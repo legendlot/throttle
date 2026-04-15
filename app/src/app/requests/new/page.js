@@ -128,7 +128,7 @@ export default function NewRequestPage() {
         <h2 className="text-xl font-bold text-white mb-2">Request Submitted</h2>
         <p className="text-zinc-500 text-sm mb-8">
           Your request has been sent to the brand team for review.
-          You'll be notified once it's approved or if more information is needed.
+          You&apos;ll be notified once it&apos;s approved or if more information is needed.
         </p>
         <div className="flex gap-3 justify-center">
           <button
