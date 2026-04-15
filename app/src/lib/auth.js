@@ -1,6 +1,7 @@
 'use client';
 import { createContext, useContext, useEffect, useState } from 'react';
 import { supabase } from './supabase';
+import { workerFetch } from './worker';
 
 const AuthContext = createContext(null);
 
@@ -16,7 +17,7 @@ export function AuthProvider({ children }) {
       async (_event, session) => {
         setSession(session);
         if (session) {
-          await loadBrandUser(session.user.id);
+          await loadBrandUser(session);
         } else {
           setUser(null);
         }
@@ -27,13 +28,17 @@ export function AuthProvider({ children }) {
     return () => subscription.unsubscribe();
   }, []);
 
-  async function loadBrandUser(userId) {
-    const { data, error } = await supabase
-      .from('users')
-      .select('*')
-      .eq('id', userId)
-      .single();
-    if (!error && data) setUser(data);
+  async function loadBrandUser(session) {
+    // Call Worker's getMe instead of querying brand.users directly.
+    // Direct client reads against brand schema hit RLS auth.uid() issues (406);
+    // Worker uses service role which bypasses RLS.
+    try {
+      const data = await workerFetch('getMe', {}, session);
+      setUser(data);
+    } catch (e) {
+      console.error('loadBrandUser failed:', e);
+      setUser(null);
+    }
   }
 
   async function signInWithGoogle() {

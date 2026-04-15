@@ -116,6 +116,7 @@ export default {
     }
 
     switch (action) {
+      case 'getMe':               return handleGetMe(body, ctx, env);
       case 'updateUserRole':      return handleUpdateUserRole(body, ctx, env);
       case 'updateUserProfile':   return handleUpdateUserProfile(body, ctx, env);
       case 'submitRequest':       return handleSubmitRequest(body, ctx, env);
@@ -143,6 +144,20 @@ export default {
     ctx.waitUntil(runSprintClose(env));
   },
 };
+
+// Returns the full brand.users row for the calling user.
+// Uses service role (bypasses RLS) so client doesn't need direct brand-schema access.
+async function handleGetMe(body, ctx, env) {
+  const res = await sbFetch(
+    `${env.SUPABASE_URL}/rest/v1/users?id=eq.${ctx.userId}&select=*`,
+    { method: 'GET' },
+    env
+  );
+  if (!res.ok) return err('Failed to fetch user record', res.status);
+  const rows = await res.json();
+  if (!rows[0]) return err('User not found', 404);
+  return json(rows[0]);
+}
 
 // Placeholder handlers — implemented phase by phase
 async function handleUpdateUserRole(body, ctx, env) {
