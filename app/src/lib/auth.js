@@ -10,12 +10,8 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      setSession(session);
-      if (session) await loadBrandUser(session.user.id);
-      setLoading(false);
-    });
-
+    // onAuthStateChange fires with INITIAL_SESSION on subscribe — more reliable
+    // than getSession() in static-export contexts where getSession() can hang.
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (_event, session) => {
         setSession(session);
@@ -24,6 +20,7 @@ export function AuthProvider({ children }) {
         } else {
           setUser(null);
         }
+        setLoading(false);
       }
     );
 
