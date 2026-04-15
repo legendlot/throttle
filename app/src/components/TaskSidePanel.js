@@ -363,11 +363,36 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
             </Section>
           )}
 
+          {/* Attachments */}
+          <AttachmentsSection taskId={task.id} />
+
           {/* Blocked reason */}
           {task.blocked_reason && task.stage === 'ext_blocked' && (
             <Section title="External Blocker">
               <p className="text-amber-400 text-sm">{task.blocked_reason}</p>
             </Section>
+          )}
+
+          {/* Submit for Review */}
+          {!['done', 'abandoned', 'in_review', 'approved'].includes(task.stage) &&
+            assignees.some(a => a.id === brandUser?.id) && (
+            <SubmitForReviewSection
+              task={task}
+              session={session}
+              onUpdate={onUpdate}
+              onError={setError}
+            />
+          )}
+
+          {/* Work Approval — for admin/lead when task is in_review */}
+          {isAdminLead && task.stage === 'in_review' && (
+            <WorkApprovalSection
+              task={task}
+              session={session}
+              onUpdate={onUpdate}
+              onClose={onClose}
+              onError={setError}
+            />
           )}
 
           {/* Abandon */}
@@ -428,5 +453,210 @@ function DetailRow({ label, value }) {
       <span className="text-xs text-zinc-600 w-24 flex-shrink-0">{label}</span>
       <span className="text-xs text-zinc-300 capitalize">{value}</span>
     </div>
+  );
+}
+
+function SubmitForReviewSection({ task, session, onUpdate, onError }) {
+  const [open, setOpen] = useState(false);
+  const [url, setUrl] = useState('');
+  const [label, setLabel] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  async function submit() {
+    if (!url.trim()) { onError('A deliverable URL is required'); return; }
+    setSubmitting(true);
+    try {
+      await workerFetch('submitForReview', {
+        task_id: task.id,
+        attachment_url: url.trim(),
+        attachment_label: label.trim() || 'Deliverable',
+      }, session?.access_token);
+      onUpdate({ ...task, stage: 'in_review' });
+      setOpen(false);
+    } catch (e) {
+      onError(e.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Section title="Submit for Review">
+      {!open ? (
+        <button
+          onClick={() => setOpen(true)}
+          className="bg-white text-black text-xs font-semibold px-4 py-2 rounded-lg hover:bg-zinc-100 transition-colors"
+        >
+          Submit Work for Review →
+        </button>
+      ) : (
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs text-zinc-500 mb-1">Deliverable URL *</label>
+            <input
+              type="url"
+              value={url}
+              onChange={e => setUrl(e.target.value)}
+              placeholder="https://drive.google.com/... or Figma link, etc."
+              className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-500"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-zinc-500 mb-1">Label (optional)</label>
+            <input
+              type="text"
+              value={label}
+              onChange={e => setLabel(e.target.value)}
+              placeholder="e.g. Final designs, Video edit v2"
+              className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-500"
+            />
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={submit}
+              disabled={submitting}
+              className="bg-white text-black text-xs font-semibold px-4 py-2 rounded-lg disabled:opacity-40 hover:bg-zinc-100 transition-colors"
+            >
+              {submitting ? 'Submitting...' : 'Submit for Review'}
+            </button>
+            <button
+              onClick={() => setOpen(false)}
+              className="text-zinc-600 text-xs hover:text-zinc-400 px-3"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </Section>
+  );
+}
+
+function WorkApprovalSection({ task, session, onUpdate, onClose, onError }) {
+  const [decision, setDecision] = useState(null); // 'approve' | 'reject'
+  const [feedback, setFeedback] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  async function submit() {
+    if (decision === 'reject' && !feedback.trim()) {
+      onError('Feedback is required when rejecting work');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const action = decision === 'approve' ? 'approveWork' : 'rejectWork';
+      await workerFetch(action, {
+        task_id: task.id,
+        feedback: feedback.trim() || undefined,
+      }, session?.access_token);
+
+      if (decision === 'approve') {
+        onUpdate({ ...task, stage: 'done' });
+        onClose();
+      } else {
+        onUpdate({ ...task, stage: 'in_progress' });
+        setDecision(null);
+        setFeedback('');
+      }
+    } catch (e) {
+      onError(e.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Section title="Review Submitted Work">
+      <div className="bg-cyan-950/40 border border-cyan-800 rounded-lg p-3 mb-3">
+        <p className="text-cyan-400 text-xs">
+          ⏳ Work has been submitted for your review
+        </p>
+      </div>
+
+      {!decision ? (
+        <div className="flex gap-2">
+          <button
+            onClick={() => setDecision('approve')}
+            className="flex-1 py-2 text-xs font-medium rounded-lg border border-green-700 text-green-400 hover:bg-green-950 transition-colors"
+          >
+            Approve
+          </button>
+          <button
+            onClick={() => setDecision('reject')}
+            className="flex-1 py-2 text-xs font-medium rounded-lg border border-red-700 text-red-400 hover:bg-red-950 transition-colors"
+          >
+            Request Revision
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <textarea
+            value={feedback}
+            onChange={e => setFeedback(e.target.value)}
+            placeholder={
+              decision === 'approve'
+                ? 'Optional note for the team member...'
+                : 'What needs to be revised? (required)'
+            }
+            className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none resize-none h-20"
+          />
+          <div className="flex gap-2">
+            <button
+              onClick={submit}
+              disabled={submitting}
+              className={`flex-1 py-2 text-xs font-semibold rounded-lg transition-colors disabled:opacity-40 ${
+                decision === 'approve'
+                  ? 'bg-green-700 text-white hover:bg-green-600'
+                  : 'bg-red-900 text-red-100 hover:bg-red-800'
+              }`}
+            >
+              {submitting
+                ? 'Submitting...'
+                : decision === 'approve' ? 'Confirm Approval' : 'Send for Revision'}
+            </button>
+            <button
+              onClick={() => { setDecision(null); setFeedback(''); }}
+              className="text-zinc-600 text-xs hover:text-zinc-400 px-3"
+            >
+              Back
+            </button>
+          </div>
+        </div>
+      )}
+    </Section>
+  );
+}
+
+function AttachmentsSection({ taskId }) {
+  const [attachments, setAttachments] = useState([]);
+
+  useEffect(() => {
+    supabase
+      .from('task_attachments')
+      .select('*')
+      .eq('task_id', taskId)
+      .order('created_at', { ascending: false })
+      .then(({ data }) => setAttachments(data || []));
+  }, [taskId]);
+
+  if (attachments.length === 0) return null;
+
+  return (
+    <Section title="Attachments">
+      <div className="space-y-2">
+        {attachments.map(a => (
+          <a
+            key={a.id}
+            href={a.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 text-xs text-zinc-400 hover:text-white transition-colors group"
+          >
+            <span className="text-zinc-600 group-hover:text-zinc-400">🔗</span>
+            <span className="truncate">{a.label || a.url}</span>
+          </a>
+        ))}
+      </div>
+    </Section>
   );
 }
