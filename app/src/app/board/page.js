@@ -359,6 +359,16 @@ export default function BoardPage() {
           </div>
 
           <div className="flex items-center gap-3">
+            {/* Review queue indicator for admin/lead */}
+            {isAdminLead && tasksByStage['in_review']?.length > 0 && (
+              <div className="flex items-center gap-2 bg-cyan-950/40 border border-cyan-800 rounded-lg px-3 py-1.5">
+                <span className="text-cyan-400 text-xs">👀</span>
+                <span className="text-cyan-300 text-xs font-medium">
+                  {tasksByStage['in_review'].length} awaiting review
+                </span>
+              </div>
+            )}
+
             {/* View toggle */}
             <div className="flex bg-zinc-900 border border-zinc-800 rounded-lg p-0.5">
               {[
