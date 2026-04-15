@@ -48,17 +48,22 @@ async function getAuthUser(request, env) {
 }
 
 async function getBrandUser(userId, env) {
-  const res = await sbFetch(
-    `${env.SUPABASE_URL}/rest/v1/users?id=eq.${userId}&select=id,name,email,role,discipline`,
-    { method: 'GET' },
-    env
-  );
-  if (!res.ok) return null;
+  const path = `users?id=eq.${userId}&select=*`;
+  const fullUrl = `${env.SUPABASE_URL}/rest/v1/${path}`;
+  const res = await sbFetch(path, { method: 'GET' }, env);
+  console.log(`[getBrandUser] GET ${fullUrl} → ${res.status}`);
+  if (!res.ok) {
+    const body = await res.text();
+    console.log(`[getBrandUser] error body: ${body.slice(0, 500)}`);
+    return null;
+  }
   const rows = await res.json();
+  console.log(`[getBrandUser] rows returned: ${rows.length}`);
   return rows[0] || null;
 }
 
-function sbFetch(url, options = {}, env) {
+function sbFetch(path, options = {}, env) {
+  const url = `${env.SUPABASE_URL}/rest/v1/${path}`;
   return fetch(url, {
     ...options,
     headers: {
@@ -149,7 +154,7 @@ export default {
 // Uses service role (bypasses RLS) so client doesn't need direct brand-schema access.
 async function handleGetMe(body, ctx, env) {
   const res = await sbFetch(
-    `${env.SUPABASE_URL}/rest/v1/users?id=eq.${ctx.userId}&select=*`,
+    `users?id=eq.${ctx.userId}&select=*`,
     { method: 'GET' },
     env
   );
