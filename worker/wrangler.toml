@@ -1,0 +1,12 @@
+name = "throttleops"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+workers_dev = true
+
+[vars]
+SUPABASE_URL = "https://jkxcnjabmrkteanzoofj.supabase.co"
+
+# Secrets set via `wrangler secret put` — never stored in this file:
+# SUPABASE_SERVICE_ROLE_KEY
+# SUPABASE_ANON_KEY
+# SLACK_WEBHOOK_URL
