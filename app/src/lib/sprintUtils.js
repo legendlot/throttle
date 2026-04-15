@@ -5,15 +5,18 @@
  */
 
 /**
- * Get the next Thursday from today (or today if today is Thursday)
- * Returns a Date object
+ * Get the next Thursday from today.
+ * If today IS Thursday, returns today.
+ * If today is any other day, returns the next upcoming Thursday.
  */
 export function getNextThursday(from = new Date()) {
   const d = new Date(from);
   d.setHours(0, 0, 0, 0);
-  const day = d.getDay(); // 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
-  const daysUntilThursday = day <= 4 ? 4 - day : 7 - day + 4;
-  d.setDate(d.getDate() + daysUntilThursday);
+  const day = d.getDay(); // 0=Sun 1=Mon 2=Tue 3=Wed 4=Thu 5=Fri 6=Sat
+  if (day === 4) return d; // today is Thursday
+  // Days until next Thursday
+  const daysUntil = day < 4 ? 4 - day : 7 - (day - 4);
+  d.setDate(d.getDate() + daysUntil);
   return d;
 }
 
