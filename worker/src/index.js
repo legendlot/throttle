@@ -64,6 +64,9 @@ async function getBrandUser(userId, env) {
 
 function sbFetch(path, options = {}, env) {
   const url = `${env.SUPABASE_URL}/rest/v1/${path}`;
+  // Allow callers to override the Prefer header via options.prefer
+  // (e.g. 'return=minimal' for writes whose response body isn't read).
+  const preferHeader = options.prefer || 'return=representation';
   return fetch(url, {
     ...options,
     headers: {
@@ -72,7 +75,7 @@ function sbFetch(path, options = {}, env) {
       Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
       'Accept-Profile': 'brand',
       'Content-Profile': 'brand',
-      Prefer: 'return=representation',
+      Prefer: preferHeader,
       ...(options.headers || {}),
     },
   });

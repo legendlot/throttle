@@ -6,9 +6,9 @@ import { workerFetch } from './worker';
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [session, setSession] = useState(null);
-  const [user, setUser]       = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [session, setSession]     = useState(null);
+  const [brandUser, setBrandUser] = useState(null);
+  const [loading, setLoading]     = useState(true);
 
   useEffect(() => {
     // onAuthStateChange fires with INITIAL_SESSION on subscribe — more reliable
@@ -19,7 +19,7 @@ export function AuthProvider({ children }) {
         if (session) {
           await loadBrandUser(session);
         } else {
-          setUser(null);
+          setBrandUser(null);
         }
         setLoading(false);
       }
@@ -34,10 +34,10 @@ export function AuthProvider({ children }) {
     // Worker uses service role which bypasses RLS.
     try {
       const data = await workerFetch('getMe', {}, session);
-      setUser(data);
+      setBrandUser(data);
     } catch (e) {
       console.error('loadBrandUser failed:', e);
-      setUser(null);
+      setBrandUser(null);
     }
   }
 
@@ -53,12 +53,12 @@ export function AuthProvider({ children }) {
 
   async function signOut() {
     await supabase.auth.signOut();
-    setUser(null);
+    setBrandUser(null);
     setSession(null);
   }
 
   return (
-    <AuthContext.Provider value={{ session, user, loading, signInWithGoogle, signOut }}>
+    <AuthContext.Provider value={{ session, brandUser, loading, signInWithGoogle, signOut }}>
       {children}
     </AuthContext.Provider>
   );
