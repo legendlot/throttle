@@ -176,19 +176,193 @@ async function handleUpdateUserProfile(body, ctx, env) {
   return err('Not implemented yet', 501);
 }
 async function handleSubmitRequest(body, ctx, env) {
-  return err('Not implemented yet', 501);
+  const { type, title, template_data, is_product_scoped, products } = body;
+
+  if (!type || !title) return err('type and title are required');
+
+  const validTypes = ['social','campaign','design','copy','photo_video','3d','deck','ad'];
+  if (!validTypes.includes(type)) return err('Invalid request type');
+
+  // INSERT request
+  const reqRes = await sbFetch('requests', {
+    method: 'POST',
+    body: JSON.stringify({
+      type,
+      title,
+      template_data: template_data || {},
+      is_product_scoped: !!is_product_scoped,
+      status: 'pending',
+      requester_id: ctx.userId,
+    }),
+  }, env);
+
+  if (!reqRes.ok) {
+    const e = await reqRes.json();
+    return err(`Failed to create request: ${e.message || reqRes.status}`);
+  }
+
+  const [request] = await reqRes.json();
+
+  // INSERT request_products if product scoped
+  if (is_product_scoped && products?.length > 0) {
+    const productRows = products.map(p => ({
+      request_id: request.id,
+      product_code: p.product_name, // using product name as code since selector uses names
+      product_notes: p.notes || null,
+    }));
+
+    const rpRes = await sbFetch('request_products', {
+      method: 'POST',
+      body: JSON.stringify(productRows),
+      prefer: 'return=minimal',
+    }, env);
+
+    if (!rpRes.ok) {
+      console.error('[submitRequest] Failed to insert request_products:', await rpRes.text());
+    }
+  }
+
+  // Slack placeholder
+  console.log(`[Slack] New request submitted: "${title}" (${type}) by ${ctx.brandUser.name}`);
+
+  return json({ ok: true, request_id: request.id });
 }
+
 async function handleApproveRequest(body, ctx, env) {
   const g = requireRole(ctx, 'admin', 'lead'); if (g) return g;
-  return err('Not implemented yet', 501);
+  const { request_id, note } = body;
+  if (!request_id) return err('request_id is required');
+
+  // Fetch request to confirm it exists and is pending
+  const fetchRes = await sbFetch(`requests?id=eq.${request_id}&select=*`, { method: 'GET' }, env);
+  if (!fetchRes.ok) return err('Request not found');
+  const [request] = await fetchRes.json();
+  if (!request) return err('Request not found');
+  if (request.status !== 'pending') return err(`Request is already ${request.status}`);
+
+  // UPDATE request status
+  const updateRes = await sbFetch(`requests?id=eq.${request_id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      status: 'approved',
+      reviewer_id: ctx.userId,
+      review_note: note || null,
+      reviewed_at: new Date().toISOString(),
+    }),
+    prefer: 'return=minimal',
+  }, env);
+
+  if (!updateRes.ok) return err('Failed to update request');
+
+  // Batch create tasks — one per product if product scoped, otherwise one task
+  const rpRes = await sbFetch(`request_products?request_id=eq.${request_id}&select=*`, { method: 'GET' }, env);
+  const requestProducts = rpRes.ok ? await rpRes.json() : [];
+
+  const taskBase = {
+    request_id,
+    type: request.type,
+    deliverable_type: 'other', // Admin/Lead sets correct type when assigning
+    stage: 'backlog',
+    priority: 'medium',
+    is_spillover: false,
+    spillover_count: 0,
+  };
+
+  let tasksToCreate = [];
+
+  if (request.is_product_scoped && requestProducts.length > 0) {
+    // Generate batch_id to group these tasks
+    const batchId = crypto.randomUUID();
+    tasksToCreate = requestProducts.map(rp => ({
+      ...taskBase,
+      product_code: rp.product_code,
+      batch_id: batchId,
+      title: `${request.title} — ${rp.product_code}`,
+      notes: rp.product_notes || null,
+    }));
+  } else {
+    tasksToCreate = [{
+      ...taskBase,
+      title: request.title,
+      notes: note || null,
+    }];
+  }
+
+  const taskRes = await sbFetch('tasks', {
+    method: 'POST',
+    body: JSON.stringify(tasksToCreate),
+  }, env);
+
+  if (!taskRes.ok) {
+    console.error('[approveRequest] Failed to create tasks:', await taskRes.text());
+  }
+
+  // Slack placeholder
+  console.log(`[Slack] Request approved: "${request.title}" by ${ctx.brandUser.name}. ${tasksToCreate.length} task(s) created.`);
+
+  return json({ ok: true, tasks_created: tasksToCreate.length });
 }
+
 async function handleRejectRequest(body, ctx, env) {
   const g = requireRole(ctx, 'admin', 'lead'); if (g) return g;
-  return err('Not implemented yet', 501);
+  const { request_id, note } = body;
+  if (!request_id) return err('request_id is required');
+  if (!note?.trim()) return err('A rejection reason is required');
+
+  const fetchRes = await sbFetch(`requests?id=eq.${request_id}&select=id,status,title`, { method: 'GET' }, env);
+  if (!fetchRes.ok) return err('Request not found');
+  const [request] = await fetchRes.json();
+  if (!request) return err('Request not found');
+  if (request.status !== 'pending') return err(`Request is already ${request.status}`);
+
+  const updateRes = await sbFetch(`requests?id=eq.${request_id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      status: 'rejected',
+      reviewer_id: ctx.userId,
+      review_note: note.trim(),
+      reviewed_at: new Date().toISOString(),
+    }),
+    prefer: 'return=minimal',
+  }, env);
+
+  if (!updateRes.ok) return err('Failed to update request');
+
+  // Slack placeholder
+  console.log(`[Slack] Request rejected: "${request.title}" by ${ctx.brandUser.name}. Reason: ${note}`);
+
+  return json({ ok: true });
 }
+
 async function handleRequestMoreInfo(body, ctx, env) {
   const g = requireRole(ctx, 'admin', 'lead'); if (g) return g;
-  return err('Not implemented yet', 501);
+  const { request_id, note } = body;
+  if (!request_id) return err('request_id is required');
+  if (!note?.trim()) return err('A note explaining what information is needed is required');
+
+  const fetchRes = await sbFetch(`requests?id=eq.${request_id}&select=id,status,title`, { method: 'GET' }, env);
+  if (!fetchRes.ok) return err('Request not found');
+  const [request] = await fetchRes.json();
+  if (!request) return err('Request not found');
+  if (request.status !== 'pending') return err(`Request is already ${request.status}`);
+
+  const updateRes = await sbFetch(`requests?id=eq.${request_id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      status: 'info_needed',
+      reviewer_id: ctx.userId,
+      review_note: note.trim(),
+      reviewed_at: new Date().toISOString(),
+    }),
+    prefer: 'return=minimal',
+  }, env);
+
+  if (!updateRes.ok) return err('Failed to update request');
+
+  // Slack placeholder
+  console.log(`[Slack] More info requested on: "${request.title}" by ${ctx.brandUser.name}. Note: ${note}`);
+
+  return json({ ok: true });
 }
 async function handleCreateTask(body, ctx, env) {
   const g = requireRole(ctx, 'admin', 'lead'); if (g) return g;
