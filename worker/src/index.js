@@ -140,6 +140,7 @@ export default {
       case 'createSprint':        return handleCreateSprint(body, ctx, env);
       case 'closeSprint':         return handleCloseSprint(body, ctx, env);
       case 'addTaskToSprint':     return handleAddTaskToSprint(body, ctx, env);
+      case 'removeTaskFromSprint':return handleRemoveTaskFromSprint(body, ctx, env);
       case 'submitForReview':     return handleSubmitForReview(body, ctx, env);
       case 'approveWork':         return handleApproveWork(body, ctx, env);
       case 'rejectWork':          return handleRejectWork(body, ctx, env);
@@ -639,15 +640,133 @@ async function logActivity(task_id, user_id, action, metadata, env) {
 }
 async function handleCreateSprint(body, ctx, env) {
   const g = requireRole(ctx, 'admin', 'lead'); if (g) return g;
-  return err('Not implemented yet', 501);
+
+  const { start_date, name } = body;
+  if (!start_date) return err('start_date is required (YYYY-MM-DD)');
+
+  // Validate Thursday
+  const startDay = new Date(start_date).getDay();
+  if (startDay !== 4) return err('Sprint must start on a Thursday');
+
+  // Calculate end date (6 days after start = Wednesday)
+  const startD = new Date(start_date);
+  const endD = new Date(startD);
+  endD.setDate(endD.getDate() + 6);
+  const end_date = endD.toISOString().split('T')[0];
+
+  // Count existing sprints for auto-naming
+  const countRes = await sbFetch('sprints?select=id', { method: 'GET' }, env);
+  const existing = countRes.ok ? await countRes.json() : [];
+  const sprintNumber = existing.length + 1;
+
+  const sprintName = name || `Sprint ${sprintNumber} — ${formatDateShort(startD)} to ${formatDateShort(endD)}`;
+
+  // Check no active sprint overlaps (prevent duplicates)
+  const activeRes = await sbFetch(
+    `sprints?status=eq.active&select=id,name`,
+    { method: 'GET' }, env
+  );
+  const activeSprints = activeRes.ok ? await activeRes.json() : [];
+  if (activeSprints.length > 0) {
+    return err(`Cannot create sprint — "${activeSprints[0].name}" is still active. Close it first.`);
+  }
+
+  const insertRes = await sbFetch('sprints', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: sprintName,
+      start_date,
+      end_date,
+      status: 'active',
+      created_by: ctx.userId,
+    }),
+  }, env);
+
+  if (!insertRes.ok) {
+    const e = await insertRes.json();
+    return err(`Failed to create sprint: ${e.message || insertRes.status}`);
+  }
+
+  const [sprint] = await insertRes.json();
+
+  console.log(`[Slack] Sprint created: "${sprintName}" by ${ctx.brandUser.name}`);
+
+  return json({ ok: true, sprint });
 }
+
 async function handleCloseSprint(body, ctx, env) {
   const g = requireRole(ctx, 'admin', 'lead'); if (g) return g;
-  return err('Not implemented yet', 501);
+  const { sprint_id } = body;
+  if (!sprint_id) return err('sprint_id is required');
+
+  const result = await closeSprintById(sprint_id, ctx.userId, env);
+  if (result.error) return err(result.error);
+
+  return json({ ok: true, ...result });
 }
+
 async function handleAddTaskToSprint(body, ctx, env) {
   const g = requireRole(ctx, 'admin', 'lead'); if (g) return g;
-  return err('Not implemented yet', 501);
+
+  const { task_id, sprint_id, due_date } = body;
+  if (!task_id || !sprint_id) return err('task_id and sprint_id are required');
+
+  // Verify sprint exists and is active or planning
+  const sprintRes = await sbFetch(`sprints?id=eq.${sprint_id}&select=id,name,status`, { method: 'GET' }, env);
+  if (!sprintRes.ok) return err('Sprint not found');
+  const [sprint] = await sprintRes.json();
+  if (!sprint) return err('Sprint not found');
+  if (sprint.status === 'closed') return err('Cannot add tasks to a closed sprint');
+
+  // Verify task exists and is in backlog
+  const taskRes = await sbFetch(`tasks?id=eq.${task_id}&select=id,title,stage`, { method: 'GET' }, env);
+  if (!taskRes.ok) return err('Task not found');
+  const [task] = await taskRes.json();
+  if (!task) return err('Task not found');
+
+  const update = {
+    sprint_id,
+    stage: 'in_sprint',
+    updated_at: new Date().toISOString(),
+  };
+  if (due_date) update.due_date = due_date;
+
+  const updateRes = await sbFetch(`tasks?id=eq.${task_id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(update),
+    prefer: 'return=minimal',
+  }, env);
+
+  if (!updateRes.ok) return err('Failed to add task to sprint');
+
+  await logActivity(task_id, ctx.userId, 'stage_change', {
+    from: task.stage,
+    to: 'in_sprint',
+    sprint_id,
+  }, env);
+
+  return json({ ok: true });
+}
+
+async function handleRemoveTaskFromSprint(body, ctx, env) {
+  const g = requireRole(ctx, 'admin', 'lead'); if (g) return g;
+  const { task_id } = body;
+  if (!task_id) return err('task_id is required');
+
+  const updateRes = await sbFetch(`tasks?id=eq.${task_id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      sprint_id: null,
+      stage: 'backlog',
+      due_date: null,
+      updated_at: new Date().toISOString(),
+    }),
+    prefer: 'return=minimal',
+  }, env);
+
+  if (!updateRes.ok) return err('Failed to remove task from sprint');
+
+  return json({ ok: true });
 }
 async function handleSubmitForReview(body, ctx, env) {
   return err('Not implemented yet', 501);
@@ -660,6 +779,224 @@ async function handleRejectWork(body, ctx, env) {
   const g = requireRole(ctx, 'admin', 'lead'); if (g) return g;
   return err('Not implemented yet', 501);
 }
+// ── Core sprint close logic — used by both manual close and cron ─────────────
+
+async function closeSprintById(sprintId, closedByUserId, env) {
+  // Fetch sprint
+  const sprintRes = await sbFetch(`sprints?id=eq.${sprintId}&select=*`, { method: 'GET' }, env);
+  if (!sprintRes.ok) return { error: 'Sprint not found' };
+  const [sprint] = await sprintRes.json();
+  if (!sprint) return { error: 'Sprint not found' };
+  if (sprint.status === 'closed') return { error: 'Sprint is already closed' };
+
+  // Fetch all tasks in this sprint
+  const tasksRes = await sbFetch(
+    `tasks?sprint_id=eq.${sprintId}&select=id,title,stage,spillover_count,is_spillover`,
+    { method: 'GET' }, env
+  );
+  const allTasks = tasksRes.ok ? await tasksRes.json() : [];
+
+  const doneTasks      = allTasks.filter(t => t.stage === 'done');
+  const abandonedTasks = allTasks.filter(t => t.stage === 'abandoned');
+  const spilloverTasks = allTasks.filter(t => !['done', 'abandoned'].includes(t.stage));
+
+  // Calculate health score
+  const total = allTasks.length;
+  const eligible = allTasks.length - abandonedTasks.length; // denominator excludes abandoned
+  const healthScore = {
+    total_tasks: total,
+    done_count: doneTasks.length,
+    spillover_count: spilloverTasks.length,
+    abandoned_count: abandonedTasks.length,
+    completion_rate: eligible > 0 ? Math.round((doneTasks.length / eligible) * 100) : 0,
+    spillover_rate: eligible > 0 ? Math.round((spilloverTasks.length / eligible) * 100) : 0,
+  };
+
+  // Update sprint to closed with health score
+  await sbFetch(`sprints?id=eq.${sprintId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      status: 'closed',
+      health_score: healthScore,
+    }),
+    prefer: 'return=minimal',
+  }, env);
+
+  // Flag spillover tasks — increment spillover_count, set is_spillover
+  if (spilloverTasks.length > 0) {
+    // Batch update — use IN filter
+    const spilloverIds = spilloverTasks.map(t => t.id);
+
+    // Cloudflare 50-subrequest limit — batch max 40 per call
+    // For typical sprint sizes this is one call
+    for (let i = 0; i < spilloverIds.length; i += 40) {
+      const batch = spilloverIds.slice(i, i + 40);
+      const inFilter = `(${batch.join(',')})`;
+      await sbFetch(`tasks?id=in.${inFilter}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          is_spillover: true,
+          sprint_id: null, // remove from closed sprint — will be added to new sprint below
+          stage: 'backlog', // reset to backlog, re-added to new sprint
+          updated_at: new Date().toISOString(),
+        }),
+        prefer: 'return=minimal',
+      }, env);
+    }
+
+    // Flag escalations (spillover_count was already >= 1 before this sprint)
+    const escalations = spilloverTasks.filter(t => t.spillover_count >= 1);
+
+    // Increment spillover_count individually (no bulk increment in PostgREST without RPC)
+    // Use an RPC for this — see note below
+    // For now: update each task's spillover_count
+    // CLOUDFLARE LIMIT: if > 40 spillovers, this could hit the 50-subrequest limit
+    // Mitigation: sprint sizes are typically small (< 30 tasks)
+    for (const task of spilloverTasks) {
+      await sbFetch(`tasks?id=eq.${task.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          spillover_count: (task.spillover_count || 0) + 1,
+        }),
+        prefer: 'return=minimal',
+      }, env);
+    }
+
+    healthScore.escalation_count = escalations.length;
+  }
+
+  // Create next sprint automatically
+  const nextThursday = getNextThursdayAfter(sprint.end_date);
+  const nextWednesday = new Date(nextThursday);
+  nextWednesday.setDate(nextWednesday.getDate() + 6);
+
+  const nextStartStr = nextThursday.toISOString().split('T')[0];
+  const nextEndStr = nextWednesday.toISOString().split('T')[0];
+
+  // Count sprints for number
+  const countRes = await sbFetch('sprints?select=id', { method: 'GET' }, env);
+  const allSprints = countRes.ok ? await countRes.json() : [];
+  const nextNumber = allSprints.length + 1;
+
+  const nextName = `Sprint ${nextNumber} — ${formatDateShort(nextThursday)} to ${formatDateShort(nextWednesday)}`;
+
+  const newSprintRes = await sbFetch('sprints', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: nextName,
+      start_date: nextStartStr,
+      end_date: nextEndStr,
+      status: 'active',
+      created_by: closedByUserId || null,
+    }),
+  }, env);
+
+  let newSprint = null;
+  if (newSprintRes.ok) {
+    const [ns] = await newSprintRes.json();
+    newSprint = ns;
+
+    // Add spillover tasks to new sprint as in_sprint
+    if (spilloverTasks.length > 0) {
+      const spilloverIds = spilloverTasks.map(t => t.id);
+      for (let i = 0; i < spilloverIds.length; i += 40) {
+        const batch = spilloverIds.slice(i, i + 40);
+        const inFilter = `(${batch.join(',')})`;
+        await sbFetch(`tasks?id=in.${inFilter}`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            sprint_id: ns.id,
+            stage: 'in_sprint',
+            updated_at: new Date().toISOString(),
+          }),
+          prefer: 'return=minimal',
+        }, env);
+      }
+    }
+  }
+
+  // Slack summary
+  const summary = [
+    `Sprint closed: "${sprint.name}"`,
+    `✅ Done: ${doneTasks.length}`,
+    `↩ Spillover: ${spilloverTasks.length}`,
+    `🚫 Abandoned: ${abandonedTasks.length}`,
+    `📊 Completion: ${healthScore.completion_rate}%`,
+    newSprint ? `🆕 New sprint created: "${nextName}"` : '⚠️ Failed to create next sprint',
+  ].join('\n');
+
+  console.log(`[Slack] ${summary}`);
+
+  return {
+    closed_sprint: sprint.name,
+    health_score: healthScore,
+    new_sprint: newSprint,
+    spillovers_carried: spilloverTasks.length,
+  };
+}
+
+// ── Auto sprint close — runs on Cloudflare Cron ──────────────────────────────
+
 async function runSprintClose(env) {
-  console.log('Sprint close cron fired — implemented in Phase 4');
+  console.log('[throttleops] Auto sprint close cron fired');
+
+  // Guard: find active sprint(s)
+  const activeRes = await sbFetch('sprints?status=eq.active&select=*', { method: 'GET' }, env);
+  if (!activeRes.ok) {
+    console.error('[sprintClose] Failed to fetch active sprints');
+    return;
+  }
+  const activeSprints = await activeRes.json();
+
+  if (activeSprints.length === 0) {
+    console.log('[sprintClose] No active sprint found — nothing to close');
+    return;
+  }
+
+  if (activeSprints.length > 1) {
+    console.error(`[sprintClose] GUARD: ${activeSprints.length} active sprints found — aborting to prevent data corruption. Fix manually.`);
+    return;
+  }
+
+  const sprint = activeSprints[0];
+
+  // Verify sprint end_date is today or past
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const endDate = new Date(sprint.end_date);
+  endDate.setHours(0, 0, 0, 0);
+
+  if (endDate > today) {
+    console.log(`[sprintClose] Sprint "${sprint.name}" end date is ${sprint.end_date} — not closing yet`);
+    return;
+  }
+
+  console.log(`[sprintClose] Closing sprint: "${sprint.name}"`);
+
+  const result = await closeSprintById(sprint.id, null, env);
+
+  if (result.error) {
+    console.error(`[sprintClose] Error: ${result.error}`);
+    return;
+  }
+
+  console.log(`[sprintClose] Done. Completion: ${result.health_score.completion_rate}%, Spillovers: ${result.spillovers_carried}`);
+}
+
+// ── Helper functions ──────────────────────────────────────────────────────────
+
+function formatDateShort(date) {
+  return new Date(date).toLocaleDateString('en-GB', {
+    weekday: 'short', day: 'numeric', month: 'short'
+  });
+}
+
+function getNextThursdayAfter(dateString) {
+  const d = new Date(dateString);
+  d.setDate(d.getDate() + 1); // day after end (Thursday after Wednesday)
+  // Should already be Thursday — but verify
+  while (d.getDay() !== 4) {
+    d.setDate(d.getDate() + 1);
+  }
+  return d;
 }

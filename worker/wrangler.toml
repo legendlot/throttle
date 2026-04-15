@@ -10,3 +10,7 @@ SUPABASE_URL = "https://jkxcnjabmrkteanzoofj.supabase.co"
 # SUPABASE_SERVICE_ROLE_KEY
 # SUPABASE_ANON_KEY
 # SLACK_WEBHOOK_URL
+
+[triggers]
+crons = ["29 18 * * 3"]
+# Wed 18:29 UTC = Wed 23:59 IST — sprint close fires end of Wednesday
