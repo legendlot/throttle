@@ -369,22 +369,244 @@ async function handleCreateTask(body, ctx, env) {
   return err('Not implemented yet', 501);
 }
 async function handleUpdateTaskStage(body, ctx, env) {
-  return err('Not implemented yet', 501);
+  const { task_id, stage, blocked_reason } = body;
+  if (!task_id || !stage) return err('task_id and stage are required');
+
+  const validStages = ['backlog','in_sprint','in_progress','ext_blocked','in_review','approved','done','abandoned'];
+  if (!validStages.includes(stage)) return err('Invalid stage');
+
+  // Fetch current task
+  const fetchRes = await sbFetch(`tasks?id=eq.${task_id}&select=id,stage,title,request_id`, { method: 'GET' }, env);
+  if (!fetchRes.ok) return err('Task not found');
+  const [task] = await fetchRes.json();
+  if (!task) return err('Task not found');
+
+  // Validate transition
+  const memberTransitions = {
+    in_sprint: ['in_progress'],
+    in_progress: ['in_review', 'ext_blocked'],
+    ext_blocked: ['in_progress'],
+  };
+  const adminLeadTransitions = {
+    backlog: ['in_sprint', 'abandoned'],
+    in_sprint: ['in_progress', 'backlog', 'abandoned'],
+    in_progress: ['in_review', 'ext_blocked', 'in_sprint', 'abandoned'],
+    ext_blocked: ['in_progress', 'abandoned'],
+    in_review: ['approved', 'in_progress', 'abandoned'],
+    approved: ['done', 'in_review', 'abandoned'],
+  };
+
+  const transitions = ['admin','lead'].includes(ctx.role)
+    ? adminLeadTransitions
+    : memberTransitions;
+
+  const allowed = transitions[task.stage] || [];
+  if (!allowed.includes(stage)) {
+    return err(`Cannot move from ${task.stage} to ${stage} as ${ctx.role}`);
+  }
+
+  // Require blocked_reason for ext_blocked and abandoned
+  if ((stage === 'ext_blocked' || stage === 'abandoned') && !blocked_reason?.trim()) {
+    return err(`A reason is required when setting stage to ${stage}`);
+  }
+
+  // Build update payload
+  const update = {
+    stage,
+    blocked_reason: (stage === 'ext_blocked' || stage === 'abandoned')
+      ? blocked_reason.trim()
+      : null,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (stage === 'done') update.completed_at = new Date().toISOString();
+  if (stage === 'abandoned') update.abandoned_at = new Date().toISOString();
+
+  const updateRes = await sbFetch(`tasks?id=eq.${task_id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(update),
+    prefer: 'return=minimal',
+  }, env);
+
+  if (!updateRes.ok) return err('Failed to update task stage');
+
+  // Log activity
+  await logActivity(task_id, ctx.userId, 'stage_change', {
+    from: task.stage,
+    to: stage,
+    reason: blocked_reason || null,
+  }, env);
+
+  console.log(`[Slack] Task "${task.title}" moved ${task.stage} → ${stage} by ${ctx.brandUser.name}`);
+
+  return json({ ok: true });
 }
+
 async function handleUpdateTaskPriority(body, ctx, env) {
+  const { task_id, priority } = body;
+  if (!task_id || !priority) return err('task_id and priority are required');
+
+  const validPriorities = ['urgent', 'high', 'medium', 'low'];
+  if (!validPriorities.includes(priority)) return err('Invalid priority');
+
   const g = requireRole(ctx, 'admin', 'lead'); if (g) return g;
-  return err('Not implemented yet', 501);
+
+  const fetchRes = await sbFetch(`tasks?id=eq.${task_id}&select=id,title,priority`, { method: 'GET' }, env);
+  if (!fetchRes.ok) return err('Task not found');
+  const [task] = await fetchRes.json();
+  if (!task) return err('Task not found');
+
+  const updateRes = await sbFetch(`tasks?id=eq.${task_id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ priority, updated_at: new Date().toISOString() }),
+    prefer: 'return=minimal',
+  }, env);
+
+  if (!updateRes.ok) return err('Failed to update priority');
+
+  await logActivity(task_id, ctx.userId, 'priority_change', {
+    from: task.priority,
+    to: priority,
+  }, env);
+
+  return json({ ok: true });
 }
+
 async function handleAssignTask(body, ctx, env) {
+  const { task_id, user_ids } = body;
+  if (!task_id || !user_ids?.length) return err('task_id and user_ids are required');
+
   const g = requireRole(ctx, 'admin', 'lead'); if (g) return g;
-  return err('Not implemented yet', 501);
+
+  // Delete existing assignees
+  await sbFetch(`task_assignees?task_id=eq.${task_id}`, {
+    method: 'DELETE',
+    prefer: 'return=minimal',
+  }, env);
+
+  // Insert new assignees
+  const rows = user_ids.map(uid => ({
+    task_id,
+    user_id: uid,
+    assigned_by: ctx.userId,
+  }));
+
+  const insertRes = await sbFetch('task_assignees', {
+    method: 'POST',
+    body: JSON.stringify(rows),
+    prefer: 'return=minimal',
+  }, env);
+
+  if (!insertRes.ok) return err('Failed to assign task');
+
+  await logActivity(task_id, ctx.userId, 'assignment', {
+    assigned_to: user_ids,
+  }, env);
+
+  console.log(`[Slack] Task ${task_id} assigned to ${user_ids.length} user(s) by ${ctx.brandUser.name}`);
+
+  return json({ ok: true });
 }
+
 async function handleAbandonTask(body, ctx, env) {
+  const { task_id, reason } = body;
+  if (!task_id) return err('task_id is required');
+  if (!reason?.trim()) return err('A reason is required to abandon a task');
+
   const g = requireRole(ctx, 'admin', 'lead'); if (g) return g;
-  return err('Not implemented yet', 501);
+
+  const fetchRes = await sbFetch(`tasks?id=eq.${task_id}&select=id,title,stage`, { method: 'GET' }, env);
+  if (!fetchRes.ok) return err('Task not found');
+  const [task] = await fetchRes.json();
+  if (!task) return err('Task not found');
+  if (['done', 'abandoned'].includes(task.stage)) {
+    return err(`Task is already ${task.stage}`);
+  }
+
+  const updateRes = await sbFetch(`tasks?id=eq.${task_id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      stage: 'abandoned',
+      blocked_reason: reason.trim(),
+      abandoned_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }),
+    prefer: 'return=minimal',
+  }, env);
+
+  if (!updateRes.ok) return err('Failed to abandon task');
+
+  await logActivity(task_id, ctx.userId, 'abandonment', { reason: reason.trim() }, env);
+
+  console.log(`[Slack] Task "${task.title}" abandoned by ${ctx.brandUser.name}. Reason: ${reason}`);
+
+  return json({ ok: true });
 }
+
 async function handleFlagExtBlocked(body, ctx, env) {
-  return err('Not implemented yet', 501);
+  const { task_id, reason } = body;
+  if (!task_id) return err('task_id is required');
+  if (!reason?.trim()) return err('A reason is required when flagging external block');
+
+  const fetchRes = await sbFetch(`tasks?id=eq.${task_id}&select=id,title,stage`, { method: 'GET' }, env);
+  if (!fetchRes.ok) return err('Task not found');
+  const [task] = await fetchRes.json();
+  if (!task) return err('Task not found');
+
+  // Check assignee or admin/lead
+  if (!['admin', 'lead'].includes(ctx.role)) {
+    const assigneeRes = await sbFetch(
+      `task_assignees?task_id=eq.${task_id}&user_id=eq.${ctx.userId}&select=task_id`,
+      { method: 'GET' }, env
+    );
+    const assignees = assigneeRes.ok ? await assigneeRes.json() : [];
+    if (!assignees.length) return err('You are not assigned to this task');
+  }
+
+  const updateRes = await sbFetch(`tasks?id=eq.${task_id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      stage: 'ext_blocked',
+      blocked_reason: reason.trim(),
+      updated_at: new Date().toISOString(),
+    }),
+    prefer: 'return=minimal',
+  }, env);
+
+  if (!updateRes.ok) return err('Failed to flag task');
+
+  await logActivity(task_id, ctx.userId, 'flag', {
+    type: 'ext_blocked',
+    reason: reason.trim(),
+  }, env);
+
+  console.log(`[Slack] Task "${task.title}" flagged ext_blocked by ${ctx.brandUser.name}. Reason: ${reason}`);
+
+  return json({ ok: true });
+}
+
+// activity_log writer — columns: id, task_id, user_id, event_type, payload, created_at
+// (id + created_at are DB-populated). Call-site passes (action, metadata) → map to
+// (event_type, payload). Wrapped in try/catch so audit insert failures don't break
+// the task operation they're logging.
+async function logActivity(task_id, user_id, action, metadata, env) {
+  try {
+    const res = await sbFetch('activity_log', {
+      method: 'POST',
+      body: JSON.stringify({
+        task_id,
+        user_id,
+        event_type: action,
+        payload: metadata,
+      }),
+      prefer: 'return=minimal',
+    }, env);
+    if (!res.ok) {
+      console.error('[logActivity] insert failed:', res.status, await res.text());
+    }
+  } catch (e) {
+    console.error('[logActivity] threw:', e?.message || e);
+  }
 }
 async function handleCreateSprint(body, ctx, env) {
   const g = requireRole(ctx, 'admin', 'lead'); if (g) return g;
