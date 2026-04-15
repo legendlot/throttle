@@ -170,7 +170,36 @@ async function handleGetMe(body, ctx, env) {
 // Placeholder handlers — implemented phase by phase
 async function handleUpdateUserRole(body, ctx, env) {
   const g = requireRole(ctx, 'admin'); if (g) return g;
-  return err('Not implemented yet', 501);
+
+  const { user_id, role, discipline } = body;
+  if (!user_id) return err('user_id is required');
+
+  // Prevent admin from changing their own role
+  if (user_id === ctx.userId && role) {
+    return err('You cannot change your own role');
+  }
+
+  const validRoles = ['admin', 'lead', 'member', 'requester'];
+  const validDisciplines = ['designer', '3d', 'copywriter', 'photo_video', 'lead', null];
+
+  if (role && !validRoles.includes(role)) return err('Invalid role');
+  if (discipline !== undefined && !validDisciplines.includes(discipline)) return err('Invalid discipline');
+
+  const update = {};
+  if (role !== undefined) update.role = role;
+  if (discipline !== undefined) update.discipline = discipline;
+
+  if (Object.keys(update).length === 0) return err('Nothing to update');
+
+  const updateRes = await sbFetch(`users?id=eq.${user_id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(update),
+    prefer: 'return=minimal',
+  }, env);
+
+  if (!updateRes.ok) return err('Failed to update user');
+
+  return json({ ok: true });
 }
 async function handleUpdateUserProfile(body, ctx, env) {
   return err('Not implemented yet', 501);
