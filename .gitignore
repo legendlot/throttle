@@ -1,0 +1,16 @@
+# Node
+node_modules/
+.env
+.env.local
+.env*.local
+
+# Next.js
+app/.next/
+app/out/
+
+# Worker
+worker/.dev.vars
+
+# OS
+.DS_Store
+Thumbs.db
