@@ -81,13 +81,53 @@ function sbFetch(path, options = {}, env) {
   });
 }
 
-async function slackNotify(message, env) {
-  if (!env.SLACK_WEBHOOK_URL) return;
-  await fetch(env.SLACK_WEBHOOK_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text: message }),
-  });
+// ── Slack notification helpers ────────────────────────────────────────────────
+
+/**
+ * Send to #throttle-ops — admin/management events
+ * New requests, approvals, sprint summaries, blockers, overdue
+ */
+async function slackOps(message, env) {
+  if (!env.SLACK_WEBHOOK_OPS) {
+    console.log('[Slack:ops]', message);
+    return;
+  }
+  try {
+    await fetch(env.SLACK_WEBHOOK_OPS, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: message }),
+    });
+  } catch (e) {
+    console.error('[Slack:ops] Failed to send:', e.message);
+  }
+}
+
+/**
+ * Send to #throttle-team — personal events for team members
+ * Task assigned, work approved/rejected, request status updates
+ */
+async function slackTeam(message, env) {
+  if (!env.SLACK_WEBHOOK_TEAM) {
+    console.log('[Slack:team]', message);
+    return;
+  }
+  try {
+    await fetch(env.SLACK_WEBHOOK_TEAM, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: message }),
+    });
+  } catch (e) {
+    console.error('[Slack:team] Failed to send:', e.message);
+  }
+}
+
+/**
+ * Send to both channels
+ */
+async function slackBoth(message, env) {
+  await Promise.all([slackOps(message, env), slackTeam(message, env)]);
 }
 
 export default {
@@ -252,8 +292,7 @@ async function handleSubmitRequest(body, ctx, env) {
     }
   }
 
-  // Slack placeholder
-  console.log(`[Slack] New request submitted: "${title}" (${type}) by ${ctx.brandUser.name}`);
+  await slackOps(`📥 *New request submitted*\n*"${title}"* (${type})\nSubmitted by: ${ctx.brandUser.name}\nProducts: ${is_product_scoped ? products.map(p => p.product_name).join(', ') : 'N/A'}`, env);
 
   return json({ ok: true, request_id: request.id });
 }
@@ -327,8 +366,8 @@ async function handleApproveRequest(body, ctx, env) {
     console.error('[approveRequest] Failed to create tasks:', await taskRes.text());
   }
 
-  // Slack placeholder
-  console.log(`[Slack] Request approved: "${request.title}" by ${ctx.brandUser.name}. ${tasksToCreate.length} task(s) created.`);
+  await slackOps(`✅ *Request approved*\n*"${request.title}"*\nApproved by: ${ctx.brandUser.name}\n${tasksToCreate.length} task(s) created in backlog`, env);
+  await slackTeam(`✅ *Request approved: "${request.title}"*\n${tasksToCreate.length} task(s) created and ready for sprint planning`, env);
 
   return json({ ok: true, tasks_created: tasksToCreate.length });
 }
@@ -358,8 +397,7 @@ async function handleRejectRequest(body, ctx, env) {
 
   if (!updateRes.ok) return err('Failed to update request');
 
-  // Slack placeholder
-  console.log(`[Slack] Request rejected: "${request.title}" by ${ctx.brandUser.name}. Reason: ${note}`);
+  await slackTeam(`❌ *Request rejected: "${request.title}"*\nRejected by: ${ctx.brandUser.name}\nReason: ${note}`, env);
 
   return json({ ok: true });
 }
@@ -389,8 +427,7 @@ async function handleRequestMoreInfo(body, ctx, env) {
 
   if (!updateRes.ok) return err('Failed to update request');
 
-  // Slack placeholder
-  console.log(`[Slack] More info requested on: "${request.title}" by ${ctx.brandUser.name}. Note: ${note}`);
+  await slackTeam(`ℹ️ *More info needed: "${request.title}"*\nFrom: ${ctx.brandUser.name}\nNote: ${note}`, env);
 
   return json({ ok: true });
 }
@@ -467,7 +504,19 @@ async function handleUpdateTaskStage(body, ctx, env) {
     reason: blocked_reason || null,
   }, env);
 
-  console.log(`[Slack] Task "${task.title}" moved ${task.stage} → ${stage} by ${ctx.brandUser.name}`);
+  // Only notify on significant moves — not every in_progress update
+  const notifyStages = ['in_review', 'approved', 'done', 'abandoned', 'ext_blocked'];
+  if (notifyStages.includes(stage)) {
+    if (stage === 'ext_blocked') {
+      await slackOps(`⚠️ *Task externally blocked*\n*"${task.title}"*\nBlocked by: ${ctx.brandUser.name}\nReason: ${blocked_reason}`, env);
+    } else if (stage === 'in_review') {
+      await slackOps(`👀 *Work submitted for review*\n*"${task.title}"*\nSubmitted by: ${ctx.brandUser.name}`, env);
+    } else if (stage === 'done') {
+      await slackTeam(`🎉 *Task completed: "${task.title}"*`, env);
+    } else if (stage === 'abandoned') {
+      await slackOps(`🚫 *Task abandoned: "${task.title}"*\nBy: ${ctx.brandUser.name}\nReason: ${blocked_reason}`, env);
+    }
+  }
 
   return json({ ok: true });
 }
@@ -533,7 +582,14 @@ async function handleAssignTask(body, ctx, env) {
     assigned_to: user_ids,
   }, env);
 
-  console.log(`[Slack] Task ${task_id} assigned to ${user_ids.length} user(s) by ${ctx.brandUser.name}`);
+  // Fetch assignee names for the notification
+  const assigneeRes = await sbFetch(
+    `users?id=in.(${user_ids.join(',')})&select=name`,
+    { method: 'GET' }, env
+  );
+  const assignees = assigneeRes.ok ? await assigneeRes.json() : [];
+  const names = assignees.map(a => a.name).join(', ');
+  await slackTeam(`📌 *Task assigned*\n*"${task_id}"* assigned to: ${names}\nBy: ${ctx.brandUser.name}`, env);
 
   return json({ ok: true });
 }
@@ -568,7 +624,7 @@ async function handleAbandonTask(body, ctx, env) {
 
   await logActivity(task_id, ctx.userId, 'abandonment', { reason: reason.trim() }, env);
 
-  console.log(`[Slack] Task "${task.title}" abandoned by ${ctx.brandUser.name}. Reason: ${reason}`);
+  await slackOps(`🚫 *Task abandoned: "${task.title}"*\nBy: ${ctx.brandUser.name}\nReason: ${reason}`, env);
 
   return json({ ok: true });
 }
@@ -610,7 +666,7 @@ async function handleFlagExtBlocked(body, ctx, env) {
     reason: reason.trim(),
   }, env);
 
-  console.log(`[Slack] Task "${task.title}" flagged ext_blocked by ${ctx.brandUser.name}. Reason: ${reason}`);
+  await slackOps(`⚠️ *External blocker flagged*\n*"${task.title}"*\nBy: ${ctx.brandUser.name}\nBlocker: ${reason}`, env);
 
   return json({ ok: true });
 }
@@ -689,7 +745,7 @@ async function handleCreateSprint(body, ctx, env) {
 
   const [sprint] = await insertRes.json();
 
-  console.log(`[Slack] Sprint created: "${sprintName}" by ${ctx.brandUser.name}`);
+  await slackOps(`🆕 *Sprint created*\n*"${sprintName}"*\nCreated by: ${ctx.brandUser.name}`, env);
 
   return json({ ok: true, sprint });
 }
@@ -769,15 +825,163 @@ async function handleRemoveTaskFromSprint(body, ctx, env) {
   return json({ ok: true });
 }
 async function handleSubmitForReview(body, ctx, env) {
-  return err('Not implemented yet', 501);
+  const { task_id, attachment_url, attachment_label } = body;
+  if (!task_id) return err('task_id is required');
+  if (!attachment_url) return err('A deliverable link or file URL is required to submit for review');
+
+  // Verify task exists and assignee is submitting
+  const fetchRes = await sbFetch(
+    `tasks?id=eq.${task_id}&select=id,title,stage,type,deliverable_type`,
+    { method: 'GET' }, env
+  );
+  if (!fetchRes.ok) return err('Task not found');
+  const [task] = await fetchRes.json();
+  if (!task) return err('Task not found');
+
+  if (task.stage === 'done' || task.stage === 'abandoned') {
+    return err(`Task is already ${task.stage}`);
+  }
+
+  // Check assignee (unless admin/lead)
+  if (!['admin', 'lead'].includes(ctx.role)) {
+    const assigneeRes = await sbFetch(
+      `task_assignees?task_id=eq.${task_id}&user_id=eq.${ctx.userId}&select=task_id`,
+      { method: 'GET' }, env
+    );
+    const rows = assigneeRes.ok ? await assigneeRes.json() : [];
+    if (!rows.length) return err('You are not assigned to this task');
+  }
+
+  // Add attachment
+  if (attachment_url) {
+    await sbFetch('task_attachments', {
+      method: 'POST',
+      body: JSON.stringify({
+        task_id,
+        type: 'link',
+        url: attachment_url,
+        label: attachment_label || 'Deliverable',
+        uploaded_by: ctx.userId,
+      }),
+      prefer: 'return=minimal',
+    }, env);
+  }
+
+  // Move to in_review
+  await sbFetch(`tasks?id=eq.${task_id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      stage: 'in_review',
+      updated_at: new Date().toISOString(),
+    }),
+    prefer: 'return=minimal',
+  }, env);
+
+  await logActivity(task_id, ctx.userId, 'stage_change', {
+    from: task.stage,
+    to: 'in_review',
+    attachment_url,
+  }, env);
+
+  await slackOps(`👀 *Work submitted for review*\n*"${task.title}"*\nSubmitted by: ${ctx.brandUser.name}\nDeliverable: ${attachment_url}`, env);
+
+  return json({ ok: true });
 }
+
 async function handleApproveWork(body, ctx, env) {
   const g = requireRole(ctx, 'admin', 'lead'); if (g) return g;
-  return err('Not implemented yet', 501);
+
+  const { task_id, feedback } = body;
+  if (!task_id) return err('task_id is required');
+
+  const fetchRes = await sbFetch(
+    `tasks?id=eq.${task_id}&select=id,title,stage,request_id`,
+    { method: 'GET' }, env
+  );
+  if (!fetchRes.ok) return err('Task not found');
+  const [task] = await fetchRes.json();
+  if (!task) return err('Task not found');
+  if (task.stage !== 'in_review') return err('Task is not in review');
+
+  // INSERT approval record
+  await sbFetch('approvals', {
+    method: 'POST',
+    body: JSON.stringify({
+      task_id,
+      reviewer_id: ctx.userId,
+      decision: 'approved',
+      feedback: feedback || null,
+    }),
+    prefer: 'return=minimal',
+  }, env);
+
+  // Move to done
+  await sbFetch(`tasks?id=eq.${task_id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      stage: 'done',
+      completed_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }),
+    prefer: 'return=minimal',
+  }, env);
+
+  await logActivity(task_id, ctx.userId, 'approval', {
+    decision: 'approved',
+    feedback: feedback || null,
+  }, env);
+
+  await slackTeam(`✅ *Work approved: "${task.title}"*\nApproved by: ${ctx.brandUser.name}${feedback ? `\nNote: ${feedback}` : ''}`, env);
+
+  return json({ ok: true });
 }
+
 async function handleRejectWork(body, ctx, env) {
   const g = requireRole(ctx, 'admin', 'lead'); if (g) return g;
-  return err('Not implemented yet', 501);
+
+  const { task_id, feedback } = body;
+  if (!task_id) return err('task_id is required');
+  if (!feedback?.trim()) return err('Feedback is required when rejecting work');
+
+  const fetchRes = await sbFetch(
+    `tasks?id=eq.${task_id}&select=id,title,stage`,
+    { method: 'GET' }, env
+  );
+  if (!fetchRes.ok) return err('Task not found');
+  const [task] = await fetchRes.json();
+  if (!task) return err('Task not found');
+  if (task.stage !== 'in_review') return err('Task is not in review');
+
+  // INSERT approval record
+  await sbFetch('approvals', {
+    method: 'POST',
+    body: JSON.stringify({
+      task_id,
+      reviewer_id: ctx.userId,
+      decision: 'rejected',
+      feedback: feedback.trim(),
+    }),
+    prefer: 'return=minimal',
+  }, env);
+
+  // Move back to in_progress
+  await sbFetch(`tasks?id=eq.${task_id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      stage: 'in_progress',
+      updated_at: new Date().toISOString(),
+    }),
+    prefer: 'return=minimal',
+  }, env);
+
+  await logActivity(task_id, ctx.userId, 'approval', {
+    decision: 'rejected',
+    feedback: feedback.trim(),
+  }, env);
+
+  await slackTeam(`🔄 *Work needs revision: "${task.title}"*\nReviewed by: ${ctx.brandUser.name}\nFeedback: ${feedback}`, env);
+
+  return json({ ok: true });
 }
 // ── Core sprint close logic — used by both manual close and cron ─────────────
 
@@ -915,17 +1119,7 @@ async function closeSprintById(sprintId, closedByUserId, env) {
     }
   }
 
-  // Slack summary
-  const summary = [
-    `Sprint closed: "${sprint.name}"`,
-    `✅ Done: ${doneTasks.length}`,
-    `↩ Spillover: ${spilloverTasks.length}`,
-    `🚫 Abandoned: ${abandonedTasks.length}`,
-    `📊 Completion: ${healthScore.completion_rate}%`,
-    newSprint ? `🆕 New sprint created: "${nextName}"` : '⚠️ Failed to create next sprint',
-  ].join('\n');
-
-  console.log(`[Slack] ${summary}`);
+  await slackOps(`📊 *Sprint closed: "${sprint.name}"*\n✅ Done: ${doneTasks.length}\n↩ Spillover: ${spilloverTasks.length}\n🚫 Abandoned: ${abandonedTasks.length}\n📈 Completion: ${healthScore.completion_rate}%${newSprint ? `\n🆕 New sprint: "${nextName}"` : '\n⚠️ Failed to create next sprint'}`, env);
 
   return {
     closed_sprint: sprint.name,
