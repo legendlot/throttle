@@ -232,6 +232,8 @@ export default {
       case 'getTaskActivity':     return handleGetTaskActivity(body, ctx, env);
       case 'addComment':          return handleAddComment(body, ctx, env);
       case 'getTeamMembers':      return handleGetTeamMembers(body, ctx, env);
+      case 'updateTaskMeta':     return handleUpdateTaskMeta(body, ctx, env);
+      case 'getProducts':        return handleGetProducts(body, ctx, env);
       default:
         return err(`Unknown action: ${action}`, 404);
     }
@@ -1226,7 +1228,7 @@ async function handleAddComment(body, ctx, env) {
 }
 
 async function handleGetTeamMembers(body, ctx, env) {
-  const g = requireRole(ctx, 'admin', 'lead'); if (g) return g;
+  const g = requireRole(ctx, 'admin', 'lead', 'member'); if (g) return g;
 
   const res = await sbFetch(
     `users?role=in.(member,lead)&select=id,name,discipline,role&order=name.asc`,
@@ -1234,6 +1236,56 @@ async function handleGetTeamMembers(body, ctx, env) {
   );
   const members = res.ok ? await res.json() : [];
   return json({ members });
+}
+
+// ── Phase 10: Task meta edit + Products ──────────────────────────────────────
+
+async function handleUpdateTaskMeta(body, ctx, env) {
+  const g = requireRole(ctx, 'admin', 'lead'); if (g) return g;
+
+  const { taskId, title, dueDate } = body;
+  if (!taskId) return err('taskId is required');
+
+  const updates = {};
+  if (title !== undefined) {
+    if (!title.trim()) return err('Title cannot be empty');
+    updates.title = title.trim();
+  }
+  if (dueDate !== undefined) updates.due_date = dueDate || null;
+  updates.updated_at = new Date().toISOString();
+
+  const updateRes = await sbFetch(`tasks?id=eq.${taskId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(updates),
+    prefer: 'return=minimal',
+  }, env);
+
+  if (!updateRes.ok) return err('Failed to update task');
+
+  await logActivity(taskId, ctx.userId, 'meta_update', {
+    fields: Object.keys(updates).filter(k => k !== 'updated_at'),
+    title: updates.title,
+    due_date: updates.due_date,
+  }, env);
+
+  return json({ ok: true });
+}
+
+async function handleGetProducts(body, ctx, env) {
+  // Any authenticated user can fetch products (needed for intake form)
+  // Override schema to public for product_master query
+  const url = `${env.SUPABASE_URL}/rest/v1/product_master?is_active=eq.true&select=product_code,product,sku,is_active&order=product.asc`;
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      'Accept-Profile': 'public',
+    },
+  });
+  const products = res.ok ? await res.json() : [];
+  return json({ products });
 }
 
 // ── Phase 6: Dashboard + Reporting actions ───────────────────────────────────
@@ -1680,17 +1732,11 @@ async function closeSprintById(sprintId, closedByUserId, env) {
     // Flag escalations (spillover_count was already >= 1 before this sprint)
     const escalations = spilloverTasks.filter(t => t.spillover_count >= 1);
 
-    // Increment spillover_count individually (no bulk increment in PostgREST without RPC)
-    // Use an RPC for this — see note below
-    // For now: update each task's spillover_count
-    // CLOUDFLARE LIMIT: if > 40 spillovers, this could hit the 50-subrequest limit
-    // Mitigation: sprint sizes are typically small (< 30 tasks)
-    for (const task of spilloverTasks) {
-      await sbFetch(`tasks?id=eq.${task.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({
-          spillover_count: (task.spillover_count || 0) + 1,
-        }),
+    // Increment spillover_count via RPC (single call, no subrequest limit concern)
+    if (spilloverIds.length > 0) {
+      await sbFetch('rpc/increment_spillover_count', {
+        method: 'POST',
+        body: JSON.stringify({ task_ids: spilloverIds }),
         prefer: 'return=minimal',
       }, env);
     }
