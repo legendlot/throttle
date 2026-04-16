@@ -1,5 +1,5 @@
 # Throttle — Technical Build Document
-**Version:** 6.0 | **Last Updated:** April 2026 (Phase 6)
+**Version:** 7.0 | **Last Updated:** April 2026 (Phase 7)
 **Purpose:** Technical reference for the Throttle brand team work OS.
 Feed this file when continuing development in a new session.
 
@@ -18,6 +18,7 @@ Feed this file when continuing development in a new session.
 | API | Cloudflare Worker | `throttleops.afshaan.workers.dev` — separate worker from lotopsproxy |
 | Frontend | Next.js 14 static export | `throttle.legendoftoys.com` — GitHub Pages, repo `legendlot/throttle` |
 | Auth | Supabase Auth — Google OAuth | @legendoftoys.com domain-restricted. Trigger auto-creates brand.users on sign-in. |
+| Fonts | Tomorrow (headings) + JetBrains Mono (body) | Google Fonts import. LOT brand identity. |
 | Drag & Drop | @dnd-kit/core | Kanban board |
 | Table | TanStack Table v8 | Task table view |
 | Calendar | FullCalendar React | Installed, not yet used — sprint timeline uses custom 7-col grid |
@@ -224,6 +225,13 @@ NEXT_PUBLIC_WORKER_URL=https://throttleops.afshaan.workers.dev
 | Completion rate: not clickable | StatCard with `bucket=null` | Completion rate is a calculated percentage, not a filterable task list. No drill-down makes sense. |
 | Workload overload threshold: >8 tasks | Orange highlight on total column | Rough heuristic for 7-day sprint. Adjustable later based on real usage data. |
 | ByPerson view: collapsible groups | Default all expanded, click to collapse | At 3–5 team members, all-expanded is manageable. Collapse helps when viewing across multiple sprints with many people. |
+| Brand refresh: inline styles over Tailwind | All zinc-* classes replaced with `style={{}}` using CSS custom properties | LOT brand tokens (--bg, --s1, --b1, --text, etc.) give exact control. Inline styles avoid Tailwind purge issues and make token usage explicit. |
+| Font stack: Tomorrow + JetBrains Mono | Google Fonts import in globals.css | Tomorrow for headings (uppercase, tracked), JetBrains Mono for body/data. Matches LOT dashboard aesthetic. |
+| ThrottleLogo: checkered flag + wordmark | Inline SVG-free 4×4 grid via CSS grid | No image dependency. Yellow (#F2CD1A) on dark (#1e1e1e) cells. "Brand OS" sub-label establishes tool identity. |
+| Nav active indicator: yellow pill | `background: '#F2CD1A', color: '#080808'` | High contrast. Same pattern as LOT dashboard. Replaces white bottom-border. |
+| Stage colors updated to LOT palette | in_sprint=#F2CD1A, in_progress=#213CE2, abandoned=#DE2A2A | Blue for active work, yellow for sprint-ready, red for abandoned. Matches LOT brand primary colors. |
+| Priority colors updated | urgent=#DE2A2A, medium=#F2CD1A, low=#555 | Red urgent, yellow medium (brand color), muted low. High > amber (#f59e0b) for visual distinction. |
+| Custom scrollbar | 4px thin, --b2 thumb, --bg track | Matches dark UI. Thin scrollbar reduces visual noise on data-heavy pages (dashboard tables, sprint lists). |
 
 ---
 
@@ -294,8 +302,30 @@ NEXT_PUBLIC_WORKER_URL=https://throttleops.afshaan.workers.dev
 - [x] TaskDrillModal — read-only drill-down modal with priority/stage badges and assignees
 - [x] Layout: Dashboard nav link visible to admin + lead (was admin only)
 
+### Phase 7 — Brand Refresh + Polish ✅
+- [x] globals.css: Tomorrow + JetBrains Mono fonts, LOT color token system (--bg, --s1-s4, --b1-b3, --text, --t2, --t3)
+- [x] ThrottleLogo component: checkered flag 4×4 grid + "Throttle" wordmark + "Brand OS" sub-label
+- [x] Layout.js: branded nav with yellow active pill, sticky header, logo separator
+- [x] Login page: large checkered logo, yellow sign-in button, brand OS subtitle
+- [x] Board page: TaskCard with priority left-border, Tomorrow column headers, inline styles
+- [x] TaskSidePanel: Tomorrow section labels, yellow focus borders, yellow primary buttons, red abandon
+- [x] TaskDrillModal: priority left-border cards, branded badges, dark overlay
+- [x] Requests page: yellow primary button, branded filter pills, LOT card styling
+- [x] Requests/new page: yellow toggle, branded form inputs with focus state, type selector cards
+- [x] Requests/approval page: branded decision buttons, yellow confirm, detail panel
+- [x] Sprints page: branded timeline cells, drag zones, sprint create form, due date modal
+- [x] Dashboard page: stat cards with accent left-borders, branded tables, Tomorrow section headings
+- [x] Settings page: branded table, yellow Load Team button
+- [x] taskConfig.js: stage colors updated (in_sprint=#F2CD1A, in_progress=#213CE2, abandoned=#DE2A2A)
+- [x] taskConfig.js: priority colors updated (urgent=#DE2A2A, high=#f59e0b, medium=#F2CD1A, low=#555)
+- [x] RequestStatusBadge: branded status pills with rgba backgrounds
+- [x] ProductSelector: branded dropdown with yellow focus
+- [x] Root page, layout.js, auth/callback: zinc classes removed
+- [x] Zero zinc-* Tailwind classes remaining (grep-verified across all src files)
+- [x] Build succeeds, deployed to GitHub Pages
+
 ### Pending
-- Phase 7: Polish + QA + full role testing
+- Phase 8: QA + full role testing
 
 ---
 
