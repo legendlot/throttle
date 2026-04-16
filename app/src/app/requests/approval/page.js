@@ -6,7 +6,7 @@ import RequestStatusBadge from '@/components/RequestStatusBadge';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
 import { workerFetch } from '@/lib/worker';
-import { REQUEST_TYPES } from '@/lib/requestTypes';
+import { REQUEST_TYPES, getRequestType } from '@/lib/requestTypes';
 
 export default function ApprovalQueuePage() {
   const { session, brandUser } = useAuth();
@@ -41,8 +41,13 @@ export default function ApprovalQueuePage() {
     setLoading(false);
   }
 
-  function getTypeLabel(value) {
-    return REQUEST_TYPES.find(t => t.value === value)?.label || value;
+  function getTypeLabel(typeId) {
+    const t = getRequestType(typeId);
+    return t ? `${t.icon} ${t.label}` : typeId;
+  }
+
+  function isBrandInitiative(typeId) {
+    return typeId === 'brand_initiative';
   }
 
   async function handleDecision() {
@@ -184,8 +189,24 @@ export default function ApprovalQueuePage() {
                       fontSize: 10,
                       color: 'var(--t3)',
                       marginBottom: 4,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
                     }}>
                       {getTypeLabel(req.type)}
+                      {isBrandInitiative(req.type) && (
+                        <span style={{
+                          background: 'rgba(242,205,26,0.12)',
+                          color: '#F2CD1A',
+                          fontFamily: 'var(--mono)',
+                          fontSize: 9,
+                          padding: '1px 6px',
+                          borderRadius: 3,
+                          fontWeight: 600,
+                        }}>
+                          Brand
+                        </span>
+                      )}
                     </div>
                     <div style={{
                       fontFamily: 'var(--mono)',
@@ -255,8 +276,24 @@ export default function ApprovalQueuePage() {
                         background: 'var(--s3)',
                         padding: '2px 8px',
                         borderRadius: 4,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 6,
                       }}>
                         {getTypeLabel(selected.type)}
+                        {isBrandInitiative(selected.type) && (
+                          <span style={{
+                            background: 'rgba(242,205,26,0.12)',
+                            color: '#F2CD1A',
+                            fontFamily: 'var(--mono)',
+                            fontSize: 9,
+                            padding: '1px 6px',
+                            borderRadius: 3,
+                            fontWeight: 600,
+                          }}>
+                            Brand
+                          </span>
+                        )}
                       </span>
                       <h2 style={{
                         fontFamily: 'var(--mono)',

@@ -9,6 +9,46 @@
  *          Authorization: Bearer <supabase_jwt>
  */
 
+// ── Launch Pack items — duplicated from app/src/lib/requestTypes.js ──────────
+// Worker needs this for approveRequest task generation
+const LAUNCH_PACK_ITEMS = [
+  { id: 'listing_images',  label: 'Listing Images',      discipline: 'designer',    deliverable_type: 'listing_image' },
+  { id: 'aplus',           label: 'A+ / EBC Content',    discipline: 'designer',    deliverable_type: 'graphic' },
+  { id: 'comic_graphics',  label: 'Comic (Graphics)',     discipline: 'designer',    deliverable_type: 'graphic' },
+  { id: 'comic_script',    label: 'Comic (Script)',       discipline: 'copywriter',  deliverable_type: 'copy' },
+  { id: 'box_sticker',     label: 'Box Sticker',          discipline: 'designer',    deliverable_type: 'graphic' },
+  { id: 'manual',          label: 'Product Manual',       discipline: 'designer',    deliverable_type: 'graphic' },
+  { id: 'packaging',       label: 'Packaging',            discipline: 'designer',    deliverable_type: 'graphic' },
+  { id: 'pdp_video',       label: 'PDP Video',            discipline: 'photo_video', deliverable_type: 'video' },
+  { id: 'tutorial_video',  label: 'Tutorial Video',       discipline: 'photo_video', deliverable_type: 'video' },
+];
+
+function deriveDeliverableType(requestType, templateData) {
+  switch (requestType) {
+    case 'product_creative':
+      if (['PDP Video','Tutorial Video'].includes(templateData.asset_type)) return 'video'
+      if (templateData.asset_type === 'Listing Images') return 'listing_image'
+      return 'graphic'
+    case 'social_media':
+      if (['Reel','Video'].includes(templateData.format)) return 'video'
+      if (templateData.format === 'Caption Only') return 'copy'
+      return 'social_post'
+    case 'advertising':
+      if (templateData.ad_format === 'Video') return 'video'
+      return 'ad_creative'
+    case 'copy_script':
+      return 'copy'
+    case 'design_brand':
+      if (templateData.asset_type === 'Presentation / Deck') return 'deck'
+      return 'graphic'
+    case '3d_motion':
+      if (['Animation','3D for Social','AI Video'].includes(templateData.project_type)) return 'video'
+      return '3d_render'
+    default:
+      return 'other'
+  }
+}
+
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -254,7 +294,9 @@ async function handleSubmitRequest(body, ctx, env) {
 
   if (!type || !title) return err('type and title are required');
 
-  const validTypes = ['social','campaign','design','copy','photo_video','3d','deck','ad'];
+  const validTypes = ['social','campaign','design','copy','photo_video','3d','deck','ad',
+    'launch_pack','product_creative','social_media','advertising','photo_video_new',
+    'copy_script','design_brand','3d_motion','brand_initiative'];
   if (!validTypes.includes(type)) return err('Invalid request type');
 
   // INSERT request
@@ -265,6 +307,7 @@ async function handleSubmitRequest(body, ctx, env) {
       title,
       template_data: template_data || {},
       is_product_scoped: !!is_product_scoped,
+      brand_team_only: type === 'brand_initiative',
       status: 'pending',
       requester_id: ctx.userId,
     }),
@@ -327,53 +370,133 @@ async function handleApproveRequest(body, ctx, env) {
 
   if (!updateRes.ok) return err('Failed to update request');
 
-  // Batch create tasks — one per product if product scoped, otherwise one task
+  // Fetch linked products
   const rpRes = await sbFetch(`request_products?request_id=eq.${request_id}&select=*`, { method: 'GET' }, env);
   const requestProducts = rpRes.ok ? await rpRes.json() : [];
 
-  const taskBase = {
-    request_id,
-    type: request.type,
-    deliverable_type: 'other', // Admin/Lead sets correct type when assigning
-    stage: 'backlog',
-    priority: 'medium',
-    is_spillover: false,
-    spillover_count: 0,
-  };
+  const approveNote = note || '';
+  const templateData = request.template_data || {};
+  const isProductScoped = request.is_product_scoped;
+  let tasksCreated = 0;
 
-  let tasksToCreate = [];
+  // Helper: insert a single task row and log activity
+  async function createTask(overrides) {
+    const taskRow = {
+      request_id,
+      stage: 'backlog',
+      priority: 'medium',
+      is_spillover: false,
+      spillover_count: 0,
+      ...overrides,
+    };
+    const res = await sbFetch('tasks', { method: 'POST', body: JSON.stringify(taskRow) }, env);
+    if (!res.ok) {
+      console.error('[approveRequest] Failed to create task:', await res.text());
+      return null;
+    }
+    const [created] = await res.json();
+    tasksCreated++;
+    return created;
+  }
 
-  if (request.is_product_scoped && requestProducts.length > 0) {
-    // Generate batch_id to group these tasks
+  // ── Type-specific task creation ────────────────────────────────────────────
+
+  if (request.type === 'launch_pack') {
+    // One task per checked launch pack item, for the single product
+    const product = requestProducts[0];
+    const checkedItems = templateData.checklist || [];
     const batchId = crypto.randomUUID();
-    tasksToCreate = requestProducts.map(rp => ({
-      ...taskBase,
-      product_code: rp.product_code,
-      batch_id: batchId,
-      title: `${request.title} — ${rp.product_code}`,
-      notes: rp.product_notes || null,
-    }));
+
+    for (const itemId of checkedItems) {
+      const item = LAUNCH_PACK_ITEMS.find(i => i.id === itemId);
+      if (!item) continue;
+      await createTask({
+        product_code: product?.product_code || null,
+        batch_id: batchId,
+        title: `${item.label} — ${product?.product_code || 'Unknown'}`,
+        type: 'launch_pack',
+        deliverable_type: item.deliverable_type,
+        is_revision: false,
+        notes: `Launch pack item. Assign to: ${item.discipline}. ${approveNote}`.trim(),
+      });
+    }
+
+  } else if (request.type === 'photo_video_new') {
+    // Two tasks per product: shoot + edit (if edit_required = 'Yes')
+    const editRequired = templateData.edit_required === 'Yes';
+    const targetProducts = isProductScoped && requestProducts.length > 0 ? requestProducts : [null];
+
+    for (const product of targetProducts) {
+      const batchId = crypto.randomUUID();
+      const productSuffix = product ? ` — ${product.product_code}` : '';
+
+      await createTask({
+        product_code: product?.product_code || null,
+        batch_id: batchId,
+        title: `Shoot${productSuffix}: ${templateData.shoot_type || ''}`,
+        type: 'photo_video_new',
+        deliverable_type: templateData.delivery_format?.includes('MP4') || templateData.delivery_format?.includes('MOV') ? 'video' : 'photo',
+        is_revision: false,
+        notes: approveNote || '',
+      });
+
+      if (editRequired) {
+        await createTask({
+          product_code: product?.product_code || null,
+          batch_id: batchId,
+          title: `Edit${productSuffix}: ${templateData.shoot_type || ''}`,
+          type: 'photo_video_new',
+          deliverable_type: 'video',
+          is_revision: false,
+          notes: `Requires shoot task to be completed first. ${approveNote}`.trim(),
+        });
+      }
+    }
+
+  } else if (request.type === 'brand_initiative') {
+    // Parse deliverables (one per line) and create one task per line
+    const deliverableLines = (templateData.deliverables || '')
+      .split('\n')
+      .map(l => l.trim())
+      .filter(Boolean);
+    const batchId = deliverableLines.length > 1 ? crypto.randomUUID() : null;
+
+    for (const deliverable of deliverableLines) {
+      await createTask({
+        product_code: null,
+        batch_id: batchId,
+        title: `${request.title}: ${deliverable}`,
+        type: 'brand_initiative',
+        deliverable_type: 'other',
+        is_revision: false,
+        notes: `Initiative: ${templateData.initiative_name}. ${approveNote}`.trim(),
+      });
+    }
+
   } else {
-    tasksToCreate = [{
-      ...taskBase,
-      title: request.title,
-      notes: note || null,
-    }];
+    // All other types: one task per product (or one if not product-scoped)
+    const isRevision = templateData.is_revision === 'Revision';
+    const targetProducts = isProductScoped && requestProducts.length > 0 ? requestProducts : [null];
+    const batchId = targetProducts.length > 1 ? crypto.randomUUID() : null;
+
+    for (const product of targetProducts) {
+      const productSuffix = product ? ` — ${product.product_code}` : '';
+      await createTask({
+        product_code: product?.product_code || null,
+        batch_id: batchId,
+        title: `${request.title}${productSuffix}`,
+        type: request.type,
+        deliverable_type: deriveDeliverableType(request.type, templateData),
+        is_revision: isRevision,
+        notes: approveNote || '',
+      });
+    }
   }
 
-  const taskRes = await sbFetch('tasks', {
-    method: 'POST',
-    body: JSON.stringify(tasksToCreate),
-  }, env);
+  await slackOps(`✅ *Request approved*\n*"${request.title}"*\nApproved by: ${ctx.brandUser.name}\n${tasksCreated} task(s) created in backlog`, env);
+  await slackTeam(`✅ *Request approved: "${request.title}"*\n${tasksCreated} task(s) created and ready for sprint planning`, env);
 
-  if (!taskRes.ok) {
-    console.error('[approveRequest] Failed to create tasks:', await taskRes.text());
-  }
-
-  await slackOps(`✅ *Request approved*\n*"${request.title}"*\nApproved by: ${ctx.brandUser.name}\n${tasksToCreate.length} task(s) created in backlog`, env);
-  await slackTeam(`✅ *Request approved: "${request.title}"*\n${tasksToCreate.length} task(s) created and ready for sprint planning`, env);
-
-  return json({ ok: true, tasks_created: tasksToCreate.length });
+  return json({ ok: true, tasks_created: tasksCreated });
 }
 
 async function handleRejectRequest(body, ctx, env) {

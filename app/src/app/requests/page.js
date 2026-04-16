@@ -5,7 +5,7 @@ import Layout from '@/components/Layout';
 import RequestStatusBadge from '@/components/RequestStatusBadge';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
-import { REQUEST_TYPES } from '@/lib/requestTypes';
+import { REQUEST_TYPES, getRequestType } from '@/lib/requestTypes';
 
 export default function RequestsPage() {
   const { session, brandUser } = useAuth();
@@ -39,8 +39,9 @@ export default function RequestsPage() {
     setLoading(false);
   }
 
-  function getTypeLabel(value) {
-    return REQUEST_TYPES.find(t => t.value === value)?.label || value;
+  function getTypeLabel(typeId) {
+    const t = getRequestType(typeId);
+    return t ? `${t.icon} ${t.label}` : typeId;
   }
 
   const filters = [

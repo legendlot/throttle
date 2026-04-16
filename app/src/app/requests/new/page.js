@@ -3,76 +3,142 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Layout from '@/components/Layout';
 import ProductSelector from '@/components/ProductSelector';
-import { REQUEST_TYPES, REQUEST_TEMPLATES } from '@/lib/requestTypes';
+import { REQUEST_TYPES, LAUNCH_PACK_ITEMS, getVisibleTypes } from '@/lib/requestTypes';
 import { workerFetch } from '@/lib/worker';
 import { useAuth } from '@/lib/auth';
 
 export default function NewRequestPage() {
-  const { session } = useAuth();
+  const { session, brandUser } = useAuth();
   const router = useRouter();
 
-  const [step, setStep] = useState('type'); // 'type' | 'form' | 'success'
+  const [step, setStep] = useState('type'); // 'type' | 'product' | 'checklist' | 'form' | 'review' | 'success'
   const [selectedType, setSelectedType] = useState(null);
   const [title, setTitle] = useState('');
   const [isProductScoped, setIsProductScoped] = useState(false);
   const [selectedProducts, setSelectedProducts] = useState([]);
-  const [productNotes, setProductNotes] = useState({}); // { productName: note }
+  const [productNotes, setProductNotes] = useState({});
   const [formData, setFormData] = useState({});
+  const [checkedItems, setCheckedItems] = useState([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
 
+  const visibleTypes = getVisibleTypes(brandUser?.role);
+
+  // ── Step navigation ────────────────────────────────────────────────────────
+
   function selectType(type) {
     setSelectedType(type);
-    setStep('form');
     setFormData({});
     setTitle('');
-    setIsProductScoped(false);
+    setIsProductScoped(type.product_required);
     setSelectedProducts([]);
     setProductNotes({});
+    // Set defaults for toggle fields
+    const defaults = {};
+    for (const f of type.fields) {
+      if (f.default) defaults[f.id] = f.default;
+    }
+    setFormData(defaults);
+    // Set default checked items for launch pack
+    if (type.id === 'launch_pack') {
+      setCheckedItems(LAUNCH_PACK_ITEMS.filter(i => i.default_on).map(i => i.id));
+    } else {
+      setCheckedItems([]);
+    }
+
+    // Skip product step for brand_initiative
+    if (type.id === 'brand_initiative') {
+      setStep('form');
+    } else {
+      setStep('product');
+    }
   }
 
-  function handleFieldChange(key, value) {
-    setFormData(prev => ({ ...prev, [key]: value }));
+  function advanceFromProduct() {
+    if (selectedType.product_required && selectedProducts.length === 0) {
+      setError('Please select at least one product');
+      return;
+    }
+    if (isProductScoped && selectedProducts.length === 0) {
+      setError('Please select at least one product');
+      return;
+    }
+    setError(null);
+    if (selectedType.id === 'launch_pack') {
+      setStep('checklist');
+    } else {
+      setStep('form');
+    }
   }
 
-  function handleProductNoteChange(product, note) {
-    setProductNotes(prev => ({ ...prev, [product]: note }));
+  function advanceFromChecklist() {
+    if (checkedItems.length === 0) {
+      setError('Select at least one item for the launch pack');
+      return;
+    }
+    setError(null);
+    setStep('review');
+  }
+
+  function advanceFromForm() {
+    const validationError = validateForm();
+    if (validationError) { setError(validationError); return; }
+    setError(null);
+    setStep('review');
+  }
+
+  function toggleItem(itemId) {
+    setCheckedItems(prev =>
+      prev.includes(itemId) ? prev.filter(i => i !== itemId) : [...prev, itemId]
+    );
+  }
+
+  function handleFieldChange(fieldId, value) {
+    setFormData(prev => ({ ...prev, [fieldId]: value }));
+  }
+
+  function toggleMultiSelect(fieldId, opt) {
+    setFormData(prev => {
+      const current = Array.isArray(prev[fieldId]) ? prev[fieldId] : [];
+      return {
+        ...prev,
+        [fieldId]: current.includes(opt) ? current.filter(v => v !== opt) : [...current, opt],
+      };
+    });
   }
 
   function isFieldVisible(field) {
     if (!field.conditional) return true;
-    return formData[field.conditional.key] === field.conditional.value;
+    return formData[field.conditional.field] === field.conditional.value;
   }
 
-  function validate() {
+  function validateForm() {
     if (!title.trim()) return 'Request title is required';
-    const fields = REQUEST_TEMPLATES[selectedType.value] || [];
-    for (const field of fields) {
+    for (const field of selectedType.fields) {
       if (field.required && isFieldVisible(field)) {
-        const val = formData[field.key];
+        const val = formData[field.id];
         if (!val || (Array.isArray(val) && val.length === 0) || val === '') {
           return `${field.label} is required`;
         }
       }
     }
-    if (isProductScoped && selectedProducts.length === 0) {
-      return 'Please select at least one product';
-    }
     return null;
   }
 
   async function handleSubmit() {
-    const validationError = validate();
-    if (validationError) { setError(validationError); return; }
-
+    if (!title.trim()) { setError('Request title is required'); return; }
     setSubmitting(true);
     setError(null);
 
+    const templateData = selectedType.id === 'launch_pack'
+      ? { checklist: checkedItems }
+      : { ...formData };
+
     try {
       await workerFetch('submitRequest', {
-        type: selectedType.value,
+        type: selectedType.id,
         title: title.trim(),
-        template_data: formData,
+        template_data: templateData,
         is_product_scoped: isProductScoped,
         products: isProductScoped
           ? selectedProducts.map(p => ({ product_name: p, notes: productNotes[p] || '' }))
@@ -87,66 +153,37 @@ export default function NewRequestPage() {
     }
   }
 
-  // ── Step: Type selector ─────────────────────────────────────────────────────
+  // ── Step: Type selector ────────────────────────────────────────────────────
   if (step === 'type') return (
     <Layout>
-      <div style={{ maxWidth: 672, margin: '0 auto' }}>
+      <div style={{ maxWidth: 768, margin: '0 auto' }}>
         <div style={{ marginBottom: 24 }}>
           <button
             onClick={() => router.push('/requests/')}
-            style={{
-              fontFamily: 'var(--mono)',
-              fontSize: 11,
-              color: 'var(--t3)',
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              marginBottom: 16,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 4,
-              padding: 0,
-            }}
+            style={backBtnStyle}
             onMouseEnter={e => e.currentTarget.style.color = 'var(--t2)'}
             onMouseLeave={e => e.currentTarget.style.color = 'var(--t3)'}
           >
             ← Back
           </button>
-          <h1 style={{
-            fontFamily: 'var(--head)',
-            fontWeight: 900,
-            fontSize: 18,
-            letterSpacing: '.2em',
-            textTransform: 'uppercase',
-            color: 'var(--text)',
-            margin: 0,
-          }}>
-            New Request
-          </h1>
-          <p style={{
-            fontFamily: 'var(--mono)',
-            fontSize: 12,
-            color: 'var(--t3)',
-            marginTop: 4,
-          }}>
-            What type of work do you need?
-          </p>
+          <h1 style={pageHeadingStyle}>New Request</h1>
+          <p style={pageSubStyle}>What type of work do you need?</p>
         </div>
 
         <div style={{
           display: 'grid',
-          gridTemplateColumns: '1fr 1fr',
+          gridTemplateColumns: '1fr 1fr 1fr',
           gap: 12,
         }}>
-          {REQUEST_TYPES.map(type => (
+          {visibleTypes.map(type => (
             <button
-              key={type.value}
+              key={type.id}
               onClick={() => selectType(type)}
               style={{
                 background: 'var(--s1)',
                 border: '1px solid var(--b1)',
                 borderRadius: 6,
-                padding: 16,
+                padding: 20,
                 textAlign: 'left',
                 cursor: 'pointer',
               }}
@@ -159,14 +196,12 @@ export default function NewRequestPage() {
                 e.currentTarget.style.background = 'var(--s1)';
               }}
             >
-              <div style={{ fontSize: 24, marginBottom: 8 }}>{type.icon}</div>
-              <div style={{
-                fontFamily: 'var(--mono)',
-                fontSize: 13,
-                fontWeight: 500,
-                color: 'var(--text)',
-              }}>
+              <div style={{ fontSize: 24, marginBottom: 10 }}>{type.icon}</div>
+              <div style={{ fontFamily: 'var(--head)', fontSize: 12, letterSpacing: '.15em', textTransform: 'uppercase', color: 'var(--text)', marginBottom: 4 }}>
                 {type.label}
+              </div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)', lineHeight: 1.5 }}>
+                {type.description}
               </div>
             </button>
           ))}
@@ -175,7 +210,353 @@ export default function NewRequestPage() {
     </Layout>
   );
 
-  // ── Step: Success ───────────────────────────────────────────────────────────
+  // ── Step: Product scoping ──────────────────────────────────────────────────
+  if (step === 'product') return (
+    <Layout>
+      <div style={{ maxWidth: 672, margin: '0 auto' }}>
+        <div style={{ marginBottom: 24 }}>
+          <button
+            onClick={() => { setStep('type'); setError(null); }}
+            style={backBtnStyle}
+            onMouseEnter={e => e.currentTarget.style.color = 'var(--t2)'}
+            onMouseLeave={e => e.currentTarget.style.color = 'var(--t3)'}
+          >
+            ← Change type
+          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+            <span style={{ fontSize: 20 }}>{selectedType.icon}</span>
+            <h1 style={pageHeadingStyle}>{selectedType.label}</h1>
+          </div>
+          <p style={pageSubStyle}>
+            {selectedType.product_required
+              ? `Select ${selectedType.multi_product ? 'the product(s)' : 'the product'} for this request`
+              : 'Is this request for specific products?'}
+          </p>
+        </div>
+
+        <div style={{
+          background: 'var(--s1)',
+          border: '1px solid var(--b1)',
+          borderRadius: 6,
+          padding: 16,
+        }}>
+          {/* If product is not required, show toggle */}
+          {!selectedType.product_required && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: isProductScoped ? 16 : 0,
+            }}>
+              <div>
+                <p style={{ fontFamily: 'var(--mono)', fontSize: 13, fontWeight: 500, color: 'var(--text)', margin: 0 }}>
+                  Product Specific?
+                </p>
+                <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginTop: 2, marginBottom: 0 }}>
+                  Is this request for specific products in our range?
+                </p>
+              </div>
+              <ToggleSwitch
+                on={isProductScoped}
+                onToggle={() => { setIsProductScoped(!isProductScoped); setSelectedProducts([]); }}
+              />
+            </div>
+          )}
+
+          {/* Product selector */}
+          {(selectedType.product_required || isProductScoped) && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <ProductSelector
+                selected={selectedProducts}
+                onChange={setSelectedProducts}
+                multi={selectedType.multi_product !== false}
+              />
+              {selectedProducts.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
+                  <p style={sectionLabelStyle}>Add notes per product (optional)</p>
+                  {selectedProducts.map(product => (
+                    <div key={product}>
+                      <label style={fieldLabelStyle}>{product}</label>
+                      <InputField
+                        value={productNotes[product] || ''}
+                        onChange={e => setProductNotes(prev => ({ ...prev, [product]: e.target.value }))}
+                        placeholder="Any specific notes for this product..."
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {error && <ErrorBanner message={error} />}
+
+        <div style={{ display: 'flex', gap: 12, paddingTop: 16 }}>
+          <YellowButton onClick={advanceFromProduct} label="Continue" />
+          <GhostButton onClick={() => router.push('/requests/')} label="Cancel" />
+        </div>
+      </div>
+    </Layout>
+  );
+
+  // ── Step: Launch Pack checklist ────────────────────────────────────────────
+  if (step === 'checklist') return (
+    <Layout>
+      <div style={{ maxWidth: 672, margin: '0 auto' }}>
+        <div style={{ marginBottom: 24 }}>
+          <button
+            onClick={() => { setStep('product'); setError(null); }}
+            style={backBtnStyle}
+            onMouseEnter={e => e.currentTarget.style.color = 'var(--t2)'}
+            onMouseLeave={e => e.currentTarget.style.color = 'var(--t3)'}
+          >
+            ← Back
+          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+            <span style={{ fontSize: 20 }}>{selectedType.icon}</span>
+            <h1 style={pageHeadingStyle}>Launch Pack</h1>
+          </div>
+          <p style={pageSubStyle}>Select the assets needed for this product launch. Each checked item becomes a separate task.</p>
+        </div>
+
+        <div style={{
+          background: 'var(--s1)',
+          border: '1px solid var(--b1)',
+          borderRadius: 6,
+          padding: '4px 16px',
+        }}>
+          {LAUNCH_PACK_ITEMS.map(item => (
+            <label key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderBottom: '1px solid var(--b1)', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={checkedItems.includes(item.id)}
+                onChange={() => toggleItem(item.id)}
+                style={{ accentColor: '#F2CD1A', width: 16, height: 16 }}
+              />
+              <div style={{ flex: 1 }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--text)' }}>{item.label}</span>
+              </div>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                {item.discipline}
+              </span>
+            </label>
+          ))}
+        </div>
+
+        <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginTop: 12 }}>
+          {checkedItems.length} item{checkedItems.length !== 1 ? 's' : ''} selected — {checkedItems.length} task{checkedItems.length !== 1 ? 's' : ''} will be created on approval
+        </div>
+
+        {error && <ErrorBanner message={error} />}
+
+        {/* Title field before review */}
+        <div style={{ marginTop: 20 }}>
+          <FormField label="Request Title" required>
+            <InputField
+              value={title}
+              onChange={e => setTitle(e.target.value)}
+              placeholder="e.g. Gyro Flare Launch Pack"
+            />
+          </FormField>
+        </div>
+
+        <div style={{ display: 'flex', gap: 12, paddingTop: 16 }}>
+          <YellowButton onClick={advanceFromChecklist} label="Review & Submit" />
+          <GhostButton onClick={() => router.push('/requests/')} label="Cancel" />
+        </div>
+      </div>
+    </Layout>
+  );
+
+  // ── Step: Template form ────────────────────────────────────────────────────
+  if (step === 'form') return (
+    <Layout>
+      <div style={{ maxWidth: 672, margin: '0 auto' }}>
+        <div style={{ marginBottom: 24 }}>
+          <button
+            onClick={() => {
+              setError(null);
+              if (selectedType.id === 'brand_initiative') setStep('type');
+              else setStep('product');
+            }}
+            style={backBtnStyle}
+            onMouseEnter={e => e.currentTarget.style.color = 'var(--t2)'}
+            onMouseLeave={e => e.currentTarget.style.color = 'var(--t3)'}
+          >
+            ← Back
+          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+            <span style={{ fontSize: 20 }}>{selectedType.icon}</span>
+            <h1 style={pageHeadingStyle}>{selectedType.label}</h1>
+          </div>
+          <p style={pageSubStyle}>Fill in the details below</p>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {/* Title */}
+          <FormField label="Request Title" required>
+            <InputField
+              value={title}
+              onChange={e => setTitle(e.target.value)}
+              placeholder="Short description of this request"
+            />
+          </FormField>
+
+          {/* Dynamic fields */}
+          {selectedType.fields.map(field => {
+            if (!isFieldVisible(field)) return null;
+            return (
+              <FormField key={field.id} label={field.label} required={field.required}>
+                <FieldInput
+                  field={field}
+                  value={formData[field.id]}
+                  onChange={val => handleFieldChange(field.id, val)}
+                  onToggleMulti={(fieldId, opt) => toggleMultiSelect(fieldId, opt)}
+                />
+              </FormField>
+            );
+          })}
+
+          {error && <ErrorBanner message={error} />}
+
+          <div style={{ display: 'flex', gap: 12, paddingTop: 8 }}>
+            <YellowButton onClick={advanceFromForm} label="Review & Submit" />
+            <GhostButton onClick={() => router.push('/requests/')} label="Cancel" />
+          </div>
+        </div>
+      </div>
+    </Layout>
+  );
+
+  // ── Step: Review & submit ──────────────────────────────────────────────────
+  if (step === 'review') return (
+    <Layout>
+      <div style={{ maxWidth: 672, margin: '0 auto' }}>
+        <div style={{ marginBottom: 24 }}>
+          <button
+            onClick={() => {
+              setError(null);
+              setStep(selectedType.id === 'launch_pack' ? 'checklist' : 'form');
+            }}
+            style={backBtnStyle}
+            onMouseEnter={e => e.currentTarget.style.color = 'var(--t2)'}
+            onMouseLeave={e => e.currentTarget.style.color = 'var(--t3)'}
+          >
+            ← Edit
+          </button>
+          <h1 style={pageHeadingStyle}>Review Request</h1>
+          <p style={pageSubStyle}>Confirm the details before submitting</p>
+        </div>
+
+        <div style={{
+          background: 'var(--s1)',
+          border: '1px solid var(--b1)',
+          borderRadius: 6,
+          padding: 20,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 16,
+        }}>
+          {/* Type */}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <span style={{ fontSize: 18 }}>{selectedType.icon}</span>
+            <span style={{ fontFamily: 'var(--head)', fontSize: 11, letterSpacing: '.15em', textTransform: 'uppercase', color: 'var(--t2)' }}>
+              {selectedType.label}
+            </span>
+          </div>
+
+          {/* Title */}
+          <div>
+            <p style={sectionLabelStyle}>Title</p>
+            <p style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--text)', margin: 0 }}>{title}</p>
+          </div>
+
+          {/* Products */}
+          {isProductScoped && selectedProducts.length > 0 && (
+            <div>
+              <p style={sectionLabelStyle}>Products</p>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {selectedProducts.map(p => (
+                  <span key={p} style={{
+                    background: 'var(--s3)',
+                    borderRadius: 4,
+                    padding: '3px 8px',
+                    fontFamily: 'var(--mono)',
+                    fontSize: 11,
+                    color: 'var(--t2)',
+                  }}>{p}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Launch pack items */}
+          {selectedType.id === 'launch_pack' && (
+            <div>
+              <p style={sectionLabelStyle}>Launch Pack Items ({checkedItems.length})</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {checkedItems.map(itemId => {
+                  const item = LAUNCH_PACK_ITEMS.find(i => i.id === itemId);
+                  return item ? (
+                    <div key={itemId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)' }}>{item.label}</span>
+                      <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase' }}>{item.discipline}</span>
+                    </div>
+                  ) : null;
+                })}
+              </div>
+              <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: '#F2CD1A', marginTop: 8, marginBottom: 0 }}>
+                {checkedItems.length} task{checkedItems.length !== 1 ? 's' : ''} will be auto-generated on approval
+              </p>
+            </div>
+          )}
+
+          {/* Photo & video note */}
+          {selectedType.id === 'photo_video_new' && (
+            <div>
+              <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: '#F2CD1A', margin: 0 }}>
+                This will create {formData.edit_required === 'Yes' ? '2 tasks: Shoot + Edit' : '1 task: Shoot'}{isProductScoped && selectedProducts.length > 1 ? ` per product (${selectedProducts.length} products)` : ''}
+              </p>
+            </div>
+          )}
+
+          {/* Form data summary */}
+          {selectedType.id !== 'launch_pack' && Object.keys(formData).length > 0 && (
+            <div>
+              <p style={sectionLabelStyle}>Details</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {selectedType.fields.map(field => {
+                  if (!isFieldVisible(field)) return null;
+                  const val = formData[field.id];
+                  if (!val || (Array.isArray(val) && val.length === 0)) return null;
+                  return (
+                    <div key={field.id} style={{ display: 'flex', gap: 8 }}>
+                      <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', width: 140, flexShrink: 0 }}>
+                        {field.label}
+                      </span>
+                      <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)', flex: 1 }}>
+                        {Array.isArray(val) ? val.join(', ') : String(val)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {error && <ErrorBanner message={error} />}
+
+        <div style={{ display: 'flex', gap: 12, paddingTop: 16 }}>
+          <YellowButton onClick={handleSubmit} label={submitting ? 'Submitting...' : 'Submit Request'} disabled={submitting} />
+          <GhostButton onClick={() => router.push('/requests/')} label="Cancel" />
+        </div>
+      </div>
+    </Layout>
+  );
+
+  // ── Step: Success ──────────────────────────────────────────────────────────
   if (step === 'success') return (
     <Layout>
       <div style={{ maxWidth: 512, margin: '0 auto', textAlign: 'center', paddingTop: 80, paddingBottom: 80 }}>
@@ -220,7 +601,17 @@ export default function NewRequestPage() {
             View My Requests
           </button>
           <button
-            onClick={() => setStep('type')}
+            onClick={() => {
+              setStep('type');
+              setSelectedType(null);
+              setTitle('');
+              setFormData({});
+              setCheckedItems([]);
+              setIsProductScoped(false);
+              setSelectedProducts([]);
+              setProductNotes({});
+              setError(null);
+            }}
             style={{
               background: 'transparent',
               color: 'var(--t2)',
@@ -241,254 +632,61 @@ export default function NewRequestPage() {
     </Layout>
   );
 
-  // ── Step: Form ──────────────────────────────────────────────────────────────
-  const fields = REQUEST_TEMPLATES[selectedType?.value] || [];
-
-  return (
-    <Layout>
-      <div style={{ maxWidth: 672, margin: '0 auto' }}>
-        <div style={{ marginBottom: 24 }}>
-          <button
-            onClick={() => setStep('type')}
-            style={{
-              fontFamily: 'var(--mono)',
-              fontSize: 11,
-              color: 'var(--t3)',
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              marginBottom: 16,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 4,
-              padding: 0,
-            }}
-            onMouseEnter={e => e.currentTarget.style.color = 'var(--t2)'}
-            onMouseLeave={e => e.currentTarget.style.color = 'var(--t3)'}
-          >
-            ← Change type
-          </button>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-            <span style={{ fontSize: 20 }}>{selectedType.icon}</span>
-            <h1 style={{
-              fontFamily: 'var(--head)',
-              fontWeight: 900,
-              fontSize: 18,
-              letterSpacing: '.2em',
-              textTransform: 'uppercase',
-              color: 'var(--text)',
-              margin: 0,
-            }}>
-              {selectedType.label}
-            </h1>
-          </div>
-          <p style={{
-            fontFamily: 'var(--mono)',
-            fontSize: 12,
-            color: 'var(--t3)',
-          }}>
-            Fill in the details below
-          </p>
-        </div>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-          {/* Title */}
-          <FormField label="Request Title" required>
-            <InputField
-              type="text"
-              value={title}
-              onChange={e => setTitle(e.target.value)}
-              placeholder="Short description of this request"
-            />
-          </FormField>
-
-          {/* Product scoping */}
-          <div style={{
-            background: 'var(--s1)',
-            border: '1px solid var(--b1)',
-            borderRadius: 6,
-            padding: 16,
-          }}>
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              marginBottom: 12,
-            }}>
-              <div>
-                <p style={{
-                  fontFamily: 'var(--mono)',
-                  fontSize: 13,
-                  fontWeight: 500,
-                  color: 'var(--text)',
-                  margin: 0,
-                }}>
-                  Product Specific?
-                </p>
-                <p style={{
-                  fontFamily: 'var(--mono)',
-                  fontSize: 11,
-                  color: 'var(--t3)',
-                  marginTop: 2,
-                  marginBottom: 0,
-                }}>
-                  Is this request for specific products in our range?
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setIsProductScoped(!isProductScoped);
-                  setSelectedProducts([]);
-                }}
-                style={{
-                  position: 'relative',
-                  display: 'inline-flex',
-                  height: 20,
-                  width: 36,
-                  alignItems: 'center',
-                  borderRadius: 10,
-                  border: 'none',
-                  cursor: 'pointer',
-                  padding: 0,
-                  transition: 'background 0.2s',
-                  background: isProductScoped ? '#F2CD1A' : 'var(--s3)',
-                }}
-              >
-                <span style={{
-                  display: 'inline-block',
-                  height: 14,
-                  width: 14,
-                  borderRadius: 7,
-                  background: '#080808',
-                  transition: 'transform 0.2s',
-                  transform: isProductScoped ? 'translateX(16px)' : 'translateX(4px)',
-                }} />
-              </button>
-            </div>
-
-            {isProductScoped && (
-              <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <ProductSelector
-                  selected={selectedProducts}
-                  onChange={setSelectedProducts}
-                />
-                {selectedProducts.length > 0 && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
-                    <p style={{
-                      fontFamily: 'var(--head)',
-                      fontSize: 9,
-                      letterSpacing: '.2em',
-                      textTransform: 'uppercase',
-                      color: 'var(--t3)',
-                      margin: 0,
-                    }}>
-                      Add notes per product (optional)
-                    </p>
-                    {selectedProducts.map(product => (
-                      <div key={product}>
-                        <label style={{
-                          fontFamily: 'var(--head)',
-                          fontSize: 10,
-                          letterSpacing: '.15em',
-                          textTransform: 'uppercase',
-                          color: 'var(--t2)',
-                          marginBottom: 4,
-                          display: 'block',
-                        }}>
-                          {product}
-                        </label>
-                        <InputField
-                          type="text"
-                          placeholder="Any specific notes for this product..."
-                          value={productNotes[product] || ''}
-                          onChange={e => handleProductNoteChange(product, e.target.value)}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Template fields */}
-          {fields.map(field => {
-            if (!isFieldVisible(field)) return null;
-            return (
-              <FormField key={field.key} label={field.label} required={field.required}>
-                <FieldInput
-                  field={field}
-                  value={formData[field.key]}
-                  onChange={val => handleFieldChange(field.key, val)}
-                />
-              </FormField>
-            );
-          })}
-
-          {/* Error */}
-          {error && (
-            <div style={{
-              background: 'rgba(222,42,42,0.08)',
-              border: '1px solid rgba(222,42,42,0.3)',
-              borderRadius: 8,
-              padding: '12px 16px',
-            }}>
-              <p style={{
-                color: 'var(--red)',
-                fontFamily: 'var(--mono)',
-                fontSize: 12,
-                margin: 0,
-              }}>{error}</p>
-            </div>
-          )}
-
-          {/* Submit */}
-          <div style={{ display: 'flex', gap: 12, paddingTop: 8 }}>
-            <button
-              onClick={handleSubmit}
-              disabled={submitting}
-              style={{
-                background: '#F2CD1A',
-                color: '#080808',
-                fontFamily: 'var(--head)',
-                fontWeight: 700,
-                fontSize: 11,
-                letterSpacing: '.15em',
-                textTransform: 'uppercase',
-                borderRadius: 6,
-                border: 'none',
-                padding: '10px 24px',
-                cursor: submitting ? 'default' : 'pointer',
-                opacity: submitting ? 0.5 : 1,
-              }}
-            >
-              {submitting ? 'Submitting...' : 'Submit Request'}
-            </button>
-            <button
-              onClick={() => router.push('/requests/')}
-              style={{
-                fontFamily: 'var(--mono)',
-                fontSize: 11,
-                color: 'var(--t3)',
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                padding: '0 16px',
-              }}
-              onMouseEnter={e => e.currentTarget.style.color = 'var(--t2)'}
-              onMouseLeave={e => e.currentTarget.style.color = 'var(--t3)'}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      </div>
-    </Layout>
-  );
+  return null;
 }
 
-// ── Helper components ─────────────────────────────────────────────────────────
+// ── Shared styles ────────────────────────────────────────────────────────────
+
+const backBtnStyle = {
+  fontFamily: 'var(--mono)',
+  fontSize: 11,
+  color: 'var(--t3)',
+  background: 'none',
+  border: 'none',
+  cursor: 'pointer',
+  marginBottom: 16,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 4,
+  padding: 0,
+};
+
+const pageHeadingStyle = {
+  fontFamily: 'var(--head)',
+  fontWeight: 900,
+  fontSize: 18,
+  letterSpacing: '.2em',
+  textTransform: 'uppercase',
+  color: 'var(--text)',
+  margin: 0,
+};
+
+const pageSubStyle = {
+  fontFamily: 'var(--mono)',
+  fontSize: 12,
+  color: 'var(--t3)',
+  marginTop: 4,
+};
+
+const sectionLabelStyle = {
+  fontFamily: 'var(--head)',
+  fontSize: 9,
+  letterSpacing: '.25em',
+  textTransform: 'uppercase',
+  color: 'var(--t3)',
+  marginBottom: 8,
+  marginTop: 0,
+};
+
+const fieldLabelStyle = {
+  display: 'block',
+  fontFamily: 'var(--head)',
+  fontSize: 10,
+  letterSpacing: '.15em',
+  textTransform: 'uppercase',
+  color: 'var(--t2)',
+  marginBottom: 4,
+};
 
 const inputStyle = {
   width: '100%',
@@ -503,21 +701,13 @@ const inputStyle = {
   outline: 'none',
 };
 
-const textareaStyle = {
-  ...inputStyle,
-  resize: 'none',
-  height: 96,
-};
+// ── Reusable components ──────────────────────────────────────────────────────
 
-const selectStyle = {
-  ...inputStyle,
-};
-
-function InputField({ type, value, onChange, placeholder }) {
+function InputField({ value, onChange, placeholder, type }) {
   return (
     <input
       type={type || 'text'}
-      value={value}
+      value={value || ''}
       onChange={onChange}
       placeholder={placeholder}
       style={inputStyle}
@@ -547,7 +737,99 @@ function FormField({ label, required, children }) {
   );
 }
 
-function FieldInput({ field, value, onChange }) {
+function ToggleSwitch({ on, onToggle }) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      style={{
+        position: 'relative',
+        display: 'inline-flex',
+        height: 20,
+        width: 36,
+        alignItems: 'center',
+        borderRadius: 10,
+        border: 'none',
+        cursor: 'pointer',
+        padding: 0,
+        transition: 'background 0.2s',
+        background: on ? '#F2CD1A' : 'var(--s3)',
+      }}
+    >
+      <span style={{
+        display: 'inline-block',
+        height: 14,
+        width: 14,
+        borderRadius: 7,
+        background: '#080808',
+        transition: 'transform 0.2s',
+        transform: on ? 'translateX(16px)' : 'translateX(4px)',
+      }} />
+    </button>
+  );
+}
+
+function YellowButton({ onClick, label, disabled }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        background: '#F2CD1A',
+        color: '#080808',
+        fontFamily: 'var(--head)',
+        fontWeight: 700,
+        fontSize: 11,
+        letterSpacing: '.15em',
+        textTransform: 'uppercase',
+        borderRadius: 6,
+        border: 'none',
+        padding: '10px 24px',
+        cursor: disabled ? 'default' : 'pointer',
+        opacity: disabled ? 0.5 : 1,
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+function GhostButton({ onClick, label }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        fontFamily: 'var(--mono)',
+        fontSize: 11,
+        color: 'var(--t3)',
+        background: 'none',
+        border: 'none',
+        cursor: 'pointer',
+        padding: '0 16px',
+      }}
+      onMouseEnter={e => e.currentTarget.style.color = 'var(--t2)'}
+      onMouseLeave={e => e.currentTarget.style.color = 'var(--t3)'}
+    >
+      {label}
+    </button>
+  );
+}
+
+function ErrorBanner({ message }) {
+  return (
+    <div style={{
+      background: 'rgba(222,42,42,0.08)',
+      border: '1px solid rgba(222,42,42,0.3)',
+      borderRadius: 8,
+      padding: '12px 16px',
+      marginTop: 12,
+    }}>
+      <p style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12, margin: 0 }}>{message}</p>
+    </div>
+  );
+}
+
+function FieldInput({ field, value, onChange, onToggleMulti }) {
   switch (field.type) {
     case 'text':
       return (
@@ -568,7 +850,7 @@ function FieldInput({ field, value, onChange }) {
           value={value || ''}
           onChange={e => onChange(e.target.value)}
           placeholder={field.placeholder || ''}
-          style={textareaStyle}
+          style={{ ...inputStyle, resize: 'none', height: 96 }}
           onFocus={e => e.currentTarget.style.borderColor = '#F2CD1A'}
           onBlur={e => e.currentTarget.style.borderColor = 'var(--b2)'}
         />
@@ -579,7 +861,7 @@ function FieldInput({ field, value, onChange }) {
         <select
           value={value || ''}
           onChange={e => onChange(e.target.value)}
-          style={selectStyle}
+          style={inputStyle}
           onFocus={e => e.currentTarget.style.borderColor = '#F2CD1A'}
           onBlur={e => e.currentTarget.style.borderColor = 'var(--b2)'}
         >
@@ -599,20 +881,16 @@ function FieldInput({ field, value, onChange }) {
               <button
                 key={opt}
                 type="button"
-                onClick={() => {
-                  const current = Array.isArray(value) ? value : [];
-                  onChange(selected ? current.filter(v => v !== opt) : [...current, opt]);
-                }}
+                onClick={() => onToggleMulti(field.id, opt)}
                 style={{
+                  background: selected ? '#F2CD1A' : 'var(--s2)',
+                  color: selected ? '#080808' : 'var(--t2)',
+                  border: '1px solid var(--b2)',
+                  borderRadius: 4,
+                  padding: '5px 12px',
                   fontFamily: 'var(--mono)',
                   fontSize: 11,
-                  padding: '6px 12px',
-                  borderRadius: 20,
                   cursor: 'pointer',
-                  transition: 'all 0.15s',
-                  background: selected ? 'rgba(242,205,26,0.12)' : 'transparent',
-                  color: selected ? '#F2CD1A' : 'var(--t3)',
-                  border: selected ? '1px solid #F2CD1A' : '1px solid var(--b2)',
                 }}
               >
                 {opt}
@@ -622,10 +900,10 @@ function FieldInput({ field, value, onChange }) {
         </div>
       );
 
-    case 'yesno':
+    case 'toggle':
       return (
         <div style={{ display: 'flex', gap: 12 }}>
-          {['yes', 'no'].map(opt => (
+          {field.options.map(opt => (
             <button
               key={opt}
               type="button"
@@ -643,7 +921,7 @@ function FieldInput({ field, value, onChange }) {
                 border: value === opt ? '1px solid #F2CD1A' : '1px solid var(--b2)',
               }}
             >
-              {opt === 'yes' ? 'Yes' : 'No'}
+              {opt}
             </button>
           ))}
         </div>
@@ -655,7 +933,7 @@ function FieldInput({ field, value, onChange }) {
           type="date"
           value={value || ''}
           onChange={e => onChange(e.target.value)}
-          style={selectStyle}
+          style={inputStyle}
           onFocus={e => e.currentTarget.style.borderColor = '#F2CD1A'}
           onBlur={e => e.currentTarget.style.borderColor = 'var(--b2)'}
         />
