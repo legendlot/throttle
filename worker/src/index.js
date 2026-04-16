@@ -184,6 +184,10 @@ export default {
       case 'submitForReview':     return handleSubmitForReview(body, ctx, env);
       case 'approveWork':         return handleApproveWork(body, ctx, env);
       case 'rejectWork':          return handleRejectWork(body, ctx, env);
+      case 'getDashboardStats':   return handleGetDashboardStats(body, ctx, env);
+      case 'getDeliverablesReport': return handleGetDeliverablesReport(body, ctx, env);
+      case 'getTeamWorkload':     return handleGetTeamWorkload(body, ctx, env);
+      case 'getTasksInBucket':    return handleGetTasksInBucket(body, ctx, env);
       default:
         return err(`Unknown action: ${action}`, 404);
     }
@@ -983,6 +987,354 @@ async function handleRejectWork(body, ctx, env) {
 
   return json({ ok: true });
 }
+// ── Phase 6: Dashboard + Reporting actions ───────────────────────────────────
+
+async function handleGetDashboardStats(body, ctx, env) {
+  const g = requireRole(ctx, 'admin', 'lead'); if (g) return g;
+
+  let sprintId = body.sprintId;
+
+  // Default to active sprint, or most recently closed
+  if (!sprintId) {
+    const activeRes = await sbFetch('sprints?status=eq.active&select=id,name&limit=1', { method: 'GET' }, env);
+    const activeSprints = activeRes.ok ? await activeRes.json() : [];
+    if (activeSprints.length > 0) {
+      sprintId = activeSprints[0].id;
+    } else {
+      const closedRes = await sbFetch('sprints?status=eq.closed&select=id,name&order=end_date.desc&limit=1', { method: 'GET' }, env);
+      const closedSprints = closedRes.ok ? await closedRes.json() : [];
+      if (closedSprints.length > 0) {
+        sprintId = closedSprints[0].id;
+      } else {
+        return json({ sprintId: null, sprintName: null, inReview: 0, overdue: 0, extBlocked: 0, abandoned: 0, completionRate: 0, spillovers: 0, doneCount: 0, totalEligible: 0 });
+      }
+    }
+  }
+
+  // Fetch sprint row
+  const sprintRes = await sbFetch(`sprints?id=eq.${sprintId}&select=id,name`, { method: 'GET' }, env);
+  if (!sprintRes.ok) return err('Sprint not found');
+  const [sprint] = await sprintRes.json();
+  if (!sprint) return err('Sprint not found');
+
+  // Fetch all tasks in sprint
+  const tasksRes = await sbFetch(
+    `tasks?sprint_id=eq.${sprintId}&select=id,stage,due_date,is_spillover`,
+    { method: 'GET' }, env
+  );
+  const tasks = tasksRes.ok ? await tasksRes.json() : [];
+
+  const today = new Date().toISOString().split('T')[0];
+
+  const inReview    = tasks.filter(t => t.stage === 'in_review').length;
+  const overdue     = tasks.filter(t => !['done','abandoned'].includes(t.stage) && t.due_date && t.due_date < today).length;
+  const extBlocked  = tasks.filter(t => t.stage === 'ext_blocked').length;
+  const abandoned   = tasks.filter(t => t.stage === 'abandoned').length;
+  const doneCount   = tasks.filter(t => t.stage === 'done').length;
+  const totalEligible = tasks.filter(t => t.stage !== 'abandoned').length;
+  const completionRate = totalEligible > 0 ? Math.round((doneCount / totalEligible) * 1000) / 10 : 0;
+  const spillovers  = tasks.filter(t => t.is_spillover && !['done','abandoned'].includes(t.stage)).length;
+
+  return json({
+    sprintId: sprint.id,
+    sprintName: sprint.name,
+    inReview,
+    overdue,
+    extBlocked,
+    abandoned,
+    completionRate,
+    spillovers,
+    doneCount,
+    totalEligible,
+  });
+}
+
+async function handleGetDeliverablesReport(body, ctx, env) {
+  const g = requireRole(ctx, 'admin', 'lead'); if (g) return g;
+
+  const { startDate, endDate } = body;
+  if (!startDate || !endDate) return err('startDate and endDate are required');
+
+  // Validate date range <= 90 days
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  const diffDays = Math.round((end - start) / (1000 * 60 * 60 * 24));
+  if (diffDays > 90) return err('Date range cannot exceed 90 days', 400);
+  if (diffDays < 0) return err('startDate must be before endDate', 400);
+
+  // Use PostgREST to query tasks joined with assignees
+  // We need tasks that are done and completed_at falls within the date range
+  // PostgREST doesn't support DATE() AT TIME ZONE casts, so fetch completed tasks
+  // in a wider window and filter on the client side
+  const tasksRes = await sbFetch(
+    `tasks?stage=eq.done&completed_at=gte.${startDate}T00:00:00.000+05:30&completed_at=lte.${endDate}T23:59:59.999+05:30&select=id,title,deliverable_type,completed_at`,
+    { method: 'GET' }, env
+  );
+  const tasks = tasksRes.ok ? await tasksRes.json() : [];
+
+  if (tasks.length === 0) {
+    return json({ rows: [], startDate, endDate });
+  }
+
+  // Fetch assignees for these tasks
+  const taskIds = tasks.map(t => t.id);
+  // Batch in groups of 40 to stay within subrequest limits
+  let allAssignees = [];
+  for (let i = 0; i < taskIds.length; i += 40) {
+    const batch = taskIds.slice(i, i + 40);
+    const inFilter = `(${batch.join(',')})`;
+    const assigneeRes = await sbFetch(
+      `task_assignees?task_id=in.${inFilter}&select=task_id,user_id`,
+      { method: 'GET' }, env
+    );
+    if (assigneeRes.ok) {
+      const rows = await assigneeRes.json();
+      allAssignees = allAssignees.concat(rows);
+    }
+  }
+
+  // Get unique user IDs and fetch user details
+  const userIds = [...new Set(allAssignees.map(a => a.user_id))];
+  let usersMap = {};
+  if (userIds.length > 0) {
+    const usersRes = await sbFetch(
+      `users?id=in.(${userIds.join(',')})&select=id,name,discipline`,
+      { method: 'GET' }, env
+    );
+    const users = usersRes.ok ? await usersRes.json() : [];
+    users.forEach(u => { usersMap[u.id] = u; });
+  }
+
+  // Build rows: one per task per assignee
+  const rows = [];
+  for (const task of tasks) {
+    const taskAssignees = allAssignees.filter(a => a.task_id === task.id);
+    // Convert completed_at to IST date
+    const completedDate = new Date(task.completed_at).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
+    if (taskAssignees.length === 0) {
+      // Task with no assignees — still show it
+      rows.push({
+        id: task.id,
+        title: task.title,
+        deliverable_type: task.deliverable_type,
+        completed_date: completedDate,
+        assignee_id: null,
+        assignee_name: 'Unassigned',
+        discipline: null,
+      });
+    } else {
+      for (const ta of taskAssignees) {
+        const user = usersMap[ta.user_id] || {};
+        rows.push({
+          id: task.id,
+          title: task.title,
+          deliverable_type: task.deliverable_type,
+          completed_date: completedDate,
+          assignee_id: ta.user_id,
+          assignee_name: user.name || 'Unknown',
+          discipline: user.discipline || null,
+        });
+      }
+    }
+  }
+
+  // Sort by completed_date desc, then assignee_name asc
+  rows.sort((a, b) => {
+    if (a.completed_date !== b.completed_date) return b.completed_date.localeCompare(a.completed_date);
+    return (a.assignee_name || '').localeCompare(b.assignee_name || '');
+  });
+
+  return json({ rows, startDate, endDate });
+}
+
+async function handleGetTeamWorkload(body, ctx, env) {
+  const g = requireRole(ctx, 'admin', 'lead'); if (g) return g;
+
+  let sprintId = body.sprintId;
+
+  // Default to active sprint, or most recently closed
+  if (!sprintId) {
+    const activeRes = await sbFetch('sprints?status=eq.active&select=id&limit=1', { method: 'GET' }, env);
+    const activeSprints = activeRes.ok ? await activeRes.json() : [];
+    if (activeSprints.length > 0) {
+      sprintId = activeSprints[0].id;
+    } else {
+      const closedRes = await sbFetch('sprints?status=eq.closed&select=id&order=end_date.desc&limit=1', { method: 'GET' }, env);
+      const closedSprints = closedRes.ok ? await closedRes.json() : [];
+      if (closedSprints.length > 0) {
+        sprintId = closedSprints[0].id;
+      } else {
+        return json({ sprintId: null, rows: [] });
+      }
+    }
+  }
+
+  // Fetch tasks in sprint
+  const tasksRes = await sbFetch(
+    `tasks?sprint_id=eq.${sprintId}&select=id,stage,priority`,
+    { method: 'GET' }, env
+  );
+  const tasks = tasksRes.ok ? await tasksRes.json() : [];
+
+  if (tasks.length === 0) {
+    return json({ sprintId, rows: [] });
+  }
+
+  // Fetch assignees
+  const taskIds = tasks.map(t => t.id);
+  let allAssignees = [];
+  for (let i = 0; i < taskIds.length; i += 40) {
+    const batch = taskIds.slice(i, i + 40);
+    const inFilter = `(${batch.join(',')})`;
+    const assigneeRes = await sbFetch(
+      `task_assignees?task_id=in.${inFilter}&select=task_id,user_id`,
+      { method: 'GET' }, env
+    );
+    if (assigneeRes.ok) {
+      const rows = await assigneeRes.json();
+      allAssignees = allAssignees.concat(rows);
+    }
+  }
+
+  // Map task_id → task for quick lookup
+  const taskMap = {};
+  tasks.forEach(t => { taskMap[t.id] = t; });
+
+  // Get unique user IDs
+  const userIds = [...new Set(allAssignees.map(a => a.user_id))];
+  let usersMap = {};
+  if (userIds.length > 0) {
+    const usersRes = await sbFetch(
+      `users?id=in.(${userIds.join(',')})&select=id,name,discipline`,
+      { method: 'GET' }, env
+    );
+    const users = usersRes.ok ? await usersRes.json() : [];
+    users.forEach(u => { usersMap[u.id] = u; });
+  }
+
+  // Build grouped rows: user × stage × priority → count
+  const groupKey = (userId, stage, priority) => `${userId}|${stage}|${priority}`;
+  const groups = {};
+
+  for (const ta of allAssignees) {
+    const task = taskMap[ta.task_id];
+    if (!task) continue;
+    const key = groupKey(ta.user_id, task.stage, task.priority);
+    if (!groups[key]) {
+      const user = usersMap[ta.user_id] || {};
+      groups[key] = {
+        id: ta.user_id,
+        name: user.name || 'Unknown',
+        discipline: user.discipline || null,
+        stage: task.stage,
+        priority: task.priority,
+        task_count: 0,
+      };
+    }
+    groups[key].task_count++;
+  }
+
+  const rows = Object.values(groups).sort((a, b) => {
+    if (a.name !== b.name) return a.name.localeCompare(b.name);
+    return a.stage.localeCompare(b.stage);
+  });
+
+  return json({ sprintId, rows });
+}
+
+async function handleGetTasksInBucket(body, ctx, env) {
+  const g = requireRole(ctx, 'admin', 'lead'); if (g) return g;
+
+  const { bucket, sprintId } = body;
+  if (!bucket) return err('bucket is required');
+
+  const validBuckets = ['in_review', 'overdue', 'ext_blocked', 'abandoned', 'spillovers'];
+  if (!validBuckets.includes(bucket)) return err('Invalid bucket');
+
+  // Default sprint
+  let sid = sprintId;
+  if (!sid) {
+    const activeRes = await sbFetch('sprints?status=eq.active&select=id&limit=1', { method: 'GET' }, env);
+    const activeSprints = activeRes.ok ? await activeRes.json() : [];
+    if (activeSprints.length > 0) {
+      sid = activeSprints[0].id;
+    } else {
+      const closedRes = await sbFetch('sprints?status=eq.closed&select=id&order=end_date.desc&limit=1', { method: 'GET' }, env);
+      const closedSprints = closedRes.ok ? await closedRes.json() : [];
+      if (closedSprints.length > 0) sid = closedSprints[0].id;
+      else return json({ bucket, tasks: [] });
+    }
+  }
+
+  // Build query filter based on bucket
+  let filter = `sprint_id=eq.${sid}`;
+  const today = new Date().toISOString().split('T')[0];
+
+  switch (bucket) {
+    case 'in_review':
+      filter += '&stage=eq.in_review';
+      break;
+    case 'overdue':
+      filter += `&stage=not.in.(done,abandoned)&due_date=lt.${today}`;
+      break;
+    case 'ext_blocked':
+      filter += '&stage=eq.ext_blocked';
+      break;
+    case 'abandoned':
+      filter += '&stage=eq.abandoned';
+      break;
+    case 'spillovers':
+      filter += '&is_spillover=eq.true&stage=not.in.(done,abandoned)';
+      break;
+  }
+
+  const tasksRes = await sbFetch(
+    `tasks?${filter}&select=id,title,type,deliverable_type,stage,priority,due_date,blocked_reason`,
+    { method: 'GET' }, env
+  );
+  const tasks = tasksRes.ok ? await tasksRes.json() : [];
+
+  // Fetch assignees for these tasks
+  if (tasks.length > 0) {
+    const taskIds = tasks.map(t => t.id);
+    let allAssignees = [];
+    for (let i = 0; i < taskIds.length; i += 40) {
+      const batch = taskIds.slice(i, i + 40);
+      const inFilter = `(${batch.join(',')})`;
+      const assigneeRes = await sbFetch(
+        `task_assignees?task_id=in.${inFilter}&select=task_id,user_id`,
+        { method: 'GET' }, env
+      );
+      if (assigneeRes.ok) {
+        const rows = await assigneeRes.json();
+        allAssignees = allAssignees.concat(rows);
+      }
+    }
+
+    // Fetch user names
+    const userIds = [...new Set(allAssignees.map(a => a.user_id))];
+    let usersMap = {};
+    if (userIds.length > 0) {
+      const usersRes = await sbFetch(
+        `users?id=in.(${userIds.join(',')})&select=id,name`,
+        { method: 'GET' }, env
+      );
+      const users = usersRes.ok ? await usersRes.json() : [];
+      users.forEach(u => { usersMap[u.id] = u; });
+    }
+
+    // Attach assignees to tasks
+    for (const task of tasks) {
+      task.assignees = allAssignees
+        .filter(a => a.task_id === task.id)
+        .map(a => ({ id: a.user_id, name: (usersMap[a.user_id] || {}).name || 'Unknown' }));
+    }
+  }
+
+  return json({ bucket, tasks });
+}
+
 // ── Core sprint close logic — used by both manual close and cron ─────────────
 
 async function closeSprintById(sprintId, closedByUserId, env) {
