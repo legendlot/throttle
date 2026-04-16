@@ -310,6 +310,44 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
                 ))}
               </div>
             )}
+
+            {/* Member: self-assign / unassign buttons */}
+            {brandUser?.role === 'member' && (() => {
+              const iAmAssigned = assignees.some(a => a.id === brandUser.id);
+              return iAmAssigned ? (
+                <button
+                  onClick={async () => {
+                    setLoading(true);
+                    try {
+                      await workerFetch('assignTask', { task_id: task.id, remove_self: true }, session?.access_token);
+                      await loadAssignees();
+                    } catch (e) { setError(e.message); }
+                    setLoading(false);
+                  }}
+                  disabled={loading}
+                  style={{ background: 'rgba(222,42,42,0.1)', color: 'var(--red)', border: '1px solid rgba(222,42,42,0.3)', borderRadius: 4, padding: '6px 14px', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer', opacity: loading ? 0.4 : 1 }}
+                >
+                  Unassign me
+                </button>
+              ) : (
+                <button
+                  onClick={async () => {
+                    setLoading(true);
+                    try {
+                      await workerFetch('assignTask', { task_id: task.id, user_ids: [brandUser.id] }, session?.access_token);
+                      await loadAssignees();
+                    } catch (e) { setError(e.message); }
+                    setLoading(false);
+                  }}
+                  disabled={loading}
+                  style={{ background: 'rgba(242,205,26,0.12)', color: '#F2CD1A', border: '1px solid rgba(242,205,26,0.3)', borderRadius: 4, padding: '6px 14px', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer', opacity: loading ? 0.4 : 1 }}
+                >
+                  Assign to me
+                </button>
+              );
+            })()}
+
+            {/* Admin/lead: full picker */}
             {isAdminLead && teamMembers.length > 0 && (
               <div style={{ marginTop: 12 }}>
                 <p style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', marginBottom: 8 }}>Click to assign / unassign</p>

@@ -685,10 +685,38 @@ async function handleUpdateTaskPriority(body, ctx, env) {
 }
 
 async function handleAssignTask(body, ctx, env) {
-  const { task_id, user_ids } = body;
-  if (!task_id || !user_ids?.length) return err('task_id and user_ids are required');
+  const { task_id, user_ids, remove_self } = body;
+  if (!task_id) return err('task_id is required');
 
+  // Members: can only assign/unassign themselves
+  if (ctx.role === 'member') {
+    if (remove_self) {
+      // Remove only the member's own row
+      await sbFetch(`task_assignees?task_id=eq.${task_id}&user_id=eq.${ctx.userId}`, {
+        method: 'DELETE',
+        prefer: 'return=minimal',
+      }, env);
+      await logActivity(task_id, ctx.userId, 'assignment', { unassigned: ctx.userId }, env);
+      return json({ ok: true });
+    }
+    if (!user_ids?.length || user_ids.length !== 1 || user_ids[0] !== ctx.userId) {
+      return err('Members can only assign themselves', 403);
+    }
+    // Add themselves without removing others
+    const insertRes = await sbFetch('task_assignees', {
+      method: 'POST',
+      body: JSON.stringify([{ task_id, user_id: ctx.userId, assigned_by: ctx.userId }]),
+      prefer: 'return=minimal',
+    }, env);
+    if (!insertRes.ok) return err('Failed to assign task');
+    await logActivity(task_id, ctx.userId, 'assignment', { assigned_to: [ctx.userId] }, env);
+    await slackTeam(`📌 *Self-assigned*\n${ctx.brandUser.name} picked up task "${task_id}"`, env);
+    return json({ ok: true });
+  }
+
+  // Admin/lead: full replace
   const g = requireRole(ctx, 'admin', 'lead'); if (g) return g;
+  if (!user_ids?.length) return err('user_ids are required');
 
   // Delete existing assignees
   await sbFetch(`task_assignees?task_id=eq.${task_id}`, {
