@@ -700,15 +700,20 @@ async function handleAssignTask(body, ctx, env) {
       return json({ ok: true });
     }
     if (!user_ids?.length || user_ids.length !== 1 || user_ids[0] !== ctx.userId) {
+      console.log(`[assignTask:member] guard failed: user_ids=${JSON.stringify(user_ids)}, ctx.userId=${ctx.userId}`);
       return err('Members can only assign themselves', 403);
     }
-    // Add themselves without removing others
+    // Add themselves without removing others (ignore if already assigned)
     const insertRes = await sbFetch('task_assignees', {
       method: 'POST',
       body: JSON.stringify([{ task_id, user_id: ctx.userId, assigned_by: ctx.userId }]),
-      prefer: 'return=minimal',
+      prefer: 'return=minimal,resolution=ignore-duplicates',
     }, env);
-    if (!insertRes.ok) return err('Failed to assign task');
+    if (!insertRes.ok) {
+      const errBody = await insertRes.text();
+      console.log(`[assignTask:member] insert failed: ${insertRes.status} ${errBody}`);
+      return err('Failed to assign task');
+    }
     await logActivity(task_id, ctx.userId, 'assignment', { assigned_to: [ctx.userId] }, env);
     await slackTeam(`📌 *Self-assigned*\n${ctx.brandUser.name} picked up task "${task_id}"`, env);
     return json({ ok: true });
