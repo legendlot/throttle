@@ -1,5 +1,5 @@
 # Throttle — Technical Build Document
-**Version:** 8.0 | **Last Updated:** April 2026 (Phase 8)
+**Version:** 9.0 | **Last Updated:** April 2026 (Phase 9)
 **Purpose:** Technical reference for the Throttle brand team work OS.
 Feed this file when continuing development in a new session.
 
@@ -150,7 +150,11 @@ Errors: `{ error: "message" }` with appropriate HTTP status.
 - `getDashboardStats` — admin/lead (summary card metrics for a sprint)
 - `getDeliverablesReport` — admin/lead (completed tasks with assignees for date range)
 - `getTeamWorkload` — admin/lead (per-person task distribution by stage/priority)
-- `getTasksInBucket` — admin/lead (drill-down task list for in_review/overdue/ext_blocked/abandoned/spillovers)
+- `getTasksInBucket` — admin/lead (drill-down task list for in_review/overdue/ext_blocked/abandoned/spillovers, optional personId filter)
+- `updateRequest` — requester only (resubmit info_needed request, resets to pending)
+- `getTaskActivity` — any assigned user or admin/lead (chronological activity log with user names)
+- `addComment` — any assigned user or admin/lead (inserts comment into activity_log)
+- `getTeamMembers` — admin/lead (list of members + leads for person filter)
 
 ### Worker secrets (set via wrangler secret put — never in files)
 - SUPABASE_SERVICE_ROLE_KEY
@@ -239,6 +243,13 @@ NEXT_PUBLIC_WORKER_URL=https://throttleops.afshaan.workers.dev
 | Stage colors updated to LOT palette | in_sprint=#F2CD1A, in_progress=#213CE2, abandoned=#DE2A2A | Blue for active work, yellow for sprint-ready, red for abandoned. Matches LOT brand primary colors. |
 | Priority colors updated | urgent=#DE2A2A, medium=#F2CD1A, low=#555 | Red urgent, yellow medium (brand color), muted low. High > amber (#f59e0b) for visual distinction. |
 | Custom scrollbar | 4px thin, --b2 thumb, --bg track | Matches dark UI. Thin scrollbar reduces visual noise on data-heavy pages (dashboard tables, sprint lists). |
+| Request resubmit: two flows | info_needed → update same row, rejected → create new row | Info Needed is a conversation — same request gets updated. Rejected is final — original preserved for audit trail, new request created fresh. |
+| Activity feed uses activity_log table | No new table — reuses existing activity_log with event_type='comment' | Comments are just another activity event. Keeps the timeline unified. Index on (task_id, created_at) added for fast loads. |
+| Activity: user names via separate fetch | Fetch activity rows, then batch-fetch user names by ID | PostgREST `select=*,user:user_id(name,role)` requires FK relationship in exposed schema. Safer to do two calls. |
+| Person filter: client-side on board/sprints | Task query includes `task_assignees(user_id)`, filter in JS | Avoids extra Worker round-trips. Sprint tasks are typically < 40, board < 100. No performance concern at current scale. |
+| Person filter: server-side on dashboard stats | `getDashboardStats` and `getTasksInBucket` accept optional `personId` | Dashboard stats need accurate counts from the task set. Filtering after aggregation would give wrong numbers. |
+| Person filter: deliverables filtered client-side | Dashboard filters `deliverables.filter(r => r.assignee_id === selectedPerson)` | Deliverables rows already include assignee_id. No need for a new Worker call. |
+| Suspense boundary for useSearchParams | Required by Next.js 14 static export | `useSearchParams()` triggers client-side rendering bailout. Wrapping in Suspense satisfies the requirement for static export. |
 
 ---
 
@@ -342,8 +353,32 @@ NEXT_PUBLIC_WORKER_URL=https://throttleops.afshaan.workers.dev
 - [x] Build succeeds, deployed to GitHub Pages
 - [ ] DB migration pending: 9 new enum values on brand.request_type, is_revision column on brand.tasks, brand_team_only column on brand.requests
 
+### Phase 9 — Request Resubmit + Task Activity Feed + Person Filter ✅
+- [x] DB index: `idx_activity_log_task_id_created` on brand.activity_log(task_id, created_at ASC) — manual SQL
+- [x] Worker: `updateRequest` — requester resubmits info_needed request, resets to pending, Slack notification
+- [x] Worker: `getTaskActivity` — chronological activity log with user names, member assignment guard
+- [x] Worker: `addComment` — comment insertion into activity_log, member assignment guard
+- [x] Worker: `getTeamMembers` — admin/lead only, returns members + leads sorted by name
+- [x] Worker: `getDashboardStats` updated — optional `personId` filters tasks by assignee
+- [x] Worker: `getTasksInBucket` updated — optional `personId` filters drill-down results
+- [x] Request resubmit: "Update & Resubmit" button on info_needed requests (updates same row)
+- [x] Request resubmit: "Resubmit" button on rejected requests (creates new row)
+- [x] "Needs Action" filter tab on requests list — shows user's own info_needed requests
+- [x] Prefill form: `/requests/new/?prefill=<id>` loads original data, shows approver note banner
+- [x] Info Needed → calls updateRequest (same row, back to pending). Rejected → calls submitRequest (new row)
+- [x] Suspense boundary added for useSearchParams in requests/new
+- [x] Task activity feed: ActivityFeed + ActivityEntry at bottom of TaskSidePanel
+- [x] Timeline icons: ✦ comment, → stage_change, ◎ assignment, ✓ approval, ⊕ attachment, ⚠ flag, ✗ abandonment
+- [x] Comment box with Cmd+Enter submit, yellow post button, feed re-fetches after submit
+- [x] Comments visually distinct: filled background, stronger border on dot
+- [x] Person filter: PersonFilter component on board, sprints, dashboard — admin/lead only
+- [x] Board: filters kanban + table view, task query includes task_assignees(user_id)
+- [x] Sprints: shows task count per person in filter buttons, filters sprint + backlog lists
+- [x] Dashboard: stats re-fetch with personId, deliverables filtered client-side, workload row highlighted
+- [x] TaskDrillModal: accepts personId for filtered drill-down
+
 ### Pending
-- Phase 9: QA + full role testing
+- Phase 10: QA + full role testing
 
 ---
 
