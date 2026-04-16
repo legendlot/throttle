@@ -418,7 +418,7 @@ const WORKLOAD_STAGES = [
   { key: 'abandoned',   label: 'Abandoned' },
 ];
 
-function WorkloadGrid({ rows }) {
+function WorkloadGrid({ rows, highlightId }) {
   if (!rows || rows.length === 0) {
     return <p style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12, padding: '40px 0', textAlign: 'center' }}>No workload data for this sprint.</p>;
   }
@@ -431,7 +431,7 @@ function WorkloadGrid({ rows }) {
     byPerson[r.id].total += r.task_count;
   });
 
-  const people = Object.values(byPerson).sort((a, b) => a.name.localeCompare(b.name));
+  const people = Object.entries(byPerson).map(([id, p]) => ({ ...p, id })).sort((a, b) => a.name.localeCompare(b.name));
 
   return (
     <div style={{ overflowX: 'auto', borderRadius: 6, border: '1px solid var(--b1)' }}>
@@ -447,7 +447,7 @@ function WorkloadGrid({ rows }) {
         </thead>
         <tbody>
           {people.map((person, i) => (
-            <tr key={person.name} style={{ borderTop: '1px solid var(--b1)', ...(i % 2 !== 0 ? { background: 'var(--s1)' } : {}) }}>
+            <tr key={person.id} style={{ borderTop: '1px solid var(--b1)', opacity: highlightId && person.id !== highlightId ? 0.4 : 1, background: highlightId && person.id === highlightId ? 'var(--s3)' : (i % 2 !== 0 ? 'var(--s1)' : 'transparent') }}>
               <td style={{ padding: '10px 12px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{ fontFamily: 'var(--mono)', fontSize: 12, fontWeight: 500, color: 'var(--text)' }}>{person.name}</span>
@@ -561,6 +561,20 @@ function ExportButton({ deliverables, dateRange, viewMode }) {
   );
 }
 
+// ── PersonFilter ────────────────────────────────────────────────────────────
+
+function PersonFilter({ members, selected, onChange }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+      <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', letterSpacing: '.1em', textTransform: 'uppercase' }}>Person</span>
+      <button onClick={() => onChange(null)} style={{ background: selected === null ? '#F2CD1A' : 'var(--s2)', color: selected === null ? '#080808' : 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 10px', fontFamily: 'var(--mono)', fontSize: 10, cursor: 'pointer' }}>All</button>
+      {members.map(m => (
+        <button key={m.id} onClick={() => onChange(m.id)} style={{ background: selected === m.id ? '#F2CD1A' : 'var(--s2)', color: selected === m.id ? '#080808' : 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 10px', fontFamily: 'var(--mono)', fontSize: 10, cursor: 'pointer' }}>{m.name.split(' ')[0]}</button>
+      ))}
+    </div>
+  );
+}
+
 // ── Main Dashboard Page ──────────────────────────────────────────────────────
 
 export default function DashboardPage() {
@@ -575,6 +589,17 @@ export default function DashboardPage() {
   const [deliverableView, setDeliverableView] = useState('date');
   const [drillModal, setDrillModal] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [selectedPerson, setSelectedPerson] = useState(null);
+  const [teamMembers, setTeamMembers] = useState([]);
+
+  // Load team members for person filter (admin/lead only)
+  useEffect(() => {
+    if (brandUser && ['admin','lead'].includes(brandUser.role) && session) {
+      workerFetch('getTeamMembers', {}, session)
+        .then(data => setTeamMembers(data.members || []))
+        .catch(() => {});
+    }
+  }, [brandUser, session]);
 
   // Load sprints on mount
   useEffect(() => {
@@ -608,15 +633,24 @@ export default function DashboardPage() {
     if (activeSprint && session) {
       const range = { start: activeSprint.start_date, end: activeSprint.end_date };
       setDateRange(range);
-      loadAllData(activeSprint.id, range);
+      setSelectedPerson(null); // Reset person filter on sprint change
+      loadAllData(activeSprint.id, range, null);
     }
   }, [activeSprint, session]);
 
-  async function loadAllData(sprintId, range) {
+  // Re-fetch when selectedPerson changes (not on initial load)
+  useEffect(() => {
+    if (activeSprint && session && selectedPerson !== undefined) {
+      const range = { start: activeSprint.start_date, end: activeSprint.end_date };
+      loadAllData(activeSprint.id, dateRange.start ? dateRange : range, selectedPerson);
+    }
+  }, [selectedPerson]);
+
+  async function loadAllData(sprintId, range, personId) {
     setLoading(true);
     try {
       const [statsData, delData, wlData] = await Promise.all([
-        workerFetch('getDashboardStats', { sprintId }, session),
+        workerFetch('getDashboardStats', { sprintId, personId: personId || undefined }, session),
         workerFetch('getDeliverablesReport', { startDate: range.start, endDate: range.end }, session),
         workerFetch('getTeamWorkload', { sprintId }, session),
       ]);
@@ -676,7 +710,12 @@ export default function DashboardPage() {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <h1 style={{ fontFamily: 'var(--head)', fontWeight: 900, fontSize: 18, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--text)' }}>Manager Dashboard</h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <h1 style={{ fontFamily: 'var(--head)', fontWeight: 900, fontSize: 18, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--text)' }}>Manager Dashboard</h1>
+            {['admin','lead'].includes(brandUser?.role) && teamMembers.length > 0 && (
+              <PersonFilter members={teamMembers} selected={selectedPerson} onChange={setSelectedPerson} />
+            )}
+          </div>
           {allSprints.length > 0 && (
             <SprintSelector
               sprints={allSprints}
@@ -700,21 +739,21 @@ export default function DashboardPage() {
                   value={stats.inReview}
                   bucket="in_review"
                   color="cyan"
-                  onClick={() => setDrillModal({ bucket: 'in_review', sprintId: activeSprint.id })}
+                  onClick={() => setDrillModal({ bucket: 'in_review', sprintId: activeSprint.id, personId: selectedPerson })}
                 />
                 <StatCard
                   label="Overdue"
                   value={stats.overdue}
                   bucket="overdue"
                   color="red"
-                  onClick={() => setDrillModal({ bucket: 'overdue', sprintId: activeSprint.id })}
+                  onClick={() => setDrillModal({ bucket: 'overdue', sprintId: activeSprint.id, personId: selectedPerson })}
                 />
                 <StatCard
                   label="Ext. Blocked"
                   value={stats.extBlocked}
                   bucket="ext_blocked"
                   color="amber"
-                  onClick={() => setDrillModal({ bucket: 'ext_blocked', sprintId: activeSprint.id })}
+                  onClick={() => setDrillModal({ bucket: 'ext_blocked', sprintId: activeSprint.id, personId: selectedPerson })}
                 />
                 <StatCard
                   label="Completion"
@@ -727,39 +766,46 @@ export default function DashboardPage() {
                   value={stats.spillovers}
                   bucket="spillovers"
                   color="orange"
-                  onClick={() => setDrillModal({ bucket: 'spillovers', sprintId: activeSprint.id })}
+                  onClick={() => setDrillModal({ bucket: 'spillovers', sprintId: activeSprint.id, personId: selectedPerson })}
                 />
               </section>
             )}
 
             {/* Section 2: Deliverables Output */}
-            <section>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-                <h2 style={{ fontFamily: 'var(--head)', fontWeight: 900, fontSize: 13, letterSpacing: '.25em', textTransform: 'uppercase', color: 'var(--text)' }}>Deliverables Output</h2>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                  <DateRangePicker
-                    start={dateRange.start}
-                    end={dateRange.end}
-                    onChange={handleDateRangeChange}
-                  />
-                  <ViewToggle value={deliverableView} onChange={setDeliverableView} />
-                  <ExportButton
-                    deliverables={deliverables}
-                    dateRange={dateRange}
-                    viewMode={deliverableView}
-                  />
-                </div>
-              </div>
-              {deliverableView === 'date'
-                ? <ByDateTable rows={deliverables} />
-                : <ByPersonTable rows={deliverables} />
-              }
-            </section>
+            {(() => {
+              const visibleDeliverables = selectedPerson
+                ? deliverables.filter(r => r.assignee_id === selectedPerson)
+                : deliverables;
+              return (
+                <section>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                    <h2 style={{ fontFamily: 'var(--head)', fontWeight: 900, fontSize: 13, letterSpacing: '.25em', textTransform: 'uppercase', color: 'var(--text)' }}>Deliverables Output</h2>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <DateRangePicker
+                        start={dateRange.start}
+                        end={dateRange.end}
+                        onChange={handleDateRangeChange}
+                      />
+                      <ViewToggle value={deliverableView} onChange={setDeliverableView} />
+                      <ExportButton
+                        deliverables={visibleDeliverables}
+                        dateRange={dateRange}
+                        viewMode={deliverableView}
+                      />
+                    </div>
+                  </div>
+                  {deliverableView === 'date'
+                    ? <ByDateTable rows={visibleDeliverables} />
+                    : <ByPersonTable rows={visibleDeliverables} />
+                  }
+                </section>
+              );
+            })()}
 
             {/* Section 3: Team Workload */}
             <section>
               <h2 style={{ fontFamily: 'var(--head)', fontWeight: 900, fontSize: 13, letterSpacing: '.25em', textTransform: 'uppercase', color: 'var(--text)', marginBottom: 16 }}>Team Workload</h2>
-              <WorkloadGrid rows={workload} />
+              <WorkloadGrid rows={workload} highlightId={selectedPerson} />
             </section>
           </>
         )}
@@ -769,6 +815,7 @@ export default function DashboardPage() {
           <TaskDrillModal
             bucket={drillModal.bucket}
             sprintId={drillModal.sprintId}
+            personId={drillModal.personId}
             onClose={() => setDrillModal(null)}
           />
         )}

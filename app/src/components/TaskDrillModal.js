@@ -12,19 +12,19 @@ const BUCKET_LABELS = {
   spillovers: 'Spillovers',
 };
 
-export default function TaskDrillModal({ bucket, sprintId, onClose }) {
+export default function TaskDrillModal({ bucket, sprintId, personId, onClose }) {
   const { session } = useAuth();
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     loadTasks();
-  }, [bucket, sprintId]);
+  }, [bucket, sprintId, personId]);
 
   async function loadTasks() {
     setLoading(true);
     try {
-      const data = await workerFetch('getTasksInBucket', { bucket, sprintId }, session);
+      const data = await workerFetch('getTasksInBucket', { bucket, sprintId, personId: personId || undefined }, session);
       setTasks(data.tasks || []);
     } catch (e) {
       console.error('Drill modal load error:', e);

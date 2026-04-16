@@ -1,15 +1,25 @@
 'use client';
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Layout from '@/components/Layout';
 import ProductSelector from '@/components/ProductSelector';
 import { REQUEST_TYPES, LAUNCH_PACK_ITEMS, getVisibleTypes } from '@/lib/requestTypes';
 import { workerFetch } from '@/lib/worker';
 import { useAuth } from '@/lib/auth';
+import { supabase } from '@/lib/supabase';
 
 export default function NewRequestPage() {
+  return (
+    <Suspense fallback={<Layout><div style={{ padding: '80px 0', textAlign: 'center' }}><p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>Loading...</p></div></Layout>}>
+      <NewRequestContent />
+    </Suspense>
+  );
+}
+
+function NewRequestContent() {
   const { session, brandUser } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const [step, setStep] = useState('type'); // 'type' | 'product' | 'checklist' | 'form' | 'review' | 'success'
   const [selectedType, setSelectedType] = useState(null);
@@ -21,8 +31,64 @@ export default function NewRequestPage() {
   const [checkedItems, setCheckedItems] = useState([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
+  const [prefillRequest, setPrefillRequest] = useState(null);
+  const [isEdit, setIsEdit] = useState(false); // true = info_needed update, false = rejected resubmit
 
   const visibleTypes = getVisibleTypes(brandUser?.role);
+
+  // Prefill from existing request
+  useEffect(() => {
+    const prefillId = searchParams?.get('prefill');
+    if (prefillId && brandUser) loadPrefill(prefillId);
+  }, [brandUser, searchParams]);
+
+  async function loadPrefill(requestId) {
+    const { data: req } = await supabase
+      .from('requests')
+      .select('*, request_products(product_code, product_notes)')
+      .eq('id', requestId)
+      .single();
+
+    if (!req) return;
+
+    setPrefillRequest(req);
+    setIsEdit(req.status === 'info_needed');
+
+    // Find the matching type
+    const matchedType = REQUEST_TYPES.find(t => t.id === req.type);
+    if (!matchedType) return;
+
+    setSelectedType(matchedType);
+    setTitle(req.title);
+    setIsProductScoped(req.is_product_scoped);
+
+    // Restore products
+    if (req.is_product_scoped && req.request_products?.length > 0) {
+      const prods = req.request_products.map(rp => rp.product_code);
+      setSelectedProducts(prods);
+      const notes = {};
+      req.request_products.forEach(rp => {
+        if (rp.product_notes) notes[rp.product_code] = rp.product_notes;
+      });
+      setProductNotes(notes);
+    }
+
+    // Restore form data
+    if (req.template_data) {
+      if (req.type === 'launch_pack' && req.template_data.checklist) {
+        setCheckedItems(req.template_data.checklist);
+      } else {
+        setFormData(req.template_data);
+      }
+    }
+
+    // Jump to form step
+    if (req.type === 'launch_pack') {
+      setStep('checklist');
+    } else {
+      setStep('form');
+    }
+  }
 
   // ── Step navigation ────────────────────────────────────────────────────────
 
@@ -135,15 +201,24 @@ export default function NewRequestPage() {
       : { ...formData };
 
     try {
-      await workerFetch('submitRequest', {
-        type: selectedType.id,
-        title: title.trim(),
-        template_data: templateData,
-        is_product_scoped: isProductScoped,
-        products: isProductScoped
-          ? selectedProducts.map(p => ({ product_name: p, notes: productNotes[p] || '' }))
-          : [],
-      }, session?.access_token);
+      if (isEdit && prefillRequest) {
+        // Info Needed → update same request, back to pending
+        await workerFetch('updateRequest', {
+          requestId: prefillRequest.id,
+          templateData,
+        }, session?.access_token);
+      } else {
+        // New request or rejected resubmit → create new row
+        await workerFetch('submitRequest', {
+          type: selectedType.id,
+          title: title.trim(),
+          template_data: templateData,
+          is_product_scoped: isProductScoped,
+          products: isProductScoped
+            ? selectedProducts.map(p => ({ product_name: p, notes: productNotes[p] || '' }))
+            : [],
+        }, session?.access_token);
+      }
 
       setStep('success');
     } catch (err) {
@@ -394,6 +469,25 @@ export default function NewRequestPage() {
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {/* Prefill banner */}
+          {prefillRequest && (
+            <div style={{
+              background: isEdit ? 'rgba(242,205,26,0.08)' : 'var(--s2)',
+              border: `1px solid ${isEdit ? 'rgba(242,205,26,0.25)' : 'var(--b1)'}`,
+              borderRadius: 6,
+              padding: '12px 16px',
+            }}>
+              <div style={{ fontFamily: 'var(--head)', fontSize: 10, letterSpacing: '.2em', textTransform: 'uppercase', color: isEdit ? '#F2CD1A' : 'var(--t2)', marginBottom: 4 }}>
+                {isEdit ? 'Updating Request' : 'Resubmitting as New Request'}
+              </div>
+              {prefillRequest.review_note && (
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)', lineHeight: 1.5 }}>
+                  Approver noted: &ldquo;{prefillRequest.review_note}&rdquo;
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Title */}
           <FormField label="Request Title" required>
             <InputField

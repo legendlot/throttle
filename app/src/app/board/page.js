@@ -326,6 +326,20 @@ function TableView({ tasks, onTaskClick }) {
   );
 }
 
+// ── Person Filter ────────────────────────────────────────────────────────────
+
+function PersonFilter({ members, selected, onChange }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+      <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', letterSpacing: '.1em', textTransform: 'uppercase' }}>Person</span>
+      <button onClick={() => onChange(null)} style={{ background: selected === null ? '#F2CD1A' : 'var(--s2)', color: selected === null ? '#080808' : 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 10px', fontFamily: 'var(--mono)', fontSize: 10, cursor: 'pointer' }}>All</button>
+      {members.map(m => (
+        <button key={m.id} onClick={() => onChange(m.id)} style={{ background: selected === m.id ? '#F2CD1A' : 'var(--s2)', color: selected === m.id ? '#080808' : 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 10px', fontFamily: 'var(--mono)', fontSize: 10, cursor: 'pointer' }}>{m.name.split(' ')[0]}</button>
+      ))}
+    </div>
+  );
+}
+
 // ── Main Board Page ───────────────────────────────────────────────────────────
 
 export default function BoardPage() {
@@ -334,6 +348,8 @@ export default function BoardPage() {
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState('kanban');
   const [selectedTask, setSelectedTask] = useState(null);
+  const [selectedPerson, setSelectedPerson] = useState(null);
+  const [teamMembers, setTeamMembers] = useState([]);
 
   const isAdminLead = ['admin', 'lead'].includes(brandUser?.role);
 
@@ -341,11 +357,19 @@ export default function BoardPage() {
     if (brandUser) loadTasks();
   }, [brandUser]);
 
+  useEffect(() => {
+    if (isAdminLead && session) {
+      workerFetch('getTeamMembers', {}, session?.access_token)
+        .then(data => setTeamMembers(data.members || []))
+        .catch(() => {});
+    }
+  }, [isAdminLead, session]);
+
   async function loadTasks() {
     setLoading(true);
     const { data, error } = await supabase
       .from('tasks')
-      .select('*')
+      .select('*, task_assignees(user_id)')
       .not('stage', 'in', '("done","abandoned")')
       .order('created_at', { ascending: false });
     if (!error) setTasks(data || []);
@@ -376,8 +400,12 @@ export default function BoardPage() {
     setSelectedTask(updatedTask);
   }
 
+  const visibleTasks = selectedPerson
+    ? tasks.filter(t => t.task_assignees?.some(a => a.user_id === selectedPerson))
+    : tasks;
+
   const tasksByStage = BOARD_STAGES.reduce((acc, stage) => {
-    acc[stage.value] = tasks.filter(t => t.stage === stage.value);
+    acc[stage.value] = visibleTasks.filter(t => t.stage === stage.value);
     return acc;
   }, {});
 
@@ -393,7 +421,7 @@ export default function BoardPage() {
               Board
             </h1>
             <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginTop: 4 }}>
-              {tasks.length} active task{tasks.length !== 1 ? 's' : ''}
+              {selectedPerson ? `${visibleTasks.length} of ${tasks.length}` : tasks.length} active task{(selectedPerson ? visibleTasks.length : tasks.length) !== 1 ? 's' : ''}
             </p>
           </div>
 
@@ -410,6 +438,11 @@ export default function BoardPage() {
                   {reviewCount} awaiting review
                 </span>
               </div>
+            )}
+
+            {/* Person filter */}
+            {isAdminLead && teamMembers.length > 0 && (
+              <PersonFilter members={teamMembers} selected={selectedPerson} onChange={setSelectedPerson} />
             )}
 
             {/* View toggle */}
@@ -463,7 +496,7 @@ export default function BoardPage() {
             </div>
           </div>
         ) : (
-          <TableView tasks={tasks} onTaskClick={setSelectedTask} />
+          <TableView tasks={visibleTasks} onTaskClick={setSelectedTask} />
         )}
 
         {selectedTask && (

@@ -160,6 +160,22 @@ function AddButton({ onClick }) {
   );
 }
 
+// ── Person Filter ────────────────────────────────────────────────────────────
+
+function PersonFilter({ members, selected, onChange, taskCounts }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+      <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', letterSpacing: '.1em', textTransform: 'uppercase' }}>Person</span>
+      <button onClick={() => onChange(null)} style={{ background: selected === null ? '#F2CD1A' : 'var(--s2)', color: selected === null ? '#080808' : 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 10px', fontFamily: 'var(--mono)', fontSize: 10, cursor: 'pointer' }}>All</button>
+      {members.map(m => (
+        <button key={m.id} onClick={() => onChange(m.id)} style={{ background: selected === m.id ? '#F2CD1A' : 'var(--s2)', color: selected === m.id ? '#080808' : 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 10px', fontFamily: 'var(--mono)', fontSize: 10, cursor: 'pointer' }}>
+          {m.name.split(' ')[0]}{taskCounts && taskCounts[m.id] ? ` (${taskCounts[m.id]})` : ''}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 // ── Main Sprint Page ──────────────────────────────────────────────────────────
 
 export default function SprintsPage() {
@@ -172,6 +188,8 @@ export default function SprintsPage() {
   const [dragOverSprint, setDragOverSprint] = useState(false);
   const [dragOverBacklog, setDragOverBacklog] = useState(false);
   const [error, setError] = useState(null);
+  const [selectedPerson, setSelectedPerson] = useState(null);
+  const [teamMembers, setTeamMembers] = useState([]);
 
   // Create sprint form
   const [showCreate, setShowCreate] = useState(false);
@@ -197,6 +215,14 @@ export default function SprintsPage() {
     if (brandUser) loadAll();
   }, [brandUser]);
 
+  useEffect(() => {
+    if (isAdminLead && session) {
+      workerFetch('getTeamMembers', {}, session?.access_token)
+        .then(data => setTeamMembers(data.members || []))
+        .catch(() => {});
+    }
+  }, [isAdminLead, session]);
+
   async function loadAll() {
     setLoading(true);
     await Promise.all([loadActiveSprint(), loadBacklog()]);
@@ -216,7 +242,7 @@ export default function SprintsPage() {
     if (sprint) {
       const { data: tasks } = await supabase
         .from('tasks')
-        .select('*')
+        .select('*, task_assignees(user_id)')
         .eq('sprint_id', sprint.id)
         .not('stage', 'in', '("done","abandoned")')
         .order('created_at', { ascending: false });
@@ -229,7 +255,7 @@ export default function SprintsPage() {
   async function loadBacklog() {
     const { data } = await supabase
       .from('tasks')
-      .select('*')
+      .select('*, task_assignees(user_id)')
       .eq('stage', 'backlog')
       .is('sprint_id', null)
       .order('created_at', { ascending: false });
@@ -331,11 +357,20 @@ export default function SprintsPage() {
     removeFromSprint(task);
   }
 
-  // Filter backlog
-  const filteredBacklog = backlogTasks.filter(t =>
-    !search || t.title.toLowerCase().includes(search.toLowerCase())
-      || t.product_code?.toLowerCase().includes(search.toLowerCase())
-  );
+  // Person filtering
+  const filteredSprintTasks = selectedPerson
+    ? sprintTasks.filter(t => t.task_assignees?.some(a => a.user_id === selectedPerson))
+    : sprintTasks;
+  const filteredBacklog = (selectedPerson
+    ? backlogTasks.filter(t => t.task_assignees?.some(a => a.user_id === selectedPerson))
+    : backlogTasks
+  ).filter(t => !search || t.title.toLowerCase().includes(search.toLowerCase()) || t.product_code?.toLowerCase().includes(search.toLowerCase()));
+
+  // Task counts per person
+  const personTaskCounts = {};
+  teamMembers.forEach(m => {
+    personTaskCounts[m.id] = sprintTasks.filter(t => t.task_assignees?.some(a => a.user_id === m.id)).length;
+  });
 
   const statusLabel = getSprintStatusLabel(activeSprint);
 
@@ -350,6 +385,9 @@ export default function SprintsPage() {
             <p style={{ fontFamily: 'var(--mono)', color: 'var(--t3)', fontSize: 11, marginTop: 4 }}>
               {activeSprint ? activeSprint.name : 'No active sprint'}
             </p>
+            {isAdminLead && teamMembers.length > 0 && (
+              <PersonFilter members={teamMembers} selected={selectedPerson} onChange={setSelectedPerson} taskCounts={personTaskCounts} />
+            )}
           </div>
 
           {isAdminLead && (
@@ -459,7 +497,7 @@ export default function SprintsPage() {
                     )}
                   </div>
                   <span style={{ fontFamily: 'var(--mono)', fontSize: 10, background: 'var(--s2)', color: 'var(--t3)', padding: '2px 6px', borderRadius: 3 }}>
-                    {sprintTasks.length}
+                    {filteredSprintTasks.length}
                   </span>
                 </div>
 
@@ -481,14 +519,14 @@ export default function SprintsPage() {
                         {isAdminLead ? 'Create a sprint to get started' : 'No active sprint'}
                       </p>
                     </div>
-                  ) : sprintTasks.length === 0 ? (
+                  ) : filteredSprintTasks.length === 0 ? (
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '40px 0' }}>
                       <p style={{ fontFamily: 'var(--mono)', color: 'var(--b2)', fontSize: 10 }}>
                         {isAdminLead ? 'Drag tasks here from the backlog' : 'No tasks in sprint'}
                       </p>
                     </div>
                   ) : (
-                    sprintTasks.map(task => (
+                    filteredSprintTasks.map(task => (
                       <div
                         key={task.id}
                         draggable={isAdminLead}

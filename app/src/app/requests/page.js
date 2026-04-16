@@ -30,7 +30,9 @@ export default function RequestsPage() {
 
     // Requesters only see their own — RLS enforces this
     // Admins/leads see all — RLS enforces this too
-    if (filter !== 'all') {
+    if (filter === 'needs_action') {
+      query = query.eq('status', 'info_needed').eq('requester_id', brandUser.id);
+    } else if (filter !== 'all') {
       query = query.eq('status', filter);
     }
 
@@ -45,6 +47,7 @@ export default function RequestsPage() {
   }
 
   const filters = [
+    { value: 'needs_action', label: 'Needs Action' },
     { value: 'all', label: 'All' },
     { value: 'pending', label: 'Pending' },
     { value: 'approved', label: 'Approved' },
@@ -234,8 +237,42 @@ export default function RequestsPage() {
                       </p>
                     )}
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
                     <RequestStatusBadge status={req.status} />
+                    {req.requester_id === brandUser?.id && req.status === 'info_needed' && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); router.push(`/requests/new/?prefill=${req.id}`); }}
+                        style={{
+                          background: 'rgba(242,205,26,0.12)',
+                          color: '#F2CD1A',
+                          border: '1px solid rgba(242,205,26,0.3)',
+                          borderRadius: 4,
+                          padding: '3px 10px',
+                          fontFamily: 'var(--mono)',
+                          fontSize: 10,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Update & Resubmit
+                      </button>
+                    )}
+                    {req.requester_id === brandUser?.id && req.status === 'rejected' && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); router.push(`/requests/new/?prefill=${req.id}`); }}
+                        style={{
+                          background: 'var(--s2)',
+                          color: 'var(--t2)',
+                          border: '1px solid var(--b2)',
+                          borderRadius: 4,
+                          padding: '3px 10px',
+                          fontFamily: 'var(--mono)',
+                          fontSize: 10,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Resubmit
+                      </button>
+                    )}
                     <span style={{
                       fontFamily: 'var(--mono)',
                       color: 'var(--t3)',
