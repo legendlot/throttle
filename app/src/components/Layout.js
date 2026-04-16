@@ -57,12 +57,12 @@ export default function Layout({ children }) {
     <div style={{ minHeight: '100vh', background: 'var(--bg)', color: 'var(--text)' }}>
       {/* Top nav */}
       <header style={{
-        borderBottom: '1px solid var(--b1)',
+        borderBottom: '1px solid #333',
         padding: '0 20px',
         display: 'flex',
         alignItems: 'center',
         height: 48,
-        background: 'var(--s1)',
+        background: '#181818',
         position: 'sticky',
         top: 0,
         zIndex: 50,
@@ -93,7 +93,7 @@ export default function Layout({ children }) {
                   alignItems: 'center',
                   transition: 'all .15s',
                   background: isActive ? '#F2CD1A' : 'transparent',
-                  color: isActive ? '#080808' : 'var(--t3)',
+                  color: isActive ? '#080808' : '#888',
                   fontWeight: isActive ? 700 : 400,
                 }}
               >
