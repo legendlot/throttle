@@ -53,9 +53,9 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
   async function loadAssignees() {
     const { data } = await supabase
       .from('task_assignees')
-      .select('user_id, users(id, name, discipline)')
+      .select('user_id, is_owner, users(id, name, discipline)')
       .eq('task_id', task.id);
-    setAssignees(data?.map(a => a.users).filter(Boolean) || []);
+    setAssignees(data?.map(a => ({ ...a.users, user_id: a.user_id, is_owner: a.is_owner })).filter(Boolean) || []);
   }
 
   async function loadTeamMembers() {
@@ -296,75 +296,8 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
             )}
           </Section>
 
-          {/* Assignees */}
-          <Section title="Assignees">
-            {assignees.length === 0 ? (
-              <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>Unassigned</p>
-            ) : (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-                {assignees.map(a => (
-                  <span key={a.id} style={{ fontFamily: 'var(--mono)', fontSize: 11, background: 'var(--s3)', color: 'var(--t2)', padding: '4px 8px', borderRadius: 4 }}>
-                    {a.name}
-                    {a.discipline && <span style={{ color: 'var(--t3)', marginLeft: 4 }}>· {a.discipline}</span>}
-                  </span>
-                ))}
-              </div>
-            )}
-
-            {/* Member: self-assign / unassign buttons */}
-            {brandUser?.role === 'member' && (() => {
-              const iAmAssigned = assignees.some(a => a.id === brandUser.id);
-              return iAmAssigned ? (
-                <button
-                  onClick={async () => {
-                    setLoading(true);
-                    try {
-                      await workerFetch('assignTask', { task_id: task.id, remove_self: true }, session?.access_token);
-                      await loadAssignees();
-                    } catch (e) { setError(e.message); }
-                    setLoading(false);
-                  }}
-                  disabled={loading}
-                  style={{ background: 'rgba(222,42,42,0.1)', color: 'var(--red)', border: '1px solid rgba(222,42,42,0.3)', borderRadius: 4, padding: '6px 14px', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer', opacity: loading ? 0.4 : 1 }}
-                >
-                  Unassign me
-                </button>
-              ) : (
-                <button
-                  onClick={async () => {
-                    setLoading(true);
-                    try {
-                      await workerFetch('assignTask', { task_id: task.id, user_ids: [brandUser.id] }, session?.access_token);
-                      await loadAssignees();
-                    } catch (e) { setError(e.message); }
-                    setLoading(false);
-                  }}
-                  disabled={loading}
-                  style={{ background: 'rgba(242,205,26,0.12)', color: '#F2CD1A', border: '1px solid rgba(242,205,26,0.3)', borderRadius: 4, padding: '6px 14px', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer', opacity: loading ? 0.4 : 1 }}
-                >
-                  Assign to me
-                </button>
-              );
-            })()}
-
-            {/* Admin/lead: full picker */}
-            {isAdminLead && teamMembers.length > 0 && (
-              <div style={{ marginTop: 12 }}>
-                <p style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', marginBottom: 8 }}>Click to assign / unassign</p>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                  {teamMembers.map(m => {
-                    const assigned = assignees.some(a => a.id === m.id);
-                    return (
-                      <button key={m.id} onClick={() => toggleAssignee(m.id)} disabled={loading} style={pillStyle(assigned)}>
-                        {assigned && <span style={{ color: 'var(--green)', marginRight: 4 }}>✓</span>}
-                        {m.name}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </Section>
+          {/* Assignees — Owner / Collaborator model */}
+          <AssigneesSection task={{ ...task, assignees }} teamMembers={teamMembers} brandUser={brandUser} session={session} onUpdate={async () => { await loadAssignees(); await loadActivity(); }} />
 
           {/* Details */}
           <Section title="Details">
@@ -461,6 +394,105 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
         </div>
       </div>
     </>
+  );
+}
+
+function AssigneesSection({ task, teamMembers, brandUser, session, onUpdate }) {
+  const owner = task.assignees?.find(a => a.is_owner);
+  const collaborators = task.assignees?.filter(a => !a.is_owner) || [];
+  const isAdminLead = ['admin', 'lead'].includes(brandUser?.role);
+  const isAlreadyAssigned = task.assignees?.some(a => a.user_id === brandUser?.id);
+
+  const call = async (action, userId) => {
+    try {
+      await workerFetch('assignTask', { taskId: task.id, action, ...(userId ? { userId } : {}) }, session?.access_token);
+      onUpdate();
+    } catch (e) { alert(e.message); }
+  };
+
+  return (
+    <div style={{ borderBottom: '1px solid var(--b1)', paddingBottom: 14 }}>
+      <div style={{ fontFamily: 'var(--head)', fontSize: 10, letterSpacing: '.25em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 12, fontWeight: 700 }}>Assignees</div>
+
+      {/* Owner */}
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', letterSpacing: '.12em', textTransform: 'uppercase', marginBottom: 8 }}>Owner</div>
+        {owner ? (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ width: 26, height: 26, borderRadius: '50%', background: '#F2CD1A', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--head)', fontSize: 11, fontWeight: 700, color: '#080808', flexShrink: 0 }}>
+                {owner.name?.[0]?.toUpperCase() || '?'}
+              </div>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)' }}>{owner.name}</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', background: 'var(--s3)', padding: '1px 6px', borderRadius: 3, letterSpacing: '.08em', textTransform: 'uppercase' }}>owner</span>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {owner.user_id === brandUser?.id && (
+                <button onClick={() => call('remove_self')} style={{ background: 'none', border: 'none', color: 'var(--t3)', cursor: 'pointer', fontSize: 11, fontFamily: 'var(--mono)' }}>Leave</button>
+              )}
+              {isAdminLead && owner.user_id !== brandUser?.id && (
+                <button onClick={() => call('remove_assignee', owner.user_id)} style={{ background: 'none', border: 'none', color: 'var(--t3)', cursor: 'pointer', fontSize: 11, fontFamily: 'var(--mono)' }}>Remove</button>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>Unassigned</span>
+            {!isAlreadyAssigned && (
+              <button onClick={() => call('self_assign_owner')} style={{ background: 'rgba(242,205,26,0.1)', color: '#F2CD1A', border: '1px solid rgba(242,205,26,0.25)', borderRadius: 4, padding: '5px 12px', fontFamily: 'var(--head)', fontSize: 10, fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', cursor: 'pointer', alignSelf: 'flex-start' }}>
+                Assign to me
+              </button>
+            )}
+            {isAdminLead && (
+              <select defaultValue="" onChange={e => { if (e.target.value) call('set_owner', e.target.value); }} style={{ background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '5px 10px', color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 11, outline: 'none' }}>
+                <option value="">Assign owner...</option>
+                {teamMembers.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+              </select>
+            )}
+          </div>
+        )}
+        {isAdminLead && owner && (
+          <select defaultValue="" onChange={e => { if (e.target.value) call('set_owner', e.target.value); }} style={{ marginTop: 8, background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '5px 10px', color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 11, outline: 'none', width: '100%' }}>
+            <option value="">Change owner...</option>
+            {teamMembers.filter(m => m.id !== owner.user_id).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </select>
+        )}
+      </div>
+
+      {/* Collaborators */}
+      <div>
+        <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', letterSpacing: '.12em', textTransform: 'uppercase', marginBottom: 8 }}>Collaborators</div>
+        {collaborators.length === 0 && <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>None</span>}
+        {collaborators.map(c => (
+          <div key={c.user_id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--s3)', border: '1px solid var(--b2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--head)', fontSize: 9, color: 'var(--t2)', flexShrink: 0 }}>
+                {c.name?.[0]?.toUpperCase() || '?'}
+              </div>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t2)' }}>{c.name}</span>
+            </div>
+            {(c.user_id === brandUser?.id || isAdminLead) && (
+              <button onClick={() => c.user_id === brandUser?.id ? call('remove_self') : call('remove_assignee', c.user_id)} style={{ background: 'none', border: 'none', color: 'var(--t3)', cursor: 'pointer', fontSize: 11, fontFamily: 'var(--mono)' }}>
+                {c.user_id === brandUser?.id ? 'Leave' : 'Remove'}
+              </button>
+            )}
+          </div>
+        ))}
+        <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {owner && !isAlreadyAssigned && (
+            <button onClick={() => call('self_add_collaborator')} style={{ background: 'var(--s2)', color: 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '5px 12px', fontFamily: 'var(--mono)', fontSize: 10, cursor: 'pointer', alignSelf: 'flex-start' }}>
+              + Add me as collaborator
+            </button>
+          )}
+          {teamMembers.filter(m => !task.assignees?.some(a => a.user_id === m.id)).length > 0 && (
+            <select defaultValue="" onChange={e => { if (e.target.value) call('add_collaborator', e.target.value); }} style={{ background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '5px 10px', color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 11, outline: 'none' }}>
+              <option value="">Add collaborator...</option>
+              {teamMembers.filter(m => !task.assignees?.some(a => a.user_id === m.id)).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 

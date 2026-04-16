@@ -242,7 +242,7 @@ export default function SprintsPage() {
     if (sprint) {
       const { data: tasks } = await supabase
         .from('tasks')
-        .select('*, task_assignees(user_id)')
+        .select('*, task_assignees(user_id, is_owner)')
         .eq('sprint_id', sprint.id)
         .not('stage', 'in', '("done","abandoned")')
         .order('created_at', { ascending: false });
@@ -255,7 +255,7 @@ export default function SprintsPage() {
   async function loadBacklog() {
     const { data } = await supabase
       .from('tasks')
-      .select('*, task_assignees(user_id)')
+      .select('*, task_assignees(user_id, is_owner)')
       .eq('stage', 'backlog')
       .is('sprint_id', null)
       .order('created_at', { ascending: false });

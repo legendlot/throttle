@@ -64,11 +64,28 @@ function TaskCard({ task, onClick, isDragging }) {
       </p>
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        {task.product_code && (
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)' }}>
-            {task.product_code}
-          </span>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          {task.product_code && (
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)' }}>
+              {task.product_code}
+            </span>
+          )}
+          {(() => {
+            const cardOwner = task.task_assignees?.find(a => a.is_owner);
+            const collabCount = task.task_assignees?.filter(a => !a.is_owner).length || 0;
+            if (!cardOwner) return null;
+            return (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                <div style={{ width: 16, height: 16, borderRadius: '50%', background: '#F2CD1A', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--head)', fontSize: 8, fontWeight: 700, color: '#080808' }}>
+                  {cardOwner.user_id?.slice(0, 1)?.toUpperCase() || '?'}
+                </div>
+                {collabCount > 0 && (
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)' }}>+{collabCount}</span>
+                )}
+              </div>
+            );
+          })()}
+        </div>
         {task.due_date && (
           <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', marginLeft: 'auto' }}>
             {new Date(task.due_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
@@ -372,7 +389,7 @@ export default function BoardPage() {
     setLoading(true);
     const { data, error } = await supabase
       .from('tasks')
-      .select('*, task_assignees(user_id)')
+      .select('*, task_assignees(user_id, is_owner)')
       .not('stage', 'in', '("done","abandoned")')
       .order('created_at', { ascending: false });
     if (!error) setTasks(data || []);

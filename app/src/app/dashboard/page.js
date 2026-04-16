@@ -584,6 +584,8 @@ export default function DashboardPage() {
   const [activeSprint, setActiveSprint] = useState(null);
   const [stats, setStats] = useState(null);
   const [deliverables, setDeliverables] = useState([]);
+  const [collaborations, setCollaborations] = useState([]);
+  const [collabOpen, setCollabOpen] = useState(false);
   const [workload, setWorkload] = useState([]);
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
   const [deliverableView, setDeliverableView] = useState('date');
@@ -656,6 +658,7 @@ export default function DashboardPage() {
       ]);
       setStats(statsData);
       setDeliverables(delData.rows || []);
+      setCollaborations(delData.collaborations || []);
       setWorkload(wlData.rows || []);
     } catch (e) {
       console.error('Dashboard load error:', e);
@@ -671,6 +674,7 @@ export default function DashboardPage() {
         endDate: newRange.end,
       }, session);
       setDeliverables(delData.rows || []);
+      setCollaborations(delData.collaborations || []);
     } catch (e) {
       console.error('Deliverables fetch error:', e);
     }
@@ -798,6 +802,34 @@ export default function DashboardPage() {
                     ? <ByDateTable rows={visibleDeliverables} />
                     : <ByPersonTable rows={visibleDeliverables} />
                   }
+
+                  {/* Collaborator footnote */}
+                  {collaborations.length > 0 && (
+                    <div style={{ marginTop: 16, borderTop: '1px solid var(--b1)', paddingTop: 12 }}>
+                      <div
+                        onClick={() => setCollabOpen(o => !o)}
+                        style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: collabOpen ? 10 : 0 }}
+                      >
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', letterSpacing: '.1em', textTransform: 'uppercase' }}>
+                          Collaborator contributions ({collaborations.length})
+                        </span>
+                        <span style={{ color: 'var(--t3)', fontSize: 10 }}>{collabOpen ? '▲' : '▼'}</span>
+                      </div>
+                      {collabOpen && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          {collaborations.map(c => (
+                            <div key={`collab-${c.id}`} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid var(--b1)' }}>
+                              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)', flex: 1 }}>{c.title}</span>
+                              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginLeft: 12 }}>
+                                {c.collaborators?.map(col => col.name).join(', ')}
+                              </span>
+                              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginLeft: 12, flexShrink: 0 }}>{c.completed_date}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </section>
               );
             })()}
