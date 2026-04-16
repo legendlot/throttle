@@ -1,5 +1,5 @@
 # Throttle — Technical Build Document
-**Version:** 10.0 | **Last Updated:** April 2026 (Phase 10)
+**Version:** 11a | **Last Updated:** April 2026 (Phase 11a)
 **Purpose:** Technical reference for the Throttle brand team work OS.
 Feed this file when continuing development in a new session.
 
@@ -137,7 +137,7 @@ Errors: `{ error: "message" }` with appropriate HTTP status.
 - `approveRequest` / `rejectRequest` / `requestMoreInfo` — admin/lead
 - `updateTaskStage` — member (own tasks, limited transitions) or admin/lead (all)
 - `updateTaskPriority` — admin/lead
-- `assignTask` — admin/lead
+- `assignTask` — all roles (6 sub-actions: self_assign_owner, self_add_collaborator, add_collaborator, set_owner, remove_self, remove_assignee)
 - `abandonTask` — admin/lead
 - `flagExtBlocked` — assignee or admin/lead
 - `createSprint` — admin/lead
@@ -157,6 +157,7 @@ Errors: `{ error: "message" }` with appropriate HTTP status.
 - `getTeamMembers` — member/lead/admin (list of members + leads for person filter)
 - `updateTaskMeta` — admin/lead (edit task title and/or due date, logs to activity)
 - `getProducts` — any authenticated user (fetches active products from public.product_master)
+- `migrateOwners` — admin only (one-time migration: promotes first assignee to owner on all tasks)
 
 ### Worker secrets (set via wrangler secret put — never in files)
 - SUPABASE_SERVICE_ROLE_KEY
@@ -258,6 +259,10 @@ NEXT_PUBLIC_WORKER_URL=https://throttleops.afshaan.workers.dev
 | ProductSelector: dynamic fetch | Worker `getProducts` queries `public.product_master` with Accept-Profile: public | No more hardcoded list. New LOT products immediately available. Worker uses public schema headers to cross brand→public boundary. |
 | ProductSelector: object data model | `{ product_code, product_name, notes, is_custom }` instead of string array | Supports both DB products and custom text entries. `is_custom` flag distinguishes for storage (product_id = null for custom). |
 | Person filter for members | `getTeamMembers` allows member role, filter visible to all non-requesters | Cross-team visibility — members can see who's working on what, filter to specific colleagues. |
+| Owner/collaborator: one owner per task | Unique partial index `one_owner_per_task` on `(task_id) WHERE is_owner = true` | DB enforces single owner. Collaborators unlimited. No need for application-level lock. |
+| Owner/collaborator: assignTask 6 sub-actions | Single action with `action` field instead of separate endpoints | Keeps the switch/case simple. Each sub-action has its own role guard and validation. |
+| Deliverables report: owner-only credit | JOIN filters `is_owner = true` | Owner gets deliverable count credit. Collaborators appear in a separate footnote. Prevents double-counting. |
+| migrateOwners: first assignee becomes owner | For multi-assignee tasks, first row promoted | Admin can correct via UI. Idempotent — safe to re-run. Left in codebase unused after first call. |
 
 ---
 
@@ -402,8 +407,26 @@ NEXT_PUBLIC_WORKER_URL=https://throttleops.afshaan.workers.dev
 - [x] requests/new: product selection refactored from string array to object array `{ product_code, product_name, notes }`
 - [x] Cross-team visibility RLS — manual SQL (brand_team_read_all_tasks policy)
 
+### Phase 11a — Owner / Collaborator Task Model ✅
+- [x] DB: `is_owner` boolean column on brand.task_assignees (manual SQL)
+- [x] DB: `one_owner_per_task` unique index (manual SQL)
+- [x] Worker: `assignTask` fully replaced with 6 sub-actions (self_assign_owner, self_add_collaborator, add_collaborator, set_owner, remove_self, remove_assignee)
+- [x] Worker: `getDeliverablesReport` — owner-only counts + `collaborations` array for footnote
+- [x] Worker: all assignee queries include `is_owner` field (getTasksInBucket, getTeamWorkload, getDeliverablesReport)
+- [x] Worker: `migrateOwners` — one-time migration promoting first assignee to owner
+- [x] TaskSidePanel: Owner section (yellow avatar, "Assign to me" if unowned, "Change owner" for admin/lead)
+- [x] TaskSidePanel: Collaborator section (muted avatars, "Add me as collaborator", add/remove controls)
+- [x] TaskSidePanel: loadAssignees includes `is_owner` in query
+- [x] Board: TaskCard shows owner initial (yellow circle) + collaborator count (+N)
+- [x] Board: task query includes `is_owner` in task_assignees select
+- [x] Sprints: task queries include `is_owner` in task_assignees select
+- [x] Dashboard: collapsible collaborator footnote below deliverables table
+- [x] Dashboard: loadAllData captures `collaborations` from worker response
+- [x] Person filter: tasks appear under both owner and collaborators (unchanged — filters on user_id)
+- [x] migrateOwners needs to be called once post-deploy (curl with admin JWT)
+
 ### Pending
-- Phase 11: QA + full role testing
+- Phase 11b: QA + full role testing
 
 ---
 
