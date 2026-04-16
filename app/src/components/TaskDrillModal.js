@@ -34,43 +34,47 @@ export default function TaskDrillModal({ bucket, sprintId, onClose }) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }}
       onClick={onClose}
     >
       <div
-        className="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-2xl max-h-[80vh] overflow-hidden flex flex-col shadow-2xl"
+        style={{ background: 'var(--s1)', border: '1px solid var(--b2)', borderRadius: 12, width: '100%', maxWidth: 640, maxHeight: '80vh', overflow: 'hidden', display: 'flex', flexDirection: 'column', boxShadow: '0 25px 50px rgba(0,0,0,0.5)' }}
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800">
-          <div className="flex items-center gap-3">
-            <h2 className="text-sm font-semibold text-white">{BUCKET_LABELS[bucket] || bucket}</h2>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', borderBottom: '1px solid var(--b1)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <h2 style={{ fontFamily: 'var(--head)', fontSize: 11, fontWeight: 700, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--text)' }}>
+              {BUCKET_LABELS[bucket] || bucket}
+            </h2>
             {!loading && (
-              <span className="text-xs bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded">
-                {tasks.length} task{tasks.length !== 1 ? 's' : ''}
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 9, background: 'var(--s3)', color: 'var(--t2)', padding: '2px 7px', borderRadius: 3, letterSpacing: '.1em' }}>
+                {tasks.length}
               </span>
             )}
           </div>
           <button
             onClick={onClose}
-            className="text-zinc-500 hover:text-zinc-300 transition-colors text-lg leading-none"
+            style={{ color: 'var(--t3)', background: 'none', border: 'none', fontSize: 16, cursor: 'pointer', padding: '4px 8px', borderRadius: 4, transition: 'background .15s' }}
+            onMouseEnter={e => e.currentTarget.style.background = 'var(--s3)'}
+            onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
           >
             &times;
           </button>
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto px-5 py-3">
+        <div style={{ flex: 1, overflowY: 'auto', padding: '12px 20px' }}>
           {loading ? (
-            <div className="flex items-center justify-center py-12">
-              <p className="text-zinc-600 text-sm">Loading...</p>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '48px 0' }}>
+              <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', letterSpacing: '.2em', textTransform: 'uppercase' }}>Loading...</p>
             </div>
           ) : tasks.length === 0 ? (
-            <div className="flex items-center justify-center py-12">
-              <p className="text-zinc-600 text-sm">No tasks in this bucket.</p>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '48px 0' }}>
+              <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>No tasks in this bucket.</p>
             </div>
           ) : (
-            <div className="flex flex-col gap-2">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {tasks.map(task => {
                 const stage = getStageConfig(task.stage);
                 const priority = getPriorityConfig(task.priority);
@@ -79,42 +83,38 @@ export default function TaskDrillModal({ bucket, sprintId, onClose }) {
                 return (
                   <div
                     key={task.id}
-                    className="bg-zinc-800/50 border border-zinc-800 rounded-lg p-3"
+                    style={{ background: 'var(--s2)', border: '1px solid var(--b1)', borderLeft: `3px solid ${priority.color}`, borderRadius: 6, padding: 12 }}
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex-1 min-w-0">
-                        <p className="text-zinc-200 text-xs font-medium leading-snug">
+                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)', fontWeight: 500, lineHeight: 1.3 }}>
                           {task.title}
                         </p>
                         {task.blocked_reason && (
-                          <p className="text-zinc-500 text-xs mt-1 italic">
+                          <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginTop: 4, fontStyle: 'italic' }}>
                             {task.blocked_reason}
                           </p>
                         )}
                       </div>
-                      <div className="flex items-center gap-2 flex-shrink-0">
-                        {/* Priority badge */}
-                        <span
-                          className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded"
-                          style={{ color: priority.color, backgroundColor: priority.color + '15' }}
-                        >
-                          <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ backgroundColor: priority.color }} />
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                        <span style={{
+                          fontFamily: 'var(--mono)', fontSize: 9, padding: '2px 7px', borderRadius: 3, letterSpacing: '.08em', textTransform: 'uppercase',
+                          color: priority.color, background: priority.color + '15',
+                        }}>
                           {priority.label}
                         </span>
-                        {/* Stage badge */}
-                        <span
-                          className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded"
-                          style={{ color: stage.color, backgroundColor: stage.color + '15' }}
-                        >
-                          <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ backgroundColor: stage.color }} />
+                        <span style={{
+                          fontFamily: 'var(--mono)', fontSize: 9, padding: '2px 7px', borderRadius: 3, letterSpacing: '.08em', textTransform: 'uppercase',
+                          color: stage.color, background: stage.color + '15',
+                        }}>
                           {stage.label}
                         </span>
                       </div>
                     </div>
-                    <div className="flex items-center gap-3 mt-2 text-xs text-zinc-500">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>
                       <span>{assigneeNames}</span>
                       {task.due_date && (
-                        <span className="ml-auto">
+                        <span style={{ marginLeft: 'auto' }}>
                           Due: {new Date(task.due_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
                         </span>
                       )}

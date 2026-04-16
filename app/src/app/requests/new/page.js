@@ -90,27 +90,82 @@ export default function NewRequestPage() {
   // ── Step: Type selector ─────────────────────────────────────────────────────
   if (step === 'type') return (
     <Layout>
-      <div className="max-w-2xl mx-auto">
-        <div className="mb-6">
+      <div style={{ maxWidth: 672, margin: '0 auto' }}>
+        <div style={{ marginBottom: 24 }}>
           <button
             onClick={() => router.push('/requests/')}
-            className="text-zinc-600 text-sm hover:text-zinc-400 transition-colors mb-4 flex items-center gap-1"
+            style={{
+              fontFamily: 'var(--mono)',
+              fontSize: 11,
+              color: 'var(--t3)',
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              marginBottom: 16,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+              padding: 0,
+            }}
+            onMouseEnter={e => e.currentTarget.style.color = 'var(--t2)'}
+            onMouseLeave={e => e.currentTarget.style.color = 'var(--t3)'}
           >
             ← Back
           </button>
-          <h1 className="text-2xl font-bold text-white">New Request</h1>
-          <p className="text-zinc-500 text-sm mt-1">What type of work do you need?</p>
+          <h1 style={{
+            fontFamily: 'var(--head)',
+            fontWeight: 900,
+            fontSize: 18,
+            letterSpacing: '.2em',
+            textTransform: 'uppercase',
+            color: 'var(--text)',
+            margin: 0,
+          }}>
+            New Request
+          </h1>
+          <p style={{
+            fontFamily: 'var(--mono)',
+            fontSize: 12,
+            color: 'var(--t3)',
+            marginTop: 4,
+          }}>
+            What type of work do you need?
+          </p>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr',
+          gap: 12,
+        }}>
           {REQUEST_TYPES.map(type => (
             <button
               key={type.value}
               onClick={() => selectType(type)}
-              className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 text-left hover:border-zinc-600 hover:bg-zinc-800 transition-all group"
+              style={{
+                background: 'var(--s1)',
+                border: '1px solid var(--b1)',
+                borderRadius: 6,
+                padding: 16,
+                textAlign: 'left',
+                cursor: 'pointer',
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.borderColor = 'var(--b3)';
+                e.currentTarget.style.background = 'var(--s3)';
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.borderColor = 'var(--b1)';
+                e.currentTarget.style.background = 'var(--s1)';
+              }}
             >
-              <div className="text-2xl mb-2">{type.icon}</div>
-              <div className="text-sm font-medium text-zinc-200 group-hover:text-white">
+              <div style={{ fontSize: 24, marginBottom: 8 }}>{type.icon}</div>
+              <div style={{
+                fontFamily: 'var(--mono)',
+                fontSize: 13,
+                fontWeight: 500,
+                color: 'var(--text)',
+              }}>
                 {type.label}
               </div>
             </button>
@@ -123,23 +178,61 @@ export default function NewRequestPage() {
   // ── Step: Success ───────────────────────────────────────────────────────────
   if (step === 'success') return (
     <Layout>
-      <div className="max-w-lg mx-auto text-center py-20">
-        <div className="text-4xl mb-4">✓</div>
-        <h2 className="text-xl font-bold text-white mb-2">Request Submitted</h2>
-        <p className="text-zinc-500 text-sm mb-8">
+      <div style={{ maxWidth: 512, margin: '0 auto', textAlign: 'center', paddingTop: 80, paddingBottom: 80 }}>
+        <div style={{ fontSize: 40, marginBottom: 16, color: '#F2CD1A' }}>✓</div>
+        <h2 style={{
+          fontFamily: 'var(--head)',
+          fontWeight: 900,
+          fontSize: 16,
+          letterSpacing: '.2em',
+          textTransform: 'uppercase',
+          color: 'var(--text)',
+          marginBottom: 8,
+        }}>
+          Request Submitted
+        </h2>
+        <p style={{
+          fontFamily: 'var(--mono)',
+          fontSize: 12,
+          color: 'var(--t3)',
+          marginBottom: 32,
+          lineHeight: 1.6,
+        }}>
           Your request has been sent to the brand team for review.
           You&apos;ll be notified once it&apos;s approved or if more information is needed.
         </p>
-        <div className="flex gap-3 justify-center">
+        <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
           <button
             onClick={() => router.push('/requests/')}
-            className="bg-white text-black font-semibold px-6 py-2.5 rounded-lg text-sm hover:bg-zinc-100 transition-colors"
+            style={{
+              background: 'transparent',
+              color: 'var(--t2)',
+              border: '1px solid var(--b2)',
+              borderRadius: 6,
+              fontFamily: 'var(--mono)',
+              fontSize: 11,
+              padding: '10px 24px',
+              cursor: 'pointer',
+            }}
+            onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--b3)'}
+            onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--b2)'}
           >
             View My Requests
           </button>
           <button
             onClick={() => setStep('type')}
-            className="bg-zinc-800 text-zinc-200 font-medium px-6 py-2.5 rounded-lg text-sm hover:bg-zinc-700 transition-colors"
+            style={{
+              background: 'transparent',
+              color: 'var(--t2)',
+              border: '1px solid var(--b2)',
+              borderRadius: 6,
+              fontFamily: 'var(--mono)',
+              fontSize: 11,
+              padding: '10px 24px',
+              cursor: 'pointer',
+            }}
+            onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--b3)'}
+            onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--b2)'}
           >
             Submit Another
           </button>
@@ -153,39 +246,92 @@ export default function NewRequestPage() {
 
   return (
     <Layout>
-      <div className="max-w-2xl mx-auto">
-        <div className="mb-6">
+      <div style={{ maxWidth: 672, margin: '0 auto' }}>
+        <div style={{ marginBottom: 24 }}>
           <button
             onClick={() => setStep('type')}
-            className="text-zinc-600 text-sm hover:text-zinc-400 transition-colors mb-4 flex items-center gap-1"
+            style={{
+              fontFamily: 'var(--mono)',
+              fontSize: 11,
+              color: 'var(--t3)',
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              marginBottom: 16,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+              padding: 0,
+            }}
+            onMouseEnter={e => e.currentTarget.style.color = 'var(--t2)'}
+            onMouseLeave={e => e.currentTarget.style.color = 'var(--t3)'}
           >
             ← Change type
           </button>
-          <div className="flex items-center gap-2 mb-1">
-            <span className="text-xl">{selectedType.icon}</span>
-            <h1 className="text-2xl font-bold text-white">{selectedType.label}</h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+            <span style={{ fontSize: 20 }}>{selectedType.icon}</span>
+            <h1 style={{
+              fontFamily: 'var(--head)',
+              fontWeight: 900,
+              fontSize: 18,
+              letterSpacing: '.2em',
+              textTransform: 'uppercase',
+              color: 'var(--text)',
+              margin: 0,
+            }}>
+              {selectedType.label}
+            </h1>
           </div>
-          <p className="text-zinc-500 text-sm">Fill in the details below</p>
+          <p style={{
+            fontFamily: 'var(--mono)',
+            fontSize: 12,
+            color: 'var(--t3)',
+          }}>
+            Fill in the details below
+          </p>
         </div>
 
-        <div className="space-y-5">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           {/* Title */}
           <FormField label="Request Title" required>
-            <input
+            <InputField
               type="text"
               value={title}
               onChange={e => setTitle(e.target.value)}
               placeholder="Short description of this request"
-              className={inputCls}
             />
           </FormField>
 
           {/* Product scoping */}
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
-            <div className="flex items-center justify-between mb-3">
+          <div style={{
+            background: 'var(--s1)',
+            border: '1px solid var(--b1)',
+            borderRadius: 6,
+            padding: 16,
+          }}>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: 12,
+            }}>
               <div>
-                <p className="text-sm font-medium text-zinc-200">Product Specific?</p>
-                <p className="text-xs text-zinc-600 mt-0.5">
+                <p style={{
+                  fontFamily: 'var(--mono)',
+                  fontSize: 13,
+                  fontWeight: 500,
+                  color: 'var(--text)',
+                  margin: 0,
+                }}>
+                  Product Specific?
+                </p>
+                <p style={{
+                  fontFamily: 'var(--mono)',
+                  fontSize: 11,
+                  color: 'var(--t3)',
+                  marginTop: 2,
+                  marginBottom: 0,
+                }}>
                   Is this request for specific products in our range?
                 </p>
               </div>
@@ -195,36 +341,68 @@ export default function NewRequestPage() {
                   setIsProductScoped(!isProductScoped);
                   setSelectedProducts([]);
                 }}
-                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-                  isProductScoped ? 'bg-white' : 'bg-zinc-700'
-                }`}
+                style={{
+                  position: 'relative',
+                  display: 'inline-flex',
+                  height: 20,
+                  width: 36,
+                  alignItems: 'center',
+                  borderRadius: 10,
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: 0,
+                  transition: 'background 0.2s',
+                  background: isProductScoped ? '#F2CD1A' : 'var(--s3)',
+                }}
               >
-                <span className={`inline-block h-3.5 w-3.5 rounded-full bg-black transition-transform ${
-                  isProductScoped ? 'translate-x-4' : 'translate-x-1'
-                }`} />
+                <span style={{
+                  display: 'inline-block',
+                  height: 14,
+                  width: 14,
+                  borderRadius: 7,
+                  background: '#080808',
+                  transition: 'transform 0.2s',
+                  transform: isProductScoped ? 'translateX(16px)' : 'translateX(4px)',
+                }} />
               </button>
             </div>
 
             {isProductScoped && (
-              <div className="mt-3 space-y-3">
+              <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <ProductSelector
                   selected={selectedProducts}
                   onChange={setSelectedProducts}
                 />
                 {selectedProducts.length > 0 && (
-                  <div className="space-y-2 mt-3">
-                    <p className="text-xs text-zinc-600">
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
+                    <p style={{
+                      fontFamily: 'var(--head)',
+                      fontSize: 9,
+                      letterSpacing: '.2em',
+                      textTransform: 'uppercase',
+                      color: 'var(--t3)',
+                      margin: 0,
+                    }}>
                       Add notes per product (optional)
                     </p>
                     {selectedProducts.map(product => (
                       <div key={product}>
-                        <label className="text-xs text-zinc-500 mb-1 block">{product}</label>
-                        <input
+                        <label style={{
+                          fontFamily: 'var(--head)',
+                          fontSize: 10,
+                          letterSpacing: '.15em',
+                          textTransform: 'uppercase',
+                          color: 'var(--t2)',
+                          marginBottom: 4,
+                          display: 'block',
+                        }}>
+                          {product}
+                        </label>
+                        <InputField
                           type="text"
                           placeholder="Any specific notes for this product..."
                           value={productNotes[product] || ''}
                           onChange={e => handleProductNoteChange(product, e.target.value)}
-                          className={inputCls}
                         />
                       </div>
                     ))}
@@ -250,23 +428,56 @@ export default function NewRequestPage() {
 
           {/* Error */}
           {error && (
-            <div className="bg-red-950 border border-red-800 rounded-lg px-4 py-3">
-              <p className="text-red-400 text-sm">{error}</p>
+            <div style={{
+              background: 'rgba(222,42,42,0.08)',
+              border: '1px solid rgba(222,42,42,0.3)',
+              borderRadius: 8,
+              padding: '12px 16px',
+            }}>
+              <p style={{
+                color: 'var(--red)',
+                fontFamily: 'var(--mono)',
+                fontSize: 12,
+                margin: 0,
+              }}>{error}</p>
             </div>
           )}
 
           {/* Submit */}
-          <div className="flex gap-3 pt-2">
+          <div style={{ display: 'flex', gap: 12, paddingTop: 8 }}>
             <button
               onClick={handleSubmit}
               disabled={submitting}
-              className="bg-white text-black font-semibold px-6 py-2.5 rounded-lg text-sm hover:bg-zinc-100 transition-colors disabled:opacity-50"
+              style={{
+                background: '#F2CD1A',
+                color: '#080808',
+                fontFamily: 'var(--head)',
+                fontWeight: 700,
+                fontSize: 11,
+                letterSpacing: '.15em',
+                textTransform: 'uppercase',
+                borderRadius: 6,
+                border: 'none',
+                padding: '10px 24px',
+                cursor: submitting ? 'default' : 'pointer',
+                opacity: submitting ? 0.5 : 1,
+              }}
             >
               {submitting ? 'Submitting...' : 'Submit Request'}
             </button>
             <button
               onClick={() => router.push('/requests/')}
-              className="text-zinc-600 text-sm hover:text-zinc-400 transition-colors px-4"
+              style={{
+                fontFamily: 'var(--mono)',
+                fontSize: 11,
+                color: 'var(--t3)',
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                padding: '0 16px',
+              }}
+              onMouseEnter={e => e.currentTarget.style.color = 'var(--t2)'}
+              onMouseLeave={e => e.currentTarget.style.color = 'var(--t3)'}
             >
               Cancel
             </button>
@@ -279,16 +490,57 @@ export default function NewRequestPage() {
 
 // ── Helper components ─────────────────────────────────────────────────────────
 
-const inputCls = "w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-500";
-const textareaCls = "w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-500 resize-none h-24";
-const selectCls = "w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-zinc-500";
+const inputStyle = {
+  width: '100%',
+  boxSizing: 'border-box',
+  background: 'var(--s2)',
+  border: '1px solid var(--b2)',
+  borderRadius: 6,
+  padding: '10px 14px',
+  color: 'var(--text)',
+  fontFamily: 'var(--mono)',
+  fontSize: 13,
+  outline: 'none',
+};
+
+const textareaStyle = {
+  ...inputStyle,
+  resize: 'none',
+  height: 96,
+};
+
+const selectStyle = {
+  ...inputStyle,
+};
+
+function InputField({ type, value, onChange, placeholder }) {
+  return (
+    <input
+      type={type || 'text'}
+      value={value}
+      onChange={onChange}
+      placeholder={placeholder}
+      style={inputStyle}
+      onFocus={e => e.currentTarget.style.borderColor = '#F2CD1A'}
+      onBlur={e => e.currentTarget.style.borderColor = 'var(--b2)'}
+    />
+  );
+}
 
 function FormField({ label, required, children }) {
   return (
     <div>
-      <label className="block text-sm font-medium text-zinc-300 mb-1.5">
+      <label style={{
+        display: 'block',
+        fontFamily: 'var(--head)',
+        fontSize: 10,
+        letterSpacing: '.15em',
+        textTransform: 'uppercase',
+        color: 'var(--t2)',
+        marginBottom: 6,
+      }}>
         {label}
-        {required && <span className="text-red-500 ml-1">*</span>}
+        {required && <span style={{ color: 'var(--red)', marginLeft: 4 }}>*</span>}
       </label>
       {children}
     </div>
@@ -304,7 +556,9 @@ function FieldInput({ field, value, onChange }) {
           value={value || ''}
           onChange={e => onChange(e.target.value)}
           placeholder={field.placeholder || ''}
-          className={inputCls}
+          style={inputStyle}
+          onFocus={e => e.currentTarget.style.borderColor = '#F2CD1A'}
+          onBlur={e => e.currentTarget.style.borderColor = 'var(--b2)'}
         />
       );
 
@@ -314,7 +568,9 @@ function FieldInput({ field, value, onChange }) {
           value={value || ''}
           onChange={e => onChange(e.target.value)}
           placeholder={field.placeholder || ''}
-          className={textareaCls}
+          style={textareaStyle}
+          onFocus={e => e.currentTarget.style.borderColor = '#F2CD1A'}
+          onBlur={e => e.currentTarget.style.borderColor = 'var(--b2)'}
         />
       );
 
@@ -323,7 +579,9 @@ function FieldInput({ field, value, onChange }) {
         <select
           value={value || ''}
           onChange={e => onChange(e.target.value)}
-          className={selectCls}
+          style={selectStyle}
+          onFocus={e => e.currentTarget.style.borderColor = '#F2CD1A'}
+          onBlur={e => e.currentTarget.style.borderColor = 'var(--b2)'}
         >
           <option value="">Select...</option>
           {field.options.map(opt => (
@@ -334,7 +592,7 @@ function FieldInput({ field, value, onChange }) {
 
     case 'multiselect':
       return (
-        <div className="flex flex-wrap gap-2">
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {field.options.map(opt => {
             const selected = Array.isArray(value) && value.includes(opt);
             return (
@@ -345,11 +603,17 @@ function FieldInput({ field, value, onChange }) {
                   const current = Array.isArray(value) ? value : [];
                   onChange(selected ? current.filter(v => v !== opt) : [...current, opt]);
                 }}
-                className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                  selected
-                    ? 'bg-white text-black border-white'
-                    : 'bg-transparent text-zinc-400 border-zinc-700 hover:border-zinc-500'
-                }`}
+                style={{
+                  fontFamily: 'var(--mono)',
+                  fontSize: 11,
+                  padding: '6px 12px',
+                  borderRadius: 20,
+                  cursor: 'pointer',
+                  transition: 'all 0.15s',
+                  background: selected ? 'rgba(242,205,26,0.12)' : 'transparent',
+                  color: selected ? '#F2CD1A' : 'var(--t3)',
+                  border: selected ? '1px solid #F2CD1A' : '1px solid var(--b2)',
+                }}
               >
                 {opt}
               </button>
@@ -360,17 +624,24 @@ function FieldInput({ field, value, onChange }) {
 
     case 'yesno':
       return (
-        <div className="flex gap-3">
+        <div style={{ display: 'flex', gap: 12 }}>
           {['yes', 'no'].map(opt => (
             <button
               key={opt}
               type="button"
               onClick={() => onChange(opt)}
-              className={`px-6 py-2 rounded-lg text-sm font-medium border transition-colors ${
-                value === opt
-                  ? 'bg-white text-black border-white'
-                  : 'bg-transparent text-zinc-400 border-zinc-700 hover:border-zinc-500'
-              }`}
+              style={{
+                padding: '8px 24px',
+                borderRadius: 6,
+                fontFamily: 'var(--mono)',
+                fontSize: 13,
+                fontWeight: 500,
+                cursor: 'pointer',
+                transition: 'all 0.15s',
+                background: value === opt ? 'rgba(242,205,26,0.12)' : 'transparent',
+                color: value === opt ? '#F2CD1A' : 'var(--t3)',
+                border: value === opt ? '1px solid #F2CD1A' : '1px solid var(--b2)',
+              }}
             >
               {opt === 'yes' ? 'Yes' : 'No'}
             </button>
@@ -384,7 +655,9 @@ function FieldInput({ field, value, onChange }) {
           type="date"
           value={value || ''}
           onChange={e => onChange(e.target.value)}
-          className={selectCls}
+          style={selectStyle}
+          onFocus={e => e.currentTarget.style.borderColor = '#F2CD1A'}
+          onBlur={e => e.currentTarget.style.borderColor = 'var(--b2)'}
         />
       );
 

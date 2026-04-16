@@ -3,58 +3,58 @@ export const STAGES = [
   {
     value: 'backlog',
     label: 'Backlog',
-    color: '#52525b', // zinc-600
+    color: '#555',
     description: 'Approved, not yet in a sprint',
   },
   {
     value: 'in_sprint',
     label: 'In Sprint',
-    color: '#3b82f6', // blue-500
+    color: '#F2CD1A',
     description: 'Assigned to current sprint',
   },
   {
     value: 'in_progress',
     label: 'In Progress',
-    color: '#8b5cf6', // violet-500
+    color: '#213CE2',
     description: 'Actively being worked on',
   },
   {
     value: 'ext_blocked',
     label: 'Ext. Blocked',
-    color: '#f59e0b', // amber-500
+    color: '#f59e0b',
     description: 'Blocked by external dependency',
   },
   {
     value: 'in_review',
     label: 'In Review',
-    color: '#06b6d4', // cyan-500
+    color: '#22d3ee',
     description: 'Submitted for approval',
   },
   {
     value: 'approved',
     label: 'Approved',
-    color: '#10b981', // emerald-500
+    color: '#22c55e',
     description: 'Work approved, pending final confirmation',
   },
   {
     value: 'done',
     label: 'Done',
-    color: '#22c55e', // green-500
+    color: '#22c55e',
     description: 'Complete',
   },
   {
     value: 'abandoned',
     label: 'Abandoned',
-    color: '#ef4444', // red-500
+    color: '#DE2A2A',
     description: 'Will not be completed',
   },
 ];
 
 export const PRIORITIES = [
-  { value: 'urgent', label: 'Urgent', color: '#ef4444' },
-  { value: 'high',   label: 'High',   color: '#f97316' },
-  { value: 'medium', label: 'Medium', color: '#eab308' },
-  { value: 'low',    label: 'Low',    color: '#22c55e' },
+  { value: 'urgent', label: 'Urgent', color: '#DE2A2A' },
+  { value: 'high',   label: 'High',   color: '#f59e0b' },
+  { value: 'medium', label: 'Medium', color: '#F2CD1A' },
+  { value: 'low',    label: 'Low',    color: '#555' },
 ];
 
 // Valid stage transitions per role

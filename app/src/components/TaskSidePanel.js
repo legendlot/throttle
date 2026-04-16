@@ -15,15 +15,10 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  // Stage move
   const [movingStage, setMovingStage] = useState(false);
   const [targetStage, setTargetStage] = useState(null);
   const [blockedReason, setBlockedReason] = useState('');
-
-  // Priority
   const [editingPriority, setEditingPriority] = useState(false);
-
-  // Abandon
   const [abandonReason, setAbandonReason] = useState('');
   const [showAbandon, setShowAbandon] = useState(false);
 
@@ -60,7 +55,6 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
       setError('A reason is required');
       return;
     }
-
     setLoading(true);
     setError(null);
     try {
@@ -99,7 +93,6 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
     const newIds = isAssigned
       ? assignees.filter(a => a.id !== userId).map(a => a.id)
       : [...assignees.map(a => a.id), userId];
-
     setLoading(true);
     setError(null);
     try {
@@ -127,117 +120,129 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
     }
   }
 
+  const inputStyle = {
+    width: '100%',
+    background: 'var(--s2)',
+    border: '1px solid var(--b2)',
+    borderRadius: 6,
+    padding: '8px 12px',
+    color: 'var(--text)',
+    fontFamily: 'var(--mono)',
+    fontSize: 12,
+    outline: 'none',
+    resize: 'none',
+    height: 80,
+  };
+
+  const pillStyle = (active) => ({
+    fontFamily: 'var(--mono)',
+    fontSize: 11,
+    padding: '5px 12px',
+    borderRadius: 20,
+    border: active ? '1px solid #F2CD1A' : '1px solid var(--b2)',
+    background: active ? 'rgba(242,205,26,0.12)' : 'transparent',
+    color: active ? '#F2CD1A' : 'var(--t2)',
+    cursor: 'pointer',
+    transition: 'all .15s',
+  });
+
   return (
     <>
       {/* Backdrop */}
       <div
-        className="fixed inset-0 bg-black/50 z-40"
+        style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 40 }}
         onClick={onClose}
       />
 
       {/* Panel */}
-      <div className="fixed top-0 right-0 h-full w-full max-w-lg bg-zinc-950 border-l border-zinc-800 z-50 overflow-y-auto">
+      <div style={{
+        position: 'fixed', top: 0, right: 0, height: '100%', width: '100%', maxWidth: 480,
+        background: 'var(--s1)', borderLeft: '1px solid var(--b1)', zIndex: 50, overflowY: 'auto',
+      }}>
         {/* Header */}
-        <div className="flex items-start justify-between p-5 border-b border-zinc-800 sticky top-0 bg-zinc-950">
-          <div className="flex-1 min-w-0 pr-4">
-            <div className="flex items-center gap-2 mb-1">
-              <span
-                className="inline-block w-2 h-2 rounded-full flex-shrink-0"
-                style={{ backgroundColor: stageConfig.color }}
-              />
-              <span className="text-xs text-zinc-500">{stageConfig.label}</span>
+        <div style={{
+          display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
+          padding: 20, borderBottom: '1px solid var(--b1)', position: 'sticky', top: 0, background: 'var(--s1)', zIndex: 1,
+        }}>
+          <div style={{ flex: 1, minWidth: 0, paddingRight: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: stageConfig.color, flexShrink: 0 }} />
+              <span style={{ fontFamily: 'var(--head)', fontSize: 9, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--t3)' }}>{stageConfig.label}</span>
               {task.is_spillover && (
-                <span className="text-xs bg-amber-900/40 text-amber-400 border border-amber-800 px-1.5 py-0.5 rounded">
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 9, background: 'rgba(245,158,11,0.12)', color: 'var(--amber)', border: '1px solid rgba(245,158,11,0.3)', padding: '2px 6px', borderRadius: 3 }}>
                   Spillover
                 </span>
               )}
             </div>
-            <h2 className="text-white font-semibold text-base leading-tight">{task.title}</h2>
+            <h2 style={{ fontFamily: 'var(--mono)', fontSize: 14, fontWeight: 600, color: 'var(--text)', lineHeight: 1.3 }}>{task.title}</h2>
             {task.product_code && (
-              <p className="text-zinc-600 text-xs mt-1">Product: {task.product_code}</p>
+              <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginTop: 4 }}>Product: {task.product_code}</p>
             )}
           </div>
           <button
             onClick={onClose}
-            className="text-zinc-600 hover:text-white transition-colors text-lg flex-shrink-0"
+            style={{ color: 'var(--t3)', background: 'none', border: 'none', fontSize: 16, cursor: 'pointer', padding: '4px 8px', borderRadius: 4, transition: 'background .15s' }}
+            onMouseEnter={e => e.currentTarget.style.background = 'var(--s3)'}
+            onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
           >
             ✕
           </button>
         </div>
 
-        <div className="p-5 space-y-6">
+        <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 24 }}>
 
           {/* Error */}
           {error && (
-            <div className="bg-red-950 border border-red-800 rounded-lg px-4 py-3">
-              <p className="text-red-400 text-sm">{error}</p>
+            <div style={{ background: 'rgba(222,42,42,0.08)', border: '1px solid rgba(222,42,42,0.3)', borderRadius: 6, padding: '10px 14px' }}>
+              <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--red)' }}>{error}</p>
             </div>
           )}
 
           {/* Stage */}
           <Section title="Stage">
             {!movingStage ? (
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span
-                    className="inline-block w-2.5 h-2.5 rounded-full"
-                    style={{ backgroundColor: stageConfig.color }}
-                  />
-                  <span className="text-sm text-zinc-200">{stageConfig.label}</span>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: stageConfig.color }} />
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--text)' }}>{stageConfig.label}</span>
                 </div>
                 {validTransitions.length > 0 && (
-                  <button
-                    onClick={() => setMovingStage(true)}
-                    className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
-                  >
+                  <button onClick={() => setMovingStage(true)} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer' }}>
                     Move →
                   </button>
                 )}
               </div>
             ) : (
-              <div className="space-y-3">
-                <div className="flex flex-wrap gap-2">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                   {validTransitions.map(s => {
                     const sc = getStageConfig(s);
                     return (
-                      <button
-                        key={s}
-                        onClick={() => setTargetStage(s)}
-                        className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                          targetStage === s
-                            ? 'bg-white text-black border-white'
-                            : 'text-zinc-400 border-zinc-700 hover:border-zinc-500'
-                        }`}
-                      >
+                      <button key={s} onClick={() => setTargetStage(s)} style={pillStyle(targetStage === s)}>
                         {sc.label}
                       </button>
                     );
                   })}
                 </div>
-
                 {(targetStage === 'ext_blocked' || targetStage === 'abandoned') && (
                   <textarea
                     value={blockedReason}
                     onChange={e => setBlockedReason(e.target.value)}
-                    placeholder={targetStage === 'abandoned'
-                      ? 'Why is this task being abandoned?'
-                      : 'What is blocking this task externally?'}
-                    className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none resize-none h-20"
+                    placeholder={targetStage === 'abandoned' ? 'Why is this task being abandoned?' : 'What is blocking this task externally?'}
+                    style={inputStyle}
+                    onFocus={e => e.target.style.borderColor = '#F2CD1A'}
+                    onBlur={e => e.target.style.borderColor = 'var(--b2)'}
                   />
                 )}
-
-                <div className="flex gap-2">
+                <div style={{ display: 'flex', gap: 8 }}>
                   <button
                     onClick={moveStage}
                     disabled={!targetStage || loading}
-                    className="bg-white text-black text-xs font-semibold px-4 py-2 rounded-lg disabled:opacity-40 hover:bg-zinc-100 transition-colors"
+                    style={{ background: '#F2CD1A', color: '#080808', border: 'none', borderRadius: 6, padding: '8px 16px', fontFamily: 'var(--head)', fontWeight: 700, fontSize: 10, letterSpacing: '.15em', textTransform: 'uppercase', cursor: 'pointer', opacity: (!targetStage || loading) ? 0.4 : 1 }}
                   >
                     {loading ? 'Moving...' : 'Confirm Move'}
                   </button>
-                  <button
-                    onClick={() => { setMovingStage(false); setTargetStage(null); setBlockedReason(''); }}
-                    className="text-zinc-600 text-xs hover:text-zinc-400 transition-colors px-3"
-                  >
+                  <button onClick={() => { setMovingStage(false); setTargetStage(null); setBlockedReason(''); }} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer' }}>
                     Cancel
                   </button>
                 </div>
@@ -248,43 +253,25 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
           {/* Priority */}
           <Section title="Priority">
             {!editingPriority ? (
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span
-                    className="inline-block w-2.5 h-2.5 rounded-full"
-                    style={{ backgroundColor: priorityConfig.color }}
-                  />
-                  <span className="text-sm text-zinc-200">{priorityConfig.label}</span>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: priorityConfig.color }} />
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--text)' }}>{priorityConfig.label}</span>
                 </div>
                 {isAdminLead && (
-                  <button
-                    onClick={() => setEditingPriority(true)}
-                    className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
-                  >
+                  <button onClick={() => setEditingPriority(true)} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer' }}>
                     Edit
                   </button>
                 )}
               </div>
             ) : (
-              <div className="flex flex-wrap gap-2">
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 {PRIORITIES.map(p => (
-                  <button
-                    key={p.value}
-                    onClick={() => changePriority(p.value)}
-                    disabled={loading}
-                    className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                      task.priority === p.value
-                        ? 'bg-white text-black border-white'
-                        : 'text-zinc-400 border-zinc-700 hover:border-zinc-500'
-                    }`}
-                  >
+                  <button key={p.value} onClick={() => changePriority(p.value)} disabled={loading} style={pillStyle(task.priority === p.value)}>
                     {p.label}
                   </button>
                 ))}
-                <button
-                  onClick={() => setEditingPriority(false)}
-                  className="text-zinc-600 text-xs hover:text-zinc-400 transition-colors"
-                >
+                <button onClick={() => setEditingPriority(false)} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer' }}>
                   Cancel
                 </button>
               </div>
@@ -294,36 +281,26 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
           {/* Assignees */}
           <Section title="Assignees">
             {assignees.length === 0 ? (
-              <p className="text-zinc-600 text-sm">Unassigned</p>
+              <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>Unassigned</p>
             ) : (
-              <div className="flex flex-wrap gap-2 mb-2">
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
                 {assignees.map(a => (
-                  <span key={a.id} className="bg-zinc-800 text-zinc-300 text-xs px-2 py-1 rounded">
+                  <span key={a.id} style={{ fontFamily: 'var(--mono)', fontSize: 11, background: 'var(--s3)', color: 'var(--t2)', padding: '4px 8px', borderRadius: 4 }}>
                     {a.name}
-                    {a.discipline && <span className="text-zinc-600 ml-1">· {a.discipline}</span>}
+                    {a.discipline && <span style={{ color: 'var(--t3)', marginLeft: 4 }}>· {a.discipline}</span>}
                   </span>
                 ))}
               </div>
             )}
-
             {isAdminLead && teamMembers.length > 0 && (
-              <div className="mt-3">
-                <p className="text-xs text-zinc-600 mb-2">Click to assign / unassign</p>
-                <div className="flex flex-wrap gap-2">
+              <div style={{ marginTop: 12 }}>
+                <p style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', marginBottom: 8 }}>Click to assign / unassign</p>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                   {teamMembers.map(m => {
                     const assigned = assignees.some(a => a.id === m.id);
                     return (
-                      <button
-                        key={m.id}
-                        onClick={() => toggleAssignee(m.id)}
-                        disabled={loading}
-                        className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                          assigned
-                            ? 'bg-zinc-700 text-white border-zinc-600'
-                            : 'text-zinc-500 border-zinc-700 hover:border-zinc-500'
-                        }`}
-                      >
-                        {assigned && <span className="mr-1 text-green-400">✓</span>}
+                      <button key={m.id} onClick={() => toggleAssignee(m.id)} disabled={loading} style={pillStyle(assigned)}>
+                        {assigned && <span style={{ color: 'var(--green)', marginRight: 4 }}>✓</span>}
                         {m.name}
                       </button>
                     );
@@ -335,31 +312,19 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
 
           {/* Details */}
           <Section title="Details">
-            <div className="space-y-2">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <DetailRow label="Type" value={task.type?.replace(/_/g, ' ')} />
-              <DetailRow
-                label="Deliverable"
-                value={DELIVERABLE_TYPES.find(d => d.value === task.deliverable_type)?.label || task.deliverable_type}
-              />
-              {task.due_date && (
-                <DetailRow
-                  label="Due"
-                  value={new Date(task.due_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
-                />
-              )}
-              {task.sprint_id && (
-                <DetailRow label="Sprint" value={task.sprint_id.slice(0, 8) + '...'} />
-              )}
-              {task.spillover_count > 0 && (
-                <DetailRow label="Spillovers" value={String(task.spillover_count)} />
-              )}
+              <DetailRow label="Deliverable" value={DELIVERABLE_TYPES.find(d => d.value === task.deliverable_type)?.label || task.deliverable_type} />
+              {task.due_date && <DetailRow label="Due" value={new Date(task.due_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })} />}
+              {task.sprint_id && <DetailRow label="Sprint" value={task.sprint_id.slice(0, 8) + '...'} />}
+              {task.spillover_count > 0 && <DetailRow label="Spillovers" value={String(task.spillover_count)} />}
             </div>
           </Section>
 
           {/* Notes */}
           {task.notes && (
             <Section title="Notes">
-              <p className="text-zinc-400 text-sm whitespace-pre-wrap">{task.notes}</p>
+              <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t2)', whiteSpace: 'pre-wrap' }}>{task.notes}</p>
             </Section>
           )}
 
@@ -369,30 +334,19 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
           {/* Blocked reason */}
           {task.blocked_reason && task.stage === 'ext_blocked' && (
             <Section title="External Blocker">
-              <p className="text-amber-400 text-sm">{task.blocked_reason}</p>
+              <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--amber)' }}>{task.blocked_reason}</p>
             </Section>
           )}
 
           {/* Submit for Review */}
           {!['done', 'abandoned', 'in_review', 'approved'].includes(task.stage) &&
             assignees.some(a => a.id === brandUser?.id) && (
-            <SubmitForReviewSection
-              task={task}
-              session={session}
-              onUpdate={onUpdate}
-              onError={setError}
-            />
+            <SubmitForReviewSection task={task} session={session} onUpdate={onUpdate} onError={setError} />
           )}
 
-          {/* Work Approval — for admin/lead when task is in_review */}
+          {/* Work Approval */}
           {isAdminLead && task.stage === 'in_review' && (
-            <WorkApprovalSection
-              task={task}
-              session={session}
-              onUpdate={onUpdate}
-              onClose={onClose}
-              onError={setError}
-            />
+            <WorkApprovalSection task={task} session={session} onUpdate={onUpdate} onClose={onClose} onError={setError} />
           )}
 
           {/* Abandon */}
@@ -401,30 +355,29 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
               {!showAbandon ? (
                 <button
                   onClick={() => setShowAbandon(true)}
-                  className="text-xs text-red-500 hover:text-red-400 transition-colors"
+                  style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)', background: 'none', border: 'none', cursor: 'pointer' }}
                 >
                   Abandon task
                 </button>
               ) : (
-                <div className="space-y-3">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                   <textarea
                     value={abandonReason}
                     onChange={e => setAbandonReason(e.target.value)}
                     placeholder="Why is this task being abandoned?"
-                    className="w-full bg-zinc-900 border border-red-900 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none resize-none h-20"
+                    style={{ ...inputStyle, borderColor: 'rgba(222,42,42,0.3)' }}
+                    onFocus={e => e.target.style.borderColor = 'var(--red)'}
+                    onBlur={e => e.target.style.borderColor = 'rgba(222,42,42,0.3)'}
                   />
-                  <div className="flex gap-2">
+                  <div style={{ display: 'flex', gap: 8 }}>
                     <button
                       onClick={abandonTask}
                       disabled={loading}
-                      className="bg-red-900 text-red-100 text-xs font-semibold px-4 py-2 rounded-lg hover:bg-red-800 transition-colors disabled:opacity-40"
+                      style={{ background: 'rgba(222,42,42,0.15)', color: 'var(--red)', border: '1px solid rgba(222,42,42,0.3)', borderRadius: 6, padding: '8px 16px', fontFamily: 'var(--head)', fontWeight: 700, fontSize: 10, letterSpacing: '.15em', textTransform: 'uppercase', cursor: 'pointer', opacity: loading ? 0.4 : 1 }}
                     >
                       {loading ? 'Abandoning...' : 'Confirm Abandon'}
                     </button>
-                    <button
-                      onClick={() => { setShowAbandon(false); setAbandonReason(''); }}
-                      className="text-zinc-600 text-xs hover:text-zinc-400 transition-colors"
-                    >
+                    <button onClick={() => { setShowAbandon(false); setAbandonReason(''); }} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer' }}>
                       Cancel
                     </button>
                   </div>
@@ -441,7 +394,7 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
 function Section({ title, children }) {
   return (
     <div>
-      <p className="text-xs text-zinc-600 uppercase tracking-widest mb-2">{title}</p>
+      <p style={{ fontFamily: 'var(--head)', fontSize: 9, letterSpacing: '.25em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 10, fontWeight: 700 }}>{title}</p>
       {children}
     </div>
   );
@@ -449,9 +402,9 @@ function Section({ title, children }) {
 
 function DetailRow({ label, value }) {
   return (
-    <div className="flex gap-3">
-      <span className="text-xs text-zinc-600 w-24 flex-shrink-0">{label}</span>
-      <span className="text-xs text-zinc-300 capitalize">{value}</span>
+    <div style={{ display: 'flex', gap: 12 }}>
+      <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', width: 80, flexShrink: 0 }}>{label}</span>
+      <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)', textTransform: 'capitalize' }}>{value}</span>
     </div>
   );
 }
@@ -462,69 +415,44 @@ function SubmitForReviewSection({ task, session, onUpdate, onError }) {
   const [label, setLabel] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
+  const inputStyle = {
+    width: '100%', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 6,
+    padding: '8px 12px', color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 12, outline: 'none',
+  };
+
   async function submit() {
     if (!url.trim()) { onError('A deliverable URL is required'); return; }
     setSubmitting(true);
     try {
       await workerFetch('submitForReview', {
-        task_id: task.id,
-        attachment_url: url.trim(),
-        attachment_label: label.trim() || 'Deliverable',
+        task_id: task.id, attachment_url: url.trim(), attachment_label: label.trim() || 'Deliverable',
       }, session?.access_token);
       onUpdate({ ...task, stage: 'in_review' });
       setOpen(false);
-    } catch (e) {
-      onError(e.message);
-    } finally {
-      setSubmitting(false);
-    }
+    } catch (e) { onError(e.message); } finally { setSubmitting(false); }
   }
 
   return (
     <Section title="Submit for Review">
       {!open ? (
-        <button
-          onClick={() => setOpen(true)}
-          className="bg-white text-black text-xs font-semibold px-4 py-2 rounded-lg hover:bg-zinc-100 transition-colors"
-        >
+        <button onClick={() => setOpen(true)} style={{ background: '#F2CD1A', color: '#080808', border: 'none', borderRadius: 6, padding: '9px 20px', fontFamily: 'var(--head)', fontWeight: 700, fontSize: 10, letterSpacing: '.15em', textTransform: 'uppercase', cursor: 'pointer' }}>
           Submit Work for Review →
         </button>
       ) : (
-        <div className="space-y-3">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div>
-            <label className="block text-xs text-zinc-500 mb-1">Deliverable URL *</label>
-            <input
-              type="url"
-              value={url}
-              onChange={e => setUrl(e.target.value)}
-              placeholder="https://drive.google.com/... or Figma link, etc."
-              className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-500"
-            />
+            <label style={{ display: 'block', fontFamily: 'var(--head)', fontSize: 9, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 6 }}>Deliverable URL *</label>
+            <input type="url" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://drive.google.com/..." style={inputStyle} onFocus={e => e.target.style.borderColor = '#F2CD1A'} onBlur={e => e.target.style.borderColor = 'var(--b2)'} />
           </div>
           <div>
-            <label className="block text-xs text-zinc-500 mb-1">Label (optional)</label>
-            <input
-              type="text"
-              value={label}
-              onChange={e => setLabel(e.target.value)}
-              placeholder="e.g. Final designs, Video edit v2"
-              className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-500"
-            />
+            <label style={{ display: 'block', fontFamily: 'var(--head)', fontSize: 9, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 6 }}>Label (optional)</label>
+            <input type="text" value={label} onChange={e => setLabel(e.target.value)} placeholder="e.g. Final designs, Video edit v2" style={inputStyle} onFocus={e => e.target.style.borderColor = '#F2CD1A'} onBlur={e => e.target.style.borderColor = 'var(--b2)'} />
           </div>
-          <div className="flex gap-2">
-            <button
-              onClick={submit}
-              disabled={submitting}
-              className="bg-white text-black text-xs font-semibold px-4 py-2 rounded-lg disabled:opacity-40 hover:bg-zinc-100 transition-colors"
-            >
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={submit} disabled={submitting} style={{ background: '#F2CD1A', color: '#080808', border: 'none', borderRadius: 6, padding: '8px 16px', fontFamily: 'var(--head)', fontWeight: 700, fontSize: 10, letterSpacing: '.15em', textTransform: 'uppercase', cursor: 'pointer', opacity: submitting ? 0.4 : 1 }}>
               {submitting ? 'Submitting...' : 'Submit for Review'}
             </button>
-            <button
-              onClick={() => setOpen(false)}
-              className="text-zinc-600 text-xs hover:text-zinc-400 px-3"
-            >
-              Cancel
-            </button>
+            <button onClick={() => setOpen(false)} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer' }}>Cancel</button>
           </div>
         </div>
       )}
@@ -533,91 +461,54 @@ function SubmitForReviewSection({ task, session, onUpdate, onError }) {
 }
 
 function WorkApprovalSection({ task, session, onUpdate, onClose, onError }) {
-  const [decision, setDecision] = useState(null); // 'approve' | 'reject'
+  const [decision, setDecision] = useState(null);
   const [feedback, setFeedback] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   async function submit() {
-    if (decision === 'reject' && !feedback.trim()) {
-      onError('Feedback is required when rejecting work');
-      return;
-    }
+    if (decision === 'reject' && !feedback.trim()) { onError('Feedback is required when rejecting work'); return; }
     setSubmitting(true);
     try {
       const action = decision === 'approve' ? 'approveWork' : 'rejectWork';
-      await workerFetch(action, {
-        task_id: task.id,
-        feedback: feedback.trim() || undefined,
-      }, session?.access_token);
-
-      if (decision === 'approve') {
-        onUpdate({ ...task, stage: 'done' });
-        onClose();
-      } else {
-        onUpdate({ ...task, stage: 'in_progress' });
-        setDecision(null);
-        setFeedback('');
-      }
-    } catch (e) {
-      onError(e.message);
-    } finally {
-      setSubmitting(false);
-    }
+      await workerFetch(action, { task_id: task.id, feedback: feedback.trim() || undefined }, session?.access_token);
+      if (decision === 'approve') { onUpdate({ ...task, stage: 'done' }); onClose(); }
+      else { onUpdate({ ...task, stage: 'in_progress' }); setDecision(null); setFeedback(''); }
+    } catch (e) { onError(e.message); } finally { setSubmitting(false); }
   }
 
   return (
     <Section title="Review Submitted Work">
-      <div className="bg-cyan-950/40 border border-cyan-800 rounded-lg p-3 mb-3">
-        <p className="text-cyan-400 text-xs">
-          ⏳ Work has been submitted for your review
-        </p>
+      <div style={{ background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.25)', borderRadius: 6, padding: 12, marginBottom: 12 }}>
+        <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: '#22d3ee' }}>⏳ Work has been submitted for your review</p>
       </div>
-
       {!decision ? (
-        <div className="flex gap-2">
-          <button
-            onClick={() => setDecision('approve')}
-            className="flex-1 py-2 text-xs font-medium rounded-lg border border-green-700 text-green-400 hover:bg-green-950 transition-colors"
-          >
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={() => setDecision('approve')} style={{ flex: 1, padding: '8px 0', fontFamily: 'var(--head)', fontSize: 10, fontWeight: 700, letterSpacing: '.15em', textTransform: 'uppercase', borderRadius: 6, border: '1px solid rgba(34,197,94,0.4)', color: 'var(--green)', background: 'transparent', cursor: 'pointer' }}>
             Approve
           </button>
-          <button
-            onClick={() => setDecision('reject')}
-            className="flex-1 py-2 text-xs font-medium rounded-lg border border-red-700 text-red-400 hover:bg-red-950 transition-colors"
-          >
+          <button onClick={() => setDecision('reject')} style={{ flex: 1, padding: '8px 0', fontFamily: 'var(--head)', fontSize: 10, fontWeight: 700, letterSpacing: '.15em', textTransform: 'uppercase', borderRadius: 6, border: '1px solid rgba(222,42,42,0.4)', color: 'var(--red)', background: 'transparent', cursor: 'pointer' }}>
             Request Revision
           </button>
         </div>
       ) : (
-        <div className="space-y-3">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <textarea
             value={feedback}
             onChange={e => setFeedback(e.target.value)}
-            placeholder={
-              decision === 'approve'
-                ? 'Optional note for the team member...'
-                : 'What needs to be revised? (required)'
-            }
-            className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none resize-none h-20"
+            placeholder={decision === 'approve' ? 'Optional note for the team member...' : 'What needs to be revised? (required)'}
+            style={{ width: '100%', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 6, padding: '8px 12px', color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 12, outline: 'none', resize: 'none', height: 80 }}
+            onFocus={e => e.target.style.borderColor = '#F2CD1A'}
+            onBlur={e => e.target.style.borderColor = 'var(--b2)'}
           />
-          <div className="flex gap-2">
-            <button
-              onClick={submit}
-              disabled={submitting}
-              className={`flex-1 py-2 text-xs font-semibold rounded-lg transition-colors disabled:opacity-40 ${
-                decision === 'approve'
-                  ? 'bg-green-700 text-white hover:bg-green-600'
-                  : 'bg-red-900 text-red-100 hover:bg-red-800'
-              }`}
-            >
-              {submitting
-                ? 'Submitting...'
-                : decision === 'approve' ? 'Confirm Approval' : 'Send for Revision'}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={submit} disabled={submitting} style={{
+              flex: 1, padding: '8px 0', fontFamily: 'var(--head)', fontSize: 10, fontWeight: 700, letterSpacing: '.15em', textTransform: 'uppercase', borderRadius: 6, cursor: 'pointer', opacity: submitting ? 0.4 : 1, border: 'none',
+              background: decision === 'approve' ? 'rgba(34,197,94,0.15)' : 'rgba(222,42,42,0.15)',
+              color: decision === 'approve' ? 'var(--green)' : 'var(--red)',
+            }}>
+              {submitting ? 'Submitting...' : decision === 'approve' ? 'Confirm Approval' : 'Send for Revision'}
             </button>
-            <button
-              onClick={() => { setDecision(null); setFeedback(''); }}
-              className="text-zinc-600 text-xs hover:text-zinc-400 px-3"
-            >
+            <button onClick={() => { setDecision(null); setFeedback(''); }} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer', padding: '0 12px' }}>
               Back
             </button>
           </div>
@@ -643,17 +534,19 @@ function AttachmentsSection({ taskId }) {
 
   return (
     <Section title="Attachments">
-      <div className="space-y-2">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {attachments.map(a => (
           <a
             key={a.id}
             href={a.url}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-2 text-xs text-zinc-400 hover:text-white transition-colors group"
+            style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)', textDecoration: 'none', transition: 'color .15s' }}
+            onMouseEnter={e => e.currentTarget.style.color = 'var(--text)'}
+            onMouseLeave={e => e.currentTarget.style.color = 'var(--t2)'}
           >
-            <span className="text-zinc-600 group-hover:text-zinc-400">🔗</span>
-            <span className="truncate">{a.label || a.url}</span>
+            <span style={{ color: 'var(--t3)' }}>🔗</span>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.label || a.url}</span>
           </a>
         ))}
       </div>

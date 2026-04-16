@@ -37,8 +37,8 @@ export default function SettingsPage() {
   if (brandUser?.role !== 'admin') {
     return (
       <Layout>
-        <div className="max-w-lg mx-auto py-20 text-center">
-          <p className="text-zinc-600 text-sm">Admin access required.</p>
+        <div style={{ maxWidth: 512, margin: '0 auto', paddingTop: 80, paddingBottom: 80, textAlign: 'center' }}>
+          <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>Admin access required.</p>
         </div>
       </Layout>
     );
@@ -46,55 +46,55 @@ export default function SettingsPage() {
 
   return (
     <Layout>
-      <div className="max-w-4xl mx-auto">
-        <h1 className="text-2xl font-bold text-white mb-1">Settings</h1>
-        <p className="text-zinc-500 text-sm mb-6">Manage team roles and disciplines</p>
+      <div style={{ maxWidth: 896, margin: '0 auto' }}>
+        <h1 style={{ fontFamily: 'var(--head)', fontWeight: 900, fontSize: 18, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--text)', marginBottom: 4 }}>Settings</h1>
+        <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginBottom: 24 }}>Manage team roles and disciplines</p>
 
         {!loaded ? (
           <button
             onClick={loadUsers}
-            className="bg-white text-black font-semibold px-4 py-2 rounded-lg text-sm hover:bg-zinc-100 transition-colors"
+            style={{ background: '#F2CD1A', color: '#080808', fontFamily: 'var(--head)', fontWeight: 700, fontSize: 11, letterSpacing: '.15em', textTransform: 'uppercase', borderRadius: 6, border: 'none', padding: '9px 20px', cursor: 'pointer' }}
           >
             Load Team
           </button>
         ) : (
           <div>
             {error && (
-              <div className="bg-red-950 border border-red-800 rounded-lg px-4 py-3 mb-4">
-                <p className="text-red-400 text-sm">{error}</p>
+              <div style={{ background: 'rgba(222,42,42,0.08)', border: '1px solid rgba(222,42,42,0.3)', borderRadius: 6, padding: '10px 14px', marginBottom: 16 }}>
+                <p style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12 }}>{error}</p>
               </div>
             )}
-            <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
-              <table className="w-full">
+            <div style={{ background: 'var(--s1)', border: '1px solid var(--b1)', borderRadius: 8, overflow: 'hidden' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--mono)', fontSize: 12 }}>
                 <thead>
-                  <tr className="border-b border-zinc-800">
-                    <th className="text-left text-xs text-zinc-500 font-medium px-4 py-3">Name</th>
-                    <th className="text-left text-xs text-zinc-500 font-medium px-4 py-3">Email</th>
-                    <th className="text-left text-xs text-zinc-500 font-medium px-4 py-3">Role</th>
-                    <th className="text-left text-xs text-zinc-500 font-medium px-4 py-3">Discipline</th>
+                  <tr style={{ borderBottom: '1px solid var(--b1)' }}>
+                    <th style={{ fontFamily: 'var(--head)', fontSize: 9, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--t3)', fontWeight: 700, padding: '10px 16px', textAlign: 'left', borderBottom: '1px solid var(--b1)' }}>Name</th>
+                    <th style={{ fontFamily: 'var(--head)', fontSize: 9, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--t3)', fontWeight: 700, padding: '10px 16px', textAlign: 'left', borderBottom: '1px solid var(--b1)' }}>Email</th>
+                    <th style={{ fontFamily: 'var(--head)', fontSize: 9, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--t3)', fontWeight: 700, padding: '10px 16px', textAlign: 'left', borderBottom: '1px solid var(--b1)' }}>Role</th>
+                    <th style={{ fontFamily: 'var(--head)', fontSize: 9, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--t3)', fontWeight: 700, padding: '10px 16px', textAlign: 'left', borderBottom: '1px solid var(--b1)' }}>Discipline</th>
                   </tr>
                 </thead>
                 <tbody>
                   {users.map((user, i) => (
-                    <tr key={user.id} className={`border-t border-zinc-800 ${i % 2 === 0 ? '' : 'bg-zinc-900/50'}`}>
-                      <td className="px-4 py-3 text-sm text-zinc-200">{user.name}</td>
-                      <td className="px-4 py-3 text-xs text-zinc-500">{user.email}</td>
-                      <td className="px-4 py-3">
+                    <tr key={user.id} style={{ borderBottom: '1px solid var(--b1)', ...(i % 2 !== 0 ? { background: 'var(--s1)' } : {}) }}>
+                      <td style={{ padding: '10px 16px', color: 'var(--text)', fontSize: 12 }}>{user.name}</td>
+                      <td style={{ padding: '10px 16px', color: 'var(--t3)', fontSize: 11 }}>{user.email}</td>
+                      <td style={{ padding: '10px 16px' }}>
                         <select
                           value={user.role}
                           disabled={user.id === brandUser.id || saving === user.id}
                           onChange={e => updateUser(user.id, 'role', e.target.value)}
-                          className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-200 focus:outline-none disabled:opacity-40"
+                          style={{ background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 8px', fontSize: 11, color: 'var(--t2)', fontFamily: 'var(--mono)', outline: 'none', ...(user.id === brandUser.id || saving === user.id ? { opacity: 0.4 } : {}) }}
                         >
                           {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
                         </select>
                       </td>
-                      <td className="px-4 py-3">
+                      <td style={{ padding: '10px 16px' }}>
                         <select
                           value={user.discipline || ''}
                           disabled={saving === user.id}
                           onChange={e => updateUser(user.id, 'discipline', e.target.value || null)}
-                          className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-200 focus:outline-none disabled:opacity-40"
+                          style={{ background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 8px', fontSize: 11, color: 'var(--t2)', fontFamily: 'var(--mono)', outline: 'none', ...(saving === user.id ? { opacity: 0.4 } : {}) }}
                         >
                           <option value="">— none —</option>
                           {DISCIPLINES.map(d => <option key={d} value={d}>{d}</option>)}

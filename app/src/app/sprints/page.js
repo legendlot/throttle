@@ -22,9 +22,9 @@ function SprintTimeline({ sprint, sprintTasks }) {
   today.setHours(0, 0, 0, 0);
 
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 mb-6">
-      <p className="text-xs text-zinc-600 uppercase tracking-widest mb-3">Sprint Timeline</p>
-      <div className="grid grid-cols-7 gap-1">
+    <div style={{ background: 'var(--s1)', border: '1px solid var(--b1)', borderRadius: 6, padding: 16, marginBottom: 24 }}>
+      <p style={{ fontFamily: 'var(--head)', fontSize: 9, letterSpacing: '.25em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 12 }}>Sprint Timeline</p>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 4 }}>
         {days.map((day, i) => {
           const dayDate = new Date(day);
           dayDate.setHours(0, 0, 0, 0);
@@ -32,45 +32,41 @@ function SprintTimeline({ sprint, sprintTasks }) {
           const isPast = dayDate < today;
           const dueTasks = sprintTasks.filter(t => taskDueOnDay(t, day));
 
+          const cellStyle = isToday
+            ? { background: 'var(--s3)', border: '1px solid var(--b3)', borderRadius: 6, padding: 8, minHeight: 80 }
+            : isPast
+            ? { background: 'var(--s1)', borderRadius: 6, padding: 8, minHeight: 80 }
+            : { background: 'var(--s2)', borderRadius: 6, padding: 8, minHeight: 80 };
+
           return (
-            <div
-              key={i}
-              className={`rounded-lg p-2 min-h-20 ${
-                isToday
-                  ? 'bg-zinc-700 border border-zinc-500'
-                  : isPast
-                  ? 'bg-zinc-900/50'
-                  : 'bg-zinc-800/50'
-              }`}
-            >
+            <div key={i} style={cellStyle}>
               {/* Day header */}
-              <div className="flex items-center justify-between mb-1.5">
-                <span className={`text-xs font-medium ${isToday ? 'text-white' : 'text-zinc-500'}`}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                <span style={{ fontFamily: 'var(--head)', fontSize: 10, letterSpacing: '.1em', textTransform: 'uppercase', fontWeight: 500, color: isToday ? 'var(--text)' : 'var(--t3)' }}>
                   {DAY_LABELS[i]}
                 </span>
-                <span className={`text-xs ${isToday ? 'text-zinc-300' : 'text-zinc-700'}`}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: isToday ? 'var(--t2)' : 'var(--b2)' }}>
                   {dayDate.getDate()}
                 </span>
               </div>
 
               {/* Tasks due this day */}
-              <div className="space-y-1">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                 {dueTasks.map(task => {
                   const priority = getPriorityConfig(task.priority);
                   return (
                     <div
                       key={task.id}
-                      className="rounded px-1 py-0.5"
-                      style={{ backgroundColor: priority.color + '22', borderLeft: `2px solid ${priority.color}` }}
+                      style={{ borderRadius: 3, paddingLeft: 4, paddingRight: 4, paddingTop: 2, paddingBottom: 2, backgroundColor: priority.color + '22', borderLeft: `2px solid ${priority.color}` }}
                     >
-                      <p className="text-xs text-zinc-300 truncate leading-tight" title={task.title}>
+                      <p style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.2 }} title={task.title}>
                         {task.title}
                       </p>
                     </div>
                   );
                 })}
                 {dueTasks.length === 0 && (
-                  <div className="h-3" /> // empty spacer
+                  <div style={{ height: 12 }} />
                 )}
               </div>
             </div>
@@ -80,7 +76,7 @@ function SprintTimeline({ sprint, sprintTasks }) {
 
       {/* No due dates note */}
       {sprintTasks.filter(t => t.due_date).length === 0 && (
-        <p className="text-zinc-700 text-xs mt-2 text-center">
+        <p style={{ fontFamily: 'var(--mono)', color: 'var(--b2)', fontSize: 10, marginTop: 8, textAlign: 'center' }}>
           No due dates set — assign due dates to tasks to see them here
         </p>
       )}
@@ -93,34 +89,74 @@ function SprintTimeline({ sprint, sprintTasks }) {
 function TaskRow({ task, actions }) {
   const priority = getPriorityConfig(task.priority);
   const stage = getStageConfig(task.stage);
+  const [hovered, setHovered] = useState(false);
 
   return (
-    <div className="flex items-center gap-3 py-2.5 px-3 hover:bg-zinc-800/50 rounded-lg group transition-colors">
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 12, paddingTop: 10, paddingBottom: 10, paddingLeft: 12, paddingRight: 12,
+        borderRadius: 6, transition: 'background 0.15s',
+        background: hovered ? 'var(--s2)' : 'transparent'
+      }}
+    >
       <span
-        className="inline-block w-2 h-2 rounded-full flex-shrink-0"
-        style={{ backgroundColor: priority.color }}
+        style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', flexShrink: 0, backgroundColor: priority.color }}
       />
-      <div className="flex-1 min-w-0">
-        <p className="text-zinc-200 text-xs font-medium truncate">{task.title}</p>
-        <div className="flex items-center gap-2 mt-0.5">
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{task.title}</p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2 }}>
           {task.product_code && (
-            <span className="text-zinc-700 text-xs">{task.product_code}</span>
+            <span style={{ fontFamily: 'var(--mono)', color: 'var(--b2)', fontSize: 10 }}>{task.product_code}</span>
           )}
-          <span className="text-zinc-700 text-xs">{stage.label}</span>
+          <span style={{ fontFamily: 'var(--mono)', color: 'var(--b2)', fontSize: 10 }}>{stage.label}</span>
           {task.is_spillover && (
-            <span className="text-amber-500 text-xs">↩ spillover</span>
+            <span style={{ fontFamily: 'var(--mono)', color: 'var(--amber)', fontSize: 10 }}>↩ spillover</span>
           )}
         </div>
       </div>
       {task.due_date && (
-        <span className="text-zinc-600 text-xs flex-shrink-0">
+        <span style={{ fontFamily: 'var(--mono)', color: 'var(--t3)', fontSize: 10, flexShrink: 0 }}>
           {new Date(task.due_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
         </span>
       )}
-      <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, opacity: hovered ? 1 : 0, transition: 'opacity 0.15s', flexShrink: 0 }}>
         {actions}
       </div>
     </div>
+  );
+}
+
+// ── Remove / Add action buttons ──────────────────────────────────────────────
+
+function RemoveButton({ onClick }) {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{ fontFamily: 'var(--mono)', fontSize: 11, color: hovered ? 'var(--red)' : 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer', transition: 'color 0.15s' }}
+      title="Remove from sprint"
+    >
+      ✕
+    </button>
+  );
+}
+
+function AddButton({ onClick }) {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{ fontFamily: 'var(--mono)', fontSize: 11, color: hovered ? 'var(--green)' : 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer', transition: 'color 0.15s' }}
+      title="Add to sprint"
+    >
+      + Add
+    </button>
   );
 }
 
@@ -151,6 +187,9 @@ export default function SprintsPage() {
 
   // Close sprint
   const [closing, setClosing] = useState(false);
+
+  // Search focus
+  const [searchFocused, setSearchFocused] = useState(false);
 
   const isAdminLead = ['admin', 'lead'].includes(brandUser?.role);
 
@@ -302,24 +341,28 @@ export default function SprintsPage() {
 
   return (
     <Layout>
-      <div className="max-w-5xl mx-auto">
+      <div style={{ maxWidth: 960, margin: '0 auto' }}>
 
         {/* Header */}
-        <div className="flex items-center justify-between mb-6">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
           <div>
-            <h1 className="text-2xl font-bold text-white">Sprints</h1>
-            <p className="text-zinc-500 text-sm mt-1">
+            <h1 style={{ fontFamily: 'var(--head)', fontWeight: 900, fontSize: 18, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--text)', margin: 0 }}>Sprints</h1>
+            <p style={{ fontFamily: 'var(--mono)', color: 'var(--t3)', fontSize: 11, marginTop: 4 }}>
               {activeSprint ? activeSprint.name : 'No active sprint'}
             </p>
           </div>
 
           {isAdminLead && (
-            <div className="flex gap-3">
+            <div style={{ display: 'flex', gap: 12 }}>
               {activeSprint && (
                 <button
                   onClick={closeSprint}
                   disabled={closing}
-                  className="bg-zinc-800 text-zinc-300 text-sm font-medium px-4 py-2 rounded-lg hover:bg-zinc-700 transition-colors disabled:opacity-40"
+                  style={{
+                    background: 'transparent', color: 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 6,
+                    fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 500,
+                    padding: '8px 16px', cursor: 'pointer', opacity: closing ? 0.4 : 1, transition: 'opacity 0.15s'
+                  }}
                 >
                   {closing ? 'Closing...' : 'Close Sprint'}
                 </button>
@@ -327,7 +370,11 @@ export default function SprintsPage() {
               {!activeSprint && (
                 <button
                   onClick={() => setShowCreate(true)}
-                  className="bg-white text-black font-semibold px-4 py-2 rounded-lg text-sm hover:bg-zinc-100 transition-colors"
+                  style={{
+                    background: '#F2CD1A', color: '#080808', fontFamily: 'var(--head)', fontWeight: 700,
+                    fontSize: 11, letterSpacing: '.15em', textTransform: 'uppercase',
+                    borderRadius: 6, border: 'none', padding: '8px 16px', cursor: 'pointer'
+                  }}
                 >
                   + Create Sprint
                 </button>
@@ -338,38 +385,46 @@ export default function SprintsPage() {
 
         {/* Error */}
         {error && (
-          <div className="bg-red-950 border border-red-800 rounded-lg px-4 py-3 mb-5">
-            <p className="text-red-400 text-sm">{error}</p>
+          <div style={{ background: 'rgba(222,42,42,0.08)', border: '1px solid rgba(222,42,42,0.3)', borderRadius: 6, padding: '12px 16px', marginBottom: 20 }}>
+            <p style={{ fontFamily: 'var(--mono)', color: 'var(--red)', fontSize: 11, margin: 0 }}>{error}</p>
           </div>
         )}
 
         {/* Create sprint form */}
         {showCreate && isAdminLead && (
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 mb-6">
-            <h2 className="text-white font-semibold mb-4">Create Sprint</h2>
-            <div className="flex gap-4 items-end">
-              <div className="flex-1">
-                <label className="block text-xs text-zinc-500 mb-1.5">
+          <div style={{ background: 'var(--s1)', border: '1px solid var(--b1)', borderRadius: 6, padding: 20, marginBottom: 24 }}>
+            <h2 style={{ fontFamily: 'var(--head)', fontSize: 13, fontWeight: 700, letterSpacing: '.15em', textTransform: 'uppercase', color: 'var(--text)', margin: 0, marginBottom: 16 }}>Create Sprint</h2>
+            <div style={{ display: 'flex', gap: 16, alignItems: 'flex-end' }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', fontFamily: 'var(--head)', fontSize: 9, letterSpacing: '.25em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 6 }}>
                   Start Date (must be a Thursday)
                 </label>
                 <input
                   type="date"
                   value={newSprintDate}
                   onChange={e => setNewSprintDate(e.target.value)}
-                  className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 focus:outline-none"
+                  style={{
+                    width: '100%', boxSizing: 'border-box', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 6,
+                    padding: '8px 12px', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', outline: 'none'
+                  }}
                 />
               </div>
-              <div className="flex gap-2">
+              <div style={{ display: 'flex', gap: 8 }}>
                 <button
                   onClick={createSprint}
                   disabled={creating}
-                  className="bg-white text-black font-semibold px-5 py-2 rounded-lg text-sm hover:bg-zinc-100 transition-colors disabled:opacity-40"
+                  style={{
+                    background: '#F2CD1A', color: '#080808', fontFamily: 'var(--head)', fontWeight: 700,
+                    fontSize: 11, letterSpacing: '.15em', textTransform: 'uppercase',
+                    borderRadius: 6, border: 'none', padding: '8px 20px', cursor: 'pointer',
+                    opacity: creating ? 0.4 : 1
+                  }}
                 >
                   {creating ? 'Creating...' : 'Create'}
                 </button>
                 <button
                   onClick={() => setShowCreate(false)}
-                  className="text-zinc-600 text-sm hover:text-zinc-400 px-3"
+                  style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer', padding: '8px 12px' }}
                 >
                   Cancel
                 </button>
@@ -379,8 +434,8 @@ export default function SprintsPage() {
         )}
 
         {loading ? (
-          <div className="py-20 text-center">
-            <p className="text-zinc-600 text-sm">Loading...</p>
+          <div style={{ padding: '80px 0', textAlign: 'center' }}>
+            <p style={{ fontFamily: 'var(--mono)', color: 'var(--t3)', fontSize: 11 }}>Loading...</p>
           </div>
         ) : (
           <>
@@ -390,20 +445,20 @@ export default function SprintsPage() {
             )}
 
             {/* Split: Sprint tasks + Backlog */}
-            <div className="grid grid-cols-2 gap-5">
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
 
               {/* Current Sprint */}
               <div>
-                <div className="flex items-center justify-between mb-3">
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
                   <div>
-                    <h2 className="text-sm font-semibold text-white">
+                    <h2 style={{ fontFamily: 'var(--head)', fontSize: 13, fontWeight: 700, letterSpacing: '.15em', textTransform: 'uppercase', color: 'var(--text)', margin: 0 }}>
                       {activeSprint ? 'Current Sprint' : 'No Active Sprint'}
                     </h2>
                     {activeSprint && (
-                      <p className="text-xs text-zinc-600 mt-0.5">{statusLabel}</p>
+                      <p style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', marginTop: 2 }}>{statusLabel}</p>
                     )}
                   </div>
-                  <span className="text-xs text-zinc-700 bg-zinc-800 px-2 py-0.5 rounded">
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 10, background: 'var(--s2)', color: 'var(--t3)', padding: '2px 6px', borderRadius: 3 }}>
                     {sprintTasks.length}
                   </span>
                 </div>
@@ -412,21 +467,23 @@ export default function SprintsPage() {
                   onDragOver={e => { if (isAdminLead && activeSprint) { e.preventDefault(); setDragOverSprint(true); } }}
                   onDragLeave={() => setDragOverSprint(false)}
                   onDrop={handleDropToSprint}
-                  className={`min-h-48 rounded-xl border transition-colors ${
-                    dragOverSprint
-                      ? 'border-dashed border-zinc-500 bg-zinc-800/50'
-                      : 'border-zinc-800 bg-zinc-900/30'
-                  } p-2`}
+                  style={{
+                    minHeight: 192, borderRadius: 6, transition: 'background 0.15s, border-color 0.15s', padding: 8,
+                    ...(dragOverSprint
+                      ? { border: '1px dashed var(--b3)', background: 'var(--s2)' }
+                      : { border: '1px solid var(--b1)', background: 'var(--s1)' }
+                    )
+                  }}
                 >
                   {!activeSprint ? (
-                    <div className="flex items-center justify-center h-full py-10">
-                      <p className="text-zinc-700 text-xs text-center">
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '40px 0' }}>
+                      <p style={{ fontFamily: 'var(--mono)', color: 'var(--b2)', fontSize: 10, textAlign: 'center' }}>
                         {isAdminLead ? 'Create a sprint to get started' : 'No active sprint'}
                       </p>
                     </div>
                   ) : sprintTasks.length === 0 ? (
-                    <div className="flex items-center justify-center h-full py-10">
-                      <p className="text-zinc-700 text-xs">
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '40px 0' }}>
+                      <p style={{ fontFamily: 'var(--mono)', color: 'var(--b2)', fontSize: 10 }}>
                         {isAdminLead ? 'Drag tasks here from the backlog' : 'No tasks in sprint'}
                       </p>
                     </div>
@@ -440,13 +497,7 @@ export default function SprintsPage() {
                         <TaskRow
                           task={task}
                           actions={isAdminLead ? (
-                            <button
-                              onClick={() => removeFromSprint(task)}
-                              className="text-zinc-700 hover:text-red-400 text-xs transition-colors"
-                              title="Remove from sprint"
-                            >
-                              ✕
-                            </button>
+                            <RemoveButton onClick={() => removeFromSprint(task)} />
                           ) : null}
                         />
                       </div>
@@ -457,9 +508,9 @@ export default function SprintsPage() {
 
               {/* Backlog */}
               <div>
-                <div className="flex items-center justify-between mb-3">
-                  <h2 className="text-sm font-semibold text-white">Backlog</h2>
-                  <span className="text-xs text-zinc-700 bg-zinc-800 px-2 py-0.5 rounded">
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                  <h2 style={{ fontFamily: 'var(--head)', fontSize: 13, fontWeight: 700, letterSpacing: '.15em', textTransform: 'uppercase', color: 'var(--text)', margin: 0 }}>Backlog</h2>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 10, background: 'var(--s2)', color: 'var(--t3)', padding: '2px 6px', borderRadius: 3 }}>
                     {filteredBacklog.length}
                   </span>
                 </div>
@@ -470,22 +521,32 @@ export default function SprintsPage() {
                   placeholder="Search backlog..."
                   value={search}
                   onChange={e => setSearch(e.target.value)}
-                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-300 placeholder-zinc-600 focus:outline-none mb-3"
+                  onFocus={() => setSearchFocused(true)}
+                  onBlur={() => setSearchFocused(false)}
+                  style={{
+                    width: '100%', boxSizing: 'border-box', background: 'var(--s2)',
+                    border: searchFocused ? '1px solid var(--yellow)' : '1px solid var(--b2)',
+                    borderRadius: 6, padding: '8px 12px', fontFamily: 'var(--mono)', fontSize: 11,
+                    color: 'var(--text)', outline: 'none', marginBottom: 12
+                  }}
                 />
 
                 <div
                   onDragOver={e => { if (isAdminLead) { e.preventDefault(); setDragOverBacklog(true); } }}
                   onDragLeave={() => setDragOverBacklog(false)}
                   onDrop={handleDropToBacklog}
-                  className={`min-h-48 rounded-xl border transition-colors overflow-y-auto max-h-96 ${
-                    dragOverBacklog
-                      ? 'border-dashed border-zinc-500 bg-zinc-800/50'
-                      : 'border-zinc-800 bg-zinc-900/30'
-                  } p-2`}
+                  style={{
+                    minHeight: 192, borderRadius: 6, transition: 'background 0.15s, border-color 0.15s',
+                    overflowY: 'auto', maxHeight: 384, padding: 8,
+                    ...(dragOverBacklog
+                      ? { border: '1px dashed var(--b3)', background: 'var(--s2)' }
+                      : { border: '1px solid var(--b1)', background: 'var(--s1)' }
+                    )
+                  }}
                 >
                   {filteredBacklog.length === 0 ? (
-                    <div className="flex items-center justify-center h-full py-10">
-                      <p className="text-zinc-700 text-xs">
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '40px 0' }}>
+                      <p style={{ fontFamily: 'var(--mono)', color: 'var(--b2)', fontSize: 10 }}>
                         {search ? 'No matching tasks' : 'Backlog is empty'}
                       </p>
                     </div>
@@ -495,18 +556,12 @@ export default function SprintsPage() {
                         key={task.id}
                         draggable={isAdminLead && !!activeSprint}
                         onDragStart={e => handleDragFromBacklog(e, task)}
-                        className={isAdminLead && activeSprint ? 'cursor-grab active:cursor-grabbing' : ''}
+                        style={isAdminLead && activeSprint ? { cursor: 'grab' } : {}}
                       >
                         <TaskRow
                           task={task}
                           actions={isAdminLead && activeSprint ? (
-                            <button
-                              onClick={() => setPendingAdd({ task, sprint_id: activeSprint.id })}
-                              className="text-zinc-700 hover:text-green-400 text-xs transition-colors"
-                              title="Add to sprint"
-                            >
-                              + Add
-                            </button>
+                            <AddButton onClick={() => setPendingAdd({ task, sprint_id: activeSprint.id })} />
                           ) : null}
                         />
                       </div>
@@ -521,31 +576,45 @@ export default function SprintsPage() {
         {/* Due date modal */}
         {pendingAdd && (
           <>
-            <div className="fixed inset-0 bg-black/60 z-40" onClick={() => setPendingAdd(null)} />
-            <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-zinc-900 border border-zinc-700 rounded-xl p-6 z-50 w-80">
-              <h3 className="text-white font-semibold mb-1">Add to Sprint</h3>
-              <p className="text-zinc-500 text-xs mb-4 truncate">{pendingAdd.task.title}</p>
-              <div className="mb-4">
-                <label className="block text-xs text-zinc-500 mb-1.5">Due Date (optional)</label>
+            <div
+              style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 40 }}
+              onClick={() => setPendingAdd(null)}
+            />
+            <div style={{
+              position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+              background: 'var(--s1)', border: '1px solid var(--b2)', borderRadius: 8,
+              padding: 24, zIndex: 50, width: 320
+            }}>
+              <h3 style={{ fontFamily: 'var(--head)', fontSize: 13, fontWeight: 700, letterSpacing: '.15em', textTransform: 'uppercase', color: 'var(--text)', margin: 0, marginBottom: 4 }}>Add to Sprint</h3>
+              <p style={{ fontFamily: 'var(--mono)', color: 'var(--t3)', fontSize: 10, marginBottom: 16, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{pendingAdd.task.title}</p>
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ display: 'block', fontFamily: 'var(--head)', fontSize: 9, letterSpacing: '.25em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 6 }}>Due Date (optional)</label>
                 <input
                   type="date"
                   value={dueDate}
                   onChange={e => setDueDate(e.target.value)}
                   min={activeSprint?.start_date}
                   max={activeSprint?.end_date}
-                  className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 focus:outline-none"
+                  style={{
+                    width: '100%', boxSizing: 'border-box', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 6,
+                    padding: '8px 12px', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', outline: 'none'
+                  }}
                 />
               </div>
-              <div className="flex gap-2">
+              <div style={{ display: 'flex', gap: 8 }}>
                 <button
                   onClick={() => addToSprint(pendingAdd.task, pendingAdd.sprint_id, dueDate)}
-                  className="flex-1 bg-white text-black font-semibold py-2 rounded-lg text-sm hover:bg-zinc-100 transition-colors"
+                  style={{
+                    flex: 1, background: '#F2CD1A', color: '#080808', fontFamily: 'var(--head)', fontWeight: 700,
+                    fontSize: 11, letterSpacing: '.15em', textTransform: 'uppercase',
+                    padding: '8px 0', borderRadius: 6, border: 'none', cursor: 'pointer'
+                  }}
                 >
                   Add to Sprint
                 </button>
                 <button
                   onClick={() => { setPendingAdd(null); setDueDate(''); }}
-                  className="text-zinc-600 text-sm px-4 hover:text-zinc-400"
+                  style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer', padding: '8px 16px' }}
                 >
                   Cancel
                 </button>

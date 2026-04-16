@@ -53,30 +53,66 @@ export default function RequestsPage() {
 
   return (
     <Layout>
-      <div className="max-w-4xl mx-auto">
-        <div className="flex items-center justify-between mb-6">
+      <div style={{ maxWidth: 896, margin: '0 auto' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
           <div>
-            <h1 className="text-2xl font-bold text-white">
+            <h1 style={{
+              fontFamily: 'var(--head)',
+              fontWeight: 900,
+              fontSize: 18,
+              letterSpacing: '.2em',
+              textTransform: 'uppercase',
+              color: 'var(--text)',
+              margin: 0
+            }}>
               {isApprover ? 'All Requests' : 'My Requests'}
             </h1>
-            <p className="text-zinc-500 text-sm mt-1">
+            <p style={{
+              fontFamily: 'var(--mono)',
+              fontSize: 11,
+              color: 'var(--t3)',
+              marginTop: 4,
+              marginBottom: 0
+            }}>
               {isApprover
                 ? 'All incoming requests from your team'
                 : 'Track the status of your submitted requests'}
             </p>
           </div>
-          <div className="flex gap-3">
+          <div style={{ display: 'flex', gap: 12 }}>
             {isApprover && (
               <button
                 onClick={() => router.push('/requests/approval/')}
-                className="bg-zinc-800 text-zinc-200 font-medium px-4 py-2 rounded-lg text-sm hover:bg-zinc-700 transition-colors"
+                style={{
+                  background: 'transparent',
+                  color: 'var(--t2)',
+                  border: '1px solid var(--b2)',
+                  borderRadius: 6,
+                  fontFamily: 'var(--mono)',
+                  fontSize: 11,
+                  letterSpacing: '.08em',
+                  padding: '8px 16px',
+                  cursor: 'pointer'
+                }}
               >
                 Approval Queue
               </button>
             )}
             <button
               onClick={() => router.push('/requests/new/')}
-              className="bg-white text-black font-semibold px-4 py-2 rounded-lg text-sm hover:bg-zinc-100 transition-colors"
+              style={{
+                background: '#F2CD1A',
+                color: '#080808',
+                border: 'none',
+                borderRadius: 6,
+                fontFamily: 'var(--head)',
+                fontWeight: 700,
+                fontSize: 11,
+                letterSpacing: '.15em',
+                textTransform: 'uppercase',
+                padding: '8px 16px',
+                cursor: 'pointer'
+              }}
             >
               + New Request
             </button>
@@ -84,16 +120,22 @@ export default function RequestsPage() {
         </div>
 
         {/* Filters */}
-        <div className="flex gap-2 mb-5">
+        <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
           {filters.map(f => (
             <button
               key={f.value}
               onClick={() => setFilter(f.value)}
-              className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                filter === f.value
-                  ? 'bg-white text-black border-white'
-                  : 'text-zinc-500 border-zinc-700 hover:border-zinc-500'
-              }`}
+              style={{
+                fontFamily: 'var(--mono)',
+                fontSize: 11,
+                padding: '6px 12px',
+                borderRadius: 20,
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+                background: filter === f.value ? 'rgba(242,205,26,0.12)' : 'transparent',
+                color: filter === f.value ? '#F2CD1A' : 'var(--t3)',
+                border: filter === f.value ? '1px solid #F2CD1A' : '1px solid var(--b2)'
+              }}
             >
               {f.label}
             </button>
@@ -102,46 +144,102 @@ export default function RequestsPage() {
 
         {/* Request list */}
         {loading ? (
-          <div className="text-zinc-600 text-sm py-12 text-center">Loading...</div>
+          <div style={{
+            color: 'var(--t3)',
+            fontFamily: 'var(--mono)',
+            fontSize: 12,
+            padding: '48px 0',
+            textAlign: 'center'
+          }}>Loading...</div>
         ) : requests.length === 0 ? (
-          <div className="text-center py-20">
-            <p className="text-zinc-600 text-sm mb-4">No requests yet</p>
+          <div style={{ textAlign: 'center', padding: '80px 0' }}>
+            <p style={{
+              color: 'var(--t3)',
+              fontFamily: 'var(--mono)',
+              fontSize: 12,
+              marginBottom: 16
+            }}>No requests yet</p>
             <button
               onClick={() => router.push('/requests/new/')}
-              className="text-zinc-400 text-sm hover:text-white transition-colors"
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--t2)',
+                fontFamily: 'var(--mono)',
+                fontSize: 12,
+                cursor: 'pointer'
+              }}
             >
               Submit your first request →
             </button>
           </div>
         ) : (
-          <div className="space-y-3">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {requests.map(req => (
               <div
                 key={req.id}
-                className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 hover:border-zinc-700 transition-colors"
+                style={{
+                  background: 'var(--s1)',
+                  border: '1px solid var(--b1)',
+                  borderRadius: 6,
+                  padding: 16
+                }}
               >
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-xs text-zinc-600 bg-zinc-800 px-2 py-0.5 rounded">
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                      <span style={{
+                        fontFamily: 'var(--mono)',
+                        fontSize: 9,
+                        background: 'var(--s3)',
+                        color: 'var(--t3)',
+                        padding: '2px 7px',
+                        borderRadius: 3
+                      }}>
                         {getTypeLabel(req.type)}
                       </span>
                       {req.is_product_scoped && (
-                        <span className="text-xs text-zinc-600">
+                        <span style={{
+                          fontFamily: 'var(--mono)',
+                          fontSize: 11,
+                          color: 'var(--t3)'
+                        }}>
                           {req.request_products?.length} product{req.request_products?.length !== 1 ? 's' : ''}
                         </span>
                       )}
                     </div>
-                    <p className="text-zinc-100 font-medium text-sm truncate">{req.title}</p>
+                    <p style={{
+                      fontFamily: 'var(--mono)',
+                      color: 'var(--text)',
+                      fontWeight: 500,
+                      fontSize: 13,
+                      margin: 0,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
+                    }}>{req.title}</p>
                     {req.review_note && (
-                      <p className="text-zinc-600 text-xs mt-1 line-clamp-1">
+                      <p style={{
+                        fontFamily: 'var(--mono)',
+                        color: 'var(--t3)',
+                        fontSize: 11,
+                        marginTop: 4,
+                        marginBottom: 0,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                      }}>
                         Note: {req.review_note}
                       </p>
                     )}
                   </div>
-                  <div className="flex items-center gap-3 flex-shrink-0">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
                     <RequestStatusBadge status={req.status} />
-                    <span className="text-zinc-700 text-xs">
+                    <span style={{
+                      fontFamily: 'var(--mono)',
+                      color: 'var(--t3)',
+                      fontSize: 11
+                    }}>
                       {new Date(req.created_at).toLocaleDateString('en-GB', {
                         day: 'numeric', month: 'short'
                       })}

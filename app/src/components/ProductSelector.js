@@ -1,9 +1,6 @@
 'use client';
-import { useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabase';
+import { useState } from 'react';
 
-// Hardcoded product list from public.product_master (active, cars only)
-// Avoids cross-schema client query complexity — update when products change
 const PRODUCTS = [
   'Alex','Apex','Bracey','Brutus','Bumble','Dash','Diesel','Doughty',
   'Ellie','Fang','Flare','Flare LE','Gazer','Ghost','Iris','Knox',
@@ -27,20 +24,20 @@ export default function ProductSelector({ selected, onChange }) {
   }
 
   return (
-    <div className="relative">
+    <div style={{ position: 'relative' }}>
       {/* Selected tags */}
       {selected.length > 0 && (
-        <div className="flex flex-wrap gap-2 mb-2">
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
           {selected.map(p => (
             <span
               key={p}
-              className="flex items-center gap-1 bg-zinc-800 text-zinc-200 text-xs px-2 py-1 rounded"
+              style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'var(--s3)', color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 11, padding: '4px 8px', borderRadius: 4 }}
             >
               {p}
               <button
                 type="button"
                 onClick={() => toggle(p)}
-                className="text-zinc-500 hover:text-white ml-1"
+                style={{ color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer', marginLeft: 4, fontSize: 11 }}
               >
                 ✕
               </button>
@@ -55,28 +52,32 @@ export default function ProductSelector({ selected, onChange }) {
         placeholder="Search products..."
         value={search}
         onChange={e => { setSearch(e.target.value); setOpen(true); }}
-        onFocus={() => setOpen(true)}
-        className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-500"
+        onFocus={e => { setOpen(true); e.target.style.borderColor = '#F2CD1A'; }}
+        onBlur={e => { e.target.style.borderColor = 'var(--b2)'; }}
+        style={{ width: '100%', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 6, padding: '10px 14px', color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 13, outline: 'none' }}
       />
 
       {/* Dropdown */}
       {open && (
-        <div className="absolute z-10 w-full mt-1 bg-zinc-900 border border-zinc-700 rounded-lg max-h-48 overflow-y-auto shadow-xl">
+        <div style={{ position: 'absolute', zIndex: 10, width: '100%', marginTop: 4, background: 'var(--s1)', border: '1px solid var(--b2)', borderRadius: 6, maxHeight: 192, overflowY: 'auto', boxShadow: '0 10px 25px rgba(0,0,0,0.5)' }}>
           {filtered.length === 0 && (
-            <p className="text-zinc-600 text-xs px-3 py-2">No products found</p>
+            <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', padding: '8px 12px' }}>No products found</p>
           )}
           {filtered.map(p => (
             <button
               key={p}
               type="button"
               onClick={() => { toggle(p); setSearch(''); }}
-              className={`w-full text-left px-3 py-2 text-sm transition-colors ${
-                selected.includes(p)
-                  ? 'bg-zinc-700 text-white'
-                  : 'text-zinc-300 hover:bg-zinc-800'
-              }`}
+              style={{
+                width: '100%', textAlign: 'left', padding: '8px 12px', fontFamily: 'var(--mono)', fontSize: 12,
+                border: 'none', cursor: 'pointer', transition: 'background .1s',
+                background: selected.includes(p) ? 'var(--s3)' : 'transparent',
+                color: selected.includes(p) ? 'var(--text)' : 'var(--t2)',
+              }}
+              onMouseEnter={e => { if (!selected.includes(p)) e.currentTarget.style.background = 'var(--s2)'; }}
+              onMouseLeave={e => { if (!selected.includes(p)) e.currentTarget.style.background = 'transparent'; }}
             >
-              {selected.includes(p) && <span className="mr-2 text-green-400">✓</span>}
+              {selected.includes(p) && <span style={{ color: 'var(--green)', marginRight: 8 }}>✓</span>}
               {p}
             </button>
           ))}
@@ -86,7 +87,7 @@ export default function ProductSelector({ selected, onChange }) {
       {/* Close on outside click */}
       {open && (
         <div
-          className="fixed inset-0 z-0"
+          style={{ position: 'fixed', inset: 0, zIndex: 0 }}
           onClick={() => setOpen(false)}
         />
       )}

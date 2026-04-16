@@ -13,8 +13,8 @@ export default function AuthCallback() {
   }, [router]);
 
   return (
-    <div className="min-h-screen bg-zinc-950 flex items-center justify-center">
-      <p className="text-zinc-500 text-sm">Signing you in...</p>
+    <div style={{ minHeight: '100vh', background: 'var(--bg)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', letterSpacing: '.2em', textTransform: 'uppercase' }}>Signing you in...</p>
     </div>
   );
 }

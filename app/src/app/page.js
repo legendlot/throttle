@@ -14,8 +14,8 @@ export default function Home() {
   }, [session, brandUser, loading, router]);
 
   return (
-    <div className="min-h-screen bg-zinc-950 flex items-center justify-center">
-      <p className="text-zinc-600 text-sm">Loading...</p>
+    <div style={{ minHeight: '100vh', background: 'var(--bg)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', letterSpacing: '.2em', textTransform: 'uppercase' }}>Loading...</p>
     </div>
   );
 }

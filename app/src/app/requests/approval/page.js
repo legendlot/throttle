@@ -18,6 +18,9 @@ export default function ApprovalQueuePage() {
   const [note, setNote] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
+  const [focusTextarea, setFocusTextarea] = useState(false);
+  const [hoveredCard, setHoveredCard] = useState(null);
+  const [hoveredBtn, setHoveredBtn] = useState(null);
 
   const isApprover = brandUser?.role === 'admin' || brandUser?.role === 'lead';
 
@@ -80,81 +83,230 @@ export default function ApprovalQueuePage() {
 
   return (
     <Layout>
-      <div className="max-w-5xl mx-auto">
-        <div className="flex items-center justify-between mb-6">
+      <div style={{ maxWidth: 960, margin: '0 auto' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
           <div>
             <button
               onClick={() => router.push('/requests/')}
-              className="text-zinc-600 text-sm hover:text-zinc-400 mb-3 flex items-center gap-1"
+              style={{
+                fontFamily: 'var(--mono)',
+                fontSize: 11,
+                color: 'var(--t3)',
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                padding: 0,
+                marginBottom: 12,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+              }}
             >
               ← All Requests
             </button>
-            <h1 className="text-2xl font-bold text-white">Approval Queue</h1>
-            <p className="text-zinc-500 text-sm mt-1">
+            <h1 style={{
+              fontFamily: 'var(--head)',
+              fontWeight: 900,
+              fontSize: 18,
+              letterSpacing: '.2em',
+              textTransform: 'uppercase',
+              color: 'var(--text)',
+              margin: 0,
+            }}>
+              Approval Queue
+            </h1>
+            <p style={{
+              fontFamily: 'var(--mono)',
+              fontSize: 12,
+              color: 'var(--t3)',
+              marginTop: 4,
+            }}>
               {requests.length} request{requests.length !== 1 ? 's' : ''} pending review
             </p>
           </div>
         </div>
 
         {loading ? (
-          <div className="text-zinc-600 text-sm py-12 text-center">Loading...</div>
+          <div style={{
+            fontFamily: 'var(--mono)',
+            fontSize: 12,
+            color: 'var(--t3)',
+            paddingTop: 48,
+            paddingBottom: 48,
+            textAlign: 'center',
+          }}>
+            Loading...
+          </div>
         ) : requests.length === 0 ? (
-          <div className="text-center py-20">
-            <p className="text-zinc-600 text-sm">Queue is clear — nothing pending review</p>
+          <div style={{ textAlign: 'center', paddingTop: 80, paddingBottom: 80 }}>
+            <p style={{
+              fontFamily: 'var(--mono)',
+              fontSize: 12,
+              color: 'var(--t3)',
+            }}>
+              Queue is clear — nothing pending review
+            </p>
           </div>
         ) : (
-          <div className="grid grid-cols-5 gap-4">
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: '2fr 3fr',
+            gap: 16,
+          }}>
             {/* Queue list */}
-            <div className="col-span-2 space-y-2">
-              {requests.map(req => (
-                <button
-                  key={req.id}
-                  onClick={() => { setSelected(req); setAction(null); setNote(''); setError(null); }}
-                  className={`w-full text-left bg-zinc-900 border rounded-xl p-3 transition-colors ${
-                    selected?.id === req.id
-                      ? 'border-zinc-500'
-                      : 'border-zinc-800 hover:border-zinc-700'
-                  }`}
-                >
-                  <div className="text-xs text-zinc-600 mb-1">{getTypeLabel(req.type)}</div>
-                  <div className="text-sm text-zinc-200 font-medium truncate">{req.title}</div>
-                  <div className="text-xs text-zinc-700 mt-1">
-                    {new Date(req.created_at).toLocaleDateString('en-GB', {
-                      day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'
-                    })}
-                  </div>
-                </button>
-              ))}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {requests.map(req => {
+                const isSelected = selected?.id === req.id;
+                const isHovered = hoveredCard === req.id;
+                return (
+                  <button
+                    key={req.id}
+                    onClick={() => { setSelected(req); setAction(null); setNote(''); setError(null); }}
+                    onMouseEnter={() => setHoveredCard(req.id)}
+                    onMouseLeave={() => setHoveredCard(null)}
+                    style={{
+                      width: '100%',
+                      textAlign: 'left',
+                      background: 'var(--s1)',
+                      border: isSelected
+                        ? '1px solid var(--b3)'
+                        : isHovered
+                          ? '1px solid var(--b2)'
+                          : '1px solid var(--b1)',
+                      borderRadius: 6,
+                      padding: 12,
+                      cursor: 'pointer',
+                      transition: 'border-color 0.15s',
+                    }}
+                  >
+                    <div style={{
+                      fontFamily: 'var(--mono)',
+                      fontSize: 10,
+                      color: 'var(--t3)',
+                      marginBottom: 4,
+                    }}>
+                      {getTypeLabel(req.type)}
+                    </div>
+                    <div style={{
+                      fontFamily: 'var(--mono)',
+                      fontSize: 12,
+                      color: 'var(--text)',
+                      fontWeight: 500,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}>
+                      {req.title}
+                    </div>
+                    <div style={{
+                      fontFamily: 'var(--mono)',
+                      fontSize: 10,
+                      color: 'var(--t3)',
+                      marginTop: 4,
+                    }}>
+                      {new Date(req.created_at).toLocaleDateString('en-GB', {
+                        day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'
+                      })}
+                    </div>
+                  </button>
+                );
+              })}
             </div>
 
             {/* Detail panel */}
-            <div className="col-span-3">
+            <div>
               {!selected ? (
-                <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 h-full flex items-center justify-center">
-                  <p className="text-zinc-600 text-sm">Select a request to review</p>
+                <div style={{
+                  background: 'var(--s1)',
+                  border: '1px solid var(--b1)',
+                  borderRadius: 6,
+                  padding: 24,
+                  height: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}>
+                  <p style={{
+                    fontFamily: 'var(--mono)',
+                    fontSize: 12,
+                    color: 'var(--t3)',
+                  }}>
+                    Select a request to review
+                  </p>
                 </div>
               ) : (
-                <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
-                  <div className="flex items-start justify-between mb-4">
+                <div style={{
+                  background: 'var(--s1)',
+                  border: '1px solid var(--b1)',
+                  borderRadius: 6,
+                  padding: 20,
+                }}>
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    justifyContent: 'space-between',
+                    marginBottom: 16,
+                  }}>
                     <div>
-                      <span className="text-xs text-zinc-600 bg-zinc-800 px-2 py-0.5 rounded">
+                      <span style={{
+                        fontFamily: 'var(--mono)',
+                        fontSize: 11,
+                        color: 'var(--t2)',
+                        background: 'var(--s3)',
+                        padding: '2px 8px',
+                        borderRadius: 4,
+                      }}>
                         {getTypeLabel(selected.type)}
                       </span>
-                      <h2 className="text-white font-semibold mt-2">{selected.title}</h2>
+                      <h2 style={{
+                        fontFamily: 'var(--mono)',
+                        color: 'var(--text)',
+                        fontWeight: 600,
+                        fontSize: 14,
+                        marginTop: 8,
+                      }}>
+                        {selected.title}
+                      </h2>
                     </div>
                     <RequestStatusBadge status={selected.status} />
                   </div>
 
                   {/* Product context */}
                   {selected.is_product_scoped && selected.request_products?.length > 0 && (
-                    <div className="mb-4">
-                      <p className="text-xs text-zinc-600 uppercase tracking-widest mb-2">Products</p>
-                      <div className="flex flex-wrap gap-2">
+                    <div style={{ marginBottom: 16 }}>
+                      <p style={{
+                        fontFamily: 'var(--head)',
+                        fontSize: 9,
+                        letterSpacing: '.25em',
+                        textTransform: 'uppercase',
+                        color: 'var(--t3)',
+                        marginBottom: 8,
+                      }}>
+                        Products
+                      </p>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                         {selected.request_products.map(rp => (
-                          <div key={rp.product_code} className="bg-zinc-800 rounded px-2 py-1">
-                            <span className="text-xs text-zinc-300">{rp.product_code}</span>
+                          <div key={rp.product_code} style={{
+                            background: 'var(--s3)',
+                            borderRadius: 4,
+                            padding: '4px 8px',
+                          }}>
+                            <span style={{
+                              fontFamily: 'var(--mono)',
+                              fontSize: 11,
+                              color: 'var(--t2)',
+                            }}>
+                              {rp.product_code}
+                            </span>
                             {rp.product_notes && (
-                              <span className="text-xs text-zinc-600 ml-2">— {rp.product_notes}</span>
+                              <span style={{
+                                fontFamily: 'var(--mono)',
+                                fontSize: 11,
+                                color: 'var(--t3)',
+                                marginLeft: 8,
+                              }}>
+                                — {rp.product_notes}
+                              </span>
                             )}
                           </div>
                         ))}
@@ -163,16 +315,37 @@ export default function ApprovalQueuePage() {
                   )}
 
                   {/* Template data */}
-                  <div className="mb-5">
-                    <p className="text-xs text-zinc-600 uppercase tracking-widest mb-2">Details</p>
-                    <div className="space-y-2">
+                  <div style={{ marginBottom: 20 }}>
+                    <p style={{
+                      fontFamily: 'var(--head)',
+                      fontSize: 9,
+                      letterSpacing: '.25em',
+                      textTransform: 'uppercase',
+                      color: 'var(--t3)',
+                      marginBottom: 8,
+                    }}>
+                      Details
+                    </p>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                       {Object.entries(selected.template_data || {}).map(([key, value]) => (
                         value ? (
-                          <div key={key} className="flex gap-2">
-                            <span className="text-xs text-zinc-600 w-32 flex-shrink-0 capitalize">
+                          <div key={key} style={{ display: 'flex', gap: 8 }}>
+                            <span style={{
+                              fontFamily: 'var(--mono)',
+                              fontSize: 11,
+                              color: 'var(--t3)',
+                              width: 128,
+                              flexShrink: 0,
+                              textTransform: 'capitalize',
+                            }}>
                               {key.replace(/_/g, ' ')}
                             </span>
-                            <span className="text-xs text-zinc-300 flex-1">
+                            <span style={{
+                              fontFamily: 'var(--mono)',
+                              fontSize: 11,
+                              color: 'var(--t2)',
+                              flex: 1,
+                            }}>
                               {Array.isArray(value) ? value.join(', ') : String(value)}
                             </span>
                           </div>
@@ -182,21 +355,65 @@ export default function ApprovalQueuePage() {
                   </div>
 
                   {/* Decision */}
-                  <div className="border-t border-zinc-800 pt-4">
-                    <p className="text-xs text-zinc-600 uppercase tracking-widest mb-3">Decision</p>
+                  <div style={{
+                    borderTop: '1px solid var(--b1)',
+                    paddingTop: 16,
+                  }}>
+                    <p style={{
+                      fontFamily: 'var(--head)',
+                      fontSize: 9,
+                      letterSpacing: '.25em',
+                      textTransform: 'uppercase',
+                      color: 'var(--t3)',
+                      marginBottom: 12,
+                    }}>
+                      Decision
+                    </p>
 
-                    <div className="flex gap-2 mb-3">
+                    <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
                       {[
-                        { value: 'approve', label: 'Approve', cls: 'border-green-700 text-green-400 hover:bg-green-950' },
-                        { value: 'reject',  label: 'Reject',  cls: 'border-red-700 text-red-400 hover:bg-red-950' },
-                        { value: 'info',    label: 'Need Info', cls: 'border-blue-700 text-blue-400 hover:bg-blue-950' },
+                        {
+                          value: 'approve',
+                          label: 'Approve',
+                          border: '1px solid rgba(34,197,94,0.4)',
+                          color: 'var(--green)',
+                        },
+                        {
+                          value: 'reject',
+                          label: 'Reject',
+                          border: '1px solid rgba(222,42,42,0.4)',
+                          color: 'var(--red)',
+                        },
+                        {
+                          value: 'info',
+                          label: 'Need Info',
+                          border: '1px solid rgba(33,60,226,0.4)',
+                          color: '#213CE2',
+                        },
                       ].map(btn => (
                         <button
                           key={btn.value}
                           onClick={() => { setAction(btn.value); setNote(''); setError(null); }}
-                          className={`flex-1 py-2 text-xs font-medium rounded-lg border transition-colors ${btn.cls} ${
-                            action === btn.value ? 'opacity-100' : 'opacity-50 hover:opacity-80'
-                          }`}
+                          onMouseEnter={() => setHoveredBtn(btn.value)}
+                          onMouseLeave={() => setHoveredBtn(null)}
+                          style={{
+                            flex: 1,
+                            padding: '8px 0',
+                            fontFamily: 'var(--mono)',
+                            fontSize: 11,
+                            fontWeight: 500,
+                            borderRadius: 6,
+                            border: btn.border,
+                            color: btn.color,
+                            background: 'transparent',
+                            cursor: 'pointer',
+                            transition: 'opacity 0.15s',
+                            opacity: action === btn.value
+                              ? 1
+                              : hoveredBtn === btn.value
+                                ? 0.8
+                                : 0.5,
+                          }}
                         >
                           {btn.label}
                         </button>
@@ -204,10 +421,12 @@ export default function ApprovalQueuePage() {
                     </div>
 
                     {action && (
-                      <div className="space-y-3">
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                         <textarea
                           value={note}
                           onChange={e => setNote(e.target.value)}
+                          onFocus={() => setFocusTextarea(true)}
+                          onBlur={() => setFocusTextarea(false)}
                           placeholder={
                             action === 'approve'
                               ? 'Optional note for the team...'
@@ -215,17 +434,54 @@ export default function ApprovalQueuePage() {
                               ? 'Reason for rejection (required)...'
                               : 'What information is needed? (required)...'
                           }
-                          className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-500 resize-none h-20"
+                          style={{
+                            width: '100%',
+                            background: 'var(--s2)',
+                            border: focusTextarea
+                              ? '1px solid var(--yellow)'
+                              : '1px solid var(--b2)',
+                            borderRadius: 6,
+                            padding: '8px 12px',
+                            fontFamily: 'var(--mono)',
+                            fontSize: 12,
+                            color: 'var(--text)',
+                            outline: 'none',
+                            resize: 'none',
+                            height: 80,
+                            boxSizing: 'border-box',
+                          }}
                         />
 
                         {error && (
-                          <p className="text-red-400 text-xs">{error}</p>
+                          <p style={{
+                            fontFamily: 'var(--mono)',
+                            fontSize: 11,
+                            color: 'var(--red)',
+                            margin: 0,
+                          }}>
+                            {error}
+                          </p>
                         )}
 
                         <button
                           onClick={handleDecision}
                           disabled={submitting}
-                          className="w-full bg-white text-black font-semibold py-2.5 rounded-lg text-sm hover:bg-zinc-100 transition-colors disabled:opacity-50"
+                          style={{
+                            width: '100%',
+                            background: '#F2CD1A',
+                            color: '#080808',
+                            fontFamily: 'var(--head)',
+                            fontWeight: 700,
+                            fontSize: 11,
+                            letterSpacing: '.15em',
+                            textTransform: 'uppercase',
+                            padding: '10px 0',
+                            borderRadius: 6,
+                            border: 'none',
+                            cursor: submitting ? 'default' : 'pointer',
+                            opacity: submitting ? 0.5 : 1,
+                            transition: 'opacity 0.15s',
+                          }}
                         >
                           {submitting ? 'Submitting...' : `Confirm ${
                             action === 'approve' ? 'Approval' :

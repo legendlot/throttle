@@ -24,36 +24,52 @@ function TaskCard({ task, onClick, isDragging }) {
         e.dataTransfer.setData('fromStage', task.stage);
       }}
       onClick={() => onClick(task)}
-      className={`bg-zinc-900 border rounded-lg p-3 cursor-pointer hover:border-zinc-600 transition-all select-none ${
-        isDragging ? 'opacity-50 border-zinc-500' : 'border-zinc-800'
-      }`}
+      style={{
+        background: 'var(--s1)',
+        border: '1px solid var(--b1)',
+        borderLeft: `3px solid ${priority.color}`,
+        borderRadius: 6,
+        padding: '10px 12px',
+        cursor: 'pointer',
+        opacity: isDragging ? 0.5 : 1,
+        transition: 'border-color .15s',
+        userSelect: 'none',
+      }}
+      onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--b3)'}
+      onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--b1)'}
     >
-      {/* Priority indicator */}
-      <div className="flex items-center justify-between mb-2">
-        <span
-          className="inline-block w-1.5 h-1.5 rounded-full"
-          style={{ backgroundColor: priority.color }}
-        />
-        {task.is_spillover && (
-          <span className="text-xs text-amber-500">↩</span>
-        )}
-        {task.stage === 'ext_blocked' && (
-          <span className="text-xs text-amber-400">⚠</span>
-        )}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', letterSpacing: '.08em' }}>
+          {task.type}
+        </span>
+        <div style={{ display: 'flex', gap: 4 }}>
+          {task.is_spillover && <span style={{ fontSize: 10, color: 'var(--amber)' }}>↩</span>}
+          {task.stage === 'ext_blocked' && <span style={{ fontSize: 10, color: 'var(--amber)' }}>⚠</span>}
+        </div>
       </div>
 
-      {/* Title */}
-      <p className="text-zinc-200 text-xs font-medium leading-snug mb-2 line-clamp-2">
+      <p style={{
+        fontFamily: 'var(--mono)',
+        fontSize: 12,
+        color: 'var(--text)',
+        lineHeight: 1.4,
+        marginBottom: 8,
+        display: '-webkit-box',
+        WebkitLineClamp: 2,
+        WebkitBoxOrient: 'vertical',
+        overflow: 'hidden',
+      }}>
         {task.title}
       </p>
 
-      {/* Footer */}
-      <div className="flex items-center justify-between mt-1">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         {task.product_code && (
-          <span className="text-zinc-700 text-xs truncate max-w-20">{task.product_code}</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)' }}>
+            {task.product_code}
+          </span>
         )}
         {task.due_date && (
-          <span className="text-zinc-700 text-xs ml-auto">
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', marginLeft: 'auto' }}>
             {new Date(task.due_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
           </span>
         )}
@@ -70,7 +86,7 @@ function KanbanColumn({ stage, tasks, onTaskClick, onDrop, canDrop }) {
 
   return (
     <div
-      className="flex flex-col min-w-52 w-52 flex-shrink-0"
+      style={{ display: 'flex', flexDirection: 'column', minWidth: 208, width: 208, flexShrink: 0 }}
       onDragOver={e => { if (canDrop) { e.preventDefault(); setIsDragOver(true); } }}
       onDragLeave={() => setIsDragOver(false)}
       onDrop={e => {
@@ -84,25 +100,51 @@ function KanbanColumn({ stage, tasks, onTaskClick, onDrop, canDrop }) {
       }}
     >
       {/* Column header */}
-      <div className={`flex items-center justify-between mb-3 px-1 py-1.5 rounded-lg transition-colors ${
-        isDragOver ? 'bg-zinc-800' : ''
-      }`}>
-        <div className="flex items-center gap-2">
-          <span
-            className="inline-block w-2 h-2 rounded-full"
-            style={{ backgroundColor: config.color }}
-          />
-          <span className="text-xs font-medium text-zinc-400">{config.label}</span>
-        </div>
-        <span className="text-xs text-zinc-700 bg-zinc-800 px-1.5 py-0.5 rounded">
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: 12,
+        padding: '6px 4px',
+        borderRadius: 6,
+        background: isDragOver ? 'var(--s2)' : 'transparent',
+        transition: 'background .15s',
+      }}>
+        <span style={{
+          fontFamily: 'var(--head)',
+          fontSize: 10,
+          letterSpacing: '.25em',
+          textTransform: 'uppercase',
+          color: config.color || 'var(--t3)',
+          fontWeight: 700,
+        }}>
+          {config.label}
+        </span>
+        <span style={{
+          fontFamily: 'var(--mono)',
+          fontSize: 10,
+          color: 'var(--t3)',
+          background: 'var(--s2)',
+          padding: '2px 6px',
+          borderRadius: 3,
+        }}>
           {tasks.length}
         </span>
       </div>
 
       {/* Cards */}
-      <div className={`flex flex-col gap-2 flex-1 min-h-24 rounded-lg p-1 transition-colors ${
-        isDragOver ? 'bg-zinc-800/50 border border-dashed border-zinc-600' : ''
-      }`}>
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        flex: 1,
+        minHeight: 96,
+        borderRadius: 6,
+        padding: 4,
+        transition: 'all .15s',
+        background: isDragOver ? 'rgba(42,42,42,0.3)' : 'transparent',
+        border: isDragOver ? '1px dashed var(--b2)' : '1px solid transparent',
+      }}>
         {tasks.map(task => (
           <TaskCard
             key={task.id}
@@ -111,8 +153,8 @@ function KanbanColumn({ stage, tasks, onTaskClick, onDrop, canDrop }) {
           />
         ))}
         {tasks.length === 0 && isDragOver && (
-          <div className="flex-1 flex items-center justify-center">
-            <p className="text-zinc-700 text-xs">Drop here</p>
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <p style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 11 }}>Drop here</p>
           </div>
         )}
       </div>
@@ -148,67 +190,79 @@ function TableView({ tasks, onTaskClick }) {
       return 0;
     });
 
-  function SortHeader({ label, field }) {
-    return (
-      <th
-        className="text-left text-xs text-zinc-500 font-medium px-3 py-2 cursor-pointer hover:text-zinc-300 transition-colors whitespace-nowrap"
-        onClick={() => handleSort(field)}
-      >
-        {label}
-        {sortKey === field && (
-          <span className="ml-1">{sortDir === 'asc' ? '↑' : '↓'}</span>
-        )}
-      </th>
-    );
-  }
+  const selectStyle = {
+    background: 'var(--s2)',
+    border: '1px solid var(--b2)',
+    borderRadius: 6,
+    padding: '6px 10px',
+    fontSize: 11,
+    color: 'var(--t2)',
+    fontFamily: 'var(--mono)',
+    outline: 'none',
+  };
+
+  const thStyle = {
+    padding: '8px 12px',
+    textAlign: 'left',
+    fontFamily: 'var(--head)',
+    fontSize: 9,
+    letterSpacing: '.2em',
+    textTransform: 'uppercase',
+    color: 'var(--t3)',
+    fontWeight: 700,
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+  };
 
   return (
     <div>
       {/* Table filters */}
-      <div className="flex gap-3 mb-4">
-        <select
-          value={filterStage}
-          onChange={e => setFilterStage(e.target.value)}
-          className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-zinc-300 focus:outline-none"
-        >
+      <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'center' }}>
+        <select value={filterStage} onChange={e => setFilterStage(e.target.value)} style={selectStyle}>
           <option value="all">All Stages</option>
           {BOARD_STAGES.map(s => (
             <option key={s.value} value={s.value}>{s.label}</option>
           ))}
         </select>
-        <select
-          value={filterPriority}
-          onChange={e => setFilterPriority(e.target.value)}
-          className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-zinc-300 focus:outline-none"
-        >
+        <select value={filterPriority} onChange={e => setFilterPriority(e.target.value)} style={selectStyle}>
           <option value="all">All Priorities</option>
           {PRIORITIES.map(p => (
             <option key={p.value} value={p.value}>{p.label}</option>
           ))}
         </select>
-        <span className="text-zinc-700 text-xs self-center ml-auto">
+        <span style={{ marginLeft: 'auto', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>
           {filtered.length} task{filtered.length !== 1 ? 's' : ''}
         </span>
       </div>
 
       {/* Table */}
-      <div className="overflow-x-auto rounded-xl border border-zinc-800">
-        <table className="w-full">
-          <thead className="bg-zinc-900">
-            <tr>
-              <SortHeader label="Title" field="title" />
-              <SortHeader label="Stage" field="stage" />
-              <SortHeader label="Priority" field="priority" />
-              <th className="text-left text-xs text-zinc-500 font-medium px-3 py-2">Product</th>
-              <th className="text-left text-xs text-zinc-500 font-medium px-3 py-2">Type</th>
-              <SortHeader label="Due" field="due_date" />
-              <SortHeader label="Created" field="created_at" />
+      <div style={{ overflowX: 'auto', borderRadius: 8, border: '1px solid var(--b1)' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--mono)', fontSize: 12 }}>
+          <thead>
+            <tr style={{ background: 'var(--s1)', borderBottom: '1px solid var(--b1)' }}>
+              <th style={thStyle} onClick={() => handleSort('title')}>
+                Title {sortKey === 'title' && (sortDir === 'asc' ? '↑' : '↓')}
+              </th>
+              <th style={thStyle} onClick={() => handleSort('stage')}>
+                Stage {sortKey === 'stage' && (sortDir === 'asc' ? '↑' : '↓')}
+              </th>
+              <th style={thStyle} onClick={() => handleSort('priority')}>
+                Priority {sortKey === 'priority' && (sortDir === 'asc' ? '↑' : '↓')}
+              </th>
+              <th style={{ ...thStyle, cursor: 'default' }}>Product</th>
+              <th style={{ ...thStyle, cursor: 'default' }}>Type</th>
+              <th style={thStyle} onClick={() => handleSort('due_date')}>
+                Due {sortKey === 'due_date' && (sortDir === 'asc' ? '↑' : '↓')}
+              </th>
+              <th style={thStyle} onClick={() => handleSort('created_at')}>
+                Created {sortKey === 'created_at' && (sortDir === 'asc' ? '↑' : '↓')}
+              </th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 ? (
               <tr>
-                <td colSpan={7} className="text-center text-zinc-600 text-sm py-10">
+                <td colSpan={7} style={{ textAlign: 'center', color: 'var(--t3)', fontSize: 12, padding: '40px 0' }}>
                   No tasks match these filters
                 </td>
               </tr>
@@ -220,46 +274,45 @@ function TableView({ tasks, onTaskClick }) {
                   <tr
                     key={task.id}
                     onClick={() => onTaskClick(task)}
-                    className={`cursor-pointer hover:bg-zinc-800/50 transition-colors border-t border-zinc-800 ${
-                      i % 2 === 0 ? '' : 'bg-zinc-900/30'
-                    }`}
+                    style={{
+                      cursor: 'pointer',
+                      borderBottom: '1px solid var(--b1)',
+                      background: i % 2 !== 0 ? 'var(--s1)' : 'transparent',
+                      transition: 'background .1s',
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'var(--s2)'}
+                    onMouseLeave={e => e.currentTarget.style.background = i % 2 !== 0 ? 'var(--s1)' : 'transparent'}
                   >
-                    <td className="px-3 py-2.5">
-                      <div className="flex items-center gap-2">
-                        {task.is_spillover && <span className="text-amber-500 text-xs">↩</span>}
-                        <span className="text-zinc-200 text-xs font-medium truncate max-w-48">
+                    <td style={{ padding: '10px 12px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        {task.is_spillover && <span style={{ color: 'var(--amber)', fontSize: 11 }}>↩</span>}
+                        <span style={{ color: 'var(--text)', fontSize: 12, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200 }}>
                           {task.title}
                         </span>
                       </div>
                     </td>
-                    <td className="px-3 py-2.5">
-                      <div className="flex items-center gap-1.5">
-                        <span
-                          className="inline-block w-1.5 h-1.5 rounded-full flex-shrink-0"
-                          style={{ backgroundColor: stage.color }}
-                        />
-                        <span className="text-zinc-400 text-xs">{stage.label}</span>
+                    <td style={{ padding: '10px 12px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: '50%', background: stage.color, flexShrink: 0 }} />
+                        <span style={{ color: 'var(--t2)', fontSize: 11 }}>{stage.label}</span>
                       </div>
                     </td>
-                    <td className="px-3 py-2.5">
-                      <div className="flex items-center gap-1.5">
-                        <span
-                          className="inline-block w-1.5 h-1.5 rounded-full flex-shrink-0"
-                          style={{ backgroundColor: priority.color }}
-                        />
-                        <span className="text-zinc-400 text-xs">{priority.label}</span>
+                    <td style={{ padding: '10px 12px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: '50%', background: priority.color, flexShrink: 0 }} />
+                        <span style={{ color: 'var(--t2)', fontSize: 11 }}>{priority.label}</span>
                       </div>
                     </td>
-                    <td className="px-3 py-2.5 text-zinc-600 text-xs">{task.product_code || '—'}</td>
-                    <td className="px-3 py-2.5 text-zinc-600 text-xs capitalize">
+                    <td style={{ padding: '10px 12px', color: 'var(--t3)', fontSize: 11 }}>{task.product_code || '—'}</td>
+                    <td style={{ padding: '10px 12px', color: 'var(--t3)', fontSize: 11, textTransform: 'capitalize' }}>
                       {task.type?.replace(/_/g, ' ')}
                     </td>
-                    <td className="px-3 py-2.5 text-zinc-600 text-xs">
+                    <td style={{ padding: '10px 12px', color: 'var(--t3)', fontSize: 11 }}>
                       {task.due_date
                         ? new Date(task.due_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
                         : '—'}
                     </td>
-                    <td className="px-3 py-2.5 text-zinc-700 text-xs">
+                    <td style={{ padding: '10px 12px', color: 'var(--t3)', fontSize: 11 }}>
                       {new Date(task.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
                     </td>
                   </tr>
@@ -279,9 +332,8 @@ export default function BoardPage() {
   const { session, brandUser } = useAuth();
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState('kanban'); // 'kanban' | 'table'
+  const [view, setView] = useState('kanban');
   const [selectedTask, setSelectedTask] = useState(null);
-  const [dragTaskId, setDragTaskId] = useState(null);
 
   const isAdminLead = ['admin', 'lead'].includes(brandUser?.role);
 
@@ -291,46 +343,30 @@ export default function BoardPage() {
 
   async function loadTasks() {
     setLoading(true);
-    let query = supabase
+    const { data, error } = await supabase
       .from('tasks')
       .select('*')
       .not('stage', 'in', '("done","abandoned")')
       .order('created_at', { ascending: false });
-
-    // Members only see their own tasks — RLS handles this
-    // but we also filter client side for clarity
-    if (brandUser?.role === 'member') {
-      // RLS will enforce this — no need for additional filter
-    }
-
-    const { data, error } = await query;
     if (!error) setTasks(data || []);
     setLoading(false);
   }
 
   async function handleDrop(taskId, fromStage, toStage) {
     if (fromStage === toStage) return;
-
     const task = tasks.find(t => t.id === taskId);
     if (!task) return;
     if (!canMoveTask(task, toStage, brandUser?.role)) return;
 
-    // Require reason for ext_blocked — can't do inline on drop, open panel instead
     if (toStage === 'ext_blocked' || toStage === 'abandoned') {
       setSelectedTask({ ...task, _pendingStage: toStage });
       return;
     }
 
-    // Optimistic update
     setTasks(prev => prev.map(t => t.id === taskId ? { ...t, stage: toStage } : t));
-
     try {
-      await workerFetch('updateTaskStage', {
-        task_id: taskId,
-        stage: toStage,
-      }, session?.access_token);
+      await workerFetch('updateTaskStage', { task_id: taskId, stage: toStage }, session?.access_token);
     } catch {
-      // Revert on failure
       setTasks(prev => prev.map(t => t.id === taskId ? { ...t, stage: fromStage } : t));
     }
   }
@@ -340,37 +376,44 @@ export default function BoardPage() {
     setSelectedTask(updatedTask);
   }
 
-  // Group tasks by stage for kanban
   const tasksByStage = BOARD_STAGES.reduce((acc, stage) => {
     acc[stage.value] = tasks.filter(t => t.stage === stage.value);
     return acc;
   }, {});
 
+  const reviewCount = tasksByStage['in_review']?.length || 0;
+
   return (
     <Layout>
-      <div className="flex flex-col h-full">
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
         {/* Board header */}
-        <div className="flex items-center justify-between mb-5">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
           <div>
-            <h1 className="text-2xl font-bold text-white">Board</h1>
-            <p className="text-zinc-600 text-xs mt-0.5">
+            <h1 style={{ fontFamily: 'var(--head)', fontWeight: 900, fontSize: 18, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--text)', lineHeight: 1 }}>
+              Board
+            </h1>
+            <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginTop: 4 }}>
               {tasks.length} active task{tasks.length !== 1 ? 's' : ''}
             </p>
           </div>
 
-          <div className="flex items-center gap-3">
-            {/* Review queue indicator for admin/lead */}
-            {isAdminLead && tasksByStage['in_review']?.length > 0 && (
-              <div className="flex items-center gap-2 bg-cyan-950/40 border border-cyan-800 rounded-lg px-3 py-1.5">
-                <span className="text-cyan-400 text-xs">👀</span>
-                <span className="text-cyan-300 text-xs font-medium">
-                  {tasksByStage['in_review'].length} awaiting review
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            {/* Review queue indicator */}
+            {isAdminLead && reviewCount > 0 && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                background: 'rgba(6,182,212,0.1)', border: '1px solid rgba(6,182,212,0.3)',
+                borderRadius: 6, padding: '6px 12px',
+              }}>
+                <span style={{ fontSize: 11, color: '#22d3ee' }}>👀</span>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: '#22d3ee', fontWeight: 500 }}>
+                  {reviewCount} awaiting review
                 </span>
               </div>
             )}
 
             {/* View toggle */}
-            <div className="flex bg-zinc-900 border border-zinc-800 rounded-lg p-0.5">
+            <div style={{ display: 'flex', background: 'var(--s1)', border: '1px solid var(--b1)', borderRadius: 6, padding: 2 }}>
               {[
                 { value: 'kanban', label: 'Kanban' },
                 { value: 'table', label: 'Table' },
@@ -378,11 +421,20 @@ export default function BoardPage() {
                 <button
                   key={v.value}
                   onClick={() => setView(v.value)}
-                  className={`px-4 py-1.5 text-xs font-medium rounded-md transition-colors ${
-                    view === v.value
-                      ? 'bg-zinc-700 text-white'
-                      : 'text-zinc-500 hover:text-zinc-300'
-                  }`}
+                  style={{
+                    padding: '6px 14px',
+                    fontFamily: 'var(--mono)',
+                    fontSize: 10,
+                    fontWeight: view === v.value ? 700 : 400,
+                    borderRadius: 4,
+                    border: 'none',
+                    cursor: 'pointer',
+                    letterSpacing: '.08em',
+                    textTransform: 'uppercase',
+                    transition: 'all .15s',
+                    background: view === v.value ? 'var(--s3)' : 'transparent',
+                    color: view === v.value ? 'var(--text)' : 'var(--t3)',
+                  }}
                 >
                   {v.label}
                 </button>
@@ -392,13 +444,12 @@ export default function BoardPage() {
         </div>
 
         {loading ? (
-          <div className="flex items-center justify-center py-20">
-            <p className="text-zinc-600 text-sm">Loading tasks...</p>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '80px 0' }}>
+            <p style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12 }}>Loading tasks...</p>
           </div>
         ) : view === 'kanban' ? (
-          /* Kanban view — horizontally scrollable */
-          <div className="overflow-x-auto pb-4">
-            <div className="flex gap-3 min-w-max">
+          <div style={{ overflowX: 'auto', paddingBottom: 16 }}>
+            <div style={{ display: 'flex', gap: 12, minWidth: 'max-content' }}>
               {BOARD_STAGES.map(stage => (
                 <KanbanColumn
                   key={stage.value}
@@ -412,11 +463,9 @@ export default function BoardPage() {
             </div>
           </div>
         ) : (
-          /* Table view */
           <TableView tasks={tasks} onTaskClick={setSelectedTask} />
         )}
 
-        {/* Side panel */}
         {selectedTask && (
           <TaskSidePanel
             task={selectedTask}
