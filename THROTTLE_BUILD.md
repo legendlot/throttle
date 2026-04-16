@@ -1,5 +1,5 @@
 # Throttle — Technical Build Document
-**Version:** 7.0 | **Last Updated:** April 2026 (Phase 7)
+**Version:** 8.0 | **Last Updated:** April 2026 (Phase 8)
 **Purpose:** Technical reference for the Throttle brand team work OS.
 Feed this file when continuing development in a new session.
 
@@ -61,7 +61,7 @@ Feed this file when continuing development in a new session.
     │       ├── supabase.js
     │       ├── worker.js
     │       ├── auth.js
-    │       ├── requestTypes.js       ← 8 types × template field config
+    │       ├── requestTypes.js       ← 9 types × field config + LAUNCH_PACK_ITEMS + getVisibleTypes
     │       ├── taskConfig.js         ← stages, priorities, transitions, deliverable types
     │       └── sprintUtils.js        ← date helpers for sprint management
     ├── .github/workflows/deploy.yml
@@ -226,6 +226,13 @@ NEXT_PUBLIC_WORKER_URL=https://throttleops.afshaan.workers.dev
 | Workload overload threshold: >8 tasks | Orange highlight on total column | Rough heuristic for 7-day sprint. Adjustable later based on real usage data. |
 | ByPerson view: collapsible groups | Default all expanded, click to collapse | At 3–5 team members, all-expanded is manageable. Collapse helps when viewing across multiple sprints with many people. |
 | Brand refresh: inline styles over Tailwind | All zinc-* classes replaced with `style={{}}` using CSS custom properties | LOT brand tokens (--bg, --s1, --b1, --text, etc.) give exact control. Inline styles avoid Tailwind purge issues and make token usage explicit. |
+| photo_video_new vs photo_video | New enum value `photo_video_new` | Old `photo_video` already exists in enum. Adding new value avoids collision with existing requests. Old requests continue to display correctly. |
+| LAUNCH_PACK_ITEMS duplicated in Worker | Constant exists in both requestTypes.js and worker/src/index.js | Worker is a separate Cloudflare Worker, not sharing Next.js modules. Duplication is intentional — keep in sync manually when items change. |
+| deriveDeliverableType in Worker | Switch on request type + template_data fields | Eliminates manual deliverable type assignment on approval. Worker auto-derives from request metadata. |
+| Multi-step new request flow | 5 steps: type → product → checklist/form → review → submit | Cleaner than single-page form. Each step validates before advancing. Review step shows task count preview for launch_pack and photo_video_new. |
+| brand_team_only flag on requests | Boolean column on brand.requests, set automatically for brand_initiative type | Enables frontend filtering — brand_initiative only visible to member/lead/admin roles, hidden from requesters. |
+| is_revision on tasks | Boolean column on brand.tasks, set from template_data.is_revision during approval | Tracks revision vs new work at task level. Not surfaced in UI yet — future enhancement for reporting. |
+| Old types kept in enum | 8 old types not removed from brand.request_type | Backwards compatibility — existing requests with old types still display correctly. Worker accepts both old and new types. |
 | Font stack: Tomorrow + JetBrains Mono | Google Fonts import in globals.css | Tomorrow for headings (uppercase, tracked), JetBrains Mono for body/data. Matches LOT dashboard aesthetic. |
 | ThrottleLogo: checkered flag + wordmark | Inline SVG-free 4×4 grid via CSS grid | No image dependency. Yellow (#F2CD1A) on dark (#1e1e1e) cells. "Brand OS" sub-label establishes tool identity. |
 | Nav active indicator: yellow pill | `background: '#F2CD1A', color: '#080808'` | High contrast. Same pattern as LOT dashboard. Replaces white bottom-border. |
@@ -324,8 +331,19 @@ NEXT_PUBLIC_WORKER_URL=https://throttleops.afshaan.workers.dev
 - [x] Zero zinc-* Tailwind classes remaining (grep-verified across all src files)
 - [x] Build succeeds, deployed to GitHub Pages
 
+### Phase 8 — Intake Redesign ✅
+- [x] requestTypes.js replaced: 9 new types (launch_pack, product_creative, social_media, advertising, photo_video_new, copy_script, design_brand, 3d_motion, brand_initiative) with LAUNCH_PACK_ITEMS, getVisibleTypes, getRequestType
+- [x] Worker: LAUNCH_PACK_ITEMS constant + deriveDeliverableType helper added
+- [x] Worker: approveRequest rewritten — type-specific task creation (launch_pack → one per checked item, photo_video_new → shoot + edit, brand_initiative → one per deliverable line, others → one per product with deriveDeliverableType)
+- [x] Worker: submitRequest accepts all 17 types (9 new + 8 legacy), sets brand_team_only flag for brand_initiative
+- [x] `/requests/new/` redesigned: 5-step flow (type selector → product scoping → checklist/form → review → submit), 3-column type grid with descriptions, launch pack checklist with discipline labels, dynamic template form (select/multiselect/toggle/date/text/textarea/conditional), review summary with task count previews
+- [x] `/requests/approval/` updated: type labels show icons from new config, brand initiative badge (⚡ Brand) on queue cards and detail panel
+- [x] `/requests/` list: getTypeLabel updated for new id-based config with icons
+- [x] Build succeeds, deployed to GitHub Pages
+- [ ] DB migration pending: 9 new enum values on brand.request_type, is_revision column on brand.tasks, brand_team_only column on brand.requests
+
 ### Pending
-- Phase 8: QA + full role testing
+- Phase 9: QA + full role testing
 
 ---
 
