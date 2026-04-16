@@ -1,5 +1,5 @@
 # Throttle — Technical Build Document
-**Version:** 5.0 | **Last Updated:** April 2026 (Phase 5)
+**Version:** 6.0 | **Last Updated:** April 2026 (Phase 6)
 **Purpose:** Technical reference for the Throttle brand team work OS.
 Feed this file when continuing development in a new session.
 
@@ -48,11 +48,12 @@ Feed this file when continuing development in a new session.
     │   │   ├── requests/approval/page.js
     │   │   ├── board/page.js
     │   │   ├── sprints/page.js
-    │   │   ├── dashboard/page.js     ← stub, Phase 6
+    │   │   ├── dashboard/page.js     ← manager dashboard: stats, deliverables, workload
     │   │   └── settings/page.js
     │   ├── components/
     │   │   ├── Layout.js             ← role-aware nav shell
     │   │   ├── TaskSidePanel.js      ← stage/priority/assignees/submit-for-review/approval
+    │   │   ├── TaskDrillModal.js     ← drill-down modal for dashboard summary cards
     │   │   ├── ProductSelector.js
     │   │   └── RequestStatusBadge.js
     │   └── lib/
@@ -145,6 +146,10 @@ Errors: `{ error: "message" }` with appropriate HTTP status.
 - `submitForReview` — assignee or admin/lead (attachment URL required)
 - `approveWork` — admin/lead (creates approval record, moves to done)
 - `rejectWork` — admin/lead (feedback required, moves back to in_progress)
+- `getDashboardStats` — admin/lead (summary card metrics for a sprint)
+- `getDeliverablesReport` — admin/lead (completed tasks with assignees for date range)
+- `getTeamWorkload` — admin/lead (per-person task distribution by stage/priority)
+- `getTasksInBucket` — admin/lead (drill-down task list for in_review/overdue/ext_blocked/abandoned/spillovers)
 
 ### Worker secrets (set via wrangler secret put — never in files)
 - SUPABASE_SERVICE_ROLE_KEY
@@ -213,6 +218,12 @@ NEXT_PUBLIC_WORKER_URL=https://throttleops.afshaan.workers.dev
 | Review indicator on board | Cyan badge shows in_review count | Admin/lead only. Disappears when queue is empty. |
 | getNextThursday fix | `day < 4` condition (was `day <= 4`) | Old code included Wednesday in the "before Thursday" branch, returning next day (Thursday) correctly — but when day=3 (Wed), `4-3=1` added to today gave tomorrow. Actually the bug was `day <= 4` caused Sunday (0), Monday (1), Tuesday (2), Wednesday (3), **Thursday (4)** to all use the formula — Thursday got `4-4=0` added, returning today. Fixed: explicit `if (day === 4) return d` for Thursday, then formula for all other days. |
 | THROTTLE_BUILD.md moved into repo | Now at `05_Throttle/THROTTLE_BUILD.md` | Was at `Documents/Claude/THROTTLE_BUILD.md` (office) only — not in git, not on home laptop. Moving into repo ensures it syncs automatically with the codebase. |
+| Dashboard Worker: no SQL JOINs | Separate PostgREST calls + client-side join | PostgREST cross-table JOINs via `select=*,task_assignees(*)` require FK relationships exposed in the brand schema. Safer to fetch tasks, then assignees, then users in separate calls. Stays within 50-subrequest limit for typical sprint sizes. |
+| Deliverables date: IST timezone | `completed_at` with `+05:30` offset in PostgREST filter, `toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })` in Worker | All LOT users are in IST. A task completed at 11:30 PM IST should count for that day, not the next UTC day. |
+| Dashboard: all components inline in page.js | StatCard, ByDateTable, ByPersonTable, WorkloadGrid, SprintSelector, DateRangePicker, ExportButton all in one file | 6.7 kB compiled. Below the threshold where extraction helps. TaskDrillModal extracted to its own file because it's a reusable modal pattern. |
+| Completion rate: not clickable | StatCard with `bucket=null` | Completion rate is a calculated percentage, not a filterable task list. No drill-down makes sense. |
+| Workload overload threshold: >8 tasks | Orange highlight on total column | Rough heuristic for 7-day sprint. Adjustable later based on real usage data. |
+| ByPerson view: collapsible groups | Default all expanded, click to collapse | At 3–5 team members, all-expanded is manageable. Collapse helps when viewing across multiple sprints with many people. |
 
 ---
 
@@ -268,8 +279,22 @@ NEXT_PUBLIC_WORKER_URL=https://throttleops.afshaan.workers.dev
 - [x] getNextThursday bug fixed
 - [x] THROTTLE_BUILD.md moved into repo (this file)
 
+### Phase 6 — Manager Dashboard + Deliverables Reporting ✅
+- [x] Worker: getDashboardStats — sprint summary metrics (in_review, overdue, ext_blocked, completion rate, spillovers)
+- [x] Worker: getDeliverablesReport — completed tasks with assignees for date range, IST timezone-aware
+- [x] Worker: getTeamWorkload — per-person task distribution by stage and priority
+- [x] Worker: getTasksInBucket — drill-down task list for summary card buckets
+- [x] `/dashboard/` page with admin+lead role guard, access-denied for other roles
+- [x] Summary cards (5): in_review, overdue, ext_blocked, completion rate, spillovers — clickable drill-down
+- [x] Deliverables Output table: By Date and By Person pivot views
+- [x] Date range picker (defaults to sprint dates, independently adjustable)
+- [x] Sprint selector — switches all three data sections
+- [x] CSV export for both deliverable views
+- [x] Team Workload grid — per-person stage breakdown with amber/orange/green visual cues
+- [x] TaskDrillModal — read-only drill-down modal with priority/stage badges and assignees
+- [x] Layout: Dashboard nav link visible to admin + lead (was admin only)
+
 ### Pending
-- Phase 6: Manager dashboard + deliverables reporting table
 - Phase 7: Polish + QA + full role testing
 
 ---
@@ -295,7 +320,7 @@ NEXT_PUBLIC_WORKER_URL=https://throttleops.afshaan.workers.dev
 2. Team member Slack IDs — needed for DM notifications (future phase). Store in brand.users.slack_id via Settings UI.
 3. ProductSelector list will need refresh if new products are added to LOT, or swap to a dynamic fetch from public.product_master.
 4. `increment_spillover_count` RPC — if any sprint regularly has 20+ spillovers, the per-task PATCH loop will approach the 50-subrequest cap. Add `brand.increment_spillover_count(task_ids uuid[])` RPC.
-5. Closed-sprint history + health view — health_score JSONB written on close, no UI yet. Phase 6 dashboard.
+5. ~~Closed-sprint history + health view~~ ✅ Done — Phase 6 dashboard. Sprint selector lets admin view any sprint's stats, deliverables, and workload.
 6. File uploads — only URL links supported for deliverables. Supabase Storage bucket for direct file upload deferred.
 7. Slack DMs per user — current notifications go to channels. Future: use brand.users.slack_id for direct DMs to specific assignees.
 8. FullCalendar — installed but unused. Sprint timeline uses custom 7-col grid. Upgrade to FullCalendar when month/quarter range views are needed.
