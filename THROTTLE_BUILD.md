@@ -1,5 +1,5 @@
 # Throttle — Technical Build Document
-**Version:** 9.0 | **Last Updated:** April 2026 (Phase 9)
+**Version:** 10.0 | **Last Updated:** April 2026 (Phase 10)
 **Purpose:** Technical reference for the Throttle brand team work OS.
 Feed this file when continuing development in a new session.
 
@@ -154,7 +154,9 @@ Errors: `{ error: "message" }` with appropriate HTTP status.
 - `updateRequest` — requester only (resubmit info_needed request, resets to pending)
 - `getTaskActivity` — any assigned user or admin/lead (chronological activity log with user names)
 - `addComment` — any assigned user or admin/lead (inserts comment into activity_log)
-- `getTeamMembers` — admin/lead (list of members + leads for person filter)
+- `getTeamMembers` — member/lead/admin (list of members + leads for person filter)
+- `updateTaskMeta` — admin/lead (edit task title and/or due date, logs to activity)
+- `getProducts` — any authenticated user (fetches active products from public.product_master)
 
 ### Worker secrets (set via wrangler secret put — never in files)
 - SUPABASE_SERVICE_ROLE_KEY
@@ -250,6 +252,12 @@ NEXT_PUBLIC_WORKER_URL=https://throttleops.afshaan.workers.dev
 | Person filter: server-side on dashboard stats | `getDashboardStats` and `getTasksInBucket` accept optional `personId` | Dashboard stats need accurate counts from the task set. Filtering after aggregation would give wrong numbers. |
 | Person filter: deliverables filtered client-side | Dashboard filters `deliverables.filter(r => r.assignee_id === selectedPerson)` | Deliverables rows already include assignee_id. No need for a new Worker call. |
 | Suspense boundary for useSearchParams | Required by Next.js 14 static export | `useSearchParams()` triggers client-side rendering bailout. Wrapping in Suspense satisfies the requirement for static export. |
+| Sprint name in side panel: fetch on open | `supabase.from('sprints').select('name').eq('id', task.sprint_id).single()` | Side panel doesn't have sprints array in scope. Single query per panel open is acceptable — not a hot path. |
+| Editable title: click to edit pattern | Inline `<input>` replaces static text on click, Enter saves, Escape cancels | Avoids modal overhead. Dashed underline signals editability for admin/lead. |
+| Spillover RPC replaces per-task loop | `brand.increment_spillover_count(task_ids uuid[])` | Single UPDATE with `ANY(task_ids)` — eliminates N subrequests. Critical for sprints with >30 spillovers approaching the 50-subrequest limit. |
+| ProductSelector: dynamic fetch | Worker `getProducts` queries `public.product_master` with Accept-Profile: public | No more hardcoded list. New LOT products immediately available. Worker uses public schema headers to cross brand→public boundary. |
+| ProductSelector: object data model | `{ product_code, product_name, notes, is_custom }` instead of string array | Supports both DB products and custom text entries. `is_custom` flag distinguishes for storage (product_id = null for custom). |
+| Person filter for members | `getTeamMembers` allows member role, filter visible to all non-requesters | Cross-team visibility — members can see who's working on what, filter to specific colleagues. |
 
 ---
 
@@ -377,8 +385,25 @@ NEXT_PUBLIC_WORKER_URL=https://throttleops.afshaan.workers.dev
 - [x] Dashboard: stats re-fetch with personId, deliverables filtered client-side, workload row highlighted
 - [x] TaskDrillModal: accepts personId for filtered drill-down
 
+### Phase 10 — Quick Wins + Data Fixes + Cross-Team Visibility ✅
+- [x] Fix 1: Sprint name resolved in TaskSidePanel (was showing raw UUID)
+- [x] Fix 2: Task title inline-editable by admin/lead (click to edit, Enter saves, Escape cancels)
+- [x] Fix 2: Due date inline-editable by admin/lead (click opens date picker)
+- [x] Fix 2: Worker: `updateTaskMeta` action with activity logging
+- [x] Fix 3: REV badge on board task cards where `is_revision = true`
+- [x] Fix 3: Revision indicator in TaskSidePanel Details section
+- [x] Fix 4: Person filter visible to member role (was admin/lead only)
+- [x] Fix 4: `getTeamMembers` allows member role
+- [x] Fix 5: `brand.increment_spillover_count` RPC — manual SQL
+- [x] Fix 5: Worker sprint close uses RPC instead of per-task PATCH loop
+- [x] Fix 6: ProductSelector fetches live from `public.product_master` (no hardcoded list)
+- [x] Fix 6: Custom product text entry — stored with `is_custom` flag, `product_id = null`
+- [x] Fix 6: Worker: `getProducts` action — queries public schema with correct headers
+- [x] requests/new: product selection refactored from string array to object array `{ product_code, product_name, notes }`
+- [x] Cross-team visibility RLS — manual SQL (brand_team_read_all_tasks policy)
+
 ### Pending
-- Phase 10: QA + full role testing
+- Phase 11: QA + full role testing
 
 ---
 
