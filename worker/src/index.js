@@ -234,6 +234,7 @@ export default {
       case 'getTeamMembers':      return handleGetTeamMembers(body, ctx, env);
       case 'updateTaskMeta':     return handleUpdateTaskMeta(body, ctx, env);
       case 'getProducts':        return handleGetProducts(body, ctx, env);
+      case 'migrateOwners':     return handleMigrateOwners(body, ctx, env);
       default:
         return err(`Unknown action: ${action}`, 404);
     }
@@ -685,79 +686,117 @@ async function handleUpdateTaskPriority(body, ctx, env) {
 }
 
 async function handleAssignTask(body, ctx, env) {
-  const { task_id, user_ids, remove_self } = body;
-  if (!task_id) return err('task_id is required');
+  const { taskId, userId, action: assignAction } = body;
+  // Also support legacy field names for backward compat during deploy
+  const tId = taskId || body.task_id;
+  const act = assignAction || null;
 
-  // Members: can only assign/unassign themselves
-  if (ctx.role === 'member') {
-    if (remove_self) {
-      // Remove only the member's own row
-      await sbFetch(`task_assignees?task_id=eq.${task_id}&user_id=eq.${ctx.userId}`, {
-        method: 'DELETE',
-        prefer: 'return=minimal',
-      }, env);
-      await logActivity(task_id, ctx.userId, 'assignment', { unassigned: ctx.userId }, env);
-      return json({ ok: true });
-    }
-    if (!user_ids?.length || user_ids.length !== 1 || user_ids[0] !== ctx.userId) {
-      console.log(`[assignTask:member] guard failed: user_ids=${JSON.stringify(user_ids)}, ctx.userId=${ctx.userId}`);
-      return err('Members can only assign themselves', 403);
-    }
-    // Add themselves without removing others (ignore if already assigned)
-    const insertRes = await sbFetch('task_assignees', {
+  if (!tId || !act) return err('taskId and action are required');
+
+  // ── SELF ASSIGN AS OWNER ──────────────────────────────────────────────────
+  if (act === 'self_assign_owner') {
+    // Check if task already has an owner
+    const ownerRes = await sbFetch(`task_assignees?task_id=eq.${tId}&is_owner=eq.true&select=id`, { method: 'GET' }, env);
+    const owners = ownerRes.ok ? await ownerRes.json() : [];
+    if (owners.length > 0) return err('Task already has an owner. Only admin or lead can reassign.', 403);
+
+    // Remove any existing non-owner entry for this user
+    await sbFetch(`task_assignees?task_id=eq.${tId}&user_id=eq.${ctx.userId}`, { method: 'DELETE', prefer: 'return=minimal' }, env);
+
+    await sbFetch('task_assignees', {
       method: 'POST',
-      body: JSON.stringify([{ task_id, user_id: ctx.userId, assigned_by: ctx.userId }]),
-      prefer: 'return=minimal,resolution=ignore-duplicates',
+      body: JSON.stringify([{ task_id: tId, user_id: ctx.userId, is_owner: true, assigned_by: ctx.userId }]),
+      prefer: 'return=minimal',
     }, env);
-    if (!insertRes.ok) {
-      const errBody = await insertRes.text();
-      console.log(`[assignTask:member] insert failed: ${insertRes.status} ${errBody}`);
-      return err('Failed to assign task');
-    }
-    await logActivity(task_id, ctx.userId, 'assignment', { assigned_to: [ctx.userId] }, env);
-    await slackTeam(`📌 *Self-assigned*\n${ctx.brandUser.name} picked up task "${task_id}"`, env);
+
+    await logActivity(tId, ctx.userId, 'assignment', { assignee_id: ctx.userId, role: 'owner', action: 'self_assigned_owner' }, env);
     return json({ ok: true });
   }
 
-  // Admin/lead: full replace
-  const g = requireRole(ctx, 'admin', 'lead'); if (g) return g;
-  if (!user_ids?.length) return err('user_ids are required');
+  // ── SELF ADD AS COLLABORATOR ──────────────────────────────────────────────
+  if (act === 'self_add_collaborator') {
+    const existRes = await sbFetch(`task_assignees?task_id=eq.${tId}&user_id=eq.${ctx.userId}&select=id`, { method: 'GET' }, env);
+    const existing = existRes.ok ? await existRes.json() : [];
+    if (existing.length > 0) return err('You are already assigned to this task', 400);
 
-  // Delete existing assignees
-  await sbFetch(`task_assignees?task_id=eq.${task_id}`, {
-    method: 'DELETE',
-    prefer: 'return=minimal',
-  }, env);
+    await sbFetch('task_assignees', {
+      method: 'POST',
+      body: JSON.stringify([{ task_id: tId, user_id: ctx.userId, is_owner: false, assigned_by: ctx.userId }]),
+      prefer: 'return=minimal',
+    }, env);
 
-  // Insert new assignees
-  const rows = user_ids.map(uid => ({
-    task_id,
-    user_id: uid,
-    assigned_by: ctx.userId,
-  }));
+    await logActivity(tId, ctx.userId, 'assignment', { assignee_id: ctx.userId, role: 'collaborator', action: 'self_added_collaborator' }, env);
+    return json({ ok: true });
+  }
 
-  const insertRes = await sbFetch('task_assignees', {
-    method: 'POST',
-    body: JSON.stringify(rows),
-    prefer: 'return=minimal',
-  }, env);
+  // ── REMOVE SELF ───────────────────────────────────────────────────────────
+  if (act === 'remove_self') {
+    await sbFetch(`task_assignees?task_id=eq.${tId}&user_id=eq.${ctx.userId}`, { method: 'DELETE', prefer: 'return=minimal' }, env);
+    await logActivity(tId, ctx.userId, 'assignment', { assignee_id: ctx.userId, action: 'removed_self' }, env);
+    return json({ ok: true });
+  }
 
-  if (!insertRes.ok) return err('Failed to assign task');
+  // ── ADD COLLABORATOR (any user) — member, lead, admin ─────────────────────
+  if (act === 'add_collaborator') {
+    if (!userId) return err('userId is required');
+    const existRes = await sbFetch(`task_assignees?task_id=eq.${tId}&user_id=eq.${userId}&select=id`, { method: 'GET' }, env);
+    const existing = existRes.ok ? await existRes.json() : [];
+    if (existing.length > 0) return err('User already assigned to this task', 400);
 
-  await logActivity(task_id, ctx.userId, 'assignment', {
-    assigned_to: user_ids,
-  }, env);
+    // Fetch assignee name
+    const nameRes = await sbFetch(`users?id=eq.${userId}&select=name`, { method: 'GET' }, env);
+    const nameRows = nameRes.ok ? await nameRes.json() : [];
+    const assigneeName = nameRows[0]?.name || 'Unknown';
 
-  // Fetch assignee names for the notification
-  const assigneeRes = await sbFetch(
-    `users?id=in.(${user_ids.join(',')})&select=name`,
-    { method: 'GET' }, env
-  );
-  const assignees = assigneeRes.ok ? await assigneeRes.json() : [];
-  const names = assignees.map(a => a.name).join(', ');
-  await slackTeam(`📌 *Task assigned*\n*"${task_id}"* assigned to: ${names}\nBy: ${ctx.brandUser.name}`, env);
+    await sbFetch('task_assignees', {
+      method: 'POST',
+      body: JSON.stringify([{ task_id: tId, user_id: userId, is_owner: false, assigned_by: ctx.userId }]),
+      prefer: 'return=minimal',
+    }, env);
 
-  return json({ ok: true });
+    await logActivity(tId, ctx.userId, 'assignment', { assignee_id: userId, assignee_name: assigneeName, role: 'collaborator', action: 'added_collaborator' }, env);
+    return json({ ok: true });
+  }
+
+  // ── SET OWNER — admin/lead only ───────────────────────────────────────────
+  if (act === 'set_owner') {
+    const g = requireRole(ctx, 'admin', 'lead'); if (g) return g;
+    if (!userId) return err('userId is required');
+
+    const nameRes = await sbFetch(`users?id=eq.${userId}&select=name`, { method: 'GET' }, env);
+    const nameRows = nameRes.ok ? await nameRes.json() : [];
+    const assigneeName = nameRows[0]?.name || 'Unknown';
+
+    // Remove existing owner
+    await sbFetch(`task_assignees?task_id=eq.${tId}&is_owner=eq.true`, { method: 'DELETE', prefer: 'return=minimal' }, env);
+    // Remove this user's collaborator entry if present
+    await sbFetch(`task_assignees?task_id=eq.${tId}&user_id=eq.${userId}`, { method: 'DELETE', prefer: 'return=minimal' }, env);
+
+    await sbFetch('task_assignees', {
+      method: 'POST',
+      body: JSON.stringify([{ task_id: tId, user_id: userId, is_owner: true, assigned_by: ctx.userId }]),
+      prefer: 'return=minimal',
+    }, env);
+
+    await logActivity(tId, ctx.userId, 'assignment', { assignee_id: userId, assignee_name: assigneeName, role: 'owner', action: 'set_owner' }, env);
+    await slackTeam(`📋 *${assigneeName}* assigned as owner of a task by ${ctx.brandUser.name}`, env);
+    return json({ ok: true });
+  }
+
+  // ── REMOVE ASSIGNEE — admin/lead only ────────────────────────────────────
+  if (act === 'remove_assignee') {
+    const g = requireRole(ctx, 'admin', 'lead'); if (g) return g;
+    if (!userId) return err('userId is required');
+
+    const nameRes = await sbFetch(`users?id=eq.${userId}&select=name`, { method: 'GET' }, env);
+    const nameRows = nameRes.ok ? await nameRes.json() : [];
+
+    await sbFetch(`task_assignees?task_id=eq.${tId}&user_id=eq.${userId}`, { method: 'DELETE', prefer: 'return=minimal' }, env);
+    await logActivity(tId, ctx.userId, 'assignment', { assignee_id: userId, assignee_name: nameRows[0]?.name || 'Unknown', action: 'removed_by_admin' }, env);
+    return json({ ok: true });
+  }
+
+  return err('Invalid assignment action', 400);
 }
 
 async function handleAbandonTask(body, ctx, env) {
@@ -1271,6 +1310,41 @@ async function handleGetTeamMembers(body, ctx, env) {
   return json({ members });
 }
 
+// ── Phase 11a: Migration ─────────────────────────────────────────────────────
+
+async function handleMigrateOwners(body, ctx, env) {
+  const g = requireRole(ctx, 'admin'); if (g) return g;
+
+  // Fetch all task_assignees
+  const res = await sbFetch('task_assignees?select=task_id,user_id,is_owner', { method: 'GET' }, env);
+  const allRows = res.ok ? await res.json() : [];
+
+  // Group by task_id
+  const taskMap = {};
+  for (const row of allRows) {
+    if (!taskMap[row.task_id]) taskMap[row.task_id] = [];
+    taskMap[row.task_id].push(row);
+  }
+
+  let migrated = 0;
+  for (const [taskId, assignees] of Object.entries(taskMap)) {
+    // Skip if already has an owner
+    if (assignees.some(a => a.is_owner)) continue;
+
+    // Promote first assignee to owner
+    if (assignees.length > 0) {
+      await sbFetch(`task_assignees?task_id=eq.${taskId}&user_id=eq.${assignees[0].user_id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ is_owner: true }),
+        prefer: 'return=minimal',
+      }, env);
+      migrated++;
+    }
+  }
+
+  return json({ ok: true, migrated, total_tasks: Object.keys(taskMap).length });
+}
+
 // ── Phase 10: Task meta edit + Products ──────────────────────────────────────
 
 async function handleUpdateTaskMeta(body, ctx, env) {
@@ -1427,15 +1501,14 @@ async function handleGetDeliverablesReport(body, ctx, env) {
     return json({ rows: [], startDate, endDate });
   }
 
-  // Fetch assignees for these tasks
+  // Fetch assignees for these tasks (include is_owner)
   const taskIds = tasks.map(t => t.id);
-  // Batch in groups of 40 to stay within subrequest limits
   let allAssignees = [];
   for (let i = 0; i < taskIds.length; i += 40) {
     const batch = taskIds.slice(i, i + 40);
     const inFilter = `(${batch.join(',')})`;
     const assigneeRes = await sbFetch(
-      `task_assignees?task_id=in.${inFilter}&select=task_id,user_id`,
+      `task_assignees?task_id=in.${inFilter}&select=task_id,user_id,is_owner`,
       { method: 'GET' }, env
     );
     if (assigneeRes.ok) {
@@ -1456,47 +1529,51 @@ async function handleGetDeliverablesReport(body, ctx, env) {
     users.forEach(u => { usersMap[u.id] = u; });
   }
 
-  // Build rows: one per task per assignee
+  // Build rows: owner only gets credit (one row per task)
   const rows = [];
+  const collaborations = [];
+
   for (const task of tasks) {
     const taskAssignees = allAssignees.filter(a => a.task_id === task.id);
-    // Convert completed_at to IST date
     const completedDate = new Date(task.completed_at).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const owner = taskAssignees.find(a => a.is_owner);
+    const collabs = taskAssignees.filter(a => !a.is_owner);
 
-    if (taskAssignees.length === 0) {
-      // Task with no assignees — still show it
+    // Owner row (or unassigned if no owner)
+    if (owner) {
+      const user = usersMap[owner.user_id] || {};
       rows.push({
-        id: task.id,
-        title: task.title,
-        deliverable_type: task.deliverable_type,
-        completed_date: completedDate,
-        assignee_id: null,
-        assignee_name: 'Unassigned',
-        discipline: null,
+        id: task.id, title: task.title, deliverable_type: task.deliverable_type,
+        completed_date: completedDate, assignee_id: owner.user_id,
+        assignee_name: user.name || 'Unknown', discipline: user.discipline || null,
       });
     } else {
-      for (const ta of taskAssignees) {
-        const user = usersMap[ta.user_id] || {};
-        rows.push({
-          id: task.id,
-          title: task.title,
-          deliverable_type: task.deliverable_type,
-          completed_date: completedDate,
-          assignee_id: ta.user_id,
-          assignee_name: user.name || 'Unknown',
-          discipline: user.discipline || null,
-        });
-      }
+      rows.push({
+        id: task.id, title: task.title, deliverable_type: task.deliverable_type,
+        completed_date: completedDate, assignee_id: null,
+        assignee_name: 'Unassigned', discipline: null,
+      });
+    }
+
+    // Collaborator footnote data
+    if (collabs.length > 0) {
+      collaborations.push({
+        id: task.id, title: task.title, deliverable_type: task.deliverable_type,
+        completed_date: completedDate,
+        collaborators: collabs.map(c => {
+          const u = usersMap[c.user_id] || {};
+          return { user_id: c.user_id, name: u.name || 'Unknown', discipline: u.discipline || null };
+        }),
+      });
     }
   }
 
-  // Sort by completed_date desc, then assignee_name asc
   rows.sort((a, b) => {
     if (a.completed_date !== b.completed_date) return b.completed_date.localeCompare(a.completed_date);
     return (a.assignee_name || '').localeCompare(b.assignee_name || '');
   });
 
-  return json({ rows, startDate, endDate });
+  return json({ rows, collaborations, startDate, endDate });
 }
 
 async function handleGetTeamWorkload(body, ctx, env) {
@@ -1539,7 +1616,7 @@ async function handleGetTeamWorkload(body, ctx, env) {
     const batch = taskIds.slice(i, i + 40);
     const inFilter = `(${batch.join(',')})`;
     const assigneeRes = await sbFetch(
-      `task_assignees?task_id=in.${inFilter}&select=task_id,user_id`,
+      `task_assignees?task_id=in.${inFilter}&select=task_id,user_id,is_owner`,
       { method: 'GET' }, env
     );
     if (assigneeRes.ok) {
@@ -1665,7 +1742,7 @@ async function handleGetTasksInBucket(body, ctx, env) {
       const batch = taskIds.slice(i, i + 40);
       const inFilter = `(${batch.join(',')})`;
       const assigneeRes = await sbFetch(
-        `task_assignees?task_id=in.${inFilter}&select=task_id,user_id`,
+        `task_assignees?task_id=in.${inFilter}&select=task_id,user_id,is_owner`,
         { method: 'GET' }, env
       );
       if (assigneeRes.ok) {
@@ -1690,7 +1767,7 @@ async function handleGetTasksInBucket(body, ctx, env) {
     for (const task of tasks) {
       task.assignees = allAssignees
         .filter(a => a.task_id === task.id)
-        .map(a => ({ id: a.user_id, name: (usersMap[a.user_id] || {}).name || 'Unknown' }));
+        .map(a => ({ id: a.user_id, name: (usersMap[a.user_id] || {}).name || 'Unknown', is_owner: a.is_owner || false }));
     }
   }
 
