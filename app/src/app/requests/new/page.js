@@ -62,9 +62,13 @@ function NewRequestContent() {
     setTitle(req.title);
     setIsProductScoped(req.is_product_scoped);
 
-    // Restore products
+    // Restore products as objects
     if (req.is_product_scoped && req.request_products?.length > 0) {
-      const prods = req.request_products.map(rp => rp.product_code);
+      const prods = req.request_products.map(rp => ({
+        product_code: rp.product_code,
+        product_name: rp.product_code, // best we have from the stored data
+        notes: '',
+      }));
       setSelectedProducts(prods);
       const notes = {};
       req.request_products.forEach(rp => {
@@ -215,7 +219,12 @@ function NewRequestContent() {
           template_data: templateData,
           is_product_scoped: isProductScoped,
           products: isProductScoped
-            ? selectedProducts.map(p => ({ product_name: p, notes: productNotes[p] || '' }))
+            ? selectedProducts.map(p => ({
+                product_name: p.product_name,
+                product_code: p.is_custom ? null : p.product_code,
+                notes: p.notes || productNotes[p.product_code] || '',
+                is_custom: p.is_custom || false,
+              }))
             : [],
         }, session?.access_token);
       }
@@ -350,11 +359,11 @@ function NewRequestContent() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
                   <p style={sectionLabelStyle}>Add notes per product (optional)</p>
                   {selectedProducts.map(product => (
-                    <div key={product}>
-                      <label style={fieldLabelStyle}>{product}</label>
+                    <div key={product.product_code}>
+                      <label style={fieldLabelStyle}>{product.product_name}</label>
                       <InputField
-                        value={productNotes[product] || ''}
-                        onChange={e => setProductNotes(prev => ({ ...prev, [product]: e.target.value }))}
+                        value={productNotes[product.product_code] || ''}
+                        onChange={e => setProductNotes(prev => ({ ...prev, [product.product_code]: e.target.value }))}
                         placeholder="Any specific notes for this product..."
                       />
                     </div>
@@ -572,14 +581,14 @@ function NewRequestContent() {
               <p style={sectionLabelStyle}>Products</p>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 {selectedProducts.map(p => (
-                  <span key={p} style={{
+                  <span key={p.product_code} style={{
                     background: 'var(--s3)',
                     borderRadius: 4,
                     padding: '3px 8px',
                     fontFamily: 'var(--mono)',
                     fontSize: 11,
                     color: 'var(--t2)',
-                  }}>{p}</span>
+                  }}>{p.is_custom ? `✦ ${p.product_name}` : p.product_name}</span>
                 ))}
               </div>
             </div>
@@ -610,7 +619,7 @@ function NewRequestContent() {
           {selectedType.id === 'photo_video_new' && (
             <div>
               <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: '#F2CD1A', margin: 0 }}>
-                This will create {formData.edit_required === 'Yes' ? '2 tasks: Shoot + Edit' : '1 task: Shoot'}{isProductScoped && selectedProducts.length > 1 ? ` per product (${selectedProducts.length} products)` : ''}
+                This will create {formData.edit_required === 'Yes' ? '2 tasks: Shoot + Edit' : '1 task: Shoot'}{isProductScoped && (selectedProducts || []).length > 1 ? ` per product (${selectedProducts.length} products)` : ''}
               </p>
             </div>
           )}

@@ -22,6 +22,7 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
   const [abandonReason, setAbandonReason] = useState('');
   const [showAbandon, setShowAbandon] = useState(false);
   const [activity, setActivity] = useState([]);
+  const [sprintName, setSprintName] = useState('—');
 
   const isAdminLead = ['admin', 'lead'].includes(brandUser?.role);
   const validTransitions = getValidTransitions(task.stage, brandUser?.role);
@@ -32,6 +33,12 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
     loadAssignees();
     loadActivity();
     if (isAdminLead) loadTeamMembers();
+    if (task.sprint_id) {
+      supabase.from('sprints').select('name').eq('id', task.sprint_id).single()
+        .then(({ data }) => setSprintName(data?.name || '—'));
+    } else {
+      setSprintName('—');
+    }
   }, [task.id]);
 
   async function loadActivity() {
@@ -185,7 +192,7 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
                 </span>
               )}
             </div>
-            <h2 style={{ fontFamily: 'var(--mono)', fontSize: 14, fontWeight: 600, color: 'var(--text)', lineHeight: 1.3 }}>{task.title}</h2>
+            <EditableTitle task={task} brandUser={brandUser} session={session} onUpdate={onUpdate} />
             {task.product_code && (
               <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginTop: 4 }}>Product: {task.product_code}</p>
             )}
@@ -326,9 +333,18 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <DetailRow label="Type" value={task.type?.replace(/_/g, ' ')} />
               <DetailRow label="Deliverable" value={DELIVERABLE_TYPES.find(d => d.value === task.deliverable_type)?.label || task.deliverable_type} />
-              {task.due_date && <DetailRow label="Due" value={new Date(task.due_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })} />}
-              {task.sprint_id && <DetailRow label="Sprint" value={task.sprint_id.slice(0, 8) + '...'} />}
+              <div style={{ display: 'flex', gap: 12 }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', width: 80, flexShrink: 0 }}>Due</span>
+                <EditableDueDate task={task} brandUser={brandUser} session={session} onUpdate={onUpdate} />
+              </div>
+              {task.sprint_id && <DetailRow label="Sprint" value={sprintName} />}
               {task.spillover_count > 0 && <DetailRow label="Spillovers" value={String(task.spillover_count)} />}
+              {task.is_revision && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--b1)' }}>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>Work Type</span>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--amber)', background: 'rgba(245,158,11,0.1)', padding: '1px 8px', borderRadius: 3 }}>Revision</span>
+                </div>
+              )}
             </div>
           </Section>
 
@@ -407,6 +423,86 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
         </div>
       </div>
     </>
+  );
+}
+
+function EditableTitle({ task, brandUser, session, onUpdate }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(task.title);
+  const canEdit = ['admin', 'lead'].includes(brandUser?.role);
+
+  useEffect(() => { setValue(task.title); }, [task.title]);
+
+  const handleSave = async () => {
+    if (value.trim() === task.title) { setEditing(false); return; }
+    try {
+      await workerFetch('updateTaskMeta', { taskId: task.id, title: value.trim() }, session?.access_token);
+      onUpdate({ ...task, title: value.trim() });
+    } catch (e) { console.error(e); }
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <input
+          autoFocus
+          value={value}
+          onChange={e => setValue(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') { setValue(task.title); setEditing(false); } }}
+          style={{ background: 'var(--s2)', border: '1px solid #F2CD1A', borderRadius: 4, padding: '6px 10px', color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 14, fontWeight: 600, outline: 'none', width: '100%' }}
+        />
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={handleSave} style={{ background: '#F2CD1A', color: '#080808', border: 'none', borderRadius: 4, padding: '4px 12px', fontFamily: 'var(--head)', fontSize: 10, fontWeight: 700, letterSpacing: '.15em', textTransform: 'uppercase', cursor: 'pointer' }}>Save</button>
+          <button onClick={() => { setValue(task.title); setEditing(false); }} style={{ background: 'var(--s3)', color: 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 12px', fontFamily: 'var(--mono)', fontSize: 10, cursor: 'pointer' }}>Cancel</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      onClick={canEdit ? () => setEditing(true) : undefined}
+      style={{ fontFamily: 'var(--mono)', fontSize: 14, fontWeight: 600, color: 'var(--text)', lineHeight: 1.4, cursor: canEdit ? 'text' : 'default', borderBottom: canEdit ? '1px dashed var(--b2)' : 'none', paddingBottom: canEdit ? 2 : 0 }}
+      title={canEdit ? 'Click to edit' : undefined}
+    >
+      {task.title}
+    </div>
+  );
+}
+
+function EditableDueDate({ task, brandUser, session, onUpdate }) {
+  const canEdit = ['admin', 'lead'].includes(brandUser?.role);
+  const [editing, setEditing] = useState(false);
+
+  const handleChange = async (e) => {
+    const newDate = e.target.value || null;
+    try {
+      await workerFetch('updateTaskMeta', { taskId: task.id, dueDate: newDate }, session?.access_token);
+      onUpdate({ ...task, due_date: newDate });
+    } catch (err) { console.error(err); }
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <input type="date" defaultValue={task.due_date || ''} onChange={handleChange} onBlur={() => setEditing(false)} autoFocus
+        style={{ background: 'var(--s2)', border: '1px solid #F2CD1A', borderRadius: 4, padding: '3px 8px', color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 12, outline: 'none' }}
+      />
+    );
+  }
+
+  const display = task.due_date
+    ? new Date(task.due_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+    : '—';
+
+  return (
+    <span onClick={canEdit ? () => setEditing(true) : undefined}
+      style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)', cursor: canEdit ? 'pointer' : 'default', borderBottom: canEdit ? '1px dashed var(--b2)' : 'none' }}
+      title={canEdit ? 'Click to edit' : undefined}
+    >
+      {display}
+    </span>
   );
 }
 

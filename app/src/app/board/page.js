@@ -42,9 +42,10 @@ function TaskCard({ task, onClick, isDragging }) {
         <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', letterSpacing: '.08em' }}>
           {task.type}
         </span>
-        <div style={{ display: 'flex', gap: 4 }}>
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
           {task.is_spillover && <span style={{ fontSize: 10, color: 'var(--amber)' }}>↩</span>}
           {task.stage === 'ext_blocked' && <span style={{ fontSize: 10, color: 'var(--amber)' }}>⚠</span>}
+          {task.is_revision && <span style={{ fontFamily: 'var(--mono)', fontSize: 8, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--t3)', background: 'var(--s3)', padding: '1px 5px', borderRadius: 3 }}>REV</span>}
         </div>
       </div>
 
@@ -358,12 +359,12 @@ export default function BoardPage() {
   }, [brandUser]);
 
   useEffect(() => {
-    if (isAdminLead && session) {
+    if (brandUser?.role !== 'requester' && session) {
       workerFetch('getTeamMembers', {}, session?.access_token)
         .then(data => setTeamMembers(data.members || []))
         .catch(() => {});
     }
-  }, [isAdminLead, session]);
+  }, [brandUser, session]);
 
   async function loadTasks() {
     setLoading(true);
@@ -441,7 +442,7 @@ export default function BoardPage() {
             )}
 
             {/* Person filter */}
-            {isAdminLead && teamMembers.length > 0 && (
+            {brandUser?.role !== 'requester' && teamMembers.length > 0 && (
               <PersonFilter members={teamMembers} selected={selectedPerson} onChange={setSelectedPerson} />
             )}
 
