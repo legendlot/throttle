@@ -228,6 +228,10 @@ export default {
       case 'getDeliverablesReport': return handleGetDeliverablesReport(body, ctx, env);
       case 'getTeamWorkload':     return handleGetTeamWorkload(body, ctx, env);
       case 'getTasksInBucket':    return handleGetTasksInBucket(body, ctx, env);
+      case 'updateRequest':       return handleUpdateRequest(body, ctx, env);
+      case 'getTaskActivity':     return handleGetTaskActivity(body, ctx, env);
+      case 'addComment':          return handleAddComment(body, ctx, env);
+      case 'getTeamMembers':      return handleGetTeamMembers(body, ctx, env);
       default:
         return err(`Unknown action: ${action}`, 404);
     }
@@ -1110,6 +1114,128 @@ async function handleRejectWork(body, ctx, env) {
 
   return json({ ok: true });
 }
+// ── Phase 9: Request Resubmit, Activity Feed, Person Filter ─────────────────
+
+async function handleUpdateRequest(body, ctx, env) {
+  const { requestId, templateData } = body;
+  if (!requestId) return err('requestId is required');
+
+  // Fetch the request
+  const fetchRes = await sbFetch(`requests?id=eq.${requestId}&select=*`, { method: 'GET' }, env);
+  if (!fetchRes.ok) return err('Request not found', 404);
+  const [req] = await fetchRes.json();
+  if (!req) return err('Request not found', 404);
+
+  // Only the requester can update
+  if (req.requester_id !== ctx.userId) return err('Forbidden', 403);
+
+  // Only info_needed requests can be updated
+  if (req.status !== 'info_needed') return err('Only info_needed requests can be updated', 400);
+
+  const updateRes = await sbFetch(`requests?id=eq.${requestId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      template_data: templateData,
+      status: 'pending',
+      review_note: null,
+      reviewer_id: null,
+      reviewed_at: null,
+      updated_at: new Date().toISOString(),
+    }),
+    prefer: 'return=minimal',
+  }, env);
+
+  if (!updateRes.ok) return err('Failed to update request');
+
+  await slackOps(`📋 *Request Updated* — "${req.title}" has been updated and is back in the approval queue.`, env);
+
+  return json({ ok: true });
+}
+
+async function handleGetTaskActivity(body, ctx, env) {
+  const { taskId } = body;
+  if (!taskId) return err('taskId is required');
+
+  // Members can only view activity on tasks they're assigned to
+  if (ctx.role === 'member') {
+    const assigneeRes = await sbFetch(
+      `task_assignees?task_id=eq.${taskId}&user_id=eq.${ctx.userId}&select=task_id`,
+      { method: 'GET' }, env
+    );
+    const rows = assigneeRes.ok ? await assigneeRes.json() : [];
+    if (!rows.length) return err('Forbidden', 403);
+  }
+
+  // Fetch activity log entries
+  const actRes = await sbFetch(
+    `activity_log?task_id=eq.${taskId}&select=*&order=created_at.asc`,
+    { method: 'GET' }, env
+  );
+  const activity = actRes.ok ? await actRes.json() : [];
+
+  // Fetch user names for all entries
+  const userIds = [...new Set(activity.map(a => a.user_id).filter(Boolean))];
+  let usersMap = {};
+  if (userIds.length > 0) {
+    const usersRes = await sbFetch(
+      `users?id=in.(${userIds.join(',')})&select=id,name,role`,
+      { method: 'GET' }, env
+    );
+    const users = usersRes.ok ? await usersRes.json() : [];
+    users.forEach(u => { usersMap[u.id] = u; });
+  }
+
+  // Attach user info
+  const enriched = activity.map(a => ({
+    ...a,
+    user: usersMap[a.user_id] || null,
+  }));
+
+  return json({ activity: enriched });
+}
+
+async function handleAddComment(body, ctx, env) {
+  const { taskId, comment } = body;
+  if (!taskId) return err('taskId is required');
+  if (!comment?.trim()) return err('Comment cannot be empty', 400);
+
+  // Members can only comment on tasks they're assigned to
+  if (ctx.role === 'member') {
+    const assigneeRes = await sbFetch(
+      `task_assignees?task_id=eq.${taskId}&user_id=eq.${ctx.userId}&select=task_id`,
+      { method: 'GET' }, env
+    );
+    const rows = assigneeRes.ok ? await assigneeRes.json() : [];
+    if (!rows.length) return err('Forbidden', 403);
+  }
+
+  const insertRes = await sbFetch('activity_log', {
+    method: 'POST',
+    body: JSON.stringify({
+      task_id: taskId,
+      user_id: ctx.userId,
+      event_type: 'comment',
+      payload: { comment: comment.trim() },
+    }),
+    prefer: 'return=minimal',
+  }, env);
+
+  if (!insertRes.ok) return err('Failed to add comment');
+
+  return json({ ok: true });
+}
+
+async function handleGetTeamMembers(body, ctx, env) {
+  const g = requireRole(ctx, 'admin', 'lead'); if (g) return g;
+
+  const res = await sbFetch(
+    `users?role=in.(member,lead)&select=id,name,discipline,role&order=name.asc`,
+    { method: 'GET' }, env
+  );
+  const members = res.ok ? await res.json() : [];
+  return json({ members });
+}
+
 // ── Phase 6: Dashboard + Reporting actions ───────────────────────────────────
 
 async function handleGetDashboardStats(body, ctx, env) {
@@ -1140,12 +1266,29 @@ async function handleGetDashboardStats(body, ctx, env) {
   const [sprint] = await sprintRes.json();
   if (!sprint) return err('Sprint not found');
 
+  // Optional person filter
+  const personId = body.personId;
+  let personTaskIds = null;
+  if (personId) {
+    const assignRes = await sbFetch(
+      `task_assignees?user_id=eq.${personId}&select=task_id`,
+      { method: 'GET' }, env
+    );
+    const assigns = assignRes.ok ? await assignRes.json() : [];
+    personTaskIds = new Set(assigns.map(a => a.task_id));
+  }
+
   // Fetch all tasks in sprint
   const tasksRes = await sbFetch(
     `tasks?sprint_id=eq.${sprintId}&select=id,stage,due_date,is_spillover`,
     { method: 'GET' }, env
   );
-  const tasks = tasksRes.ok ? await tasksRes.json() : [];
+  let tasks = tasksRes.ok ? await tasksRes.json() : [];
+
+  // Filter by person if specified
+  if (personTaskIds) {
+    tasks = tasks.filter(t => personTaskIds.has(t.id));
+  }
 
   const today = new Date().toISOString().split('T')[0];
 
@@ -1369,7 +1512,7 @@ async function handleGetTeamWorkload(body, ctx, env) {
 async function handleGetTasksInBucket(body, ctx, env) {
   const g = requireRole(ctx, 'admin', 'lead'); if (g) return g;
 
-  const { bucket, sprintId } = body;
+  const { bucket, sprintId, personId } = body;
   if (!bucket) return err('bucket is required');
 
   const validBuckets = ['in_review', 'overdue', 'ext_blocked', 'abandoned', 'spillovers'];
@@ -1416,7 +1559,18 @@ async function handleGetTasksInBucket(body, ctx, env) {
     `tasks?${filter}&select=id,title,type,deliverable_type,stage,priority,due_date,blocked_reason`,
     { method: 'GET' }, env
   );
-  const tasks = tasksRes.ok ? await tasksRes.json() : [];
+  let tasks = tasksRes.ok ? await tasksRes.json() : [];
+
+  // Optional person filter
+  if (personId && tasks.length > 0) {
+    const personAssignRes = await sbFetch(
+      `task_assignees?user_id=eq.${personId}&select=task_id`,
+      { method: 'GET' }, env
+    );
+    const personAssigns = personAssignRes.ok ? await personAssignRes.json() : [];
+    const personTaskIds = new Set(personAssigns.map(a => a.task_id));
+    tasks = tasks.filter(t => personTaskIds.has(t.id));
+  }
 
   // Fetch assignees for these tasks
   if (tasks.length > 0) {
