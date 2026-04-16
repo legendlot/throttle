@@ -87,7 +87,7 @@ function KanbanColumn({ stage, tasks, onTaskClick, onDrop, canDrop }) {
 
   return (
     <div
-      style={{ display: 'flex', flexDirection: 'column', minWidth: 208, width: 208, flexShrink: 0 }}
+      style={{ display: 'flex', flexDirection: 'column', minWidth: 208, width: 208, flexShrink: 0, height: '100%' }}
       onDragOver={e => { if (canDrop) { e.preventDefault(); setIsDragOver(true); } }}
       onDragLeave={() => setIsDragOver(false)}
       onDrop={e => {
@@ -110,6 +110,7 @@ function KanbanColumn({ stage, tasks, onTaskClick, onDrop, canDrop }) {
         borderRadius: 6,
         background: isDragOver ? 'var(--s2)' : 'transparent',
         transition: 'background .15s',
+        flexShrink: 0,
       }}>
         <span style={{
           fontFamily: 'var(--head)',
@@ -139,7 +140,8 @@ function KanbanColumn({ stage, tasks, onTaskClick, onDrop, canDrop }) {
         flexDirection: 'column',
         gap: 8,
         flex: 1,
-        minHeight: 96,
+        minHeight: 0,
+        overflowY: 'auto',
         borderRadius: 6,
         padding: 4,
         transition: 'all .15s',
@@ -414,9 +416,9 @@ export default function BoardPage() {
 
   return (
     <Layout>
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 48px - 48px)', overflow: 'hidden' }}>
         {/* Board header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, flexShrink: 0 }}>
           <div>
             <h1 style={{ fontFamily: 'var(--head)', fontWeight: 900, fontSize: 18, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--text)', lineHeight: 1 }}>
               Board
@@ -482,8 +484,8 @@ export default function BoardPage() {
             <p style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12 }}>Loading tasks...</p>
           </div>
         ) : view === 'kanban' ? (
-          <div style={{ overflowX: 'auto', paddingBottom: 16 }}>
-            <div style={{ display: 'flex', gap: 12, minWidth: 'max-content' }}>
+          <div style={{ flex: 1, overflowX: 'auto', overflowY: 'hidden' }}>
+            <div style={{ display: 'flex', gap: 12, minWidth: 'max-content', height: '100%' }}>
               {BOARD_STAGES.map(stage => (
                 <KanbanColumn
                   key={stage.value}
