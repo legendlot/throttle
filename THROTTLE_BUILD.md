@@ -1,5 +1,5 @@
 # Throttle — Technical Build Document
-**Version:** 11a.1 | **Last Updated:** 2026-04-17 (Phase 11a.1 — branding polish)
+**Version:** 11b | **Last Updated:** 2026-04-17 (Phase 11b — bug fixes)
 **Purpose:** Technical reference for the Throttle brand team work OS.
 Feed this file when continuing development in a new session.
 
@@ -264,6 +264,7 @@ NEXT_PUBLIC_WORKER_URL=https://throttleops.afshaan.workers.dev
 | Owner/collaborator: assignTask 6 sub-actions | Single action with `action` field instead of separate endpoints | Keeps the switch/case simple. Each sub-action has its own role guard and validation. |
 | Deliverables report: owner-only credit | JOIN filters `is_owner = true` | Owner gets deliverable count credit. Collaborators appear in a separate footnote. Prevents double-counting. |
 | migrateOwners: first assignee becomes owner | For multi-assignee tasks, first row promoted | Admin can correct via UI. Idempotent — safe to re-run. Left in codebase unused after first call. |
+| updateRequest PATCH body | Removed `updated_at` field | brand.requests has no updated_at column — only created_at and reviewed_at. PostgREST rejects unknown columns silently with 400. Tasks table has updated_at; requests table does not — inconsistency introduced during Phase 2 schema design. |
 
 ---
 
@@ -430,6 +431,12 @@ NEXT_PUBLIC_WORKER_URL=https://throttleops.afshaan.workers.dev
 - [x] Favicon replaced with branded checkered-flag mark: static `app/src/app/icon.svg`, 32×32 viewBox, 4×4 grid alternating #F2CD1A / #151515
 - [x] Old default `favicon.ico` deleted; Next.js App Router auto-serves `icon.svg` at `/icon.svg`
 - [x] Gotcha: dynamic `icon.tsx`/`icon.js` image routes are incompatible with `output: 'export'` unless they return `ImageResponse` — raw SVG JSX fails prerender with *"No response is returned from route handler"*. Static `icon.svg` is the simpler, working path.
+
+### Phase 11b — Bug Fixes ✅
+- [x] Fix: handleUpdateRequest in worker/src/index.js — removed `updated_at`
+      from PATCH body (brand.requests has no updated_at column; PostgREST was
+      rejecting the update with 400, surfacing as "Failed to update request"
+      on info_needed resubmit flow)
 
 ### Pending
 - Phase 11b: QA + full role testing
