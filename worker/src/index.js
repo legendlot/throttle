@@ -1214,7 +1214,6 @@ async function handleUpdateRequest(body, ctx, env) {
       review_note: null,
       reviewer_id: null,
       reviewed_at: null,
-      updated_at: new Date().toISOString(),
     }),
     prefer: 'return=minimal',
   }, env);
