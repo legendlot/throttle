@@ -1,5 +1,5 @@
 # Throttle — Technical Build Document
-**Version:** 11a | **Last Updated:** April 2026 (Phase 11a)
+**Version:** 11a.1 | **Last Updated:** 2026-04-17 (Phase 11a.1 — branding polish)
 **Purpose:** Technical reference for the Throttle brand team work OS.
 Feed this file when continuing development in a new session.
 
@@ -42,6 +42,7 @@ Feed this file when continuing development in a new session.
     │   ├── app/
     │   │   ├── page.js               ← redirects to /requests/ after auth
     │   │   ├── layout.js
+    │   │   ├── icon.svg              ← branded checkered-flag favicon (4×4 #F2CD1A / #151515)
     │   │   ├── login/page.js
     │   │   ├── auth/callback/page.js
     │   │   ├── requests/page.js
@@ -424,6 +425,11 @@ NEXT_PUBLIC_WORKER_URL=https://throttleops.afshaan.workers.dev
 - [x] Dashboard: loadAllData captures `collaborations` from worker response
 - [x] Person filter: tasks appear under both owner and collaborators (unchanged — filters on user_id)
 - [x] migrateOwners needs to be called once post-deploy (curl with admin JWT)
+
+### Phase 11a.1 — Branding polish ✅
+- [x] Favicon replaced with branded checkered-flag mark: static `app/src/app/icon.svg`, 32×32 viewBox, 4×4 grid alternating #F2CD1A / #151515
+- [x] Old default `favicon.ico` deleted; Next.js App Router auto-serves `icon.svg` at `/icon.svg`
+- [x] Gotcha: dynamic `icon.tsx`/`icon.js` image routes are incompatible with `output: 'export'` unless they return `ImageResponse` — raw SVG JSX fails prerender with *"No response is returned from route handler"*. Static `icon.svg` is the simpler, working path.
 
 ### Pending
 - Phase 11b: QA + full role testing
