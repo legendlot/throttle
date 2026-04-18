@@ -209,7 +209,17 @@ function NewRequestContent() {
         // Info Needed → update same request, back to pending
         await workerFetch('updateRequest', {
           requestId: prefillRequest.id,
+          title: title.trim(),
           templateData,
+          is_product_scoped: isProductScoped,
+          products: isProductScoped
+            ? selectedProducts.map(p => ({
+                product_name: p.product_name,
+                product_code: p.is_custom ? null : p.product_code,
+                notes: p.notes || productNotes[p.product_code] || '',
+                is_custom: p.is_custom || false,
+              }))
+            : [],
         }, session?.access_token);
       } else {
         // New request or rejected resubmit → create new row

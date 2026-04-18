@@ -1191,7 +1191,7 @@ async function handleRejectWork(body, ctx, env) {
 // ── Phase 9: Request Resubmit, Activity Feed, Person Filter ─────────────────
 
 async function handleUpdateRequest(body, ctx, env) {
-  const { requestId, templateData } = body;
+  const { requestId, title, templateData, is_product_scoped, products } = body;
   if (!requestId) return err('requestId is required');
 
   // Fetch the request
@@ -1206,21 +1206,64 @@ async function handleUpdateRequest(body, ctx, env) {
   // Only info_needed requests can be updated
   if (req.status !== 'info_needed') return err('Only info_needed requests can be updated', 400);
 
+  // Build PATCH body — only include fields that were sent
+  const patch = {
+    template_data: templateData,
+    status: 'pending',
+    review_note: null,
+    reviewer_id: null,
+    reviewed_at: null,
+  };
+  if (typeof title === 'string') {
+    const trimmed = title.trim();
+    if (!trimmed) return err('Title cannot be empty');
+    patch.title = trimmed;
+  }
+  if (typeof is_product_scoped === 'boolean') {
+    patch.is_product_scoped = is_product_scoped;
+  }
+
   const updateRes = await sbFetch(`requests?id=eq.${requestId}`, {
     method: 'PATCH',
-    body: JSON.stringify({
-      template_data: templateData,
-      status: 'pending',
-      review_note: null,
-      reviewer_id: null,
-      reviewed_at: null,
-    }),
+    body: JSON.stringify(patch),
     prefer: 'return=minimal',
   }, env);
 
   if (!updateRes.ok) return err('Failed to update request');
 
-  await slackOps(`📋 *Request Updated* — "${req.title}" has been updated and is back in the approval queue.`, env);
+  // If products array was sent, replace request_products rows
+  // (caller is authoritative — delete existing, insert fresh)
+  if (Array.isArray(products)) {
+    const delRes = await sbFetch(
+      `request_products?request_id=eq.${requestId}`,
+      { method: 'DELETE', prefer: 'return=minimal' },
+      env
+    );
+    if (!delRes.ok) {
+      console.error('[updateRequest] Failed to delete old request_products:', await delRes.text());
+    }
+
+    const shouldInsert = (is_product_scoped !== false) && products.length > 0;
+    if (shouldInsert) {
+      const productRows = products.map(p => ({
+        request_id: requestId,
+        product_code: p.product_name, // mirrors submitRequest — selector keys on name
+        product_notes: p.notes || null,
+      }));
+
+      const rpRes = await sbFetch('request_products', {
+        method: 'POST',
+        body: JSON.stringify(productRows),
+        prefer: 'return=minimal',
+      }, env);
+      if (!rpRes.ok) {
+        console.error('[updateRequest] Failed to insert request_products:', await rpRes.text());
+      }
+    }
+  }
+
+  const finalTitle = patch.title || req.title;
+  await slackOps(`📋 *Request Updated* — "${finalTitle}" has been updated and is back in the approval queue.`, env);
 
   return json({ ok: true });
 }
