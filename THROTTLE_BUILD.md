@@ -1,5 +1,5 @@
 # Throttle — Technical Build Document
-**Version:** 11b | **Last Updated:** 2026-04-17 (Phase 11b — bug fixes)
+**Version:** 11c | **Last Updated:** 2026-04-18 (Phase 11c — resubmit persistence fix)
 **Purpose:** Technical reference for the Throttle brand team work OS.
 Feed this file when continuing development in a new session.
 
@@ -265,6 +265,7 @@ NEXT_PUBLIC_WORKER_URL=https://throttleops.afshaan.workers.dev
 | Deliverables report: owner-only credit | JOIN filters `is_owner = true` | Owner gets deliverable count credit. Collaborators appear in a separate footnote. Prevents double-counting. |
 | migrateOwners: first assignee becomes owner | For multi-assignee tasks, first row promoted | Admin can correct via UI. Idempotent — safe to re-run. Left in codebase unused after first call. |
 | updateRequest PATCH body | Removed `updated_at` field | brand.requests has no updated_at column — only created_at and reviewed_at. PostgREST rejects unknown columns silently with 400. Tasks table has updated_at; requests table does not — inconsistency introduced during Phase 2 schema design. |
+| updateRequest persistence | handleUpdateRequest now accepts title, is_product_scoped, products | Info-needed resubmit was only updating template_data — title and product scope stayed frozen at original submission. request_products rewritten via delete+insert (simpler than diffing). |
 
 ---
 
@@ -437,6 +438,13 @@ NEXT_PUBLIC_WORKER_URL=https://throttleops.afshaan.workers.dev
       from PATCH body (brand.requests has no updated_at column; PostgREST was
       rejecting the update with 400, surfacing as "Failed to update request"
       on info_needed resubmit flow)
+
+### Phase 11c — Resubmit Persistence Fix ✅
+- [x] Worker: handleUpdateRequest accepts title, is_product_scoped, products
+- [x] Worker: request_products rows replaced (delete + insert) when products array sent
+- [x] Worker: empty-title guard added on server side
+- [x] Client: /requests/new handleSubmit sends title + products on updateRequest branch
+- [x] Slack notification uses the new title if it changed
 
 ### Pending
 - Phase 11b: QA + full role testing
