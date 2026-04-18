@@ -4,7 +4,11 @@ on:
   push:
     branches: [main]
     paths:
-      - 'app/**'
+      - 'apps/throttle/**'
+      - 'packages/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'turbo.json'
 
 jobs:
   deploy:
@@ -20,15 +24,14 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: app/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
         run: npm ci
-        working-directory: app
 
       - name: Build
         run: npm run build
-        working-directory: app
+        working-directory: apps/throttle
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
@@ -38,5 +41,5 @@ jobs:
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: app/out
+          publish_dir: apps/throttle/out
           cname: throttle.legendoftoys.com

@@ -1,0 +1,13 @@
+{
+  "name": "@throttle/auth",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "dependencies": {
+    "@throttle/db": "*"
+  },
+  "peerDependencies": {
+    "react": "^18"
+  }
+}

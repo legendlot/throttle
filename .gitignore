@@ -4,12 +4,16 @@ node_modules/
 .env.local
 .env*.local
 
-# Next.js
-app/.next/
-app/out/
+# Next.js (all apps)
+**/.next/
+**/out/
+
+# Turbo
+.turbo/
 
 # Worker
 worker/.dev.vars
+.wrangler/
 
 # OS
 .DS_Store
