@@ -385,7 +385,7 @@ export default function SprintsPage() {
 
   return (
     <Layout>
-      <div style={{ maxWidth: 960, margin: '0 auto' }}>
+      <div style={{ maxWidth: 960, margin: '0 auto', overflow: 'hidden' }}>
 
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
@@ -522,10 +522,10 @@ export default function SprintsPage() {
             )}
 
             {/* Split: Sprint tasks + Backlog */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, minWidth: 0 }}>
 
               {/* Current Sprint */}
-              <div>
+              <div style={{ minWidth: 0, overflow: 'hidden' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
                   <div>
                     <h2 style={{ fontFamily: 'var(--head)', fontSize: 13, fontWeight: 700, letterSpacing: '.15em', textTransform: 'uppercase', color: 'var(--text)', margin: 0 }}>
@@ -584,7 +584,7 @@ export default function SprintsPage() {
               </div>
 
               {/* Backlog */}
-              <div>
+              <div style={{ minWidth: 0, overflow: 'hidden' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
                   <h2 style={{ fontFamily: 'var(--head)', fontSize: 13, fontWeight: 700, letterSpacing: '.15em', textTransform: 'uppercase', color: 'var(--text)', margin: 0 }}>Backlog</h2>
                   <span style={{ fontFamily: 'var(--mono)', fontSize: 10, background: 'var(--s2)', color: 'var(--t3)', padding: '2px 6px', borderRadius: 3 }}>
