@@ -181,6 +181,7 @@ export default function SprintsPage() {
   const { session, brandUser } = useAuth();
   const [activeSprint, setActiveSprint] = useState(null);
   const [sprintTasks, setSprintTasks] = useState([]);
+  const [doneCount, setDoneCount] = useState(0);
   const [backlogTasks, setBacklogTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -246,8 +247,17 @@ export default function SprintsPage() {
         .not('stage', 'in', '("done","abandoned")')
         .order('created_at', { ascending: false });
       setSprintTasks(tasks || []);
+
+      // Count done tasks in this sprint for progress bar
+      const { count } = await supabase
+        .from('tasks')
+        .select('id', { count: 'exact', head: true })
+        .eq('sprint_id', sprint.id)
+        .eq('stage', 'done');
+      setDoneCount(count || 0);
     } else {
       setSprintTasks([]);
+      setDoneCount(0);
     }
   }
 
@@ -384,6 +394,32 @@ export default function SprintsPage() {
             <p style={{ fontFamily: 'var(--mono)', color: 'var(--t3)', fontSize: 11, marginTop: 4 }}>
               {activeSprint ? activeSprint.name : 'No active sprint'}
             </p>
+            {activeSprint && (() => {
+              const total     = sprintTasks.length + doneCount;
+              const pct       = total > 0 ? Math.round((doneCount / total) * 100) : 0;
+              const barColor  = pct >= 80 ? '#30D158' : pct >= 40 ? '#F2CD1A' : '#213CE2';
+              return (
+                <div style={{ marginTop: 8, maxWidth: 320 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>
+                      {doneCount} of {total} done
+                    </span>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: barColor, fontWeight: 600 }}>
+                      {pct}%
+                    </span>
+                  </div>
+                  <div style={{ height: 4, background: 'var(--s3)', borderRadius: 2, overflow: 'hidden' }}>
+                    <div style={{
+                      height: '100%',
+                      width: `${pct}%`,
+                      background: barColor,
+                      borderRadius: 2,
+                      transition: 'width .4s ease',
+                    }} />
+                  </div>
+                </div>
+              );
+            })()}
             {isAdminLead && teamMembers.length > 0 && (
               <PersonFilter members={teamMembers} selected={selectedPerson} onChange={setSelectedPerson} taskCounts={personTaskCounts} />
             )}

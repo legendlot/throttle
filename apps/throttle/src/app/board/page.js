@@ -10,6 +10,16 @@ import {
 } from '@/lib/taskConfig';
 import { getAgeingStatus, getAgeingTimestamp, AGEING_COLORS } from '@/lib/ageingUtils';
 
+function getDueDateStyle(dueDateStr, stage) {
+  if (!dueDateStr || ['done', 'abandoned'].includes(stage)) return null;
+  const now = Date.now();
+  const due = new Date(dueDateStr).getTime();
+  const hoursUntil = (due - now) / (1000 * 60 * 60);
+  if (hoursUntil < 0)   return { color: '#DE2A2A', fontWeight: 600 };
+  if (hoursUntil < 48)  return { color: '#f59e0b' };
+  return null;
+}
+
 // ── Kanban Card ───────────────────────────────────────────────────────────────
 
 function TaskCard({ task, onClick, isDragging, ageingConfig }) {
@@ -108,11 +118,15 @@ function TaskCard({ task, onClick, isDragging, ageingConfig }) {
             );
           })()}
         </div>
-        {task.due_date && (
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', marginLeft: 'auto' }}>
-            {new Date(task.due_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
-          </span>
-        )}
+        {task.due_date && (() => {
+          const duStyle = getDueDateStyle(task.due_date, task.stage);
+          return (
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', marginLeft: 'auto', ...duStyle }}>
+              {new Date(task.due_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+              {duStyle?.color === '#DE2A2A' ? ' !' : ''}
+            </span>
+          );
+        })()}
       </div>
     </div>
   );
@@ -394,8 +408,22 @@ export default function BoardPage() {
   const [selectedPerson, setSelectedPerson] = useState(null);
   const [teamMembers, setTeamMembers] = useState([]);
   const [ageingConfig, setAgeingConfig] = useState({});
+  const [searchOpen, setSearchOpen]   = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
   const isAdminLead = ['admin', 'lead'].includes(brandUser?.role);
+
+  useEffect(() => {
+    function onKey(e) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        setSearchOpen(o => !o);
+        setSearchQuery('');
+      }
+    }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
 
   useEffect(() => {
     if (brandUser) loadTasks();
@@ -473,8 +501,13 @@ export default function BoardPage() {
             <h1 style={{ fontFamily: 'var(--head)', fontWeight: 900, fontSize: 18, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--text)', lineHeight: 1 }}>
               Board
             </h1>
-            <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginTop: 4 }}>
-              {selectedPerson ? `${visibleTasks.length} of ${tasks.length}` : tasks.length} active task{(selectedPerson ? visibleTasks.length : tasks.length) !== 1 ? 's' : ''}
+            <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginTop: 4, display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span>
+                {selectedPerson ? `${visibleTasks.length} of ${tasks.length}` : tasks.length} active task{(selectedPerson ? visibleTasks.length : tasks.length) !== 1 ? 's' : ''}
+              </span>
+              <span style={{ color: 'var(--t3)' }}>
+                <kbd style={{ background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 3, padding: '1px 5px', fontSize: 9 }}>⌘K</kbd> search
+              </span>
             </p>
           </div>
 
@@ -559,6 +592,86 @@ export default function BoardPage() {
             onClose={() => setSelectedTask(null)}
             onUpdate={handleTaskUpdate}
           />
+        )}
+
+        {searchOpen && (
+          <>
+            <div
+              onClick={() => setSearchOpen(false)}
+              style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 200 }}
+            />
+            <div style={{
+              position: 'fixed', top: '20%', left: '50%', transform: 'translateX(-50%)',
+              width: '100%', maxWidth: 560, background: '#1a1a1a', border: '1px solid var(--b2)',
+              borderRadius: 10, overflow: 'hidden', zIndex: 201, boxShadow: '0 20px 60px rgba(0,0,0,0.6)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderBottom: '1px solid var(--b1)' }}>
+                <span style={{ color: 'var(--t3)', fontSize: 14 }}>⌕</span>
+                <input
+                  autoFocus
+                  type="text"
+                  placeholder="Search tasks..."
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Escape') { setSearchOpen(false); }
+                  }}
+                  style={{ flex: 1, background: 'none', border: 'none', outline: 'none', fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--text)', caretColor: '#F2CD1A' }}
+                />
+                <kbd style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 3, padding: '2px 5px' }}>ESC</kbd>
+              </div>
+              <div style={{ maxHeight: 360, overflowY: 'auto' }}>
+                {(() => {
+                  const q = searchQuery.toLowerCase().trim();
+                  const results = (tasks || []).filter(t =>
+                    !q ||
+                    t.title?.toLowerCase().includes(q) ||
+                    t.product_code?.toLowerCase().includes(q) ||
+                    t.type?.toLowerCase().includes(q)
+                  ).slice(0, 12);
+
+                  if (results.length === 0) {
+                    return (
+                      <div style={{ padding: '24px 16px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>
+                        No tasks found
+                      </div>
+                    );
+                  }
+
+                  return results.map(t => {
+                    const stage = getStageConfig(t.stage);
+                    return (
+                      <div
+                        key={t.id}
+                        onClick={() => { setSelectedTask(t); setSearchOpen(false); setSearchQuery(''); }}
+                        style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', cursor: 'pointer', borderBottom: '1px solid var(--b1)', transition: 'background .1s' }}
+                        onMouseEnter={e => e.currentTarget.style.background = 'var(--s2)'}
+                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                      >
+                        <span style={{ width: 8, height: 8, borderRadius: '50%', background: stage?.color || 'var(--t3)', flexShrink: 0 }} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.title}</p>
+                          <p style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', margin: '2px 0 0' }}>{stage?.label || t.stage}</p>
+                        </div>
+                        {t.due_date && (
+                          <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', flexShrink: 0 }}>
+                            {new Date(t.due_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+              {searchQuery === '' && (
+                <div style={{ padding: '8px 16px', borderTop: '1px solid var(--b1)' }}>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>
+                    {(tasks || []).length} active tasks — type to filter
+                  </span>
+                </div>
+              )}
+            </div>
+          </>
         )}
       </div>
     </Layout>

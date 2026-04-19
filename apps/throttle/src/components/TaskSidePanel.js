@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '@throttle/auth';
 import { workerFetch, supabaseBrand as supabase } from '@throttle/db';
+import { useToast } from '@/lib/toast';
 import {
   STAGES, PRIORITIES, DELIVERABLE_TYPES,
   getStageConfig, getPriorityConfig, getValidTransitions
@@ -9,6 +10,7 @@ import {
 
 export default function TaskSidePanel({ task, onClose, onUpdate }) {
   const { session, brandUser } = useAuth();
+  const toast = useToast();
   const [teamMembers, setTeamMembers] = useState([]);
   const [assignees, setAssignees] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -108,6 +110,7 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
       setMovingStage(false);
       setTargetStage(null);
       setBlockedReason('');
+      toast('Stage updated');
     } catch (e) {
       setError(e.message);
     } finally {
@@ -122,6 +125,7 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
       await workerFetch('updateTaskPriority', { task_id: task.id, priority }, session?.access_token);
       onUpdate({ ...task, priority });
       setEditingPriority(false);
+      toast('Priority updated');
     } catch (e) {
       setError(e.message);
     } finally {
@@ -139,6 +143,7 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
     try {
       await workerFetch('assignTask', { task_id: task.id, user_ids: newIds }, session?.access_token);
       await loadAssignees();
+      toast('Assignee updated');
     } catch (e) {
       setError(e.message);
     } finally {
@@ -154,6 +159,7 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
       await workerFetch('abandonTask', { task_id: task.id, reason: abandonReason }, session?.access_token);
       onUpdate({ ...task, stage: 'abandoned' });
       onClose();
+      toast('Task abandoned', 'warning');
     } catch (e) {
       setError(e.message);
     } finally {
@@ -405,6 +411,9 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
                 </button>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: '#DE2A2A', margin: 0 }}>
+                    This removes the task from all active views. Are you sure?
+                  </p>
                   <textarea
                     value={abandonReason}
                     onChange={e => setAbandonReason(e.target.value)}
