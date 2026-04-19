@@ -1,5 +1,5 @@
 # Throttle — Technical Build Document
-**Version:** 11d | **Last Updated:** 2026-04-19 (Phase 11d — owner display + activity name fixes)
+**Version:** 12 | **Last Updated:** 2026-04-19 (Phase 12 — delivery loop + ageing)
 **Purpose:** Technical reference for the Throttle brand team work OS.
 Feed this file when continuing development in a new session.
 
@@ -79,14 +79,19 @@ Worker uses `Accept-Profile: brand` / `Content-Profile: brand` headers.
 
 ### Tables (all created manually — Phase 1)
 - `brand.users` — role defaults to requester on first Google sign-in
-- `brand.requests` — intake submissions
+- `brand.requests` — intake submissions (adds `required_by` date in Phase 12)
 - `brand.request_products` — links requests to public.product_master.product_code
 - `brand.sprints` — weekly Thu–Wed, enforced by DB CHECK constraints
-- `brand.tasks` — core work unit with deliverable_type for reporting
+- `brand.tasks` — core work unit with deliverable_type for reporting. Phase 12 adds: iteration_count, in_progress_at, in_review_at, approved_at, delivered_at, auto_close_at, delivery_message
 - `brand.task_assignees` — many-to-many
 - `brand.task_attachments` — files and links (currently URL-only, no direct file upload)
 - `brand.approvals` — work review decisions (approved/rejected + feedback)
 - `brand.activity_log` — immutable ledger, INSERT via Worker only
+- `brand.task_feedback` — requester feedback per delivered task (verdict, comment, reference_links, batch_id)
+- `brand.ageing_config` — per-stage warning/critical/auto-close hour thresholds
+
+### Stage enum (brand.task_stage)
+backlog → in_sprint → in_progress → ext_blocked → in_review → approved → **delivered** → done (or abandoned at any step)
 
 ### Security definer function
 `brand.get_my_role()` — reads caller's role as postgres, bypasses RLS recursion.
@@ -159,6 +164,12 @@ Errors: `{ error: "message" }` with appropriate HTTP status.
 - `updateTaskMeta` — admin/lead (edit task title and/or due date, logs to activity)
 - `getProducts` — any authenticated user (fetches active products from public.product_master)
 - `migrateOwners` — admin only (one-time migration: promotes first assignee to owner on all tasks)
+- `deliverTask` — assignee or admin/lead; moves approved task to delivered, sets auto_close_at, notifies requester
+- `submitBatchFeedback` — requester only; accepts or requests iteration per task in one form submission
+- `markTaskDone` — admin/lead override; closes any task to done regardless of requester feedback
+- `getRequestDelivery` — requester or brand team; returns request + all tasks with attachments + latest feedback
+- `getAgeingConfig` — any authenticated user; returns ageing threshold config
+- `updateAgeingConfig` — admin only; updates warning/critical/auto_close hours per stage
 
 ### Worker secrets (set via wrangler secret put — never in files)
 - SUPABASE_SERVICE_ROLE_KEY
@@ -268,6 +279,14 @@ NEXT_PUBLIC_WORKER_URL=https://throttleops.afshaan.workers.dev
 | updateRequest persistence | handleUpdateRequest now accepts title, is_product_scoped, products | Info-needed resubmit was only updating template_data — title and product scope stayed frozen at original submission. request_products rewritten via delete+insert (simpler than diffing). |
 | loadAssignees: two-query pattern | Fetch task_assignees rows then users separately | task_assignees has two FK columns to brand.users (user_id + assigned_by). PostgREST sees ambiguous relationship, join silently returns null, owner shows as Unassigned. Same separate-call pattern used everywhere else in the codebase. |
 | self-assign activity name | Added assignee_name: ctx.brandUser?.name to self_assign_owner, self_add_collaborator, remove_self logActivity calls | Was only included for add_collaborator and set_owner actions. Self-assign paths forgot to include it, causing "assigned to someone" in the feed. |
+| approveWork now moves to 'approved' not 'done' | Assignee delivers to requester from 'approved' stage | Separates internal quality check from external delivery. Lead approves quality, assignee handles delivery. |
+| Delivery loop: delivered stage | approved → delivered → done (accepted) or in_progress (iteration) | Full tracking of brand→requester handoff. Auto-close after configurable window prevents tasks being held open indefinitely. |
+| Batch feedback: one form per request | Requester responds to all delivered tasks in one submission | Avoids requester having to respond to 5 separate notifications for a 5-product batch. Tasks still tracked individually on the board. |
+| iteration_count vs is_revision | iteration_count tracks how many times a requester sent work back. is_revision means the task itself is a type=revision (a refresh of old work). Separate concerns. | |
+| Auto-close timer | Configurable via ageing_config.auto_close_hours for 'delivered' stage (default 72h). Runs in the existing sprint-close cron. | Prevents requesters from holding tasks open indefinitely. Lead override always available. |
+| Ageing thresholds in DB | brand.ageing_config table, admin-editable from Settings | Per-stage warning/critical hours. Ageing dots on task cards. No hardcoded thresholds in frontend. |
+| Feedback page at /requests/feedback/?id= | Query-param route, not [id] dynamic segment | Next.js `output: 'export'` requires generateStaticParams for `[id]` segments — incompatible with arbitrary request UUIDs. Query-param is functionally identical and prerenders cleanly. |
+| Feedback page: requester-facing delivery review | Thumbs up/down per task, reference link/comment on iteration | Shows delivery message, attachments, previous feedback history. All verdicts submit in one batch so one request ≈ one response. |
 
 ---
 
@@ -453,6 +472,23 @@ NEXT_PUBLIC_WORKER_URL=https://throttleops.afshaan.workers.dev
 - [x] Worker: self_add_collaborator logActivity includes assignee_name
 - [x] Worker: remove_self logActivity includes assignee_name
 - [x] TaskSidePanel: loadAssignees replaced with two separate queries (no ambiguous FK join)
+
+### Phase 12 — Delivery Loop + Ageing ✅
+- [x] DB: delivered stage, iteration_count, stage timestamp columns, required_by, task_feedback table, ageing_config table
+- [x] Worker: deliverTask, submitBatchFeedback, markTaskDone, getRequestDelivery, getAgeingConfig, updateAgeingConfig
+- [x] Worker: approveWork moves to 'approved' (not 'done') — assignee delivers from there
+- [x] Worker: updateTaskStage stamps in_progress_at, in_review_at, approved_at on transitions; clears auto_close_at on done
+- [x] Worker: validStages + admin/lead transitions include delivered
+- [x] Worker: autoCloseStaleTasks runs in cron alongside sprint close
+- [x] Worker: submitRequest extracts required_by from template_data.deadline
+- [x] taskConfig.js: STAGES + VALID_TRANSITIONS include delivered (lead/admin)
+- [x] TaskSidePanel: DeliverTaskSection on approved tasks, MarkDoneSection on delivered tasks
+- [x] TaskSidePanel: delivery + iteration icons in activity feed
+- [x] Board: ageing dots on task cards (warning=amber, critical=red), ageingConfig fetched on mount
+- [x] /requests/feedback/?id=: requester feedback page — per-task verdict + comment + ref link
+- [x] /requests/: "📦 Delivered — Give Feedback" badge links to feedback page
+- [x] Settings: Ageing Thresholds section for admin
+- [x] Build clean, deploy green
 
 ### Pending
 - Phase 11b: QA + full role testing
