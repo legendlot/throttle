@@ -63,47 +63,75 @@ export default function SettingsPage() {
                 <p style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12 }}>{error}</p>
               </div>
             )}
-            <div style={{ background: 'var(--s1)', border: '1px solid var(--b1)', borderRadius: 8, overflow: 'hidden' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--mono)', fontSize: 12 }}>
-                <thead>
-                  <tr style={{ borderBottom: '1px solid var(--b1)' }}>
-                    <th style={{ fontFamily: 'var(--head)', fontSize: 9, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--t3)', fontWeight: 700, padding: '10px 16px', textAlign: 'left', borderBottom: '1px solid var(--b1)' }}>Name</th>
-                    <th style={{ fontFamily: 'var(--head)', fontSize: 9, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--t3)', fontWeight: 700, padding: '10px 16px', textAlign: 'left', borderBottom: '1px solid var(--b1)' }}>Email</th>
-                    <th style={{ fontFamily: 'var(--head)', fontSize: 9, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--t3)', fontWeight: 700, padding: '10px 16px', textAlign: 'left', borderBottom: '1px solid var(--b1)' }}>Role</th>
-                    <th style={{ fontFamily: 'var(--head)', fontSize: 9, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--t3)', fontWeight: 700, padding: '10px 16px', textAlign: 'left', borderBottom: '1px solid var(--b1)' }}>Discipline</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {users.map((user, i) => (
-                    <tr key={user.id} style={{ borderBottom: '1px solid var(--b1)', ...(i % 2 !== 0 ? { background: 'var(--s1)' } : {}) }}>
-                      <td style={{ padding: '10px 16px', color: 'var(--text)', fontSize: 12 }}>{user.name}</td>
-                      <td style={{ padding: '10px 16px', color: 'var(--t3)', fontSize: 11 }}>{user.email}</td>
-                      <td style={{ padding: '10px 16px' }}>
-                        <select
-                          value={user.role}
-                          disabled={user.id === brandUser.id || saving === user.id}
-                          onChange={e => updateUser(user.id, 'role', e.target.value)}
-                          style={{ background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 8px', fontSize: 11, color: 'var(--t2)', fontFamily: 'var(--mono)', outline: 'none', ...(user.id === brandUser.id || saving === user.id ? { opacity: 0.4 } : {}) }}
-                        >
-                          {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
-                        </select>
-                      </td>
-                      <td style={{ padding: '10px 16px' }}>
-                        <select
-                          value={user.discipline || ''}
-                          disabled={saving === user.id}
-                          onChange={e => updateUser(user.id, 'discipline', e.target.value || null)}
-                          style={{ background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 8px', fontSize: 11, color: 'var(--t2)', fontFamily: 'var(--mono)', outline: 'none', ...(saving === user.id ? { opacity: 0.4 } : {}) }}
-                        >
-                          <option value="">— none —</option>
-                          {DISCIPLINES.map(d => <option key={d} value={d}>{d}</option>)}
-                        </select>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            {(() => {
+              const GROUP_ORDER = [
+                { key: 'lead',      label: 'Lead',        roles: ['lead'] },
+                { key: 'team',      label: 'Brand Team',  roles: ['member', 'admin'] },
+                { key: 'requester', label: 'Requesters',  roles: ['requester'] },
+              ];
+
+              const thStyle = { fontFamily: 'var(--head)', fontSize: 9, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--t3)', fontWeight: 700, padding: '9px 16px', textAlign: 'left', borderBottom: '1px solid var(--b1)' };
+              const tdBase  = { padding: '10px 16px' };
+
+              return GROUP_ORDER.map(group => {
+                const groupUsers = users.filter(u => group.roles.includes(u.role));
+                if (groupUsers.length === 0) return null;
+                return (
+                  <div key={group.key} style={{ marginBottom: 24 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                      <span style={{ fontFamily: 'var(--head)', fontSize: 10, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--t3)', fontWeight: 700 }}>{group.label}</span>
+                      <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', background: 'var(--s2)', border: '1px solid var(--b1)', borderRadius: 10, padding: '1px 8px' }}>{groupUsers.length}</span>
+                    </div>
+                    <div style={{ background: 'var(--s1)', border: '1px solid var(--b1)', borderRadius: 8, overflow: 'hidden' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--mono)', fontSize: 12 }}>
+                        <thead>
+                          <tr style={{ borderBottom: '1px solid var(--b1)' }}>
+                            <th style={thStyle}>Name</th>
+                            <th style={thStyle}>Email</th>
+                            <th style={thStyle}>Role</th>
+                            <th style={thStyle}>Discipline</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {groupUsers.map((user, i) => (
+                            <tr key={user.id} style={{ borderBottom: i < groupUsers.length - 1 ? '1px solid var(--b1)' : 'none' }}>
+                              <td style={{ ...tdBase, color: 'var(--text)', fontSize: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                                {user.id === brandUser?.id && (
+                                  <span style={{ fontFamily: 'var(--mono)', fontSize: 9, background: 'rgba(242,205,26,0.12)', color: '#F2CD1A', border: '1px solid rgba(242,205,26,0.25)', borderRadius: 3, padding: '1px 5px', letterSpacing: '.06em' }}>you</span>
+                                )}
+                                {user.name}
+                              </td>
+                              <td style={{ ...tdBase, color: 'var(--t3)', fontSize: 11 }}>{user.email}</td>
+                              <td style={tdBase}>
+                                <select
+                                  value={user.role}
+                                  disabled={user.id === brandUser?.id || saving === user.id}
+                                  onChange={e => updateUser(user.id, 'role', e.target.value)}
+                                  style={{ background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 8px', fontSize: 11, color: 'var(--t2)', fontFamily: 'var(--mono)', outline: 'none', opacity: (user.id === brandUser?.id || saving === user.id) ? 0.4 : 1 }}
+                                >
+                                  {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+                                </select>
+                              </td>
+                              <td style={tdBase}>
+                                <select
+                                  value={user.discipline || ''}
+                                  disabled={saving === user.id}
+                                  onChange={e => updateUser(user.id, 'discipline', e.target.value || null)}
+                                  style={{ background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 8px', fontSize: 11, color: 'var(--t2)', fontFamily: 'var(--mono)', outline: 'none', opacity: saving === user.id ? 0.4 : 1 }}
+                                >
+                                  <option value="">— none —</option>
+                                  {DISCIPLINES.map(d => <option key={d} value={d}>{d}</option>)}
+                                </select>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                );
+              });
+            })()}
           </div>
         )}
 
