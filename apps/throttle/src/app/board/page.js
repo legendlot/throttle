@@ -8,12 +8,34 @@ import {
   BOARD_STAGES, PRIORITIES,
   getStageConfig, getPriorityConfig, canMoveTask
 } from '@/lib/taskConfig';
+import { getAgeingStatus, getAgeingTimestamp, AGEING_COLORS } from '@/lib/ageingUtils';
 
 // ── Kanban Card ───────────────────────────────────────────────────────────────
 
-function TaskCard({ task, onClick, isDragging }) {
+function TaskCard({ task, onClick, isDragging, ageingConfig }) {
   const priority = getPriorityConfig(task.priority);
   const stage = getStageConfig(task.stage);
+
+  const ageingDot = (() => {
+    if (!ageingConfig) return null;
+    const stageKey = task.stage === 'in_sprint' ? 'accepted_to_in_progress'
+      : task.stage === 'in_progress' ? 'in_progress'
+      : task.stage === 'in_review'   ? 'in_review'
+      : task.stage === 'approved'    ? 'approved'
+      : task.stage === 'delivered'   ? 'delivered'
+      : null;
+    if (!stageKey || !ageingConfig[stageKey]) return null;
+    const cfg = ageingConfig[stageKey];
+    const ts  = getAgeingTimestamp(task);
+    const status = getAgeingStatus(ts, cfg.warning_hours, cfg.critical_hours);
+    if (!status || status === 'ok') return null;
+    return (
+      <span
+        title={status === 'critical' ? 'Overdue' : 'Ageing'}
+        style={{ width: 6, height: 6, borderRadius: '50%', background: AGEING_COLORS[status]?.color, display: 'inline-block', marginLeft: 4, flexShrink: 0 }}
+      />
+    );
+  })();
 
   return (
     <div
@@ -45,6 +67,7 @@ function TaskCard({ task, onClick, isDragging }) {
           {task.is_spillover && <span style={{ fontSize: 10, color: 'var(--amber)' }}>↩</span>}
           {task.stage === 'ext_blocked' && <span style={{ fontSize: 10, color: 'var(--amber)' }}>⚠</span>}
           {task.is_revision && <span style={{ fontFamily: 'var(--mono)', fontSize: 8, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--t3)', background: 'var(--s3)', padding: '1px 5px', borderRadius: 3 }}>REV</span>}
+          {ageingDot}
         </div>
       </div>
 
@@ -97,7 +120,7 @@ function TaskCard({ task, onClick, isDragging }) {
 
 // ── Kanban Column ─────────────────────────────────────────────────────────────
 
-function KanbanColumn({ stage, tasks, onTaskClick, onDrop, canDrop }) {
+function KanbanColumn({ stage, tasks, onTaskClick, onDrop, canDrop, ageingConfig }) {
   const [isDragOver, setIsDragOver] = useState(false);
   const config = getStageConfig(stage);
 
@@ -169,6 +192,7 @@ function KanbanColumn({ stage, tasks, onTaskClick, onDrop, canDrop }) {
             key={task.id}
             task={task}
             onClick={onTaskClick}
+            ageingConfig={ageingConfig}
           />
         ))}
         {tasks.length === 0 && isDragOver && (
@@ -369,6 +393,7 @@ export default function BoardPage() {
   const [selectedTask, setSelectedTask] = useState(null);
   const [selectedPerson, setSelectedPerson] = useState(null);
   const [teamMembers, setTeamMembers] = useState([]);
+  const [ageingConfig, setAgeingConfig] = useState({});
 
   const isAdminLead = ['admin', 'lead'].includes(brandUser?.role);
 
@@ -380,6 +405,15 @@ export default function BoardPage() {
     if (brandUser?.role !== 'requester' && session) {
       workerFetch('getTeamMembers', {}, session?.access_token)
         .then(data => setTeamMembers(data.members || []))
+        .catch(() => {});
+    }
+    if (session) {
+      workerFetch('getAgeingConfig', {}, session?.access_token)
+        .then(d => {
+          const map = {};
+          for (const row of d.config || []) map[row.stage] = row;
+          setAgeingConfig(map);
+        })
         .catch(() => {});
     }
   }, [brandUser, session]);
@@ -510,6 +544,7 @@ export default function BoardPage() {
                   onTaskClick={setSelectedTask}
                   onDrop={handleDrop}
                   canDrop={true}
+                  ageingConfig={ageingConfig}
                 />
               ))}
             </div>

@@ -13,6 +13,7 @@ export default function RequestsPage() {
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
+  const [deliveredRequestIds, setDeliveredRequestIds] = useState(new Set());
 
   const isApprover = brandUser?.role === 'admin' || brandUser?.role === 'lead';
 
@@ -37,7 +38,24 @@ export default function RequestsPage() {
     }
 
     const { data, error } = await query;
-    if (!error) setRequests(data || []);
+    const fetchedRequests = error ? [] : (data || []);
+    if (!error) setRequests(fetchedRequests);
+
+    // Fetch delivered task counts per request
+    const requestIds = fetchedRequests.map(r => r.id);
+    if (requestIds.length > 0) {
+      const { data: deliveredTasks } = await supabase
+        .from('tasks')
+        .select('request_id')
+        .in('request_id', requestIds)
+        .eq('stage', 'delivered');
+
+      const deliveredSet = new Set((deliveredTasks || []).map(t => t.request_id));
+      setDeliveredRequestIds(deliveredSet);
+    } else {
+      setDeliveredRequestIds(new Set());
+    }
+
     setLoading(false);
   }
 
@@ -239,6 +257,14 @@ export default function RequestsPage() {
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
                     <RequestStatusBadge status={req.status} />
+                    {deliveredRequestIds.has(req.id) && (
+                      <a
+                        href={`/requests/feedback/?id=${req.id}`}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(242,205,26,0.12)', border: '1px solid rgba(242,205,26,0.35)', borderRadius: 4, padding: '3px 10px', fontFamily: 'var(--mono)', fontSize: 10, color: '#F2CD1A', textDecoration: 'none', letterSpacing: '.06em', textTransform: 'uppercase' }}
+                      >
+                        📦 Delivered — Give Feedback
+                      </a>
+                    )}
                     {req.requester_id === brandUser?.id && req.status === 'info_needed' && (
                       <button
                         onClick={(e) => { e.stopPropagation(); router.push(`/requests/new/?prefill=${req.id}`); }}

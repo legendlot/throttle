@@ -106,7 +106,117 @@ export default function SettingsPage() {
             </div>
           </div>
         )}
+
+        {brandUser?.role === 'admin' && (
+          <section style={{ marginTop: 40 }}>
+            <h2 style={{ fontFamily: 'var(--head)', fontSize: 13, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--text)', marginBottom: 16 }}>Ageing Thresholds</h2>
+            <AgeingConfigSection session={session} />
+          </section>
+        )}
       </div>
     </Layout>
+  );
+}
+
+function AgeingConfigSection({ session }) {
+  const [config, setConfig] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [edits, setEdits] = useState({});
+
+  async function loadConfig() {
+    setLoading(true);
+    try {
+      const d = await workerFetch('getAgeingConfig', {}, session?.access_token);
+      setConfig(d.config || []);
+      const initial = {};
+      for (const row of d.config || []) {
+        initial[row.stage] = {
+          warning_hours:    row.warning_hours,
+          critical_hours:   row.critical_hours,
+          auto_close_hours: row.auto_close_hours ?? '',
+        };
+      }
+      setEdits(initial);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function save() {
+    setSaving(true);
+    setSaved(false);
+    try {
+      const updates = config.map(row => ({
+        stage:            row.stage,
+        warning_hours:    Number(edits[row.stage]?.warning_hours),
+        critical_hours:   Number(edits[row.stage]?.critical_hours),
+        auto_close_hours: edits[row.stage]?.auto_close_hours !== '' ? Number(edits[row.stage]?.auto_close_hours) : null,
+      }));
+      await workerFetch('updateAgeingConfig', { updates }, session?.access_token);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function update(stage, field, value) {
+    setEdits(e => ({ ...e, [stage]: { ...e[stage], [field]: value } }));
+  }
+
+  if (config.length === 0 && !loading) {
+    return (
+      <div>
+        <button onClick={loadConfig} style={{ background: '#F2CD1A', color: '#080808', border: 'none', borderRadius: 4, padding: '7px 14px', fontFamily: 'var(--head)', fontSize: 10, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer' }}>
+          Load Ageing Config
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {loading && <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>Loading...</p>}
+      {config.length > 0 && (
+        <>
+          <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 16 }}>
+            <thead>
+              <tr>
+                {['Stage', 'Warning (hrs)', 'Critical (hrs)', 'Auto-close (hrs)'].map(h => (
+                  <th key={h} style={{ textAlign: 'left', fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', letterSpacing: '.1em', textTransform: 'uppercase', padding: '6px 10px', borderBottom: '1px solid var(--b1)' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {config.map(row => (
+                <tr key={row.stage}>
+                  <td style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)', padding: '8px 10px', borderBottom: '1px solid var(--b1)' }}>{row.label}</td>
+                  {['warning_hours', 'critical_hours', 'auto_close_hours'].map(field => (
+                    <td key={field} style={{ padding: '6px 10px', borderBottom: '1px solid var(--b1)' }}>
+                      <input
+                        type="number"
+                        value={edits[row.stage]?.[field] ?? ''}
+                        onChange={e => update(row.stage, field, e.target.value)}
+                        placeholder={field === 'auto_close_hours' ? 'n/a' : ''}
+                        style={{ width: 70, background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 8px', color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 11, outline: 'none' }}
+                      />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <button
+            onClick={save}
+            disabled={saving}
+            style={{ background: '#F2CD1A', color: '#080808', border: 'none', borderRadius: 4, padding: '7px 14px', fontFamily: 'var(--head)', fontSize: 10, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', opacity: saving ? 0.5 : 1 }}
+          >
+            {saved ? 'Saved ✓' : saving ? 'Saving...' : 'Save Changes'}
+          </button>
+        </>
+      )}
+    </div>
   );
 }

@@ -362,6 +362,29 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
             <WorkApprovalSection task={task} session={session} onUpdate={onUpdate} onClose={onClose} onError={setError} />
           )}
 
+          {/* Deliver to Requester — shown on approved tasks to assignees and admin/lead */}
+          {task.stage === 'approved' && (
+            assignees.some(a => a.user_id === brandUser?.id) || isAdminLead
+          ) && (
+            <DeliverTaskSection
+              task={task}
+              session={session}
+              onUpdate={onUpdate}
+              onError={setError}
+            />
+          )}
+
+          {/* Mark Done override — admin/lead only, shown on delivered tasks */}
+          {isAdminLead && task.stage === 'delivered' && (
+            <MarkDoneSection
+              task={task}
+              session={session}
+              onUpdate={onUpdate}
+              onClose={onClose}
+              onError={setError}
+            />
+          )}
+
           {/* Abandon */}
           {isAdminLead && !['done', 'abandoned'].includes(task.stage) && (
             <Section title="Danger Zone">
@@ -866,12 +889,12 @@ function ActivityEntry({ entry, isLast }) {
 }
 
 function getActivityIcon(type) {
-  return { comment: '✦', stage_change: '→', assignment: '◎', approval: '✓', attachment: '⊕', flag: '⚠', completion: '✓', abandonment: '✗' }[type] || '·';
+  return { comment: '✦', stage_change: '→', assignment: '◎', approval: '✓', attachment: '⊕', flag: '⚠', completion: '✓', abandonment: '✗', delivery: '📦', iteration: '🔄' }[type] || '·';
 }
 
 function getActivityMessage(entry) {
   const p = entry.payload || {};
-  const stageLabel = s => ({ backlog:'Backlog', in_sprint:'In Sprint', in_progress:'In Progress', ext_blocked:'Ext. Blocked', in_review:'In Review', approved:'Approved', done:'Done', abandoned:'Abandoned' }[s] || s);
+  const stageLabel = s => ({ backlog:'Backlog', in_sprint:'In Sprint', in_progress:'In Progress', ext_blocked:'Ext. Blocked', in_review:'In Review', approved:'Approved', delivered:'Delivered', done:'Done', abandoned:'Abandoned' }[s] || s);
   switch (entry.event_type) {
     case 'comment':       return p.comment;
     case 'stage_change':  return `moved from ${stageLabel(p.from)} → ${stageLabel(p.to)}`;
@@ -881,6 +904,146 @@ function getActivityMessage(entry) {
     case 'flag':          return `flagged as externally blocked — "${p.reason || ''}"`;
     case 'completion':    return 'marked as done';
     case 'abandonment':   return `abandoned — "${p.reason || ''}"`;
+    case 'delivery':      return `delivered to requester${p.message ? ` — "${p.message}"` : ''}`;
+    case 'iteration':     return `iteration ${p.iteration_number} requested${p.comment ? ` — "${p.comment}"` : ''}`;
     default:              return JSON.stringify(p);
   }
+}
+
+// ── DELIVER TASK SECTION — shown on 'approved' tasks to assignee / admin / lead
+function DeliverTaskSection({ task, session, onUpdate, onError }) {
+  const [open, setOpen] = useState(false);
+  const [message, setMessage] = useState('');
+  const [url, setUrl] = useState('');
+  const [label, setLabel] = useState('');
+  const [delivering, setDelivering] = useState(false);
+
+  async function deliver() {
+    setDelivering(true);
+    try {
+      await workerFetch('deliverTask', {
+        task_id: task.id,
+        message: message.trim() || undefined,
+        attachment_url: url.trim() || undefined,
+        attachment_label: label.trim() || undefined,
+      }, session?.access_token);
+      onUpdate({ ...task, stage: 'delivered' });
+      setOpen(false);
+    } catch (e) {
+      onError(e.message);
+    } finally {
+      setDelivering(false);
+    }
+  }
+
+  return (
+    <Section title="Deliver to Requester">
+      {!open ? (
+        <button
+          onClick={() => setOpen(true)}
+          style={{ background: '#F2CD1A', color: '#080808', border: 'none', borderRadius: 4, padding: '7px 14px', fontFamily: 'var(--head)', fontSize: 10, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer' }}
+        >
+          Deliver →
+        </button>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div>
+            <label style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', display: 'block', marginBottom: 4 }}>Message to requester (optional)</label>
+            <textarea
+              value={message}
+              onChange={e => setMessage(e.target.value)}
+              placeholder="e.g. Here's the v1. We went with a white background as discussed."
+              style={{ width: '100%', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '8px 10px', color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 11, outline: 'none', resize: 'none', height: 72, boxSizing: 'border-box' }}
+            />
+          </div>
+          <div>
+            <label style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', display: 'block', marginBottom: 4 }}>Deliverable URL (optional)</label>
+            <input
+              type="url"
+              value={url}
+              onChange={e => setUrl(e.target.value)}
+              placeholder="https://drive.google.com/... or Figma link"
+              style={{ width: '100%', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '7px 10px', color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 11, outline: 'none', boxSizing: 'border-box' }}
+            />
+          </div>
+          <div>
+            <label style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', display: 'block', marginBottom: 4 }}>Label (optional)</label>
+            <input
+              type="text"
+              value={label}
+              onChange={e => setLabel(e.target.value)}
+              placeholder="e.g. Final assets v1"
+              style={{ width: '100%', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '7px 10px', color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 11, outline: 'none', boxSizing: 'border-box' }}
+            />
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              onClick={deliver}
+              disabled={delivering}
+              style={{ background: '#F2CD1A', color: '#080808', border: 'none', borderRadius: 4, padding: '7px 14px', fontFamily: 'var(--head)', fontSize: 10, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', opacity: delivering ? 0.5 : 1 }}
+            >
+              {delivering ? 'Delivering...' : 'Confirm Delivery'}
+            </button>
+            <button onClick={() => setOpen(false)} style={{ background: 'none', border: 'none', color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer' }}>Cancel</button>
+          </div>
+        </div>
+      )}
+    </Section>
+  );
+}
+
+// ── MARK DONE OVERRIDE — admin/lead only, shown on delivered tasks
+function MarkDoneSection({ task, session, onUpdate, onClose, onError }) {
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  async function markDone() {
+    setSaving(true);
+    try {
+      await workerFetch('markTaskDone', { task_id: task.id, reason: reason.trim() || undefined }, session?.access_token);
+      onUpdate({ ...task, stage: 'done' });
+      onClose();
+    } catch (e) {
+      onError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Section title="Admin Override">
+      {!open ? (
+        <button
+          onClick={() => setOpen(true)}
+          style={{ background: 'none', border: '1px solid var(--b2)', borderRadius: 4, padding: '6px 12px', color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer' }}
+        >
+          Mark as Done
+        </button>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', margin: 0 }}>
+            This closes the task regardless of requester feedback.
+          </p>
+          <input
+            type="text"
+            value={reason}
+            onChange={e => setReason(e.target.value)}
+            placeholder="Reason (optional)"
+            style={{ width: '100%', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '7px 10px', color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 11, outline: 'none', boxSizing: 'border-box' }}
+          />
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              onClick={markDone}
+              disabled={saving}
+              style={{ background: 'var(--s3)', border: '1px solid var(--b2)', borderRadius: 4, padding: '6px 12px', color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer', opacity: saving ? 0.5 : 1 }}
+            >
+              {saving ? 'Saving...' : 'Confirm'}
+            </button>
+            <button onClick={() => setOpen(false)} style={{ background: 'none', border: 'none', color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer' }}>Cancel</button>
+          </div>
+        </div>
+      )}
+    </Section>
+  );
 }

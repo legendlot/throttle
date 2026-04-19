@@ -37,6 +37,12 @@ export const STAGES = [
     description: 'Work approved, pending final confirmation',
   },
   {
+    value: 'delivered',
+    label: 'Delivered',
+    color: '#8b5cf6',
+    description: 'Delivered to requester, awaiting feedback',
+  },
+  {
     value: 'done',
     label: 'Done',
     color: '#22c55e',
@@ -72,7 +78,8 @@ export const VALID_TRANSITIONS = {
     in_progress: ['in_review', 'ext_blocked', 'in_sprint', 'abandoned'],
     ext_blocked: ['in_progress', 'abandoned'],
     in_review:   ['approved', 'in_progress'],
-    approved:    ['done', 'in_review'],
+    approved:    ['delivered', 'done', 'in_review'],
+    delivered:   ['done', 'in_progress'],
     // done and abandoned are terminal — no transitions out
   },
   admin: {
@@ -81,7 +88,8 @@ export const VALID_TRANSITIONS = {
     in_progress: ['in_review', 'ext_blocked', 'in_sprint', 'abandoned'],
     ext_blocked: ['in_progress', 'abandoned'],
     in_review:   ['approved', 'in_progress', 'abandoned'],
-    approved:    ['done', 'in_review', 'abandoned'],
+    approved:    ['delivered', 'done', 'in_review', 'abandoned'],
+    delivered:   ['done', 'in_progress', 'abandoned'],
   },
 };
 

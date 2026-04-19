@@ -235,6 +235,12 @@ export default {
       case 'updateTaskMeta':     return handleUpdateTaskMeta(body, ctx, env);
       case 'getProducts':        return handleGetProducts(body, ctx, env);
       case 'migrateOwners':     return handleMigrateOwners(body, ctx, env);
+      case 'deliverTask':           return handleDeliverTask(body, ctx, env);
+      case 'submitBatchFeedback':   return handleSubmitBatchFeedback(body, ctx, env);
+      case 'markTaskDone':          return handleMarkTaskDone(body, ctx, env);
+      case 'getRequestDelivery':    return handleGetRequestDelivery(body, ctx, env);
+      case 'getAgeingConfig':       return handleGetAgeingConfig(body, ctx, env);
+      case 'updateAgeingConfig':    return handleUpdateAgeingConfig(body, ctx, env);
       default:
         return err(`Unknown action: ${action}`, 404);
     }
@@ -317,6 +323,7 @@ async function handleSubmitRequest(body, ctx, env) {
       brand_team_only: type === 'brand_initiative',
       status: 'pending',
       requester_id: ctx.userId,
+      required_by: template_data?.deadline || null,
     }),
   }, env);
 
@@ -573,7 +580,7 @@ async function handleUpdateTaskStage(body, ctx, env) {
   const { task_id, stage, blocked_reason } = body;
   if (!task_id || !stage) return err('task_id and stage are required');
 
-  const validStages = ['backlog','in_sprint','in_progress','ext_blocked','in_review','approved','done','abandoned'];
+  const validStages = ['backlog','in_sprint','in_progress','ext_blocked','in_review','approved','delivered','done','abandoned'];
   if (!validStages.includes(stage)) return err('Invalid stage');
 
   // Fetch current task
@@ -594,7 +601,8 @@ async function handleUpdateTaskStage(body, ctx, env) {
     in_progress: ['in_review', 'ext_blocked', 'in_sprint', 'abandoned'],
     ext_blocked: ['in_progress', 'abandoned'],
     in_review: ['approved', 'in_progress', 'abandoned'],
-    approved: ['done', 'in_review', 'abandoned'],
+    approved: ['delivered', 'done', 'in_review', 'abandoned'],
+    delivered: ['done', 'in_progress', 'abandoned'],
   };
 
   const transitions = ['admin','lead'].includes(ctx.role)
@@ -620,8 +628,12 @@ async function handleUpdateTaskStage(body, ctx, env) {
     updated_at: new Date().toISOString(),
   };
 
-  if (stage === 'done') update.completed_at = new Date().toISOString();
-  if (stage === 'abandoned') update.abandoned_at = new Date().toISOString();
+  const now = new Date().toISOString();
+  if (stage === 'in_progress') update.in_progress_at = now;
+  if (stage === 'in_review')   update.in_review_at   = now;
+  if (stage === 'approved')    update.approved_at    = now;
+  if (stage === 'done')        { update.completed_at = now; update.auto_close_at = null; }
+  if (stage === 'abandoned')   update.abandoned_at   = now;
 
   const updateRes = await sbFetch(`tasks?id=eq.${task_id}`, {
     method: 'PATCH',
@@ -1120,13 +1132,14 @@ async function handleApproveWork(body, ctx, env) {
     prefer: 'return=minimal',
   }, env);
 
-  // Move to done
+  // Move to approved — assignee then delivers to requester
+  const nowApproved = new Date().toISOString();
   await sbFetch(`tasks?id=eq.${task_id}`, {
     method: 'PATCH',
     body: JSON.stringify({
-      stage: 'done',
-      completed_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+      stage: 'approved',
+      approved_at: nowApproved,
+      updated_at: nowApproved,
     }),
     prefer: 'return=minimal',
   }, env);
@@ -1136,7 +1149,7 @@ async function handleApproveWork(body, ctx, env) {
     feedback: feedback || null,
   }, env);
 
-  await slackTeam(`✅ *Work approved: "${task.title}"*\nApproved by: ${ctx.brandUser.name}${feedback ? `\nNote: ${feedback}` : ''}`, env);
+  await slackTeam(`✅ *Work approved internally: "${task.title}"*\nApproved by: ${ctx.brandUser?.name || ctx.name}${feedback ? `\nNote: ${feedback}` : ''}\nTask is now ready to deliver to the requester.`, env);
 
   return json({ ok: true });
 }
@@ -1961,6 +1974,9 @@ async function closeSprintById(sprintId, closedByUserId, env) {
 async function runSprintClose(env) {
   console.log('[throttleops] Auto sprint close cron fired');
 
+  // Auto-close delivered tasks past their feedback window
+  await autoCloseStaleTasks(env);
+
   // Guard: find active sprint(s)
   const activeRes = await sbFetch('sprints?status=eq.active&select=*', { method: 'GET' }, env);
   if (!activeRes.ok) {
@@ -2002,6 +2018,351 @@ async function runSprintClose(env) {
   }
 
   console.log(`[sprintClose] Done. Completion: ${result.health_score.completion_rate}%, Spillovers: ${result.spillovers_carried}`);
+}
+
+// ── DELIVER TASK ──────────────────────────────────────────────────────────────
+async function handleDeliverTask(body, ctx, env) {
+  const { task_id, message, attachment_url, attachment_label } = body;
+  if (!task_id) return err('task_id is required');
+
+  const tRes = await sbFetch(`tasks?id=eq.${task_id}&select=id,title,stage,request_id`, { method: 'GET' }, env);
+  if (!tRes.ok) return err('Task not found', 404);
+  const [task] = await tRes.json();
+  if (!task) return err('Task not found', 404);
+  if (task.stage !== 'approved') return err('Task must be in approved stage to deliver');
+
+  // Assignee or admin/lead can deliver
+  if (!['admin', 'lead'].includes(ctx.role)) {
+    const aRes = await sbFetch(
+      `task_assignees?task_id=eq.${task_id}&user_id=eq.${ctx.userId}&select=task_id`,
+      { method: 'GET' }, env
+    );
+    const rows = aRes.ok ? await aRes.json() : [];
+    if (!rows.length) return err('You are not assigned to this task', 403);
+  }
+
+  // Get auto_close_hours from ageing config
+  const cfgRes = await sbFetch(`ageing_config?stage=eq.delivered&select=auto_close_hours`, { method: 'GET' }, env);
+  const cfgRows = cfgRes.ok ? await cfgRes.json() : [];
+  const autoCloseHours = cfgRows[0]?.auto_close_hours ?? 72;
+  const now = new Date().toISOString();
+  const autoCloseAt = new Date(Date.now() + autoCloseHours * 60 * 60 * 1000).toISOString();
+
+  await sbFetch(`tasks?id=eq.${task_id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      stage: 'delivered',
+      delivered_at: now,
+      auto_close_at: autoCloseAt,
+      delivery_message: message || null,
+      updated_at: now,
+    }),
+    prefer: 'return=minimal',
+  }, env);
+
+  if (attachment_url) {
+    await sbFetch('task_attachments', {
+      method: 'POST',
+      body: JSON.stringify({
+        task_id,
+        type: 'link',
+        url: attachment_url,
+        label: attachment_label || 'Delivery',
+        uploaded_by: ctx.userId,
+      }),
+      prefer: 'return=minimal',
+    }, env);
+  }
+
+  await logActivity(task_id, ctx.userId, 'delivery', {
+    message: message || null,
+    attachment_url: attachment_url || null,
+    auto_close_at: autoCloseAt,
+  }, env);
+
+  // Notify requester via Slack if slack_id exists
+  if (task.request_id) {
+    const reqRes = await sbFetch(
+      `requests?id=eq.${task.request_id}&select=title,requester_id`,
+      { method: 'GET' }, env
+    );
+    const [request] = reqRes.ok ? await reqRes.json() : [null];
+    if (request?.requester_id) {
+      const userRes = await sbFetch(
+        `users?id=eq.${request.requester_id}&select=name,slack_id`,
+        { method: 'GET' }, env
+      );
+      const [requester] = userRes.ok ? await userRes.json() : [null];
+      const mention = requester?.slack_id ? `<@${requester.slack_id}>` : (requester?.name || 'Requester');
+      await slackTeam(
+        `📦 *Delivery ready: "${task.title}"*\n${mention} — your deliverable is ready for review.\nYou have ${autoCloseHours}h to submit feedback before it auto-accepts.\nReview at: https://throttle.legendoftoys.com/requests/`,
+        env
+      );
+    }
+  }
+
+  await slackOps(
+    `📦 *Task delivered to requester*\n*"${task.title}"*\nDelivered by: ${ctx.brandUser?.name || ctx.name}\nFeedback window: ${autoCloseHours}h`,
+    env
+  );
+
+  return json({ ok: true, auto_close_at: autoCloseAt });
+}
+
+// ── SUBMIT BATCH FEEDBACK ─────────────────────────────────────────────────────
+async function handleSubmitBatchFeedback(body, ctx, env) {
+  const { request_id, feedback_items } = body;
+  // feedback_items: [{ task_id, verdict ('accepted'|'iteration_requested'), comment, reference_links }]
+  if (!request_id) return err('request_id is required');
+  if (!Array.isArray(feedback_items) || feedback_items.length === 0) return err('feedback_items is required');
+
+  // Only the requester can submit feedback on their own request
+  const reqRes = await sbFetch(
+    `requests?id=eq.${request_id}&select=id,title,requester_id`,
+    { method: 'GET' }, env
+  );
+  const [request] = reqRes.ok ? await reqRes.json() : [null];
+  if (!request) return err('Request not found', 404);
+  if (request.requester_id !== ctx.userId) return err('Forbidden', 403);
+
+  // Verify all tasks belong to this request
+  const taskIds = feedback_items.map(f => f.task_id);
+  const tasksRes = await sbFetch(
+    `tasks?id=in.(${taskIds.join(',')})&request_id=eq.${request_id}&select=id,title,stage,iteration_count`,
+    { method: 'GET' }, env
+  );
+  const tasks = tasksRes.ok ? await tasksRes.json() : [];
+  const taskMap = Object.fromEntries(tasks.map(t => [t.id, t]));
+
+  const batchId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const results = { accepted: [], iterations: [], errors: [] };
+
+  for (const item of feedback_items) {
+    const task = taskMap[item.task_id];
+    if (!task) {
+      results.errors.push({ task_id: item.task_id, error: 'Task not found in this request' });
+      continue;
+    }
+    if (task.stage !== 'delivered') {
+      results.errors.push({ task_id: item.task_id, error: `Task is in '${task.stage}', not delivered` });
+      continue;
+    }
+
+    await sbFetch('task_feedback', {
+      method: 'POST',
+      body: JSON.stringify({
+        task_id: item.task_id,
+        batch_id: batchId,
+        submitted_by: ctx.userId,
+        verdict: item.verdict,
+        comment: item.comment || null,
+        reference_links: item.reference_links || [],
+      }),
+      prefer: 'return=minimal',
+    }, env);
+
+    if (item.verdict === 'accepted') {
+      await sbFetch(`tasks?id=eq.${item.task_id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ stage: 'done', completed_at: now, auto_close_at: null, updated_at: now }),
+        prefer: 'return=minimal',
+      }, env);
+      await logActivity(item.task_id, ctx.userId, 'completion', { source: 'requester_accepted', batch_id: batchId }, env);
+      results.accepted.push(item.task_id);
+    } else {
+      // iteration_requested — send back to in_progress
+      const newIterCount = (task.iteration_count || 0) + 1;
+      await sbFetch(`tasks?id=eq.${item.task_id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          stage: 'in_progress',
+          iteration_count: newIterCount,
+          auto_close_at: null,
+          delivered_at: null,
+          delivery_message: null,
+          in_progress_at: now,
+          updated_at: now,
+        }),
+        prefer: 'return=minimal',
+      }, env);
+      await logActivity(item.task_id, ctx.userId, 'iteration', {
+        iteration_number: newIterCount,
+        comment: item.comment || null,
+        reference_links: item.reference_links || [],
+        batch_id: batchId,
+      }, env);
+      results.iterations.push(item.task_id);
+    }
+  }
+
+  // Notify brand team
+  if (results.iterations.length > 0) {
+    await slackOps(
+      `🔄 *Iteration requested on "${request.title}"*\n✅ Accepted: ${results.accepted.length}\n↩ Needs revision: ${results.iterations.length}\nFrom: ${ctx.brandUser?.name || ctx.name}`,
+      env
+    );
+    // DM the owners of iteration tasks
+    const ownersRes = await sbFetch(
+      `task_assignees?task_id=in.(${results.iterations.join(',')})&is_owner=eq.true&select=user_id`,
+      { method: 'GET' }, env
+    );
+    const ownerRows = ownersRes.ok ? await ownersRes.json() : [];
+    const ownerIds = [...new Set(ownerRows.map(r => r.user_id))];
+    if (ownerIds.length > 0) {
+      const usersRes = await sbFetch(`users?id=in.(${ownerIds.join(',')})&select=name,slack_id`, { method: 'GET' }, env);
+      const owners = usersRes.ok ? await usersRes.json() : [];
+      const mentions = owners.map(o => o.slack_id ? `<@${o.slack_id}>` : o.name).join(', ');
+      await slackTeam(
+        `🔄 ${mentions} — ${results.iterations.length} task(s) on *"${request.title}"* need a revision. Check the board.`,
+        env
+      );
+    }
+  } else {
+    await slackTeam(
+      `✅ *All tasks accepted on "${request.title}"* by ${ctx.brandUser?.name || ctx.name}`,
+      env
+    );
+  }
+
+  return json({ ok: true, batch_id: batchId, accepted: results.accepted.length, iterations: results.iterations.length, errors: results.errors });
+}
+
+// ── MARK TASK DONE — lead/admin override ──────────────────────────────────────
+async function handleMarkTaskDone(body, ctx, env) {
+  const g = requireRole(ctx, 'admin', 'lead'); if (g) return g;
+  const { task_id, reason } = body;
+  if (!task_id) return err('task_id is required');
+
+  const tRes = await sbFetch(`tasks?id=eq.${task_id}&select=id,title,stage`, { method: 'GET' }, env);
+  const [task] = tRes.ok ? await tRes.json() : [null];
+  if (!task) return err('Task not found', 404);
+  if (['done', 'abandoned'].includes(task.stage)) return err(`Task is already ${task.stage}`);
+
+  const now = new Date().toISOString();
+  await sbFetch(`tasks?id=eq.${task_id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ stage: 'done', completed_at: now, auto_close_at: null, updated_at: now }),
+    prefer: 'return=minimal',
+  }, env);
+
+  await logActivity(task_id, ctx.userId, 'completion', { source: 'admin_override', reason: reason || null }, env);
+  await slackTeam(
+    `✅ *Task marked done by ${ctx.brandUser?.name || ctx.name}: "${task.title}"*${reason ? `\nReason: ${reason}` : ''}`,
+    env
+  );
+  return json({ ok: true });
+}
+
+// ── GET REQUEST DELIVERY — requester feedback UI ──────────────────────────────
+async function handleGetRequestDelivery(body, ctx, env) {
+  const { request_id } = body;
+  if (!request_id) return err('request_id is required');
+
+  const reqRes = await sbFetch(
+    `requests?id=eq.${request_id}&select=id,title,requester_id,required_by,status`,
+    { method: 'GET' }, env
+  );
+  const [request] = reqRes.ok ? await reqRes.json() : [null];
+  if (!request) return err('Request not found', 404);
+
+  // Requester can only fetch their own; brand team can fetch any
+  if (!['admin', 'lead', 'member'].includes(ctx.role) && request.requester_id !== ctx.userId) {
+    return err('Forbidden', 403);
+  }
+
+  const tasksRes = await sbFetch(
+    `tasks?request_id=eq.${request_id}&stage=neq.abandoned&select=id,title,stage,deliverable_type,delivery_message,delivered_at,auto_close_at,iteration_count,completed_at`,
+    { method: 'GET' }, env
+  );
+  const tasks = tasksRes.ok ? await tasksRes.json() : [];
+  if (tasks.length === 0) return json({ request, tasks: [] });
+
+  const taskIds = tasks.map(t => t.id);
+
+  // Attachments
+  const attRes = await sbFetch(
+    `task_attachments?task_id=in.(${taskIds.join(',')})&select=task_id,url,label,type,created_at&order=created_at.desc`,
+    { method: 'GET' }, env
+  );
+  const attachments = attRes.ok ? await attRes.json() : [];
+  const attByTask = {};
+  for (const a of attachments) {
+    if (!attByTask[a.task_id]) attByTask[a.task_id] = [];
+    attByTask[a.task_id].push(a);
+  }
+
+  // Latest feedback per task
+  const fbRes = await sbFetch(
+    `task_feedback?task_id=in.(${taskIds.join(',')})&select=task_id,verdict,comment,reference_links,created_at&order=created_at.desc`,
+    { method: 'GET' }, env
+  );
+  const feedbackRows = fbRes.ok ? await fbRes.json() : [];
+  const latestFbByTask = {};
+  for (const f of feedbackRows) {
+    if (!latestFbByTask[f.task_id]) latestFbByTask[f.task_id] = f;
+  }
+
+  const enriched = tasks.map(t => ({
+    ...t,
+    attachments: attByTask[t.id] || [],
+    latest_feedback: latestFbByTask[t.id] || null,
+  }));
+
+  return json({ request, tasks: enriched });
+}
+
+// ── AGEING CONFIG ─────────────────────────────────────────────────────────────
+async function handleGetAgeingConfig(body, ctx, env) {
+  const res = await sbFetch('ageing_config?select=*&order=stage.asc', { method: 'GET' }, env);
+  const rows = res.ok ? await res.json() : [];
+  return json({ config: rows });
+}
+
+async function handleUpdateAgeingConfig(body, ctx, env) {
+  const g = requireRole(ctx, 'admin'); if (g) return g;
+  const { updates } = body;
+  if (!Array.isArray(updates) || updates.length === 0) return err('updates array required');
+
+  const now = new Date().toISOString();
+  for (const u of updates) {
+    if (!u.stage) continue;
+    const patch = { updated_by: ctx.userId, updated_at: now };
+    if (typeof u.warning_hours  === 'number') patch.warning_hours  = u.warning_hours;
+    if (typeof u.critical_hours === 'number') patch.critical_hours = u.critical_hours;
+    if ('auto_close_hours' in u) patch.auto_close_hours = u.auto_close_hours;
+    await sbFetch(`ageing_config?stage=eq.${u.stage}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+      prefer: 'return=minimal',
+    }, env);
+  }
+  return json({ ok: true });
+}
+
+// ── AUTO-CLOSE STALE DELIVERED TASKS ─────────────────────────────────────────
+async function autoCloseStaleTasks(env) {
+  const now = new Date().toISOString();
+
+  const res = await sbFetch(
+    `tasks?stage=eq.delivered&auto_close_at=lte.${now}&select=id,title,request_id`,
+    { method: 'GET' }, env
+  );
+  if (!res.ok) { console.error('[autoClose] Failed to fetch stale delivered tasks'); return; }
+  const staleTasks = await res.json();
+  if (!staleTasks.length) { console.log('[autoClose] No stale delivered tasks'); return; }
+
+  for (const task of staleTasks) {
+    await sbFetch(`tasks?id=eq.${task.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ stage: 'done', completed_at: now, auto_close_at: null, updated_at: now }),
+      prefer: 'return=minimal',
+    }, env);
+    await logActivity(task.id, null, 'completion', { source: 'auto_close', reason: 'Feedback window expired — auto-accepted' }, env);
+    await slackOps(`⏱ *Auto-accepted: "${task.title}"* — feedback window expired, task marked done.`, env);
+  }
+
+  console.log(`[autoClose] Auto-closed ${staleTasks.length} task(s)`);
 }
 
 // ── Helper functions ──────────────────────────────────────────────────────────
