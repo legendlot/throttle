@@ -620,7 +620,7 @@ export default function BoardPage() {
                   }}
                   style={{ flex: 1, background: 'none', border: 'none', outline: 'none', fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--text)', caretColor: '#F2CD1A' }}
                 />
-                <kbd style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 3, padding: '2px 5px' }}>ESC</kbd>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)' }}>/ or ESC to close</span>
               </div>
               <div style={{ maxHeight: 360, overflowY: 'auto' }}>
                 {(() => {
