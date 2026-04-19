@@ -178,10 +178,12 @@ function KanbanColumn({ stage, tasks, onTaskClick, onDrop, canDrop, ageingConfig
         <span style={{
           fontFamily: 'var(--mono)',
           fontSize: 10,
-          color: 'var(--t3)',
-          background: 'var(--s2)',
+          color: 'var(--text)',
+          background: 'var(--s3)',
+          border: '1px solid var(--b2)',
           padding: '2px 6px',
           borderRadius: 3,
+          fontWeight: 600,
         }}>
           {tasks.length}
         </span>
