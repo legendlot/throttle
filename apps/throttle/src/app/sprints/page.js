@@ -411,7 +411,8 @@ export default function SprintsPage() {
                   <div style={{ height: 4, background: 'var(--s3)', borderRadius: 2, overflow: 'hidden' }}>
                     <div style={{
                       height: '100%',
-                      width: `${pct}%`,
+                      width: pct === 0 ? '2px' : `${pct}%`,
+                      minWidth: pct === 0 ? 0 : undefined,
                       background: barColor,
                       borderRadius: 2,
                       transition: 'width .4s ease',
@@ -420,9 +421,6 @@ export default function SprintsPage() {
                 </div>
               );
             })()}
-            {isAdminLead && teamMembers.length > 0 && (
-              <PersonFilter members={teamMembers} selected={selectedPerson} onChange={setSelectedPerson} taskCounts={personTaskCounts} />
-            )}
           </div>
 
           {isAdminLead && (
@@ -455,6 +453,12 @@ export default function SprintsPage() {
             </div>
           )}
         </div>
+
+        {isAdminLead && teamMembers.length > 0 && (
+          <div style={{ marginBottom: 16 }}>
+            <PersonFilter members={teamMembers} selected={selectedPerson} onChange={setSelectedPerson} taskCounts={personTaskCounts} />
+          </div>
+        )}
 
         {/* Error */}
         {error && (
