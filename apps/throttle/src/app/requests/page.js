@@ -7,6 +7,30 @@ import { supabaseBrand as supabase } from '@throttle/db';
 import { useAuth } from '@throttle/auth';
 import { REQUEST_TYPES, getRequestType } from '@/lib/requestTypes';
 
+function timeInStage(req) {
+  const since = ['pending'].includes(req.status)
+    ? req.created_at
+    : req.reviewed_at || req.created_at;
+  if (!since) return null;
+
+  const hours = (Date.now() - new Date(since).getTime()) / (1000 * 60 * 60);
+  if (hours < 1)   return `${Math.floor(hours * 60)}m`;
+  if (hours < 24)  return `${Math.floor(hours)}h`;
+  const days = Math.floor(hours / 24);
+  return `${days}d`;
+}
+
+function stageColor(req) {
+  const since = ['pending'].includes(req.status)
+    ? req.created_at
+    : req.reviewed_at || req.created_at;
+  if (!since) return 'var(--t3)';
+  const hours = (Date.now() - new Date(since).getTime()) / (1000 * 60 * 60);
+  if (hours >= 48) return '#DE2A2A';
+  if (hours >= 24) return '#f59e0b';
+  return 'var(--t3)';
+}
+
 export default function RequestsPage() {
   const { session, brandUser } = useAuth();
   const router = useRouter();
@@ -299,6 +323,15 @@ export default function RequestsPage() {
                         Resubmit
                       </button>
                     )}
+                    <span style={{
+                      fontFamily: 'var(--mono)',
+                      fontSize: 10,
+                      color: stageColor(req),
+                      letterSpacing: '.04em',
+                      marginRight: 8,
+                    }}>
+                      {timeInStage(req)}
+                    </span>
                     <span style={{
                       fontFamily: 'var(--mono)',
                       color: 'var(--t3)',
