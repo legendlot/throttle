@@ -434,13 +434,13 @@ export default function BoardPage() {
   }, [brandUser]);
 
   useEffect(() => {
-    if (!brandUser?.id) return;
+    if (!brandUser?.id || !session) return;
     if (brandUser?.role !== 'requester') {
-      workerFetch('getTeamMembers', {})
+      workerFetch('getTeamMembers', {}, session?.access_token)
         .then(data => setTeamMembers(data.members || []))
         .catch(() => {});
     }
-    workerFetch('getAgeingConfig', {})
+    workerFetch('getAgeingConfig', {}, session?.access_token)
       .then(d => {
         const map = {};
         for (const row of d.config || []) map[row.stage] = row;
