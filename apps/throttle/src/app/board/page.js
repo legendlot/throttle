@@ -586,7 +586,9 @@ export default function BoardPage() {
             </div>
           </div>
         ) : (
-          <TableView tasks={visibleTasks} onTaskClick={setSelectedTask} />
+          <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: '0 2px' }}>
+            <TableView tasks={visibleTasks} onTaskClick={setSelectedTask} />
+          </div>
         )}
 
         {selectedTask && (
