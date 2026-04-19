@@ -1,5 +1,5 @@
 'use client';
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useState, useRef } from 'react';
 import { supabase, workerFetch } from '@throttle/db';
 
 const AuthContext = createContext(null);
@@ -11,6 +11,7 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
   const [perms, setPerms]           = useState(null);
   const [brandUser, setBrandUser]   = useState(null);
   const [loading, setLoading]       = useState(true);
+  const identityCacheRef = useRef(null); // { userId, data }
 
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
@@ -33,7 +34,26 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
 
   async function loadIdentity(currentSession) {
     try {
+      const incomingUserId = currentSession?.user?.id;
+
+      // If we already have identity data for this exact user, reuse it.
+      // This prevents a Worker round-trip (and the resulting re-render flash)
+      // on every token refresh / tab focus event.
+      if (identityCacheRef.current?.userId === incomingUserId && identityCacheRef.current?.data) {
+        const data = identityCacheRef.current.data;
+        setBrandUser(data);
+        setRole(data?.role ?? null);
+        setPerms(data?.permissions ?? null);
+        setUser({
+          id: data?.id ?? incomingUserId ?? null,
+          email: data?.email ?? currentSession.user?.email ?? null,
+          full_name: data?.full_name ?? null,
+        });
+        return;
+      }
+
       const data = await workerFetch(pingAction, {}, currentSession, workerUrl);
+      identityCacheRef.current = { userId: incomingUserId, data };
       const resolvedRole     = data?.role ?? null;
       const resolvedFullName = data?.full_name ?? null;
       const resolvedPerms    = data?.permissions ?? null;
