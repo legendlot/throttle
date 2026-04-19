@@ -415,7 +415,9 @@ export default function BoardPage() {
 
   useEffect(() => {
     function onKey(e) {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        const tag = document.activeElement?.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
         e.preventDefault();
         setSearchOpen(o => !o);
         setSearchQuery('');
@@ -506,7 +508,7 @@ export default function BoardPage() {
                 {selectedPerson ? `${visibleTasks.length} of ${tasks.length}` : tasks.length} active task{(selectedPerson ? visibleTasks.length : tasks.length) !== 1 ? 's' : ''}
               </span>
               <span style={{ color: 'var(--t3)' }}>
-                <kbd style={{ background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 3, padding: '1px 5px', fontSize: 9 }}>⌘K</kbd> search
+                <kbd style={{ background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 3, padding: '1px 5px', fontSize: 9 }}>/</kbd> search
               </span>
             </p>
           </div>

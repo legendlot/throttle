@@ -9,6 +9,8 @@ const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'missing-
 const authOptions = {
   persistSession: true,
   autoRefreshToken: true,
+  detectSessionInUrl: true,
+  storageKey: 'throttle-auth',
 };
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
