@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Layout from '@/components/Layout';
 import { supabaseBrand as supabase, workerFetch } from '@throttle/db';
 import { useAuth } from '@throttle/auth';
@@ -11,14 +11,25 @@ export default function SettingsPage() {
   const { session, brandUser } = useAuth();
   const [users, setUsers] = useState([]);
   const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState(null);
   const [saving, setSaving] = useState(null);
   const [error, setError] = useState(null);
 
   async function loadUsers() {
-    const { data } = await supabase.from('users').select('*').order('name');
-    setUsers(data || []);
-    setLoaded(true);
+    try {
+      const { data, error } = await supabase.from('users').select('*').order('name');
+      if (error) throw error;
+      setUsers(data || []);
+    } catch (e) {
+      setLoadError(e.message);
+    } finally {
+      setLoaded(true);
+    }
   }
+
+  useEffect(() => {
+    if (session && brandUser?.role === 'admin') loadUsers();
+  }, [session, brandUser]);
 
   async function updateUser(userId, field, value) {
     setSaving(userId);
@@ -50,12 +61,9 @@ export default function SettingsPage() {
         <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginBottom: 24 }}>Manage team roles and disciplines</p>
 
         {!loaded ? (
-          <button
-            onClick={loadUsers}
-            style={{ background: '#F2CD1A', color: '#080808', fontFamily: 'var(--head)', fontWeight: 700, fontSize: 11, letterSpacing: '.15em', textTransform: 'uppercase', borderRadius: 6, border: 'none', padding: '9px 20px', cursor: 'pointer' }}
-          >
-            Load Team
-          </button>
+          <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>Loading team...</p>
+        ) : loadError ? (
+          <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: '#DE2A2A' }}>{loadError}</p>
         ) : (
           <div>
             {error && (
@@ -149,12 +157,14 @@ export default function SettingsPage() {
 function AgeingConfigSection({ session }) {
   const [config, setConfig] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [edits, setEdits] = useState({});
 
   async function loadConfig() {
     setLoading(true);
+    setLoadError(null);
     try {
       const d = await workerFetch('getAgeingConfig', {}, session?.access_token);
       setConfig(d.config || []);
@@ -167,10 +177,16 @@ function AgeingConfigSection({ session }) {
         };
       }
       setEdits(initial);
+    } catch (e) {
+      setLoadError(e.message);
     } finally {
       setLoading(false);
     }
   }
+
+  useEffect(() => {
+    if (session) loadConfig();
+  }, [session]);
 
   async function save() {
     setSaving(true);
@@ -194,15 +210,9 @@ function AgeingConfigSection({ session }) {
     setEdits(e => ({ ...e, [stage]: { ...e[stage], [field]: value } }));
   }
 
-  if (config.length === 0 && !loading) {
-    return (
-      <div>
-        <button onClick={loadConfig} style={{ background: '#F2CD1A', color: '#080808', border: 'none', borderRadius: 4, padding: '7px 14px', fontFamily: 'var(--head)', fontSize: 10, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer' }}>
-          Load Ageing Config
-        </button>
-      </div>
-    );
-  }
+  if (loading) return <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>Loading...</p>;
+  if (loadError) return <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: '#DE2A2A' }}>{loadError}</p>;
+  if (config.length === 0) return <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>No config found.</p>;
 
   return (
     <div>
