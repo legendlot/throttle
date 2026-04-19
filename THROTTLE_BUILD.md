@@ -1,5 +1,5 @@
 # Throttle — Technical Build Document
-**Version:** 12 | **Last Updated:** 2026-04-19 (Phase 12 — delivery loop + ageing)
+**Version:** 13 | **Last Updated:** 2026-04-19 (Phase 13 — convenience features)
 **Purpose:** Technical reference for the Throttle brand team work OS.
 Feed this file when continuing development in a new session.
 
@@ -62,6 +62,8 @@ Feed this file when continuing development in a new session.
     │       ├── supabase.js
     │       ├── worker.js
     │       ├── auth.js
+    │       ├── toast.js              ← ToastProvider + useToast hook (Phase 13)
+    │       ├── ageingUtils.js        ← ageing status + timestamp helpers (Phase 12)
     │       ├── requestTypes.js       ← 9 types × field config + LAUNCH_PACK_ITEMS + getVisibleTypes
     │       ├── taskConfig.js         ← stages, priorities, transitions, deliverable types
     │       └── sprintUtils.js        ← date helpers for sprint management
@@ -287,6 +289,13 @@ NEXT_PUBLIC_WORKER_URL=https://throttleops.afshaan.workers.dev
 | Ageing thresholds in DB | brand.ageing_config table, admin-editable from Settings | Per-stage warning/critical hours. Ageing dots on task cards. No hardcoded thresholds in frontend. |
 | Feedback page at /requests/feedback/?id= | Query-param route, not [id] dynamic segment | Next.js `output: 'export'` requires generateStaticParams for `[id]` segments — incompatible with arbitrary request UUIDs. Query-param is functionally identical and prerenders cleanly. |
 | Feedback page: requester-facing delivery review | Thumbs up/down per task, reference link/comment on iteration | Shows delivery message, attachments, previous feedback history. All verdicts submit in one batch so one request ≈ one response. |
+| Toast system | ToastContext in src/lib/toast.js, ToastProvider wraps Layout | Global feedback for all async actions. Success=yellow left border, error=red, warning=amber. Auto-dismiss 3.2s, click to dismiss early. useToast fails soft outside the provider so unauthenticated routes (login) don't crash. |
+| Click outside to close panel | Transparent overlay div behind the panel at zIndex 40, panel at zIndex 50 | Standard modal pattern. Overlay captures all outside clicks. Pre-existed in TaskSidePanel — no change needed for Phase 13. |
+| Due date colours | getDueDateStyle helper in board/page.js: red if overdue, amber if <48h | Uses client-side Date.now() — no ageing config fetch needed. Excluded for done/abandoned tasks. Overdue cards append ` !`. |
+| Abandon confirmation | Two-step: click link → inline form with reason textarea + warning line → confirm | Reason required (matches Worker validation). Success toast fires post-onClose. Replaces any potential browser confirm(). |
+| Cmd+K search | Client-side filter on loaded tasks array, opens side panel | No network call — uses already-loaded board data. Matches on title/product_code/type. Shows up to 12 results. ESC closes. Hint in board header. |
+| Sprint progress bar | Separate .count({ head: true }) query for done tasks + sprintTasks.length | Main tasks query excludes done — can't derive progress without second query. Bar color: blue <40%, yellow 40-80%, green ≥80%. |
+| Notification bell | Polls activity_log every 60s, localStorage for last-seen timestamp | No notifications table needed. Scoped to tasks the user is assigned to, excluding their own actions. Member/lead/admin only. supabase imported at top of Layout.js (not inline require). |
 
 ---
 
@@ -472,6 +481,17 @@ NEXT_PUBLIC_WORKER_URL=https://throttleops.afshaan.workers.dev
 - [x] Worker: self_add_collaborator logActivity includes assignee_name
 - [x] Worker: remove_self logActivity includes assignee_name
 - [x] TaskSidePanel: loadAssignees replaced with two separate queries (no ambiguous FK join)
+
+### Phase 13 — Convenience Features ✅
+- [x] Toast system: ToastProvider in Layout, useToast hook, success/warning/error variants
+- [x] Toasts wired into TaskSidePanel for stage, priority, assignment, abandon
+- [x] Click-outside overlay already in place on TaskSidePanel (pre-existed)
+- [x] Due date colour coding on task cards (amber <48h, red overdue, exclamation mark on overdue)
+- [x] Abandon confirmation: two-step with required reason textarea + warning line
+- [x] Cmd+K search modal on board: client-side filter, opens side panel, ⌘K header hint
+- [x] Sprint progress bar: done/total with colour coding (blue<40%, yellow<80%, green≥80%)
+- [x] Notification bell in nav: activity_log polling, localStorage unread tracking, member/lead/admin only
+- [x] Build clean, deploy green
 
 ### Phase 12 — Delivery Loop + Ageing ✅
 - [x] DB: delivered stage, iteration_count, stage timestamp columns, required_by, task_feedback table, ageing_config table
