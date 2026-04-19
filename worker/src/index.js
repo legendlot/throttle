@@ -709,7 +709,7 @@ async function handleAssignTask(body, ctx, env) {
       prefer: 'return=minimal',
     }, env);
 
-    await logActivity(tId, ctx.userId, 'assignment', { assignee_id: ctx.userId, role: 'owner', action: 'self_assigned_owner' }, env);
+    await logActivity(tId, ctx.userId, 'assignment', { assignee_id: ctx.userId, assignee_name: ctx.brandUser?.name || 'Unknown', role: 'owner', action: 'self_assigned_owner' }, env);
     return json({ ok: true });
   }
 
@@ -725,14 +725,14 @@ async function handleAssignTask(body, ctx, env) {
       prefer: 'return=minimal',
     }, env);
 
-    await logActivity(tId, ctx.userId, 'assignment', { assignee_id: ctx.userId, role: 'collaborator', action: 'self_added_collaborator' }, env);
+    await logActivity(tId, ctx.userId, 'assignment', { assignee_id: ctx.userId, assignee_name: ctx.brandUser?.name || 'Unknown', role: 'collaborator', action: 'self_added_collaborator' }, env);
     return json({ ok: true });
   }
 
   // ── REMOVE SELF ───────────────────────────────────────────────────────────
   if (act === 'remove_self') {
     await sbFetch(`task_assignees?task_id=eq.${tId}&user_id=eq.${ctx.userId}`, { method: 'DELETE', prefer: 'return=minimal' }, env);
-    await logActivity(tId, ctx.userId, 'assignment', { assignee_id: ctx.userId, action: 'removed_self' }, env);
+    await logActivity(tId, ctx.userId, 'assignment', { assignee_id: ctx.userId, assignee_name: ctx.brandUser?.name || 'Unknown', action: 'removed_self' }, env);
     return json({ ok: true });
   }
 

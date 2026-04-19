@@ -50,11 +50,27 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
   }
 
   async function loadAssignees() {
-    const { data } = await supabase
+    // Two separate queries — task_assignees has two FKs to users (user_id + assigned_by),
+    // which makes the PostgREST join ambiguous and silently return null. Fetch separately.
+    const { data: rows } = await supabase
       .from('task_assignees')
-      .select('user_id, is_owner, users(id, name, discipline)')
+      .select('user_id, is_owner')
       .eq('task_id', task.id);
-    setAssignees(data?.map(a => ({ ...a.users, user_id: a.user_id, is_owner: a.is_owner })).filter(Boolean) || []);
+
+    if (!rows || rows.length === 0) { setAssignees([]); return; }
+
+    const userIds = [...new Set(rows.map(r => r.user_id))];
+    const { data: users } = await supabase
+      .from('users')
+      .select('id, name, discipline')
+      .in('id', userIds);
+
+    const usersById = Object.fromEntries((users || []).map(u => [u.id, u]));
+    setAssignees(
+      rows
+        .map(r => ({ ...usersById[r.user_id], user_id: r.user_id, is_owner: r.is_owner }))
+        .filter(a => a.user_id)
+    );
   }
 
   async function loadTeamMembers() {
