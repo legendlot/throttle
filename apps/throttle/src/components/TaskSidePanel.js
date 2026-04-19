@@ -40,6 +40,14 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
     }
   }, [task.id]);
 
+  useEffect(() => {
+    function handleKeyDown(e) {
+      if (e.key === 'Escape') onClose();
+    }
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
   async function loadActivity() {
     try {
       const data = await workerFetch('getTaskActivity', { taskId: task.id }, session?.access_token);
