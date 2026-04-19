@@ -1,5 +1,5 @@
 'use client';
-import { createContext, useContext, useEffect, useState, useRef } from 'react';
+import { createContext, useContext, useEffect, useState } from 'react';
 import { supabase, workerFetch } from '@throttle/db';
 
 const AuthContext = createContext(null);
@@ -10,15 +10,11 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
   const [role, setRole]             = useState(null);
   const [perms, setPerms]           = useState(null);
   const [brandUser, setBrandUser]   = useState(null);
-  const brandUserRef = useRef(null);
   const [loading, setLoading]       = useState(true);
 
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, nextSession) => {
-        // On token refresh, only skip re-render if identity is already loaded.
-        // If brandUser is null we're still initialising — must proceed normally.
-        if (event === 'TOKEN_REFRESHED' && brandUserRef.current) return;
+      async (_event, nextSession) => {
         setSession(nextSession);
         if (nextSession) {
           await loadIdentity(nextSession);
@@ -49,7 +45,6 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
         full_name: resolvedFullName,
       });
       setBrandUser(data);
-      brandUserRef.current = data;
     } catch (e) {
       console.error('[AuthProvider] loadIdentity failed:', e);
       setUser(null);
