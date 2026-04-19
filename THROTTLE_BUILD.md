@@ -1,5 +1,5 @@
 # Throttle — Technical Build Document
-**Version:** 11c | **Last Updated:** 2026-04-18 (Phase 11c — resubmit persistence fix)
+**Version:** 11d | **Last Updated:** 2026-04-19 (Phase 11d — owner display + activity name fixes)
 **Purpose:** Technical reference for the Throttle brand team work OS.
 Feed this file when continuing development in a new session.
 
@@ -266,6 +266,8 @@ NEXT_PUBLIC_WORKER_URL=https://throttleops.afshaan.workers.dev
 | migrateOwners: first assignee becomes owner | For multi-assignee tasks, first row promoted | Admin can correct via UI. Idempotent — safe to re-run. Left in codebase unused after first call. |
 | updateRequest PATCH body | Removed `updated_at` field | brand.requests has no updated_at column — only created_at and reviewed_at. PostgREST rejects unknown columns silently with 400. Tasks table has updated_at; requests table does not — inconsistency introduced during Phase 2 schema design. |
 | updateRequest persistence | handleUpdateRequest now accepts title, is_product_scoped, products | Info-needed resubmit was only updating template_data — title and product scope stayed frozen at original submission. request_products rewritten via delete+insert (simpler than diffing). |
+| loadAssignees: two-query pattern | Fetch task_assignees rows then users separately | task_assignees has two FK columns to brand.users (user_id + assigned_by). PostgREST sees ambiguous relationship, join silently returns null, owner shows as Unassigned. Same separate-call pattern used everywhere else in the codebase. |
+| self-assign activity name | Added assignee_name: ctx.brandUser?.name to self_assign_owner, self_add_collaborator, remove_self logActivity calls | Was only included for add_collaborator and set_owner actions. Self-assign paths forgot to include it, causing "assigned to someone" in the feed. |
 
 ---
 
@@ -445,6 +447,12 @@ NEXT_PUBLIC_WORKER_URL=https://throttleops.afshaan.workers.dev
 - [x] Worker: empty-title guard added on server side
 - [x] Client: /requests/new handleSubmit sends title + products on updateRequest branch
 - [x] Slack notification uses the new title if it changed
+
+### Phase 11d — Owner Display + Activity Name Fixes ✅
+- [x] Worker: self_assign_owner logActivity includes assignee_name
+- [x] Worker: self_add_collaborator logActivity includes assignee_name
+- [x] Worker: remove_self logActivity includes assignee_name
+- [x] TaskSidePanel: loadAssignees replaced with two separate queries (no ambiguous FK join)
 
 ### Pending
 - Phase 11b: QA + full role testing
