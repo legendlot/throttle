@@ -434,21 +434,20 @@ export default function BoardPage() {
   }, [brandUser]);
 
   useEffect(() => {
-    if (brandUser?.role !== 'requester' && session) {
-      workerFetch('getTeamMembers', {}, session?.access_token)
+    if (!brandUser?.id) return;
+    if (brandUser?.role !== 'requester') {
+      workerFetch('getTeamMembers', {})
         .then(data => setTeamMembers(data.members || []))
         .catch(() => {});
     }
-    if (session) {
-      workerFetch('getAgeingConfig', {}, session?.access_token)
-        .then(d => {
-          const map = {};
-          for (const row of d.config || []) map[row.stage] = row;
-          setAgeingConfig(map);
-        })
-        .catch(() => {});
-    }
-  }, [brandUser, session]);
+    workerFetch('getAgeingConfig', {})
+      .then(d => {
+        const map = {};
+        for (const row of d.config || []) map[row.stage] = row;
+        setAgeingConfig(map);
+      })
+      .catch(() => {});
+  }, [brandUser?.id]);
 
   async function loadTasks() {
     setLoading(true);

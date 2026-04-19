@@ -14,7 +14,8 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
 
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (_event, nextSession) => {
+      async (event, nextSession) => {
+        if (event === 'TOKEN_REFRESHED') return; // token updated in localStorage silently — no React state update needed
         setSession(nextSession);
         if (nextSession) {
           await loadIdentity(nextSession);
