@@ -31,6 +31,9 @@ export const SALE_EVENT_ITEMS = [
   { id: 'google_display',   label: 'Google Display Ad',   discipline: 'designer',    deliverable_type: 'ad_creative',  default_on: false },
   { id: 'email_header',     label: 'Email Header',        discipline: 'designer',    deliverable_type: 'graphic',      default_on: false },
   { id: 'whatsapp_graphic', label: 'WhatsApp Graphic',    discipline: 'designer',    deliverable_type: 'graphic',      default_on: false },
+  { id: 'pdp_refresh',      label: 'PDP Refresh (Website)', discipline: 'designer',  deliverable_type: 'graphic',      default_on: false },
+  { id: 'homepage_changes', label: 'Homepage Changes',    discipline: 'designer',    deliverable_type: 'graphic',      default_on: false },
+  { id: 'layout_changes',   label: 'Layout Changes',      discipline: 'designer',    deliverable_type: 'graphic',      default_on: false },
 ];
 
 // ── REQUEST TYPE DEFINITIONS ─────────────────────────────────────────────────

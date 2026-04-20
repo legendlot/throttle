@@ -34,6 +34,9 @@ const SALE_EVENT_ITEMS = [
   { id: 'google_display',   label: 'Google Display Ad',   discipline: 'designer',    deliverable_type: 'ad_creative'  },
   { id: 'email_header',     label: 'Email Header',        discipline: 'designer',    deliverable_type: 'graphic'      },
   { id: 'whatsapp_graphic', label: 'WhatsApp Graphic',    discipline: 'designer',    deliverable_type: 'graphic'      },
+  { id: 'pdp_refresh',      label: 'PDP Refresh (Website)', discipline: 'designer',  deliverable_type: 'graphic'      },
+  { id: 'homepage_changes', label: 'Homepage Changes',    discipline: 'designer',    deliverable_type: 'graphic'      },
+  { id: 'layout_changes',   label: 'Layout Changes',      discipline: 'designer',    deliverable_type: 'graphic'      },
 ];
 
 function deriveDeliverableType(requestType, templateData) {
