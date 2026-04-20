@@ -22,7 +22,7 @@ function getDueDateStyle(dueDateStr, stage) {
 
 // ── Kanban Card ───────────────────────────────────────────────────────────────
 
-function TaskCard({ task, onClick, isDragging, ageingConfig }) {
+function TaskCard({ task, onClick, isDragging, ageingConfig, teamMembers }) {
   const priority = getPriorityConfig(task.priority);
   const stage = getStageConfig(task.stage);
 
@@ -106,10 +106,11 @@ function TaskCard({ task, onClick, isDragging, ageingConfig }) {
             const cardOwner = task.task_assignees?.find(a => a.is_owner);
             const collabCount = task.task_assignees?.filter(a => !a.is_owner).length || 0;
             if (!cardOwner) return null;
+            const owner = { ...cardOwner, name: teamMembers?.find(m => m.id === cardOwner.user_id)?.name };
             return (
               <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
                 <div style={{ width: 16, height: 16, borderRadius: '50%', background: '#F2CD1A', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--head)', fontSize: 8, fontWeight: 700, color: '#080808' }}>
-                  {cardOwner.user_id?.slice(0, 1)?.toUpperCase() || '?'}
+                  {owner.name?.[0]?.toUpperCase() || '?'}
                 </div>
                 {collabCount > 0 && (
                   <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)' }}>+{collabCount}</span>
@@ -134,7 +135,7 @@ function TaskCard({ task, onClick, isDragging, ageingConfig }) {
 
 // ── Kanban Column ─────────────────────────────────────────────────────────────
 
-function KanbanColumn({ stage, tasks, onTaskClick, onDrop, canDrop, ageingConfig }) {
+function KanbanColumn({ stage, tasks, onTaskClick, onDrop, canDrop, ageingConfig, teamMembers }) {
   const [isDragOver, setIsDragOver] = useState(false);
   const config = getStageConfig(stage);
 
@@ -209,6 +210,7 @@ function KanbanColumn({ stage, tasks, onTaskClick, onDrop, canDrop, ageingConfig
             task={task}
             onClick={onTaskClick}
             ageingConfig={ageingConfig}
+            teamMembers={teamMembers}
           />
         ))}
         {tasks.length === 0 && isDragOver && (
@@ -581,6 +583,7 @@ export default function BoardPage() {
                   onDrop={handleDrop}
                   canDrop={true}
                   ageingConfig={ageingConfig}
+                  teamMembers={teamMembers}
                 />
               ))}
             </div>
