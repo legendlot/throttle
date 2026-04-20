@@ -11,7 +11,8 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
   const [perms, setPerms]           = useState(null);
   const [brandUser, setBrandUser]   = useState(null);
   const [loading, setLoading]       = useState(true);
-  const identityCacheRef = useRef(null); // { userId, data }
+  const identityCacheRef   = useRef(null);  // { userId, data }
+  const loadingIdentityRef = useRef(false); // in-flight guard for loadIdentity
 
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
@@ -33,6 +34,13 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
   }, []);
 
   async function loadIdentity(currentSession) {
+    // In-flight guard. onAuthStateChange can fire several times in quick
+    // succession on initial load (INITIAL_SESSION → SIGNED_IN → TOKEN_REFRESHED);
+    // without this, concurrent calls all bypass identityCacheRef (cache is
+    // populated only after the first call returns) and fire parallel getMe
+    // requests with a not-yet-settled token, producing cascading 401s.
+    if (loadingIdentityRef.current) return;
+    loadingIdentityRef.current = true;
     try {
       // Wait for Supabase to finish hydrating the session from storage before
       // calling the Worker. On mobile browsers, onAuthStateChange can fire
@@ -80,6 +88,8 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
       setRole(null);
       setPerms(null);
       setBrandUser(null);
+    } finally {
+      loadingIdentityRef.current = false;
     }
   }
 
