@@ -34,7 +34,16 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
 
   async function loadIdentity(currentSession) {
     try {
-      const incomingUserId = currentSession?.user?.id;
+      // Wait for Supabase to finish hydrating the session from storage before
+      // calling the Worker. On mobile browsers, onAuthStateChange can fire
+      // with a session object before the access_token is ready, which causes
+      // getMe to 401 and the app to hang on LOADING. getSession() resolves
+      // only once the in-memory session is settled.
+      const { data: { session: liveSession } } = await supabase.auth.getSession();
+      const activeSession = liveSession || currentSession;
+      if (!activeSession?.access_token) return;
+
+      const incomingUserId = activeSession.user?.id;
 
       // If we already have identity data for this exact user, reuse it.
       // This prevents a Worker round-trip (and the resulting re-render flash)
@@ -46,13 +55,13 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
         setPerms(data?.permissions ?? null);
         setUser({
           id: data?.id ?? incomingUserId ?? null,
-          email: data?.email ?? currentSession.user?.email ?? null,
+          email: data?.email ?? activeSession.user?.email ?? null,
           full_name: data?.full_name ?? null,
         });
         return;
       }
 
-      const data = await workerFetch(pingAction, {}, currentSession, workerUrl);
+      const data = await workerFetch(pingAction, {}, activeSession, workerUrl);
       identityCacheRef.current = { userId: incomingUserId, data };
       const resolvedRole     = data?.role ?? null;
       const resolvedFullName = data?.full_name ?? null;
@@ -60,8 +69,8 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
       setRole(resolvedRole);
       setPerms(resolvedPerms);
       setUser({
-        id: data?.id ?? currentSession.user?.id ?? null,
-        email: data?.email ?? currentSession.user?.email ?? null,
+        id: data?.id ?? activeSession.user?.id ?? null,
+        email: data?.email ?? activeSession.user?.email ?? null,
         full_name: resolvedFullName,
       });
       setBrandUser(data);
