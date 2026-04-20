@@ -29,6 +29,15 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
         setLoading(false);
       }
     );
+
+    // Fallback for static export / incognito where onAuthStateChange may not
+    // fire on initial load. If getSession() resolves to no session, bounce
+    // loading off immediately so the login screen renders instead of hanging.
+    // A real session will still trigger onAuthStateChange, which takes over.
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) setLoading(false);
+    });
+
     return () => subscription.unsubscribe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
