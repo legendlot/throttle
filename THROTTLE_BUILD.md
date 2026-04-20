@@ -1,5 +1,5 @@
 # Throttle — Technical Build Document
-**Version:** 13 | **Last Updated:** 2026-04-19 (Phase 13 — convenience features)
+**Version:** 14 | **Last Updated:** 2026-04-20 (Phase 14 — sale event request type)
 **Purpose:** Technical reference for the Throttle brand team work OS.
 Feed this file when continuing development in a new session.
 
@@ -64,7 +64,7 @@ Feed this file when continuing development in a new session.
     │       ├── auth.js
     │       ├── toast.js              ← ToastProvider + useToast hook (Phase 13)
     │       ├── ageingUtils.js        ← ageing status + timestamp helpers (Phase 12)
-    │       ├── requestTypes.js       ← 9 types × field config + LAUNCH_PACK_ITEMS + getVisibleTypes
+    │       ├── requestTypes.js       ← 10 types × field config + LAUNCH_PACK_ITEMS + SALE_EVENT_ITEMS + getVisibleTypes
     │       ├── taskConfig.js         ← stages, priorities, transitions, deliverable types
     │       └── sprintUtils.js        ← date helpers for sprint management
     ├── .github/workflows/deploy.yml
@@ -172,6 +172,10 @@ Errors: `{ error: "message" }` with appropriate HTTP status.
 - `getRequestDelivery` — requester or brand team; returns request + all tasks with attachments + latest feedback
 - `getAgeingConfig` — any authenticated user; returns ageing threshold config
 - `updateAgeingConfig` — admin only; updates warning/critical/auto_close hours per stage
+
+### Valid request types (validTypes in handleSubmitRequest)
+Legacy (8): `social`, `campaign`, `design`, `copy`, `photo_video`, `3d`, `deck`, `ad`
+Current (10): `launch_pack`, `product_creative`, `social_media`, `advertising`, `photo_video_new`, `copy_script`, `design_brand`, `3d_motion`, `brand_initiative`, `sale_event`
 
 ### Worker secrets (set via wrangler secret put — never in files)
 - SUPABASE_SERVICE_ROLE_KEY
@@ -481,6 +485,16 @@ NEXT_PUBLIC_WORKER_URL=https://throttleops.afshaan.workers.dev
 - [x] Worker: self_add_collaborator logActivity includes assignee_name
 - [x] Worker: remove_self logActivity includes assignee_name
 - [x] TaskSidePanel: loadAssignees replaced with two separate queries (no ambiguous FK join)
+
+### Phase 14 — Sale Event Request Type ✅
+- [x] DB: `ALTER TYPE brand.request_type ADD VALUE 'sale_event'`
+- [x] requestTypes.js: SALE_EVENT_ITEMS (9 deliverables) + sale_event entry in REQUEST_TYPES
+- [x] requests/new/page.js: form → checklist → review flow for sale_event
+- [x] requests/new/page.js: selectType defaults, advanceFromProduct, advanceFromForm, handleSubmit, loadPrefill, checklist/review UI
+- [x] Worker: SALE_EVENT_ITEMS duplicated constant
+- [x] Worker: validTypes includes sale_event
+- [x] Worker: approveRequest creates one task per checked deliverable, shared batch_id if 2+, notes include scope/channels/dates
+- [x] Build clean, Worker deployed, frontend push triggered
 
 ### Phase 13 — Convenience Features ✅
 - [x] Toast system: ToastProvider in Layout, useToast hook, success/warning/error variants
