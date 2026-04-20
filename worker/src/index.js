@@ -23,6 +23,19 @@ const LAUNCH_PACK_ITEMS = [
   { id: 'tutorial_video',  label: 'Tutorial Video',       discipline: 'photo_video', deliverable_type: 'video' },
 ];
 
+// ── Sale Event items — duplicated from app/src/lib/requestTypes.js ───────────
+const SALE_EVENT_ITEMS = [
+  { id: 'website_banner',   label: 'Website Banner',      discipline: 'designer',    deliverable_type: 'graphic'      },
+  { id: 'social_static',    label: 'Social Static Post',  discipline: 'designer',    deliverable_type: 'social_post'  },
+  { id: 'social_story',     label: 'Social Story',        discipline: 'designer',    deliverable_type: 'graphic'      },
+  { id: 'reel',             label: 'Reel / Video',        discipline: 'photo_video', deliverable_type: 'video'        },
+  { id: 'meta_ad_static',   label: 'Meta Ad (Static)',    discipline: 'designer',    deliverable_type: 'ad_creative'  },
+  { id: 'meta_ad_video',    label: 'Meta Ad (Video)',     discipline: 'photo_video', deliverable_type: 'ad_creative'  },
+  { id: 'google_display',   label: 'Google Display Ad',   discipline: 'designer',    deliverable_type: 'ad_creative'  },
+  { id: 'email_header',     label: 'Email Header',        discipline: 'designer',    deliverable_type: 'graphic'      },
+  { id: 'whatsapp_graphic', label: 'WhatsApp Graphic',    discipline: 'designer',    deliverable_type: 'graphic'      },
+];
+
 function deriveDeliverableType(requestType, templateData) {
   switch (requestType) {
     case 'product_creative':
@@ -309,7 +322,7 @@ async function handleSubmitRequest(body, ctx, env) {
 
   const validTypes = ['social','campaign','design','copy','photo_video','3d','deck','ad',
     'launch_pack','product_creative','social_media','advertising','photo_video_new',
-    'copy_script','design_brand','3d_motion','brand_initiative'];
+    'copy_script','design_brand','3d_motion','brand_initiative','sale_event'];
   if (!validTypes.includes(type)) return err('Invalid request type');
 
   // INSERT request
@@ -484,6 +497,33 @@ async function handleApproveRequest(body, ctx, env) {
         deliverable_type: 'other',
         is_revision: false,
         notes: `Initiative: ${templateData.initiative_name}. ${approveNote}`.trim(),
+      });
+    }
+
+  } else if (request.type === 'sale_event') {
+    // One task per checked deliverable item
+    // Products are informational context — tasks are not multiplied per product
+    const checkedItems = templateData.checklist || [];
+    const saleName = templateData.sale_name || request.title;
+    const batchId = checkedItems.length > 1 ? crypto.randomUUID() : null;
+
+    for (const itemId of checkedItems) {
+      const item = SALE_EVENT_ITEMS.find(i => i.id === itemId);
+      if (!item) continue;
+      await createTask({
+        product_code: null,
+        batch_id: batchId,
+        title: `${saleName}: ${item.label}`,
+        type: 'sale_event',
+        deliverable_type: item.deliverable_type,
+        is_revision: false,
+        notes: [
+          templateData.scope ? `Scope: ${templateData.scope}` : '',
+          templateData.channels?.length ? `Channels: ${templateData.channels.join(', ')}` : '',
+          templateData.sale_start ? `Sale live: ${templateData.sale_start}` : '',
+          templateData.sale_end ? `Sale ends: ${templateData.sale_end}` : '',
+          approveNote,
+        ].filter(Boolean).join('. '),
       });
     }
 

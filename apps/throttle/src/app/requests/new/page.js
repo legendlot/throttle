@@ -3,7 +3,7 @@ import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Layout from '@/components/Layout';
 import ProductSelector from '@/components/ProductSelector';
-import { REQUEST_TYPES, LAUNCH_PACK_ITEMS, getVisibleTypes } from '@/lib/requestTypes';
+import { REQUEST_TYPES, LAUNCH_PACK_ITEMS, SALE_EVENT_ITEMS, getVisibleTypes } from '@/lib/requestTypes';
 import { workerFetch, supabaseBrand as supabase } from '@throttle/db';
 import { useAuth } from '@throttle/auth';
 
@@ -80,6 +80,10 @@ function NewRequestContent() {
     if (req.template_data) {
       if (req.type === 'launch_pack' && req.template_data.checklist) {
         setCheckedItems(req.template_data.checklist);
+      } else if (req.type === 'sale_event') {
+        const { checklist, ...rest } = req.template_data;
+        if (checklist) setCheckedItems(checklist);
+        setFormData(rest);
       } else {
         setFormData(req.template_data);
       }
@@ -108,9 +112,11 @@ function NewRequestContent() {
       if (f.default) defaults[f.id] = f.default;
     }
     setFormData(defaults);
-    // Set default checked items for launch pack
+    // Set default checked items
     if (type.id === 'launch_pack') {
       setCheckedItems(LAUNCH_PACK_ITEMS.filter(i => i.default_on).map(i => i.id));
+    } else if (type.id === 'sale_event') {
+      setCheckedItems(SALE_EVENT_ITEMS.filter(i => i.default_on).map(i => i.id));
     } else {
       setCheckedItems([]);
     }
@@ -135,6 +141,8 @@ function NewRequestContent() {
     setError(null);
     if (selectedType.id === 'launch_pack') {
       setStep('checklist');
+    } else if (selectedType.id === 'sale_event') {
+      setStep('form');
     } else {
       setStep('form');
     }
@@ -142,7 +150,7 @@ function NewRequestContent() {
 
   function advanceFromChecklist() {
     if (checkedItems.length === 0) {
-      setError('Select at least one item for the launch pack');
+      setError('Select at least one item');
       return;
     }
     setError(null);
@@ -153,7 +161,12 @@ function NewRequestContent() {
     const validationError = validateForm();
     if (validationError) { setError(validationError); return; }
     setError(null);
-    setStep('review');
+    // sale_event: form → checklist → review
+    if (selectedType.id === 'sale_event') {
+      setStep('checklist');
+    } else {
+      setStep('review');
+    }
   }
 
   function toggleItem(itemId) {
@@ -201,7 +214,9 @@ function NewRequestContent() {
 
     const templateData = selectedType.id === 'launch_pack'
       ? { checklist: checkedItems }
-      : { ...formData };
+      : selectedType.id === 'sale_event'
+        ? { checklist: checkedItems, ...formData }
+        : { ...formData };
 
     try {
       if (isEdit && prefillRequest) {
@@ -399,7 +414,7 @@ function NewRequestContent() {
       <div style={{ maxWidth: 672, margin: '0 auto' }}>
         <div style={{ marginBottom: 24 }}>
           <button
-            onClick={() => { setStep('product'); setError(null); }}
+            onClick={() => { setStep(selectedType.id === 'sale_event' ? 'form' : 'product'); setError(null); }}
             style={backBtnStyle}
             onMouseEnter={e => e.currentTarget.style.color = 'var(--t2)'}
             onMouseLeave={e => e.currentTarget.style.color = 'var(--t3)'}
@@ -408,9 +423,13 @@ function NewRequestContent() {
           </button>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
             <span style={{ fontSize: 20 }}>{selectedType.icon}</span>
-            <h1 style={pageHeadingStyle}>Launch Pack</h1>
+            <h1 style={pageHeadingStyle}>{selectedType.label}</h1>
           </div>
-          <p style={pageSubStyle}>Select the assets needed for this product launch. Each checked item becomes a separate task.</p>
+          <p style={pageSubStyle}>
+            {selectedType.id === 'sale_event'
+              ? 'Select the assets needed for this sale event. Each checked item becomes a separate task.'
+              : 'Select the assets needed for this product launch. Each checked item becomes a separate task.'}
+          </p>
         </div>
 
         <div style={{
@@ -419,7 +438,7 @@ function NewRequestContent() {
           borderRadius: 6,
           padding: '4px 16px',
         }}>
-          {LAUNCH_PACK_ITEMS.map(item => (
+          {(selectedType.id === 'sale_event' ? SALE_EVENT_ITEMS : LAUNCH_PACK_ITEMS).map(item => (
             <label key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderBottom: '1px solid var(--b1)', cursor: 'pointer' }}>
               <input
                 type="checkbox"
@@ -549,7 +568,11 @@ function NewRequestContent() {
           <button
             onClick={() => {
               setError(null);
-              setStep(selectedType.id === 'launch_pack' ? 'checklist' : 'form');
+              if (selectedType.id === 'launch_pack' || selectedType.id === 'sale_event') {
+                setStep('checklist');
+              } else {
+                setStep('form');
+              }
             }}
             style={backBtnStyle}
             onMouseEnter={e => e.currentTarget.style.color = 'var(--t2)'}
@@ -610,6 +633,27 @@ function NewRequestContent() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                 {checkedItems.map(itemId => {
                   const item = LAUNCH_PACK_ITEMS.find(i => i.id === itemId);
+                  return item ? (
+                    <div key={itemId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)' }}>{item.label}</span>
+                      <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase' }}>{item.discipline}</span>
+                    </div>
+                  ) : null;
+                })}
+              </div>
+              <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: '#F2CD1A', marginTop: 8, marginBottom: 0 }}>
+                {checkedItems.length} task{checkedItems.length !== 1 ? 's' : ''} will be auto-generated on approval
+              </p>
+            </div>
+          )}
+
+          {/* Sale event deliverables */}
+          {selectedType.id === 'sale_event' && (
+            <div>
+              <p style={sectionLabelStyle}>Deliverables ({checkedItems.length})</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {checkedItems.map(itemId => {
+                  const item = SALE_EVENT_ITEMS.find(i => i.id === itemId);
                   return item ? (
                     <div key={itemId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)' }}>{item.label}</span>

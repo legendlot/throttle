@@ -17,6 +17,22 @@ export const LAUNCH_PACK_ITEMS = [
   { id: 'tutorial_video',  label: 'Tutorial Video',       discipline: 'photo_video', deliverable_type: 'video',         default_on: false },
 ];
 
+// ── SALE EVENT ITEMS ──────────────────────────────────────────────────────────
+// Each item: { id, label, discipline, deliverable_type, default_on }
+// On approval, one task is auto-created per checked item.
+
+export const SALE_EVENT_ITEMS = [
+  { id: 'website_banner',   label: 'Website Banner',      discipline: 'designer',    deliverable_type: 'graphic',      default_on: true  },
+  { id: 'social_static',    label: 'Social Static Post',  discipline: 'designer',    deliverable_type: 'social_post',  default_on: true  },
+  { id: 'social_story',     label: 'Social Story',        discipline: 'designer',    deliverable_type: 'graphic',      default_on: false },
+  { id: 'reel',             label: 'Reel / Video',        discipline: 'photo_video', deliverable_type: 'video',        default_on: false },
+  { id: 'meta_ad_static',   label: 'Meta Ad (Static)',    discipline: 'designer',    deliverable_type: 'ad_creative',  default_on: true  },
+  { id: 'meta_ad_video',    label: 'Meta Ad (Video)',     discipline: 'photo_video', deliverable_type: 'ad_creative',  default_on: false },
+  { id: 'google_display',   label: 'Google Display Ad',   discipline: 'designer',    deliverable_type: 'ad_creative',  default_on: false },
+  { id: 'email_header',     label: 'Email Header',        discipline: 'designer',    deliverable_type: 'graphic',      default_on: false },
+  { id: 'whatsapp_graphic', label: 'WhatsApp Graphic',    discipline: 'designer',    deliverable_type: 'graphic',      default_on: false },
+];
+
 // ── REQUEST TYPE DEFINITIONS ─────────────────────────────────────────────────
 
 export const REQUEST_TYPES = [
@@ -174,6 +190,25 @@ export const REQUEST_TYPES = [
       { id: 'duration',       label: 'Duration (seconds)',type: 'text',     required: false, conditional: { field: 'animation', value: 'Yes' } },
       { id: 'deadline',       label: 'Deadline',          type: 'date',     required: true },
       { id: 'notes',          label: 'Additional Notes',  type: 'textarea', required: false },
+    ],
+  },
+  {
+    id: 'sale_event',
+    label: 'Sale Event',
+    description: 'Banners, ads, and social assets for a sale or promotional event',
+    icon: '🏷️',
+    brand_team_only: false,
+    product_required: false,
+    multi_product: true,
+    generates_multiple: true,   // generates one task per checked deliverable item
+    fields: [
+      { id: 'sale_name',   label: 'Sale / Event Name',       type: 'text',        required: true  },
+      { id: 'channels',    label: 'Channels',                 type: 'multiselect', required: true,  options: ['Website', 'Social', 'Email', 'Paid Ads', 'Amazon', 'Flipkart', 'WhatsApp'] },
+      { id: 'scope',       label: 'Sale Scope',               type: 'select',      required: true,  options: ['Sitewide', 'Category-wide', 'Specific Products'] },
+      { id: 'sale_start',  label: 'Sale Goes Live',           type: 'date',        required: true  },
+      { id: 'sale_end',    label: 'Sale Ends',                type: 'date',        required: true  },
+      { id: 'deadline',    label: 'Assets Needed By',         type: 'date',        required: true  },
+      { id: 'notes',       label: 'Brief / Additional Notes', type: 'textarea',    required: false },
     ],
   },
   {
