@@ -95,6 +95,9 @@ Worker uses `Accept-Profile: brand` / `Content-Profile: brand` headers.
 ### Stage enum (brand.task_stage)
 backlog → in_sprint → in_progress → ext_blocked → in_review → approved → **delivered** → done (or abandoned at any step)
 
+### Discipline enum (brand.users.discipline)
+`designer`, `3d`, `copywriter`, `photo_video`, `social_media`, `lead` — plus `null` for requesters/admins with no discipline. Worker-side validation in `handleUpdateUserRole`; frontend dropdown in `/settings/`. Keep both lists in sync.
+
 ### Security definer function
 `brand.get_my_role()` — reads caller's role as postgres, bypasses RLS recursion.
 **All RLS policies that check role must use this function. Never subquery brand.users in a policy.**

@@ -5,7 +5,7 @@ import { supabaseBrand as supabase, workerFetch } from '@throttle/db';
 import { useAuth } from '@throttle/auth';
 
 const ROLES = ['admin', 'lead', 'member', 'requester'];
-const DISCIPLINES = ['designer', '3d', 'copywriter', 'photo_video', 'lead'];
+const DISCIPLINES = ['designer', '3d', 'copywriter', 'photo_video', 'social_media', 'lead'];
 
 export default function SettingsPage() {
   const { session, brandUser } = useAuth();

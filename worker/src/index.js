@@ -294,7 +294,7 @@ async function handleUpdateUserRole(body, ctx, env) {
   }
 
   const validRoles = ['admin', 'lead', 'member', 'requester'];
-  const validDisciplines = ['designer', '3d', 'copywriter', 'photo_video', 'lead', null];
+  const validDisciplines = ['designer', '3d', 'copywriter', 'photo_video', 'social_media', 'lead', null];
 
   if (role && !validRoles.includes(role)) return err('Invalid role');
   if (discipline !== undefined && !validDisciplines.includes(discipline)) return err('Invalid discipline');
