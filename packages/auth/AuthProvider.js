@@ -15,8 +15,25 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
   const loadingIdentityRef = useRef(false); // in-flight guard for loadIdentity
 
   useEffect(() => {
+    let cancelled = false;
+
+    // Primary: load session immediately on mount. onAuthStateChange is unreliable
+    // in a Next.js static export on GitHub Pages — it fires inconsistently on
+    // hard refresh, tab switch, and back navigation, which leaves the app stuck
+    // on LOADING. getSession() resolves synchronously from storage.
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (cancelled) return;
+      setSession(session);
+      if (session) {
+        await loadIdentity(session);
+      }
+      setLoading(false);
+    });
+
+    // Secondary: handle subsequent auth changes (sign in, sign out, token refresh).
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (_event, nextSession) => {
+        if (cancelled) return;
         setSession(nextSession);
         if (nextSession) {
           await loadIdentity(nextSession);
@@ -25,29 +42,25 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
           setRole(null);
           setPerms(null);
           setBrandUser(null);
+          setLoading(false);
         }
-        setLoading(false);
       }
     );
 
-    // Fallback for static export / incognito where onAuthStateChange may not
-    // fire on initial load. If getSession() resolves to no session, bounce
-    // loading off immediately so the login screen renders instead of hanging.
-    // A real session will still trigger onAuthStateChange, which takes over.
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session) setLoading(false);
-    });
-
-    return () => subscription.unsubscribe();
+    return () => {
+      cancelled = true;
+      subscription.unsubscribe();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function loadIdentity(currentSession) {
-    // In-flight guard. onAuthStateChange can fire several times in quick
-    // succession on initial load (INITIAL_SESSION → SIGNED_IN → TOKEN_REFRESHED);
-    // without this, concurrent calls all bypass identityCacheRef (cache is
-    // populated only after the first call returns) and fire parallel getMe
-    // requests with a not-yet-settled token, producing cascading 401s.
+    // In-flight guard. Both the getSession primary path and onAuthStateChange
+    // (which itself can fire INITIAL_SESSION → SIGNED_IN → TOKEN_REFRESHED in
+    // quick succession) can call this concurrently. Without the guard, all
+    // concurrent calls bypass identityCacheRef (cache populates only after the
+    // first call returns) and fire parallel getMe requests with a not-yet-
+    // settled token, producing cascading 401s.
     if (loadingIdentityRef.current) return;
     loadingIdentityRef.current = true;
     try {
