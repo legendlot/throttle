@@ -67,6 +67,9 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
       .select('user_id, is_owner')
       .eq('task_id', task.id);
 
+    const ownerRow = (rows || []).find(r => r.is_owner === true);
+    console.log('[loadAssignees] task', task.id, 'rows:', rows, 'ownerRow:', ownerRow);
+
     if (!rows || rows.length === 0) { setAssignees([]); return; }
 
     const userIds = [...new Set(rows.map(r => r.user_id))];
@@ -78,7 +81,7 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
     const usersById = Object.fromEntries((users || []).map(u => [u.id, u]));
     setAssignees(
       rows
-        .map(r => ({ ...usersById[r.user_id], user_id: r.user_id, is_owner: r.is_owner }))
+        .map(r => ({ ...usersById[r.user_id], user_id: r.user_id, is_owner: r.is_owner === true }))
         .filter(a => a.user_id)
     );
   }
