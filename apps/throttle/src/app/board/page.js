@@ -66,8 +66,16 @@ function TaskCard({ task, onClick, isDragging, ageingConfig, teamMembers }) {
         transition: 'border-color .15s',
         userSelect: 'none',
       }}
-      onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--b3)'}
-      onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--b1)'}
+      onMouseEnter={e => {
+        e.currentTarget.style.borderTopColor = 'var(--b3)';
+        e.currentTarget.style.borderRightColor = 'var(--b3)';
+        e.currentTarget.style.borderBottomColor = 'var(--b3)';
+      }}
+      onMouseLeave={e => {
+        e.currentTarget.style.borderTopColor = 'var(--b1)';
+        e.currentTarget.style.borderRightColor = 'var(--b1)';
+        e.currentTarget.style.borderBottomColor = 'var(--b1)';
+      }}
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
         <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', letterSpacing: '.08em' }}>
