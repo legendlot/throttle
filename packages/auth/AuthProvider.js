@@ -2,6 +2,22 @@
 import { createContext, useContext, useEffect, useState, useRef } from 'react';
 import { supabase, workerFetch } from '@throttle/db';
 
+const BRAND_USER_CACHE_KEY = 'throttle-brand-user';
+function readCache(userId) {
+  try {
+    const raw = sessionStorage.getItem(BRAND_USER_CACHE_KEY);
+    if (!raw) return null;
+    const { userId: cachedId, data } = JSON.parse(raw);
+    return cachedId === userId ? data : null;
+  } catch { return null; }
+}
+function writeCache(userId, data) {
+  try { sessionStorage.setItem(BRAND_USER_CACHE_KEY, JSON.stringify({ userId, data })); } catch {}
+}
+function clearCache() {
+  try { sessionStorage.removeItem(BRAND_USER_CACHE_KEY); } catch {}
+}
+
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
@@ -25,9 +41,22 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
       if (cancelled) return;
       setSession(session);
       if (session) {
-        await loadIdentity(session);
+        // Apply cached identity immediately so app loads without waiting for Worker
+        const cached = readCache(session.user?.id);
+        if (cached) {
+          setBrandUser(cached);
+          setRole(cached?.role ?? null);
+          setUser({ id: cached?.id ?? session.user?.id, email: cached?.email ?? session.user?.email, full_name: cached?.full_name ?? null });
+          setLoading(false);
+          // Revalidate in background — don't await
+          loadIdentity(session);
+        } else {
+          await loadIdentity(session);
+          setLoading(false);
+        }
+      } else {
+        setLoading(false);
       }
-      setLoading(false);
     });
 
     // Secondary: handle subsequent auth changes (sign in, sign out, token refresh).
@@ -104,12 +133,16 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
         full_name: resolvedFullName,
       });
       setBrandUser(data);
+      writeCache(incomingUserId, data);
     } catch (e) {
       console.error('[AuthProvider] loadIdentity failed:', e);
-      setUser(null);
-      setRole(null);
-      setPerms(null);
-      setBrandUser(null);
+      // Only clear state if we have nothing — don't wipe a valid session on a transient Worker error
+      if (!identityCacheRef.current?.data) {
+        setUser(null);
+        setRole(null);
+        setPerms(null);
+        setBrandUser(null);
+      }
     } finally {
       loadingIdentityRef.current = false;
     }
@@ -126,6 +159,7 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
   }
 
   async function signOut() {
+    clearCache();
     await supabase.auth.signOut();
     setSession(null);
     setUser(null);
