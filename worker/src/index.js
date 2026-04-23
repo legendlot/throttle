@@ -1915,39 +1915,19 @@ async function closeSprintById(sprintId, closedByUserId, env) {
     prefer: 'return=minimal',
   }, env);
 
-  // Flag spillover tasks — increment spillover_count, set is_spillover
+  // Flag spillover tasks — increment spillover_count (is_spillover is set below when re-attaching to new sprint)
   if (spilloverTasks.length > 0) {
-    // Batch update — use IN filter
     const spilloverIds = spilloverTasks.map(t => t.id);
-
-    // Cloudflare 50-subrequest limit — batch max 40 per call
-    // For typical sprint sizes this is one call
-    for (let i = 0; i < spilloverIds.length; i += 40) {
-      const batch = spilloverIds.slice(i, i + 40);
-      const inFilter = `(${batch.join(',')})`;
-      await sbFetch(`tasks?id=in.${inFilter}`, {
-        method: 'PATCH',
-        body: JSON.stringify({
-          is_spillover: true,
-          sprint_id: null, // remove from closed sprint — will be added to new sprint below
-          stage: 'backlog', // reset to backlog, re-added to new sprint
-          updated_at: new Date().toISOString(),
-        }),
-        prefer: 'return=minimal',
-      }, env);
-    }
 
     // Flag escalations (spillover_count was already >= 1 before this sprint)
     const escalations = spilloverTasks.filter(t => t.spillover_count >= 1);
 
     // Increment spillover_count via RPC (single call, no subrequest limit concern)
-    if (spilloverIds.length > 0) {
-      await sbFetch('rpc/increment_spillover_count', {
-        method: 'POST',
-        body: JSON.stringify({ task_ids: spilloverIds }),
-        prefer: 'return=minimal',
-      }, env);
-    }
+    await sbFetch('rpc/increment_spillover_count', {
+      method: 'POST',
+      body: JSON.stringify({ task_ids: spilloverIds }),
+      prefer: 'return=minimal',
+    }, env);
 
     healthScore.escalation_count = escalations.length;
   }
@@ -1983,17 +1963,39 @@ async function closeSprintById(sprintId, closedByUserId, env) {
     const [ns] = await newSprintRes.json();
     newSprint = ns;
 
-    // Add spillover tasks to new sprint as in_sprint
+    // Add spillover tasks to new sprint — preserve stage for in-flight tasks
     if (spilloverTasks.length > 0) {
-      const spilloverIds = spilloverTasks.map(t => t.id);
-      for (let i = 0; i < spilloverIds.length; i += 40) {
-        const batch = spilloverIds.slice(i, i + 40);
+      // Tasks in backlog/in_sprint → reset stage to in_sprint in new sprint
+      const resetIds = spilloverTasks
+        .filter(t => t.stage === 'backlog' || t.stage === 'in_sprint')
+        .map(t => t.id);
+      for (let i = 0; i < resetIds.length; i += 40) {
+        const batch = resetIds.slice(i, i + 40);
         const inFilter = `(${batch.join(',')})`;
         await sbFetch(`tasks?id=in.${inFilter}`, {
           method: 'PATCH',
           body: JSON.stringify({
             sprint_id: ns.id,
             stage: 'in_sprint',
+            is_spillover: true,
+            updated_at: new Date().toISOString(),
+          }),
+          prefer: 'return=minimal',
+        }, env);
+      }
+
+      // In-flight tasks (in_progress, in_review, ext_blocked, approved, delivered) → preserve stage
+      const preserveIds = spilloverTasks
+        .filter(t => t.stage !== 'backlog' && t.stage !== 'in_sprint')
+        .map(t => t.id);
+      for (let i = 0; i < preserveIds.length; i += 40) {
+        const batch = preserveIds.slice(i, i + 40);
+        const inFilter = `(${batch.join(',')})`;
+        await sbFetch(`tasks?id=in.${inFilter}`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            sprint_id: ns.id,
+            is_spillover: true,
             updated_at: new Date().toISOString(),
           }),
           prefer: 'return=minimal',
