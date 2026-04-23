@@ -414,6 +414,8 @@ export default function BoardPage() {
   const [ageingConfig, setAgeingConfig] = useState({});
   const [searchOpen, setSearchOpen]   = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState(null);
+  const [searchLoading, setSearchLoading] = useState(false);
 
   const isAdminLead = ['admin', 'lead'].includes(brandUser?.role);
 
@@ -434,6 +436,29 @@ export default function BoardPage() {
   useEffect(() => {
     if (brandUser) loadTasks();
   }, [brandUser]);
+
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (!q) {
+      setSearchResults(null);
+      setSearchLoading(false);
+      return;
+    }
+    setSearchLoading(true);
+    const timer = setTimeout(async () => {
+      const sanitized = q.replace(/["\\]/g, '');
+      const pattern = `"%${sanitized}%"`;
+      const { data, error } = await supabase
+        .from('tasks')
+        .select('id, title, type, stage, due_date, product_code, sprint_id')
+        .or(`title.ilike.${pattern},product_code.ilike.${pattern},type.ilike.${pattern}`)
+        .order('created_at', { ascending: false })
+        .limit(20);
+      setSearchResults(error ? [] : (data || []));
+      setSearchLoading(false);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   useEffect(() => {
     if (!brandUser?.id || !session) return;
@@ -630,15 +655,18 @@ export default function BoardPage() {
               </div>
               <div style={{ maxHeight: 360, overflowY: 'auto' }}>
                 {(() => {
-                  const q = searchQuery.toLowerCase().trim();
-                  const results = (tasks || []).filter(t =>
-                    !q ||
-                    t.title?.toLowerCase().includes(q) ||
-                    t.product_code?.toLowerCase().includes(q) ||
-                    t.type?.toLowerCase().includes(q)
-                  ).slice(0, 12);
+                  const usingSearch = searchResults !== null;
+                  const items = usingSearch ? searchResults : (tasks || []).slice(0, 12);
 
-                  if (results.length === 0) {
+                  if (usingSearch && searchLoading && items.length === 0) {
+                    return (
+                      <div style={{ padding: '24px 16px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>
+                        Searching...
+                      </div>
+                    );
+                  }
+
+                  if (items.length === 0) {
                     return (
                       <div style={{ padding: '24px 16px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>
                         No tasks found
@@ -646,7 +674,7 @@ export default function BoardPage() {
                     );
                   }
 
-                  return results.map(t => {
+                  return items.map(t => {
                     const stage = getStageConfig(t.stage);
                     return (
                       <div
@@ -671,13 +699,15 @@ export default function BoardPage() {
                   });
                 })()}
               </div>
-              {searchQuery === '' && (
-                <div style={{ padding: '8px 16px', borderTop: '1px solid var(--b1)' }}>
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>
-                    {(tasks || []).length} active tasks — type to filter
-                  </span>
-                </div>
-              )}
+              <div style={{ padding: '8px 16px', borderTop: '1px solid var(--b1)' }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>
+                  {searchQuery === ''
+                    ? `${(tasks || []).length} active tasks — type to filter`
+                    : searchLoading
+                      ? 'Searching all tasks...'
+                      : `${(searchResults || []).length} result${(searchResults || []).length === 1 ? '' : 's'}`}
+                </span>
+              </div>
             </div>
           </>
         )}
