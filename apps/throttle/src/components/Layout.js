@@ -2,6 +2,7 @@
 import { useAuth } from '@throttle/auth';
 import { useRouter, usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { ToastProvider } from '@/lib/toast';
 import { supabaseBrand as supabase } from '@throttle/db';
 
@@ -274,7 +275,7 @@ export default function Layout({ children }) {
           {visibleNav.map(item => {
             const isActive = pathname?.startsWith(item.href);
             return (
-              <a
+              <Link
                 key={item.href}
                 href={item.href}
                 style={{
@@ -295,7 +296,7 @@ export default function Layout({ children }) {
                 }}
               >
                 {item.label}
-              </a>
+              </Link>
             );
           })}
         </nav>

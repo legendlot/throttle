@@ -31,15 +31,20 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
   const priorityConfig = getPriorityConfig(task.priority);
 
   useEffect(() => {
-    loadAssignees();
-    loadActivity();
-    if (isAdminLead) loadTeamMembers();
-    if (task.sprint_id) {
-      supabase.from('sprints').select('name').eq('id', task.sprint_id).single()
-        .then(({ data }) => setSprintName(data?.name || '—'));
-    } else {
-      setSprintName('—');
+    async function init() {
+      await supabase.auth.getSession();
+      loadAssignees();
+      loadActivity();
+      if (isAdminLead) loadTeamMembers();
+      if (task.sprint_id) {
+        supabase.from('sprints').select('name')
+          .eq('id', task.sprint_id).single()
+          .then(({ data }) => setSprintName(data?.name || '—'));
+      } else {
+        setSprintName('—');
+      }
     }
+    init();
   }, [task.id]);
 
   useEffect(() => {
@@ -62,10 +67,11 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
   async function loadAssignees() {
     // Two separate queries — task_assignees has two FKs to users (user_id + assigned_by),
     // which makes the PostgREST join ambiguous and silently return null. Fetch separately.
-    const { data: rows } = await supabase
+    const { data: rows, error: rowsError } = await supabase
       .from('task_assignees')
       .select('user_id, is_owner')
       .eq('task_id', task.id);
+    if (rowsError) console.error('[loadAssignees] task_assignees error:', rowsError);
 
     const ownerRow = (rows || []).find(r => r.is_owner === true);
     console.log('[loadAssignees] task', task.id, 'rows:', rows, 'ownerRow:', ownerRow);
@@ -73,10 +79,11 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
     if (!rows || rows.length === 0) { setAssignees([]); return; }
 
     const userIds = [...new Set(rows.map(r => r.user_id))];
-    const { data: users } = await supabase
+    const { data: users, error: usersError } = await supabase
       .from('users')
       .select('id, name, discipline')
       .in('id', userIds);
+    if (usersError) console.error('[loadAssignees] users error:', usersError);
 
     const usersById = Object.fromEntries((users || []).map(u => [u.id, u]));
     setAssignees(
@@ -765,12 +772,17 @@ function AttachmentsSection({ taskId }) {
   const [attachments, setAttachments] = useState([]);
 
   useEffect(() => {
-    supabase
-      .from('task_attachments')
-      .select('*')
-      .eq('task_id', taskId)
-      .order('created_at', { ascending: false })
-      .then(({ data }) => setAttachments(data || []));
+    supabase.auth.getSession().then(() => {
+      supabase
+        .from('task_attachments')
+        .select('*')
+        .eq('task_id', taskId)
+        .order('created_at', { ascending: false })
+        .then(({ data, error }) => {
+          if (error) console.error('[AttachmentsSection] query error:', error);
+          setAttachments(data || []);
+        });
+    });
   }, [taskId]);
 
   if (attachments.length === 0) return null;

@@ -438,6 +438,15 @@ export default function BoardPage() {
   }, [brandUser]);
 
   useEffect(() => {
+    if (!brandUser) return;
+    function onVisible() {
+      if (document.visibilityState === 'visible') loadTasks();
+    }
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [brandUser]);
+
+  useEffect(() => {
     const q = searchQuery.trim();
     if (!q) {
       setSearchResults(null);

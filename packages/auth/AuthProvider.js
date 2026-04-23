@@ -120,7 +120,12 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
         return;
       }
 
-      const data = await workerFetch(pingAction, {}, activeSession, workerUrl);
+      const data = await Promise.race([
+        workerFetch(pingAction, {}, activeSession, workerUrl),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Identity fetch timeout')), 10000)
+        )
+      ]);
       identityCacheRef.current = { userId: incomingUserId, data };
       const resolvedRole     = data?.role ?? null;
       const resolvedFullName = data?.full_name ?? null;
