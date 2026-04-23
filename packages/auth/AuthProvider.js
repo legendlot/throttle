@@ -36,8 +36,24 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
     // Primary: load session immediately on mount. onAuthStateChange is unreliable
     // in a Next.js static export on GitHub Pages — it fires inconsistently on
     // hard refresh, tab switch, and back navigation, which leaves the app stuck
-    // on LOADING. getSession() resolves synchronously from storage.
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
+    // on LOADING. getSession() resolves synchronously from storage, but can
+    // deadlock if the stored session is malformed — hence the 5s timeout.
+    (async () => {
+      const sessionResult = await Promise.race([
+        supabase.auth.getSession(),
+        new Promise(resolve =>
+          setTimeout(() => resolve({ data: { session: null }, timedOut: true }), 5000)
+        )
+      ]);
+
+      if (sessionResult.timedOut) {
+        console.warn('[AuthProvider] getSession() timed out — clearing stored session');
+        await supabase.auth.signOut({ scope: 'local' });
+        if (!cancelled) setLoading(false);
+        return;
+      }
+
+      const { data: { session } } = sessionResult;
       if (cancelled) return;
       setSession(session);
       if (session) {
@@ -57,7 +73,7 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
       } else {
         setLoading(false);
       }
-    });
+    })();
 
     // Secondary: handle subsequent auth changes (sign in, sign out, token refresh).
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
@@ -97,8 +113,32 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
       // calling the Worker. On mobile browsers, onAuthStateChange can fire
       // with a session object before the access_token is ready, which causes
       // getMe to 401 and the app to hang on LOADING. getSession() resolves
-      // only once the in-memory session is settled.
-      const { data: { session: liveSession } } = await supabase.auth.getSession();
+      // only once the in-memory session is settled — but can also deadlock on
+      // a malformed stored session, so guard with a 5s timeout.
+      const sessionResult = await Promise.race([
+        supabase.auth.getSession(),
+        new Promise(resolve =>
+          setTimeout(() => resolve({ data: { session: null }, timedOut: true }), 5000)
+        )
+      ]);
+
+      if (sessionResult.timedOut) {
+        console.warn('[AuthProvider] getSession() timed out in loadIdentity — skipping Worker call');
+        const cached = identityCacheRef.current?.data;
+        if (cached) {
+          setBrandUser(cached);
+          setRole(cached?.role ?? null);
+          setPerms(cached?.permissions ?? null);
+          setUser({
+            id: cached?.id ?? currentSession?.user?.id ?? null,
+            email: cached?.email ?? currentSession?.user?.email ?? null,
+            full_name: cached?.full_name ?? null,
+          });
+        }
+        return;
+      }
+
+      const { data: { session: liveSession } } = sessionResult;
       const activeSession = liveSession || currentSession;
       if (!activeSession?.access_token) return;
 
