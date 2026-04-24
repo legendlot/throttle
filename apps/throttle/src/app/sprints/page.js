@@ -221,6 +221,9 @@ export default function SprintsPage() {
   const [sprintSearchQuery, setSprintSearchQuery] = useState('');
   const [highlightedTaskId, setHighlightedTaskId] = useState(null);
 
+  // Stage breakdown bar tooltip
+  const [hoveredSegment, setHoveredSegment] = useState(null);
+
   const isAdminLead = ['admin', 'lead'].includes(brandUser?.role);
 
   useEffect(() => {
@@ -440,13 +443,21 @@ export default function SprintsPage() {
               const total     = sprintTasks.length + doneCount;
               const pct       = total > 0 ? Math.round((doneCount / total) * 100) : 0;
               const barColor  = pct >= 80 ? '#30D158' : pct >= 40 ? '#F2CD1A' : '#213CE2';
+
+              const STAGE_ORDER = ['done', 'in_review', 'approved', 'in_progress', 'ext_blocked', 'in_sprint', 'backlog'];
+              const stageCounts = { done: doneCount };
+              for (const t of sprintTasks) {
+                stageCounts[t.stage] = (stageCounts[t.stage] || 0) + 1;
+              }
+              const activeStages = STAGE_ORDER.filter(s => (stageCounts[s] || 0) > 0);
+
               return (
                 <div style={{ marginTop: 8, maxWidth: 320 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                    <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>
-                      {doneCount} of {total} done
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+                      {activeStages.map(s => `${stageCounts[s]} ${getStageConfig(s).label.toLowerCase()}`).join(' · ')}
                     </span>
-                    <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: barColor, fontWeight: 600 }}>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: barColor, fontWeight: 600, flexShrink: 0 }}>
                       {pct}%
                     </span>
                   </div>
@@ -460,6 +471,34 @@ export default function SprintsPage() {
                       transition: 'width .4s ease',
                     }} />
                   </div>
+                  {total > 0 && (
+                    <div style={{ position: 'relative', marginTop: 4, height: 4, display: 'flex', borderRadius: 2, overflow: 'hidden' }}>
+                      {activeStages.map(s => {
+                        const cfg = getStageConfig(s);
+                        const count = stageCounts[s];
+                        const segPct = Math.round((count / total) * 100);
+                        return (
+                          <div
+                            key={s}
+                            onMouseEnter={() => setHoveredSegment(s)}
+                            onMouseLeave={() => setHoveredSegment(null)}
+                            style={{ position: 'relative', width: `${(count / total) * 100}%`, height: '100%', background: cfg.color, cursor: 'default' }}
+                          >
+                            {hoveredSegment === s && (
+                              <div style={{
+                                position: 'absolute', bottom: 10, left: '50%', transform: 'translateX(-50%)',
+                                background: '#1a1a1a', border: '1px solid var(--b2)', borderRadius: 4,
+                                padding: '4px 8px', fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text)',
+                                whiteSpace: 'nowrap', zIndex: 10, pointerEvents: 'none',
+                              }}>
+                                {cfg.label} — {count} task{count === 1 ? '' : 's'} ({segPct}%)
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               );
             })()}
