@@ -1,5 +1,5 @@
 # Throttle — Technical Build Document
-**Version:** 14 | **Last Updated:** 2026-04-20 (Phase 14 — sale event request type)
+**Version:** 15 | **Last Updated:** 2026-04-24 (Phase 15 — task IDs, stale-token fixes, sprint/dashboard polish)
 **Purpose:** Technical reference for the Throttle brand team work OS.
 Feed this file when continuing development in a new session.
 
@@ -84,7 +84,7 @@ Worker uses `Accept-Profile: brand` / `Content-Profile: brand` headers.
 - `brand.requests` — intake submissions (adds `required_by` date in Phase 12)
 - `brand.request_products` — links requests to public.product_master.product_code
 - `brand.sprints` — weekly Thu–Wed, enforced by DB CHECK constraints
-- `brand.tasks` — core work unit with deliverable_type for reporting. Phase 12 adds: iteration_count, in_progress_at, in_review_at, approved_at, delivered_at, auto_close_at, delivery_message
+- `brand.tasks` — core work unit with deliverable_type for reporting. Phase 12 adds: iteration_count, in_progress_at, in_review_at, approved_at, delivered_at, auto_close_at, delivery_message. Phase 15 adds: `task_number` (integer NOT NULL, default `nextval('brand.task_number_seq')`, backfilled 1–68)
 - `brand.task_assignees` — many-to-many
 - `brand.task_attachments` — files and links (currently URL-only, no direct file upload)
 - `brand.approvals` — work review decisions (approved/rejected + feedback)
@@ -110,6 +110,10 @@ Columns used: `product_code`, `product`, `sku`, `is_active`.
 Enabled on all brand tables.
 Worker uses service_role key — bypasses RLS (trusted server-side writes).
 Client uses anon key — RLS enforces all reads.
+
+Phase 15 adds cross-team read policies (admin/lead/member) so the board, sprint page, and side panel can load assignee + attachment rows for tasks the caller isn't personally assigned to:
+- `brand_team_read_all_assignees` — `task_assignees` SELECT for admin/lead/member
+- `brand_team_read_all_attachments` — `task_attachments` SELECT for admin/lead/member
 
 ---
 
@@ -303,6 +307,20 @@ NEXT_PUBLIC_WORKER_URL=https://throttleops.afshaan.workers.dev
 | Cmd+K search | Client-side filter on loaded tasks array, opens side panel | No network call — uses already-loaded board data. Matches on title/product_code/type. Shows up to 12 results. ESC closes. Hint in board header. |
 | Sprint progress bar | Separate .count({ head: true }) query for done tasks + sprintTasks.length | Main tasks query excludes done — can't derive progress without second query. Bar color: blue <40%, yellow 40-80%, green ≥80%. |
 | Notification bell | Polls activity_log every 60s, localStorage for last-seen timestamp | No notifications table needed. Scoped to tasks the user is assigned to, excluding their own actions. Member/lead/admin only. supabase imported at top of Layout.js (not inline require). |
+| Task ID system | `brand.tasks.task_number` integer column with dedicated sequence; display derived client-side | Stable human-readable handle independent of UUIDs. Standalone tasks render `T-NNN`; batch tasks render `T-NNN/N` where N is position within `batch_id` group sorted by `task_number`. `batch_position` is NOT stored — derived at render time. |
+| `getTaskId` lives in board/page.js, inline `getSprintTaskId` in sprints/page.js | Two helpers instead of one shared util | Board needs full `T-NNN/N` with batch context (requires `allTasks`). Sprint page only shows base `T-NNN` (batch context is unhelpful when looking at a sprint list). Avoided a shared util to keep the sprint variant cheap. |
+| `displayId` passed on selectedTask, not recomputed in side panel | `handleTaskClick` computes `T-NNN/N` once, stores on `{...task, displayId}` | Side panel doesn't receive the board's `allTasks` array, so batch-position can't be recomputed there. Computing at click time is cheap and survives in-panel edits via `handleTaskUpdate` preserving `prev.displayId`. |
+| Stale-token gate: `supabase.auth.getSession()` as first line of every raw-query function | Explicit refresh-settle call before touching Supabase | On tab return the in-memory JWT may be expired. `getSession()` is the only call that explicitly waits for the refresh cycle to settle. Added to `TaskSidePanel.init`, `AttachmentsSection`, board `loadTasks` + search debounce, `NotificationBell.loadNotifications` (60s interval — highest risk), settings `loadUsers`. |
+| Nav links: Next.js `<Link>` not `<a>` | Client-side routing preserves AuthProvider mount | Plain `<a>` triggered a full-page reload on every nav click, remounting AuthProvider → flash of unauthed state and token-refresh race. Migrating to `<Link>` (with `prefetch=false` where appropriate) keeps the app shell stable. |
+| `Promise.race` timeouts on getSession + workerFetch | 10s for auth, per-call timeout for workerFetch | Prevents the login screen or app shell from hanging indefinitely when Supabase or the Worker stalls. Surfaces a real error instead of a permanent spinner. |
+| Board re-fetch on `visibilitychange` | `document.addEventListener('visibilitychange', ...)` in board/page.js | Tab-backgrounded Supabase connections drift — returning to the tab needs a fresh pull. Combined with the getSession gate this fixes the "stale board after long idle" symptom. |
+| Card hover border: three explicit borderColor properties | `borderTopColor` / `borderRightColor` / `borderBottomColor` set individually | Setting `borderColor` wipes all four sides including the priority left border (3px priority colour). After first hover the priority colour was permanently lost until full remount. Three-property form leaves the left border untouched. |
+| Dashboard IN REVIEW + EXT. BLOCKED: cross-sprint | `handleGetDashboardStats` issues two extra stage-only queries; `handleGetTasksInBucket` drops `sprint_id` filter for these two buckets | Tasks in `in_review` or `ext_blocked` need action regardless of sprint. Sprint-scoped counts hid blocked work from previous sprints. `personTaskIds` still intersected when person filter is active. All other metrics remain sprint-scoped. |
+| Sprint page `/` search overlay | Client-side filter on already-loaded `sprintTasks` + `backlogTasks`, scroll-to-highlight on click | No Supabase round-trip needed — both arrays live on the page. Results grouped under "In Sprint" / "Backlog" dividers. Click sets `highlightedTaskId`, scrolls row into view, 2s tint fade via `data-task-id` selector. Same `/` trigger as board; swallowed inside input/textarea focus. |
+| Sprint stage breakdown bar | Segmented bar below the existing progress bar, one segment per active stage | At a glance: where is the sprint actually stuck? Summary line replaced "X of Y done" with per-stage counts (`3 done · 8 in review · 5 in progress · …`) using `getStageConfig(stage).label.toLowerCase()`. Segments coloured via `getStageConfig`. |
+| Breakdown bar hover: nested inner fill + padded wrapper | 16px invisible hit zone around a 4px visible bar | 4px hover zone is too small for reliable tooltips. Wrapper carries `paddingTop: 6, paddingBottom: 6, marginTop: -6, marginBottom: -6`; inner fill div renders the actual colour at height 4 with `borderRadius` on the first/last segment. Outer container dropped `overflow: hidden` so the padded hit zone actually receives mouse events. |
+| photo_video_new task titles | `${request.title} — Shoot[${productSuffix}]` / `— Edit[…]` | Original format `Shoot: ${shoot_type}` dropped the request title entirely, making tasks hard to identify on the board. `shoot_type` suffix removed — the request title already describes the shoot. |
+| Sprint close: preserve in-flight stages | in_review / in_progress / ext_blocked / approved / delivered carry stage into new sprint | Old logic reset every spillover to `in_sprint`, which lost review queues and blocked-work state across a sprint boundary. Fixed in the sprint-close handler; manual restore done on Sprint 1 tasks that closed under the old code. |
 
 ---
 
@@ -527,8 +545,33 @@ NEXT_PUBLIC_WORKER_URL=https://throttleops.afshaan.workers.dev
 - [x] Settings: Ageing Thresholds section for admin
 - [x] Build clean, deploy green
 
+### Phase 15 — Task IDs, Stale-Token Fixes, Sprint + Dashboard Polish ✅ (2026-04-24)
+
+**Bug fixes shipped**
+- [x] Sprint close stage preservation: in-flight tasks (`in_review`, `in_progress`, `ext_blocked`, `approved`, `delivered`) now carry stage into the new sprint instead of being reset to `in_sprint`
+- [x] Board `/` search queries all stages including `done` / `abandoned` (was filtering to active stages only)
+- [x] RLS added: `brand_team_read_all_assignees` on `task_assignees`, `brand_team_read_all_attachments` on `task_attachments` (admin/lead/member SELECT) — fixes silently-empty assignee/attachment panels when the caller isn't personally assigned
+- [x] Stale JWT on tab return: `await supabase.auth.getSession()` gate added as the first line of every raw-query function — `TaskSidePanel.init`, `AttachmentsSection` (loader), board `loadTasks` + search debounce, `NotificationBell.loadNotifications` (60s interval), settings `loadUsers`
+- [x] Nav links converted from `<a>` to Next.js `<Link>` — eliminates AuthProvider remount on every nav click
+- [x] AuthProvider `getSession()` and `workerFetch` wrapped in `Promise.race` timeouts — prevents permanent loading screen on stalled network
+- [x] Board `visibilitychange` listener re-fetches tasks when the tab becomes visible — combined with the `getSession` gate, fixes stale board after long idle
+- [x] Card hover border: `onMouseEnter` / `onMouseLeave` now set `borderTopColor` / `borderRightColor` / `borderBottomColor` individually — preserves the 3px priority left border (previously wiped by `borderColor` shorthand)
+
+**Features shipped**
+- [x] Task ID system: `task_number` integer column + `brand.task_number_seq` added to `brand.tasks` (NOT NULL, DEFAULT `nextval`, backfilled 1–68). `T-NNN` for standalone tasks, `T-NNN/N` for batch tasks (N derived client-side from `batch_id` group sorted by `task_number`). Shown on card top-left (before type tag) and side panel header (pill next to stage)
+- [x] `getTaskId(task, allTasks)` helper in board/page.js; inline `getSprintTaskId(task)` in sprints/page.js (base `T-NNN` only)
+- [x] `handleTaskClick(task)` wraps `setSelectedTask` and attaches `displayId`; covers kanban, table, search-result, and drop-pending-stage paths. `handleTaskUpdate` preserves `displayId` across in-panel edits
+- [x] Worker: `task_number` added to task selects in `handleGetDashboardStats`, `handleGetTasksInBucket`, `handleGetRequestDelivery`
+- [x] Sprint page `/` search overlay: client-side filter across `sprintTasks` + `backlogTasks`, grouped under "In Sprint" / "Backlog" dividers, stage-dot / task ID / title / due date / source pill per row. Click sets `highlightedTaskId`, scrolls the matching `TaskRow` into view via `data-task-id`, 2s yellow-tinted highlight
+- [x] `TaskRow` gains `highlighted` prop + `data-task-id` attribute
+- [x] Sprint stage breakdown bar: segmented bar under the existing single-colour progress bar (4px tall, same width, one segment per active stage coloured via `getStageConfig`). Per-segment hover tooltip: `"[Stage Label] — N task(s) (X%)"`. Summary line replaced with per-stage counts (`"3 done · 8 in review · 5 in progress · …"`)
+- [x] Breakdown bar hover: 16px padded hit zone (6px top/bottom padding + matching negative margin); inner fill div carries the visible 4px colour and rounded corners on first/last segment. Outer container no longer `overflow: hidden` so the padded zone receives mouse events
+- [x] Dashboard `IN REVIEW` + `EXT. BLOCKED` stat cards + drill-down now cross-sprint — `handleGetDashboardStats` issues two extra global queries, `handleGetTasksInBucket` drops `sprint_id` filter for these two buckets. Person-filter intersection preserved via existing `personTaskIds` set
+- [x] `photo_video_new` task titles now carry request title: `"<request title> — Shoot[ — <product_code>]"` and `"<request title> — Edit[…]"` — `shoot_type` suffix dropped
+
 ### Pending
 - Phase 11b: QA + full role testing
+- Sprint 1 tasks that were `in_review` when the pre-fix sprint close ran (Apr 23) — team is restoring manually (no SQL fix) for a clean audit trail
 
 ---
 
@@ -544,6 +587,10 @@ NEXT_PUBLIC_WORKER_URL=https://throttleops.afshaan.workers.dev
   VALUES ('107ea993-f5ed-4221-ba97-b08e38dcd00c', 'Afshaan Siddiqui', 'afshaan@legendoftoys.com', 'admin');
   ```
 - **RLS recursion fix SQL** — run manually in Supabase SQL editor (Phase 2 post-build) ✅
+- **Phase 15 DB changes** ✅
+  - `ALTER TABLE brand.tasks ADD COLUMN task_number integer NOT NULL DEFAULT nextval('brand.task_number_seq')` with `brand.task_number_seq` created and backfilled 1–68
+  - RLS: `brand_team_read_all_assignees` on `task_assignees` + `brand_team_read_all_attachments` on `task_attachments` (SELECT for admin/lead/member via `brand.get_my_role()`)
+- **Sprint 1 `in_review` restoration** — tasks that closed under the pre-fix sprint-close logic are being moved back to `in_review` manually by the team (no SQL batch) for a clean audit trail
 
 ---
 
@@ -558,6 +605,9 @@ NEXT_PUBLIC_WORKER_URL=https://throttleops.afshaan.workers.dev
 7. Slack DMs per user — current notifications go to channels. Future: use brand.users.slack_id for direct DMs to specific assignees.
 8. FullCalendar — installed but unused. Sprint timeline uses custom 7-col grid. Upgrade to FullCalendar when month/quarter range views are needed.
 9. getNextThursday fix — confirmed correct: explicit Thursday check + formula for all other days. Sunday (0) → +4, Monday (1) → +3, Tuesday (2) → +2, Wednesday (3) → +1, Thursday (4) → today, Friday (5) → +6, Saturday (6) → +5.
+10. Sprints page pre-existing lint warning: `React Hook useEffect has a missing dependency: 'loadAll'` in sprints/page.js. Benign — `loadAll` is a stable function reference defined in the same component and adding it to the dep array would re-run on every render. Left as-is.
+11. `handleGetDashboardStats`: `task_number` added to its task select even though tasks aren't returned to the client (only counted). Harmless single column; trim later if cleaning up the query is worthwhile.
+12. Sprint search on batch tasks from archived (done/abandoned) results: `getTaskId` derives position from the active `tasks` array; archived siblings aren't loaded, so batch position can be approximate for search results outside the active set. Standalone IDs always correct.
 
 ---
 
