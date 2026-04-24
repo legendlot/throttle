@@ -463,7 +463,7 @@ async function handleApproveRequest(body, ctx, env) {
       await createTask({
         product_code: product?.product_code || null,
         batch_id: batchId,
-        title: `Shoot${productSuffix}: ${templateData.shoot_type || ''}`,
+        title: `${request.title} — Shoot${productSuffix}`,
         type: 'photo_video_new',
         deliverable_type: templateData.delivery_format?.includes('MP4') || templateData.delivery_format?.includes('MOV') ? 'video' : 'photo',
         is_revision: false,
@@ -474,7 +474,7 @@ async function handleApproveRequest(body, ctx, env) {
         await createTask({
           product_code: product?.product_code || null,
           batch_id: batchId,
-          title: `Edit${productSuffix}: ${templateData.shoot_type || ''}`,
+          title: `${request.title} — Edit${productSuffix}`,
           type: 'photo_video_new',
           deliverable_type: 'video',
           is_revision: false,
