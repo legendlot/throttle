@@ -154,7 +154,7 @@ export default function DashboardPage() {
     loadActivity(session, setActivity, setActLoading);
   }
 
-  useAutoRefresh(loadAll, 60000);
+  useAutoRefresh(loadAll, 60000, !session);
 
   const cutoff7  = useMemo(() => daysAgo(7),  []);
   const cutoff3  = useMemo(() => daysAgo(3),  []);

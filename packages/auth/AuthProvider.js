@@ -37,12 +37,12 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
     // in a Next.js static export on GitHub Pages — it fires inconsistently on
     // hard refresh, tab switch, and back navigation, which leaves the app stuck
     // on LOADING. getSession() resolves synchronously from storage, but can
-    // deadlock if the stored session is malformed — hence the 5s timeout.
+    // deadlock if the stored session is malformed — hence the 15s timeout.
     (async () => {
       const sessionResult = await Promise.race([
         supabase.auth.getSession(),
         new Promise(resolve =>
-          setTimeout(() => resolve({ data: { session: null }, timedOut: true }), 5000)
+          setTimeout(() => resolve({ data: { session: null }, timedOut: true }), 15000)
         )
       ]);
 
@@ -114,11 +114,11 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
       // with a session object before the access_token is ready, which causes
       // getMe to 401 and the app to hang on LOADING. getSession() resolves
       // only once the in-memory session is settled — but can also deadlock on
-      // a malformed stored session, so guard with a 5s timeout.
+      // a malformed stored session, so guard with a 15s timeout.
       const sessionResult = await Promise.race([
         supabase.auth.getSession(),
         new Promise(resolve =>
-          setTimeout(() => resolve({ data: { session: null }, timedOut: true }), 5000)
+          setTimeout(() => resolve({ data: { session: null }, timedOut: true }), 15000)
         )
       ]);
 

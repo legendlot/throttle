@@ -1,11 +1,14 @@
 'use client';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 
 export function useAutoRefresh(fn, intervalMs = 60000, skip = false) {
+  const fnRef = useRef(fn);
+  useEffect(() => { fnRef.current = fn; });
+
   useEffect(() => {
-    fn();
     if (skip) return;
-    const id = setInterval(fn, intervalMs);
+    fnRef.current();
+    const id = setInterval(() => fnRef.current(), intervalMs);
     return () => clearInterval(id);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [skip, intervalMs]);
 }
