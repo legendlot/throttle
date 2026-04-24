@@ -85,19 +85,26 @@ function SprintTimeline({ sprint, sprintTasks }) {
 
 // ── Task Row (for sprint and backlog lists) ───────────────────────────────────
 
-function TaskRow({ task, actions }) {
+function getSprintTaskId(task) {
+  if (!task.task_number) return null;
+  return `T-${String(task.task_number).padStart(3, '0')}`;
+}
+
+function TaskRow({ task, actions, highlighted }) {
   const priority = getPriorityConfig(task.priority);
   const stage = getStageConfig(task.stage);
   const [hovered, setHovered] = useState(false);
 
   return (
     <div
+      data-task-id={task.id}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
         display: 'flex', alignItems: 'center', gap: 12, paddingTop: 10, paddingBottom: 10, paddingLeft: 12, paddingRight: 12,
-        borderRadius: 6, transition: 'background 0.15s',
-        background: hovered ? 'var(--s2)' : 'transparent'
+        borderRadius: 6, transition: 'background 0.3s',
+        background: highlighted ? 'rgba(242,205,26,0.08)' : (hovered ? 'var(--s2)' : 'transparent'),
+        outline: highlighted ? '1px solid rgba(242,205,26,0.25)' : 'none',
       }}
     >
       <span
@@ -209,7 +216,39 @@ export default function SprintsPage() {
   // Search focus
   const [searchFocused, setSearchFocused] = useState(false);
 
+  // "/" search overlay
+  const [sprintSearchOpen, setSprintSearchOpen] = useState(false);
+  const [sprintSearchQuery, setSprintSearchQuery] = useState('');
+  const [highlightedTaskId, setHighlightedTaskId] = useState(null);
+
   const isAdminLead = ['admin', 'lead'].includes(brandUser?.role);
+
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        const tag = document.activeElement?.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+        e.preventDefault();
+        setSprintSearchOpen(o => !o);
+        setSprintSearchQuery('');
+      } else if (e.key === 'Escape' && sprintSearchOpen) {
+        setSprintSearchOpen(false);
+      }
+    }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [sprintSearchOpen]);
+
+  function handleSearchResultClick(task) {
+    setSprintSearchOpen(false);
+    setSprintSearchQuery('');
+    setHighlightedTaskId(task.id);
+    setTimeout(() => {
+      document.querySelector(`[data-task-id="${task.id}"]`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 50);
+    setTimeout(() => setHighlightedTaskId(null), 2000);
+  }
 
   useEffect(() => {
     if (brandUser) loadAll();
@@ -393,6 +432,9 @@ export default function SprintsPage() {
             <h1 style={{ fontFamily: 'var(--head)', fontWeight: 900, fontSize: 18, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--text)', margin: 0 }}>Sprints</h1>
             <p style={{ fontFamily: 'var(--mono)', color: 'var(--t3)', fontSize: 11, marginTop: 4 }}>
               {activeSprint ? activeSprint.name : 'No active sprint'}
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginLeft: 12 }}>
+                <kbd style={{ background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 3, padding: '1px 5px', fontSize: 9 }}>/</kbd> search
+              </span>
             </p>
             {activeSprint && (() => {
               const total     = sprintTasks.length + doneCount;
@@ -573,6 +615,7 @@ export default function SprintsPage() {
                       >
                         <TaskRow
                           task={task}
+                          highlighted={highlightedTaskId === task.id}
                           actions={isAdminLead ? (
                             <RemoveButton onClick={() => removeFromSprint(task)} />
                           ) : null}
@@ -637,6 +680,7 @@ export default function SprintsPage() {
                       >
                         <TaskRow
                           task={task}
+                          highlighted={highlightedTaskId === task.id}
                           actions={isAdminLead && activeSprint ? (
                             <AddButton onClick={() => setPendingAdd({ task, sprint_id: activeSprint.id })} />
                           ) : null}
@@ -699,6 +743,116 @@ export default function SprintsPage() {
             </div>
           </>
         )}
+
+        {sprintSearchOpen && (() => {
+          const q = sprintSearchQuery.trim().toLowerCase();
+          const matchFn = t =>
+            !q ||
+            t.title.toLowerCase().includes(q) ||
+            t.product_code?.toLowerCase().includes(q);
+          const sprintMatches = q ? sprintTasks.filter(matchFn) : [];
+          const backlogMatches = q ? backlogTasks.filter(matchFn) : [];
+          const totalResults = sprintMatches.length + backlogMatches.length;
+
+          const renderRow = (t, source) => {
+            const stage = getStageConfig(t.stage);
+            const taskId = getSprintTaskId(t);
+            const isSprint = source === 'sprint';
+            return (
+              <div
+                key={`${source}-${t.id}`}
+                onClick={() => handleSearchResultClick(t)}
+                style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', cursor: 'pointer', borderBottom: '1px solid var(--b1)', transition: 'background .1s' }}
+                onMouseEnter={e => e.currentTarget.style.background = 'var(--s2)'}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+              >
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: stage?.color || 'var(--t3)', flexShrink: 0 }} />
+                {taskId && (
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', letterSpacing: '.06em', flexShrink: 0 }}>
+                    {taskId}
+                  </span>
+                )}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.title}</p>
+                </div>
+                {t.due_date && (
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', flexShrink: 0 }}>
+                    {new Date(t.due_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                  </span>
+                )}
+                <span style={{
+                  fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '.08em',
+                  padding: '2px 6px', borderRadius: 3, flexShrink: 0,
+                  background: isSprint ? '#F2CD1A' : 'var(--s3)',
+                  color: isSprint ? '#080808' : 'var(--t2)',
+                }}>
+                  {isSprint ? 'Sprint' : 'Backlog'}
+                </span>
+              </div>
+            );
+          };
+
+          return (
+            <>
+              <div
+                onClick={() => setSprintSearchOpen(false)}
+                style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 200 }}
+              />
+              <div style={{
+                position: 'fixed', top: '20%', left: '50%', transform: 'translateX(-50%)',
+                width: '100%', maxWidth: 560, background: '#1a1a1a', border: '1px solid var(--b2)',
+                borderRadius: 10, overflow: 'hidden', zIndex: 201, boxShadow: '0 20px 60px rgba(0,0,0,0.6)',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderBottom: '1px solid var(--b1)' }}>
+                  <span style={{ color: 'var(--t3)', fontSize: 14 }}>⌕</span>
+                  <input
+                    autoFocus
+                    type="text"
+                    placeholder="Search sprint + backlog..."
+                    value={sprintSearchQuery}
+                    onChange={e => setSprintSearchQuery(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Escape') setSprintSearchOpen(false); }}
+                    style={{ flex: 1, background: 'none', border: 'none', outline: 'none', fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--text)', caretColor: '#F2CD1A' }}
+                  />
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)' }}>/ or ESC to close</span>
+                </div>
+                <div style={{ maxHeight: 360, overflowY: 'auto' }}>
+                  {!q ? null : totalResults === 0 ? (
+                    <div style={{ padding: '24px 16px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>
+                      No tasks found
+                    </div>
+                  ) : (
+                    <>
+                      {sprintMatches.length > 0 && (
+                        <>
+                          <div style={{ padding: '8px 16px', fontFamily: 'var(--head)', fontSize: 9, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--t3)', background: 'var(--s2)' }}>
+                            In Sprint
+                          </div>
+                          {sprintMatches.map(t => renderRow(t, 'sprint'))}
+                        </>
+                      )}
+                      {backlogMatches.length > 0 && (
+                        <>
+                          <div style={{ padding: '8px 16px', fontFamily: 'var(--head)', fontSize: 9, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--t3)', background: 'var(--s2)' }}>
+                            Backlog
+                          </div>
+                          {backlogMatches.map(t => renderRow(t, 'backlog'))}
+                        </>
+                      )}
+                    </>
+                  )}
+                </div>
+                <div style={{ padding: '8px 16px', borderTop: '1px solid var(--b1)' }}>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>
+                    {q
+                      ? `${totalResults} result${totalResults === 1 ? '' : 's'}`
+                      : `${sprintTasks.length} sprint · ${backlogTasks.length} backlog — type to filter`}
+                  </span>
+                </div>
+              </div>
+            </>
+          );
+        })()}
       </div>
     </Layout>
   );
