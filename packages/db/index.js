@@ -20,5 +20,6 @@ export async function garageFetch(action, params = {}, sessionOrToken) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error || `Worker ${res.status}`);
   }
-  return res.json();
+  const body = await res.json();
+  return body.data !== undefined ? body.data : body;
 }

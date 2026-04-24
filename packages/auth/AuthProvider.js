@@ -160,12 +160,16 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
         return;
       }
 
-      const data = await Promise.race([
-        workerFetch(pingAction, {}, activeSession, workerUrl),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Identity fetch timeout')), 10000)
-        )
-      ]);
+      const pingBase = process.env.NEXT_PUBLIC_WORKER_URL;
+      const pingUrl = new URL(pingBase);
+      pingUrl.searchParams.set('action', pingAction);
+      const pingRes = await fetch(pingUrl.toString(), {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${activeSession.access_token}` },
+      });
+      if (!pingRes.ok) throw new Error('Unknown action: ' + pingAction);
+      const pingBody = await pingRes.json();
+      const data = pingBody.data !== undefined ? pingBody.data : pingBody;
       identityCacheRef.current = { userId: incomingUserId, data };
       const resolvedRole     = data?.role ?? null;
       const resolvedFullName = data?.full_name ?? null;
