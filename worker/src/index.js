@@ -1549,9 +1549,28 @@ async function handleGetDashboardStats(body, ctx, env) {
 
   const today = new Date().toISOString().split('T')[0];
 
-  const inReview    = tasks.filter(t => t.stage === 'in_review').length;
+  // IN REVIEW and EXT. BLOCKED always show across all sprints —
+  // these stages require action regardless of sprint membership.
+  const allInReviewRes = await sbFetch(
+    'tasks?stage=eq.in_review&select=id',
+    { method: 'GET' }, env
+  );
+  const allInReview = allInReviewRes.ok ? await allInReviewRes.json() : [];
+
+  const allExtBlockedRes = await sbFetch(
+    'tasks?stage=eq.ext_blocked&select=id',
+    { method: 'GET' }, env
+  );
+  const allExtBlocked = allExtBlockedRes.ok ? await allExtBlockedRes.json() : [];
+
+  const inReview = personTaskIds
+    ? allInReview.filter(t => personTaskIds.has(t.id)).length
+    : allInReview.length;
+  const extBlocked = personTaskIds
+    ? allExtBlocked.filter(t => personTaskIds.has(t.id)).length
+    : allExtBlocked.length;
+
   const overdue     = tasks.filter(t => !['done','abandoned'].includes(t.stage) && t.due_date && t.due_date < today).length;
-  const extBlocked  = tasks.filter(t => t.stage === 'ext_blocked').length;
   const abandoned   = tasks.filter(t => t.stage === 'abandoned').length;
   const doneCount   = tasks.filter(t => t.stage === 'done').length;
   const totalEligible = tasks.filter(t => t.stage !== 'abandoned').length;
@@ -1793,26 +1812,26 @@ async function handleGetTasksInBucket(body, ctx, env) {
     }
   }
 
-  // Build query filter based on bucket
-  let filter = `sprint_id=eq.${sid}`;
+  // Build query filter based on bucket. in_review and ext_blocked
+  // span all sprints — these stages need attention regardless of
+  // which sprint the task belongs to.
   const today = new Date().toISOString().split('T')[0];
-
-  switch (bucket) {
-    case 'in_review':
-      filter += '&stage=eq.in_review';
-      break;
-    case 'overdue':
-      filter += `&stage=not.in.(done,abandoned)&due_date=lt.${today}`;
-      break;
-    case 'ext_blocked':
-      filter += '&stage=eq.ext_blocked';
-      break;
-    case 'abandoned':
-      filter += '&stage=eq.abandoned';
-      break;
-    case 'spillovers':
-      filter += '&is_spillover=eq.true&stage=not.in.(done,abandoned)';
-      break;
+  let filter;
+  if (bucket === 'in_review' || bucket === 'ext_blocked') {
+    filter = `stage=eq.${bucket}`;
+  } else {
+    filter = `sprint_id=eq.${sid}`;
+    switch (bucket) {
+      case 'overdue':
+        filter += `&stage=not.in.(done,abandoned)&due_date=lt.${today}`;
+        break;
+      case 'abandoned':
+        filter += '&stage=eq.abandoned';
+        break;
+      case 'spillovers':
+        filter += '&is_spillover=eq.true&stage=not.in.(done,abandoned)';
+        break;
+    }
   }
 
   const tasksRes = await sbFetch(
