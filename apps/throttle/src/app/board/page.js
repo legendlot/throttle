@@ -20,9 +20,19 @@ function getDueDateStyle(dueDateStr, stage) {
   return null;
 }
 
+function getTaskId(task, allTasks) {
+  if (!task.task_number) return null;
+  if (!task.batch_id) return `T-${String(task.task_number).padStart(3, '0')}`;
+  const siblings = allTasks
+    .filter(t => t.batch_id === task.batch_id)
+    .sort((a, b) => a.task_number - b.task_number);
+  const pos = siblings.findIndex(t => t.id === task.id) + 1;
+  return `T-${String(siblings[0].task_number).padStart(3, '0')}/${pos}`;
+}
+
 // ── Kanban Card ───────────────────────────────────────────────────────────────
 
-function TaskCard({ task, onClick, isDragging, ageingConfig, teamMembers }) {
+function TaskCard({ task, onClick, isDragging, ageingConfig, teamMembers, allTasks }) {
   const priority = getPriorityConfig(task.priority);
   const stage = getStageConfig(task.stage);
 
@@ -78,9 +88,19 @@ function TaskCard({ task, onClick, isDragging, ageingConfig, teamMembers }) {
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', letterSpacing: '.08em' }}>
-          {task.type}
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+          {(() => {
+            const taskId = getTaskId(task, allTasks);
+            return taskId ? (
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', letterSpacing: '.06em' }}>
+                {taskId}
+              </span>
+            ) : null;
+          })()}
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', letterSpacing: '.08em' }}>
+            {task.type}
+          </span>
+        </div>
         <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
           {task.is_spillover && <span style={{ fontSize: 10, color: 'var(--amber)' }}>↩</span>}
           {task.stage === 'ext_blocked' && <span style={{ fontSize: 10, color: 'var(--amber)' }}>⚠</span>}
@@ -143,7 +163,7 @@ function TaskCard({ task, onClick, isDragging, ageingConfig, teamMembers }) {
 
 // ── Kanban Column ─────────────────────────────────────────────────────────────
 
-function KanbanColumn({ stage, tasks, onTaskClick, onDrop, canDrop, ageingConfig, teamMembers }) {
+function KanbanColumn({ stage, tasks, onTaskClick, onDrop, canDrop, ageingConfig, teamMembers, allTasks }) {
   const [isDragOver, setIsDragOver] = useState(false);
   const config = getStageConfig(stage);
 
@@ -219,6 +239,7 @@ function KanbanColumn({ stage, tasks, onTaskClick, onDrop, canDrop, ageingConfig
             onClick={onTaskClick}
             ageingConfig={ageingConfig}
             teamMembers={teamMembers}
+            allTasks={allTasks}
           />
         ))}
         {tasks.length === 0 && isDragOver && (
@@ -468,7 +489,7 @@ export default function BoardPage() {
       const pattern = `"%${sanitized}%"`;
       const { data, error } = await supabase
         .from('tasks')
-        .select('id, title, type, stage, due_date, product_code, sprint_id')
+        .select('id, title, type, stage, due_date, product_code, sprint_id, task_number, batch_id')
         .or(`title.ilike.${pattern},product_code.ilike.${pattern},type.ilike.${pattern}`)
         .order('created_at', { ascending: false })
         .limit(20);
@@ -499,11 +520,16 @@ export default function BoardPage() {
     setLoading(true);
     const { data, error } = await supabase
       .from('tasks')
-      .select('*, task_assignees(user_id, is_owner)')
+      .select('*, task_assignees(user_id, is_owner), task_number, batch_id')
       .not('stage', 'in', '("done","abandoned")')
       .order('created_at', { ascending: false });
     if (!error) setTasks(data || []);
     setLoading(false);
+  }
+
+  function handleTaskClick(task) {
+    const displayId = getTaskId(task, tasks);
+    setSelectedTask({ ...task, displayId });
   }
 
   async function handleDrop(taskId, fromStage, toStage) {
@@ -513,7 +539,8 @@ export default function BoardPage() {
     if (!canMoveTask(task, toStage, brandUser?.role)) return;
 
     if (toStage === 'ext_blocked' || toStage === 'abandoned') {
-      setSelectedTask({ ...task, _pendingStage: toStage });
+      const displayId = getTaskId(task, tasks);
+      setSelectedTask({ ...task, displayId, _pendingStage: toStage });
       return;
     }
 
@@ -527,7 +554,7 @@ export default function BoardPage() {
 
   function handleTaskUpdate(updatedTask) {
     setTasks(prev => prev.map(t => t.id === updatedTask.id ? updatedTask : t));
-    setSelectedTask(updatedTask);
+    setSelectedTask(prev => ({ ...updatedTask, displayId: prev?.displayId }));
   }
 
   const visibleTasks = selectedPerson
@@ -623,18 +650,19 @@ export default function BoardPage() {
                   key={stage.value}
                   stage={stage.value}
                   tasks={tasksByStage[stage.value] || []}
-                  onTaskClick={setSelectedTask}
+                  onTaskClick={handleTaskClick}
                   onDrop={handleDrop}
                   canDrop={true}
                   ageingConfig={ageingConfig}
                   teamMembers={teamMembers}
+                  allTasks={tasks}
                 />
               ))}
             </div>
           </div>
         ) : (
           <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: '0 2px' }}>
-            <TableView tasks={visibleTasks} onTaskClick={setSelectedTask} />
+            <TableView tasks={visibleTasks} onTaskClick={handleTaskClick} />
           </div>
         )}
 
@@ -698,7 +726,7 @@ export default function BoardPage() {
                     return (
                       <div
                         key={t.id}
-                        onClick={() => { setSelectedTask(t); setSearchOpen(false); setSearchQuery(''); }}
+                        onClick={() => { handleTaskClick(t); setSearchOpen(false); setSearchQuery(''); }}
                         style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', cursor: 'pointer', borderBottom: '1px solid var(--b1)', transition: 'background .1s' }}
                         onMouseEnter={e => e.currentTarget.style.background = 'var(--s2)'}
                         onMouseLeave={e => e.currentTarget.style.background = 'transparent'}

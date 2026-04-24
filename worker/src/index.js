@@ -1537,7 +1537,7 @@ async function handleGetDashboardStats(body, ctx, env) {
 
   // Fetch all tasks in sprint
   const tasksRes = await sbFetch(
-    `tasks?sprint_id=eq.${sprintId}&select=id,stage,due_date,is_spillover`,
+    `tasks?sprint_id=eq.${sprintId}&select=id,stage,due_date,is_spillover,task_number`,
     { method: 'GET' }, env
   );
   let tasks = tasksRes.ok ? await tasksRes.json() : [];
@@ -1816,7 +1816,7 @@ async function handleGetTasksInBucket(body, ctx, env) {
   }
 
   const tasksRes = await sbFetch(
-    `tasks?${filter}&select=id,title,type,deliverable_type,stage,priority,due_date,blocked_reason`,
+    `tasks?${filter}&select=id,title,type,deliverable_type,stage,priority,due_date,blocked_reason,task_number`,
     { method: 'GET' }, env
   );
   let tasks = tasksRes.ok ? await tasksRes.json() : [];
@@ -2317,7 +2317,7 @@ async function handleGetRequestDelivery(body, ctx, env) {
   }
 
   const tasksRes = await sbFetch(
-    `tasks?request_id=eq.${request_id}&stage=neq.abandoned&select=id,title,stage,deliverable_type,delivery_message,delivered_at,auto_close_at,iteration_count,completed_at`,
+    `tasks?request_id=eq.${request_id}&stage=neq.abandoned&select=id,title,stage,deliverable_type,delivery_message,delivered_at,auto_close_at,iteration_count,completed_at,task_number`,
     { method: 'GET' }, env
   );
   const tasks = tasksRes.ok ? await tasksRes.json() : [];

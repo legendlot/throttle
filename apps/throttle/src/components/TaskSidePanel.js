@@ -225,6 +225,11 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
               <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: stageConfig.color, flexShrink: 0 }} />
               <span style={{ fontFamily: 'var(--head)', fontSize: 9, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--t3)' }}>{stageConfig.label}</span>
+              {task.displayId && (
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', letterSpacing: '.08em', background: 'var(--s3)', padding: '2px 6px', borderRadius: 3 }}>
+                  {task.displayId}
+                </span>
+              )}
               {task.is_spillover && (
                 <span style={{ fontFamily: 'var(--mono)', fontSize: 9, background: 'rgba(245,158,11,0.12)', color: 'var(--amber)', border: '1px solid rgba(245,158,11,0.3)', padding: '2px 6px', borderRadius: 3 }}>
                   Spillover
