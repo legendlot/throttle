@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect, useMemo } from 'react';
 import { useAuth, hasPermission } from '@throttle/auth';
-import { workerFetch } from '@throttle/db';
+import { garageFetch } from '@throttle/db';
 import { EmptyState, Spinner } from '@throttle/ui';
 
 const btnBase = {
@@ -60,7 +60,7 @@ export default function StockPage() {
       setStockLoading(true);
       setStockError(null);
       try {
-        const data = await workerFetch('getStock', {}, session);
+        const data = await garageFetch('getStock', {}, session);
         setStockData(data || []);
       } catch (e) {
         setStockError(e.message);
@@ -71,7 +71,7 @@ export default function StockPage() {
     async function loadFbu() {
       setFbuLoading(true);
       try {
-        const data = await workerFetch('getFbuStock', {}, session);
+        const data = await garageFetch('getFbuStock', {}, session);
         setFbuData(data || []);
       } catch (e) {
         setFbuData([]);

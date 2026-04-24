@@ -1,7 +1,7 @@
 'use client';
 import { useState, useMemo } from 'react';
 import { useAuth, hasPermission } from '@throttle/auth';
-import { workerFetch } from '@throttle/db';
+import { garageFetch } from '@throttle/db';
 import { KpiCard, EmptyState, Spinner } from '@throttle/ui';
 import { useAutoRefresh } from '../../../hooks/useAutoRefresh.js';
 import { useRefreshState } from '../layout.js';
@@ -43,11 +43,11 @@ async function loadMain(session, setKpis, setSections, setMainLoading, setMainEr
   setMainError(null);
   try {
     const [kpisRes, grnsRes, issuesRes, returnsRes, shipmentsRes] = await Promise.all([
-      workerFetch('getDashboard',  {}, session),
-      workerFetch('getGRNSummary', {}, session),
-      workerFetch('getIssues',     {}, session),
-      workerFetch('getReturns',    {}, session),
-      workerFetch('getShipments',  {}, session),
+      garageFetch('getDashboard',  {}, session),
+      garageFetch('getGRNSummary', {}, session),
+      garageFetch('getIssues',     {}, session),
+      garageFetch('getReturns',    {}, session),
+      garageFetch('getShipments',  {}, session),
     ]);
     setKpis(kpisRes);
     setSections({ grns: grnsRes, issues: issuesRes, returns: returnsRes, shipments: shipmentsRes });
@@ -64,7 +64,7 @@ async function loadProducible(session, setProducible, setProdLoading) {
   try {
     const results = await Promise.all(
       PRODUCTS.map(product =>
-        workerFetch('calcKit', { product, variant: '', colour: '', qty: 1 }, session)
+        garageFetch('calcKit', { product, variant: '', colour: '', qty: 1 }, session)
           .then(data => ({ product, ok: true, kit: data.kit || [] }))
           .catch(() => ({ product, ok: false, kit: [] }))
       )
@@ -95,7 +95,7 @@ async function loadProducible(session, setProducible, setProdLoading) {
 async function loadActivity(session, setActivity, setActLoading) {
   setActLoading(true);
   try {
-    const data = await workerFetch('getActivityLog', { limit: 10 }, session);
+    const data = await garageFetch('getActivityLog', { limit: 10 }, session);
     setActivity(data || []);
   } catch (e) {
     setActivity([]);
