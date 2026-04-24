@@ -472,11 +472,13 @@ export default function SprintsPage() {
                     }} />
                   </div>
                   {total > 0 && (
-                    <div style={{ position: 'relative', marginTop: 4, height: 4, display: 'flex', borderRadius: 2, overflow: 'hidden' }}>
-                      {activeStages.map(s => {
+                    <div style={{ position: 'relative', marginTop: 4, height: 4, display: 'flex' }}>
+                      {activeStages.map((s, i) => {
                         const cfg = getStageConfig(s);
                         const count = stageCounts[s];
                         const segPct = Math.round((count / total) * 100);
+                        const isFirst = i === 0;
+                        const isLast  = i === activeStages.length - 1;
                         return (
                           <div
                             key={s}
@@ -486,7 +488,6 @@ export default function SprintsPage() {
                               position: 'relative',
                               width: `${(count / total) * 100}%`,
                               height: '100%',
-                              background: cfg.color,
                               paddingTop: 6,
                               paddingBottom: 6,
                               marginTop: -6,
@@ -494,6 +495,15 @@ export default function SprintsPage() {
                               cursor: 'default',
                             }}
                           >
+                            <div style={{
+                              width: '100%',
+                              height: '100%',
+                              background: cfg.color,
+                              borderTopLeftRadius: isFirst ? 2 : 0,
+                              borderBottomLeftRadius: isFirst ? 2 : 0,
+                              borderTopRightRadius: isLast ? 2 : 0,
+                              borderBottomRightRadius: isLast ? 2 : 0,
+                            }} />
                             {hoveredSegment === s && (
                               <div style={{
                                 position: 'absolute', bottom: 10, left: '50%', transform: 'translateX(-50%)',
