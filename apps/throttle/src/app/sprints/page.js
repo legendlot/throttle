@@ -482,7 +482,17 @@ export default function SprintsPage() {
                             key={s}
                             onMouseEnter={() => setHoveredSegment(s)}
                             onMouseLeave={() => setHoveredSegment(null)}
-                            style={{ position: 'relative', width: `${(count / total) * 100}%`, height: '100%', background: cfg.color, cursor: 'default' }}
+                            style={{
+                              position: 'relative',
+                              width: `${(count / total) * 100}%`,
+                              height: '100%',
+                              background: cfg.color,
+                              paddingTop: 6,
+                              paddingBottom: 6,
+                              marginTop: -6,
+                              marginBottom: -6,
+                              cursor: 'default',
+                            }}
                           >
                             {hoveredSegment === s && (
                               <div style={{
