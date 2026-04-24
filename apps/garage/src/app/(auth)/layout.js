@@ -37,7 +37,7 @@ function AuthLayoutInner({ children }) {
   const { refreshing } = useRefreshState();
   const navGroups = useNavGroups(perms || {});
 
-  if (loading) return <Spinner />;
+  if (loading && !user) return <Spinner />;
 
   return (
     <>

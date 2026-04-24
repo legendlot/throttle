@@ -5,6 +5,7 @@ const COLORS = {
   red:    '#ef4444',
   blue:   '#3b82f6',
   orange: '#f97316',
+  yellow: 'var(--yellow)',
 };
 
 export function KpiCard({ label, value, sub, color }) {
