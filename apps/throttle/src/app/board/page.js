@@ -463,6 +463,7 @@ export default function BoardPage() {
     }
     setSearchLoading(true);
     const timer = setTimeout(async () => {
+      await supabase.auth.getSession();
       const sanitized = q.replace(/["\\]/g, '');
       const pattern = `"%${sanitized}%"`;
       const { data, error } = await supabase
@@ -494,6 +495,7 @@ export default function BoardPage() {
   }, [brandUser?.id]);
 
   async function loadTasks() {
+    await supabase.auth.getSession();
     setLoading(true);
     const { data, error } = await supabase
       .from('tasks')

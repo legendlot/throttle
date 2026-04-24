@@ -16,6 +16,7 @@ export default function SettingsPage() {
   const [error, setError] = useState(null);
 
   async function loadUsers() {
+    await supabase.auth.getSession();
     try {
       const { data, error } = await supabase.from('users').select('*').order('name');
       if (error) throw error;

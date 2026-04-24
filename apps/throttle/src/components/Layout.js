@@ -23,6 +23,7 @@ function NotificationBell({ brandUser }) {
   const storageKey = `throttle_notif_seen_${brandUser?.id}`;
 
   async function loadNotifications() {
+    await supabase.auth.getSession();
     if (!brandUser?.id) return;
     setLoading(true);
     try {
