@@ -20,15 +20,37 @@ const PRODUCT_VARIANTS = {
 };
 const PRODUCTS = Object.keys(PRODUCT_VARIANTS);
 
+// Keys match entity_type values returned by the API (capitalized, matches legacy ACT_COLORS exactly)
 const ACT_COLORS = {
-  grn:        'var(--green)',
-  issue:      'var(--blue)',
-  return:     'var(--red)',
-  shipment:   'var(--yellow)',
-  work_order: 'var(--blue)',
-  po:         'var(--yellow)',
-  user:       'var(--t2)',
+  GRN:      'var(--green)',
+  WO:       'var(--blue)',
+  Issue:    'var(--yellow)',
+  Return:   'var(--red)',
+  Shipment: 'var(--blue)',
+  Flush:    'var(--yellow)',
+  PO:       'var(--t2)',
 };
+
+const ACT_ICONS = {
+  GRN_CREATED:       '📥', GRN_FROM_RECEIVING: '📦',
+  WO_CREATED:        '🏭', STOCK_ISSUED:       '📤',
+  RETURN_LOGGED:     '🔄', SHIPMENT_CREATED:   '🚢',
+  FLUSH_CREATED:     '🔁', FLUSH_VERIFIED:     '✅',
+  PO_CREATED:        '📋', PO_APPROVED:        '✔',
+  PO_STATUS_UPDATED: '🔀', PO_CANCELLED:       '✖',
+};
+
+function formatActivityTime(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  const now = new Date();
+  const diff = Math.floor((now - d) / 1000);
+  if (diff < 60)    return `${diff}s ago`;
+  if (diff < 3600)  return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) + ' ' +
+         d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+}
 
 function daysAgo(n) {
   const d = new Date();
@@ -561,18 +583,28 @@ export default function DashboardPage() {
         ) : activity.length === 0 ? (
           <EmptyState message="No activity yet" />
         ) : (
-          <div style={{ padding: '8px 0' }}>
-            {activity.map((a, i) => (
-              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '6px 16px', fontSize: 12, borderBottom: '1px solid var(--surface2)' }}>
-                <div style={{ display: 'flex', gap: 10, alignItems: 'baseline' }}>
-                  <StatusBadge label={a.entity_type || '—'} color={ACT_COLORS[a.entity_type] || 'var(--t2)'} />
-                  <span>{a.summary || a.message || '—'}</span>
+          <div>
+            {activity.map((a, i) => {
+              const color = ACT_COLORS[a.entity_type] || 'var(--t2)';
+              const icon  = ACT_ICONS[a.action] || '·';
+              return (
+                <div key={i} style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  padding: '6px 16px', borderBottom: '1px solid var(--border)',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                    <StatusBadge label={a.entity_type || '—'} color={color} />
+                    <span style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {icon} {a.summary || a.message || '—'}
+                    </span>
+                  </div>
+                  <div style={{ flexShrink: 0, marginLeft: 12, textAlign: 'right' }}>
+                    <div style={{ fontSize: 10, fontWeight: 600 }}>{a.actor || '—'}</div>
+                    <div style={{ fontSize: 10, color: 'var(--t3)' }}>{formatActivityTime(a.logged_at || a.created_at)}</div>
+                  </div>
                 </div>
-                <div style={{ color: 'var(--t3)', fontSize: 11, fontFamily: 'var(--mono)' }}>
-                  {a.actor || '—'} · {a.created_at || ''}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>
