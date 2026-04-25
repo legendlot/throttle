@@ -20,15 +20,16 @@ const PRODUCT_VARIANTS = {
 };
 const PRODUCTS = Object.keys(PRODUCT_VARIANTS);
 
-// Keys match entity_type values returned by the API (capitalized, matches legacy ACT_COLORS exactly)
-const ACT_COLORS = {
-  GRN:      'var(--green)',
-  WO:       'var(--blue)',
-  Issue:    'var(--yellow)',
-  Return:   'var(--red)',
-  Shipment: 'var(--blue)',
-  Flush:    'var(--yellow)',
-  PO:       'var(--t2)',
+// Tone keys match legacy .badge-* classes — used by StatusBadge
+const ACT_TONES = {
+  GRN:      'green',
+  WO:       'blue',
+  Issue:    'yellow',
+  Return:   'red',
+  Shipment: 'blue',
+  Flush:    'yellow',
+  PO:       'gray',
+  Run:      'gray',
 };
 
 const ACT_ICONS = {
@@ -137,23 +138,46 @@ const twoColStyle = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, 
 const tableTdStyle = { padding: '9px 10px', fontSize: 12, borderBottom: '1px solid rgba(42,42,42,.6)', whiteSpace: 'nowrap' };
 const tableThStyle = { padding: '8px 10px', fontSize: 10, textAlign: 'left', color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' };
 
-function StatusBadge({ label, color }) {
+// Matches legacy .badge + .badge-* rgba values exactly
+const BADGE_STYLES = {
+  yellow: { background: 'rgba(242,205,26,.12)', color: '#f2cd1a', border: '1px solid rgba(242,205,26,.2)' },
+  green:  { background: 'rgba(34,197,94,.12)',  color: '#4ade80', border: '1px solid rgba(34,197,94,.2)'  },
+  red:    { background: 'rgba(222,42,42,.15)',  color: '#ff7070', border: '1px solid rgba(222,42,42,.25)' },
+  blue:   { background: 'rgba(33,60,226,.2)',   color: '#7b93ff', border: '1px solid rgba(33,60,226,.3)'  },
+  orange: { background: 'rgba(255,140,0,.15)',  color: '#ffaa33', border: '1px solid rgba(255,140,0,.25)' },
+  gray:   { background: 'rgba(80,80,80,.2)',    color: '#888',    border: '1px solid rgba(80,80,80,.3)'   },
+};
+function StatusBadge({ label, tone = 'gray' }) {
+  const s = BADGE_STYLES[tone] || BADGE_STYLES.gray;
   return (
     <span style={{
-      padding: '2px 6px', borderRadius: 3, fontFamily: 'var(--mono)',
-      fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.5,
-      background: `${color}22`, color,
+      display: 'inline-block', padding: '2px 6px', borderRadius: 2,
+      fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '.04em',
+      textTransform: 'uppercase', ...s,
     }}>{label}</span>
   );
 }
 
-function shipmentStatusColor(status) {
+function shipmentStatusTone(status) {
   const s = (status || '').toLowerCase();
-  if (s.includes('arriv') && !s.includes('complete')) return 'var(--yellow)';
-  if (s.includes('progress')) return 'var(--blue)';
-  if (s.includes('complete')) return 'var(--green)';
-  if (s.includes('closed'))   return 'var(--t3)';
-  return 'var(--t3)';
+  if (s.includes('arriv') && !s.includes('complete')) return 'yellow';
+  if (s.includes('progress')) return 'blue';
+  if (s.includes('complete')) return 'green';
+  return 'gray';
+}
+
+function formatDisplayDate(raw) {
+  if (!raw) return '—';
+  const str = String(raw);
+  if (/^\d{2}-[A-Za-z]{3}-\d{4}/.test(str)) return str.slice(0, 11);
+  if (/^\d{4}-\d{2}-\d{2}/.test(str)) {
+    const d = new Date(str);
+    if (!isNaN(d)) {
+      const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      return String(d.getDate()).padStart(2, '0') + '-' + months[d.getMonth()] + '-' + d.getFullYear();
+    }
+  }
+  return str.slice(0, 10);
 }
 
 export default function DashboardPage() {
@@ -431,15 +455,17 @@ export default function DashboardPage() {
             <tbody>
               {recentShipments.map((s, i) => (
                 <tr key={i}>
-                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{s.shipment_no || s.id || '—'}</td>
+                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{s.shipment_id || '—'}</td>
                   <td style={tableTdStyle}>{s.supplier || '—'}</td>
-                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{s.arrival_date || '—'}</td>
+                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{formatDisplayDate(s.arrival_date)}</td>
                   <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>
-                    {(s.boxes_received ?? 0)} / {(s.boxes_expected ?? 0)}
+                    {(s.total_boxes_received ?? 0)} / {(s.total_boxes_expected ?? 0)}
                   </td>
-                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{s.parts_count ?? '—'}</td>
+                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>
+                    {(s.parts_counted ?? 0)} / {(s.total_parts ?? 0)}
+                  </td>
                   <td style={tableTdStyle}>
-                    <StatusBadge label={s.status || '—'} color={shipmentStatusColor(s.status)} />
+                    <StatusBadge label={s.status || '—'} tone={shipmentStatusTone(s.status)} />
                   </td>
                 </tr>
               ))}
@@ -469,10 +495,10 @@ export default function DashboardPage() {
                 {recentGRNs.map((r, i) => (
                   <tr key={i}>
                     <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{r.grn_no || '—'}</td>
-                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.grn_date || '—'}</td>
+                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{formatDisplayDate(r.grn_date)}</td>
                     <td style={tableTdStyle}>{r.supplier || '—'}</td>
                     <td style={tableTdStyle}>{r.product || '—'}</td>
-                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{(r.line_count ?? '—')} · {(r.total_qty ?? '—')} pcs</td>
+                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{(r.lines ?? '—')} · {(r.total_qty ?? 0).toLocaleString()} pcs</td>
                   </tr>
                 ))}
               </tbody>
@@ -500,10 +526,10 @@ export default function DashboardPage() {
                 {plannedIssues.map((r, i) => (
                   <tr key={i}>
                     <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.issue_no || '—'}</td>
-                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.wo_no || '—'}</td>
+                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.wo_no || r.work_order_no || '—'}</td>
                     <td style={tableTdStyle}>{r.product || '—'}</td>
-                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.units ?? '—'}</td>
-                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.issue_date || '—'}</td>
+                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.units_planned ?? '—'}</td>
+                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{formatDisplayDate(r.issue_date)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -585,7 +611,7 @@ export default function DashboardPage() {
         ) : (
           <div>
             {activity.map((a, i) => {
-              const color = ACT_COLORS[a.entity_type] || 'var(--t2)';
+              const tone  = ACT_TONES[a.entity_type] || 'gray';
               const icon  = ACT_ICONS[a.action] || '·';
               return (
                 <div key={i} style={{
@@ -593,7 +619,7 @@ export default function DashboardPage() {
                   padding: '6px 16px', borderBottom: '1px solid var(--border)',
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-                    <StatusBadge label={a.entity_type || '—'} color={color} />
+                    <StatusBadge label={a.entity_type || '—'} tone={tone} />
                     <span style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {icon} {a.summary || a.message || '—'}
                     </span>
