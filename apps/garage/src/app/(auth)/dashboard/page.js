@@ -266,32 +266,38 @@ export default function DashboardPage() {
             <span>🔴 Reorder Flags</span>
             <span style={{ color: reorderCount > 0 ? 'var(--red)' : 'var(--green)' }}>{reorderCount || 0}</span>
           </header>
-          <div style={{ padding: '8px 0' }}>
+          <div style={{ padding: '12px 16px' }}>
             {reorderFlags.length === 0 ? (
-              <div style={{ padding: '16px', textAlign: 'center', color: 'var(--green)', fontSize: 12 }}>
+              <div style={{ textAlign: 'center', color: 'var(--green)', fontSize: 12 }}>
                 ✅ No reorder flags
               </div>
             ) : (
-              <>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {reorderFlags.slice(0, 10).map((r, i) => (
-                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 16px', fontSize: 12 }}>
+                  <div key={i} style={{
+                    padding: '10px 12px',
+                    background: 'rgba(222,42,42,.06)',
+                    border: '1px solid rgba(222,42,42,.15)',
+                    borderRadius: 3,
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  }}>
                     <div>
-                      <div style={{ color: 'var(--t1)' }}>{r.part_name}</div>
-                      <div style={{ color: 'var(--t3)', fontSize: 11, fontFamily: 'var(--mono)' }}>
+                      <div style={{ fontSize: 12, color: 'var(--t1)' }}>{r.part_name}</div>
+                      <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>
                         {r.part_code} · {r.product || '—'}
                       </div>
                     </div>
-                    <div style={{ fontFamily: 'var(--mono)', color: 'var(--red)' }}>
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--red)' }}>
                       {r.closing_stock ?? 0} / {r.reorder_level ?? 0}
                     </div>
                   </div>
                 ))}
                 {reorderFlags.length > 10 && (
-                  <div style={{ padding: '8px 16px', fontSize: 11, color: 'var(--t3)', textAlign: 'center' }}>
+                  <div style={{ fontSize: 11, color: 'var(--t3)', textAlign: 'center', paddingTop: 4 }}>
                     + {reorderFlags.length - 10} more parts need reordering
                   </div>
                 )}
-              </>
+              </div>
             )}
           </div>
         </section>
@@ -301,39 +307,80 @@ export default function DashboardPage() {
             <span>Producible Units by Product</span>
             <span style={{ color: 'var(--t3)' }}>{producible.length} products</span>
           </header>
-          <div style={{ padding: '8px 0' }}>
+          <div>
             {prodLoading ? (
               <div style={{ padding: 16, textAlign: 'center' }}><Spinner size="sm" /></div>
             ) : producible.length === 0 ? (
               <EmptyState message="No producible data" />
             ) : (
               producible.map((row, i) => {
-                const constrained = row.maxPossible === 0;
-                const color = constrained ? 'var(--red)' : 'var(--green)';
+                const constrained = row.shorts.length > 0;
+                const color = row.maxPossible === 0 ? 'var(--red)' : 'var(--green)';
+                const pct = row.maxPossible > 0 && row.bottleneck
+                  ? Math.round((row.bottleneck.max_units / row.maxPossible) * 100)
+                  : 0;
                 const isOpen = expandedIndex === i;
+                const isLast = i === producible.length - 1;
                 return (
-                  <div key={row.product}>
-                    <button
+                  <div key={row.product} style={{
+                    padding: '9px 16px',
+                    borderBottom: isLast ? 'none' : '1px solid var(--border)',
+                  }}>
+                    <div
+                      style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}
                       onClick={() => setExpandedIndex(isOpen ? null : i)}
-                      style={{
-                        display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'baseline',
-                        padding: '6px 16px', fontSize: 12, background: 'transparent', border: 'none',
-                        color: 'var(--t1)', fontFamily: 'inherit', cursor: 'pointer', textAlign: 'left',
-                      }}
                     >
-                      <span>{row.product}</span>
-                      <span style={{ fontFamily: 'var(--mono)', color, fontWeight: 700 }}>
-                        {row.maxPossible}
-                      </span>
-                      <span style={{ fontSize: 11, color: 'var(--t3)', marginLeft: 8 }}>
-                        {row.bottleneck?.part_name || '—'}
-                      </span>
-                    </button>
-                    {isOpen && row.shorts.slice(0, 3).map((s, j) => (
-                      <div key={j} style={{ padding: '2px 32px', fontSize: 11, color: 'var(--t3)' }}>
-                        {s.part_name} — need {Math.max(0, s.bom_qty - (s.available % s.bom_qty || 0))} more → {s.max_units} units possible
+                      <div>
+                        <div style={{ fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 14 }}>{row.product}</div>
+                        <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>
+                          Bottleneck: {row.bottleneck?.part_name || '—'}
+                        </div>
                       </div>
-                    ))}
+                      <div style={{ textAlign: 'right' }}>
+                        <div style={{ fontFamily: 'var(--mono)', fontSize: 20, color }}>
+                          {row.maxPossible.toLocaleString()}
+                        </div>
+                        <div style={{ fontSize: 10, color: 'var(--t3)' }}>units producible</div>
+                      </div>
+                    </div>
+                    {constrained && (
+                      <div style={{ marginTop: 5 }}>
+                        <div style={{ height: 4, background: 'var(--surface2)', borderRadius: 2, overflow: 'hidden' }}>
+                          <div style={{ width: `${pct}%`, height: 4, background: color, borderRadius: 2 }} />
+                        </div>
+                        <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 2, fontFamily: 'var(--mono)' }}>
+                          {pct}% of max potential ({row.maxPossible.toLocaleString()} units)
+                        </div>
+                      </div>
+                    )}
+                    {isOpen && constrained && row.shorts.length > 0 && (
+                      <div style={{ marginTop: 6, padding: '8px 10px', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, fontSize: 11 }}>
+                        <div style={{ fontSize: 10, color: 'var(--t3)', marginBottom: 6, fontFamily: 'var(--mono)' }}>
+                          WHAT'S NEEDED TO REACH {row.maxPossible.toLocaleString()} UNITS
+                        </div>
+                        {row.shorts.slice(0, 3).map((s, j) => {
+                          const needed = (row.maxPossible - s.max_units) * s.bom_qty;
+                          return (
+                            <div key={j} style={{
+                              display: 'flex', justifyContent: 'space-between', padding: '3px 0',
+                              borderBottom: j < Math.min(row.shorts.length, 3) - 1 ? '1px solid rgba(42,42,42,.4)' : 'none',
+                            }}>
+                              <span style={{ color: 'var(--t2)' }}>
+                                {s.part_name} <span style={{ color: 'var(--t3)', fontSize: 10 }}>({s.part_code})</span>
+                              </span>
+                              <span style={{ color: 'var(--yellow)', fontFamily: 'var(--mono)' }}>
+                                need {needed} more → {row.maxPossible} units
+                              </span>
+                            </div>
+                          );
+                        })}
+                        {row.shorts.length > 3 && (
+                          <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 4 }}>
+                            + {row.shorts.length - 3} more parts short
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })
