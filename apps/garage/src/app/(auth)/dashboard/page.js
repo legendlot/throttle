@@ -104,16 +104,16 @@ async function loadActivity(session, setActivity, setActLoading) {
   }
 }
 
-const panelStyle = { backgroundColor: 'var(--surface)', borderRadius: 6, overflow: 'hidden', marginBottom: 16 };
+const panelStyle = { backgroundColor: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden', marginBottom: 16 };
 const panelHeaderStyle = {
-  padding: '10px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-  borderBottom: '1px solid var(--surface2)',
-  fontFamily: 'var(--mono)', fontSize: 12, textTransform: 'uppercase', letterSpacing: 1,
-  color: 'var(--t1)',
+  padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+  borderBottom: '1px solid var(--border)',
+  fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 13, textTransform: 'uppercase', letterSpacing: '0.06em',
+  color: 'var(--t2)',
 };
 const twoColStyle = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 };
-const tableTdStyle = { padding: '6px 10px', fontSize: 12, borderBottom: '1px solid var(--surface2)' };
-const tableThStyle = { padding: '6px 10px', fontSize: 11, textAlign: 'left', color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: 1 };
+const tableTdStyle = { padding: '9px 10px', fontSize: 12, borderBottom: '1px solid rgba(42,42,42,.6)', whiteSpace: 'nowrap' };
+const tableThStyle = { padding: '8px 10px', fontSize: 10, textAlign: 'left', color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' };
 
 function StatusBadge({ label, color }) {
   return (
@@ -214,7 +214,7 @@ export default function DashboardPage() {
   return (
     <div style={{ padding: '16px 24px', color: 'var(--t1)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 16 }}>
-        <h1 style={{ fontFamily: 'var(--mono)', fontSize: 24, fontWeight: 900, textTransform: 'uppercase', margin: 0 }}>
+        <h1 style={{ fontFamily: 'var(--cond)', fontSize: 28, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.03em', margin: 0 }}>
           Dashboard
         </h1>
         <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>

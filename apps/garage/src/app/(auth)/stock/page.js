@@ -7,20 +7,20 @@ import { EmptyState, Spinner } from '@throttle/ui';
 const btnBase = {
   padding: '6px 14px', borderRadius: 4, cursor: 'pointer',
   fontFamily: 'var(--mono)', fontSize: 12, textTransform: 'uppercase', letterSpacing: 1,
-  border: '1px solid var(--surface2)',
+  border: '1px solid var(--border)',
 };
 const btnPrimary   = { ...btnBase, background: 'var(--yellow)', color: '#000', borderColor: 'var(--yellow)' };
 const btnSecondary = { ...btnBase, background: 'var(--surface)', color: 'var(--t2)' };
 
 const inputStyle = {
-  background: 'var(--surface)', color: 'var(--t1)', border: '1px solid var(--surface2)',
+  background: 'var(--surface)', color: 'var(--t1)', border: '1px solid var(--border)',
   borderRadius: 4, padding: '6px 10px', fontFamily: 'var(--mono)', fontSize: 12, minWidth: 140,
 };
 
-const tableTdStyle = { padding: '6px 10px', fontSize: 12, borderBottom: '1px solid var(--surface2)' };
+const tableTdStyle = { padding: '9px 10px', fontSize: 12, borderBottom: '1px solid rgba(42,42,42,.6)', whiteSpace: 'nowrap' };
 const tableThStyle = {
-  padding: '6px 10px', fontSize: 11, textAlign: 'left', color: 'var(--t3)',
-  textTransform: 'uppercase', letterSpacing: 1, borderBottom: '1px solid var(--surface2)',
+  padding: '8px 10px', fontSize: 10, textAlign: 'left', color: 'var(--t3)',
+  textTransform: 'uppercase', letterSpacing: '0.08em', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap',
 };
 
 function Badge({ label, tone }) {
