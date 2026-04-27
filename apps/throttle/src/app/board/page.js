@@ -2,7 +2,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import Layout from '@/components/Layout';
 import TaskSidePanel from '@/components/TaskSidePanel';
-import { supabaseBrand as supabase, workerFetch } from '@throttle/db';
+import { supabaseBrand as supabase, workerFetch, getValidSession } from '@throttle/db';
 import { useAuth } from '@throttle/auth';
 import {
   BOARD_STAGES, PRIORITIES,
@@ -467,15 +467,6 @@ export default function BoardPage() {
   }, [brandUser]);
 
   useEffect(() => {
-    if (!brandUser) return;
-    function onVisible() {
-      if (document.visibilityState === 'visible') loadTasks();
-    }
-    document.addEventListener('visibilitychange', onVisible);
-    return () => document.removeEventListener('visibilitychange', onVisible);
-  }, [brandUser]);
-
-  useEffect(() => {
     const q = searchQuery.trim();
     if (!q) {
       setSearchResults(null);
@@ -484,7 +475,7 @@ export default function BoardPage() {
     }
     setSearchLoading(true);
     const timer = setTimeout(async () => {
-      await supabase.auth.getSession();
+      await getValidSession();
       const sanitized = q.replace(/["\\]/g, '');
       const pattern = `"%${sanitized}%"`;
       const { data, error } = await supabase
@@ -516,7 +507,7 @@ export default function BoardPage() {
   }, [brandUser?.id]);
 
   async function loadTasks() {
-    await supabase.auth.getSession();
+    await getValidSession();
     setLoading(true);
     const { data, error } = await supabase
       .from('tasks')

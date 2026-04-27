@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { useAuth } from '@throttle/auth';
-import { workerFetch, supabaseBrand as supabase } from '@throttle/db';
+import { workerFetch, supabaseBrand as supabase, getValidSession } from '@throttle/db';
 import { useToast } from '@/lib/toast';
 import {
   STAGES, PRIORITIES, DELIVERABLE_TYPES,
@@ -32,7 +32,7 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
 
   useEffect(() => {
     async function init() {
-      await supabase.auth.getSession();
+      await getValidSession();
       loadAssignees();
       loadActivity();
       if (isAdminLead) loadTeamMembers();
@@ -777,17 +777,16 @@ function AttachmentsSection({ taskId }) {
   const [attachments, setAttachments] = useState([]);
 
   useEffect(() => {
-    supabase.auth.getSession().then(() => {
-      supabase
+    (async () => {
+      await getValidSession();
+      const { data, error } = await supabase
         .from('task_attachments')
         .select('*')
         .eq('task_id', taskId)
-        .order('created_at', { ascending: false })
-        .then(({ data, error }) => {
-          if (error) console.error('[AttachmentsSection] query error:', error);
-          setAttachments(data || []);
-        });
-    });
+        .order('created_at', { ascending: false });
+      if (error) console.error('[AttachmentsSection] query error:', error);
+      setAttachments(data || []);
+    })();
   }, [taskId]);
 
   if (attachments.length === 0) return null;

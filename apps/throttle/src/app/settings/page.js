@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import Layout from '@/components/Layout';
-import { supabaseBrand as supabase, workerFetch } from '@throttle/db';
+import { supabaseBrand as supabase, workerFetch, getValidSession } from '@throttle/db';
 import { useAuth } from '@throttle/auth';
 
 const ROLES = ['admin', 'lead', 'member', 'requester'];
@@ -16,7 +16,7 @@ export default function SettingsPage() {
   const [error, setError] = useState(null);
 
   async function loadUsers() {
-    await supabase.auth.getSession();
+    await getValidSession();
     try {
       const { data, error } = await supabase.from('users').select('*').order('name');
       if (error) throw error;

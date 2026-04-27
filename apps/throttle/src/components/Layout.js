@@ -4,7 +4,7 @@ import { useRouter, usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ToastProvider } from '@/lib/toast';
-import { supabaseBrand as supabase } from '@throttle/db';
+import { supabaseBrand as supabase, getValidSession } from '@throttle/db';
 
 const NAV_ITEMS = [
   { label: 'Requests',  href: '/requests/',  roles: ['requester', 'member', 'lead', 'admin'] },
@@ -23,7 +23,7 @@ function NotificationBell({ brandUser }) {
   const storageKey = `throttle_notif_seen_${brandUser?.id}`;
 
   async function loadNotifications() {
-    await supabase.auth.getSession();
+    await getValidSession();
     if (!brandUser?.id) return;
     setLoading(true);
     try {
