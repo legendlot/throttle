@@ -1,6 +1,6 @@
 'use client';
 import { createContext, useContext, useEffect, useState, useRef } from 'react';
-import { supabase, workerFetch } from '@throttle/db';
+import { supabase, workerFetch, getValidSession } from '@throttle/db';
 
 const BRAND_USER_CACHE_KEY = 'throttle-brand-user';
 function readCache(userId) {
@@ -92,9 +92,20 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
       }
     );
 
+    // Pre-warm the shared session cache when the tab returns to visible —
+    // the JWT may have expired in the background, so kicking off the refresh
+    // here lets the next data-fetch hit a warm cache instead of waiting for it.
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        getValidSession().catch(() => {});
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
     return () => {
       cancelled = true;
       subscription.unsubscribe();
+      document.removeEventListener('visibilitychange', handleVisibility);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -160,16 +171,30 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
         return;
       }
 
-      const pingBase = process.env.NEXT_PUBLIC_WORKER_URL;
-      const pingUrl = new URL(pingBase);
-      pingUrl.searchParams.set('action', pingAction);
-      const pingRes = await fetch(pingUrl.toString(), {
-        method: 'GET',
-        headers: { 'Authorization': `Bearer ${activeSession.access_token}` },
-      });
-      if (!pingRes.ok) throw new Error('Unknown action: ' + pingAction);
-      const pingBody = await pingRes.json();
-      const data = pingBody.data !== undefined ? pingBody.data : pingBody;
+      // One-time hand-off from the OAuth callback: if /auth/callback already
+      // pre-fetched getMe, use that instead of re-calling the Worker.
+      let data = null;
+      try {
+        const raw = sessionStorage.getItem('throttle_me');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          data = parsed?.data !== undefined ? parsed.data : parsed;
+          sessionStorage.removeItem('throttle_me');
+        }
+      } catch { /* ignore */ }
+
+      if (!data) {
+        const pingBase = process.env.NEXT_PUBLIC_WORKER_URL;
+        const pingUrl = new URL(pingBase);
+        pingUrl.searchParams.set('action', pingAction);
+        const pingRes = await fetch(pingUrl.toString(), {
+          method: 'GET',
+          headers: { 'Authorization': `Bearer ${activeSession.access_token}` },
+        });
+        if (!pingRes.ok) throw new Error('Unknown action: ' + pingAction);
+        const pingBody = await pingRes.json();
+        data = pingBody.data !== undefined ? pingBody.data : pingBody;
+      }
       identityCacheRef.current = { userId: incomingUserId, data };
       const resolvedRole     = data?.role ?? null;
       const resolvedFullName = data?.full_name ?? null;
