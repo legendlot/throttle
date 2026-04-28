@@ -5,20 +5,7 @@ import { garageFetch } from '@throttle/db';
 import { KpiCard, EmptyState, Spinner } from '@throttle/ui';
 import { useAutoRefresh } from '../../../hooks/useAutoRefresh.js';
 import { useRefreshState } from '../layout.js';
-
-// TD-020: replace with dynamic getMaterials call once shared useProducts() lands in G-W2.
-const PRODUCT_VARIANTS = {
-  'Flare':    ['Track','Race','Underground','Street','Burnout'],
-  'Flare LE': ['Race'],
-  'Ghost':    ['Burnout','Street','Underground'],
-  'Knox':     ['Adventure','Explorer'],
-  'Shadow':   ['Asphalt','Tarmac'],
-  'Nitro':    ['Race Grey','Race Blue','Tarmac Black','Tarmac Green','Tarmac Grey','Burnout Red'],
-  'Dash':     ['Street White','Green','Black','Blue','Silver','Urban Red','Urban White','Sports Yellow','Sports Blue'],
-  'Fang':     [],
-  'Atlas':    [],
-};
-const PRODUCTS = Object.keys(PRODUCT_VARIANTS);
+import { PRODUCTS, PRODUCT_VARIANTS } from '../../../hooks/useProducts.js';
 
 // Tone keys match legacy .badge-* classes — used by StatusBadge
 const ACT_TONES = {
