@@ -1,12 +1,17 @@
 'use client';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 
+// Ref-held pattern: fn reference is always current; effect re-runs when skip or
+// intervalMs changes. When skip flips false (session arrives), fires immediately
+// and starts the interval. No stale closures, no work before auth is ready.
 export function useAutoRefresh(fn, intervalMs = 30000, skip = false) {
+  const fnRef = useRef(fn);
+  useEffect(() => { fnRef.current = fn; });
+
   useEffect(() => {
-    fn();
     if (skip) return;
-    const id = setInterval(fn, intervalMs);
+    fnRef.current();
+    const id = setInterval(() => fnRef.current(), intervalMs);
     return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [skip, intervalMs]);
 }
