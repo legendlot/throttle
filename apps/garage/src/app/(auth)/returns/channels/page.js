@@ -149,16 +149,7 @@ export default function ChannelsPage() {
   const canManage = !!perms?.channel_manage;
 
   return (
-    <div style={{ color: 'var(--t1)' }}>
-      <div style={{ marginBottom: 16 }}>
-        <h1 style={{ fontFamily: 'var(--cond)', fontSize: 28, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.03em', margin: 0 }}>
-          Return Channels
-        </h1>
-        <p style={{ color: 'var(--t3)', fontSize: 11, marginTop: 4, fontFamily: 'var(--mono)' }}>
-          Channel master — drives shipment receive form &amp; reporting buckets.
-        </p>
-      </div>
-
+    <div>
       <div style={{ display: 'grid', gridTemplateColumns: canManage ? 'minmax(0, 0.9fr) minmax(0, 1.1fr)' : '1fr', gap: 16, alignItems: 'start' }}>
         {canManage && (
           <div style={panelStyle}>

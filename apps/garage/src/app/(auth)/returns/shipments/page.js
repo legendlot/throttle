@@ -131,16 +131,7 @@ export default function ShipmentsPage() {
   }
 
   return (
-    <div style={{ color: 'var(--t1)' }}>
-      <div style={{ marginBottom: 16 }}>
-        <h1 style={{ fontFamily: 'var(--cond)', fontSize: 28, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.03em', margin: 0 }}>
-          Returns — Shipments
-        </h1>
-        <p style={{ color: 'var(--t3)', fontSize: 11, marginTop: 4, fontFamily: 'var(--mono)' }}>
-          Receive return shipments — start processing units after creation.
-        </p>
-      </div>
-
+    <div>
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1.2fr)', gap: 16, alignItems: 'start' }}>
         {/* Create form */}
         <div style={panelStyle}>

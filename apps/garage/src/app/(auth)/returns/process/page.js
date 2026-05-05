@@ -272,17 +272,10 @@ function ProcessPage() {
   // No shipment selected
   if (!shipmentId) {
     return (
-      <div style={{ color: 'var(--t1)' }}>
-        <div style={{ marginBottom: 16 }}>
-          <h1 style={{ fontFamily: 'var(--cond)', fontSize: 28, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.03em', margin: 0 }}>
-            Returns — Process Units
-          </h1>
-        </div>
-        <div style={{ padding: 60, textAlign: 'center', color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12 }}>
-          Select a shipment from the Shipments tab to start processing units.
-          <div style={{ marginTop: 12 }}>
-            <button style={btnPrimary} onClick={() => router.push('/returns/shipments')}>Go to Shipments →</button>
-          </div>
+      <div style={{ padding: 60, textAlign: 'center', color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12 }}>
+        Select a shipment from the Shipments tab to start processing units.
+        <div style={{ marginTop: 12 }}>
+          <button style={btnPrimary} onClick={() => router.push('/returns/shipments')}>Go to Shipments →</button>
         </div>
       </div>
     );

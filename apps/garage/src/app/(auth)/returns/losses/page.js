@@ -149,16 +149,12 @@ export default function LossesPage() {
   }
 
   return (
-    <div style={{ color: 'var(--t1)' }}>
-      <div style={{ marginBottom: 16 }}>
-        <h1 style={{ fontFamily: 'var(--cond)', fontSize: 28, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.03em', margin: 0 }}>
-          Loss Notes
-          {pendingCount > 0 && <span style={{ marginLeft: 12, fontSize: 12, color: 'var(--yellow)', fontFamily: 'var(--mono)', letterSpacing: '0.04em' }}>({pendingCount} pending)</span>}
-        </h1>
-        <p style={{ color: 'var(--t3)', fontSize: 11, marginTop: 4, fontFamily: 'var(--mono)' }}>
-          Damage / rejection / scrap notes raised during inspection. Approve or reject pending ones.
-        </p>
-      </div>
+    <div>
+      {pendingCount > 0 && (
+        <div style={{ marginBottom: 12, fontSize: 11, color: 'var(--yellow)', fontFamily: 'var(--mono)', letterSpacing: '0.04em' }}>
+          {pendingCount} pending approval
+        </div>
+      )}
 
       <div style={panelStyle}>
         <div style={panelHeaderStyle}>
