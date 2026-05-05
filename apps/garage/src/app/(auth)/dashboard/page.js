@@ -41,9 +41,12 @@ function formatActivityTime(ts) {
 }
 
 function daysAgo(n) {
+  // Match legacy 04_stores/index.html line 5389: cutoff is "now minus N days"
+  // at the current time-of-day — NOT zeroed to midnight. A row dated exactly
+  // N days ago will fall outside the window unless its timestamp is later
+  // than the current time-of-day.
   const d = new Date();
   d.setDate(d.getDate() - n);
-  d.setHours(0, 0, 0, 0);
   return d;
 }
 
@@ -426,7 +429,10 @@ export default function DashboardPage() {
       <section style={panelStyle}>
         <header style={panelHeaderStyle}>
           <span>Recent Shipments — Last 7 Days</span>
-          <span style={{ color: 'var(--t3)' }}>{recentShipments.length}</span>
+          <StatusBadge
+            label={`${recentShipments.length} shipment${recentShipments.length === 1 ? '' : 's'}`}
+            tone="yellow"
+          />
         </header>
         {recentShipments.length === 0 ? (
           <EmptyState message="No shipments in the last 7 days" />
@@ -497,7 +503,7 @@ export default function DashboardPage() {
         <section style={panelStyle}>
           <header style={panelHeaderStyle}>
             <span>Planned Issues — Last 7 Days</span>
-            <span style={{ color: 'var(--t3)' }}>{plannedIssues.length}</span>
+            <StatusBadge label="PLANNED" tone="blue" />
           </header>
           {plannedIssues.length === 0 ? (
             <EmptyState message="No planned issues in 7 days" />
@@ -530,7 +536,7 @@ export default function DashboardPage() {
         <section style={panelStyle}>
           <header style={panelHeaderStyle}>
             <span>Ad Hoc Issues — Last 3 Days</span>
-            <span style={{ color: 'var(--t3)' }}>{adhocIssues.length}</span>
+            <StatusBadge label="AD HOC" tone="red" />
           </header>
           {adhocIssues.length === 0 ? (
             <EmptyState message="No ad hoc issues in 3 days" />
@@ -561,7 +567,6 @@ export default function DashboardPage() {
         <section style={panelStyle}>
           <header style={panelHeaderStyle}>
             <span>Returns by Channel — Last 30 Days</span>
-            <span style={{ color: 'var(--t3)' }}>{returnsTotal} total</span>
           </header>
           {returnsByChannel.length === 0 ? (
             <EmptyState message="No returns in the last 30 days" />
