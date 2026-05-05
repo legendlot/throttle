@@ -1,0 +1,1114 @@
+'use client';
+import { Fragment, Suspense, useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { useAuth } from '@throttle/auth';
+import { garageFetch, workerFetch } from '@throttle/db';
+import { Spinner, useToast } from '@throttle/ui';
+import { todayStr } from '@throttle/domain';
+import { PRODUCTS, PRODUCT_VARIANTS, PRODUCT_SUBVARIANTS } from '../../../../../hooks/useProducts.js';
+
+const PO_SOURCES = ['China', 'India', 'USA', 'Germany', 'Taiwan', 'Vietnam', 'Bangladesh', 'Japan', 'South Korea', 'UK', 'Italy', 'Turkey', 'Other'];
+const PO_TYPES   = ['Product', 'Packaging', 'Para', 'Consumable', 'Component', 'Tools', 'Machines'];
+const PO_CURRENCIES = ['INR', 'USD', 'RMB'];
+const PO_INCOTERMS  = ['FOB', 'CIF', 'DDP', 'Ex-Works', 'Local delivery'];
+const PO_PAYMENT_TERMS = ['Advance', 'Credit 30', 'Credit 60', 'LC', 'TT'];
+const PO_SHIP_MODES = ['Sea', 'Air', 'Land'];
+
+const PO_CATEGORIES = [
+  { key: 'fbu',         icon: '🚗', title: 'Full Units',     sub: 'FBU · China',         desc: 'Finished cars + remotes from supplier',    order_type: 'Product',   source: 'China',  currency: 'RMB', incoterms: 'FOB' },
+  { key: 'ckd',         icon: '🔧', title: 'Components',     sub: 'CKD · China / India',  desc: 'Parts ordered via BOM explosion',          order_type: 'Component', source: 'China',  currency: 'RMB', incoterms: 'FOB' },
+  { key: 'packaging',   icon: '📦', title: 'Packaging',      sub: 'India',                desc: 'Boxes, trays, shrink wrap, inserts',        order_type: 'Packaging', source: 'India',  currency: 'INR', incoterms: 'Local delivery' },
+  { key: 'metal',       icon: '⚙️', title: 'Metal Parts',    sub: 'India',                desc: 'Springs, axles, metal hardware',           order_type: 'Component', source: 'India',  currency: 'INR', incoterms: 'Local delivery' },
+  { key: 'electronics', icon: '🔋', title: 'Electronics',    sub: 'India',                desc: 'Batteries, PCBs, chargers',                order_type: 'Component', source: 'India',  currency: 'INR', incoterms: 'Local delivery' },
+  { key: 'consumables', icon: '🔩', title: 'Consumables',    sub: 'India',                desc: 'Screws, fasteners, elastic bands',          order_type: 'Consumable',source: 'India',  currency: 'INR', incoterms: 'Local delivery' },
+  { key: 'para',        icon: '📄', title: 'Para',           sub: 'India',                desc: 'Comics, licences, stickers',               order_type: 'Para',      source: 'India',  currency: 'INR', incoterms: 'Local delivery' },
+  { key: 'other',       icon: '✏️', title: 'Custom / Other', sub: 'Any',                  desc: 'Free-form lines, one-offs',                order_type: '',          source: 'India',  currency: 'INR', incoterms: '' },
+];
+
+const BOM_GROUPS = [
+  { key: 'full',        label: '🚗 Full Product' },
+  { key: 'car',         label: '🔩 Car Parts' },
+  { key: 'remote',      label: '📡 Remote Only' },
+  { key: 'accessories', label: '🧰 Accessories' },
+  { key: 'metal',       label: '⚙ Metal Parts' },
+  { key: 'packaging',   label: '📦 Packaging' },
+  { key: 'para',        label: '📄 Para' },
+  { key: 'consumables', label: '🔧 Consumables' },
+];
+
+const ITEM_TYPES = ['Part', 'Other', 'FBU Unit', 'Ecom Packaging', 'Comic', 'Consumable'];
+
+const TONE_STYLES = {
+  yellow: { bg: 'rgba(242,205,26,.12)', fg: '#f2cd1a', border: 'rgba(242,205,26,.2)' },
+  green:  { bg: 'rgba(34,197,94,.12)',  fg: '#4ade80', border: 'rgba(34,197,94,.2)' },
+  red:    { bg: 'rgba(222,42,42,.15)',  fg: '#ff7070', border: 'rgba(222,42,42,.25)' },
+  blue:   { bg: 'rgba(33,60,226,.2)',   fg: '#7b93ff', border: 'rgba(33,60,226,.3)' },
+  gray:   { bg: 'rgba(80,80,80,.2)',    fg: '#aaa',    border: 'rgba(80,80,80,.3)' },
+};
+
+function StatusBadge({ label, tone = 'gray' }) {
+  const s = TONE_STYLES[tone] || TONE_STYLES.gray;
+  return (
+    <span style={{
+      display: 'inline-block', padding: '2px 6px', borderRadius: 2,
+      fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '.04em',
+      textTransform: 'uppercase',
+      background: s.bg, color: s.fg, border: `1px solid ${s.border}`,
+    }}>{label}</span>
+  );
+}
+
+const panelStyle       = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, marginBottom: 16 };
+const panelHeaderStyle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid var(--border)', fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--t2)', gap: 8, flexWrap: 'wrap' };
+const panelBodyStyle   = { padding: '14px 16px' };
+const tableThStyle     = { padding: '8px 10px', fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', textAlign: 'left' };
+const tableTdStyle     = { padding: '7px 10px', borderBottom: '1px solid rgba(42,42,42,.6)', fontSize: 12, whiteSpace: 'nowrap' };
+const inputStyle       = { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: '6px 10px', fontSize: 12, color: 'var(--t1)', outline: 'none', fontFamily: 'inherit' };
+const selectStyle      = { ...inputStyle, cursor: 'pointer' };
+const labelStyle       = { fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4, display: 'block' };
+const btnPrimary       = { background: 'var(--yellow)', border: '1px solid var(--yellow)', borderRadius: 3, padding: '7px 16px', fontSize: 12, fontWeight: 700, color: '#000', cursor: 'pointer', fontFamily: 'var(--cond)', letterSpacing: '0.04em' };
+const btnSecondary     = { background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, padding: '6px 12px', fontSize: 11, color: 'var(--t2)', cursor: 'pointer', fontFamily: 'var(--cond)' };
+
+const modeBtn = (active) => ({
+  background: active ? 'var(--yellow)' : 'var(--surface2)',
+  color: active ? '#000' : 'var(--t3)',
+  border: active ? '1px solid var(--yellow)' : '1px solid var(--border)',
+  borderRadius: 4, padding: '6px 14px', fontFamily: 'var(--mono)', fontSize: 11,
+  textTransform: 'uppercase', letterSpacing: 1, cursor: 'pointer', fontWeight: active ? 700 : 500,
+});
+
+const cardStyle = {
+  background: 'var(--surface)',
+  border: '1px solid var(--border)',
+  borderRadius: 6,
+  padding: 24,
+  cursor: 'pointer',
+  textAlign: 'center',
+  transition: 'border-color 0.15s, transform 0.15s',
+};
+
+const cardHover = { borderColor: 'var(--yellow)', transform: 'translateY(-2px)' };
+
+function addDays(dateStr, n) {
+  if (!dateStr || !n) return '';
+  const d = new Date(dateStr);
+  if (isNaN(d)) return '';
+  d.setDate(d.getDate() + parseInt(n, 10));
+  return d.toISOString().slice(0, 10);
+}
+
+function daysBetween(fromStr, toStr) {
+  if (!fromStr || !toStr) return 0;
+  const f = new Date(fromStr);
+  const t = new Date(toStr);
+  if (isNaN(f) || isNaN(t)) return 0;
+  return Math.round((t - f) / (1000 * 60 * 60 * 24));
+}
+
+function ModesByCategory(catKey) {
+  if (catKey === 'fbu') return ['units'];
+  if (catKey === 'ckd') return ['ckd', 'manual'];
+  return ['bom', 'manual'];
+}
+
+export default function NewPOPageWrapper() {
+  return (
+    <Suspense fallback={<div style={{ padding: 40, display: 'flex', justifyContent: 'center' }}><Spinner /></div>}>
+      <NewPOPage />
+    </Suspense>
+  );
+}
+
+function NewPOPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const { session, perms } = useAuth();
+  const { showToast } = useToast();
+
+  const [step, setStep] = useState('category');
+  const [selectedCategory, setSelectedCategory] = useState(null);
+  const [hoverCard, setHoverCard] = useState(null);
+
+  // Header
+  const [orderType, setOrderType] = useState('');
+  const [source, setSource] = useState('India');
+  const [currency, setCurrency] = useState('INR');
+  const [incoterms, setIncoterms] = useState('');
+  const [vendor, setVendor] = useState('');
+  const [paymentTerms, setPaymentTerms] = useState('');
+  const [leadTimeDays, setLeadTimeDays] = useState('');
+  const [portOfLoading, setPortOfLoading] = useState('');
+  const [notes, setNotes] = useState('');
+  const [showAutoFields, setShowAutoFields] = useState(false);
+
+  // Timeline
+  const [readyDate, setReadyDate] = useState('');
+  const [shippingDate, setShippingDate] = useState('');
+  const [shippingMode, setShippingMode] = useState('');
+  const [forwarderCode, setForwarderCode] = useState('');
+  const [transitDays, setTransitDays] = useState('');
+
+  // Lines
+  const [lineMode, setLineMode] = useState('bom');
+  const [lineItems, setLineItems] = useState([]); // {part_code, description, item_type, qty_ordered, unit, unit_price, product, variant}
+
+  // BOM mode
+  const [bomProduct, setBomProduct] = useState('');
+  const [bomVariant, setBomVariant] = useState('');
+  const [bomQty, setBomQty] = useState(1);
+  const [bomGroup, setBomGroup] = useState(null);
+  const [bomChecklist, setBomChecklist] = useState([]); // {part_code, part_name, category, type, bom_qty, qty (overrideable), checked}
+  const [bomLoading, setBomLoading] = useState(false);
+
+  // Units mode
+  const [fbuProduct, setFbuProduct] = useState('');
+  const [unitsRows, setUnitsRows] = useState([]); // for FBU unit-grid: {variant, color, qty}
+
+  // CKD mode
+  const [ckdProductSel, setCkdProductSel] = useState('');
+  const [ckdQueue, setCkdQueue] = useState([]); // [{ product, lines: [{variant, color, qty}] }]
+  const [ckdExplosion, setCkdExplosion] = useState([]); // exploded part lines
+  const [ckdExploding, setCkdExploding] = useState(false);
+
+  // Caches
+  const [vendorCache, setVendorCache] = useState([]);
+  const [forwarderCache, setForwarderCache] = useState([]);
+  const [materialCache, setMaterialCache] = useState({});
+
+  const [submitting, setSubmitting] = useState(false);
+  const rrParam = searchParams?.get('rr') || null;
+  const announcedRR = useRef(false);
+
+  // Lazy caches
+  useEffect(() => {
+    if (!session) return;
+    garageFetch('getVendors', {}, session).then((d) => setVendorCache(Array.isArray(d) ? d : [])).catch(() => {});
+    garageFetch('getForwarders', {}, session).then((d) => setForwarderCache(Array.isArray(d) ? d : [])).catch(() => {});
+  }, [session]);
+
+  // RR conversion toast
+  useEffect(() => {
+    if (rrParam && !announcedRR.current) {
+      showToast(`Create the PO — it will be linked to ${rrParam}`, 'info');
+      announcedRR.current = true;
+    }
+  }, [rrParam, showToast]);
+
+  function applyCategory(cat) {
+    setSelectedCategory(cat);
+    setOrderType(cat.order_type || '');
+    setSource(cat.source || 'India');
+    setCurrency(cat.currency || 'INR');
+    setIncoterms(cat.incoterms || '');
+    const modes = ModesByCategory(cat.key);
+    setLineMode(modes[0]);
+    setLineItems([]);
+    setStep('form');
+  }
+
+  function vendorMatch(name) {
+    if (!name) return null;
+    const lo = name.trim().toLowerCase();
+    return vendorCache.find((v) => (v.vendor_name || '').toLowerCase() === lo) || null;
+  }
+
+  function onVendorBlur() {
+    const m = vendorMatch(vendor);
+    if (!m) return;
+    if (m.payment_terms) setPaymentTerms(m.payment_terms);
+    if (m.currency) setCurrency(m.currency);
+    if (m.source_country) setSource(m.source_country);
+    if (m.lead_time_days != null) setLeadTimeDays(String(m.lead_time_days));
+  }
+
+  function onForwarderChange(code) {
+    setForwarderCode(code);
+    const f = forwarderCache.find((x) => x.forwarder_code === code);
+    if (!f) return;
+    if (shippingMode === 'Sea' && f.sea_days != null)  setTransitDays(String(f.sea_days));
+    if (shippingMode === 'Air' && f.air_days != null)  setTransitDays(String(f.air_days));
+    if (shippingMode === 'Land' && f.land_days != null) setTransitDays(String(f.land_days));
+  }
+
+  function onShippingModeChange(mode) {
+    setShippingMode(mode);
+    const f = forwarderCache.find((x) => x.forwarder_code === forwarderCode);
+    if (!f) return;
+    if (mode === 'Sea' && f.sea_days != null)   setTransitDays(String(f.sea_days));
+    if (mode === 'Air' && f.air_days != null)   setTransitDays(String(f.air_days));
+    if (mode === 'Land' && f.land_days != null) setTransitDays(String(f.land_days));
+  }
+
+  const computedArrival = useMemo(() => {
+    if (!shippingDate || !transitDays) return '';
+    return addDays(shippingDate, transitDays);
+  }, [shippingDate, transitDays]);
+
+  const productionLeadTime = useMemo(() => {
+    if (!readyDate) return 0;
+    return daysBetween(todayStr(), readyDate);
+  }, [readyDate]);
+
+  // BOM checklist load
+  async function loadBomChecklist() {
+    if (!bomProduct) { showToast('Select a product', 'error'); return; }
+    setBomLoading(true);
+    try {
+      const data = await garageFetch('getBOM', { product: bomProduct, variant: bomVariant || '' }, session);
+      const rows = (Array.isArray(data) ? data : []).map((r) => ({
+        part_code: r.part_code,
+        part_name: r.part_name,
+        category:  r.part_category || '',
+        type:      r.part_type || '',
+        bom_qty:   parseFloat(r.qty_per_unit) || 0,
+        qty:       String((parseFloat(r.qty_per_unit) || 0) * (parseInt(bomQty, 10) || 1)),
+        checked:   true,
+      }));
+      // Filter by group
+      let filtered = rows;
+      if (bomGroup && bomGroup !== 'full') {
+        const groupCats = {
+          car:         ['Car', 'Body'],
+          remote:      ['Remote'],
+          accessories: ['Accessories'],
+          metal:       ['Metal'],
+          packaging:   ['Packaging'],
+          para:        ['Para', 'License', 'Comic'],
+          consumables: ['Consumables', 'Batteries', 'Chemical'],
+        }[bomGroup] || [];
+        filtered = rows.filter((r) => groupCats.some((c) => (r.category || '').toLowerCase().includes(c.toLowerCase())));
+      }
+      setBomChecklist(filtered);
+    } catch (e) {
+      showToast(e.message || 'BOM load failed', 'error');
+    } finally {
+      setBomLoading(false);
+    }
+  }
+
+  function addBomSelected() {
+    const picked = bomChecklist.filter((r) => r.checked && parseFloat(r.qty) > 0);
+    if (!picked.length) { showToast('No parts selected', 'error'); return; }
+    setLineItems((prev) => [
+      ...prev,
+      ...picked.map((r) => ({
+        part_code:    r.part_code,
+        description:  r.part_name,
+        item_type:    'Part',
+        qty_ordered:  String(r.qty),
+        unit:         'pcs',
+        unit_price:   '',
+        product:      bomProduct,
+        variant:      bomVariant || null,
+      })),
+    ]);
+    setBomChecklist([]);
+    setBomGroup(null);
+    showToast(`Added ${picked.length} parts`, 'success');
+  }
+
+  // Manual mode
+  function addManualLine() {
+    setLineItems((prev) => [...prev, { part_code: '', description: '', item_type: 'Part', qty_ordered: '', unit: 'pcs', unit_price: '' }]);
+  }
+  function updateLine(i, field, value) {
+    setLineItems((prev) => prev.map((l, j) => (j === i ? { ...l, [field]: value } : l)));
+  }
+  function removeLine(i) {
+    setLineItems((prev) => prev.filter((_, j) => j !== i));
+  }
+  async function lookupPart(i, code) {
+    if (!code) return;
+    if (!materialCache._loaded) {
+      try {
+        const data = await garageFetch('getMaterials', {}, session);
+        const map = { _loaded: true };
+        (data || []).forEach((m) => { map[m.part_code] = m; });
+        setMaterialCache(map);
+        const m = map[code];
+        if (m) updateLine(i, 'description', m.part_name || '');
+      } catch {}
+    } else {
+      const m = materialCache[code];
+      if (m) updateLine(i, 'description', m.part_name || '');
+    }
+  }
+
+  // Units mode (FBU)
+  const fbuVariants = useMemo(() => fbuProduct ? (PRODUCT_VARIANTS[fbuProduct] || []) : [], [fbuProduct]);
+  function addUnitRow() {
+    setUnitsRows((prev) => [...prev, { variant: '', color: '', qty: '' }]);
+  }
+  function updateUnitRow(i, field, value) {
+    setUnitsRows((prev) => prev.map((r, j) => (j === i ? { ...r, [field]: value } : r)));
+  }
+  function removeUnitRow(i) {
+    setUnitsRows((prev) => prev.filter((_, j) => j !== i));
+  }
+
+  // CKD mode
+  function addCkdProduct() {
+    if (!ckdProductSel) return;
+    if (ckdQueue.find((q) => q.product === ckdProductSel)) {
+      showToast('Already in queue', 'error'); return;
+    }
+    const variants = (PRODUCT_VARIANTS[ckdProductSel] || []).map((v) => ({ variant: v, color: '', qty: '' }));
+    setCkdQueue((prev) => [...prev, { product: ckdProductSel, variants: variants.length ? variants : [{ variant: 'Common', color: '', qty: '' }] }]);
+    setCkdProductSel('');
+  }
+  function updateCkdQty(productIdx, varIdx, value) {
+    setCkdQueue((prev) => prev.map((p, i) => {
+      if (i !== productIdx) return p;
+      return { ...p, variants: p.variants.map((v, j) => (j === varIdx ? { ...v, qty: value } : v)) };
+    }));
+  }
+  function removeCkdProduct(idx) {
+    setCkdQueue((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  async function explodeCKD() {
+    if (!ckdQueue.length) { showToast('Add a product first', 'error'); return; }
+    setCkdExploding(true);
+    try {
+      const allParts = {};
+      for (const p of ckdQueue) {
+        for (const v of p.variants) {
+          const qty = parseInt(v.qty, 10) || 0;
+          if (qty <= 0) continue;
+          const data = await garageFetch('calcKit', {
+            product: p.product, variant: v.variant || '', colour: v.color || '', qty,
+          }, session);
+          const kit = data?.kit || [];
+          kit.forEach((row) => {
+            const code = row.part_code;
+            if (!allParts[code]) {
+              allParts[code] = {
+                part_code: code, part_name: row.part_name, category: row.part_category || '',
+                bom_qty:   parseFloat(row.bom_qty) || 0,
+                qty:       0,
+              };
+            }
+            allParts[code].qty += parseFloat(row.required) || ((parseFloat(row.bom_qty) || 1) * qty);
+          });
+        }
+      }
+      setCkdExplosion(Object.values(allParts).map((r) => ({ ...r, qty: String(Math.ceil(r.qty)), checked: true })));
+    } catch (e) {
+      showToast(e.message || 'BOM explosion failed', 'error');
+    } finally {
+      setCkdExploding(false);
+    }
+  }
+
+  function addCkdToLines() {
+    const picked = ckdExplosion.filter((r) => r.checked && parseFloat(r.qty) > 0);
+    if (!picked.length) { showToast('No parts selected', 'error'); return; }
+    setLineItems((prev) => [
+      ...prev,
+      ...picked.map((r) => ({
+        part_code:   r.part_code,
+        description: r.part_name,
+        item_type:   'Part',
+        qty_ordered: r.qty,
+        unit:        'pcs',
+        unit_price:  '',
+      })),
+    ]);
+    setCkdExplosion([]);
+    setCkdQueue([]);
+    showToast(`Added ${picked.length} parts`, 'success');
+  }
+
+  // Total
+  const lineTotal = useMemo(() => {
+    let t = 0;
+    lineItems.forEach((l) => { t += (parseFloat(l.qty_ordered) || 0) * (parseFloat(l.unit_price) || 0); });
+    if (selectedCategory?.key === 'fbu') {
+      unitsRows.forEach((r) => { t += 0; }); // unit prices not collected per row in FBU mini-grid; user enters in lines table after explode
+    }
+    return t;
+  }, [lineItems, unitsRows, selectedCategory]);
+
+  // Submit
+  async function handleSubmit() {
+    if (!vendor.trim()) { showToast('Vendor required', 'error'); return; }
+
+    let lines = [...lineItems];
+
+    // FBU units mode: convert unitsRows into lines
+    if (selectedCategory?.key === 'fbu' && unitsRows.length) {
+      unitsRows.forEach((u) => {
+        const q = parseInt(u.qty, 10) || 0;
+        if (q <= 0) return;
+        lines.push({
+          item_type:    'FBU Unit',
+          product:      fbuProduct,
+          variant:      u.variant || null,
+          color:        u.color || null,
+          qty_ordered:  q,
+          unit:         'units',
+          unit_price:   '',
+          description:  `${fbuProduct} ${u.variant || ''} ${u.color || ''}`.trim(),
+        });
+      });
+    }
+
+    if (!lines.length) { showToast('Add at least one line', 'error'); return; }
+
+    const payload = {
+      order_type: orderType,
+      po_category: selectedCategory?.key || null,
+      source,
+      vendor_name: vendor.trim(),
+      currency,
+      payment_terms: paymentTerms || null,
+      incoterms: incoterms || null,
+      expected_delivery: computedArrival || null,
+      lead_time_days: leadTimeDays ? parseInt(leadTimeDays, 10) : null,
+      port_of_loading: portOfLoading || null,
+      expected_ready_date: readyDate || null,
+      shipping_date: shippingDate || null,
+      shipping_mode: shippingMode || null,
+      forwarder_code: forwarderCode || null,
+      transit_days: transitDays ? parseInt(transitDays, 10) : null,
+      notes: notes || null,
+      lines: lines.map((l) => ({
+        part_code:   l.part_code || null,
+        description: l.description || null,
+        item_type:   l.item_type || 'Part',
+        qty_ordered: parseFloat(l.qty_ordered) || 0,
+        unit:        l.unit || 'pcs',
+        unit_price:  l.unit_price ? parseFloat(l.unit_price) : null,
+        product:     l.product || null,
+        variant:     l.variant || null,
+        color:       l.color || null,
+        receive_format: l.receive_format || null,
+      })),
+    };
+
+    setSubmitting(true);
+    try {
+      const res = await workerFetch('postPO', { data: payload }, session);
+      const result = res.data || res;
+      if (rrParam) {
+        try {
+          await workerFetch('updateReorderRequest', {
+            data: { request_id: rrParam, action: 'convert', po_number: result.po_number },
+          }, session);
+        } catch {}
+      }
+      showToast(`${result.po_number} created`, 'success');
+      router.push(`/procurement/pos/${encodeURIComponent(result.po_number)}`);
+    } catch (e) {
+      showToast(e.message || 'PO creation failed', 'error');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (perms && !perms.procurement_view) {
+    return <div style={{ padding: 24, color: 'var(--t3)' }}>Access restricted.</div>;
+  }
+  if (perms && !perms.procurement_raise) {
+    return <div style={{ padding: 24, color: 'var(--t3)' }}>You don&apos;t have permission to raise POs.</div>;
+  }
+
+  // STEP 1 — Category picker
+  if (step === 'category') {
+    return (
+      <div style={{ color: 'var(--t1)' }}>
+        <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
+          <button style={btnSecondary} onClick={() => router.push('/procurement/pos')}>← Back to POs</button>
+          {rrParam && (
+            <span style={{ fontSize: 11, color: 'var(--yellow)', fontFamily: 'var(--mono)' }}>
+              Linking to {rrParam}
+            </span>
+          )}
+        </div>
+        <div style={{ marginBottom: 20 }}>
+          <h1 style={{ fontFamily: 'var(--cond)', fontSize: 24, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.03em', margin: 0 }}>
+            New Purchase Order
+          </h1>
+          <p style={{ color: 'var(--t3)', fontSize: 11, marginTop: 4, fontFamily: 'var(--mono)' }}>
+            Pick a category — the PO defaults to source/currency/incoterms below.
+          </p>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12, maxWidth: 960 }}>
+          {PO_CATEGORIES.map((cat) => (
+            <div
+              key={cat.key}
+              style={hoverCard === cat.key ? { ...cardStyle, ...cardHover } : cardStyle}
+              onMouseEnter={() => setHoverCard(cat.key)}
+              onMouseLeave={() => setHoverCard(null)}
+              onClick={() => applyCategory(cat)}
+            >
+              <div style={{ fontSize: 36 }}>{cat.icon}</div>
+              <div style={{ fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 15, marginTop: 8 }}>{cat.title}</div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', marginTop: 2, letterSpacing: '0.04em' }}>{cat.sub}</div>
+              <div style={{ fontSize: 11, color: 'var(--t3)', marginTop: 8, lineHeight: 1.4 }}>{cat.desc}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // STEP 2 — Form
+  const allowedModes = ModesByCategory(selectedCategory?.key);
+
+  return (
+    <div style={{ color: 'var(--t1)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+        <button style={btnSecondary} onClick={() => setStep('category')}>← Categories</button>
+        <span style={{ color: 'var(--t3)' }}>|</span>
+        <span style={{ fontFamily: 'var(--cond)', fontSize: 18, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+          New Purchase Order
+        </span>
+        {selectedCategory && <StatusBadge label={`${selectedCategory.icon} ${selectedCategory.title}`} tone="blue" />}
+        {rrParam && <StatusBadge label={`Linking ${rrParam}`} tone="yellow" />}
+      </div>
+
+      {/* Product selector for FBU/CKD */}
+      {selectedCategory?.key === 'fbu' && (
+        <div style={panelStyle}>
+          <div style={panelHeaderStyle}><span>Product</span></div>
+          <div style={panelBodyStyle}>
+            <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: 10, alignItems: 'end' }}>
+              <div>
+                <span style={labelStyle}>Product *</span>
+                <select value={fbuProduct} onChange={(e) => { setFbuProduct(e.target.value); setUnitsRows([]); }} style={{ ...selectStyle, width: '100%' }}>
+                  <option value="">Select…</option>
+                  {PRODUCTS.map((p) => <option key={p} value={p}>{p}</option>)}
+                </select>
+              </div>
+              {fbuProduct && <StatusBadge label={`FBU · ${fbuProduct}`} tone="blue" />}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedCategory?.key === 'ckd' && (
+        <div style={panelStyle}>
+          <div style={panelHeaderStyle}><span>Products to Order (CKD Queue)</span></div>
+          <div style={panelBodyStyle}>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'end', marginBottom: 12 }}>
+              <div style={{ flex: 1 }}>
+                <span style={labelStyle}>Add Product</span>
+                <select value={ckdProductSel} onChange={(e) => setCkdProductSel(e.target.value)} style={{ ...selectStyle, width: '100%' }}>
+                  <option value="">Select…</option>
+                  {PRODUCTS.filter((p) => !ckdQueue.find((q) => q.product === p)).map((p) => <option key={p} value={p}>{p}</option>)}
+                </select>
+              </div>
+              <button style={btnSecondary} onClick={addCkdProduct}>+ Add</button>
+            </div>
+
+            {ckdQueue.length === 0 ? (
+              <div style={{ color: 'var(--t3)', fontSize: 11, fontStyle: 'italic' }}>No products queued yet.</div>
+            ) : (
+              ckdQueue.map((p, pi) => (
+                <div key={p.product} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: 10, marginBottom: 8 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                    <strong style={{ fontFamily: 'var(--cond)', fontSize: 14 }}>{p.product}</strong>
+                    <button onClick={() => removeCkdProduct(pi)} style={{ background: 'transparent', border: '1px solid var(--border)', color: '#ff7070', cursor: 'pointer', fontSize: 11, borderRadius: 3, padding: '2px 8px' }}>✕</button>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 6 }}>
+                    {p.variants.map((v, vi) => (
+                      <div key={`${v.variant}-${vi}`} style={{ display: 'grid', gridTemplateColumns: '1fr 100px', gap: 4 }}>
+                        <span style={{ fontSize: 11, color: 'var(--t2)', alignSelf: 'center' }}>{v.variant || 'Common'}</span>
+                        <input
+                          type="number"
+                          min="0"
+                          placeholder="0"
+                          value={v.qty}
+                          onChange={(e) => updateCkdQty(pi, vi, e.target.value)}
+                          style={{ ...inputStyle, fontFamily: 'var(--mono)' }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))
+            )}
+
+            {ckdQueue.length > 0 && (
+              <button style={btnPrimary} onClick={explodeCKD} disabled={ckdExploding}>
+                {ckdExploding ? 'Exploding…' : 'Explode BOM →'}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Order details */}
+      <div style={panelStyle}>
+        <div style={panelHeaderStyle}>
+          <span>Order Details</span>
+          <button style={btnSecondary} onClick={() => setShowAutoFields((v) => !v)}>
+            {showAutoFields ? 'Hide auto-fields' : 'Edit auto-fields ↓'}
+          </button>
+        </div>
+        <div style={panelBodyStyle}>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', padding: '8px 10px', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, marginBottom: 12, fontSize: 11, fontFamily: 'var(--mono)' }}>
+            <span><span style={{ color: 'var(--t3)' }}>Type: </span><strong>{orderType || '—'}</strong></span>
+            <span><span style={{ color: 'var(--t3)' }}>Source: </span><strong>{source || '—'}</strong></span>
+            <span><span style={{ color: 'var(--t3)' }}>Currency: </span><strong>{currency || '—'}</strong></span>
+            <span><span style={{ color: 'var(--t3)' }}>Incoterms: </span><strong>{incoterms || '—'}</strong></span>
+          </div>
+
+          {showAutoFields && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10, marginBottom: 14 }}>
+              <SelectField label="Order Type" value={orderType} onChange={setOrderType} options={['', ...PO_TYPES]} />
+              <SelectField label="Source" value={source} onChange={setSource} options={PO_SOURCES} />
+              <SelectField label="Currency" value={currency} onChange={setCurrency} options={PO_CURRENCIES} />
+              <SelectField label="Incoterms" value={incoterms} onChange={setIncoterms} options={['', ...PO_INCOTERMS]} />
+            </div>
+          )}
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <div>
+              <span style={labelStyle}>Vendor *</span>
+              <input
+                type="text"
+                value={vendor}
+                onChange={(e) => setVendor(e.target.value)}
+                onBlur={onVendorBlur}
+                list="vendor-list"
+                placeholder="Type or pick…"
+                style={{ ...inputStyle, width: '100%' }}
+              />
+              <datalist id="vendor-list">
+                {vendorCache.map((v) => <option key={v.vendor_code} value={v.vendor_name} />)}
+              </datalist>
+            </div>
+            <SelectField label="Payment Terms" value={paymentTerms} onChange={setPaymentTerms} options={['', ...PO_PAYMENT_TERMS]} />
+            <Field label="Lead Time (days)" type="number" value={leadTimeDays} onChange={setLeadTimeDays} readOnly />
+            <Field label="Port of Loading" value={portOfLoading} onChange={setPortOfLoading} />
+            <div style={{ gridColumn: '1 / -1' }}>
+              <span style={labelStyle}>Notes</span>
+              <input type="text" value={notes} onChange={(e) => setNotes(e.target.value)} style={{ ...inputStyle, width: '100%' }} />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Line items */}
+      <div style={panelStyle}>
+        <div style={panelHeaderStyle}>
+          <span>Line Items</span>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {allowedModes.includes('bom') && <button style={modeBtn(lineMode === 'bom')} onClick={() => setLineMode('bom')}>📋 From BOM</button>}
+            {allowedModes.includes('manual') && <button style={modeBtn(lineMode === 'manual')} onClick={() => setLineMode('manual')}>✏ Manual</button>}
+            {allowedModes.includes('units') && <button style={modeBtn(lineMode === 'units')} onClick={() => setLineMode('units')}>🚗 By Units</button>}
+            {allowedModes.includes('ckd') && <button style={modeBtn(lineMode === 'ckd')} onClick={() => setLineMode('ckd')}>🔧 CKD</button>}
+          </div>
+        </div>
+        <div style={panelBodyStyle}>
+          {lineMode === 'bom' && (
+            <BomMode
+              bomProduct={bomProduct} setBomProduct={setBomProduct}
+              bomVariant={bomVariant} setBomVariant={setBomVariant}
+              bomQty={bomQty} setBomQty={setBomQty}
+              bomGroup={bomGroup} setBomGroup={setBomGroup}
+              bomChecklist={bomChecklist} setBomChecklist={setBomChecklist}
+              loadBomChecklist={loadBomChecklist}
+              addBomSelected={addBomSelected}
+              loading={bomLoading}
+            />
+          )}
+
+          {lineMode === 'manual' && (
+            <ManualMode
+              lineItems={lineItems}
+              addManualLine={addManualLine}
+              updateLine={updateLine}
+              removeLine={removeLine}
+              lookupPart={lookupPart}
+              currency={currency}
+            />
+          )}
+
+          {lineMode === 'units' && selectedCategory?.key === 'fbu' && (
+            <UnitsMode
+              fbuProduct={fbuProduct}
+              fbuVariants={fbuVariants}
+              unitsRows={unitsRows}
+              addUnitRow={addUnitRow}
+              updateUnitRow={updateUnitRow}
+              removeUnitRow={removeUnitRow}
+            />
+          )}
+
+          {lineMode === 'ckd' && (
+            <CkdMode
+              ckdQueue={ckdQueue}
+              explosion={ckdExplosion}
+              setExplosion={setCkdExplosion}
+              addCkdToLines={addCkdToLines}
+            />
+          )}
+
+          {/* Picked lines summary table */}
+          {lineItems.length > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ ...labelStyle, marginBottom: 6 }}>Lines Added ({lineItems.length})</div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead><tr>
+                    <th style={tableThStyle}>Part Code</th>
+                    <th style={tableThStyle}>Description</th>
+                    <th style={tableThStyle}>Type</th>
+                    <th style={tableThStyle}>Qty</th>
+                    <th style={tableThStyle}>Unit</th>
+                    <th style={tableThStyle}>Unit Price</th>
+                    <th style={tableThStyle}>Total</th>
+                    <th style={{ ...tableThStyle, width: 30 }}></th>
+                  </tr></thead>
+                  <tbody>
+                    {lineItems.map((l, i) => {
+                      const tot = (parseFloat(l.qty_ordered) || 0) * (parseFloat(l.unit_price) || 0);
+                      return (
+                        <tr key={i}>
+                          <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{l.part_code || '—'}</td>
+                          <td style={{ ...tableTdStyle, whiteSpace: 'normal' }}>{l.description || '—'}</td>
+                          <td style={tableTdStyle}>{l.item_type}</td>
+                          <td style={tableTdStyle}>
+                            <input type="number" min="0" step="0.01" value={l.qty_ordered} onChange={(e) => updateLine(i, 'qty_ordered', e.target.value)} style={{ ...inputStyle, width: 90, fontFamily: 'var(--mono)' }} />
+                          </td>
+                          <td style={tableTdStyle}>
+                            <input type="text" value={l.unit} onChange={(e) => updateLine(i, 'unit', e.target.value)} style={{ ...inputStyle, width: 70 }} />
+                          </td>
+                          <td style={tableTdStyle}>
+                            <input type="number" min="0" step="0.01" value={l.unit_price} onChange={(e) => updateLine(i, 'unit_price', e.target.value)} style={{ ...inputStyle, width: 100, fontFamily: 'var(--mono)' }} />
+                          </td>
+                          <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{tot.toLocaleString('en-IN')}</td>
+                          <td style={tableTdStyle}>
+                            <button onClick={() => removeLine(i)} style={{ background: 'transparent', border: '1px solid var(--border)', color: '#ff7070', cursor: 'pointer', fontSize: 11, borderRadius: 3, padding: '2px 6px' }}>✕</button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          <div style={{ marginTop: 12, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: 13 }}>
+            Total: <strong style={{ color: 'var(--yellow)' }}>{currency} {lineTotal.toLocaleString('en-IN')}</strong>
+          </div>
+        </div>
+      </div>
+
+      {/* Shipping timeline */}
+      <div style={panelStyle}>
+        <div style={panelHeaderStyle}><span>Shipping Timeline</span></div>
+        <div style={panelBodyStyle}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10 }}>
+            <Field label="Order Placed" type="date" value={todayStr()} onChange={() => {}} readOnly />
+            <Field label="Expected Ready Date" type="date" value={readyDate} onChange={setReadyDate} />
+            <div>
+              <span style={labelStyle}>Production Lead Time</span>
+              <input type="text" value={productionLeadTime ? `${productionLeadTime}d` : '—'} readOnly style={{ ...inputStyle, width: '100%', fontFamily: 'var(--mono)', color: 'var(--t2)' }} />
+            </div>
+            <Field label="Shipping Date" type="date" value={shippingDate} onChange={setShippingDate} />
+            <SelectField label="Shipping Mode" value={shippingMode} onChange={onShippingModeChange} options={['', ...PO_SHIP_MODES]} />
+            <div>
+              <span style={labelStyle}>Forwarder</span>
+              <select value={forwarderCode} onChange={(e) => onForwarderChange(e.target.value)} style={{ ...selectStyle, width: '100%' }}>
+                <option value="">Select…</option>
+                {forwarderCache.map((f) => <option key={f.forwarder_code} value={f.forwarder_code}>{f.company_name} ({f.forwarder_code})</option>)}
+              </select>
+            </div>
+            <Field label="Transit Days" type="number" value={transitDays} onChange={setTransitDays} />
+            <div>
+              <span style={labelStyle}>Expected Arrival</span>
+              <input type="text" value={computedArrival || '—'} readOnly style={{ ...inputStyle, width: '100%', fontFamily: 'var(--mono)', color: 'var(--yellow)', fontWeight: 700 }} />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
+        <button style={btnSecondary} onClick={() => router.push('/procurement/pos')} disabled={submitting}>Cancel</button>
+        <button
+          style={{ ...btnPrimary, opacity: submitting ? 0.6 : 1, cursor: submitting ? 'wait' : 'pointer' }}
+          onClick={handleSubmit}
+          disabled={submitting}
+        >
+          {submitting ? 'Creating…' : 'Create PO'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function BomMode(props) {
+  const { bomProduct, setBomProduct, bomVariant, setBomVariant, bomQty, setBomQty, bomGroup, setBomGroup, bomChecklist, setBomChecklist, loadBomChecklist, addBomSelected, loading } = props;
+  const variants = bomProduct ? (PRODUCT_VARIANTS[bomProduct] || []) : [];
+
+  function toggleAll(checked) {
+    setBomChecklist((rows) => rows.map((r) => ({ ...r, checked })));
+  }
+  function updateRow(i, field, value) {
+    setBomChecklist((rows) => rows.map((r, j) => (j === i ? { ...r, [field]: value } : r)));
+  }
+
+  return (
+    <>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 100px auto', gap: 10, alignItems: 'end', marginBottom: 12 }}>
+        <SelectField label="Product *" value={bomProduct} onChange={(v) => { setBomProduct(v); setBomVariant(''); }} options={['', ...PRODUCTS]} />
+        <SelectField label="Variant" value={bomVariant} onChange={setBomVariant} options={['', ...variants]} />
+        <Field label="Units Qty" type="number" value={bomQty} onChange={setBomQty} />
+      </div>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
+        {BOM_GROUPS.map((g) => (
+          <button
+            key={g.key}
+            style={modeBtn(bomGroup === g.key)}
+            onClick={() => { setBomGroup(g.key); setTimeout(loadBomChecklist, 0); }}
+          >
+            {g.label}
+          </button>
+        ))}
+      </div>
+      {loading ? (
+        <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+      ) : bomChecklist.length > 0 && (
+        <>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+            <button style={btnSecondary} onClick={() => toggleAll(true)}>Select All</button>
+            <button style={btnSecondary} onClick={() => toggleAll(false)}>Clear All</button>
+          </div>
+          <div style={{ maxHeight: 260, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 3 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead><tr>
+                <th style={{ ...tableThStyle, width: 30 }}></th>
+                <th style={tableThStyle}>Part Code</th>
+                <th style={tableThStyle}>Name</th>
+                <th style={tableThStyle}>Category</th>
+                <th style={tableThStyle}>BOM Qty</th>
+                <th style={tableThStyle}>Order Qty</th>
+              </tr></thead>
+              <tbody>
+                {bomChecklist.map((r, i) => (
+                  <tr key={r.part_code}>
+                    <td style={tableTdStyle}>
+                      <input type="checkbox" checked={!!r.checked} onChange={(e) => updateRow(i, 'checked', e.target.checked)} />
+                    </td>
+                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{r.part_code}</td>
+                    <td style={{ ...tableTdStyle, whiteSpace: 'normal' }}>{r.part_name}</td>
+                    <td style={tableTdStyle}>{r.category || '—'}</td>
+                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.bom_qty}</td>
+                    <td style={tableTdStyle}>
+                      <input type="number" min="0" step="0.01" value={r.qty} onChange={(e) => updateRow(i, 'qty', e.target.value)} style={{ ...inputStyle, width: 90, fontFamily: 'var(--mono)' }} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ marginTop: 8, textAlign: 'right' }}>
+            <button style={btnPrimary} onClick={addBomSelected}>Add Selected →</button>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+function ManualMode({ lineItems, addManualLine, updateLine, removeLine, lookupPart, currency }) {
+  return (
+    <>
+      <div style={{ marginBottom: 8 }}>
+        <button style={btnSecondary} onClick={addManualLine}>+ Add Line</button>
+      </div>
+      {lineItems.length === 0 && (
+        <div style={{ color: 'var(--t3)', fontSize: 11, fontStyle: 'italic', textAlign: 'center', padding: 12 }}>
+          No lines yet — click + Add Line.
+        </div>
+      )}
+      {lineItems.length > 0 && (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>
+              <th style={tableThStyle}>Part Code</th>
+              <th style={tableThStyle}>Description</th>
+              <th style={tableThStyle}>Type</th>
+              <th style={tableThStyle}>Qty</th>
+              <th style={tableThStyle}>Unit Price</th>
+              <th style={tableThStyle}>Unit</th>
+              <th style={{ ...tableThStyle, width: 30 }}></th>
+            </tr></thead>
+            <tbody>
+              {lineItems.map((l, i) => (
+                <tr key={i}>
+                  <td style={tableTdStyle}>
+                    <input
+                      type="text"
+                      value={l.part_code}
+                      onChange={(e) => updateLine(i, 'part_code', e.target.value)}
+                      onBlur={(e) => lookupPart(i, e.target.value)}
+                      style={{ ...inputStyle, width: 130, fontFamily: 'var(--mono)' }}
+                    />
+                  </td>
+                  <td style={tableTdStyle}>
+                    <input type="text" value={l.description} onChange={(e) => updateLine(i, 'description', e.target.value)} style={{ ...inputStyle, width: 240 }} />
+                  </td>
+                  <td style={tableTdStyle}>
+                    <select value={l.item_type} onChange={(e) => updateLine(i, 'item_type', e.target.value)} style={{ ...selectStyle, width: 130 }}>
+                      {ITEM_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                  </td>
+                  <td style={tableTdStyle}>
+                    <input type="number" min="0" step="0.01" value={l.qty_ordered} onChange={(e) => updateLine(i, 'qty_ordered', e.target.value)} style={{ ...inputStyle, width: 90, fontFamily: 'var(--mono)' }} />
+                  </td>
+                  <td style={tableTdStyle}>
+                    <input type="number" min="0" step="0.01" value={l.unit_price} onChange={(e) => updateLine(i, 'unit_price', e.target.value)} style={{ ...inputStyle, width: 100, fontFamily: 'var(--mono)' }} />
+                  </td>
+                  <td style={tableTdStyle}>
+                    <input type="text" value={l.unit} onChange={(e) => updateLine(i, 'unit', e.target.value)} style={{ ...inputStyle, width: 70 }} />
+                  </td>
+                  <td style={tableTdStyle}>
+                    <button onClick={() => removeLine(i)} style={{ background: 'transparent', border: '1px solid var(--border)', color: '#ff7070', cursor: 'pointer', fontSize: 11, borderRadius: 3, padding: '2px 6px' }}>✕</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
+  );
+}
+
+function UnitsMode({ fbuProduct, fbuVariants, unitsRows, addUnitRow, updateUnitRow, removeUnitRow }) {
+  if (!fbuProduct) {
+    return <div style={{ color: 'var(--t3)', fontSize: 11, fontStyle: 'italic' }}>Select a product first.</div>;
+  }
+  return (
+    <>
+      <div style={{ marginBottom: 8 }}>
+        <button style={btnSecondary} onClick={addUnitRow}>+ Add Variant Row</button>
+      </div>
+      {unitsRows.length === 0 ? (
+        <div style={{ color: 'var(--t3)', fontSize: 11, fontStyle: 'italic', textAlign: 'center', padding: 12 }}>
+          No rows yet — add a variant + colour + qty.
+        </div>
+      ) : (
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr>
+            <th style={tableThStyle}>Variant</th>
+            <th style={tableThStyle}>Colour</th>
+            <th style={tableThStyle}>Qty</th>
+            <th style={{ ...tableThStyle, width: 30 }}></th>
+          </tr></thead>
+          <tbody>
+            {unitsRows.map((r, i) => {
+              const colors = r.variant ? ((PRODUCT_SUBVARIANTS[fbuProduct] || {})[r.variant] || []) : [];
+              return (
+                <tr key={i}>
+                  <td style={tableTdStyle}>
+                    <select value={r.variant} onChange={(e) => updateUnitRow(i, 'variant', e.target.value)} style={{ ...selectStyle, width: 160 }}>
+                      <option value="">Select…</option>
+                      {fbuVariants.map((v) => <option key={v} value={v}>{v}</option>)}
+                    </select>
+                  </td>
+                  <td style={tableTdStyle}>
+                    <select value={r.color} onChange={(e) => updateUnitRow(i, 'color', e.target.value)} style={{ ...selectStyle, width: 140 }} disabled={!colors.length}>
+                      <option value="">{colors.length ? 'Select…' : '—'}</option>
+                      {colors.map((c) => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </td>
+                  <td style={tableTdStyle}>
+                    <input type="number" min="0" value={r.qty} onChange={(e) => updateUnitRow(i, 'qty', e.target.value)} style={{ ...inputStyle, width: 100, fontFamily: 'var(--mono)' }} />
+                  </td>
+                  <td style={tableTdStyle}>
+                    <button onClick={() => removeUnitRow(i)} style={{ background: 'transparent', border: '1px solid var(--border)', color: '#ff7070', cursor: 'pointer', fontSize: 11, borderRadius: 3, padding: '2px 6px' }}>✕</button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </>
+  );
+}
+
+function CkdMode({ ckdQueue, explosion, setExplosion, addCkdToLines }) {
+  if (!ckdQueue.length) {
+    return <div style={{ color: 'var(--t3)', fontSize: 11, fontStyle: 'italic' }}>Add products in the queue above and click Explode BOM.</div>;
+  }
+  if (!explosion.length) {
+    return <div style={{ color: 'var(--t3)', fontSize: 11, fontStyle: 'italic' }}>Click "Explode BOM →" above to compute the part list.</div>;
+  }
+  function updateRow(i, field, value) {
+    setExplosion((rows) => rows.map((r, j) => (j === i ? { ...r, [field]: value } : r)));
+  }
+  return (
+    <>
+      <div style={{ marginBottom: 8, fontSize: 11, color: 'var(--t3)' }}>
+        Exploded {explosion.length} unique parts.
+      </div>
+      <div style={{ maxHeight: 320, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 3 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr>
+            <th style={{ ...tableThStyle, width: 30 }}></th>
+            <th style={tableThStyle}>Part Code</th>
+            <th style={tableThStyle}>Name</th>
+            <th style={tableThStyle}>Category</th>
+            <th style={tableThStyle}>Order Qty</th>
+          </tr></thead>
+          <tbody>
+            {explosion.map((r, i) => (
+              <tr key={r.part_code}>
+                <td style={tableTdStyle}>
+                  <input type="checkbox" checked={!!r.checked} onChange={(e) => updateRow(i, 'checked', e.target.checked)} />
+                </td>
+                <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{r.part_code}</td>
+                <td style={{ ...tableTdStyle, whiteSpace: 'normal' }}>{r.part_name}</td>
+                <td style={tableTdStyle}>{r.category || '—'}</td>
+                <td style={tableTdStyle}>
+                  <input type="number" min="0" step="0.01" value={r.qty} onChange={(e) => updateRow(i, 'qty', e.target.value)} style={{ ...inputStyle, width: 100, fontFamily: 'var(--mono)' }} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ marginTop: 8, textAlign: 'right' }}>
+        <button style={btnPrimary} onClick={addCkdToLines}>Add Selected →</button>
+      </div>
+    </>
+  );
+}
+
+function Field({ label, value, onChange, type = 'text', readOnly }) {
+  return (
+    <div>
+      <span style={labelStyle}>{label}</span>
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange?.(e.target.value)}
+        readOnly={readOnly}
+        style={{
+          ...inputStyle, width: '100%',
+          fontFamily: type === 'number' || type === 'date' ? 'var(--mono)' : 'inherit',
+          color: readOnly ? 'var(--t2)' : 'var(--t1)',
+        }}
+      />
+    </div>
+  );
+}
+
+function SelectField({ label, value, onChange, options, disabled }) {
+  return (
+    <div>
+      <span style={labelStyle}>{label}</span>
+      <select value={value} onChange={(e) => onChange(e.target.value)} style={{ ...selectStyle, width: '100%' }} disabled={disabled}>
+        {options.map((o) => <option key={o} value={o}>{o || '—'}</option>)}
+      </select>
+    </div>
+  );
+}
