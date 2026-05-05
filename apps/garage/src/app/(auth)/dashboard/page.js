@@ -338,7 +338,7 @@ export default function DashboardPage() {
         <section style={panelStyle}>
           <header style={panelHeaderStyle}>
             <span>Producible Units by Product</span>
-            <span style={{ color: 'var(--t3)' }}>{producible.length} products</span>
+            <span style={{ color: 'var(--t3)' }}>{PRODUCTS.length} products</span>
           </header>
           <div>
             {prodLoading ? (
@@ -347,11 +347,12 @@ export default function DashboardPage() {
               <EmptyState message="No producible data" />
             ) : (
               producible.map((row, i) => {
-                const constrained = row.shorts.length > 0;
-                const color = row.maxPossible === 0 ? 'var(--red)' : 'var(--green)';
-                const pct = row.maxPossible > 0 && row.bottleneck
-                  ? Math.round((row.bottleneck.max_units / row.maxPossible) * 100)
-                  : 0;
+                const bottleneckUnits = row.bottleneck?.max_units ?? 0;
+                const constrained = bottleneckUnits < row.maxPossible;
+                const color = constrained ? 'var(--red)' : 'var(--green)';
+                const pct = row.maxPossible > 0
+                  ? Math.round((bottleneckUnits / row.maxPossible) * 100)
+                  : 100;
                 const isOpen = expandedIndex === i;
                 const isLast = i === producible.length - 1;
                 return (
@@ -371,7 +372,7 @@ export default function DashboardPage() {
                       </div>
                       <div style={{ textAlign: 'right' }}>
                         <div style={{ fontFamily: 'var(--mono)', fontSize: 20, color }}>
-                          {row.maxPossible.toLocaleString()}
+                          {bottleneckUnits.toLocaleString()}
                         </div>
                         <div style={{ fontSize: 10, color: 'var(--t3)' }}>units producible</div>
                       </div>
