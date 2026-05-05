@@ -87,6 +87,11 @@ const CSS = `
   background: rgba(242, 205, 26, 0.06);
   font-weight: 600;
 }
+.tn-sep {
+  height: 1px;
+  background: var(--border, #2a2a2a);
+  margin: 4px 0;
+}
 
 .tn-right {
   display: flex;
@@ -120,9 +125,10 @@ const CSS = `
 `;
 
 function isItemActive(item, activeTab) {
-  return item && (item.id === activeTab || item.route === activeTab);
+  return item && !item.separator && (item.id === activeTab || item.route === activeTab);
 }
 function isGroupActive(group, activeTab) {
+  if (group.flat && group.route) return group.route === activeTab;
   return (group.items || []).some(i => isItemActive(i, activeTab));
 }
 
@@ -134,6 +140,22 @@ export function TopNav({ groups = [], activeTab, onTabSelect, rightSlot, onLogou
         {groups.map((g) => {
           const active = isGroupActive(g, activeTab);
           const items = g.items || [];
+          if (g.flat) {
+            return (
+              <div
+                key={g.id || g.label}
+                className={`tn-group${active ? ' tn-active' : ''}`}
+              >
+                <button
+                  className="tn-group-btn"
+                  type="button"
+                  onClick={() => onTabSelect && onTabSelect({ id: g.id, label: g.label, route: g.route })}
+                >
+                  {g.label}
+                </button>
+              </div>
+            );
+          }
           return (
             <div
               key={g.id || g.label}
@@ -144,7 +166,10 @@ export function TopNav({ groups = [], activeTab, onTabSelect, rightSlot, onLogou
                 <span className="tn-caret">▾</span>
               </button>
               <div className="tn-dropdown" role="menu">
-                {items.map((item) => {
+                {items.map((item, idx) => {
+                  if (item.separator) {
+                    return <div key={`sep-${idx}`} className="tn-sep" role="separator" />;
+                  }
                   const itemActive = isItemActive(item, activeTab);
                   return (
                     <button

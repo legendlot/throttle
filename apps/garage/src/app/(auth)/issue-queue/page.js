@@ -1,10 +1,10 @@
 'use client';
 import { Fragment, useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast, printWindow } from '@throttle/ui';
 import { RejectRunModal } from '../../../components/production-runs/RejectRunModal.js';
-import { FlushVerifyPanel } from '../../../components/flush/FlushVerifyPanel.js';
 
 const PICK_CAT_ORDER  = ['Car', 'Remote', 'Accessories', 'Packaging', 'Para', 'Batteries', 'License'];
 const PICK_TYPE_ORDER = ['Electronic', 'Metal', 'Plastic', 'Cardboard', 'Paper', 'Fabric', 'Chemical', 'Rubber'];
@@ -76,16 +76,15 @@ function pickSortKey(p, materialCache) {
 export default function IssueQueuePage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
+  const router = useRouter();
 
   const [queue, setQueue] = useState([]);
   const [history, setHistory] = useState([]);
-  const [pendingFlushes, setPendingFlushes] = useState([]);
   const [selectedItem, setSelectedItem] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [confirmChecked, setConfirmChecked] = useState(false);
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
-  const [flushVerifyId, setFlushVerifyId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [materialCache, setMaterialCache] = useState({});
   const [rejectedRefs, setRejectedRefs] = useState(() => new Set());
@@ -171,18 +170,19 @@ export default function IssueQueuePage() {
         const key = r.issue_no;
         if (!map[key]) {
           map[key] = {
-            issue_no:   r.issue_no,
-            issue_date: r.issue_date,
-            issue_type: r.issue_type,
-            wo_no:      r.wo_no,
-            run_id:     r.run_id,
-            run_no:     r.run_no || null,
-            product:    r.product,
-            variant:    r.variant,
-            colour:     r.colour || '',
-            issued_by:  r.issued_by,
-            units:      r.units_planned,
-            lines:      [],
+            issue_no:     r.issue_no,
+            ref_issue_no: r.ref_issue_no || null,
+            issue_date:   r.issue_date,
+            issue_type:   r.issue_type,
+            wo_no:        r.wo_no,
+            run_id:       r.run_id,
+            run_no:       r.run_no || null,
+            product:      r.product,
+            variant:      r.variant,
+            colour:       r.colour || '',
+            issued_by:    r.issued_by,
+            units:        r.units_planned,
+            lines:        [],
           };
         }
         map[key].lines.push(r);
@@ -196,19 +196,8 @@ export default function IssueQueuePage() {
     }
   }, [session]);
 
-  const loadPendingFlushes = useCallback(async () => {
-    if (!session) return;
-    try {
-      const data = await garageFetch('getFlushes', { status: 'Pending Verification' }, session);
-      setPendingFlushes(Array.isArray(data) ? data : []);
-    } catch {
-      setPendingFlushes([]);
-    }
-  }, [session]);
-
   useEffect(() => { loadQueue(); }, [loadQueue]);
   useEffect(() => { loadHistory(); }, [loadHistory]);
-  useEffect(() => { loadPendingFlushes(); }, [loadPendingFlushes]);
 
   const visibleQueue = useMemo(
     () => queue.filter((r) => !rejectedRefs.has(r.ref)),
@@ -521,7 +510,7 @@ export default function IssueQueuePage() {
           Issue Queue
         </h1>
         <p style={{ color: 'var(--t3)', fontSize: 11, marginTop: 4, fontFamily: 'var(--mono)' }}>
-          Open production runs and work orders awaiting store issue.
+          All open requests from production — production runs, ad hoc requests, and rework
         </p>
       </div>
 
@@ -632,60 +621,6 @@ export default function IssueQueuePage() {
         </div>
       )}
 
-      {/* PENDING FLUSHES */}
-      {pendingFlushes.length > 0 && (
-        <div style={panelStyle}>
-          <div style={panelHeaderStyle}>
-            <span>Pending Flushes <span style={{ color: 'var(--yellow)', marginLeft: 6 }}>({pendingFlushes.length})</span></span>
-            <button style={btnSecondary} onClick={loadPendingFlushes}>↻</button>
-          </div>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr>
-                  <th style={tableThStyle}>Flush ID</th>
-                  <th style={tableThStyle}>Date</th>
-                  <th style={tableThStyle}>Run / WO</th>
-                  <th style={tableThStyle}>Line</th>
-                  <th style={tableThStyle}>Shift</th>
-                  <th style={tableThStyle}>Raised By</th>
-                  <th style={{ ...tableThStyle, textAlign: 'right' }}></th>
-                </tr>
-              </thead>
-              <tbody>
-                {pendingFlushes.map((f) => (
-                  <tr key={f.flush_id}>
-                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{f.flush_id}</td>
-                    <td style={tableTdStyle}>{f.flush_date || '—'}</td>
-                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontSize: 11 }}>{f.run_no || f.wo_no || 'Standalone'}</td>
-                    <td style={tableTdStyle}>{f.line_no || '—'}</td>
-                    <td style={tableTdStyle}>{f.shift || '—'}</td>
-                    <td style={tableTdStyle}>{f.raised_by || '—'}</td>
-                    <td style={{ ...tableTdStyle, textAlign: 'right' }}>
-                      <button style={btnPrimary} onClick={() => setFlushVerifyId(f.flush_id)}>VERIFY →</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {flushVerifyId && (
-        <div style={panelStyle}>
-          <div style={panelHeaderStyle}>
-            <span>Verify {flushVerifyId}</span>
-            <button onClick={() => setFlushVerifyId(null)} style={btnSecondary}>✕ Close</button>
-          </div>
-          <FlushVerifyPanel
-            flushId={flushVerifyId}
-            onClose={() => setFlushVerifyId(null)}
-            onVerified={() => { setFlushVerifyId(null); loadPendingFlushes(); }}
-          />
-        </div>
-      )}
-
       {/* RECENT ISSUES */}
       <div style={panelStyle}>
         <div style={panelHeaderStyle}>
@@ -714,9 +649,26 @@ export default function IssueQueuePage() {
               <tbody>
                 {history.map((h) => (
                   <tr key={h.issue_no}>
-                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{h.issue_no}</td>
+                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>
+                      {h.issue_no}
+                      {h.ref_issue_no && (
+                        <div style={{ fontSize: 9, color: 'var(--t3)', marginTop: 2 }}>
+                          ref:{h.ref_issue_no}
+                        </div>
+                      )}
+                    </td>
                     <td style={tableTdStyle}><StatusBadge label={h.issue_type || '—'} tone={issueTypeTone(h.issue_type)} /></td>
-                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontSize: 11 }}>{h.run_no || '—'}</td>
+                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontSize: 11 }}>
+                      {h.run_no ? (
+                        <span
+                          onClick={() => router.push(`/production-runs?run=${encodeURIComponent(h.run_no)}`)}
+                          title={`View run ${h.run_no}`}
+                          style={{ color: 'var(--yellow)', cursor: 'pointer', textDecoration: 'underline dotted' }}
+                        >
+                          {h.run_no}
+                        </span>
+                      ) : <span style={{ color: 'var(--t3)' }}>—</span>}
+                    </td>
                     <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontSize: 11 }}>{h.wo_no || '—'}</td>
                     <td style={tableTdStyle}>{h.product || '—'}</td>
                     <td style={tableTdStyle}>{h.variant || '—'}</td>

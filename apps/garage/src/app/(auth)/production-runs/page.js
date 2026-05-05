@@ -1,6 +1,7 @@
 // TODO: TD-005 — wire production_runs gate from G-W7
 'use client';
 import { useEffect, useState } from 'react';
+import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
 import { EmptyState } from '@throttle/ui';
@@ -32,6 +33,9 @@ function modeBtnStyle(active) {
 
 export default function ProductionRunsPage() {
   const { session, perms } = useAuth();
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const [runMode, setRunMode] = useState('fresh');
   const [runs, setRuns] = useState([]);
   const [repairRuns, setRepairRuns] = useState([]);
@@ -62,6 +66,16 @@ export default function ProductionRunsPage() {
   useEffect(() => {
     loadRuns();
   }, [session, filterStatus]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Deep-link: /production-runs?run=RUN-069 opens the run panel.
+  // Used by the Issue Queue Recent Issues "RUN" link.
+  useEffect(() => {
+    const runNo = searchParams?.get('run');
+    if (!runNo) return;
+    setActivePanel({ type: 'run', runNo });
+    // Strip the param so back-nav and refresh behave correctly
+    router.replace(pathname, { scroll: false });
+  }, [searchParams, pathname, router]);
 
   useEffect(() => {
     if (!activePanel) return;
