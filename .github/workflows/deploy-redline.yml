@@ -33,11 +33,11 @@ jobs:
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
           NEXT_PUBLIC_WORKER_URL: ${{ secrets.NEXT_PUBLIC_WORKER_URL }}
 
-      - name: Deploy to legendlot/production
+      - name: Deploy to legendlot/dashboard
         uses: peaceiris/actions-gh-pages@v3
         with:
           personal_token: ${{ secrets.DEPLOY_TOKEN }}
-          external_repository: legendlot/production
+          external_repository: legendlot/dashboard
           publish_branch: main
           publish_dir: apps/redline/out
           cname: redline.legendoftoys.com
