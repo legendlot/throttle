@@ -226,7 +226,7 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
     return supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: `${window.location.origin}/auth/callback/`,
+        redirectTo: window.location.origin,
         hd: 'legendoftoys.com',
       },
     });
