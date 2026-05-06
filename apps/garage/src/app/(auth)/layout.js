@@ -4,6 +4,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { RequireAuth, useAuth } from '@throttle/auth';
 import { Sidebar, Spinner } from '@throttle/ui';
 import { useNavGroups } from '../../lib/nav.js';
+import { GarageIcon } from '../../components/GarageIcon.js';
 
 const RefreshContext = createContext({ refreshing: false, setRefreshing: () => {} });
 
@@ -54,8 +55,9 @@ function AuthLayoutInner({ children }) {
         onLogout={signOut}
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed(c => !c)}
-        appLabel="LOT / GARAGE"
+        appLabel="GARAGE"
         appShortLabel="G"
+        appIcon={<GarageIcon size={20} strokeWidth={2.5} />}
       />
       <main style={{ flex: 1, overflowY: 'auto', padding: '16px 24px' }}>
         {children}

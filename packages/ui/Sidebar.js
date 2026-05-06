@@ -121,6 +121,7 @@ export function Sidebar({
   onToggle,
   appLabel = 'LOT',
   appShortLabel = 'L',
+  appIcon = null,
 }) {
   const isCollapsed = !!collapsed;
 
@@ -216,11 +217,14 @@ export function Sidebar({
 
         <div className="sb-header" onClick={isCollapsed ? onToggle : undefined}>
           {isCollapsed ? (
-            <span className="sb-logo-short">{appShortLabel}</span>
+            appIcon
+              ? <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{appIcon}</span>
+              : <span className="sb-logo-short">{appShortLabel}</span>
           ) : (
             <>
-              <span className="sb-logo">
-                {labelPart}{subPart && <span> / {subPart}</span>}
+              <span className="sb-logo" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {appIcon}
+                <span>{labelPart}{subPart && <span> / {subPart}</span>}</span>
               </span>
               <button
                 className="sb-toggle"

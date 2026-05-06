@@ -5,6 +5,7 @@ import { RequireAuth, useAuth } from '@throttle/auth';
 import { Sidebar, Spinner } from '@throttle/ui';
 import { NAV_GROUPS } from '../../lib/nav.js';
 import { usePendingCounts } from '../../hooks/usePendingCounts.js';
+import { RedlineIcon } from '../../components/RedlineIcon.js';
 
 const RefreshContext = createContext({
   refreshing: false,    setRefreshing:    () => {},
@@ -152,8 +153,9 @@ function AuthLayoutInner({ children }) {
         onLogout={signOut}
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed(c => !c)}
-        appLabel="LOT / REDLINE"
+        appLabel="REDLINE"
         appShortLabel="RL"
+        appIcon={<RedlineIcon bar={2} gap={2} />}
       />
       <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
         <Topbar
