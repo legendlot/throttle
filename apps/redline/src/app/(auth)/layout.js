@@ -1,9 +1,10 @@
 'use client';
-import { createContext, useContext, useState } from 'react';
+import { createContext, useContext, useMemo, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { RequireAuth, useAuth } from '@throttle/auth';
 import { TopNav, Spinner } from '@throttle/ui';
 import { NAV_GROUPS } from '../../lib/nav.js';
+import { usePendingCounts } from '../../hooks/usePendingCounts.js';
 
 // ── Refresh context ───────────────────────────────────────────
 // Exposes refreshing + lastRefreshed so pages can drive the TopNav
@@ -40,11 +41,50 @@ export default function AuthLayout({ children }) {
   );
 }
 
+// ── Badge span helpers ────────────────────────────────────────
+function NavBadge({ count, color }) {
+  if (!count || count < 1) return null;
+  const bg = color === 'red' ? '#de2a2a' : '#f97316';
+  const fg = color === 'red' ? '#fff'    : '#000';
+  return (
+    <span style={{
+      display: 'inline-block',
+      background: bg, color: fg,
+      fontSize: 9, fontWeight: 700,
+      padding: '1px 5px',
+      borderRadius: 8,
+      marginLeft: 5,
+      verticalAlign: 'middle',
+      fontFamily: 'var(--mono)',
+      letterSpacing: '0.04em',
+    }}>
+      {count > 99 ? '99+' : count}
+    </span>
+  );
+}
+
 function AuthLayoutInner({ children }) {
-  const { user, role, signOut, loading } = useAuth();
+  const { user, session, role, signOut, loading } = useAuth();
   const pathname  = usePathname();
   const router    = useRouter();
   const { refreshing, lastRefreshed } = useRefreshState();
+  const { alertCount, returnCount }   = usePendingCounts(session);
+
+  // Inject live badge elements into a copy of NAV_GROUPS
+  const navGroupsWithBadges = useMemo(() => {
+    return NAV_GROUPS.map(group => ({
+      ...group,
+      items: (group.items || []).map(item => {
+        if (item.id === 'alerts' && item.badgeColor) {
+          return { ...item, badge: <NavBadge count={alertCount}  color={item.badgeColor} /> };
+        }
+        if (item.id === 'returns' && item.badgeColor) {
+          return { ...item, badge: <NavBadge count={returnCount} color={item.badgeColor} /> };
+        }
+        return item;
+      }),
+    }));
+  }, [alertCount, returnCount]);
 
   // Show spinner only on first mount — not on background token refreshes
   if (loading && !user) return <Spinner />;
@@ -52,7 +92,7 @@ function AuthLayoutInner({ children }) {
   return (
     <>
       <TopNav
-        groups={NAV_GROUPS}
+        groups={navGroupsWithBadges}
         activeTab={pathname}
         onTabSelect={(item) => router.push(item.route)}
         rightSlot={
