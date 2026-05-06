@@ -17,12 +17,19 @@ export default function LoginPage() {
 
   return (
     <div style={{
+      position: 'fixed',
+      inset: 0,
+      width: '100vw',
       height: '100dvh',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
       background: '#0e0e0e',
       fontFamily: MONO,
+      margin: 0,
+      padding: 0,
+      overflow: 'hidden',
+      zIndex: 1,
     }}>
       <div style={{
         display: 'flex',
