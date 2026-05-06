@@ -13,6 +13,7 @@ const STYLE = `
 .sb-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 0 14px; height: 48px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+  cursor: pointer;
 }
 .sb-collapsed .sb-header { justify-content: center; padding: 0; cursor: pointer; }
 .sb-logo { font-size: 11px; font-weight: 700; letter-spacing: .1em; color: var(--yellow); white-space: nowrap; }
@@ -31,7 +32,7 @@ const STYLE = `
 .sb-scroll::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
 
 .sb-section {
-  font-size: 9px; letter-spacing: .18em; color: var(--t3);
+  font-size: 10px; letter-spacing: .14em; color: rgba(242,205,26,.55);
   text-transform: uppercase; font-weight: 700;
   padding: 10px 16px 4px; white-space: nowrap; overflow: hidden;
 }
@@ -50,6 +51,10 @@ const STYLE = `
 .sb-section-row {
   display: flex; align-items: center; gap: 8px;
   padding: 12px 16px 4px; white-space: nowrap; overflow: hidden;
+  margin-top: 4px; border-top: 1px solid var(--border);
+}
+.sb-scroll > div:first-child .sb-section-row {
+  border-top: none; margin-top: 0;
 }
 .sb-section-row .sb-section { padding: 0; }
 .sb-section-icon { display: inline-flex; color: var(--t3); flex-shrink: 0; }
@@ -67,6 +72,18 @@ const STYLE = `
 .sb-badge-dot {
   position: absolute; top: 4px; right: 4px;
   width: 7px; height: 7px; border-radius: 50%; border: 1px solid var(--surface);
+}
+.sb-group-btn::after {
+  content: attr(data-label);
+  position: absolute; left: calc(100% + 8px); top: 50%; transform: translateY(-50%);
+  background: var(--surface2); color: var(--t1); border: 1px solid var(--border2);
+  padding: 4px 8px; border-radius: 4px; font-size: 11px; font-family: var(--mono);
+  white-space: nowrap; pointer-events: none;
+  opacity: 0; transition: opacity .08s ease;
+  z-index: 999;
+}
+.sb-group-btn:hover::after {
+  opacity: 1;
 }
 
 .sb-collapsed-scroll {
@@ -219,7 +236,7 @@ export function Sidebar({
               <div
                 className={`sb-group-btn${active ? ' sb-active' : ''}`}
                 onClick={handleClick}
-                title={group.label}
+                data-label={group.label}
               >
                 {group.icon ? renderIcon(group.icon, 18) : abbr(group.label)}
                 {hasBadge && (
@@ -241,7 +258,7 @@ export function Sidebar({
       <style>{STYLE}</style>
       <div className={`sb-wrap ${isCollapsed ? 'sb-collapsed' : 'sb-expanded'}`}>
 
-        <div className="sb-header" onClick={isCollapsed ? onToggle : undefined}>
+        <div className="sb-header" onClick={onToggle}>
           {isCollapsed ? (
             appIcon
               ? <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{appIcon}</span>
