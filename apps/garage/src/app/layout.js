@@ -14,6 +14,8 @@ export default function RootLayout({ children }) {
           rel="stylesheet"
           href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Tomorrow:wght@400;500;600;700;900&display=swap"
         />
+        <link rel="icon" href="/lot-logo.png" />
+        <link rel="apple-touch-icon" href="/lot-logo.png" />
       </head>
       <body>
         <AuthProvider workerUrl={process.env.NEXT_PUBLIC_WORKER_URL} pingAction="ping">

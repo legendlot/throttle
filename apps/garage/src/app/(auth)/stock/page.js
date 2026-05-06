@@ -129,7 +129,7 @@ export default function StockPage() {
   return (
     <div style={{ padding: '16px 24px', color: 'var(--t1)' }}>
       <div style={{ marginBottom: 16 }}>
-        <h1 style={{ fontFamily: 'var(--mono)', fontSize: 24, fontWeight: 900, textTransform: 'uppercase', margin: 0 }}>
+        <h1 style={{ fontFamily: 'var(--cond)', fontSize: 28, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.03em', margin: 0 }}>
           Stock Ledger
         </h1>
         <p style={{ color: 'var(--t3)', fontSize: 12, margin: '4px 0 0', fontFamily: 'var(--mono)' }}>
