@@ -38,7 +38,7 @@ jobs:
         with:
           personal_token: ${{ secrets.DEPLOY_TOKEN }}
           external_repository: legendlot/Stores
-          publish_branch: main
+          publish_branch: gh-pages
           publish_dir: apps/garage/out
           cname: garage.legendoftoys.com
           commit_message: 'deploy: Garage React app (LOT Monorepo)'
