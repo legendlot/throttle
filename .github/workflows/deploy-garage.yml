@@ -1,0 +1,45 @@
+name: Deploy Garage
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type DEPLOY to confirm cutover to garage.legendoftoys.com'
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.confirm == 'DEPLOY'
+
+    steps:
+      - name: Checkout monorepo
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Garage
+        run: npx turbo build --filter=@throttle/garage
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          NEXT_PUBLIC_WORKER_URL: ${{ secrets.NEXT_PUBLIC_WORKER_URL }}
+
+      - name: Deploy to legendlot/Stores
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          personal_token: ${{ secrets.DEPLOY_TOKEN }}
+          external_repository: legendlot/Stores
+          publish_branch: main
+          publish_dir: apps/garage/out
+          cname: garage.legendoftoys.com
+          commit_message: 'deploy: Garage React app (LOT Monorepo)'
+          force_orphan: true

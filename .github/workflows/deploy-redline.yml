@@ -1,0 +1,45 @@
+name: Deploy Redline
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type DEPLOY to confirm cutover to redline.legendoftoys.com'
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.confirm == 'DEPLOY'
+
+    steps:
+      - name: Checkout monorepo
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Redline
+        run: npx turbo build --filter=@throttle/redline
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          NEXT_PUBLIC_WORKER_URL: ${{ secrets.NEXT_PUBLIC_WORKER_URL }}
+
+      - name: Deploy to legendlot/production
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          personal_token: ${{ secrets.DEPLOY_TOKEN }}
+          external_repository: legendlot/production
+          publish_branch: main
+          publish_dir: apps/redline/out
+          cname: redline.legendoftoys.com
+          commit_message: 'deploy: Redline React app (LOT Monorepo)'
+          force_orphan: true
