@@ -41,8 +41,8 @@ html, body {
   color: var(--t1);
   font-family: var(--mono);
   font-size: 14px;
-  min-height: 100vh;
-  overflow-x: hidden;
+  height: 100%;
+  overflow: hidden;
 }
 
 a {
@@ -52,20 +52,4 @@ a {
 
 button {
   font-family: inherit;
-}
-
-/* ── Scan-line texture (subtle, matches legacy) ── */
-body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  background: repeating-linear-gradient(
-    0deg,
-    transparent,
-    transparent 2px,
-    rgba(255, 255, 255, 0.008) 2px,
-    rgba(255, 255, 255, 0.008) 4px
-  );
-  pointer-events: none;
-  z-index: 0;
 }

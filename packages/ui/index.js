@@ -4,6 +4,7 @@ export { ConfirmModal } from './ConfirmModal.js';
 export { Spinner } from './Spinner.js';
 export { Badge } from './Badge.js';
 export { TopNav } from './TopNav.js';
+export { Sidebar } from './Sidebar.js';
 export { DateBar } from './DateBar.js';
 export { EmptyState } from './EmptyState.js';
 export { DataTable } from './DataTable.js';

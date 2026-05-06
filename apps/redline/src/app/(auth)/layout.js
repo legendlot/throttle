@@ -2,18 +2,13 @@
 import { createContext, useContext, useMemo, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { RequireAuth, useAuth } from '@throttle/auth';
-import { TopNav, Spinner } from '@throttle/ui';
+import { Sidebar, Spinner } from '@throttle/ui';
 import { NAV_GROUPS } from '../../lib/nav.js';
 import { usePendingCounts } from '../../hooks/usePendingCounts.js';
 
-// ── Refresh context ───────────────────────────────────────────
-// Exposes refreshing + lastRefreshed so pages can drive the TopNav
-// spinner and the "last updated" timestamp without prop-drilling.
 const RefreshContext = createContext({
-  refreshing:       false,
-  setRefreshing:    () => {},
-  lastRefreshed:    null,
-  setLastRefreshed: () => {},
+  refreshing: false,    setRefreshing:    () => {},
+  lastRefreshed: null,  setLastRefreshed: () => {},
 });
 
 export function RefreshProvider({ children }) {
@@ -30,7 +25,6 @@ export function useRefreshState() {
   return useContext(RefreshContext);
 }
 
-// ── Route group layout ────────────────────────────────────────
 export default function AuthLayout({ children }) {
   return (
     <RequireAuth>
@@ -41,25 +35,80 @@ export default function AuthLayout({ children }) {
   );
 }
 
-// ── Badge span helpers ────────────────────────────────────────
 function NavBadge({ count, color }) {
   if (!count || count < 1) return null;
   const bg = color === 'red' ? '#de2a2a' : '#f97316';
   const fg = color === 'red' ? '#fff'    : '#000';
   return (
     <span style={{
-      display: 'inline-block',
-      background: bg, color: fg,
-      fontSize: 9, fontWeight: 700,
-      padding: '1px 5px',
-      borderRadius: 8,
-      marginLeft: 5,
-      verticalAlign: 'middle',
-      fontFamily: 'var(--mono)',
-      letterSpacing: '0.04em',
+      display:'inline-block', background:bg, color:fg,
+      fontSize:9, fontWeight:700, padding:'1px 5px',
+      borderRadius:8, marginLeft:5, fontFamily:'var(--mono)', letterSpacing:'0.04em',
     }}>
       {count > 99 ? '99+' : count}
     </span>
+  );
+}
+
+function Topbar({ navGroups, pathname, onTabSelect, refreshing, lastRefreshed }) {
+  const activeGroup = navGroups.find(g =>
+    (g.items || []).some(i => pathname === i.route || pathname.startsWith(i.route + '/'))
+  ) || navGroups[0];
+
+  const subTabs  = (activeGroup?.items || []).filter(i => !i.separator);
+  const activeItem = subTabs.find(i =>
+    pathname === i.route || pathname.startsWith(i.route + '/')
+  ) || subTabs[0];
+
+  const showSubTabs = subTabs.length > 1;
+
+  return (
+    <div style={{
+      height: 44, borderBottom: '1px solid var(--border)',
+      display: 'flex', alignItems: 'center', padding: '0 20px',
+      gap: 10, flexShrink: 0, background: '#0e0e0e',
+    }}>
+      <span style={{ fontSize:10, color:'var(--t3)', letterSpacing:'.1em', fontFamily:'var(--mono)' }}>
+        {activeGroup?.label}
+      </span>
+      <span style={{ color:'var(--border2)', fontSize:14 }}>/</span>
+      <span style={{ fontSize:11, fontWeight:700, letterSpacing:'.06em', color:'var(--t1)', fontFamily:'var(--mono)' }}>
+        {activeItem?.label?.toUpperCase() || ''}
+      </span>
+
+      {showSubTabs && (
+        <div style={{ display:'flex', gap:2, marginLeft:20, borderLeft:'1px solid var(--border)', paddingLeft:14 }}>
+          {subTabs.map(item => {
+            const isActive = pathname === item.route || pathname.startsWith(item.route + '/');
+            return (
+              <button key={item.id} onClick={() => onTabSelect(item)} style={{
+                background: isActive ? 'rgba(242,205,26,.07)' : 'none',
+                border: 'none', borderRadius: 4, padding: '4px 10px',
+                fontSize: 10, color: isActive ? 'var(--yellow)' : 'var(--t3)',
+                cursor: 'pointer', fontFamily: 'var(--mono)',
+                display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap',
+              }}>
+                {item.label}
+                {item.badge || null}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      <div style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:12 }}>
+        {refreshing && (
+          <span style={{ fontSize:9, color:'var(--t3)', letterSpacing:'.1em' }}>↻ UPDATING</span>
+        )}
+        {lastRefreshed && !refreshing && (
+          <span style={{ fontSize:9, color:'var(--t3)', letterSpacing:'.04em' }}>{lastRefreshed}</span>
+        )}
+        <span style={{ fontSize:9, color:'var(--t3)', letterSpacing:'.04em', display:'flex', alignItems:'center', gap:5 }}>
+          <span style={{ width:6, height:6, background:'var(--green)', borderRadius:'50%', display:'inline-block' }} />
+          LIVE
+        </span>
+      </div>
+    </div>
   );
 }
 
@@ -69,8 +118,8 @@ function AuthLayoutInner({ children }) {
   const router    = useRouter();
   const { refreshing, lastRefreshed } = useRefreshState();
   const { alertCount, returnCount }   = usePendingCounts(session);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
 
-  // Inject live badge elements into a copy of NAV_GROUPS
   const navGroupsWithBadges = useMemo(() => {
     return NAV_GROUPS.map(group => ({
       ...group,
@@ -86,27 +135,38 @@ function AuthLayoutInner({ children }) {
     }));
   }, [alertCount, returnCount]);
 
-  // Show spinner only on first mount — not on background token refreshes
   if (loading && !user) return <Spinner />;
 
+  const displayName = user?.full_name || user?.email || '';
+  const initial     = displayName ? displayName[0].toUpperCase() : '?';
+
   return (
-    <>
-      <TopNav
+    <div style={{ display:'flex', height:'100dvh', overflow:'hidden' }}>
+      <Sidebar
         groups={navGroupsWithBadges}
         activeTab={pathname}
         onTabSelect={(item) => router.push(item.route)}
-        rightSlot={
-          <span style={{ color: 'var(--t3)', fontSize: 12, fontFamily: 'var(--mono)' }}>
-            {user?.full_name || user?.email}&nbsp;·&nbsp;{role}
-          </span>
-        }
+        userLabel={displayName}
+        userInitial={initial}
+        userRole={role || ''}
         onLogout={signOut}
-        refreshing={refreshing}
-        lastRefreshed={lastRefreshed}
+        collapsed={sidebarCollapsed}
+        onToggle={() => setSidebarCollapsed(c => !c)}
+        appLabel="LOT / REDLINE"
+        appShortLabel="RL"
       />
-      <main style={{ padding: '16px 24px', position: 'relative', zIndex: 1 }}>
-        {children}
-      </main>
-    </>
+      <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+        <Topbar
+          navGroups={navGroupsWithBadges}
+          pathname={pathname}
+          onTabSelect={(item) => router.push(item.route)}
+          refreshing={refreshing}
+          lastRefreshed={lastRefreshed}
+        />
+        <main style={{ flex:1, overflowY:'auto', padding:'16px 24px' }}>
+          {children}
+        </main>
+      </div>
+    </div>
   );
 }
