@@ -38,7 +38,7 @@ jobs:
         with:
           personal_token: ${{ secrets.DEPLOY_TOKEN }}
           external_repository: legendlot/dashboard
-          publish_branch: main
+          publish_branch: gh-pages
           publish_dir: apps/redline/out
           cname: redline.legendoftoys.com
           commit_message: 'deploy: Redline React app (LOT Monorepo)'
