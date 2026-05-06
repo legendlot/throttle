@@ -1,16 +1,13 @@
 name: Deploy Garage
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      confirm:
-        description: 'Type DEPLOY to confirm cutover to garage.legendoftoys.com'
-        required: true
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    if: github.event.inputs.confirm == 'DEPLOY'
 
     steps:
       - name: Checkout monorepo
