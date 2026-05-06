@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useState, isValidElement, createElement } from 'react';
 
 const STYLE = `
 .sb-wrap {
@@ -106,11 +106,10 @@ function abbr(label) {
 
 function renderIcon(icon, size) {
   if (!icon) return null;
-  if (typeof icon === 'function') {
-    const Cmp = icon;
-    return <Cmp size={size} strokeWidth={1.75} />;
-  }
-  return icon;
+  // Already a JSX element (e.g. <SomeIcon />)
+  if (isValidElement(icon)) return icon;
+  // Component reference — function components or forwardRef components (e.g. Lucide icons)
+  return createElement(icon, { size, strokeWidth: 1.75 });
 }
 
 function isGroupActive(group, pathname) {
