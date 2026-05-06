@@ -36,7 +36,7 @@ const STYLE = `
   padding: 10px 16px 4px; white-space: nowrap; overflow: hidden;
 }
 .sb-item {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: 10px;
   padding: 7px 16px; font-size: 11px; color: var(--t2);
   cursor: pointer; border-left: 2px solid transparent;
   white-space: nowrap; overflow: hidden;
@@ -44,15 +44,25 @@ const STYLE = `
 .sb-item:hover { color: var(--t1); background: rgba(255,255,255,.025); }
 .sb-item.sb-active { color: var(--yellow); background: rgba(242,205,26,.07); border-left-color: var(--yellow); }
 .sb-item-label { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.sb-item-icon { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 14px; color: var(--t3); }
+.sb-item.sb-active .sb-item-icon { color: var(--yellow); }
+.sb-item:hover .sb-item-icon { color: var(--t2); }
+.sb-section-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 16px 4px; white-space: nowrap; overflow: hidden;
+}
+.sb-section-row .sb-section { padding: 0; }
+.sb-section-icon { display: inline-flex; color: var(--t3); flex-shrink: 0; }
 
 .sb-group-btn {
-  width: 36px; height: 36px; border-radius: 6px;
+  width: 38px; height: 38px; border-radius: 6px;
   display: flex; align-items: center; justify-content: center;
   font-size: 9px; font-weight: 700; letter-spacing: .06em;
   cursor: pointer; border-left: 2px solid transparent;
-  color: var(--t3); position: relative; margin: 2px auto;
+  color: var(--t2); position: relative; margin: 2px auto;
+  transition: color .12s, background .12s;
 }
-.sb-group-btn:hover { background: rgba(255,255,255,.035); color: var(--t2); }
+.sb-group-btn:hover { background: rgba(255,255,255,.04); color: var(--t1); }
 .sb-group-btn.sb-active { background: rgba(242,205,26,.09); color: var(--yellow); border-left-color: var(--yellow); }
 .sb-badge-dot {
   position: absolute; top: 4px; right: 4px;
@@ -94,6 +104,15 @@ function abbr(label) {
   return label.slice(0, 2).toUpperCase();
 }
 
+function renderIcon(icon, size) {
+  if (!icon) return null;
+  if (typeof icon === 'function') {
+    const Cmp = icon;
+    return <Cmp size={size} strokeWidth={1.75} />;
+  }
+  return icon;
+}
+
 function isGroupActive(group, pathname) {
   return (group.items || []).some(i =>
     pathname === i.route || pathname.startsWith(i.route + '/')
@@ -133,11 +152,15 @@ export function Sidebar({
             const isActive = activeTab === group.route || (activeTab || '').startsWith((group.route || '') + '/');
             return (
               <div key={group.id}>
-                <div className="sb-section">{group.label}</div>
+                <div className="sb-section-row">
+                  <span className="sb-section-icon">{renderIcon(group.icon, 13)}</span>
+                  <span className="sb-section">{group.label}</span>
+                </div>
                 <div
                   className={`sb-item${isActive ? ' sb-active' : ''}`}
                   onClick={() => onTabSelect && onTabSelect(group)}
                 >
+                  <span className="sb-item-icon">{renderIcon(group.icon, 14)}</span>
                   <span className="sb-item-label">{group.label}</span>
                   {group.badge || null}
                 </div>
@@ -146,7 +169,10 @@ export function Sidebar({
           }
           return (
             <div key={group.id}>
-              <div className="sb-section">{group.label}</div>
+              <div className="sb-section-row">
+                <span className="sb-section-icon">{renderIcon(group.icon, 13)}</span>
+                <span className="sb-section">{group.label}</span>
+              </div>
               {(group.items || []).map((item, idx) => {
                 if (item.separator) return <div key={`sep-${idx}`} style={{ height: 4 }} />;
                 const isActive = activeTab === item.route || (activeTab || '').startsWith(item.route + '/');
@@ -156,6 +182,7 @@ export function Sidebar({
                     className={`sb-item${isActive ? ' sb-active' : ''}`}
                     onClick={() => onTabSelect && onTabSelect(item)}
                   >
+                    <span className="sb-item-icon">{renderIcon(item.icon, 14)}</span>
                     <span className="sb-item-label">{item.label}</span>
                     {item.badge || null}
                   </div>
@@ -195,7 +222,7 @@ export function Sidebar({
                 onClick={handleClick}
                 title={group.label}
               >
-                {abbr(group.label)}
+                {group.icon ? renderIcon(group.icon, 18) : abbr(group.label)}
                 {hasBadge && (
                   <div className="sb-badge-dot" style={{ background: badgeBg }} />
                 )}

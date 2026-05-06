@@ -1,48 +1,57 @@
+import {
+  Factory, GitBranch, ShieldCheck,
+  Bell, Undo2, ScanLine, Edit3,
+  Truck, Network, Send, Tag,
+  Wrench,
+  BarChart3,
+  QrCode, Users, Printer,
+} from 'lucide-react';
+
 export const NAV_GROUPS = [
   {
-    id: 'production', label: 'PRODUCTION',
+    id: 'production', label: 'PRODUCTION', icon: Factory,
     items: [
-      { id: 'exec',  label: 'Dashboard', route: '/exec' },
-      { id: 'lines', label: 'Lines',     route: '/lines' },
-      { id: 'qc',    label: 'QC',        route: '/qc' },
+      { id: 'exec',  label: 'Dashboard', route: '/exec',  icon: BarChart3 },
+      { id: 'lines', label: 'Lines',     route: '/lines', icon: GitBranch },
+      { id: 'qc',    label: 'QC',        route: '/qc',    icon: ShieldCheck },
     ],
   },
   {
-    id: 'activity', label: 'ACTIVITY',
+    id: 'activity', label: 'ACTIVITY', icon: Bell,
     items: [
-      { id: 'alerts',      label: 'Alerts',      route: '/alerts',      badgeColor: 'red' },
-      { id: 'returns',     label: 'Returns',     route: '/returns',     badgeColor: 'orange' },
-      { id: 'scans',       label: 'Scans',       route: '/scans' },
-      { id: 'corrections', label: 'Corrections', route: '/corrections' },
+      { id: 'alerts',      label: 'Alerts',      route: '/alerts',      icon: Bell,     badgeColor: 'red' },
+      { id: 'returns',     label: 'Returns',     route: '/returns',     icon: Undo2,    badgeColor: 'orange' },
+      { id: 'scans',       label: 'Scans',       route: '/scans',       icon: ScanLine },
+      { id: 'corrections', label: 'Corrections', route: '/corrections', icon: Edit3 },
     ],
   },
   {
-    id: 'dispatch', label: 'DISPATCH',
+    id: 'dispatch', label: 'DISPATCH', icon: Truck,
     items: [
-      { id: 'dispatch',           label: 'Overview',        route: '/dispatch' },
-      { id: 'dispatch-pipeline',  label: 'Pipeline',        route: '/dispatch-pipeline' },
-      { id: 'dispatch-shipments', label: 'Shipments',       route: '/dispatch-shipments' },
-      { id: 'dispatch-channels',  label: 'Channel Master',  route: '/dispatch-channels' },
+      { id: 'dispatch',           label: 'Overview',        route: '/dispatch',           icon: Truck },
+      { id: 'dispatch-pipeline',  label: 'Pipeline',        route: '/dispatch-pipeline',  icon: Network },
+      { id: 'dispatch-shipments', label: 'Shipments',       route: '/dispatch-shipments', icon: Send },
+      { id: 'dispatch-channels',  label: 'Channel Master',  route: '/dispatch-channels',  icon: Tag },
     ],
   },
   {
-    id: 'repair', label: 'REPAIR',
+    id: 'repair', label: 'REPAIR', icon: Wrench,
     items: [
-      { id: 'repair-queue', label: 'Queue', route: '/repair-queue' },
+      { id: 'repair-queue', label: 'Queue', route: '/repair-queue', icon: Wrench },
     ],
   },
   {
-    id: 'reporting', label: 'REPORTING',
+    id: 'reporting', label: 'REPORTING', icon: BarChart3,
     items: [
-      { id: 'reporting', label: 'Reporting', route: '/reporting' },
+      { id: 'reporting', label: 'Reporting', route: '/reporting', icon: BarChart3 },
     ],
   },
   {
-    id: 'admin', label: 'ADMIN',
+    id: 'admin', label: 'ADMIN', icon: Users,
     items: [
-      { id: 'upc',       label: 'UPC Generator', route: '/upc' },
-      { id: 'operators', label: 'Operators',     route: '/operators' },
-      { id: 'print',     label: 'Print',         route: '/print' },
+      { id: 'upc',       label: 'UPC Generator', route: '/upc',       icon: QrCode },
+      { id: 'operators', label: 'Operators',     route: '/operators', icon: Users },
+      { id: 'print',     label: 'Print',         route: '/print',     icon: Printer },
     ],
   },
 ];
