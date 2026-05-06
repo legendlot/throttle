@@ -11,3 +11,5 @@ export { DataTable } from './DataTable.js';
 export { KpiCard } from './KpiCard.js';
 export { SectionLabel } from './SectionLabel.js';
 export { printWindow } from './printWindow.js';
+export { QuickCreate } from './QuickCreate.js';
+export { Topbar } from './Topbar.js';

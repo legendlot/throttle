@@ -9,6 +9,7 @@ import {
   ShoppingCart, FileText, RefreshCw, Building, Truck,
   Users,
   Package, Factory, Store,
+  Bell,
 } from 'lucide-react';
 
 // Mirrors legacy 04_stores/index.html nav structure (lines 1018–1080):
@@ -18,6 +19,7 @@ const GROUPS = [
   {
     id: 'overview', label: 'OVERVIEW', icon: LayoutDashboard,
     items: [
+      { id: 'alerts',    label: 'Alerts',       route: '/alerts',    icon: Bell,            badgeColor: 'red' },
       { id: 'dashboard', label: 'Dashboard',    route: '/dashboard', icon: LayoutDashboard, gate: (p) => hasPermission(p, 'dashboard') },
       { id: 'activity',  label: 'Activity Log', route: '/activity',  icon: Activity,        gate: (p) => hasPermission(p, 'reports') || hasPermission(p, 'users_view') },
       { id: 'reports',   label: 'Reports',      route: '/reports',   icon: BarChart3,       gate: (p) => hasPermission(p, 'reports') },

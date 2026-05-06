@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
-import { EmptyState } from '@throttle/ui';
+import { EmptyState, Modal } from '@throttle/ui';
 import { FreshRunForm } from '../../../components/production-runs/FreshRunForm.js';
 import { RepairRunForm } from '../../../components/production-runs/RepairRunForm.js';
 import { RunsTable } from '../../../components/production-runs/RunsTable.js';
@@ -43,6 +43,7 @@ export default function ProductionRunsPage() {
   const [listError, setListError] = useState(null);
   const [filterStatus, setFilterStatus] = useState('');
   const [activePanel, setActivePanel] = useState(null);
+  const [showNewRunModal, setShowNewRunModal] = useState(false);
 
   async function loadRuns() {
     if (!session) return;
@@ -74,6 +75,14 @@ export default function ProductionRunsPage() {
     if (!runNo) return;
     setActivePanel({ type: 'run', runNo });
     // Strip the param so back-nav and refresh behave correctly
+    router.replace(pathname, { scroll: false });
+  }, [searchParams, pathname, router]);
+
+  useEffect(() => {
+    const newParam = searchParams?.get('new');
+    if (!newParam) return;
+    if (newParam === 'repair') setRunMode('repair'); else setRunMode('fresh');
+    setShowNewRunModal(true);
     router.replace(pathname, { scroll: false });
   }, [searchParams, pathname, router]);
 
@@ -117,35 +126,31 @@ export default function ProductionRunsPage() {
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1.05fr 0.95fr', gap: 16, alignItems: 'start' }}>
-        <div>
-          <div style={{ ...panel, marginBottom: 0 }}>
-            <div style={panelHdr}>
-              <span>New Run</span>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button style={modeBtnStyle(runMode === 'fresh')} onClick={() => setRunMode('fresh')}>Fresh</button>
-                <button style={modeBtnStyle(runMode === 'repair')} onClick={() => setRunMode('repair')}>Repair</button>
-              </div>
-            </div>
-          </div>
-          <div style={{ marginTop: 8 }}>
-            {runMode === 'fresh'
-              ? <FreshRunForm session={session} onSuccess={loadRuns} />
-              : <RepairRunForm session={session} onSuccess={loadRuns} />}
-          </div>
-        </div>
-
-        <RunsTable
-          runs={runs}
-          repairRuns={repairRuns}
-          loading={listLoading}
-          filterStatus={filterStatus}
-          onFilterChange={setFilterStatus}
-          onRefresh={loadRuns}
-          onSelectRun={handleSelectRun}
-          onSelectRepairRun={handleSelectRepairRun}
-        />
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 12 }}>
+        <button
+          style={modeBtnStyle(false)}
+          onClick={() => { setRunMode('repair'); setShowNewRunModal(true); }}
+        >
+          + Repair Run
+        </button>
+        <button
+          style={modeBtnStyle(true)}
+          onClick={() => { setRunMode('fresh'); setShowNewRunModal(true); }}
+        >
+          + New Run
+        </button>
       </div>
+
+      <RunsTable
+        runs={runs}
+        repairRuns={repairRuns}
+        loading={listLoading}
+        filterStatus={filterStatus}
+        onFilterChange={setFilterStatus}
+        onRefresh={loadRuns}
+        onSelectRun={handleSelectRun}
+        onSelectRepairRun={handleSelectRepairRun}
+      />
 
       {activePanel?.type === 'run' && (
         <RunDetailPanel
@@ -165,6 +170,21 @@ export default function ProductionRunsPage() {
           session={session}
         />
       )}
+
+      <Modal
+        open={showNewRunModal}
+        onClose={() => setShowNewRunModal(false)}
+        size="lg"
+        title={runMode === 'fresh' ? 'New Production Run' : 'New Repair Run'}
+      >
+        <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
+          <button style={modeBtnStyle(runMode === 'fresh')} onClick={() => setRunMode('fresh')}>Fresh</button>
+          <button style={modeBtnStyle(runMode === 'repair')} onClick={() => setRunMode('repair')}>Repair</button>
+        </div>
+        {runMode === 'fresh'
+          ? <FreshRunForm session={session} onSuccess={() => { loadRuns(); setShowNewRunModal(false); }} />
+          : <RepairRunForm session={session} onSuccess={() => { loadRuns(); setShowNewRunModal(false); }} />}
+      </Modal>
     </div>
   );
 }

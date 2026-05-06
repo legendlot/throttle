@@ -1,10 +1,12 @@
 'use client';
-import { createContext, useContext, useState } from 'react';
+import { createContext, useContext, useMemo, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { RequireAuth, useAuth } from '@throttle/auth';
-import { Sidebar, Spinner } from '@throttle/ui';
+import { Sidebar, Spinner, Topbar, QuickCreate } from '@throttle/ui';
 import { useNavGroups } from '../../lib/nav.js';
 import { GarageIcon } from '../../components/GarageIcon.js';
+import { useGarageAlerts } from '../../hooks/useGarageAlerts.js';
+import { Cog, ClipboardList, Workflow, Inbox } from 'lucide-react';
 
 const RefreshContext = createContext({ refreshing: false, setRefreshing: () => {} });
 
@@ -32,11 +34,58 @@ export default function AuthLayout({ children }) {
 }
 
 function AuthLayoutInner({ children }) {
-  const { user, role, signOut, perms, loading } = useAuth();
+  const { user, session, role, signOut, perms, loading } = useAuth();
   const pathname  = usePathname();
   const router    = useRouter();
-  const navGroups = useNavGroups(perms || {});
+  const rawNavGroups = useNavGroups(perms || {});
+  const { alertCount } = useGarageAlerts(session);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  function NavBadge({ count, color }) {
+    if (!count || count < 1) return null;
+    return (
+      <span style={{
+        display: 'inline-block',
+        background: color === 'red' ? '#de2a2a' : '#f97316',
+        color: '#fff',
+        fontSize: 9, fontWeight: 700, padding: '1px 5px',
+        borderRadius: 8, marginLeft: 5,
+        fontFamily: 'var(--mono)', letterSpacing: '.04em',
+      }}>
+        {count > 99 ? '99+' : count}
+      </span>
+    );
+  }
+
+  const navGroups = useMemo(() => {
+    return rawNavGroups.map(group => ({
+      ...group,
+      items: (group.items || []).map(item => {
+        if (item.id === 'alerts' && item.badgeColor) {
+          return { ...item, badge: <NavBadge count={alertCount} color={item.badgeColor} /> };
+        }
+        return item;
+      }),
+    }));
+  }, [rawNavGroups, alertCount]);
+
+  const quickCreateGroups = [
+    {
+      label: 'Production',
+      actions: [
+        { label: 'New Production Run', icon: Cog,           onClick: () => router.push('/production-runs?new=fresh') },
+        { label: 'New Repair Run',     icon: Cog,           onClick: () => router.push('/production-runs?new=repair') },
+        { label: 'Ad Hoc Issue',       icon: ClipboardList, onClick: () => router.push('/work-orders') },
+        { label: 'Line Flush',         icon: Workflow,      onClick: () => router.push('/line-flush') },
+      ],
+    },
+    {
+      label: 'Inventory',
+      actions: [
+        { label: 'New GRN', icon: Inbox, onClick: () => router.push('/grn') },
+      ],
+    },
+  ];
 
   if (loading && !user) return <Spinner />;
 
@@ -59,9 +108,17 @@ function AuthLayoutInner({ children }) {
         appShortLabel="G"
         appIcon={<GarageIcon size={20} strokeWidth={2.5} />}
       />
-      <main style={{ flex: 1, overflowY: 'auto', padding: '16px 24px' }}>
-        {children}
-      </main>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <Topbar
+          navGroups={navGroups}
+          pathname={pathname}
+          onTabSelect={(item) => router.push(item.route)}
+        />
+        <main style={{ flex: 1, overflowY: 'auto', padding: '16px 24px' }}>
+          {children}
+        </main>
+      </div>
+      <QuickCreate groups={quickCreateGroups} />
     </div>
   );
 }
