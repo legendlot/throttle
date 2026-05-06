@@ -4,6 +4,9 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { GarageIcon } from '../../components/GarageIcon.js';
 
+const COND = "'Tomorrow', system-ui, -apple-system, 'Helvetica Neue', sans-serif";
+const MONO = "'JetBrains Mono', ui-monospace, Menlo, monospace";
+
 export default function LoginPage() {
   const { session, loading, signInWithGoogle } = useAuth();
   const router = useRouter();
@@ -19,7 +22,7 @@ export default function LoginPage() {
       alignItems: 'center',
       justifyContent: 'center',
       background: '#0e0e0e',
-      fontFamily: 'var(--mono)',
+      fontFamily: MONO,
     }}>
       <div style={{
         display: 'flex',
@@ -42,7 +45,7 @@ export default function LoginPage() {
 
         {/* System title */}
         <div style={{
-          fontFamily: 'var(--cond)',
+          fontFamily: COND,
           fontWeight: 900,
           fontSize: 36,
           letterSpacing: '0.04em',
@@ -56,11 +59,11 @@ export default function LoginPage() {
 
         {/* Sub-title */}
         <div style={{
-          fontFamily: 'var(--mono)',
+          fontFamily: MONO,
           fontSize: 10,
           letterSpacing: '0.3em',
           textTransform: 'uppercase',
-          color: '#444',
+          color: '#666',
           marginBottom: 36,
         }}>
           Inventory · Store
@@ -69,17 +72,17 @@ export default function LoginPage() {
         {/* Divider */}
         <div style={{ width: '100%', height: 1, background: '#1e1e1e', marginBottom: 28 }} />
 
-        {/* Sign-in button */}
+        {/* Sign-in button — explicit hex values */}
         <button
           onClick={signInWithGoogle}
           style={{
             width: '100%',
-            background: 'var(--yellow)',
+            background: '#F2CD1A',
             color: '#080808',
             border: 'none',
             borderRadius: 6,
             padding: '14px',
-            fontFamily: 'var(--cond)',
+            fontFamily: COND,
             fontWeight: 700,
             fontSize: 12,
             letterSpacing: '0.2em',
@@ -87,10 +90,10 @@ export default function LoginPage() {
             cursor: 'pointer',
             transition: 'opacity .15s, transform .1s',
           }}
-          onMouseEnter={(e) => e.currentTarget.style.opacity = '0.9'}
-          onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}
-          onMouseDown={(e) => e.currentTarget.style.transform = 'scale(.99)'}
-          onMouseUp={(e) => e.currentTarget.style.transform = 'scale(1)'}
+          onMouseEnter={(e) => { e.currentTarget.style.opacity = '0.9'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.opacity = '1'; }}
+          onMouseDown={(e) => { e.currentTarget.style.transform = 'scale(0.99)'; }}
+          onMouseUp={(e) => { e.currentTarget.style.transform = 'scale(1)'; }}
         >
           Sign in with Google
         </button>
@@ -98,9 +101,9 @@ export default function LoginPage() {
         {/* Footer */}
         <div style={{
           marginTop: 48,
-          fontFamily: 'var(--mono)',
+          fontFamily: MONO,
           fontSize: 9,
-          color: '#2a2a2a',
+          color: '#3a3a3a',
           letterSpacing: '0.15em',
           textTransform: 'uppercase',
         }}>
