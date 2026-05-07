@@ -816,9 +816,13 @@ export default function DispatchShipmentsPage() {
           )}
         </div>
 
-        {/* Detail Panel */}
+        {/* Detail Panel — modal overlay */}
         {detailShipment && (
-          <div style={{ marginTop: 18, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: 16 }}>
+          <div
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+            onClick={(e) => { if (e.target === e.currentTarget) setDetailShipment(null); }}
+          >
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: 16, width: 800, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
               <span style={{ fontFamily: 'var(--mono)', color: 'var(--yellow)', fontSize: 14, fontWeight: 700 }}>{detailShipment.shipment_no}</span>
               <StatusBadge status={detailShipment.status} />
@@ -953,6 +957,7 @@ export default function DispatchShipmentsPage() {
                 })
               )}
             </div>
+          </div>
           </div>
         )}
       </div>
