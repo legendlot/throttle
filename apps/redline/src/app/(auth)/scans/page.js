@@ -209,6 +209,7 @@ export default function ScansPage() {
     let rows = baseRows || [];
     // In UPC mode, allow toggle to filter voided client-side; in normal mode the hook already excludes
     if (upcMode && !showVoided) rows = rows.filter(r => !r.voided);
+    if (upcMode && activityFilter) rows = rows.filter(r => r.activity === activityFilter);
     if (!upcMode && trimmed.length >= 1 && trimmed.length <= 3) {
       rows = rows.filter(r => (r.upc || '').toUpperCase().includes(trimmed));
     }

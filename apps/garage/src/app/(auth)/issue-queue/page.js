@@ -124,7 +124,13 @@ export default function IssueQueuePage() {
           badge:    'PROD RUN',
           badgeTone: 'blue',
           product:  run.product,
-          details:  (run.variants || []).map((v) => `${v.variant || 'Common'} ×${v.qty}`).join(', '),
+          details: (run.variants || []).map((v) => {
+            const e    = v.qty_ecomm || 0;
+            const r    = v.qty_retail || 0;
+            const name = v.variant || 'Common';
+            if (e > 0 || r > 0) return `${name} E:${e} R:${r}`;
+            return `${name} ×${v.qty}`;
+          }).join(', '),
           units:    run.total_units || 0,
           run_date: run.run_date,
           submitted: run.released_at,
@@ -750,6 +756,11 @@ function DetailBody({ item, materialCache }) {
               <span style={{ color: 'var(--t3)', margin: '0 4px' }}>·</span>
               <span>{(wo.variant || 'Common')}{wo.colour ? ' ' + wo.colour : ''}</span>
               <span style={{ color: '#7b93ff', marginLeft: 6 }}>{wo.qty} units</span>
+              {(wo.qty_ecomm > 0 || wo.qty_retail > 0) && (
+                <span style={{ color: 'var(--t3)', fontSize: 10, marginLeft: 5, fontFamily: 'var(--mono)' }}>
+                  E:{wo.qty_ecomm || 0} R:{wo.qty_retail || 0}
+                </span>
+              )}
             </div>
           ))}
           <div style={{ padding: '4px 10px', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, fontSize: 11 }}>
@@ -962,7 +973,14 @@ function CategoryGroup({ group, run }) {
                 <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{p.part_code}</td>
                 <td style={tableTdStyle}>{p.part_name || '—'}</td>
                 <td style={tableTdStyle}>{run?.product || '—'}</td>
-                <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{planned}</td>
+                <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>
+                  {planned}
+                  {p.is_packaging_split && (p.total_ecomm_qty > 0 || p.total_retail_qty > 0) && (
+                    <div style={{ fontSize: 9, color: 'var(--t3)', marginTop: 2 }}>
+                      E:{Math.round(p.total_ecomm_qty || 0)} R:{Math.round(p.total_retail_qty || 0)}
+                    </div>
+                  )}
+                </td>
                 <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: short ? '#ff7070' : '#4ade80' }}>{p.available || 0}</td>
                 <td style={tableTdStyle}>
                   <input
