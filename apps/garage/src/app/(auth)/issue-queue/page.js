@@ -88,6 +88,8 @@ export default function IssueQueuePage() {
   const [loading, setLoading] = useState(true);
   const [materialCache, setMaterialCache] = useState({});
   const [rejectedRefs, setRejectedRefs] = useState(() => new Set());
+  const [issuedState, setIssuedState] = useState(null);
+  // { ref, issueNo, product } — set on successful issue, cleared on close
 
   // Refs to read uncontrolled inputs at submit time
   const detailFormRef = useRef(null);
@@ -292,13 +294,13 @@ export default function IssueQueuePage() {
     const lineInputs = root.querySelectorAll('input.iss-actual-qty');
     const lines = [];
     lineInputs.forEach((inp) => {
-      const qty = parseFloat(inp.value);
+      const qty = Math.round(parseFloat(inp.value) * 100) / 100;
       if (!qty || qty <= 0) return;
       lines.push({
         part_code:     inp.dataset.partCode,
         part_name:     inp.dataset.partName || '',
-        actual_issued: qty,
-        actual_qty:    qty, // postIssue uses actual_qty
+        actual_issued: Math.round(qty),
+        actual_qty:    Math.round(qty), // postIssue uses actual_qty
         bom_qty:       parseFloat(inp.dataset.bomQty) || 0,
       });
     });
@@ -344,10 +346,18 @@ export default function IssueQueuePage() {
         }, session);
       }
       const result = res.data || res;
-      showToast(`✅ Issued — ${result.issue_no}`, 'success');
-      closeItem();
-      loadQueue();
-      loadHistory();
+      const issueNo = result.issue_no || '—';
+      setIssuedState({
+        ref:     selectedItem.ref,
+        issueNo,
+        product: selectedItem.product || '',
+      });
+      setTimeout(() => {
+        setIssuedState(null);
+        closeItem();
+        loadQueue();
+        loadHistory();
+      }, 2500);
     } catch (e) {
       showToast(e.message || 'Issue submission failed', 'error');
     } finally {
@@ -561,6 +571,33 @@ export default function IssueQueuePage() {
           )}
         </div>
       </div>
+
+      {/* ISSUED SUCCESS OVERLAY */}
+      {issuedState && (
+        <div style={{
+          ...panelStyle,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '32px 24px',
+          textAlign: 'center',
+          gap: 10,
+        }}>
+          <div style={{ fontSize: 13, color: 'var(--green)', fontFamily: 'var(--cond)', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+            ✓ Issued
+          </div>
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 28, fontWeight: 700, color: 'var(--yellow)', letterSpacing: '0.04em' }}>
+            {issuedState.issueNo}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--t2)' }}>
+            {issuedState.ref} — {issuedState.product}
+          </div>
+          <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 4, fontFamily: 'var(--mono)' }}>
+            Closing in 2.5 seconds…
+          </div>
+        </div>
+      )}
 
       {/* DETAIL PANEL */}
       {selectedItem && (
