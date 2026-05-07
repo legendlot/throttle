@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { ConfirmModal, EmptyState, useToast } from '@throttle/ui';
+import { ConfirmModal, EmptyState, Modal, useToast } from '@throttle/ui';
 import { WorkOrderForm } from '../../../components/work-orders/WorkOrderForm.js';
 import { WorkOrdersTable } from '../../../components/work-orders/WorkOrdersTable.js';
 
@@ -14,6 +14,7 @@ export default function WorkOrdersPage() {
   const [error, setError] = useState(null);
   const [cancelTarget, setCancelTarget] = useState(null);
   const [cancelling, setCancelling] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
 
   async function loadOrders() {
     if (!session) return;
@@ -63,20 +64,37 @@ export default function WorkOrdersPage() {
         </p>
       </div>
 
+      <div style={{ marginBottom: 16 }}>
+        <button
+          style={{ background: 'var(--yellow)', color: '#000', border: 'none', borderRadius: 4, padding: '7px 16px', fontFamily: 'var(--mono)', fontSize: 12, textTransform: 'uppercase', letterSpacing: 1, cursor: 'pointer', fontWeight: 700 }}
+          onClick={() => setShowCreate(true)}
+        >
+          + New Ad Hoc Request
+        </button>
+      </div>
+
       {error && (
         <div style={{ marginBottom: 16 }}>
           <EmptyState message={error} />
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1.05fr 0.95fr', gap: 16, alignItems: 'start' }}>
-        <WorkOrderForm session={session} onSuccess={loadOrders} />
-        <WorkOrdersTable
-          orders={orders}
-          loading={loading}
-          onCancel={(wo) => setCancelTarget(wo)}
+      <WorkOrdersTable
+        orders={orders}
+        loading={loading}
+        onCancel={(wo) => setCancelTarget(wo)}
+      />
+
+      <Modal
+        open={showCreate}
+        onClose={() => setShowCreate(false)}
+        size="lg"
+      >
+        <WorkOrderForm
+          session={session}
+          onSuccess={() => { loadOrders(); setShowCreate(false); }}
         />
-      </div>
+      </Modal>
 
       <ConfirmModal
         open={!!cancelTarget}

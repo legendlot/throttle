@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { EmptyState, Spinner, useToast } from '@throttle/ui';
+import { EmptyState, Modal, Spinner, useToast } from '@throttle/ui';
 import { useProducts } from '../../../hooks/useProducts.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -652,6 +652,7 @@ function RecentGrnsPanel({ grns, loading, onOpenDetail }) {
 // ── GRN Page ──────────────────────────────────────────────────────────────────
 export default function GrnPage() {
   const { session, perms } = useAuth();
+  const [showCreate, setShowCreate] = useState(false);
   const [mode, setMode]           = useState('bulk');
   const [grns, setGrns]           = useState([]);
   const [grnsLoading, setGrnsLoading] = useState(true);
@@ -680,12 +681,6 @@ export default function GrnPage() {
     );
   }
 
-  const modes = [
-    { id: 'bulk',  label: 'Bulk (BOM)' },
-    { id: 'fbu',   label: 'FBU Units' },
-    { id: 'parts', label: 'Parts' },
-  ];
-
   return (
     <div style={{ padding: '16px 24px', color: 'var(--t1)' }}>
       {/* Page header */}
@@ -698,36 +693,50 @@ export default function GrnPage() {
         </p>
       </div>
 
-      {/* Mode toggle */}
-      <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
-        {modes.map(m => (
-          <button
-            key={m.id}
-            style={mode === m.id ? btnPri : btnSec}
-            onClick={() => setMode(m.id)}
-          >
-            {m.label}
-          </button>
-        ))}
+      <div style={{ marginBottom: 16 }}>
+        <button
+          style={{ background: 'var(--yellow)', color: '#000', border: 'none', borderRadius: 4, padding: '7px 16px', fontFamily: 'var(--mono)', fontSize: 12, textTransform: 'uppercase', letterSpacing: 1, cursor: 'pointer', fontWeight: 700 }}
+          onClick={() => setShowCreate(true)}
+        >
+          + New GRN
+        </button>
       </div>
 
-      {/* Two-column layout: form left, history right */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 0.9fr', gap: 16, alignItems: 'start' }}>
+      {/* Full-width history table */}
+      <RecentGrnsPanel grns={grns} loading={grnsLoading} onOpenDetail={no => setDetailGrnNo(no)} />
+
+      {/* Create Modal */}
+      <Modal
+        open={showCreate}
+        onClose={() => setShowCreate(false)}
+        size="lg"
+        title="New GRN"
+      >
+        {/* Mode toggle */}
+        <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
+          {[{ id: 'bulk', label: 'Bulk (BOM)' }, { id: 'fbu', label: 'FBU Units' }, { id: 'parts', label: 'Parts' }].map(m => (
+            <button
+              key={m.id}
+              style={mode === m.id ? btnPri : btnSec}
+              onClick={() => setMode(m.id)}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+
         {/* Active mode panel */}
         <div style={panel}>
           <div style={panelHdr}>
             <span>{mode === 'bulk' ? 'Bulk GRN — BOM Driven' : mode === 'fbu' ? 'FBU GRN — Units Only' : 'Parts GRN — Manual Entry'}</span>
           </div>
           <div style={{ padding: 16 }}>
-            {mode === 'bulk'  && <BulkGrnPanel  session={session} onSuccess={loadGrns} />}
-            {mode === 'fbu'   && <FbuGrnPanel   session={session} onSuccess={loadGrns} />}
-            {mode === 'parts' && <PartsGrnPanel session={session} onSuccess={loadGrns} />}
+            {mode === 'bulk'  && <BulkGrnPanel  session={session} onSuccess={() => { loadGrns(); setShowCreate(false); }} />}
+            {mode === 'fbu'   && <FbuGrnPanel   session={session} onSuccess={() => { loadGrns(); setShowCreate(false); }} />}
+            {mode === 'parts' && <PartsGrnPanel session={session} onSuccess={() => { loadGrns(); setShowCreate(false); }} />}
           </div>
         </div>
-
-        {/* GRN History */}
-        <RecentGrnsPanel grns={grns} loading={grnsLoading} onOpenDetail={no => setDetailGrnNo(no)} />
-      </div>
+      </Modal>
 
       {/* GRN Detail Modal */}
       {detailGrnNo && (

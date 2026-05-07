@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, useToast } from '@throttle/ui';
+import { Modal, Spinner, useToast } from '@throttle/ui';
 import { todayStr } from '@throttle/domain';
 import { FlushVerifyPanel } from '../../../components/flush/FlushVerifyPanel.js';
 
@@ -63,7 +63,8 @@ export default function LineFlushPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
   const [activeTab, setActiveTab] = useState('flushes');
-  const [view, setView] = useState('list'); // list | new | detail
+  const [view, setView] = useState('list'); // list | detail
+  const [showNewFlush, setShowNewFlush] = useState(false);
 
   // List state
   const [flushRows, setFlushRows] = useState([]);
@@ -187,14 +188,14 @@ export default function LineFlushPage() {
   }, [session, showToast]);
 
   useEffect(() => {
-    if (view === 'new' && flushType === 'run') {
+    if (showNewFlush && flushType === 'run') {
       loadRunsForForm();
       ensureMaterialCache();
     }
-    if (view === 'new' && flushType === 'standalone') {
+    if (showNewFlush && flushType === 'standalone') {
       ensureMaterialCache();
     }
-  }, [view, flushType, loadRunsForForm, ensureMaterialCache]);
+  }, [showNewFlush, flushType, loadRunsForForm, ensureMaterialCache]);
 
   async function handleRunSelect(runNo) {
     setSelectedRun(runNo);
@@ -314,7 +315,7 @@ export default function LineFlushPage() {
       const result = res.data || res;
       showToast(`${result.flush_id} submitted — ${result.lines} parts`, 'success');
       resetNewForm();
-      setView('list');
+      setShowNewFlush(false);
       loadFlushes();
     } catch (e) {
       showToast(e.message || 'Flush submission failed', 'error');
@@ -392,7 +393,7 @@ export default function LineFlushPage() {
                 </select>
                 <button style={btnSecondary} onClick={loadFlushes} disabled={listLoading}>↻</button>
                 {canCreate && (
-                  <button style={btnPrimary} onClick={() => { resetNewForm(); setView('new'); }}>+ NEW FLUSH</button>
+                  <button style={btnPrimary} onClick={() => { resetNewForm(); setShowNewFlush(true); }}>+ NEW FLUSH</button>
                 )}
               </div>
             </div>
@@ -452,7 +453,23 @@ export default function LineFlushPage() {
         </>
       )}
 
-      {activeTab === 'flushes' && view === 'new' && (
+      {activeTab === 'flushes' && view === 'detail' && (
+        <FlushDetailView
+          loading={detailLoading}
+          data={currentFlush}
+          canVerify={canVerify}
+          verifyOpen={verifyOpen}
+          openVerify={() => setVerifyOpen(true)}
+          onVerified={handleVerified}
+          onClose={() => { setView('list'); setCurrentFlush(null); setVerifyOpen(false); }}
+        />
+      )}
+
+      <Modal
+        open={showNewFlush}
+        onClose={() => { resetNewForm(); setShowNewFlush(false); }}
+        size="lg"
+      >
         <NewFlushForm
           flushType={flushType} setFlushType={setFlushType}
           flushDate={flushDate} setFlushDate={setFlushDate}
@@ -474,21 +491,9 @@ export default function LineFlushPage() {
           updateSplit={updateSplit}
           submitFlush={submitFlush}
           submitting={submitting}
-          onCancel={() => { resetNewForm(); setView('list'); }}
+          onCancel={() => { resetNewForm(); setShowNewFlush(false); }}
         />
-      )}
-
-      {activeTab === 'flushes' && view === 'detail' && (
-        <FlushDetailView
-          loading={detailLoading}
-          data={currentFlush}
-          canVerify={canVerify}
-          verifyOpen={verifyOpen}
-          openVerify={() => setVerifyOpen(true)}
-          onVerified={handleVerified}
-          onClose={() => { setView('list'); setCurrentFlush(null); setVerifyOpen(false); }}
-        />
-      )}
+      </Modal>
 
       {activeTab === 'quarantine' && (
         <div style={panelStyle}>
