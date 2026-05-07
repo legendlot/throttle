@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
-import { PRODUCTS } from '../../../../hooks/useProducts.js';
+import { useProducts } from '../../../../hooks/useProducts.js';
 
 const PO_SOURCES = ['China', 'India', 'USA', 'Germany', 'Taiwan', 'Vietnam', 'Bangladesh', 'Japan', 'South Korea', 'UK', 'Italy', 'Turkey', 'Other'];
 const PO_CURRENCIES = ['INR', 'USD', 'RMB'];
@@ -63,6 +63,7 @@ const tabBtn = (active) => ({
 export default function VendorsPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
+  const { PRODUCTS, loading: productsLoading } = useProducts();
 
   const [view, setView] = useState('list');
   const [vendors, setVendors] = useState([]);
@@ -416,8 +417,8 @@ export default function VendorsPage() {
                 <div>
                   <span style={labelStyle}>Reference</span>
                   {vsiType === 'product' ? (
-                    <select value={vsiProduct} onChange={(e) => setVsiProduct(e.target.value)} style={{ ...selectStyle, width: '100%' }}>
-                      <option value="">Select…</option>
+                    <select value={vsiProduct} onChange={(e) => setVsiProduct(e.target.value)} style={{ ...selectStyle, width: '100%' }} disabled={productsLoading}>
+                      <option value="">{productsLoading ? 'Loading…' : 'Select…'}</option>
                       {PRODUCTS.map((p) => <option key={p} value={p}>{p}</option>)}
                     </select>
                   ) : vsiType === 'part' ? (

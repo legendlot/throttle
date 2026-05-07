@@ -5,7 +5,7 @@ import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { todayStr } from '@throttle/domain';
-import { PRODUCTS, PRODUCT_VARIANTS, PRODUCT_SUBVARIANTS } from '../../../../../hooks/useProducts.js';
+import { useProducts } from '../../../../../hooks/useProducts.js';
 
 const PO_SOURCES = ['China', 'India', 'USA', 'Germany', 'Taiwan', 'Vietnam', 'Bangladesh', 'Japan', 'South Korea', 'UK', 'Italy', 'Turkey', 'Other'];
 const PO_TYPES   = ['Product', 'Packaging', 'Para', 'Consumable', 'Component', 'Tools', 'Machines'];
@@ -124,6 +124,7 @@ function NewPOPage() {
   const searchParams = useSearchParams();
   const { session, perms } = useAuth();
   const { showToast } = useToast();
+  const { PRODUCTS, PRODUCT_VARIANTS, loading: productsLoading } = useProducts();
 
   const [step, setStep] = useState('category');
   const [selectedCategory, setSelectedCategory] = useState(null);
@@ -335,7 +336,7 @@ function NewPOPage() {
   }
 
   // Units mode (FBU)
-  const fbuVariants = useMemo(() => fbuProduct ? (PRODUCT_VARIANTS[fbuProduct] || []) : [], [fbuProduct]);
+  const fbuVariants = useMemo(() => fbuProduct ? (PRODUCT_VARIANTS[fbuProduct] || []) : [], [fbuProduct, PRODUCT_VARIANTS]);
   function addUnitRow() {
     setUnitsRows((prev) => [...prev, { variant: '', color: '', qty: '' }]);
   }
@@ -576,8 +577,8 @@ function NewPOPage() {
             <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: 10, alignItems: 'end' }}>
               <div>
                 <span style={labelStyle}>Product *</span>
-                <select value={fbuProduct} onChange={(e) => { setFbuProduct(e.target.value); setUnitsRows([]); }} style={{ ...selectStyle, width: '100%' }}>
-                  <option value="">Select…</option>
+                <select value={fbuProduct} onChange={(e) => { setFbuProduct(e.target.value); setUnitsRows([]); }} style={{ ...selectStyle, width: '100%' }} disabled={productsLoading}>
+                  <option value="">{productsLoading ? 'Loading…' : 'Select…'}</option>
                   {PRODUCTS.map((p) => <option key={p} value={p}>{p}</option>)}
                 </select>
               </div>
@@ -594,8 +595,8 @@ function NewPOPage() {
             <div style={{ display: 'flex', gap: 6, alignItems: 'end', marginBottom: 12 }}>
               <div style={{ flex: 1 }}>
                 <span style={labelStyle}>Add Product</span>
-                <select value={ckdProductSel} onChange={(e) => setCkdProductSel(e.target.value)} style={{ ...selectStyle, width: '100%' }}>
-                  <option value="">Select…</option>
+                <select value={ckdProductSel} onChange={(e) => setCkdProductSel(e.target.value)} style={{ ...selectStyle, width: '100%' }} disabled={productsLoading}>
+                  <option value="">{productsLoading ? 'Loading…' : 'Select…'}</option>
                   {PRODUCTS.filter((p) => !ckdQueue.find((q) => q.product === p)).map((p) => <option key={p} value={p}>{p}</option>)}
                 </select>
               </div>
@@ -844,6 +845,7 @@ function NewPOPage() {
 
 function BomMode(props) {
   const { bomProduct, setBomProduct, bomVariant, setBomVariant, bomQty, setBomQty, bomGroup, setBomGroup, bomChecklist, setBomChecklist, loadBomChecklist, addBomSelected, loading } = props;
+  const { PRODUCTS, PRODUCT_VARIANTS } = useProducts();
   const variants = bomProduct ? (PRODUCT_VARIANTS[bomProduct] || []) : [];
 
   function toggleAll(checked) {
@@ -992,31 +994,23 @@ function UnitsMode({ fbuProduct, fbuVariants, unitsRows, addUnitRow, updateUnitR
       </div>
       {unitsRows.length === 0 ? (
         <div style={{ color: 'var(--t3)', fontSize: 11, fontStyle: 'italic', textAlign: 'center', padding: 12 }}>
-          No rows yet — add a variant + colour + qty.
+          No rows yet — add a variant + qty.
         </div>
       ) : (
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr>
             <th style={tableThStyle}>Variant</th>
-            <th style={tableThStyle}>Colour</th>
             <th style={tableThStyle}>Qty</th>
             <th style={{ ...tableThStyle, width: 30 }}></th>
           </tr></thead>
           <tbody>
             {unitsRows.map((r, i) => {
-              const colors = r.variant ? ((PRODUCT_SUBVARIANTS[fbuProduct] || {})[r.variant] || []) : [];
               return (
                 <tr key={i}>
                   <td style={tableTdStyle}>
                     <select value={r.variant} onChange={(e) => updateUnitRow(i, 'variant', e.target.value)} style={{ ...selectStyle, width: 160 }}>
                       <option value="">Select…</option>
                       {fbuVariants.map((v) => <option key={v} value={v}>{v}</option>)}
-                    </select>
-                  </td>
-                  <td style={tableTdStyle}>
-                    <select value={r.color} onChange={(e) => updateUnitRow(i, 'color', e.target.value)} style={{ ...selectStyle, width: 140 }} disabled={!colors.length}>
-                      <option value="">{colors.length ? 'Select…' : '—'}</option>
-                      {colors.map((c) => <option key={c} value={c}>{c}</option>)}
                     </select>
                   </td>
                   <td style={tableTdStyle}>

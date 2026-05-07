@@ -4,7 +4,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
-import { PRODUCTS } from '../../../../hooks/useProducts.js';
+import { useProducts } from '../../../../hooks/useProducts.js';
 
 const RETURN_CATEGORIES = [
   { value: 'UDR', label: 'UDR — Undamaged Return',    tone: 'green'  },
@@ -91,6 +91,7 @@ function ProcessPage() {
   const searchParams = useSearchParams();
   const { session, perms } = useAuth();
   const { showToast } = useToast();
+  const { PRODUCTS, loading: productsLoading } = useProducts();
 
   const shipmentId = searchParams?.get('id') || null;
 
@@ -403,8 +404,8 @@ function ProcessPage() {
               </div>
               <div>
                 <span style={labelStyle}>Product *</span>
-                <select value={product} onChange={(e) => setProduct(e.target.value)} style={{ ...selectStyle, width: '100%' }} disabled={submittingUnit}>
-                  <option value="">Select…</option>
+                <select value={product} onChange={(e) => setProduct(e.target.value)} style={{ ...selectStyle, width: '100%' }} disabled={submittingUnit || productsLoading}>
+                  <option value="">{productsLoading ? 'Loading…' : 'Select…'}</option>
                   {PRODUCTS.map((p) => <option key={p} value={p}>{p}</option>)}
                 </select>
               </div>

@@ -1,57 +1,38 @@
 // apps/garage/src/hooks/useProducts.js
-// TD-020 resolution: single source of truth for LOT product/variant constants.
-// Used by GRN, Receiving, and Dashboard pages.
-
-// NOTE TD-021: PRODUCT_VARIANTS and PRODUCT_SUBVARIANTS are hardcoded constants.
-// Long-term these should be driven from bom_current (DISTINCT product, variant_model).
-// Do not add new products or variants here — log a tech-debt ticket instead.
-export const PRODUCT_VARIANTS = {
-  'Flare':    ['Track', 'Race', 'Underground', 'Street', 'Burnout'],
-  'Flare LE': ['Race'],
-  'Ghost':    ['Burnout', 'Street', 'Underground'],
-  'Knox':     ['Adventure', 'Explorer'],
-  'Shadow':   ['Asphalt', 'Tarmac'],
-  'Nitro':    ['Race Grey', 'Race Blue', 'Tarmac Black', 'Tarmac Green', 'Tarmac Grey'],
-  'Dash':     ['Street White', 'Green', 'Black', 'Blue', 'Silver', 'Urban Red', 'Urban White', 'Sports Yellow', 'Sports Blue'],
-  'Fang':     ['Common'],
-  'Atlas':    ['Common'],
-};
-
-export const PRODUCT_SUBVARIANTS = {
-  'Flare': {
-    'Track':       ['Pink', 'White'],
-    'Race':        ['Grey', 'Black'],
-    'Underground': ['Silver', 'Blue'],
-    'Street':      ['White', 'Red'],
-    'Burnout':     ['Grey', 'Green', 'Red'],
-  },
-  'Flare LE': {
-    'Race': ['Black'],
-  },
-  'Ghost': {
-    'Burnout':     ['Red', 'Yellow'],
-    'Street':      ['Blue', 'White'],
-    'Underground': ['Black', 'White'],
-  },
-  'Knox': {
-    'Adventure': ['Black', 'Green'],
-    'Explorer':  ['Black', 'Blue'],
-  },
-  'Shadow': {
-    'Tarmac':  ['Black', 'Red'],
-    'Asphalt': ['Black', 'Silver'],
-  },
-  'Nitro':    {},
-  'Dash':     {},
-  'Fang':     {},
-  'Atlas':    {},
-};
-
-export const PRODUCTS = Object.keys(PRODUCT_VARIANTS);
-
-// Products that ship with a separate remote unit (FBU receive creates car + remote lines)
-export const HAS_REMOTE = new Set(['Dash', 'Nitro', 'Flare LE']);
+// TD-021 resolution: product catalogue driven from bom_current + product_master.
+// Replaces hardcoded PRODUCT_VARIANTS / PRODUCT_SUBVARIANTS constants.
+'use client';
+import { useState, useEffect } from 'react';
+import { useAuth } from '@throttle/auth';
+import { garageFetch } from '@throttle/db';
 
 export function useProducts() {
-  return { PRODUCTS, PRODUCT_VARIANTS, PRODUCT_SUBVARIANTS, HAS_REMOTE };
+  const { session } = useAuth();
+  const [data, setData]       = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    garageFetch('getProductCatalogue', {}, session)
+      .then((d) => {
+        if (cancelled) return;
+        setData(d);
+        setLoading(false);
+      })
+      .catch(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [session]);
+
+  const PRODUCTS         = data?.products || [];
+  const PRODUCT_VARIANTS = data?.variants  || {};
+  const HAS_REMOTE       = new Set(
+    Object.entries(data?.has_remote || {})
+      .filter(([, v]) => v)
+      .map(([k]) => k),
+  );
+
+  return { PRODUCTS, PRODUCT_VARIANTS, HAS_REMOTE, loading };
 }

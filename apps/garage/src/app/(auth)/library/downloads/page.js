@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
-import { PRODUCTS } from '../../../../hooks/useProducts.js';
+import { useProducts } from '../../../../hooks/useProducts.js';
 
 const panelStyle       = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, marginBottom: 16 };
 const panelHeaderStyle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid var(--border)', fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--t2)' };
@@ -46,6 +46,7 @@ function triggerCSVDownload(csv, filename) {
 export default function LibraryDownloadsPage() {
   const { session } = useAuth();
   const { showToast } = useToast();
+  const { PRODUCTS, loading: productsLoading } = useProducts();
 
   const [selectedProduct, setSelectedProduct] = useState('');
   const [bomCache, setBomCache] = useState({});
@@ -57,7 +58,7 @@ export default function LibraryDownloadsPage() {
 
   // Load all BOMs in parallel for full-extract stats
   useEffect(() => {
-    if (!session) return;
+    if (!session || productsLoading || !PRODUCTS.length) return;
     let cancelled = false;
     setFullLoading(true);
     (async () => {
@@ -91,7 +92,7 @@ export default function LibraryDownloadsPage() {
       }
     })();
     return () => { cancelled = true; };
-  }, [session]);
+  }, [session, productsLoading, PRODUCTS]);
 
   const previewStats = useMemo(() => {
     if (!selectedProduct) return null;
@@ -182,8 +183,9 @@ export default function LibraryDownloadsPage() {
                 value={selectedProduct}
                 onChange={(e) => setSelectedProduct(e.target.value)}
                 style={{ ...selectStyle, width: '100%' }}
+                disabled={productsLoading}
               >
-                <option value="">Select…</option>
+                <option value="">{productsLoading ? 'Loading…' : 'Select…'}</option>
                 {PRODUCTS.map((p) => <option key={p} value={p}>{p}</option>)}
               </select>
             </div>

@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
 import { Spinner } from '@throttle/ui';
-import { PRODUCTS } from '../../../../hooks/useProducts.js';
+import { useProducts } from '../../../../hooks/useProducts.js';
 
 const TONE_STYLES = {
   yellow: { bg: 'rgba(242,205,26,.12)', fg: '#f2cd1a', border: 'rgba(242,205,26,.2)' },
@@ -45,6 +45,7 @@ const btnSecondary     = { background: 'transparent', border: '1px solid var(--b
 
 export default function LibraryPartsPage() {
   const { session } = useAuth();
+  const { PRODUCTS, loading: productsLoading } = useProducts();
 
   const [partsDB, setPartsDB] = useState([]);
   const [loadStatus, setLoadStatus] = useState('Loading BOM data…');
@@ -55,7 +56,7 @@ export default function LibraryPartsPage() {
   const [filterCat, setFilterCat] = useState('');
 
   useEffect(() => {
-    if (!session) return;
+    if (!session || productsLoading || !PRODUCTS.length) return;
     let cancelled = false;
     setLoadStatus('Loading BOM data…');
     (async () => {
@@ -97,7 +98,7 @@ export default function LibraryPartsPage() {
       }
     })();
     return () => { cancelled = true; };
-  }, [session]);
+  }, [session, productsLoading, PRODUCTS]);
 
   const categories = useMemo(() => {
     const set = new Set();
@@ -150,8 +151,8 @@ export default function LibraryPartsPage() {
             </div>
             <div style={{ flex: '0 0 180px' }}>
               <span style={labelStyle}>Product</span>
-              <select value={filterProduct} onChange={(e) => setFilterProduct(e.target.value)} style={{ ...selectStyle, width: '100%' }}>
-                <option value="">All Products</option>
+              <select value={filterProduct} onChange={(e) => setFilterProduct(e.target.value)} style={{ ...selectStyle, width: '100%' }} disabled={productsLoading}>
+                <option value="">{productsLoading ? 'Loading…' : 'All Products'}</option>
                 {PRODUCTS.map((p) => <option key={p} value={p}>{p}</option>)}
               </select>
             </div>

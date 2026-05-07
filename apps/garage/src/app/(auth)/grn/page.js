@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { EmptyState, Spinner, useToast } from '@throttle/ui';
-import { PRODUCTS, PRODUCT_VARIANTS, PRODUCT_SUBVARIANTS } from '../../../hooks/useProducts.js';
+import { useProducts } from '../../../hooks/useProducts.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 function todayISO() {
@@ -45,36 +45,23 @@ function StatusBadge({ label: text, tone = 'gray' }) {
   );
 }
 
-// ── Variant / Sub-variant selects — shared across all three panels ─────────────
-function VariantSelects({ product, variant, setVariant, subvariant, setSubvariant }) {
-  const variants    = product ? (PRODUCT_VARIANTS[product] || []) : [];
-  const subvariants = (product && variant) ? ((PRODUCT_SUBVARIANTS[product] || {})[variant] || []) : [];
+// ── Variant select — shared across panels ─────────────────────────────────────
+function VariantSelects({ product, variant, setVariant }) {
+  const { PRODUCT_VARIANTS } = useProducts();
+  const variants = product ? (PRODUCT_VARIANTS[product] || []) : [];
 
   useEffect(() => { setVariant(''); }, [product]);          // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { setSubvariant(''); }, [variant]);       // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!product) return null;
+  if (variants.length === 0) return null;
   return (
-    <>
-      {variants.length > 0 && (
-        <div>
-          <span style={label}>Variant</span>
-          <select style={{ ...sel, width: '100%' }} value={variant} onChange={e => setVariant(e.target.value)}>
-            <option value="">— Any variant —</option>
-            {variants.map(v => <option key={v} value={v}>{v}</option>)}
-          </select>
-        </div>
-      )}
-      {subvariants.length > 0 && (
-        <div>
-          <span style={label}>Colour</span>
-          <select style={{ ...sel, width: '100%' }} value={subvariant} onChange={e => setSubvariant(e.target.value)}>
-            <option value="">— Any colour —</option>
-            {subvariants.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
-        </div>
-      )}
-    </>
+    <div>
+      <span style={label}>Variant</span>
+      <select style={{ ...sel, width: '100%' }} value={variant} onChange={e => setVariant(e.target.value)}>
+        <option value="">— Any variant —</option>
+        {variants.map(v => <option key={v} value={v}>{v}</option>)}
+      </select>
+    </div>
   );
 }
 
@@ -182,9 +169,9 @@ function GrnDetailModal({ grnNo, onClose, session }) {
 // ── Bulk GRN Panel — BOM-driven ────────────────────────────────────────────────
 function BulkGrnPanel({ session, onSuccess }) {
   const { showToast }               = useToast();
+  const { PRODUCTS, loading: productsLoading } = useProducts();
   const [product, setProduct]       = useState('');
   const [variant, setVariant]       = useState('');
-  const [subvariant, setSubvariant] = useState('');
   const [units, setUnits]           = useState('');
   const [supplier, setSupplier]     = useState('');
   const [grnDate, setGrnDate]       = useState(todayISO());
@@ -198,7 +185,7 @@ function BulkGrnPanel({ session, onSuccess }) {
     if (!product || qty <= 0) { setBomLines([]); return; }
     setBomLoading(true);
     try {
-      const data = await garageFetch('calcKit', { product, variant: variant || '', colour: subvariant || '', qty }, session);
+      const data = await garageFetch('calcKit', { product, variant: variant || '', colour: '', qty }, session);
       setBomLines((data.kit || []).map(r => ({ ...r, _received: r.total_qty || 0, _rejected: 0, _inspection: 'Pass' })));
     } catch (e) {
       showToast('Failed to load BOM: ' + e.message, 'error');
@@ -206,7 +193,7 @@ function BulkGrnPanel({ session, onSuccess }) {
     } finally {
       setBomLoading(false);
     }
-  }, [product, variant, subvariant, units, session]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [product, variant, units, session]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const t = setTimeout(loadBom, 350);
@@ -222,7 +209,7 @@ function BulkGrnPanel({ session, onSuccess }) {
   }
 
   function clearForm() {
-    setProduct(''); setVariant(''); setSubvariant('');
+    setProduct(''); setVariant('');
     setUnits(''); setSupplier(''); setPoRef('');
     setGrnDate(todayISO()); setBomLines([]);
   }
@@ -267,8 +254,8 @@ function BulkGrnPanel({ session, onSuccess }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
         <div>
           <span style={label}>Product *</span>
-          <select style={{ ...sel, width: '100%' }} value={product} onChange={e => { setProduct(e.target.value); setVariant(''); setSubvariant(''); }}>
-            <option value="">Select product…</option>
+          <select style={{ ...sel, width: '100%' }} value={product} onChange={e => { setProduct(e.target.value); setVariant(''); }} disabled={productsLoading}>
+            <option value="">{productsLoading ? 'Loading…' : 'Select product…'}</option>
             {PRODUCTS.map(p => <option key={p} value={p}>{p}</option>)}
           </select>
         </div>
@@ -278,7 +265,7 @@ function BulkGrnPanel({ session, onSuccess }) {
         </div>
       </div>
 
-      <VariantSelects product={product} variant={variant} setVariant={setVariant} subvariant={subvariant} setSubvariant={setSubvariant} />
+      <VariantSelects product={product} variant={variant} setVariant={setVariant} />
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 10, marginTop: 10 }}>
         <div>
@@ -385,9 +372,9 @@ function BulkGrnPanel({ session, onSuccess }) {
 // ── FBU GRN Panel — units only ─────────────────────────────────────────────────
 function FbuGrnPanel({ session, onSuccess }) {
   const { showToast }               = useToast();
+  const { PRODUCTS, loading: productsLoading } = useProducts();
   const [product, setProduct]       = useState('');
   const [variant, setVariant]       = useState('');
-  const [subvariant, setSubvariant] = useState('');
   const [units, setUnits]           = useState('');
   const [supplier, setSupplier]     = useState('');
   const [grnDate, setGrnDate]       = useState(todayISO());
@@ -395,7 +382,7 @@ function FbuGrnPanel({ session, onSuccess }) {
   const [submitting, setSubmitting] = useState(false);
 
   function clearForm() {
-    setProduct(''); setVariant(''); setSubvariant('');
+    setProduct(''); setVariant('');
     setUnits(''); setSupplier(''); setPoRef('');
     setGrnDate(todayISO());
   }
@@ -408,7 +395,7 @@ function FbuGrnPanel({ session, onSuccess }) {
     setSubmitting(true);
     try {
       const res = await workerFetch('postFbuGRN', {
-        data: { product, variant: variant || null, color: subvariant || null, qty_received: qty, grn_date: grnDate, supplier, po_ref: poRef }
+        data: { product, variant: variant || null, color: null, qty_received: qty, grn_date: grnDate, supplier, po_ref: poRef }
       }, session);
       showToast(`FBU GRN ${res.data.grn_no} created — ${qty} units`, 'success');
       clearForm();
@@ -428,8 +415,8 @@ function FbuGrnPanel({ session, onSuccess }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
         <div>
           <span style={label}>Product *</span>
-          <select style={{ ...sel, width: '100%' }} value={product} onChange={e => { setProduct(e.target.value); setVariant(''); setSubvariant(''); }}>
-            <option value="">Select product…</option>
+          <select style={{ ...sel, width: '100%' }} value={product} onChange={e => { setProduct(e.target.value); setVariant(''); }} disabled={productsLoading}>
+            <option value="">{productsLoading ? 'Loading…' : 'Select product…'}</option>
             {PRODUCTS.map(p => <option key={p} value={p}>{p}</option>)}
           </select>
         </div>
@@ -439,7 +426,7 @@ function FbuGrnPanel({ session, onSuccess }) {
         </div>
       </div>
 
-      <VariantSelects product={product} variant={variant} setVariant={setVariant} subvariant={subvariant} setSubvariant={setSubvariant} />
+      <VariantSelects product={product} variant={variant} setVariant={setVariant} />
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginTop: 10, marginBottom: 14 }}>
         <div>
@@ -469,6 +456,7 @@ function FbuGrnPanel({ session, onSuccess }) {
 // ── Parts GRN Panel — manual line entry ───────────────────────────────────────
 function PartsGrnPanel({ session, onSuccess }) {
   const { showToast }               = useToast();
+  const { PRODUCTS, loading: productsLoading } = useProducts();
   const [product, setProduct]       = useState('');
   const [supplier, setSupplier]     = useState('');
   const [grnDate, setGrnDate]       = useState(todayISO());
@@ -550,8 +538,8 @@ function PartsGrnPanel({ session, onSuccess }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 10, marginBottom: 12 }}>
         <div>
           <span style={label}>Product (optional)</span>
-          <select style={{ ...sel, width: '100%' }} value={product} onChange={e => setProduct(e.target.value)}>
-            <option value="">— None —</option>
+          <select style={{ ...sel, width: '100%' }} value={product} onChange={e => setProduct(e.target.value)} disabled={productsLoading}>
+            <option value="">{productsLoading ? 'Loading…' : '— None —'}</option>
             {PRODUCTS.map(p => <option key={p} value={p}>{p}</option>)}
           </select>
         </div>

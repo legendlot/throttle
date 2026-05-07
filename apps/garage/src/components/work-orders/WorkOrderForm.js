@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useToast } from '@throttle/ui';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { PRODUCTS } from '../../hooks/useProducts.js';
+import { useProducts } from '../../hooks/useProducts.js';
 
 const panel = { backgroundColor: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4 };
 const panelHdr = {
@@ -57,6 +57,7 @@ function newId() {
 
 export function WorkOrderForm({ onSuccess, session }) {
   const { showToast } = useToast();
+  const { PRODUCTS, loading } = useProducts();
   const [mode, setMode] = useState('bom');
   const [bomProduct, setBomProduct] = useState('');
   const [bomCategory, setBomCategory] = useState('');
@@ -237,9 +238,9 @@ export function WorkOrderForm({ onSuccess, session }) {
                   style={sel}
                   value={bomProduct}
                   onChange={(e) => { setBomProduct(e.target.value); setBomCategory(''); }}
-                  disabled={submitting}
+                  disabled={submitting || loading}
                 >
-                  <option value="">Select product…</option>
+                  <option value="">{loading ? 'Loading…' : 'Select product…'}</option>
                   {PRODUCTS.map((p) => (
                     <option key={p} value={p}>{p}</option>
                   ))}

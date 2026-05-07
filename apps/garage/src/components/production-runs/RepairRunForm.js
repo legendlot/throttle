@@ -2,11 +2,7 @@
 import { useState } from 'react';
 import { useToast } from '@throttle/ui';
 import { workerFetch } from '@throttle/db';
-import {
-  PRODUCTS,
-  PRODUCT_VARIANTS,
-  PRODUCT_SUBVARIANTS,
-} from '../../hooks/useProducts.js';
+import { useProducts } from '../../hooks/useProducts.js';
 
 const panel = { backgroundColor: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4 };
 const panelHdr = {
@@ -44,28 +40,17 @@ function tomorrowISO() {
   return d.toISOString().slice(0, 10);
 }
 
-function buildRowsForProduct(product) {
-  const variants = PRODUCT_VARIANTS[product] || [];
+function buildRowsForProduct(product, variantMap) {
+  const variants = variantMap[product] || [];
   if (variants.length === 0) {
-    return [{ model: null, color: null, label: product, carQty: 0, remoteQty: 0 }];
+    return [{ model: null, color: null, label: 'Common', carQty: 0, remoteQty: 0 }];
   }
-  const subMap = PRODUCT_SUBVARIANTS[product] || {};
-  const rows = [];
-  for (const v of variants) {
-    const subs = subMap[v] || [];
-    if (subs.length === 0) {
-      rows.push({ model: v, color: null, label: v, carQty: 0, remoteQty: 0 });
-    } else {
-      for (const c of subs) {
-        rows.push({ model: v, color: c, label: `${v} · ${c}`, carQty: 0, remoteQty: 0 });
-      }
-    }
-  }
-  return rows;
+  return variants.map((v) => ({ model: v, color: null, label: v, carQty: 0, remoteQty: 0 }));
 }
 
 export function RepairRunForm({ onSuccess, session }) {
   const { showToast } = useToast();
+  const { PRODUCTS, PRODUCT_VARIANTS, loading } = useProducts();
   const [runDate, setRunDate] = useState(tomorrowISO());
   const [line, setLine] = useState('L1');
   const [shift, setShift] = useState('Morning');
@@ -82,7 +67,7 @@ export function RepairRunForm({ onSuccess, session }) {
     }
     setProductBlocks((prev) => [
       ...prev,
-      { product: productToAdd, rows: buildRowsForProduct(productToAdd) },
+      { product: productToAdd, rows: buildRowsForProduct(productToAdd, PRODUCT_VARIANTS) },
     ]);
     setProductToAdd('');
   }
@@ -196,8 +181,8 @@ export function RepairRunForm({ onSuccess, session }) {
         <div style={{ display: 'flex', gap: 8, marginBottom: 14, alignItems: 'flex-end' }}>
           <div style={{ flex: 1 }}>
             <span style={lbl}>Add Product</span>
-            <select style={sel} value={productToAdd} onChange={(e) => setProductToAdd(e.target.value)} disabled={submitting}>
-              <option value="">Select product…</option>
+            <select style={sel} value={productToAdd} onChange={(e) => setProductToAdd(e.target.value)} disabled={submitting || loading}>
+              <option value="">{loading ? 'Loading…' : 'Select product…'}</option>
               {availableProducts.map((p) => (
                 <option key={p} value={p}>{p}</option>
               ))}

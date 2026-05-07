@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
-import { PRODUCTS } from '../../../hooks/useProducts.js';
+import { useProducts } from '../../../hooks/useProducts.js';
 
 const LF_STATUS_TONES = { 'Pending Verification': 'yellow', Verified: 'green', Disputed: 'red' };
 
@@ -88,6 +88,7 @@ function aggregateIssues(rows) {
 export default function StoreHistoryPage() {
   const { session } = useAuth();
   const { showToast } = useToast();
+  const { PRODUCTS, loading: productsLoading } = useProducts();
   const [activeTab, setActiveTab] = useState('issues');
 
   // Issues state
@@ -179,8 +180,9 @@ export default function StoreHistoryPage() {
                 value={issueFilters.product}
                 onChange={(e) => setIssueFilters((f) => ({ ...f, product: e.target.value }))}
                 style={selectStyle}
+                disabled={productsLoading}
               >
-                <option value="">All Products</option>
+                <option value="">{productsLoading ? 'Loading…' : 'All Products'}</option>
                 {PRODUCTS.map((p) => <option key={p} value={p}>{p}</option>)}
               </select>
               <select

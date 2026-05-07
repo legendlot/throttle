@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
-import { PRODUCTS, PRODUCT_VARIANTS, PRODUCT_SUBVARIANTS } from '../../../../hooks/useProducts.js';
+import { useProducts } from '../../../../hooks/useProducts.js';
 
 const TONE_STYLES = {
   yellow: { bg: 'rgba(242,205,26,.12)', fg: '#f2cd1a', border: 'rgba(242,205,26,.2)' },
@@ -66,6 +66,7 @@ export default function ReordersPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
   const router = useRouter();
+  const { PRODUCTS, PRODUCT_VARIANTS, loading: productsLoading } = useProducts();
 
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -80,7 +81,6 @@ export default function ReordersPage() {
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [product, setProduct] = useState('');
   const [variant, setVariant] = useState('');
-  const [color, setColor] = useState('');
   const [qty, setQty] = useState('');
   const [unit, setUnit] = useState('pcs');
   const [urgency, setUrgency] = useState('Normal');
@@ -116,7 +116,6 @@ export default function ReordersPage() {
     setPartSuggestions([]);
     setProduct('');
     setVariant('');
-    setColor('');
     setQty('');
     setUnit('pcs');
     setUrgency('Normal');
@@ -172,7 +171,7 @@ export default function ReordersPage() {
           part_name:    rrType === 'part'    ? partName : null,
           product:      rrType === 'product' ? product  : null,
           variant:      rrType === 'product' ? variant  : null,
-          color:        rrType === 'product' ? color    : null,
+          color:        null,
           requested_qty: qtyNum,
           unit,
           urgency,
@@ -215,7 +214,6 @@ export default function ReordersPage() {
 
   const canRaise = perms?.procurement_raise || perms?.reorder_raise;
   const variants = product ? (PRODUCT_VARIANTS[product] || []) : [];
-  const colors   = product && variant ? ((PRODUCT_SUBVARIANTS[product] || {})[variant] || []) : [];
 
   return (
     <div style={{ color: 'var(--t1)' }}>
@@ -291,26 +289,19 @@ export default function ReordersPage() {
                 </div>
               </div>
             ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 10 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
                 <div>
                   <span style={labelStyle}>Product</span>
-                  <select value={product} onChange={(e) => { setProduct(e.target.value); setVariant(''); setColor(''); }} style={{ ...selectStyle, width: '100%' }}>
-                    <option value="">Select product…</option>
+                  <select value={product} onChange={(e) => { setProduct(e.target.value); setVariant(''); }} style={{ ...selectStyle, width: '100%' }} disabled={productsLoading}>
+                    <option value="">{productsLoading ? 'Loading…' : 'Select product…'}</option>
                     {PRODUCTS.map((p) => <option key={p} value={p}>{p}</option>)}
                   </select>
                 </div>
                 <div>
                   <span style={labelStyle}>Variant</span>
-                  <select value={variant} onChange={(e) => { setVariant(e.target.value); setColor(''); }} style={{ ...selectStyle, width: '100%' }} disabled={!product}>
+                  <select value={variant} onChange={(e) => setVariant(e.target.value)} style={{ ...selectStyle, width: '100%' }} disabled={!product}>
                     <option value="">{variants.length ? 'Select…' : '—'}</option>
                     {variants.map((v) => <option key={v} value={v}>{v}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <span style={labelStyle}>Colour</span>
-                  <select value={color} onChange={(e) => setColor(e.target.value)} style={{ ...selectStyle, width: '100%' }} disabled={!variant || !colors.length}>
-                    <option value="">{colors.length ? 'Select…' : '—'}</option>
-                    {colors.map((c) => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </div>
               </div>

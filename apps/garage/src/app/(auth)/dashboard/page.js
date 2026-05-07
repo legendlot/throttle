@@ -5,7 +5,7 @@ import { garageFetch } from '@throttle/db';
 import { KpiCard, EmptyState, Spinner } from '@throttle/ui';
 import { useAutoRefresh } from '../../../hooks/useAutoRefresh.js';
 import { useRefreshState } from '../layout.js';
-import { PRODUCTS, PRODUCT_VARIANTS } from '../../../hooks/useProducts.js';
+import { useProducts } from '../../../hooks/useProducts.js';
 
 // Tone keys match legacy .badge-* classes — used by StatusBadge
 const ACT_TONES = {
@@ -72,11 +72,11 @@ async function loadMain(session, setKpis, setSections, setMainLoading, setMainEr
   }
 }
 
-async function loadProducible(session, setProducible, setProdLoading) {
+async function loadProducible(session, products, setProducible, setProdLoading) {
   setProdLoading(true);
   try {
     const results = await Promise.all(
-      PRODUCTS.map(product =>
+      products.map(product =>
         garageFetch('calcKit', { product, variant: '', colour: '', qty: 1 }, session)
           .then(data => ({ product, ok: true, kit: data.kit || [] }))
           .catch(() => ({ product, ok: false, kit: [] }))
@@ -173,6 +173,7 @@ function formatDisplayDate(raw) {
 export default function DashboardPage() {
   const { session, perms } = useAuth();
   const { setRefreshing } = useRefreshState();
+  const { PRODUCTS, loading: productsLoading } = useProducts();
   const [kpis, setKpis] = useState(null);
   const [sections, setSections] = useState({ grns: [], issues: [], returns: [], shipments: [] });
   const [mainLoading, setMainLoading] = useState(true);
@@ -184,13 +185,13 @@ export default function DashboardPage() {
   const [expandedIndex, setExpandedIndex] = useState(null);
 
   function loadAll() {
-    if (!session) return;
+    if (!session || productsLoading) return;
     loadMain(session, setKpis, setSections, setMainLoading, setMainError, setRefreshing);
-    loadProducible(session, setProducible, setProdLoading);
+    loadProducible(session, PRODUCTS, setProducible, setProdLoading);
     loadActivity(session, setActivity, setActLoading);
   }
 
-  useAutoRefresh(loadAll, 60000, !session);
+  useAutoRefresh(loadAll, 60000, !session || productsLoading);
 
   const cutoff7  = useMemo(() => daysAgo(7),  []);
   const cutoff3  = useMemo(() => daysAgo(3),  []);

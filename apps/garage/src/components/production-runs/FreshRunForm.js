@@ -2,12 +2,7 @@
 import { useState, useMemo } from 'react';
 import { ConfirmModal, useToast } from '@throttle/ui';
 import { workerFetch } from '@throttle/db';
-import {
-  PRODUCTS,
-  PRODUCT_VARIANTS,
-  PRODUCT_SUBVARIANTS,
-  HAS_REMOTE,
-} from '../../hooks/useProducts.js';
+import { useProducts } from '../../hooks/useProducts.js';
 
 const panel = { backgroundColor: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4 };
 const panelHdr = {
@@ -54,7 +49,6 @@ function blankRow() {
   return {
     id: Math.random().toString(36).slice(2, 9),
     variant: '',
-    colour: '',
     qtyEcomm: '',
     qtyRetail: '',
     issueMode: 'components',
@@ -63,6 +57,7 @@ function blankRow() {
 
 export function FreshRunForm({ onSuccess, session }) {
   const { showToast } = useToast();
+  const { PRODUCTS, PRODUCT_VARIANTS, HAS_REMOTE, loading } = useProducts();
   const [product, setProduct] = useState('');
   const [runDate, setRunDate] = useState(tomorrowISO());
   const [line, setLine] = useState('L1');
@@ -87,15 +82,7 @@ export function FreshRunForm({ onSuccess, session }) {
 
   function updateRow(id, patch) {
     setVariantRows((prev) =>
-      prev.map((r) => {
-        if (r.id !== id) return r;
-        const updated = { ...r, ...patch };
-        if (patch.variant !== undefined) {
-          const sub = PRODUCT_SUBVARIANTS[product]?.[patch.variant] || [];
-          if (sub.length === 0) updated.colour = '';
-        }
-        return updated;
-      }),
+      prev.map((r) => (r.id !== id ? r : { ...r, ...patch })),
     );
   }
 
@@ -110,15 +97,15 @@ export function FreshRunForm({ onSuccess, session }) {
   function buildVariantsPayload() {
     return variantRows
       .map((r) => {
-        const e = parseInt(r.qtyEcomm) || 0;
+        const e   = parseInt(r.qtyEcomm)  || 0;
         const ret = parseInt(r.qtyRetail) || 0;
         const total = e + ret;
         if (total <= 0) return null;
         return {
-          variant: r.variant || '',
-          colour: r.colour || '',
-          qty: total,
-          qty_ecomm: e,
+          variant:    r.variant || '',
+          colour:     '',
+          qty:        total,
+          qty_ecomm:  e,
           qty_retail: ret,
           issue_mode: r.issueMode || 'components',
         };
@@ -227,9 +214,9 @@ export function FreshRunForm({ onSuccess, session }) {
               style={sel}
               value={product}
               onChange={(e) => setProductAndReset(e.target.value)}
-              disabled={submitting}
+              disabled={submitting || loading}
             >
-              <option value="">Select product…</option>
+              <option value="">{loading ? 'Loading products…' : 'Select product…'}</option>
               {PRODUCTS.map((p) => (
                 <option key={p} value={p}>{p}</option>
               ))}
@@ -277,23 +264,15 @@ export function FreshRunForm({ onSuccess, session }) {
           <span style={lbl}>Variants & Quantities</span>
         </div>
         {variantRows.map((row) => {
-          const subList = product && row.variant
-            ? PRODUCT_SUBVARIANTS[product]?.[row.variant] || []
-            : [];
           const total = (parseInt(row.qtyEcomm) || 0) + (parseInt(row.qtyRetail) || 0);
           return (
             <div
               key={row.id}
               style={{
                 display: 'grid',
-                gridTemplateColumns:
-                  isFbuFormat
-                    ? subList.length
-                      ? '1fr 1fr 0.8fr 0.8fr 60px 1fr 28px'
-                      : '1fr 0.8fr 0.8fr 60px 1fr 28px'
-                    : subList.length
-                      ? '1fr 1fr 0.8fr 0.8fr 60px 28px'
-                      : '1fr 0.8fr 0.8fr 60px 28px',
+                gridTemplateColumns: isFbuFormat
+                  ? '1fr 0.8fr 0.8fr 60px 1fr 28px'
+                  : '1fr 0.8fr 0.8fr 60px 28px',
                 gap: 6, alignItems: 'end', marginBottom: 8,
               }}
             >
@@ -317,22 +296,6 @@ export function FreshRunForm({ onSuccess, session }) {
                   )}
                 </select>
               </div>
-              {subList.length > 0 && (
-                <div>
-                  <span style={lbl}>Colour</span>
-                  <select
-                    style={sel}
-                    value={row.colour}
-                    onChange={(e) => updateRow(row.id, { colour: e.target.value })}
-                    disabled={submitting}
-                  >
-                    <option value="">All</option>
-                    {subList.map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
               <div>
                 <span style={lbl}>E-Comm</span>
                 <input
