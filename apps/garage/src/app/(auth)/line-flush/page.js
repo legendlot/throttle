@@ -145,14 +145,42 @@ export default function LineFlushPage() {
   const loadRunsForForm = useCallback(async () => {
     if (!session) return;
     try {
-      const all = [];
-      for (const status of ['Issued', 'In Progress', 'Completed']) {
-        try {
-          const data = await garageFetch('getProductionRuns', { status }, session);
-          (data || []).forEach((r) => all.push(r));
-        } catch { /* ignore single-status failures */ }
-      }
-      setRuns(all);
+      // Compute date 7 days ago in YYYY-MM-DD format (IST)
+      const d = new Date();
+      d.setDate(d.getDate() - 7);
+      const sevenDaysAgo = d.toLocaleDateString('sv-SE', { timeZone: 'Asia/Kolkata' });
+
+      // Open runs (Issued, In Progress): no date filter — always include regardless of age
+      // Completed runs: last 7 days only to keep the list short
+      const [issuedData, inProgressData, completedData] = await Promise.all([
+        garageFetch('getProductionRuns', { status: 'Issued' }, session),
+        garageFetch('getProductionRuns', { status: 'In Progress' }, session),
+        garageFetch('getProductionRuns', { status: 'Completed', date_from: sevenDaysAgo }, session),
+      ]);
+
+      const combined = [
+        ...(issuedData     || []),
+        ...(inProgressData || []),
+        ...(completedData  || []),
+      ];
+
+      // Deduplicate by run_no in case any run appears in multiple fetches
+      const seen = new Set();
+      const deduped = combined.filter((r) => {
+        if (seen.has(r.run_no)) return false;
+        seen.add(r.run_no);
+        return true;
+      });
+
+      // Sort: open runs first (Issued, In Progress), then Completed; within each group newest first
+      const statusOrder = { 'Issued': 0, 'In Progress': 1, 'Completed': 2 };
+      deduped.sort((a, b) => {
+        const so = (statusOrder[a.status] ?? 3) - (statusOrder[b.status] ?? 3);
+        if (so !== 0) return so;
+        return new Date(b.run_date || 0) - new Date(a.run_date || 0);
+      });
+
+      setRuns(deduped);
     } catch (e) {
       showToast(e.message || 'Failed to load runs', 'error');
     }

@@ -2,13 +2,16 @@
 // TD-020 resolution: single source of truth for LOT product/variant constants.
 // Used by GRN, Receiving, and Dashboard pages.
 
+// NOTE TD-021: PRODUCT_VARIANTS and PRODUCT_SUBVARIANTS are hardcoded constants.
+// Long-term these should be driven from bom_current (DISTINCT product, variant_model).
+// Do not add new products or variants here — log a tech-debt ticket instead.
 export const PRODUCT_VARIANTS = {
   'Flare':    ['Track', 'Race', 'Underground', 'Street', 'Burnout'],
   'Flare LE': ['Race'],
   'Ghost':    ['Burnout', 'Street', 'Underground'],
   'Knox':     ['Adventure', 'Explorer'],
   'Shadow':   ['Asphalt', 'Tarmac'],
-  'Nitro':    ['Race Grey', 'Race Blue', 'Tarmac Black', 'Tarmac Green', 'Tarmac Grey', 'Burnout Red'],
+  'Nitro':    ['Race Grey', 'Race Blue', 'Tarmac Black', 'Tarmac Green', 'Tarmac Grey'],
   'Dash':     ['Street White', 'Green', 'Black', 'Blue', 'Silver', 'Urban Red', 'Urban White', 'Sports Yellow', 'Sports Blue'],
   'Fang':     ['Common'],
   'Atlas':    ['Common'],
