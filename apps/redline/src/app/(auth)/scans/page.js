@@ -114,7 +114,8 @@ export default function ScansPage() {
   const [summary,         setSummary]         = useState(null);
   const [summaryLoading,  setSummaryLoading]  = useState(false);
 
-  const { scans, loading, reload } = useScans({ dateFrom, dateTo, showVoided }, session);
+  const { scans, loading, error: scanError, hasMore, loadMore, reload } =
+    useScans({ dateFrom, dateTo, showVoided, activityFilter }, session);
 
   // ── Scan summary fetch (single date) ──────────────────────
   useEffect(() => {
@@ -208,7 +209,6 @@ export default function ScansPage() {
     let rows = baseRows || [];
     // In UPC mode, allow toggle to filter voided client-side; in normal mode the hook already excludes
     if (upcMode && !showVoided) rows = rows.filter(r => !r.voided);
-    if (activityFilter) rows = rows.filter(r => r.activity === activityFilter);
     if (!upcMode && trimmed.length >= 1 && trimmed.length <= 3) {
       rows = rows.filter(r => (r.upc || '').toUpperCase().includes(trimmed));
     }
@@ -357,6 +357,27 @@ export default function ScansPage() {
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+        {hasMore && !upcMode && (
+          <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
+              Showing {scans.length} scans — more available
+            </span>
+            <button
+              style={{ padding: '5px 14px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontSize: 11, cursor: loading ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)' }}
+              onClick={loadMore}
+              disabled={loading}
+            >
+              {loading ? 'Loading…' : 'Load More'}
+            </button>
+          </div>
+        )}
+        {!hasMore && scans.length > 0 && !upcMode && (
+          <div style={{ padding: '8px 16px', borderTop: '1px solid var(--border)', textAlign: 'right' }}>
+            <span style={{ fontSize: 10, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
+              {scans.length} scans loaded
+            </span>
           </div>
         )}
       </div>

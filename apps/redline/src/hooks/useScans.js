@@ -4,35 +4,48 @@ import { garageFetch } from '@throttle/db';
 
 /**
  * Fetches scans from getAllScans for a date range.
- * Both Scans and Corrections pages use this hook.
- * Client-side filtering (activity, search, voided display) is done in the caller.
+ * Supports server-side activity filtering and cursor-based load-more.
  *
- * @param {{ dateFrom: string, dateTo: string, showVoided: boolean }} params
- * @param {object|null} session  — Supabase session from useAuth()
- * @returns {{ scans: array, loading: boolean, error: string|null, reload: function }}
+ * @param {{ dateFrom, dateTo, showVoided, activityFilter }} params
+ * @param {object|null} session
+ * @returns {{ scans, loading, error, hasMore, loadMore, reload }}
  */
-export function useScans({ dateFrom, dateTo, showVoided = false }, session) {
+export function useScans({ dateFrom, dateTo, showVoided = false, activityFilter = '' }, session) {
   const [scans,   setScans]   = useState([]);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState(null);
+  const [offset,  setOffset]  = useState(0);
+  const [hasMore, setHasMore] = useState(false);
 
-  const load = useCallback(async () => {
+  const PAGE_SIZE = 500;
+
+  const load = useCallback(async (newOffset = 0, append = false) => {
     if (!session || !dateFrom || !dateTo) return;
     setLoading(true);
     setError(null);
     try {
-      const params = { date_from: dateFrom, date_to: dateTo };
-      if (showVoided) params.voided = 'true';
+      const params = { date_from: dateFrom, date_to: dateTo, offset: newOffset };
+      if (showVoided)     params.voided   = 'true';
+      if (activityFilter) params.activity = activityFilter;
       const data = await garageFetch('getAllScans', params, session);
-      setScans(Array.isArray(data) ? data : []);
+      const rows = Array.isArray(data) ? data : [];
+      setScans(prev => append ? [...prev, ...rows] : rows);
+      setOffset(newOffset);
+      setHasMore(rows.length === PAGE_SIZE);
     } catch (e) {
       setError(e.message || 'Failed to load scans');
     } finally {
       setLoading(false);
     }
-  }, [dateFrom, dateTo, showVoided, session]);
+  }, [dateFrom, dateTo, showVoided, activityFilter, session]);
 
-  useEffect(() => { load(); }, [load]);
+  // Reload from scratch whenever filters change
+  useEffect(() => { load(0, false); }, [load]);
 
-  return { scans, loading, error, reload: load };
+  const loadMore = useCallback(() => {
+    if (!hasMore || loading) return;
+    load(offset + PAGE_SIZE, true);
+  }, [hasMore, loading, load, offset]);
+
+  return { scans, loading, error, hasMore, loadMore, reload: () => load(0, false) };
 }
