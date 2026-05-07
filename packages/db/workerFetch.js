@@ -9,7 +9,7 @@ export async function workerFetch(action, body = {}, sessionOrToken, workerUrl) 
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ action, ...body }),
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || 'Worker request failed');

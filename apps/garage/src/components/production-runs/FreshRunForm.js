@@ -145,7 +145,7 @@ export function FreshRunForm({ onSuccess, session }) {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${session?.access_token}`,
       },
-      body: JSON.stringify({ data: payload }),
+      body: JSON.stringify({ action: 'createProductionRun', data: payload }),
     });
     const data = await res.json().catch(() => ({}));
     if (res.status === 409 && data?.warning === true) {
