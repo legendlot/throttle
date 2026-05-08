@@ -599,17 +599,18 @@ function PartsGrnPanel({ session, onSuccess }) {
                 />
                 {showDropdown && results.length > 0 && (
                   <div style={{
-                    position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 200,
+                    position: 'absolute', top: '100%', left: 0, zIndex: 200,
+                    minWidth: 520,
                     background: 'var(--surface)', border: '1px solid var(--border)',
                     borderRadius: 4, boxShadow: '0 6px 20px rgba(0,0,0,.5)',
-                    maxHeight: 240, overflowY: 'auto', marginTop: 2,
+                    maxHeight: 300, overflowY: 'auto', marginTop: 2,
                   }}>
                     {results.map((m, ri) => (
                       <div
                         key={ri}
                         onMouseDown={e => { e.preventDefault(); selectPart(i, m); }}
                         style={{
-                          padding: '7px 10px', cursor: 'pointer',
+                          padding: '9px 12px', cursor: 'pointer',
                           borderBottom: ri < results.length - 1 ? '1px solid var(--border)' : 'none',
                           display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
                         }}
@@ -635,7 +636,8 @@ function PartsGrnPanel({ session, onSuccess }) {
                 )}
                 {showDropdown && tokens.length > 0 && results.length === 0 && (
                   <div style={{
-                    position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 200,
+                    position: 'absolute', top: '100%', left: 0, zIndex: 200,
+                    minWidth: 520,
                     background: 'var(--surface)', border: '1px solid var(--border)',
                     borderRadius: 4, padding: '8px 10px', marginTop: 2,
                     fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)',
