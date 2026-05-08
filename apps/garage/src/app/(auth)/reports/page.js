@@ -102,6 +102,7 @@ const TABS = [
   { id: 'lineflush',   label: 'Line Flush' },
   { id: 'procurement', label: 'Procurement' },
   { id: 'returns',     label: 'Returns' },
+  { id: 'analytics',   label: 'Analytics' },
 ];
 
 function formatDate(raw) {
@@ -168,6 +169,11 @@ export default function ReportsPage() {
   const [procRpt, setProcRpt] = useState(null);
   const [retData, setRetData] = useState(null);
 
+  const [analyticsFlow,       setAnalyticsFlow]       = useState(null);
+  const [analyticsRunway,     setAnalyticsRunway]      = useState(null);
+  const [analyticsEfficiency, setAnalyticsEfficiency]  = useState(null);
+  const [analyticsGap,        setAnalyticsGap]         = useState(null);
+
   const [loading, setLoading] = useState({});
 
   const setTabLoading = (tab, val) => setLoading((l) => ({ ...l, [tab]: val }));
@@ -179,6 +185,67 @@ export default function ReportsPage() {
     if (activeTab === 'lineflush')   setFlushRpt(null);
     if (activeTab === 'procurement') setProcRpt(null);
     if (activeTab === 'returns')     setRetData(null);
+    if (activeTab === 'analytics') {
+      setAnalyticsFlow(null);
+      setAnalyticsRunway(null);
+      setAnalyticsEfficiency(null);
+      setAnalyticsGap(null);
+    }
+  }
+
+  async function loadAnalyticsFlow() {
+    setTabLoading('analytics_flow', true);
+    try {
+      const params = { type: 'flow' };
+      if (fromDate) params.from = fromDate;
+      if (toDate)   params.to   = toDate;
+      const data = await garageFetch('getAnalyticsReport', params, session);
+      setAnalyticsFlow(data || {});
+    } catch (e) {
+      showToast(e.message || 'Failed to load flow report', 'error');
+      setAnalyticsFlow({});
+    } finally {
+      setTabLoading('analytics_flow', false);
+    }
+  }
+
+  async function loadAnalyticsRunway() {
+    setTabLoading('analytics_runway', true);
+    try {
+      const data = await garageFetch('getAnalyticsReport', { type: 'runway' }, session);
+      setAnalyticsRunway(data || {});
+    } catch (e) {
+      showToast(e.message || 'Failed to load runway report', 'error');
+      setAnalyticsRunway({});
+    } finally {
+      setTabLoading('analytics_runway', false);
+    }
+  }
+
+  async function loadAnalyticsEfficiency() {
+    setTabLoading('analytics_efficiency', true);
+    try {
+      const data = await garageFetch('getAnalyticsReport', { type: 'efficiency' }, session);
+      setAnalyticsEfficiency(data || {});
+    } catch (e) {
+      showToast(e.message || 'Failed to load efficiency report', 'error');
+      setAnalyticsEfficiency({});
+    } finally {
+      setTabLoading('analytics_efficiency', false);
+    }
+  }
+
+  async function loadAnalyticsGap() {
+    setTabLoading('analytics_gap', true);
+    try {
+      const data = await garageFetch('getAnalyticsReport', { type: 'dispatch_gap' }, session);
+      setAnalyticsGap(data || {});
+    } catch (e) {
+      showToast(e.message || 'Failed to load dispatch gap report', 'error');
+      setAnalyticsGap({});
+    } finally {
+      setTabLoading('analytics_gap', false);
+    }
   }
 
   function clearDates() {
@@ -391,6 +458,32 @@ export default function ReportsPage() {
       {activeTab === 'lineflush'   && <LineFlushSummary data={flushRpt}  loading={loading.lineflush}   load={loadLineFlush} />}
       {activeTab === 'procurement' && <ProcurementSummary data={procRpt} loading={loading.procurement} load={loadProcurement} />}
       {activeTab === 'returns'     && <ReturnsSummary    data={retData}  loading={loading.returns}     load={loadReturns} />}
+      {activeTab === 'analytics'   && (
+        <>
+          <AnalyticsFlowPanel
+            data={analyticsFlow}
+            loading={loading.analytics_flow}
+            load={loadAnalyticsFlow}
+            fromDate={fromDate}
+            toDate={toDate}
+          />
+          <AnalyticsRunwayPanel
+            data={analyticsRunway}
+            loading={loading.analytics_runway}
+            load={loadAnalyticsRunway}
+          />
+          <AnalyticsEfficiencyPanel
+            data={analyticsEfficiency}
+            loading={loading.analytics_efficiency}
+            load={loadAnalyticsEfficiency}
+          />
+          <AnalyticsGapPanel
+            data={analyticsGap}
+            loading={loading.analytics_gap}
+            load={loadAnalyticsGap}
+          />
+        </>
+      )}
     </div>
   );
 }
@@ -706,4 +799,224 @@ function useMemoIssueGroups(issues) {
     });
     return out;
   }, [issues]);
+}
+
+// ── Analytics panel helpers ───────────────────────────────────────────────
+
+function runwayTone(days) {
+  if (days === null) return 'gray';
+  if (days >= 30) return 'green';
+  if (days >= 14) return 'yellow';
+  if (days >= 7)  return 'orange';
+  return 'red';
+}
+
+function runwayColor(days) {
+  if (days === null) return 'var(--t3)';
+  if (days >= 30) return '#4ade80';
+  if (days >= 14) return '#f2cd1a';
+  if (days >= 7)  return '#ffaa33';
+  return '#ff7070';
+}
+
+function gapColor(gap) {
+  if (gap <= 0)   return '#4ade80';
+  if (gap <= 100) return '#f2cd1a';
+  if (gap <= 300) return '#ffaa33';
+  return '#ff7070';
+}
+
+// 1. Procurement → Production Flow
+function AnalyticsFlowPanel({ data, loading, load, fromDate, toDate }) {
+  const rows = data?.rows || [];
+  const title = data?.from
+    ? `Procurement → Production Flow  (${data.from} → ${data.to})`
+    : 'Procurement → Production Flow';
+  return (
+    <SummaryShell title={title} data={data} loading={loading} load={load}>
+      {rows.length === 0 ? (
+        <div style={{ padding: 12, color: 'var(--t3)', fontSize: 12, textAlign: 'center' }}>No activity in selected range</div>
+      ) : (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>
+              <th style={tableThStyle}>Product</th>
+              <th style={{ ...tableThStyle, textAlign: 'right' }}>Parts Received (qty)</th>
+              <th style={{ ...tableThStyle, textAlign: 'right' }}>Parts Issued (qty)</th>
+              <th style={{ ...tableThStyle, textAlign: 'right' }}>Units Produced</th>
+            </tr></thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.product}>
+                  <td style={tableTdStyle}>{r.product}</td>
+                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', textAlign: 'right' }}>
+                    {r.qty_received.toLocaleString('en-IN')}
+                  </td>
+                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', textAlign: 'right' }}>
+                    {r.qty_issued.toLocaleString('en-IN')}
+                  </td>
+                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', textAlign: 'right', fontWeight: 700 }}>
+                    {r.units_produced.toLocaleString('en-IN')}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ padding: '8px 10px', fontSize: 10, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
+            Parts Received = total qty in GRN register for the period. Parts Issued = materials consumed in production issues. Units Produced = work order qty across completed runs.
+          </div>
+        </div>
+      )}
+    </SummaryShell>
+  );
+}
+
+// 2. Parts Runway by Product
+function AnalyticsRunwayPanel({ data, loading, load }) {
+  const rows = data?.rows || [];
+  return (
+    <SummaryShell title="Parts Runway by Product (90-day consumption rate)" data={data} loading={loading} load={load}>
+      {rows.length === 0 ? (
+        <div style={{ padding: 12, color: 'var(--t3)', fontSize: 12, textAlign: 'center' }}>No BOM data available</div>
+      ) : (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>
+              <th style={tableThStyle}>Product</th>
+              <th style={{ ...tableThStyle, textAlign: 'right' }}>Runway (days)</th>
+              <th style={tableThStyle}>Bottleneck Part</th>
+              <th style={{ ...tableThStyle, textAlign: 'right' }}>BOM Parts</th>
+              <th style={{ ...tableThStyle, textAlign: 'right' }}>With Consumption Data</th>
+            </tr></thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.product}>
+                  <td style={tableTdStyle}>{r.product}</td>
+                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', textAlign: 'right', fontWeight: 700, color: runwayColor(r.runway_days) }}>
+                    {r.runway_days !== null ? r.runway_days : '—'}
+                  </td>
+                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontSize: 11, color: r.bottleneck_part ? '#ffaa33' : 'var(--t3)' }}>
+                    {r.bottleneck_part || '—'}
+                  </td>
+                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', textAlign: 'right' }}>{r.bom_parts}</td>
+                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', textAlign: 'right', color: r.parts_with_data === 0 ? 'var(--t3)' : 'var(--t1)' }}>
+                    {r.parts_with_data}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ padding: '8px 10px', fontSize: 10, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
+            Runway = min(closing_stock / avg_daily_consumption) across all BOM parts with issues in last 90 days. Parts with no recent consumption are excluded from the calculation.
+          </div>
+        </div>
+      )}
+    </SummaryShell>
+  );
+}
+
+// 3. Weekly Production Trend (8 weeks)
+function AnalyticsEfficiencyPanel({ data, loading, load }) {
+  const weeks  = data?.weeks   || [];
+  const products = data?.products || [];
+
+  // Format "2026-05-04" → "4 May"
+  function fmtWeek(dateStr) {
+    if (!dateStr) return '';
+    const d = new Date(dateStr + 'T00:00:00Z');
+    return d.getUTCDate() + ' ' + d.toLocaleString('en-IN', { month: 'short', timeZone: 'UTC' });
+  }
+
+  return (
+    <SummaryShell title="Weekly Production Trend (last 8 weeks)" data={data} loading={loading} load={load}>
+      {products.length === 0 ? (
+        <div style={{ padding: 12, color: 'var(--t3)', fontSize: 12, textAlign: 'center' }}>No production runs in last 8 weeks</div>
+      ) : (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>
+              <th style={tableThStyle}>Product</th>
+              {weeks.map(w => (
+                <th key={w} style={{ ...tableThStyle, textAlign: 'right', minWidth: 56 }}>{fmtWeek(w)}</th>
+              ))}
+              <th style={{ ...tableThStyle, textAlign: 'right' }}>Total</th>
+              <th style={{ ...tableThStyle, textAlign: 'right' }}>Avg/Active Wk</th>
+            </tr></thead>
+            <tbody>
+              {products.map(p => (
+                <tr key={p.product}>
+                  <td style={tableTdStyle}>{p.product}</td>
+                  {p.weekly_units.map((qty, i) => (
+                    <td key={i} style={{ ...tableTdStyle, fontFamily: 'var(--mono)', textAlign: 'right', color: qty === 0 ? 'var(--t3)' : 'var(--t1)' }}>
+                      {qty > 0 ? qty.toLocaleString('en-IN') : '—'}
+                    </td>
+                  ))}
+                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', textAlign: 'right', fontWeight: 700 }}>
+                    {p.total.toLocaleString('en-IN')}
+                  </td>
+                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', textAlign: 'right', color: 'var(--t2)' }}>
+                    {p.avg_per_active_week.toLocaleString('en-IN')}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ padding: '8px 10px', fontSize: 10, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
+            Week columns show units produced in work orders for production runs starting that week (Monday–Sunday). Avg/Active Wk excludes zero-production weeks.
+          </div>
+        </div>
+      )}
+    </SummaryShell>
+  );
+}
+
+// 4. Production vs Dispatch Gap
+function AnalyticsGapPanel({ data, loading, load }) {
+  const rows = data?.rows || [];
+  const monthLabel = data?.from
+    ? new Date(data.from + 'T00:00:00Z').toLocaleString('en-IN', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+    : 'This Month';
+  return (
+    <SummaryShell
+      title={`Production vs Dispatch Gap — ${monthLabel}`}
+      data={data}
+      loading={loading}
+      load={load}
+    >
+      {rows.length === 0 ? (
+        <div style={{ padding: 12, color: 'var(--t3)', fontSize: 12, textAlign: 'center' }}>No production or dispatch data this month</div>
+      ) : (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>
+              <th style={tableThStyle}>Product</th>
+              <th style={{ ...tableThStyle, textAlign: 'right' }}>Units Produced</th>
+              <th style={{ ...tableThStyle, textAlign: 'right' }}>Units Shipped</th>
+              <th style={{ ...tableThStyle, textAlign: 'right' }}>Gap</th>
+            </tr></thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.product}>
+                  <td style={tableTdStyle}>{r.product}</td>
+                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', textAlign: 'right' }}>
+                    {r.units_produced.toLocaleString('en-IN')}
+                  </td>
+                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', textAlign: 'right' }}>
+                    {r.units_shipped.toLocaleString('en-IN')}
+                  </td>
+                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', textAlign: 'right', fontWeight: 700, color: gapColor(r.gap) }}>
+                    {r.gap > 0 ? '+' : ''}{r.gap.toLocaleString('en-IN')}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ padding: '8px 10px', fontSize: 10, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
+            Gap = Produced − Shipped. Positive gap means units are in pipeline (RTD/handed-over/allocated) or backlog. Negative gap would indicate returns or data discrepancy.
+            Shipped = units with current_status=shipped in public.units, updated this month.
+          </div>
+        </div>
+      )}
+    </SummaryShell>
+  );
 }
