@@ -453,15 +453,13 @@ function FbuGrnPanel({ session, onSuccess }) {
   );
 }
 
-// ── Parts GRN Panel — manual line entry ───────────────────────────────────────
+// ── Parts GRN Panel — searchable part picker ──────────────────────────────────
 function PartsGrnPanel({ session, onSuccess }) {
   const { showToast }               = useToast();
-  const { PRODUCTS, loading: productsLoading } = useProducts();
-  const [product, setProduct]       = useState('');
   const [supplier, setSupplier]     = useState('');
   const [grnDate, setGrnDate]       = useState(todayISO());
   const [poRef, setPoRef]           = useState('');
-  const [lines, setLines]           = useState([{ partCode: '', partName: '', qty: '' }]);
+  const [lines, setLines]           = useState([{ search: '', partCode: '', partName: '', product: '', qty: '' }]);
   const [matCache, setMatCache]     = useState({});
   const [submitting, setSubmitting] = useState(false);
 
@@ -477,48 +475,64 @@ function PartsGrnPanel({ session, onSuccess }) {
   }, [session]);
 
   function addLine() {
-    setLines(prev => [...prev, { partCode: '', partName: '', qty: '' }]);
+    setLines(prev => [...prev, { search: '', partCode: '', partName: '', product: '', qty: '' }]);
   }
 
   function removeLine(idx) {
     setLines(prev => {
       const next = prev.filter((_, i) => i !== idx);
-      return next.length ? next : [{ partCode: '', partName: '', qty: '' }];
+      return next.length ? next : [{ search: '', partCode: '', partName: '', product: '', qty: '' }];
     });
   }
 
-  function updateLine(idx, field, value) {
-    setLines(prev => {
-      const next = prev.map((l, i) => i !== idx ? l : { ...l, [field]: value });
-      // Auto-fill part name from material cache when code changes
-      if (field === 'partCode') {
-        const code  = value.trim().toUpperCase();
-        const match = matCache[code];
-        if (match) next[idx] = { ...next[idx], partName: match.part_name || '' };
+  function updateSearch(idx, value) {
+    // Clear selection whenever user edits the search text
+    setLines(prev => prev.map((l, i) =>
+      i !== idx ? l : { ...l, search: value, partCode: '', partName: '', product: '' }
+    ));
+  }
+
+  function updateQty(idx, value) {
+    setLines(prev => prev.map((l, i) => i !== idx ? l : { ...l, qty: value }));
+  }
+
+  function selectPart(idx, mat) {
+    setLines(prev => prev.map((l, i) =>
+      i !== idx ? l : {
+        ...l,
+        search:   (mat.product ? mat.product + ' — ' : '') + (mat.part_name || ''),
+        partCode: mat.part_code || '',
+        partName: mat.part_name || '',
+        product:  mat.product   || '',
       }
-      return next;
-    });
+    ));
   }
 
   function clearForm() {
-    setProduct(''); setSupplier(''); setPoRef('');
+    setSupplier(''); setPoRef('');
     setGrnDate(todayISO());
-    setLines([{ partCode: '', partName: '', qty: '' }]);
+    setLines([{ search: '', partCode: '', partName: '', product: '', qty: '' }]);
   }
 
   async function submit() {
     if (!grnDate) { showToast('Select a GRN date', 'error'); return; }
     const validLines = lines
       .filter(l => l.partCode.trim() && parseInt(l.qty) > 0)
-      .map(l => {
-        const code = l.partCode.trim().toUpperCase();
-        const name = l.partName.trim() || (matCache[code]?.part_name) || '';
-        return { part_code: code, part_name: name, product, qty_received: parseInt(l.qty), inspection: 'Pass' };
-      });
-    if (!validLines.length) { showToast('Add at least one part line with code and qty', 'error'); return; }
+      .map(l => ({
+        part_code:    l.partCode.trim().toUpperCase(),
+        part_name:    l.partName.trim() || (matCache[l.partCode.trim().toUpperCase()]?.part_name) || '',
+        product:      l.product || '',
+        qty_received: parseInt(l.qty),
+        inspection:   'Pass',
+      }));
+    if (!validLines.length) { showToast('Select at least one part and enter a qty', 'error'); return; }
+    // Derive top-level product from first line so batch number has a clean prefix
+    const headerProduct = validLines[0]?.product || '';
     setSubmitting(true);
     try {
-      const res = await workerFetch('postGRN', { data: { product, supplier, grn_date: grnDate, po_ref: poRef, lines: validLines } }, session);
+      const res = await workerFetch('postGRN', {
+        data: { product: headerProduct, supplier, grn_date: grnDate, po_ref: poRef, lines: validLines }
+      }, session);
       showToast(`GRN ${res.data.grn_no} created — ${res.data.lines} line(s)`, 'success');
       clearForm();
       onSuccess();
@@ -532,17 +546,11 @@ function PartsGrnPanel({ session, onSuccess }) {
   return (
     <div>
       <p style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 12 }}>
-        Use for ad-hoc part receipts not tied to a full BOM. Enter part codes manually — names auto-fill from the material master.
+        Use for ad-hoc part receipts not tied to a full BOM. Search by product and part name together (e.g. "flare pcb") — select to fill automatically.
       </p>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 10, marginBottom: 12 }}>
-        <div>
-          <span style={label}>Product (optional)</span>
-          <select style={{ ...sel, width: '100%' }} value={product} onChange={e => setProduct(e.target.value)} disabled={productsLoading}>
-            <option value="">{productsLoading ? 'Loading…' : '— None —'}</option>
-            {PRODUCTS.map(p => <option key={p} value={p}>{p}</option>)}
-          </select>
-        </div>
+      {/* Header fields — product removed, now auto-filled per line */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 12 }}>
         <div>
           <span style={label}>Supplier</span>
           <input style={inp} value={supplier} onChange={e => setSupplier(e.target.value)} placeholder="Supplier name" />
@@ -557,41 +565,119 @@ function PartsGrnPanel({ session, onSuccess }) {
         </div>
       </div>
 
-      {/* Line entries */}
-      <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr 80px 28px', gap: 6, marginBottom: 4, padding: '0 2px' }}>
-        <span style={label}>Part Code</span>
-        <span style={label}>Part Name</span>
+      {/* Column headers */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 130px 80px 28px', gap: 6, marginBottom: 4, padding: '0 2px' }}>
+        <span style={label}>Part Search</span>
+        <span style={label}>Code · Product</span>
         <span style={{ ...label, textAlign: 'right' }}>Qty</span>
         <span />
       </div>
+
+      {/* Line rows */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12 }}>
-        {lines.map((l, i) => (
-          <div key={i} style={{ display: 'grid', gridTemplateColumns: '140px 1fr 80px 28px', gap: 6, alignItems: 'center' }}>
-            <input
-              style={{ ...inp, textTransform: 'uppercase', fontSize: 11 }}
-              value={l.partCode}
-              onChange={e => updateLine(i, 'partCode', e.target.value.toUpperCase())}
-              placeholder="Part code"
-            />
-            <input
-              style={inp}
-              value={l.partName}
-              onChange={e => updateLine(i, 'partName', e.target.value)}
-              placeholder="Auto-fills from master"
-            />
-            <input
-              style={{ ...inp, textAlign: 'right' }}
-              type="number" min="1"
-              value={l.qty}
-              onChange={e => updateLine(i, 'qty', e.target.value)}
-              placeholder="Qty"
-            />
-            <button
-              onClick={() => removeLine(i)}
-              style={{ background: 'transparent', border: 'none', color: 'var(--t3)', cursor: 'pointer', fontSize: 18, lineHeight: 1 }}
-            >×</button>
-          </div>
-        ))}
+        {lines.map((l, i) => {
+          const term   = l.search.trim().toLowerCase();
+          const tokens = term.split(/\s+/).filter(Boolean);
+          const showDropdown = tokens.length > 0 && !l.partCode;
+          const results = showDropdown
+            ? Object.values(matCache).filter(m => {
+                const haystack = `${m.product || ''} ${m.part_name || ''} ${m.part_code || ''}`.toLowerCase();
+                return tokens.every(t => haystack.includes(t));
+              }).slice(0, 10)
+            : [];
+
+          return (
+            <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 130px 80px 28px', gap: 6, alignItems: 'center' }}>
+              {/* Search input with dropdown */}
+              <div style={{ position: 'relative' }}>
+                <input
+                  style={inp}
+                  value={l.search}
+                  onChange={e => updateSearch(i, e.target.value)}
+                  placeholder="e.g. flare pcb, knox licence…"
+                  autoComplete="off"
+                />
+                {showDropdown && results.length > 0 && (
+                  <div style={{
+                    position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 200,
+                    background: 'var(--surface)', border: '1px solid var(--border)',
+                    borderRadius: 4, boxShadow: '0 6px 20px rgba(0,0,0,.5)',
+                    maxHeight: 240, overflowY: 'auto', marginTop: 2,
+                  }}>
+                    {results.map((m, ri) => (
+                      <div
+                        key={ri}
+                        onMouseDown={e => { e.preventDefault(); selectPart(i, m); }}
+                        style={{
+                          padding: '7px 10px', cursor: 'pointer',
+                          borderBottom: ri < results.length - 1 ? '1px solid var(--border)' : 'none',
+                          display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
+                        }}
+                        onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)'; }}
+                        onMouseLeave={e => { e.currentTarget.style.background = ''; }}
+                      >
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {m.part_name || m.part_code}
+                          </div>
+                          {m.product && (
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', marginTop: 1 }}>
+                              {m.product}
+                            </div>
+                          )}
+                        </div>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--yellow)', flexShrink: 0 }}>
+                          {m.part_code}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {showDropdown && tokens.length > 0 && results.length === 0 && (
+                  <div style={{
+                    position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 200,
+                    background: 'var(--surface)', border: '1px solid var(--border)',
+                    borderRadius: 4, padding: '8px 10px', marginTop: 2,
+                    fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)',
+                  }}>
+                    No parts found
+                  </div>
+                )}
+              </div>
+
+              {/* Code + product badge */}
+              <div style={{
+                padding: '5px 8px', background: 'var(--surface2)',
+                borderRadius: 4, border: '1px solid var(--border)',
+                minHeight: 34, display: 'flex', flexDirection: 'column', justifyContent: 'center',
+              }}>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: l.partCode ? 'var(--yellow)' : 'var(--t3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {l.partCode || '—'}
+                </div>
+                {l.product && (
+                  <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {l.product}
+                  </div>
+                )}
+              </div>
+
+              {/* Qty */}
+              <input
+                style={{ ...inp, textAlign: 'right' }}
+                type="number" min="1"
+                value={l.qty}
+                onChange={e => updateQty(i, e.target.value)}
+                placeholder="Qty"
+              />
+
+              {/* Remove */}
+              <button
+                onClick={() => removeLine(i)}
+                style={{ background: 'transparent', border: 'none', color: 'var(--t3)', cursor: 'pointer', fontSize: 18, lineHeight: 1 }}
+              >×</button>
+            </div>
+          );
+        })}
       </div>
 
       <div style={{ display: 'flex', gap: 8 }}>
