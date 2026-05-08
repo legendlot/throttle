@@ -96,7 +96,9 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
     // the JWT may have expired in the background, so kicking off the refresh
     // here lets the next data-fetch hit a warm cache instead of waiting for it.
     const handleVisibility = () => {
-      if (document.visibilityState === 'visible') {
+      // Only pre-warm if we're not already mid-load — avoids racing with
+      // an in-progress token refresh and triggering Web Lock contention.
+      if (document.visibilityState === 'visible' && !loadingIdentityRef.current) {
         getValidSession().catch(() => {});
       }
     };
@@ -120,37 +122,11 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
     if (loadingIdentityRef.current) return;
     loadingIdentityRef.current = true;
     try {
-      // Wait for Supabase to finish hydrating the session from storage before
-      // calling the Worker. On mobile browsers, onAuthStateChange can fire
-      // with a session object before the access_token is ready, which causes
-      // getMe to 401 and the app to hang on LOADING. getSession() resolves
-      // only once the in-memory session is settled — but can also deadlock on
-      // a malformed stored session, so guard with a 15s timeout.
-      const sessionResult = await Promise.race([
-        supabase.auth.getSession(),
-        new Promise(resolve =>
-          setTimeout(() => resolve({ data: { session: null }, timedOut: true }), 15000)
-        )
-      ]);
-
-      if (sessionResult.timedOut) {
-        console.warn('[AuthProvider] getSession() timed out in loadIdentity — skipping Worker call');
-        const cached = identityCacheRef.current?.data;
-        if (cached) {
-          setBrandUser(cached);
-          setRole(cached?.role ?? null);
-          setPerms(cached?.permissions ?? null);
-          setUser({
-            id: cached?.id ?? currentSession?.user?.id ?? null,
-            email: cached?.email ?? currentSession?.user?.email ?? null,
-            full_name: cached?.full_name ?? null,
-          });
-        }
-        return;
-      }
-
-      const { data: { session: liveSession } } = sessionResult;
-      const activeSession = liveSession || currentSession;
+      // Use the session passed in directly — the caller already called getSession()
+      // immediately before invoking loadIdentity, so currentSession is settled.
+      // Making a second getSession() call here races with the caller's lock and
+      // causes "lock:throttle-auth was released because another request stole it".
+      const activeSession = currentSession;
       if (!activeSession?.access_token) return;
 
       const incomingUserId = activeSession.user?.id;
@@ -210,6 +186,12 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
       writeCache(incomingUserId, data);
     } catch (e) {
       console.error('[AuthProvider] loadIdentity failed:', e);
+      // If the Supabase Web Lock was stolen by a concurrent request, retry once
+      // after a short delay rather than leaving the app stuck on Loading.
+      if (e?.message?.includes('stole it')) {
+        setTimeout(() => loadIdentity(currentSession), 600);
+        return;
+      }
       // Only clear state if we have nothing — don't wipe a valid session on a transient Worker error
       if (!identityCacheRef.current?.data) {
         setUser(null);
