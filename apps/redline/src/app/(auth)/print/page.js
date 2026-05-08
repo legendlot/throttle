@@ -30,12 +30,15 @@ export default function PrintPage() {
   const { session } = useAuth();
   const { showToast } = useToast();
 
-  const [mode,        setMode]        = useState('single');
-  const [singleVal,   setSingleVal]   = useState('');
-  const [bulkVal,     setBulkVal]     = useState('');
-  const [results,     setResults]     = useState(null);  // null | { rows: [], notFound: [] }
-  const [searching,   setSearching]   = useState(false);
-  const [printStatus, setPrintStatus] = useState({});    // { [index]: 'queuing'|'done'|'error' }
+  const PRINTERS = ['L1', 'L2', 'L3', 'DISPATCH'];
+
+  const [mode,            setMode]           = useState('single');
+  const [singleVal,       setSingleVal]      = useState('');
+  const [bulkVal,         setBulkVal]        = useState('');
+  const [results,         setResults]        = useState(null);  // null | { rows: [], notFound: [] }
+  const [searching,       setSearching]      = useState(false);
+  const [printStatus,     setPrintStatus]    = useState({});    // { [index]: 'queuing'|'done'|'error' }
+  const [selectedPrinter, setSelectedPrinter] = useState('');   // '' = unselected, blocks print
 
   function setMode_(newMode) {
     setMode(newMode);
@@ -91,6 +94,10 @@ export default function PrintPage() {
 
   // ── Reprint queue ─────────────────────────────────────────
   async function queueReprint(i, row) {
+    if (!selectedPrinter) {
+      showToast('Select a printer before printing', 'warn');
+      return;
+    }
     setPrintStatus(prev => ({ ...prev, [i]: 'queuing' }));
     try {
       await workerFetch('postReprintJob', {
@@ -99,7 +106,7 @@ export default function PrintPage() {
         model:       row.model   || '',
         color:       row.color   || '',
         channel:     row.channel || '',
-        line:        row.line    || '',
+        line:        selectedPrinter,
       }, session);
       setPrintStatus(prev => ({ ...prev, [i]: 'done' }));
     } catch (e) {
@@ -109,6 +116,10 @@ export default function PrintPage() {
 
   async function printAll() {
     if (!results?.rows?.length) return;
+    if (!selectedPrinter) {
+      showToast('Select a printer before printing', 'warn');
+      return;
+    }
     for (let i = 0; i < results.rows.length; i++) {
       // Skip already-done rows
       if (printStatus[i] === 'done') continue;
@@ -171,6 +182,36 @@ export default function PrintPage() {
               >{searching ? 'Looking up…' : '🔍 Look Up All'}</button>
             </div>
           </>
+        )}
+      </div>
+
+      {/* Printer selector */}
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: '12px 16px', marginBottom: 18, display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ fontFamily: 'var(--cond)', fontSize: 10, fontWeight: 700, letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--t3)', whiteSpace: 'nowrap' }}>Print To</div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {PRINTERS.map(p => (
+            <button
+              key={p}
+              onClick={() => setSelectedPrinter(prev => prev === p ? '' : p)}
+              style={{
+                padding: '5px 14px',
+                background: selectedPrinter === p ? 'var(--yellow)' : 'var(--surface2)',
+                color: selectedPrinter === p ? '#000' : 'var(--t2)',
+                border: selectedPrinter === p ? '1px solid var(--yellow)' : '1px solid var(--border)',
+                borderRadius: 3,
+                fontSize: 11,
+                fontFamily: 'var(--mono)',
+                fontWeight: 700,
+                letterSpacing: '0.06em',
+                cursor: 'pointer',
+              }}
+            >{p}</button>
+          ))}
+        </div>
+        {!selectedPrinter && (
+          <div style={{ fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)', marginLeft: 4 }}>
+            — select before printing
+          </div>
         )}
       </div>
 
