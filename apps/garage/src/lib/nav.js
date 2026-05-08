@@ -1,6 +1,6 @@
 import { hasPermission } from '@throttle/auth';
 import {
-  LayoutDashboard, Activity, BarChart3,
+  LayoutDashboard, Activity, BarChart3, Target,
   Boxes, Inbox, PackageOpen,
   Cog, ClipboardList, Workflow,
   ListChecks, CheckSquare, History, UserCog,
@@ -22,7 +22,8 @@ const GROUPS = [
       { id: 'alerts',    label: 'Alerts',       route: '/alerts',    icon: Bell,            badgeColor: 'red' },
       { id: 'dashboard', label: 'Dashboard',    route: '/dashboard', icon: LayoutDashboard, gate: (p) => hasPermission(p, 'dashboard') },
       { id: 'activity',  label: 'Activity Log', route: '/activity',  icon: Activity,        gate: (p) => hasPermission(p, 'reports') || hasPermission(p, 'users_view') },
-      { id: 'reports',   label: 'Reports',      route: '/reports',   icon: BarChart3,       gate: (p) => hasPermission(p, 'reports') },
+      { id: 'reports',         label: 'Reports',        route: '/reports',         icon: BarChart3, gate: (p) => hasPermission(p, 'reports') },
+      { id: 'producibility',   label: 'Producibility',  route: '/producibility',   icon: Target,    gate: (p) => hasPermission(p, 'dashboard') },
     ],
   },
   {
