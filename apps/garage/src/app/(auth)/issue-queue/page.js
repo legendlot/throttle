@@ -385,10 +385,82 @@ export default function IssueQueuePage() {
   }
 
   async function buildPickListHtml(item) {
-    if (item.type !== 'run') return '';
+    if (item.type !== 'run' && item.type !== 'wo') return '';
     const materials = await ensureMaterialCache();
-    const run = item.run;
     const today = new Date().toLocaleDateString('en-IN');
+
+    // ── WO (ad hoc) path ──────────────────────────────────────────────────────
+    if (item.type === 'wo') {
+      const wo = item.wo || {};
+      const rows = (item.lines || [])
+        .slice()
+        .sort((a, b) => pickSortKey(a, materials) - pickSortKey(b, materials));
+      const partRows = rows.map((p) => {
+        const bagSize = (materials[p.part_code]?.bag_size) || 25;
+        const bags = Math.ceil((p.required || 0) / bagSize);
+        const status = (p.available || 0) >= (p.required || 0) ? 'OK' : 'SHORT';
+        return `
+          <tr>
+            <td class="check"></td>
+            <td class="mono">${escapeHtml(p.part_code)}</td>
+            <td>${escapeHtml(p.part_name || '')}</td>
+            <td>${escapeHtml(wo.product || '')}</td>
+            <td class="num mono">${p.required || 0}</td>
+            <td class="num mono">${p.available || 0}</td>
+            <td class="num mono">${bagSize}</td>
+            <td class="num mono">${bags}</td>
+            <td class="${status === 'SHORT' ? 'short' : 'ok'}">${status}</td>
+          </tr>`;
+      }).join('');
+      const variantLabel = [wo.variant, wo.colour].filter(Boolean).join(' / ') || 'Common';
+      const totalUnits = wo.qty || 1;
+      const woTypeLabel = wo.wo_type || 'Ad Hoc';
+      return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Pick List — ${escapeHtml(item.ref)}</title>
+<style>
+  body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 24px; color: #111; }
+  .hdr { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 14px; }
+  .brand { font-weight: 900; font-size: 18px; letter-spacing: 0.04em; }
+  .title { font-size: 16px; font-weight: 700; text-transform: uppercase; }
+  .meta { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; font-size: 11px; margin-bottom: 16px; }
+  .meta div { border: 1px solid #ddd; padding: 6px 8px; }
+  .meta strong { display: block; font-size: 9px; color: #666; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 2px; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  th, td { border: 1px solid #ccc; padding: 5px 6px; text-align: left; }
+  th { background: #f5f5f5; text-transform: uppercase; font-size: 10px; letter-spacing: 0.04em; }
+  .num { text-align: right; }
+  .check { width: 20px; }
+  .mono { font-family: ui-monospace, Menlo, monospace; }
+  .short { color: #c00; font-weight: 700; }
+  .ok { color: #060; font-weight: 700; }
+  .sig { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-top: 28px; font-size: 11px; }
+  .sig div { border-top: 1px solid #000; padding-top: 4px; text-align: center; }
+</style></head><body>
+  <div class="hdr">
+    <div class="brand">LEGEND <strong>OF</strong> TOYS</div>
+    <div class="title">Pick List — Store → Production</div>
+  </div>
+  <div class="meta">
+    <div><strong>WO No</strong>${escapeHtml(item.ref)}</div>
+    <div><strong>Product</strong>${escapeHtml(wo.product || '')}</div>
+    <div><strong>Total Units</strong>${totalUnits}</div>
+    <div><strong>Date Printed</strong>${today}</div>
+    <div><strong>Variant</strong>${escapeHtml(variantLabel)}</div>
+  </div>
+  <div style="font-size:10px;color:#666;margin-bottom:12px;font-family:ui-monospace,Menlo,monospace">Type: ${escapeHtml(woTypeLabel)}</div>
+  <table>
+    <thead><tr><th>✓</th><th>Part Code</th><th>Part Name</th><th>Product</th><th>Qty Required</th><th>In Stock</th><th>Bag Size</th><th>Bags</th><th>Status</th></tr></thead>
+    <tbody>${partRows}</tbody>
+  </table>
+  <div class="sig">
+    <div>Picked By</div>
+    <div>Checked By</div>
+    <div>Issued By</div>
+  </div>
+</body></html>`;
+    }
+
+    // ── Run path (unchanged) ───────────────────────────────────────────────────
+    const run = item.run;
     const rows = (item.lines || [])
       .slice()
       .sort((a, b) => pickSortKey(a, materials) - pickSortKey(b, materials));
@@ -611,7 +683,7 @@ export default function IssueQueuePage() {
           <div style={panelHeaderStyle}>
             <span>{selectedItem.ref} — {detailLoading ? 'Loading…' : (selectedItem.product || '')}</span>
             <div style={{ display: 'flex', gap: 6 }}>
-              {selectedItem.type === 'run' && (
+              {(selectedItem.type === 'run' || selectedItem.type === 'wo') && (
                 <button style={btnSecondary} onClick={() => handlePrint(selectedItem)}>🖨 Print</button>
               )}
               <button style={btnSecondary} onClick={closeItem} disabled={submitting}>✕ Close</button>
