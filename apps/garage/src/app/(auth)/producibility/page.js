@@ -305,7 +305,17 @@ export default function ProducibilityPage() {
 
           {/* Content */}
           {view === 'summary'     && <SummaryView    products={data.products}           onSelectProduct={handleSelectProduct} />}
-          {view === 'breakdown'   && <BreakdownView  products={breakdownProducts} />}
+          {view === 'breakdown'   && (
+            <>
+              <button
+                onClick={() => { setView('summary'); setDrillProduct(null); }}
+                style={{ background: 'transparent', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 13, padding: '0 0 16px 0', display: 'flex', alignItems: 'center', gap: 4 }}
+              >
+                ← All Products
+              </button>
+              <BreakdownView products={breakdownProducts} />
+            </>
+          )}
           {view === 'bottlenecks' && <BottlenecksView parts={data.bottleneck_parts} />}
         </>
       )}
