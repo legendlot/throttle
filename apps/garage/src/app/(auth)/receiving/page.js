@@ -56,9 +56,9 @@ function buildBagLabelsHtml(bags, shipmentId) {
 
   return `<!DOCTYPE html><html><head><title>Bag Labels (${bags.length})</title><style>
     *{margin:0;padding:0;box-sizing:border-box}
-    body{font-family:Arial,sans-serif;background:#fff}
-    .page{display:flex;flex-wrap:wrap;gap:4mm;padding:5mm}
-    .label{width:110mm;height:55mm;border:1px solid #000;padding:3mm;display:flex;flex-direction:column;page-break-inside:avoid}
+    body{font-family:Arial,sans-serif;background:#eee}
+    .page{display:flex;flex-wrap:wrap;gap:4mm;padding:5mm;background:#eee}
+    .label{width:100mm;height:50mm;border:1px solid #000;padding:3mm;display:flex;flex-direction:column;background:#fff}
     .lh{display:flex;align-items:center;gap:6px;border-bottom:1px solid #000;padding-bottom:2mm;margin-bottom:2mm}
     .lp{font-weight:900;font-size:14pt;letter-spacing:2px;margin-right:2px}
     .lc{font-family:monospace;font-size:12pt;font-weight:700;flex:1}
@@ -74,7 +74,13 @@ function buildBagLabelsHtml(bags, shipmentId) {
     .lq{flex-shrink:0;display:flex;align-items:center}
     .lf{display:flex;justify-content:space-between;align-items:center;border-top:1px solid #000;padding-top:1.5mm;margin-top:auto}
     .lid{font-family:monospace;font-size:6.5pt;color:#333}
-    @media print{body{background:#fff}.page{padding:2mm;gap:2mm}}
+    @page{size:100mm 50mm;margin:0}
+    @media print{
+      body{background:#fff}
+      .page{display:block;padding:0;background:#fff}
+      .label{width:100mm;height:50mm;border:none;page-break-after:always;break-after:page}
+      .label:last-child{page-break-after:avoid;break-after:avoid}
+    }
   </style></head><body><div class="page">${labelItems}</div></body></html>`;
 }
 
