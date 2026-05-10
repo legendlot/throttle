@@ -434,9 +434,9 @@ export default function VendorsPage() {
                       />
                       {vsiPartName && <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 2 }}>{vsiPartName}</div>}
                       {showPartSuggestions && partSuggestions.length > 0 && (
-                        <div style={{ position: 'absolute', top: 'calc(100% + 2px)', left: 0, right: 0, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 3, zIndex: 50, maxHeight: 200, overflowY: 'auto' }}>
+                        <div style={{ position: 'absolute', top: 'calc(100% + 2px)', left: 0, minWidth: 520, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 3, zIndex: 50, maxHeight: 300, overflowY: 'auto' }}>
                           {partSuggestions.map((p) => (
-                            <div key={p.part_code} style={{ padding: '6px 10px', cursor: 'pointer', fontSize: 11 }} onMouseDown={(e) => { e.preventDefault(); selectPart(p); }}>
+                            <div key={p.part_code} style={{ padding: '9px 12px', cursor: 'pointer', fontSize: 11 }} onMouseDown={(e) => { e.preventDefault(); selectPart(p); }}>
                               <span style={{ fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{p.part_code}</span>
                               <span style={{ color: 'var(--t2)', marginLeft: 8 }}>{p.part_name}</span>
                             </div>
