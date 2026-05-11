@@ -400,6 +400,79 @@ export default function ReceivingPage() {
     }
   }
 
+  async function submitAndPrintBoxLabels() {
+    if (!activeMarkId || !currentShipmentId) return;
+    const entries = Object.entries(boxQtys)
+      .filter(([, qty]) => qty > 0)
+      .map(([key, qty]) => {
+        const [lineId, condition] = key.split(':');
+        return { line_id: lineId, condition, qty };
+      });
+    const unexpectedItems = unexpected
+      .filter(u => u.desc.trim() && (u.ok + u.damaged) > 0)
+      .map(u => ({ description: u.desc.trim(), ok_qty: u.ok, damaged_qty: u.damaged }));
+    if (!entries.length && !unexpectedItems.length) {
+      showToast('Enter at least one qty', 'error'); return;
+    }
+
+    // Lines with OK entries — bags are generated from OK qty only
+    const okLineIds = [...new Set(
+      entries.filter(e => e.condition === 'OK').map(e => e.line_id)
+    )];
+
+    setBoxSubmitting(true);
+    try {
+      // Step 1: Submit box intake
+      await workerFetch('postBoxIntake', {
+        data: { shipment_id: currentShipmentId, mark_id: activeMarkId, entries, unexpected: unexpectedItems }
+      }, session);
+
+      if (okLineIds.length === 0) {
+        showToast('Box recorded — no OK qty, no labels to print', 'info');
+        closeBoxIntake();
+        await refreshDetail();
+        return;
+      }
+
+      // Step 2: Snapshot existing bag IDs before generating (so we only print new bags)
+      const priorBagArrays = await Promise.all(
+        okLineIds.map(lid =>
+          garageFetch('getBags', { line_id: lid }, session).then(d => d || []).catch(() => [])
+        )
+      );
+      const priorBagIds = new Set(priorBagArrays.flat().map(b => b.bag_id));
+
+      // Step 3: Generate bags for lines touched by this box
+      await Promise.all(
+        okLineIds.map(lid =>
+          workerFetch('generateBags', { data: { line_id: lid } }, session).catch(() => {})
+        )
+      );
+
+      // Step 4: Fetch bags and isolate only the newly created ones
+      const afterBagArrays = await Promise.all(
+        okLineIds.map(lid =>
+          garageFetch('getBags', { line_id: lid }, session).then(d => d || []).catch(() => [])
+        )
+      );
+      const newBags = afterBagArrays.flat().filter(b => !priorBagIds.has(b.bag_id));
+
+      if (newBags.length === 0) {
+        showToast('Box recorded — bags already up to date, nothing new to print', 'info');
+      } else {
+        printWindow(buildBagLabelsHtml(newBags, currentShipmentId));
+        showToast(`Box recorded — ${newBags.length} bag label(s) sent to print`, 'success');
+      }
+
+      closeBoxIntake();
+      await refreshDetail();
+    } catch (e) {
+      showToast(e.message || 'Submit and print failed', 'error');
+    } finally {
+      setBoxSubmitting(false);
+    }
+  }
+
   // ── Bags ─────────────────────────────────────────────────────────────────────
   async function generateBagsForLine(lineId) {
     try {
@@ -911,7 +984,18 @@ export default function ReceivingPage() {
                 <span style={{ color: '#7b93ff' }}>
                   📦 Box Intake — {marks.find(m => m.mark_id === activeMarkId)?.mark_code || activeMarkId}
                 </span>
-                <button style={{ ...btnSec, padding: '2px 10px', fontSize: 11 }} onClick={closeBoxIntake}>✕ Close</button>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  {Object.values(boxQtys).some(v => v > 0) && (
+                    <button
+                      style={{ ...btnSec, padding: '2px 10px', fontSize: 11 }}
+                      onClick={submitAndPrintBoxLabels}
+                      disabled={boxSubmitting}
+                    >
+                      🖨 Submit &amp; Print Labels
+                    </button>
+                  )}
+                  <button style={{ ...btnSec, padding: '2px 10px', fontSize: 11 }} onClick={closeBoxIntake}>✕ Close</button>
+                </div>
               </div>
               <div style={{ padding: 16 }}>
                 {/* Expected lines grid */}
