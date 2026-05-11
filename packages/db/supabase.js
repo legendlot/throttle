@@ -34,6 +34,23 @@ let _sessionCache = null;
 let _sessionFetchedAt = 0;
 const SESSION_CACHE_TTL = 30_000;
 
+// Registered once at module level — never inside getValidSession().
+// Registering inside getValidSession() accumulates unbounded subscriptions
+// (one per stale-cache call), causing a flood of onAuthStateChange callbacks
+// across tabs that freezes the UI.
+// Also handles TOKEN_REFRESHED so the cache stays current across tabs —
+// without this, a token refreshed in Tab B leaves Tab A serving a stale
+// access_token for up to 30 s, causing 401s on every Worker request.
+supabase.auth.onAuthStateChange((event, session) => {
+  if (event === 'SIGNED_OUT') {
+    _sessionCache = null;
+    _sessionFetchedAt = 0;
+  } else if (event === 'TOKEN_REFRESHED' && session) {
+    _sessionCache = session;
+    _sessionFetchedAt = Date.now();
+  }
+});
+
 export async function getValidSession() {
   const now = Date.now();
   if (_sessionCache && (now - _sessionFetchedAt) < SESSION_CACHE_TTL) {
@@ -42,14 +59,5 @@ export async function getValidSession() {
   const { data } = await supabase.auth.getSession();
   _sessionCache = data.session;
   _sessionFetchedAt = now;
-
-  // Clear cache on sign-out so next login gets a fresh session
-  supabase.auth.onAuthStateChange((event) => {
-    if (event === 'SIGNED_OUT') {
-      _sessionCache = null;
-      _sessionFetchedAt = 0;
-    }
-  });
-
   return _sessionCache;
 }

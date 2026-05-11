@@ -189,7 +189,10 @@ export function AuthProvider({ children, workerUrl, pingAction = 'ping' }) {
       // If the Supabase Web Lock was stolen by a concurrent request, retry once
       // after a short delay rather than leaving the app stuck on Loading.
       if (e?.message?.includes('stole it')) {
-        setTimeout(() => loadIdentity(currentSession), 600);
+        setTimeout(async () => {
+          const fresh = await getValidSession().catch(() => null);
+          loadIdentity(fresh || currentSession);
+        }, 600);
         return;
       }
       // Only clear state if we have nothing — don't wipe a valid session on a transient Worker error
