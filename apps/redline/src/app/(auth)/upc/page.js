@@ -240,11 +240,21 @@ export default function UpcPage() {
   // ── Mark received ─────────────────────────────────────────
   async function receiveBatch(batchId) {
     try {
-      await workerFetch('receiveUpcBatch', { batch_id: batchId }, session);
+      await workerFetch('receiveUpcBatch', { data: { batch_id: batchId } }, session);
       showToast(`Batch ${batchId} received`, 'success');
       await loadHistory();
     } catch (e) {
       showToast(e.message || 'Failed', 'error');
+    }
+  }
+
+  async function markSent(batchId) {
+    try {
+      await workerFetch('markUpcBatchSent', { data: { batch_id: batchId } }, session);
+      showToast(`Batch ${batchId} marked as sent`, 'success');
+      await loadHistory();
+    } catch (e) {
+      showToast(e.message || 'Failed to mark as sent', 'error');
     }
   }
 
@@ -389,8 +399,8 @@ export default function UpcPage() {
                         <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{formatDateTime(b.generated_at)}</td>
                         <td style={tdStyle}>
                           <button onClick={() => printBatch(b.batch_id)} style={{ ...btnStyle, color: 'var(--blue)', borderColor: 'var(--blue)', marginRight: 4 }}>🖨 Print</button>
-                          {canMove && (
-                            <button onClick={loadHistory} style={{ ...btnStyle, color: 'var(--orange)', borderColor: 'var(--orange)', marginRight: 4 }}>Sent</button>
+                          {canMove && b.status === 'generated' && (
+                            <button onClick={() => markSent(b.batch_id)} style={{ ...btnStyle, color: 'var(--orange)', borderColor: 'var(--orange)', marginRight: 4 }}>Sent</button>
                           )}
                           {canMove && (
                             <button onClick={() => receiveBatch(b.batch_id)} style={{ ...btnStyle, color: 'var(--green)', borderColor: 'var(--green)' }}>Received</button>
