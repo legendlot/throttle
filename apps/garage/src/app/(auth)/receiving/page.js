@@ -486,6 +486,53 @@ export default function ReceivingPage() {
     }
   }
 
+  async function printMarkLabels(markId) {
+    // Find lines that had OK entries recorded under this mark
+    const okLineIds = [...new Set(
+      lines.flatMap(l =>
+        (l._entries || [])
+          .filter(e => e.mark_id === markId && e.condition !== 'Damaged' && (e.qty || 0) > 0)
+          .map(() => l.line_id)
+      )
+    )];
+    if (!okLineIds.length) {
+      showToast('No OK items recorded for this box', 'info'); return;
+    }
+    try {
+      // Snapshot existing bag IDs before generating
+      const priorBagArrays = await Promise.all(
+        okLineIds.map(lid =>
+          garageFetch('getBags', { line_id: lid }, session).then(d => d || []).catch(() => [])
+        )
+      );
+      const priorBagIds = new Set(priorBagArrays.flat().map(b => b.bag_id));
+
+      // Generate bags for affected lines
+      await Promise.all(
+        okLineIds.map(lid =>
+          workerFetch('generateBags', { data: { line_id: lid } }, session).catch(() => {})
+        )
+      );
+
+      // Fetch all bags and isolate newly created ones
+      const afterBagArrays = await Promise.all(
+        okLineIds.map(lid =>
+          garageFetch('getBags', { line_id: lid }, session).then(d => d || []).catch(() => [])
+        )
+      );
+      const newBags = afterBagArrays.flat().filter(b => !priorBagIds.has(b.bag_id));
+
+      if (newBags.length === 0) {
+        showToast('All bag labels for this box have already been printed', 'info');
+      } else {
+        printWindow(buildBagLabelsHtml(newBags, currentShipmentId));
+        showToast(`${newBags.length} bag label(s) sent to print`, 'success');
+      }
+    } catch (e) {
+      showToast(e.message || 'Failed to print labels for this box', 'error');
+    }
+  }
+
   // ── Bags ─────────────────────────────────────────────────────────────────────
   async function generateBagsForLine(lineId) {
     try {
@@ -1245,6 +1292,12 @@ export default function ReceivingPage() {
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, paddingBottom: 6, borderBottom: '1px solid var(--border)' }}>
                             <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, fontSize: 12 }}>{m.mark_code}</span>
                             <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)' }}>{total > 0 ? total + ' units' : 'empty'}</span>
+                            {total > 0 && (
+                              <button
+                                onClick={() => printMarkLabels(m.mark_id)}
+                                style={{ marginLeft: 'auto', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 2, color: 'var(--t2)', fontSize: 9, fontFamily: 'var(--mono)', padding: '2px 6px', cursor: 'pointer', letterSpacing: '0.04em' }}
+                              >🖨 Print Labels</button>
+                            )}
                           </div>
                           {itemEntries.length === 0 ? (
                             <p style={{ fontSize: 11, color: 'var(--t3)' }}>No items recorded</p>
