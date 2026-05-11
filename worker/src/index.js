@@ -421,8 +421,9 @@ async function handleApproveRequest(body, ctx, env) {
     };
     const res = await sbFetch('tasks', { method: 'POST', body: JSON.stringify(taskRow) }, env);
     if (!res.ok) {
-      console.error('[approveRequest] Failed to create task:', await res.text());
-      return null;
+      const errorBody = await res.text();
+      console.error('[approveRequest] Failed to create task:', errorBody);
+      throw new Error(`Task INSERT failed: ${errorBody}`);
     }
     const [created] = await res.json();
     tasksCreated++;
@@ -430,6 +431,7 @@ async function handleApproveRequest(body, ctx, env) {
   }
 
   // ── Type-specific task creation ────────────────────────────────────────────
+  try {
 
   if (request.type === 'launch_pack') {
     // One task per checked launch pack item, for the single product
@@ -548,6 +550,11 @@ async function handleApproveRequest(body, ctx, env) {
         notes: approveNote || '',
       });
     }
+  }
+
+  } catch (taskErr) {
+    console.error('[approveRequest] Task creation aborted:', taskErr.message);
+    return err(`Approval succeeded but task creation failed: ${taskErr.message}`);
   }
 
   await slackOps(`✅ *Request approved*\n*"${request.title}"*\nApproved by: ${ctx.brandUser.name}\n${tasksCreated} task(s) created in backlog`, env);
