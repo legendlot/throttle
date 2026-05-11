@@ -1085,6 +1085,7 @@ export default function ReceivingPage() {
                                 {l.product || '—'}
                                 {l.component_type === 'remote' && <span style={{ marginLeft: 5, fontFamily: 'var(--mono)', fontSize: 9, color: '#7b93ff' }}>Remote</span>}
                                 {l.component_type === 'car'    && <span style={{ marginLeft: 5, fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--green)' }}>Car</span>}
+                                {l.component_type === 'drone'  && <span style={{ marginLeft: 5, fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--orange)' }}>Drone</span>}
                               </div>
                               <div style={{ fontSize: 11, color: 'var(--t2)' }}>{l.variant || '—'}</div>
                               <div style={{ fontSize: 11, color: 'var(--t2)' }}>{l.color   || '—'}</div>
