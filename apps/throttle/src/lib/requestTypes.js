@@ -62,7 +62,7 @@ export const REQUEST_TYPES = [
     multi_product: true,
     generates_multiple: false,
     fields: [
-      { id: 'asset_type',     label: 'Asset Type',        type: 'select',   required: true,  options: ['Listing Images', 'A+ Content', 'Box Sticker', 'Product Manual', 'Packaging', 'PDP Video', 'Tutorial Video', 'Other'] },
+      { id: 'asset_type',     label: 'Asset Type',        type: 'select',   required: true,  options: ['Listing Images', 'A+ Content', 'Box Sticker', 'Product Manual', 'Packaging', 'PDP Video', 'Tutorial Video', 'Comic', 'Other'] },
       { id: 'is_revision',    label: 'Work Type',         type: 'toggle',   required: true,  options: ['New', 'Revision'] },
       { id: 'revision_ref',   label: 'What exists? (link or description)', type: 'text', required: false, conditional: { field: 'is_revision', value: 'Revision' } },
       { id: 'specs',          label: 'Specs / Dimensions',type: 'text',     required: false },

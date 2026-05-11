@@ -44,6 +44,7 @@ function deriveDeliverableType(requestType, templateData) {
     case 'product_creative':
       if (['PDP Video','Tutorial Video'].includes(templateData.asset_type)) return 'video'
       if (templateData.asset_type === 'Listing Images') return 'listing_image'
+      if (templateData.asset_type === 'Comic') return 'graphic'
       return 'graphic'
     case 'social_media':
       if (['Reel','Video'].includes(templateData.format)) return 'video'
