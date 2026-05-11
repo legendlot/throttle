@@ -34,6 +34,37 @@ function Badge({ label, tone }) {
   );
 }
 
+function downloadCsv(rows, filename, showCost) {
+  const headers = [
+    'Part Code', 'Product', 'Part Name', 'Category', 'Type',
+    'Opening', 'Received', 'Issued', 'Returned', 'Closing',
+    ...(showCost ? ['Unit Cost'] : []),
+    'Reorder Point', 'Location', 'Status',
+  ];
+  const lines = [
+    headers,
+    ...rows.map(r => {
+      const closing = Number(r.closing_stock) || 0;
+      const reorder = Number(r.reorder_level) || 0;
+      const isLow = reorder > 0 && closing <= reorder;
+      return [
+        r.part_code, r.product, r.part_name, r.category, r.part_type,
+        r.opening_stock ?? 0, r.total_received ?? 0, r.total_issued ?? 0, r.returned ?? 0, closing,
+        ...(showCost ? [r.unit_cost ?? ''] : []),
+        r.reorder_level ?? 0, r.location, isLow ? 'Reorder' : 'OK',
+      ];
+    }),
+  ];
+  const csv = lines.map(l => l.map(v =>
+    v == null ? '' : `"${String(v).replace(/"/g, '""')}"`
+  ).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function StockPage() {
   const { session, perms } = useAuth();
   const [tab, setTab] = useState('components');
@@ -126,6 +157,14 @@ export default function StockPage() {
     setStatusFilter('');
   }
 
+  function handleDownloadCsv() {
+    const today = new Date().toISOString().slice(0, 10);
+    const slug = productFilter
+      ? productFilter.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+      : 'all';
+    downloadCsv(filteredStock, `stock-ledger-${slug}-${today}.csv`, showCost);
+  }
+
   return (
     <div style={{ padding: '16px 24px', color: 'var(--t1)' }}>
       <div style={{ marginBottom: 16 }}>
@@ -173,6 +212,7 @@ export default function StockPage() {
               <option value="ok">OK</option>
             </select>
             <button style={btnSecondary} onClick={clearFilters}>Clear</button>
+            <button style={btnSecondary} onClick={handleDownloadCsv} disabled={filteredStock.length === 0}>Download CSV</button>
           </div>
 
           {stockLoading ? (
