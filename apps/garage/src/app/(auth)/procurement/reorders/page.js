@@ -108,6 +108,17 @@ export default function ReordersPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Close the inline form panel on Escape
+  useEffect(() => {
+    function handleEsc(e) {
+      if (e.key !== 'Escape') return;
+      if (formOpen) { resetForm(); setFormOpen(false); }
+    }
+    document.addEventListener('keydown', handleEsc);
+    return () => document.removeEventListener('keydown', handleEsc);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formOpen]);
+
   function resetForm() {
     setRrType('part');
     setPartCode('');

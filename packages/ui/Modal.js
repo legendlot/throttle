@@ -1,4 +1,5 @@
 'use client';
+import { useEffect } from 'react';
 
 export function Modal({
   open,
@@ -13,6 +14,16 @@ export function Modal({
   size = 'md',
   children,
 }) {
+  // Close on Escape — only listens while this modal is actually open.
+  useEffect(() => {
+    if (!open) return;
+    function handleEsc(e) {
+      if (e.key === 'Escape') onClose?.();
+    }
+    document.addEventListener('keydown', handleEsc);
+    return () => document.removeEventListener('keydown', handleEsc);
+  }, [open, onClose]);
+
   if (!open) return null;
   const maxWidth = size === 'lg' ? 740 : 560;
   return (

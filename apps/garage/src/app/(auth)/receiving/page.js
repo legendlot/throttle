@@ -201,6 +201,19 @@ export default function ReceivingPage() {
 
   useEffect(() => { if (view === 'list') loadList(); }, [view, session]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Close any open overlay panel on Escape — innermost first
+  useEffect(() => {
+    function handleEsc(e) {
+      if (e.key !== 'Escape') return;
+      if (activeMarkId)  { closeBoxIntake();        return; }
+      if (showMarkForm)  { setShowMarkForm(false);  return; }
+      if (showNewForm)   { setShowNewForm(false);   return; }
+    }
+    document.addEventListener('keydown', handleEsc);
+    return () => document.removeEventListener('keydown', handleEsc);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeMarkId, showMarkForm, showNewForm]);
+
   // ── New shipment form ────────────────────────────────────────────────────────
   function resetNewForm() {
     setNewSup(''); setNewPO(''); setNewDate(todayISO());
