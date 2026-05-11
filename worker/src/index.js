@@ -463,6 +463,9 @@ async function handleApproveRequest(body, ctx, env) {
     for (const product of targetProducts) {
       const batchId = crypto.randomUUID();
       const productSuffix = product ? ` — ${product.product_code}` : '';
+      const pvChannelNote = templateData.channel?.length
+        ? `Channel: ${Array.isArray(templateData.channel) ? templateData.channel.join(', ') : templateData.channel}.`
+        : '';
 
       await createTask({
         product_code: product?.product_code || null,
@@ -471,7 +474,7 @@ async function handleApproveRequest(body, ctx, env) {
         type: 'photo_video_new',
         deliverable_type: templateData.delivery_format?.includes('MP4') || templateData.delivery_format?.includes('MOV') ? 'video' : 'photo',
         is_revision: false,
-        notes: approveNote || '',
+        notes: [pvChannelNote, approveNote].filter(Boolean).join(' '),
       });
 
       if (editRequired) {
@@ -482,7 +485,7 @@ async function handleApproveRequest(body, ctx, env) {
           type: 'photo_video_new',
           deliverable_type: 'video',
           is_revision: false,
-          notes: `Requires shoot task to be completed first. ${approveNote}`.trim(),
+          notes: [`Requires shoot task to be completed first.`, pvChannelNote, approveNote].filter(Boolean).join(' '),
         });
       }
     }
@@ -542,6 +545,9 @@ async function handleApproveRequest(body, ctx, env) {
 
     for (const product of targetProducts) {
       const productSuffix = product ? ` — ${product.product_code}` : '';
+      const channelNote = templateData.channel?.length
+        ? `Channel: ${Array.isArray(templateData.channel) ? templateData.channel.join(', ') : templateData.channel}.`
+        : '';
       await createTask({
         product_code: product?.product_code || null,
         batch_id: batchId,
@@ -549,7 +555,7 @@ async function handleApproveRequest(body, ctx, env) {
         type: request.type,
         deliverable_type: deriveDeliverableType(request.type, templateData),
         is_revision: isRevision,
-        notes: approveNote || '',
+        notes: [channelNote, approveNote].filter(Boolean).join(' '),
       });
     }
   }
