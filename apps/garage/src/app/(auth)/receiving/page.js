@@ -1018,7 +1018,7 @@ export default function ReceivingPage() {
                         <span style={{ ...lbl, textAlign: 'center', color: 'var(--red)'   }}>✕ Dmg</span>
                       </div>
                       {expectedLines.map((l, i) => (
-                        <div key={i} style={{ display: 'grid', gridTemplateColumns: cols, gap: 8, alignItems: 'center', padding: '5px 0', borderBottom: '1px solid rgba(42,42,42,.5)' }}>
+                        <div key={i} style={{ display: 'grid', gridTemplateColumns: cols, gap: 8, alignItems: 'center', padding: '5px 0', borderBottom: '1px solid var(--border)', background: i % 2 === 0 ? 'var(--surface2)' : 'transparent' }}>
                           {isFbu ? (
                             <>
                               <div style={{ fontSize: 12 }}>
