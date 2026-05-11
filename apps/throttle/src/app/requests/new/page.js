@@ -153,6 +153,10 @@ function NewRequestContent() {
       setError('Select at least one item');
       return;
     }
+    if (selectedType?.id === 'launch_pack' && !formData.deadline) {
+      setError('Assets Needed By date is required');
+      return;
+    }
     setError(null);
     setStep('review');
   }
@@ -213,7 +217,7 @@ function NewRequestContent() {
     setError(null);
 
     const templateData = selectedType.id === 'launch_pack'
-      ? { checklist: checkedItems }
+      ? { checklist: checkedItems, deadline: formData.deadline || null }
       : selectedType.id === 'sale_event'
         ? { checklist: checkedItems, ...formData }
         : { ...formData };
@@ -431,6 +435,23 @@ function NewRequestContent() {
               : 'Select the assets needed for this product launch. Each checked item becomes a separate task.'}
           </p>
         </div>
+
+        {/* Deadline field for launch_pack */}
+        {selectedType?.id === 'launch_pack' && (
+          <div style={{ marginBottom: 24 }}>
+            <label style={fieldLabelStyle}>
+              Assets Needed By <span style={{ color: 'var(--red)' }}>*</span>
+            </label>
+            <input
+              type="date"
+              value={formData.deadline || ''}
+              onChange={e => handleFieldChange('deadline', e.target.value)}
+              style={inputStyle}
+              onFocus={e => e.currentTarget.style.borderColor = '#F2CD1A'}
+              onBlur={e => e.currentTarget.style.borderColor = 'var(--b2)'}
+            />
+          </div>
+        )}
 
         <div style={{
           background: 'var(--s1)',

@@ -449,6 +449,7 @@ async function handleApproveRequest(body, ctx, env) {
         type: 'launch_pack',
         deliverable_type: item.deliverable_type,
         is_revision: false,
+        due_date: templateData.deadline || null,
         notes: `Launch pack item. Assign to: ${item.discipline}. ${approveNote}`.trim(),
       });
     }

@@ -49,7 +49,7 @@ export const REQUEST_TYPES = [
     multi_product: false,       // one product per launch pack
     generates_multiple: true,   // generates one task per checked item
     fields: [
-      // No template fields beyond the checklist — handled separately in the UI
+      { id: 'deadline', label: 'Assets Needed By', type: 'date', required: true },
     ],
   },
   {
