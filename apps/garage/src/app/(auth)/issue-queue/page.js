@@ -5,6 +5,7 @@ import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast, printWindow } from '@throttle/ui';
 import { RejectRunModal } from '../../../components/production-runs/RejectRunModal.js';
+import { RejectWorkOrderModal } from '../../../components/work-orders/RejectWorkOrderModal.js';
 
 const PICK_CAT_ORDER  = ['Car', 'Remote', 'Accessories', 'Packaging', 'Para', 'Batteries', 'License'];
 const PICK_TYPE_ORDER = ['Electronic', 'Metal', 'Plastic', 'Cardboard', 'Paper', 'Fabric', 'Chemical', 'Rubber'];
@@ -85,6 +86,7 @@ export default function IssueQueuePage() {
   const [submitting, setSubmitting] = useState(false);
   const [confirmChecked, setConfirmChecked] = useState(false);
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
+  const [rejectWOModalOpen, setRejectWOModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [materialCache, setMaterialCache] = useState({});
   const [rejectedRefs, setRejectedRefs] = useState(() => new Set());
@@ -380,6 +382,19 @@ export default function IssueQueuePage() {
       });
     }
     setRejectModalOpen(false);
+    closeItem();
+    loadQueue();
+  }
+
+  function handleRejectWOSuccess() {
+    if (selectedItem) {
+      setRejectedRefs((prev) => {
+        const next = new Set(prev);
+        next.add(selectedItem.ref);
+        return next;
+      });
+    }
+    setRejectWOModalOpen(false);
     closeItem();
     loadQueue();
   }
@@ -719,6 +734,9 @@ export default function IssueQueuePage() {
                   {selectedItem.type === 'run' && (
                     <button style={btnDanger} onClick={() => setRejectModalOpen(true)} disabled={submitting}>REJECT</button>
                   )}
+                  {selectedItem.type === 'wo' && selectedItem.wo?.wo_type !== 'Short Supply' && (
+                    <button style={btnDanger} onClick={() => setRejectWOModalOpen(true)} disabled={submitting}>REJECT</button>
+                  )}
                 </div>
                 <div style={{ display: 'flex', gap: 6 }}>
                   <button style={btnSecondary} onClick={setAllAsPlanned} disabled={submitting}>All as planned</button>
@@ -806,6 +824,14 @@ export default function IssueQueuePage() {
         runNo={selectedItem?.ref}
         onClose={() => setRejectModalOpen(false)}
         onSuccess={handleRejectSuccess}
+        session={session}
+      />
+
+      <RejectWorkOrderModal
+        open={rejectWOModalOpen}
+        woNo={selectedItem?.ref}
+        onClose={() => setRejectWOModalOpen(false)}
+        onSuccess={handleRejectWOSuccess}
         session={session}
       />
     </div>
