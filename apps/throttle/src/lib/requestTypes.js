@@ -87,7 +87,7 @@ export const REQUEST_TYPES = [
       { id: 'caption_needed', label: 'Caption Required',  type: 'toggle',   required: true,  options: ['Yes', 'No'] },
       { id: 'post_date',      label: 'Desired Post Date', type: 'date',     required: true },
       { id: 'campaign_name',  label: 'Campaign Name (if part of one)', type: 'text', required: false },
-      { id: 'reference',      label: 'Reference / Inspiration', type: 'text', required: false },
+      { id: 'reference',      label: 'Reference / Inspiration', type: 'multilink', required: false },
       { id: 'notes',          label: 'Additional Notes',  type: 'textarea', required: false },
     ],
   },
@@ -110,7 +110,7 @@ export const REQUEST_TYPES = [
       { id: 'cta',            label: 'CTA',               type: 'text',     required: true },
       { id: 'go_live_date',   label: 'Go-Live Date',      type: 'date',     required: true },
       { id: 'campaign_name',  label: 'Campaign Name',     type: 'text',     required: false },
-      { id: 'reference',      label: 'Reference / Examples', type: 'text', required: false },
+      { id: 'reference',      label: 'Reference / Examples', type: 'multilink', required: false },
     ],
   },
   {
@@ -132,7 +132,7 @@ export const REQUEST_TYPES = [
       { id: 'channel',        label: 'Channel(s)',        type: 'multiselect', required: true,  options: ['Amazon', 'Flipkart', 'Website', 'Social', 'Offline', 'All'] },
       { id: 'shoot_date',     label: 'Desired Shoot Date',type: 'date',        required: true },
       { id: 'shot_list',      label: 'Brief / Shot List', type: 'textarea', required: false },
-      { id: 'reference',      label: 'Reference / Mood',  type: 'text',     required: false },
+      { id: 'reference',      label: 'Reference / Mood',  type: 'multilink', required: false },
     ],
   },
   {
@@ -155,7 +155,7 @@ export const REQUEST_TYPES = [
       { id: 'key_messages',   label: 'Key Messages',      type: 'textarea', required: true },
       { id: 'where_used',     label: 'Where It Will Live',type: 'text',     required: true },
       { id: 'deadline',       label: 'Deadline',          type: 'date',     required: true },
-      { id: 'reference',      label: 'Reference Links',   type: 'text',     required: false },
+      { id: 'reference',      label: 'Reference Links',   type: 'multilink', required: false },
     ],
   },
   {
@@ -176,7 +176,7 @@ export const REQUEST_TYPES = [
       { id: 'copy_text',      label: 'Copy Text',         type: 'textarea', required: false, conditional: { field: 'copy_provided', value: 'Yes' } },
       { id: 'format',         label: 'File Format',       type: 'multiselect', required: false, options: ['PNG', 'PDF', 'SVG', 'AI', 'Other'] },
       { id: 'deadline',       label: 'Deadline',          type: 'date',     required: true },
-      { id: 'reference',      label: 'Reference / Inspiration', type: 'text', required: false },
+      { id: 'reference',      label: 'Reference / Inspiration', type: 'multilink', required: false },
     ],
   },
   {
@@ -190,7 +190,7 @@ export const REQUEST_TYPES = [
     generates_multiple: false,
     fields: [
       { id: 'project_type',   label: 'Project Type',      type: 'select',   required: true,  options: ['Product Render', '3D Model', 'Texture', 'Animation', '3D for Social', 'AI Video', 'Environment', 'Other'] },
-      { id: 'reference',      label: 'Reference Visuals', type: 'text',     required: true },
+      { id: 'reference',      label: 'Reference Visuals', type: 'multilink', required: true },
       { id: 'format',         label: 'File Format',       type: 'multiselect', required: true, options: ['PNG', 'MP4', 'GLB', 'OBJ', 'FBX', 'Other'] },
       { id: 'quality',        label: 'Render Quality',    type: 'select',   required: true,  options: ['Draft', 'Standard', 'High', 'Hero'] },
       { id: 'animation',      label: 'Animation Required',type: 'toggle',   required: true,  options: ['Yes', 'No'] },
@@ -233,7 +233,7 @@ export const REQUEST_TYPES = [
       { id: 'deliverables',   label: 'Deliverables (one per line)', type: 'textarea', required: true },
       { id: 'team_members',   label: 'Team Members Involved', type: 'text', required: false },
       { id: 'timeline',       label: 'Target Timeline',   type: 'text',     required: true },
-      { id: 'reference',      label: 'Reference / Mood',  type: 'text',     required: false },
+      { id: 'reference',      label: 'Reference / Mood',  type: 'multilink', required: false },
     ],
   },
 ];

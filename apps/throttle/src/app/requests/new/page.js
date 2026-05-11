@@ -1021,6 +1021,14 @@ function FieldInput({ field, value, onChange, onToggleMulti }) {
         />
       );
 
+    case 'multilink':
+      return (
+        <MultiLinkInput
+          value={value}
+          onChange={onChange}
+        />
+      );
+
     case 'textarea':
       return (
         <textarea
@@ -1119,4 +1127,73 @@ function FieldInput({ field, value, onChange, onToggleMulti }) {
     default:
       return null;
   }
+}
+
+function MultiLinkInput({ value, onChange }) {
+  const links = Array.isArray(value) ? value : (value ? [value] : []);
+  const [draft, setDraft] = useState('');
+
+  function addLink() {
+    const trimmed = draft.trim();
+    if (!trimmed) return;
+    onChange([...links, trimmed]);
+    setDraft('');
+  }
+
+  function removeLink(idx) {
+    onChange(links.filter((_, i) => i !== idx));
+  }
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 8, marginBottom: links.length > 0 ? 8 : 0 }}>
+        <input
+          type="url"
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addLink(); } }}
+          placeholder="Paste a link and press Enter or Add"
+          style={{ ...inputStyle, flex: 1 }}
+          onFocus={e => e.currentTarget.style.borderColor = '#F2CD1A'}
+          onBlur={e => e.currentTarget.style.borderColor = 'var(--b2)'}
+        />
+        <button
+          type="button"
+          onClick={addLink}
+          style={{
+            background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 6,
+            padding: '0 16px', fontFamily: 'var(--mono)', fontSize: 11,
+            color: 'var(--t2)', cursor: 'pointer', flexShrink: 0,
+          }}
+          onMouseEnter={e => e.currentTarget.style.borderColor = '#F2CD1A'}
+          onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--b2)'}
+        >
+          Add
+        </button>
+      </div>
+      {links.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {links.map((link, idx) => (
+            <div key={idx} style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              background: 'var(--s2)', border: '1px solid var(--b1)',
+              borderRadius: 4, padding: '6px 10px',
+            }}>
+              <span style={{
+                flex: 1, fontFamily: 'var(--mono)', fontSize: 11,
+                color: 'var(--t2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }} title={link}>{link}</span>
+              <button
+                type="button"
+                onClick={() => removeLink(idx)}
+                style={{ background: 'none', border: 'none', color: 'var(--t3)', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: 0, flexShrink: 0 }}
+                onMouseEnter={e => e.currentTarget.style.color = 'var(--red)'}
+                onMouseLeave={e => e.currentTarget.style.color = 'var(--t3)'}
+              >✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }

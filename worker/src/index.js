@@ -466,6 +466,9 @@ async function handleApproveRequest(body, ctx, env) {
       const pvChannelNote = templateData.channel?.length
         ? `Channel: ${Array.isArray(templateData.channel) ? templateData.channel.join(', ') : templateData.channel}.`
         : '';
+      const pvRefNote = templateData.reference?.length
+        ? `Refs: ${Array.isArray(templateData.reference) ? templateData.reference.join(' | ') : templateData.reference}.`
+        : '';
 
       await createTask({
         product_code: product?.product_code || null,
@@ -474,7 +477,7 @@ async function handleApproveRequest(body, ctx, env) {
         type: 'photo_video_new',
         deliverable_type: templateData.delivery_format?.includes('MP4') || templateData.delivery_format?.includes('MOV') ? 'video' : 'photo',
         is_revision: false,
-        notes: [pvChannelNote, approveNote].filter(Boolean).join(' '),
+        notes: [pvChannelNote, pvRefNote, approveNote].filter(Boolean).join(' '),
       });
 
       if (editRequired) {
@@ -485,7 +488,7 @@ async function handleApproveRequest(body, ctx, env) {
           type: 'photo_video_new',
           deliverable_type: 'video',
           is_revision: false,
-          notes: [`Requires shoot task to be completed first.`, pvChannelNote, approveNote].filter(Boolean).join(' '),
+          notes: [`Requires shoot task to be completed first.`, pvChannelNote, pvRefNote, approveNote].filter(Boolean).join(' '),
         });
       }
     }
@@ -548,6 +551,9 @@ async function handleApproveRequest(body, ctx, env) {
       const channelNote = templateData.channel?.length
         ? `Channel: ${Array.isArray(templateData.channel) ? templateData.channel.join(', ') : templateData.channel}.`
         : '';
+      const refNote = templateData.reference?.length
+        ? `Refs: ${Array.isArray(templateData.reference) ? templateData.reference.join(' | ') : templateData.reference}.`
+        : '';
       await createTask({
         product_code: product?.product_code || null,
         batch_id: batchId,
@@ -555,7 +561,7 @@ async function handleApproveRequest(body, ctx, env) {
         type: request.type,
         deliverable_type: deriveDeliverableType(request.type, templateData),
         is_revision: isRevision,
-        notes: [channelNote, approveNote].filter(Boolean).join(' '),
+        notes: [channelNote, refNote, approveNote].filter(Boolean).join(' '),
       });
     }
   }
