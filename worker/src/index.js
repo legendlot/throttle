@@ -205,8 +205,34 @@ export default {
     const authUser = await getAuthUser(request, env);
     if (!authUser) return err('Unauthorized', 401);
 
-    const brandUser = await getBrandUser(authUser.id, env);
-    if (!brandUser) return err('User not found — contact admin to get access', 403);
+    let brandUser = await getBrandUser(authUser.id, env);
+    if (!brandUser) {
+      // First-time Throttle login self-heal: staff already exist in auth.users
+      // from Garage/Redline, so on_auth_user_created never fires for them.
+      // Provision a default 'requester' row now so they aren't locked out.
+      const name = authUser.user_metadata?.full_name
+        || authUser.email?.split('@')[0]
+        || 'Unknown';
+      const insertRes = await sbFetch('users', {
+        method: 'POST',
+        body: JSON.stringify({
+          id: authUser.id,
+          name,
+          email: authUser.email,
+          role: 'requester',
+        }),
+      }, env);
+      if (insertRes.ok) {
+        const rows = await insertRes.json();
+        brandUser = rows[0] || null;
+        console.log(`[autoCreateBrandUser] provisioned ${authUser.email} as requester (id=${authUser.id})`);
+      } else {
+        const body = await insertRes.text();
+        console.warn(`[autoCreateBrandUser] insert ${insertRes.status}: ${body.slice(0, 200)} — refetching`);
+        brandUser = await getBrandUser(authUser.id, env);
+      }
+      if (!brandUser) return err('Failed to auto-provision user account', 500);
+    }
 
     const ctx = {
       authUser,
