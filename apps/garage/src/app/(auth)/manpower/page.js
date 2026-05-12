@@ -784,9 +784,8 @@ function AttendanceTab({ session, canManageFloor, operators }) {
 // ═══════════════════════════════════════════════════════════════════════════
 // DailyRosterTab — line assignment roster backed by store.manpower_assignments.
 // HTML5 drag-and-drop from operators panel into L1/L2/L3 columns + dropdown
-// fallback. assignManpower upserts (operator+date+line UNIQUE). No remove
-// action exists in the worker yet — reassigning to a different line creates a
-// second row (does not move). See CC_RESULT for gap.
+// fallback. assignManpower upserts (operator+date+line UNIQUE).
+// removeManpower DELETEs a single (operator_id, shift_date, line) row.
 // ═══════════════════════════════════════════════════════════════════════════
 function DailyRosterTab({ session, canManageFloor, operators }) {
   const { showToast } = useToast();
@@ -848,6 +847,21 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
       load();
     } catch (e) {
       showToast(e.message || 'Assign failed', 'error');
+    }
+  }
+
+  async function handleUnassign(row, line) {
+    if (!canManageFloor || !row?.operator_id || !line) return;
+    try {
+      await workerFetch(
+        'removeManpower',
+        { data: { operator_id: row.operator_id, line, shift_date: date } },
+        session
+      );
+      showToast(`Removed ${row.operator_name || 'operator'} from ${line}`, 'success');
+      load();
+    } catch (e) {
+      showToast(e.message || 'Unassign failed', 'error');
     }
   }
 
@@ -1020,13 +1034,36 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                           borderRadius: 3,
                           padding: '6px 10px',
                           marginBottom: 6,
+                          display: 'flex', alignItems: 'flex-start', gap: 8,
                         }}
                       >
-                        <div style={{ fontSize: 12, color: 'var(--t1)' }}>{row.operator_name || '(unknown)'}</div>
-                        <div style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 2 }}>
-                          {row.operator_department || '—'}
-                          {row.station ? ` · ${row.station}` : ''}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 12, color: 'var(--t1)' }}>{row.operator_name || '(unknown)'}</div>
+                          <div style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 2 }}>
+                            {row.operator_department || '—'}
+                            {row.station ? ` · ${row.station}` : ''}
+                          </div>
                         </div>
+                        {canManageFloor && (
+                          <button
+                            onClick={() => handleUnassign(row, line)}
+                            title={`Remove ${row.operator_name || 'operator'} from ${line}`}
+                            style={{
+                              background: 'transparent',
+                              border: '1px solid var(--border)',
+                              color: '#ff7070',
+                              cursor: 'pointer',
+                              borderRadius: 3,
+                              padding: '0 6px',
+                              fontSize: 13,
+                              lineHeight: '20px',
+                              height: 22,
+                              flexShrink: 0,
+                            }}
+                          >
+                            ×
+                          </button>
+                        )}
                       </div>
                     ))
                   )}
@@ -1171,9 +1208,7 @@ function PerformanceTab({ session, canManageFloor, operators }) {
         return <span title={t.length > 80 ? t : undefined}>{t.length > 80 ? t.slice(0, 80) + '…' : t}</span>;
       }
       case 'recorded_by':
-        return row.recorded_by
-          ? <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }} title={row.recorded_by}>{row.recorded_by.slice(0, 8)}…</span>
-          : '—';
+        return row.recorded_by_name || '—';
       default:
         return row[c.key];
     }
