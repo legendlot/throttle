@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, useToast, Modal, Badge, DataTable } from '@throttle/ui';
+import { Spinner, useToast, Modal, ConfirmModal, Badge, DataTable, EmptyState } from '@throttle/ui';
 import { todayStr } from '@throttle/domain';
 
 // ── Legacy daily-log activity presets (preserved from prior page) ───────────
@@ -74,7 +74,7 @@ export default function ManpowerPage() {
       />
 
       {activeTab === 'operators'   && <OperatorsTab session={session} canManageFloor={canManageFloor} />}
-      {activeTab === 'attendance'  && <ComingSoon label="Attendance — live clock-in/out viewer (Step 6C)" />}
+      {activeTab === 'attendance'  && <AttendanceTab session={session} canManageFloor={canManageFloor} />}
       {activeTab === 'roster'      && <DailyRosterTab session={session} />}
       {activeTab === 'performance' && <ComingSoon label="Performance — points and events (Step 6D)" />}
     </div>
@@ -507,6 +507,233 @@ function Field({ label, full, children }) {
     <div style={{ gridColumn: full ? '1 / -1' : 'auto' }}>
       <span style={labelStyle}>{label}</span>
       {children}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AttendanceTab — daily clock-in/out view with close-shift action.
+// Uses worker actions getOperatorAttendance (date_from/date_to/operator_id/department)
+// and closeAttendanceShift (attendance_id). Worker requires canManageFloor for both,
+// so the entire tab is gated on canManageFloor.
+// ═══════════════════════════════════════════════════════════════════════════
+function istToday() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
+function fmtIstTime(ts) {
+  if (!ts) return null;
+  try {
+    return new Date(ts).toLocaleTimeString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+  } catch { return null; }
+}
+
+function fmtDuration(clockIn, clockOut) {
+  if (!clockIn || !clockOut) return '—';
+  const ms = new Date(clockOut).getTime() - new Date(clockIn).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return '—';
+  const totalMin = Math.floor(ms / 60000);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return `${h}h ${m}m`;
+}
+
+function AttendanceTab({ session, canManageFloor }) {
+  const { showToast } = useToast();
+  const [date, setDate] = useState(istToday());
+  const [rows, setRows] = useState([]);
+  const [operators, setOperators] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [closeTarget, setCloseTarget] = useState(null);
+  const [closing, setClosing] = useState(false);
+
+  const opMap = useMemo(() => {
+    const m = {};
+    for (const op of operators) m[op.id] = op;
+    return m;
+  }, [operators]);
+
+  // Load operators once (for employee_id lookup — worker attendance rows don't carry it)
+  useEffect(() => {
+    if (!session || !canManageFloor) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await workerFetch('getOperators', { data: { status: '' } }, session);
+        const list = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
+        if (!cancelled) setOperators(list);
+      } catch (e) {
+        if (!cancelled) showToast(e.message || 'Failed to load operators', 'error');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [session, canManageFloor, showToast]);
+
+  const load = useCallback(async () => {
+    if (!session || !canManageFloor || !date) return;
+    setLoading(true);
+    try {
+      const res = await workerFetch(
+        'getOperatorAttendance',
+        { data: { date_from: date, date_to: date } },
+        session
+      );
+      const list = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
+      setRows(list);
+    } catch (e) {
+      showToast(e.message || 'Failed to load attendance', 'error');
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [session, canManageFloor, date, showToast]);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function confirmClose() {
+    if (!closeTarget) return;
+    setClosing(true);
+    try {
+      const res = await workerFetch(
+        'closeAttendanceShift',
+        { data: { attendance_id: closeTarget.id } },
+        session
+      );
+      // Worker returns { ok:false, error } for already-closed/not-found cases inside data
+      const inner = res?.data;
+      if (inner && inner.ok === false) {
+        showToast(inner.error || 'Could not close shift', 'error');
+      } else {
+        showToast(`Shift closed for ${closeTarget.operator_name || 'operator'}`, 'success');
+      }
+      setCloseTarget(null);
+      load();
+    } catch (e) {
+      showToast(e.message || 'Close shift failed', 'error');
+    } finally {
+      setClosing(false);
+    }
+  }
+
+  if (!canManageFloor) {
+    return (
+      <div style={{ ...panelStyle, padding: '40px 24px', textAlign: 'center' }}>
+        <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>
+          Attendance is restricted to floor supervisors.
+        </div>
+      </div>
+    );
+  }
+
+  const columns = [
+    { key: 'employee_id', label: 'Employee ID' },
+    { key: 'name',        label: 'Name' },
+    { key: 'department',  label: 'Department' },
+    { key: 'shift',       label: 'Shift' },
+    { key: 'clock_in',    label: 'Clock In' },
+    { key: 'clock_out',   label: 'Clock Out' },
+    { key: 'duration',    label: 'Duration' },
+    { key: 'device',      label: 'Device' },
+    { key: '_actions',    label: '' },
+  ];
+
+  function renderCell(row, c) {
+    const op = opMap[row.operator_id];
+    switch (c.key) {
+      case 'employee_id':
+        return <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)' }}>{op?.employee_id || '—'}</span>;
+      case 'name':
+        return row.operator_name || op?.name || '—';
+      case 'department':
+        return capitalize(row.operator_department || op?.department || '');
+      case 'shift':
+        return capitalize(row.shift_type || '');
+      case 'clock_in':
+        return <span style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>{fmtIstTime(row.clock_in) || '—'}</span>;
+      case 'clock_out':
+        return row.clock_out
+          ? <span style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>{fmtIstTime(row.clock_out)}</span>
+          : <Badge color="var(--yellow)">OPEN</Badge>;
+      case 'duration':
+        return <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)' }}>{fmtDuration(row.clock_in, row.clock_out)}</span>;
+      case 'device':
+        return <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>{row.clock_in_device || '—'}</span>;
+      case '_actions':
+        if (row.clock_out) return null;
+        return (
+          <button
+            onClick={(e) => { e.stopPropagation(); setCloseTarget(row); }}
+            style={{ ...btnSecondary, padding: '4px 8px' }}
+            title="Close shift"
+          >
+            Close Shift
+          </button>
+        );
+      default:
+        return row[c.key];
+    }
+  }
+
+  return (
+    <div>
+      {/* Toolbar */}
+      <div style={{ ...panelStyle, marginBottom: 12 }}>
+        <div style={{ padding: '10px 14px', display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <div>
+            <span style={labelStyle}>Date</span>
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              style={{ ...inputStyle, fontFamily: 'var(--mono)' }}
+            />
+          </div>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+              {rows.length} record{rows.length === 1 ? '' : 's'}
+            </span>
+            <button style={btnSecondary} onClick={load} disabled={loading}>↻</button>
+          </div>
+        </div>
+      </div>
+
+      {/* Table */}
+      <div style={panelStyle}>
+        <div style={panelBodyStyle}>
+          {loading ? (
+            <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+          ) : rows.length === 0 ? (
+            <EmptyState message={`No attendance records for ${date}`} />
+          ) : (
+            <DataTable
+              columns={columns}
+              rows={rows}
+              loading={false}
+              emptyMessage=""
+              renderCell={renderCell}
+            />
+          )}
+        </div>
+      </div>
+
+      <ConfirmModal
+        open={!!closeTarget}
+        onClose={() => !closing && setCloseTarget(null)}
+        title="Close Shift"
+        confirmLabel={closing ? 'Closing…' : 'Close Shift'}
+        onConfirm={confirmClose}
+        loading={closing}
+        message={
+          closeTarget
+            ? `Close shift for ${closeTarget.operator_name || 'this operator'}? This will set their clock-out to the current time.`
+            : ''
+        }
+      />
     </div>
   );
 }
