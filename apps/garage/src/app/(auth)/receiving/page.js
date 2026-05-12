@@ -487,7 +487,6 @@ export default function ReceivingPage() {
   }
 
   async function printMarkLabels(markId) {
-    // Find lines that had OK entries recorded under this mark
     const okLineIds = [...new Set(
       lines.flatMap(l =>
         (l._entries || [])
@@ -499,34 +498,24 @@ export default function ReceivingPage() {
       showToast('No OK items recorded for this box', 'info'); return;
     }
     try {
-      // Snapshot existing bag IDs before generating
-      const priorBagArrays = await Promise.all(
-        okLineIds.map(lid =>
-          garageFetch('getBags', { line_id: lid }, session).then(d => d || []).catch(() => [])
-        )
-      );
-      const priorBagIds = new Set(priorBagArrays.flat().map(b => b.bag_id));
-
-      // Generate bags for affected lines
       await Promise.all(
         okLineIds.map(lid =>
           workerFetch('generateBags', { data: { line_id: lid } }, session).catch(() => {})
         )
       );
 
-      // Fetch all bags and isolate newly created ones
-      const afterBagArrays = await Promise.all(
+      const bagArrays = await Promise.all(
         okLineIds.map(lid =>
           garageFetch('getBags', { line_id: lid }, session).then(d => d || []).catch(() => [])
         )
       );
-      const newBags = afterBagArrays.flat().filter(b => !priorBagIds.has(b.bag_id));
+      const allBags = bagArrays.flat();
 
-      if (newBags.length === 0) {
-        showToast('All bag labels for this box have already been printed', 'info');
+      if (allBags.length === 0) {
+        showToast('No bags found for this box', 'info');
       } else {
-        printWindow(buildBagLabelsHtml(newBags, currentShipmentId));
-        showToast(`${newBags.length} bag label(s) sent to print`, 'success');
+        printWindow(buildBagLabelsHtml(allBags, currentShipmentId));
+        showToast(`${allBags.length} bag label(s) sent to print`, 'success');
       }
     } catch (e) {
       showToast(e.message || 'Failed to print labels for this box', 'error');
