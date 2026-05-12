@@ -209,9 +209,10 @@ export const REQUEST_TYPES = [
     multi_product: true,
     generates_multiple: true,   // generates one task per checked deliverable item
     fields: [
-      { id: 'sale_name',   label: 'Sale / Event Name',       type: 'text',        required: true  },
-      { id: 'channels',    label: 'Channels',                 type: 'multiselect', required: true,  options: ['Website', 'Social', 'Email', 'Paid Ads', 'Amazon', 'Flipkart', 'WhatsApp'] },
-      { id: 'scope',       label: 'Sale Scope',               type: 'select',      required: true,  options: ['Sitewide', 'Category-wide', 'Specific Products'] },
+      { id: 'sale_name',     label: 'Sale / Event Name',       type: 'text',        required: true  },
+      { id: 'channels',      label: 'Channels',                 type: 'multiselect', required: true,  options: ['Website', 'Social', 'Email', 'Paid Ads', 'Amazon', 'Flipkart', 'WhatsApp', 'Offline'] },
+      { id: 'offline_scope', label: 'Offline Scope',            type: 'textarea',    required: false, placeholder: 'Describe in-store materials, BTL, physical collateral, etc.', conditional: { field: 'channels', includes: 'Offline' } },
+      { id: 'scope',         label: 'Sale Scope',               type: 'select',      required: true,  options: ['Sitewide', 'Category-wide', 'Specific Products'] },
       { id: 'sale_start',  label: 'Sale Goes Live',           type: 'date',        required: true  },
       { id: 'sale_end',    label: 'Sale Ends',                type: 'date',        required: true  },
       { id: 'deadline',    label: 'Assets Needed By',         type: 'date',        required: true  },

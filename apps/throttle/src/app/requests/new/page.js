@@ -195,6 +195,10 @@ function NewRequestContent() {
 
   function isFieldVisible(field) {
     if (!field.conditional) return true;
+    if (field.conditional.includes !== undefined) {
+      const v = formData[field.conditional.field];
+      return Array.isArray(v) && v.includes(field.conditional.includes);
+    }
     return formData[field.conditional.field] === field.conditional.value;
   }
 

@@ -533,6 +533,7 @@ async function handleApproveRequest(body, ctx, env) {
         notes: [
           templateData.scope ? `Scope: ${templateData.scope}` : '',
           templateData.channels?.length ? `Channels: ${templateData.channels.join(', ')}` : '',
+          templateData.offline_scope ? `Offline scope: ${templateData.offline_scope}` : '',
           templateData.sale_start ? `Sale live: ${templateData.sale_start}` : '',
           templateData.sale_end ? `Sale ends: ${templateData.sale_end}` : '',
           approveNote,
