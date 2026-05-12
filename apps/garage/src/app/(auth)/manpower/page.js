@@ -1,23 +1,11 @@
 'use client';
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
-import { garageFetch, workerFetch } from '@throttle/db';
+import { workerFetch } from '@throttle/db';
 import { Spinner, useToast, Modal, ConfirmModal, Badge, DataTable, EmptyState } from '@throttle/ui';
-import { todayStr } from '@throttle/domain';
 
-// ── Legacy daily-log activity presets (preserved from prior page) ───────────
-const MP_ACTIVITIES = [
-  { key: 'inwarding',   label: 'Inwarding / Receiving / GRN', color: 'var(--green)'  },
-  { key: 'issuance',    label: 'Issuance / Picking',          color: 'var(--yellow)' },
-  { key: 'counting',    label: 'Counting / Audit',            color: 'var(--blue)'   },
-  { key: 'bagging',     label: 'Bagging & Tagging',           color: 'var(--blue)'   },
-  { key: 'rearranging', label: 'Rearranging / Organising',    color: 'var(--t2)'     },
-  { key: 'cleanup',     label: 'Clean-up',                    color: 'var(--t3)'     },
-  { key: 'qa',          label: 'QA / Inspection',             color: '#a78bfa'       },
-  { key: 'dispatch',    label: 'Dispatch / Packing',          color: 'var(--t2)'     },
-  { key: 'other',       label: 'Other',                       color: 'var(--t3)'     },
-];
-const SHIFT_COLORS = { Morning: 'var(--yellow)', Afternoon: 'var(--blue)', Night: 'var(--t3)' };
+// Line accent colours — used in Daily Roster.
+const LINE_COLORS = { L1: '#22c55e', L2: '#3b82f6', L3: '#a855f7' };
 
 // ── Shared styles ──────────────────────────────────────────────────────────
 const panelStyle       = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, marginBottom: 16 };
@@ -42,10 +30,29 @@ function fmtDate(d) {
 // ─── Manpower page (4 tabs) ────────────────────────────────────────────────
 export default function ManpowerPage() {
   const { session, perms } = useAuth();
+  const { showToast } = useToast();
   const [activeTab, setActiveTab] = useState('operators');
+  // Page-level operators cache, shared by Attendance / Daily Roster / Performance.
+  // Operators tab has its own filter-driven fetch — it does not consume this.
+  const [allOperators, setAllOperators] = useState([]);
 
   // canManageFloor mirrors worker.js's canManageFloor predicate.
   const canManageFloor = !!(perms?.users_manage || perms?.production_view || perms?.procurement_approve);
+
+  useEffect(() => {
+    if (!session || !canManageFloor) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await workerFetch('getOperators', { data: { status: '' } }, session);
+        const list = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
+        if (!cancelled) setAllOperators(list);
+      } catch (e) {
+        if (!cancelled) showToast(e.message || 'Failed to load operators', 'error');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [session, canManageFloor, showToast]);
 
   if (perms && !perms.dashboard) {
     return <div style={{ padding: 24, color: 'var(--t3)' }}>Access restricted</div>;
@@ -74,9 +81,9 @@ export default function ManpowerPage() {
       />
 
       {activeTab === 'operators'   && <OperatorsTab session={session} canManageFloor={canManageFloor} />}
-      {activeTab === 'attendance'  && <AttendanceTab session={session} canManageFloor={canManageFloor} />}
-      {activeTab === 'roster'      && <DailyRosterTab session={session} />}
-      {activeTab === 'performance' && <ComingSoon label="Performance — points and events (Step 6D)" />}
+      {activeTab === 'attendance'  && <AttendanceTab session={session} canManageFloor={canManageFloor} operators={allOperators} />}
+      {activeTab === 'roster'      && <DailyRosterTab session={session} canManageFloor={canManageFloor} operators={allOperators} />}
+      {activeTab === 'performance' && <PerformanceTab session={session} canManageFloor={canManageFloor} operators={allOperators} />}
     </div>
   );
 }
@@ -110,14 +117,6 @@ function TabBar({ tabs, active, onChange }) {
           </button>
         );
       })}
-    </div>
-  );
-}
-
-function ComingSoon({ label }) {
-  return (
-    <div style={{ ...panelStyle, padding: '40px 24px', textAlign: 'center' }}>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>{label} — coming soon</div>
     </div>
   );
 }
@@ -543,36 +542,20 @@ function fmtDuration(clockIn, clockOut) {
   return `${h}h ${m}m`;
 }
 
-function AttendanceTab({ session, canManageFloor }) {
+function AttendanceTab({ session, canManageFloor, operators }) {
   const { showToast } = useToast();
   const [date, setDate] = useState(istToday());
   const [rows, setRows] = useState([]);
-  const [operators, setOperators] = useState([]);
   const [loading, setLoading] = useState(true);
   const [closeTarget, setCloseTarget] = useState(null);
   const [closing, setClosing] = useState(false);
 
+  // employee_id lookup — worker attendance rows include name+department but no employee_id.
   const opMap = useMemo(() => {
     const m = {};
-    for (const op of operators) m[op.id] = op;
+    for (const op of operators || []) m[op.id] = op;
     return m;
   }, [operators]);
-
-  // Load operators once (for employee_id lookup — worker attendance rows don't carry it)
-  useEffect(() => {
-    if (!session || !canManageFloor) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await workerFetch('getOperators', { data: { status: '' } }, session);
-        const list = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
-        if (!cancelled) setOperators(list);
-      } catch (e) {
-        if (!cancelled) showToast(e.message || 'Failed to load operators', 'error');
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [session, canManageFloor, showToast]);
 
   const load = useCallback(async () => {
     if (!session || !canManageFloor || !date) return;
@@ -739,276 +722,543 @@ function AttendanceTab({ session, canManageFloor }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// DailyRosterTab — preserves the legacy daily headcount log + history.
-// Uses the legacy `manpower_log` schema via garageFetch/getManpower and
-// workerFetch/postManpower. A future task will rewrite this against the new
-// store.manpower_assignments table.
+// DailyRosterTab — line assignment roster backed by store.manpower_assignments.
+// HTML5 drag-and-drop from operators panel into L1/L2/L3 columns + dropdown
+// fallback. assignManpower upserts (operator+date+line UNIQUE). No remove
+// action exists in the worker yet — reassigning to a different line creates a
+// second row (does not move). See CC_RESULT for gap.
 // ═══════════════════════════════════════════════════════════════════════════
-function freshActivityRows() {
-  return MP_ACTIVITIES.map((a, i) => ({ id: i + 1, preset: a.key, custom: '', count: '' }));
-}
-
-function DailyRosterTab({ session }) {
+function DailyRosterTab({ session, canManageFloor, operators }) {
   const { showToast } = useToast();
-  const [date, setDate] = useState(todayStr());
-  const [shift, setShift] = useState('Morning');
-  const [notes, setNotes] = useState('');
-  const [activityRows, setActivityRows] = useState(freshActivityRows());
-  const [submitting, setSubmitting] = useState(false);
-  const [days, setDays] = useState(7);
-  const [logs, setLogs] = useState([]);
-  const [historyLoading, setHistoryLoading] = useState(true);
+  const [date, setDate] = useState(istToday());
+  const [grouped, setGrouped] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [assignOp, setAssignOp] = useState({ L1: '', L2: '', L3: '' });
+  const [showAssign, setShowAssign] = useState({ L1: false, L2: false, L3: false });
 
-  const loadHistory = useCallback(async () => {
-    if (!session) return;
-    setHistoryLoading(true);
-    try {
-      const data = await garageFetch('getManpower', { days }, session);
-      setLogs(Array.isArray(data) ? data : []);
-    } catch (e) {
-      showToast(e.message || 'Failed to load manpower history', 'error');
-      setLogs([]);
-    } finally {
-      setHistoryLoading(false);
-    }
-  }, [session, days, showToast]);
-
-  useEffect(() => { loadHistory(); }, [loadHistory]);
-
-  const totalHeadcount = useMemo(
-    () => activityRows.reduce((s, r) => s + (parseInt(r.count) || 0), 0),
-    [activityRows]
+  const activeOperators = useMemo(
+    () => (operators || []).filter((o) => o.status !== 'inactive'),
+    [operators]
   );
 
-  function updateRow(id, field, value) {
-    setActivityRows((rows) => rows.map((r) => r.id === id ? { ...r, [field]: value } : r));
-  }
-  function addRow() {
-    setActivityRows((rows) => [...rows, { id: Date.now(), preset: '', custom: '', count: '' }]);
-  }
-  function removeRow(id) {
-    setActivityRows((rows) => rows.filter((r) => r.id !== id));
-  }
+  const filteredOperators = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return activeOperators;
+    return activeOperators.filter((o) => (o.name || '').toLowerCase().includes(q));
+  }, [activeOperators, search]);
 
-  async function handleSubmit() {
-    const finalActivities = [];
-    activityRows.forEach((row) => {
-      const count = parseInt(row.count) || 0;
-      if (count === 0) return;
-      const actKey = row.preset || '';
-      const actLabel = actKey
-        ? (MP_ACTIVITIES.find((a) => a.key === actKey)?.label || actKey)
-        : (row.custom?.trim() || 'Other');
-      finalActivities.push({
-        person_name: String(count) + 'x',
-        activity:    actLabel,
-        station:     actKey || null,
-      });
-    });
-    if (totalHeadcount === 0) {
-      showToast('Enter at least one activity with headcount > 0', 'error');
-      return;
+  // operator_id -> line they're already on (for left-panel chip dot)
+  const assignedLineByOpId = useMemo(() => {
+    const m = {};
+    for (const line of ['L1', 'L2', 'L3']) {
+      for (const row of grouped[line] || []) m[row.operator_id] = line;
     }
-    setSubmitting(true);
+    return m;
+  }, [grouped]);
+
+  const load = useCallback(async () => {
+    if (!session || !canManageFloor || !date) return;
+    setLoading(true);
     try {
-      const res = await workerFetch('postManpower', {
-        data: {
-          log_date:   date,
-          shift,
-          headcount:  totalHeadcount,
-          notes:      notes || null,
-          activities: finalActivities,
-        },
-      }, session);
-      const result = res.data || res;
-      showToast(`Manpower logged — ${result.headcount || totalHeadcount} staff on ${shift} shift`, 'success');
-      setNotes('');
-      setActivityRows(freshActivityRows());
-      loadHistory();
+      const res = await workerFetch('getManpowerLog', { data: { shift_date: date } }, session);
+      const inner = res?.data;
+      const obj = inner && typeof inner === 'object' && !Array.isArray(inner) ? inner : {};
+      setGrouped(obj);
     } catch (e) {
-      showToast(e.message || 'Failed to log manpower', 'error');
+      showToast(e.message || 'Failed to load roster', 'error');
+      setGrouped({});
     } finally {
-      setSubmitting(false);
+      setLoading(false);
+    }
+  }, [session, canManageFloor, date, showToast]);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function handleAssign(operatorId, line) {
+    if (!canManageFloor || !operatorId || !line) return;
+    try {
+      await workerFetch(
+        'assignManpower',
+        { data: { operator_id: operatorId, line, shift_date: date } },
+        session
+      );
+      const op = activeOperators.find((o) => o.id === operatorId);
+      showToast(`Assigned ${op?.name || 'operator'} to ${line}`, 'success');
+      load();
+    } catch (e) {
+      showToast(e.message || 'Assign failed', 'error');
     }
   }
 
-  const maxCount = Math.max(...logs.map((l) => l.headcount || 0), 1);
+  function onDragStart(e, op) {
+    e.dataTransfer.setData('operatorId', op.id);
+    e.dataTransfer.effectAllowed = 'move';
+  }
+
+  function onDropToLine(e, line) {
+    e.preventDefault();
+    const operatorId = e.dataTransfer.getData('operatorId');
+    if (operatorId) handleAssign(operatorId, line);
+  }
+
+  if (!canManageFloor) {
+    return (
+      <div style={{ ...panelStyle, padding: '40px 24px', textAlign: 'center' }}>
+        <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>
+          Daily Roster is restricted to floor supervisors.
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 16, alignItems: 'start' }}>
-      {/* LOG FORM */}
-      <div style={panelStyle}>
-        <div style={panelHeaderStyle}>
-          <span>Log Manpower</span>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+    <div>
+      {/* Toolbar */}
+      <div style={{ ...panelStyle, marginBottom: 12 }}>
+        <div style={{ padding: '10px 14px', display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <div>
+            <span style={labelStyle}>Date</span>
             <input
               type="date"
               value={date}
               onChange={(e) => setDate(e.target.value)}
               style={{ ...inputStyle, fontFamily: 'var(--mono)' }}
-              disabled={submitting}
             />
-            <select
-              value={shift}
-              onChange={(e) => setShift(e.target.value)}
-              style={selectStyle}
-              disabled={submitting}
-            >
-              <option>Morning</option>
-              <option>Afternoon</option>
-              <option>Night</option>
-            </select>
+          </div>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+              {(['L1','L2','L3']).reduce((s, l) => s + ((grouped[l] || []).length), 0)} assigned
+            </span>
+            <button style={btnSecondary} onClick={load} disabled={loading}>↻</button>
           </div>
         </div>
-        <div style={panelBodyStyle}>
-          <div style={{ marginBottom: 8, fontSize: 10, color: 'var(--t3)', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Activity Breakdown</div>
-          {activityRows.map((row) => {
-            const isCustom = !row.preset;
-            return (
-              <div key={row.id} style={{ display: 'grid', gridTemplateColumns: '1fr 90px 28px', gap: 6, marginBottom: 6, alignItems: 'center' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: isCustom ? '1fr 1fr' : '1fr', gap: 6 }}>
-                  <select
-                    value={row.preset}
-                    onChange={(e) => updateRow(row.id, 'preset', e.target.value)}
-                    style={selectStyle}
-                    disabled={submitting}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 12, alignItems: 'start' }}>
+        {/* Operators panel */}
+        <div style={panelStyle}>
+          <div style={panelHeaderStyle}>
+            <span>Operators ({activeOperators.length})</span>
+          </div>
+          <div style={panelBodyStyle}>
+            <input
+              type="text"
+              placeholder="Search…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              style={{ ...inputStyle, width: '100%', marginBottom: 10 }}
+            />
+            {filteredOperators.length === 0 ? (
+              <div style={{ fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
+                {activeOperators.length === 0 ? 'Loading operators…' : 'No matches'}
+              </div>
+            ) : (
+              filteredOperators.map((op) => {
+                const assignedLine = assignedLineByOpId[op.id];
+                const dotColor = assignedLine ? LINE_COLORS[assignedLine] : null;
+                return (
+                  <div
+                    key={op.id}
+                    draggable
+                    onDragStart={(e) => onDragStart(e, op)}
+                    title={assignedLine ? `Already on ${assignedLine} (drag to add to another line)` : 'Drag to a line column'}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 8,
+                      padding: '6px 8px', marginBottom: 4,
+                      background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3,
+                      cursor: 'grab', fontSize: 12, color: 'var(--t1)',
+                    }}
                   >
-                    <option value="">Custom activity…</option>
-                    {MP_ACTIVITIES.map((a) => (
-                      <option key={a.key} value={a.key}>{a.label}</option>
-                    ))}
-                  </select>
-                  {isCustom && (
-                    <input
-                      type="text"
-                      placeholder="Activity name"
-                      value={row.custom}
-                      onChange={(e) => updateRow(row.id, 'custom', e.target.value)}
-                      style={inputStyle}
-                      disabled={submitting}
-                    />
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>≡</span>
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{op.name}</span>
+                    {dotColor && (
+                      <span
+                        style={{ width: 8, height: 8, borderRadius: '50%', background: dotColor, boxShadow: '0 0 0 1px var(--border)' }}
+                        title={`On ${assignedLine}`}
+                      />
+                    )}
+                    <span style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--t3)', textTransform: 'uppercase' }}>
+                      {(op.department || '').slice(0, 4)}
+                    </span>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        {/* Line columns */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
+          {['L1', 'L2', 'L3'].map((line) => {
+            const rows = grouped[line] || [];
+            const accent = LINE_COLORS[line];
+            return (
+              <div
+                key={line}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => onDropToLine(e, line)}
+                style={{ ...panelStyle, marginBottom: 0, minHeight: 220 }}
+              >
+                <div style={{ ...panelHeaderStyle, color: accent }}>
+                  <span>{line} ({rows.length})</span>
+                  <button
+                    style={{ ...btnSecondary, padding: '2px 8px' }}
+                    onClick={() => setShowAssign((s) => ({ ...s, [line]: !s[line] }))}
+                    title={showAssign[line] ? 'Close' : 'Assign via dropdown'}
+                  >
+                    {showAssign[line] ? '×' : '+'}
+                  </button>
+                </div>
+                <div style={panelBodyStyle}>
+                  {showAssign[line] && (
+                    <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+                      <select
+                        value={assignOp[line]}
+                        onChange={(e) => setAssignOp((s) => ({ ...s, [line]: e.target.value }))}
+                        style={{ ...selectStyle, flex: 1, minWidth: 0 }}
+                      >
+                        <option value="">Select operator…</option>
+                        {activeOperators.map((op) => (
+                          <option key={op.id} value={op.id}>{op.name}</option>
+                        ))}
+                      </select>
+                      <button
+                        style={{ ...btnPrimary, padding: '6px 12px', fontSize: 11 }}
+                        onClick={async () => {
+                          const id = assignOp[line];
+                          if (!id) return;
+                          await handleAssign(id, line);
+                          setAssignOp((s) => ({ ...s, [line]: '' }));
+                          setShowAssign((s) => ({ ...s, [line]: false }));
+                        }}
+                        disabled={!assignOp[line]}
+                      >
+                        Assign
+                      </button>
+                    </div>
+                  )}
+                  {loading ? (
+                    <div style={{ padding: 12, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+                  ) : rows.length === 0 ? (
+                    <div style={{
+                      border: '1px dashed var(--border)', borderRadius: 3,
+                      padding: '24px 12px', textAlign: 'center',
+                      color: 'var(--t3)', fontSize: 11, fontFamily: 'var(--mono)',
+                      textTransform: 'uppercase', letterSpacing: '0.08em',
+                    }}>
+                      Drop operator here
+                    </div>
+                  ) : (
+                    rows.map((row) => (
+                      <div
+                        key={row.id}
+                        style={{
+                          background: 'var(--surface2)',
+                          border: '1px solid var(--border)',
+                          borderLeft: `3px solid ${accent}`,
+                          borderRadius: 3,
+                          padding: '6px 10px',
+                          marginBottom: 6,
+                        }}
+                      >
+                        <div style={{ fontSize: 12, color: 'var(--t1)' }}>{row.operator_name || '(unknown)'}</div>
+                        <div style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 2 }}>
+                          {row.operator_department || '—'}
+                          {row.station ? ` · ${row.station}` : ''}
+                        </div>
+                      </div>
+                    ))
                   )}
                 </div>
-                <input
-                  type="number"
-                  min="0"
-                  placeholder="0"
-                  value={row.count}
-                  onChange={(e) => updateRow(row.id, 'count', e.target.value)}
-                  style={{ ...inputStyle, fontSize: 13, fontWeight: 700, textAlign: 'center', fontFamily: 'var(--mono)' }}
-                  disabled={submitting}
-                />
-                <button
-                  onClick={() => removeRow(row.id)}
-                  disabled={submitting}
-                  style={{ background: 'transparent', border: '1px solid var(--border)', color: '#ff7070', cursor: 'pointer', fontSize: 11, borderRadius: 3, padding: 0, height: 28 }}
-                  title="Remove row"
-                >
-                  ✕
-                </button>
               </div>
             );
           })}
-          <button
-            onClick={addRow}
-            disabled={submitting}
-            style={{ ...btnSecondary, marginTop: 4 }}
-          >
-            + Add Activity
-          </button>
-
-          <div style={{ marginTop: 14, padding: '10px 12px', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Total Headcount</span>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 26, fontWeight: 700, color: 'var(--yellow)' }}>{totalHeadcount}</span>
-          </div>
-
-          <div style={{ marginTop: 12 }}>
-            <span style={labelStyle}>Notes (optional)</span>
-            <input
-              type="text"
-              placeholder="Optional notes…"
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              style={{ ...inputStyle, width: '100%' }}
-              disabled={submitting}
-            />
-          </div>
-
-          <button
-            onClick={handleSubmit}
-            disabled={submitting}
-            style={{ ...btnPrimary, width: '100%', marginTop: 14, opacity: submitting ? 0.6 : 1, cursor: submitting ? 'wait' : 'pointer' }}
-          >
-            {submitting ? 'SAVING…' : 'SAVE LOG'}
-          </button>
-        </div>
-      </div>
-
-      {/* HISTORY */}
-      <div style={panelStyle}>
-        <div style={panelHeaderStyle}>
-          <span>History</span>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <select
-              value={days}
-              onChange={(e) => setDays(parseInt(e.target.value, 10))}
-              style={selectStyle}
-              disabled={historyLoading}
-            >
-              <option value={7}>Last 7 days</option>
-              <option value={14}>Last 14 days</option>
-              <option value={30}>Last 30 days</option>
-            </select>
-            <button style={btnSecondary} onClick={loadHistory} disabled={historyLoading}>↻</button>
-          </div>
-        </div>
-        <div style={panelBodyStyle}>
-          {historyLoading ? (
-            <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
-          ) : logs.length === 0 ? (
-            <div style={{ padding: 24, textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>No manpower logs yet</div>
-          ) : (
-            logs.map((l) => {
-              const pct = ((l.headcount || 0) / maxCount) * 100;
-              const sc = SHIFT_COLORS[l.shift] || 'var(--t2)';
-              const acts = Array.isArray(l.activities) ? l.activities : [];
-              return (
-                <div key={l.id} style={{ borderBottom: '1px solid var(--border)', padding: '12px 0' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
-                    <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                      <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, fontSize: 13 }}>{l.log_date}</span>
-                      <span style={{ fontSize: 11, color: sc, fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{l.shift}</span>
-                      {l.notes && <span style={{ fontSize: 11, color: 'var(--t3)', fontStyle: 'italic' }}>{l.notes}</span>}
-                    </div>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                      <div style={{ width: 80, height: 6, background: 'var(--surface2)', borderRadius: 3, overflow: 'hidden' }}>
-                        <div style={{ width: `${pct}%`, height: '100%', background: 'var(--yellow)' }} />
-                      </div>
-                      <span style={{ fontFamily: 'var(--mono)', fontSize: 14, fontWeight: 700, color: 'var(--yellow)' }}>{l.headcount || 0}</span>
-                      <span style={{ fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase' }}>staff</span>
-                    </div>
-                  </div>
-                  {acts.length > 0 && (
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 8 }}>
-                      {acts.map((a) => {
-                        const def = MP_ACTIVITIES.find((x) => x.key === a.station);
-                        const color = def?.color || 'var(--t2)';
-                        const count = parseInt(a.person_name) || 0;
-                        return (
-                          <div key={a.id || `${a.activity}-${a.station}-${a.person_name}`} style={{ background: 'var(--surface2)', borderLeft: `3px solid ${color}`, padding: '6px 10px', borderRadius: 2 }}>
-                            <div style={{ fontSize: 11, color: 'var(--t2)' }}>{a.activity}</div>
-                            <div style={{ fontFamily: 'var(--mono)', fontSize: 16, fontWeight: 700, color }}>{count}</div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              );
-            })
-          )}
         </div>
       </div>
     </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PerformanceTab — per-operator point-event log + supervisor add modal.
+// Worker getPerformanceHistory returns { total, events } pre-summed.
+// addPerformanceEvent records points (non-zero int), reason, category,
+// event_date; recorded_by is captured server-side from JWT userId.
+// ═══════════════════════════════════════════════════════════════════════════
+const PERFORMANCE_CATEGORIES = [
+  { value: 'attendance', label: 'Attendance' },
+  { value: 'quality',    label: 'Quality' },
+  { value: 'behaviour',  label: 'Behaviour' },
+  { value: 'output',     label: 'Output' },
+  { value: 'other',      label: 'Other' },
+];
+
+function PerformanceTab({ session, canManageFloor, operators }) {
+  const { showToast } = useToast();
+  const [operatorId, setOperatorId] = useState('');
+  const [data, setData] = useState({ total: 0, events: [] });
+  const [loading, setLoading] = useState(false);
+  const [showAdd, setShowAdd] = useState(false);
+
+  const activeOperators = useMemo(
+    () => (operators || []).filter((o) => o.status !== 'inactive'),
+    [operators]
+  );
+  const selectedOperator = useMemo(
+    () => activeOperators.find((o) => o.id === operatorId) || null,
+    [activeOperators, operatorId]
+  );
+
+  const load = useCallback(async () => {
+    if (!session || !canManageFloor || !operatorId) {
+      setData({ total: 0, events: [] });
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await workerFetch(
+        'getPerformanceHistory',
+        { data: { operator_id: operatorId } },
+        session
+      );
+      const inner = res?.data || {};
+      setData({
+        total: Number(inner.total) || 0,
+        events: Array.isArray(inner.events) ? inner.events : [],
+      });
+    } catch (e) {
+      showToast(e.message || 'Failed to load performance', 'error');
+      setData({ total: 0, events: [] });
+    } finally {
+      setLoading(false);
+    }
+  }, [session, canManageFloor, operatorId, showToast]);
+
+  useEffect(() => { load(); }, [load]);
+
+  if (!canManageFloor) {
+    return (
+      <div style={{ ...panelStyle, padding: '40px 24px', textAlign: 'center' }}>
+        <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>
+          Performance log is restricted to floor supervisors.
+        </div>
+      </div>
+    );
+  }
+
+  const totalColor = data.total > 0 ? 'var(--green)' : data.total < 0 ? '#ff7070' : 'var(--t2)';
+
+  const columns = [
+    { key: 'event_date',  label: 'Date' },
+    { key: 'points',      label: 'Points' },
+    { key: 'category',    label: 'Category' },
+    { key: 'reason',      label: 'Reason' },
+    { key: 'recorded_by', label: 'Recorded by' },
+  ];
+
+  function renderCell(row, c) {
+    switch (c.key) {
+      case 'event_date':
+        return <span style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>{fmtDate(row.event_date)}</span>;
+      case 'points': {
+        const p = Number(row.points);
+        const color = p > 0 ? 'var(--green)' : p < 0 ? '#ff7070' : 'var(--t2)';
+        return <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, color }}>{p > 0 ? `+${p}` : p}</span>;
+      }
+      case 'category': {
+        const def = PERFORMANCE_CATEGORIES.find((x) => x.value === (row.category || 'other'));
+        return def?.label || capitalize(row.category || 'other');
+      }
+      case 'reason': {
+        const t = row.reason || '';
+        return <span title={t.length > 80 ? t : undefined}>{t.length > 80 ? t.slice(0, 80) + '…' : t}</span>;
+      }
+      case 'recorded_by':
+        return row.recorded_by
+          ? <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }} title={row.recorded_by}>{row.recorded_by.slice(0, 8)}…</span>
+          : '—';
+      default:
+        return row[c.key];
+    }
+  }
+
+  return (
+    <div>
+      {/* Toolbar */}
+      <div style={{ ...panelStyle, marginBottom: 12 }}>
+        <div style={{ padding: '10px 14px', display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <div style={{ flex: '1 1 240px', minWidth: 200 }}>
+            <span style={labelStyle}>Operator</span>
+            <select
+              value={operatorId}
+              onChange={(e) => setOperatorId(e.target.value)}
+              style={{ ...selectStyle, width: '100%' }}
+            >
+              <option value="">(Select operator)</option>
+              {activeOperators.map((op) => (
+                <option key={op.id} value={op.id}>{op.name} — {op.employee_id}</option>
+              ))}
+            </select>
+          </div>
+          {operatorId && (
+            <div style={{
+              display: 'flex', gap: 14, alignItems: 'center',
+              padding: '6px 14px', background: 'var(--surface2)',
+              border: '1px solid var(--border)', borderRadius: 3,
+            }}>
+              <div>
+                <div style={{ fontSize: 9, color: 'var(--t3)', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Total</div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 20, fontWeight: 700, color: totalColor }}>
+                  {data.total > 0 ? `+${data.total}` : data.total} pts
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 9, color: 'var(--t3)', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Events</div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 20, fontWeight: 700, color: 'var(--t1)' }}>{data.events.length}</div>
+              </div>
+            </div>
+          )}
+          <div style={{ marginLeft: 'auto' }}>
+            <button onClick={() => setShowAdd(true)} style={btnPrimary}>+ Add Event</button>
+          </div>
+        </div>
+      </div>
+
+      {/* Table */}
+      <div style={panelStyle}>
+        <div style={panelBodyStyle}>
+          {!operatorId ? (
+            <EmptyState message="Select an operator to view their performance history" />
+          ) : loading ? (
+            <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+          ) : data.events.length === 0 ? (
+            <EmptyState message={`No performance events for ${selectedOperator?.name || 'this operator'}`} />
+          ) : (
+            <DataTable
+              columns={columns}
+              rows={data.events}
+              loading={false}
+              emptyMessage=""
+              renderCell={renderCell}
+            />
+          )}
+        </div>
+      </div>
+
+      <AddPerformanceEventModal
+        open={showAdd}
+        onClose={() => setShowAdd(false)}
+        session={session}
+        operators={activeOperators}
+        defaultOperatorId={operatorId}
+        onSaved={(savedOpId, name) => {
+          setShowAdd(false);
+          showToast(`Performance event logged${name ? ' for ' + name : ''}`, 'success');
+          if (operatorId && savedOpId === operatorId) load();
+        }}
+      />
+    </div>
+  );
+}
+
+function AddPerformanceEventModal({ open, onClose, session, operators, defaultOperatorId, onSaved }) {
+  const { showToast } = useToast();
+  const [opId, setOpId] = useState('');
+  const [points, setPoints] = useState('');
+  const [category, setCategory] = useState('quality');
+  const [reason, setReason] = useState('');
+  const [date, setDate] = useState(istToday());
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setOpId(defaultOperatorId || '');
+      setPoints('');
+      setCategory('quality');
+      setReason('');
+      setDate(istToday());
+      setSaving(false);
+    }
+  }, [open, defaultOperatorId]);
+
+  async function save() {
+    if (!opId) { showToast('Operator required', 'error'); return; }
+    const p = Math.round(Number(points));
+    if (!Number.isFinite(p) || p === 0) {
+      showToast('Points must be a non-zero integer', 'error');
+      return;
+    }
+    if (!reason.trim()) { showToast('Reason required', 'error'); return; }
+    if (!date)          { showToast('Date required', 'error'); return; }
+    setSaving(true);
+    try {
+      await workerFetch(
+        'addPerformanceEvent',
+        { data: { operator_id: opId, points: p, reason: reason.trim(), category, event_date: date } },
+        session
+      );
+      const name = operators.find((o) => o.id === opId)?.name;
+      onSaved?.(opId, name);
+    } catch (e) {
+      showToast(e.message || 'Insert failed', 'error');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!open) return null;
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Log Performance Event"
+      size="md"
+      confirmLabel={saving ? 'Saving…' : 'Log Event'}
+      onConfirm={save}
+      loading={saving}
+    >
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 12 }}>
+        <Field label="Operator *" full>
+          <select value={opId} onChange={(e) => setOpId(e.target.value)} style={{ ...selectStyle, width: '100%' }}>
+            <option value="">Select operator…</option>
+            {operators.map((op) => (
+              <option key={op.id} value={op.id}>{op.name} — {op.employee_id}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Points *">
+          <input
+            type="number"
+            value={points}
+            onChange={(e) => setPoints(e.target.value)}
+            placeholder="+5 or -3"
+            style={{ ...inputStyle, width: '100%' }}
+          />
+          <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 4, fontFamily: 'var(--mono)' }}>
+            Positive for good, negative for poor performance.
+          </div>
+        </Field>
+        <Field label="Category *">
+          <select value={category} onChange={(e) => setCategory(e.target.value)} style={{ ...selectStyle, width: '100%' }}>
+            {PERFORMANCE_CATEGORIES.map((c) => (
+              <option key={c.value} value={c.value}>{c.label}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Date *">
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ ...inputStyle, width: '100%' }} />
+        </Field>
+        <Field label="Reason *" full>
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            rows={3}
+            placeholder="What happened?"
+            style={{ ...inputStyle, width: '100%', resize: 'vertical', fontFamily: 'inherit' }}
+          />
+        </Field>
+      </div>
+    </Modal>
   );
 }
