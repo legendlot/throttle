@@ -1,8 +1,9 @@
 'use client';
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { workerFetch } from '@throttle/db';
 import { Spinner, useToast, Modal, ConfirmModal, Badge, DataTable, EmptyState } from '@throttle/ui';
+import QRCode from 'qrcode';
 
 // Line accent colours — used in Daily Roster.
 const LINE_COLORS = { L1: '#22c55e', L2: '#3b82f6', L3: '#a855f7' };
@@ -161,6 +162,54 @@ function OperatorsTab({ session, canManageFloor }) {
 
   useEffect(() => { load(); }, [load]);
 
+  async function handlePrintQr(op) {
+    try {
+      const dataUrl = await QRCode.toDataURL(op.employee_id, {
+        width: 200,
+        margin: 2,
+        color: { dark: '#000000', light: '#ffffff' },
+      });
+      const safeName = (op.name || '').replace(/[<>&"]/g, '');
+      const safeDept = (op.department || '').replace(/[<>&"]/g, '');
+      const html = `<!DOCTYPE html><html><head>
+  <title>QR — ${op.employee_id}</title>
+  <style>
+    @page { size: 85mm 54mm; margin: 0; }
+    html, body { margin: 0; padding: 0; }
+    body { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; }
+    .card {
+      width: 85mm; height: 54mm;
+      padding: 8mm;
+      display: flex; align-items: center; gap: 6mm;
+      border: 1px solid #ccc;
+      box-sizing: border-box;
+    }
+    .meta { display: flex; flex-direction: column; }
+    .brand { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.05em; }
+    .empid { font-size: 18px; font-weight: bold; margin: 3px 0; }
+    .name { font-size: 13px; }
+    .dept { font-size: 11px; color: #666; text-transform: capitalize; }
+  </style>
+</head><body onload="window.print(); window.onafterprint = function(){ window.close(); };">
+  <div class="card">
+    <img src="${dataUrl}" width="80" height="80" alt="QR" />
+    <div class="meta">
+      <div class="brand">Legend of Toys</div>
+      <div class="empid">${op.employee_id}</div>
+      <div class="name">${safeName}</div>
+      <div class="dept">${safeDept}</div>
+    </div>
+  </div>
+</body></html>`;
+      const w = window.open('', '_blank', 'width=420,height=320');
+      if (!w) { showToast('Pop-up blocked — allow pop-ups for this site', 'error'); return; }
+      w.document.write(html);
+      w.document.close();
+    } catch (e) {
+      showToast(e.message || 'QR generation failed', 'error');
+    }
+  }
+
   const columns = [
     { key: 'employee_id',     label: 'Employee ID' },
     { key: 'name',            label: 'Name' },
@@ -169,7 +218,7 @@ function OperatorsTab({ session, canManageFloor }) {
     { key: 'status',          label: 'Status' },
     { key: 'phone',           label: 'Phone' },
     { key: 'join_date',       label: 'Join Date' },
-    ...(canManageFloor ? [{ key: '_actions', label: '' }] : []),
+    { key: '_actions',        label: '' },
   ];
 
   function renderCell(row, c) {
@@ -192,13 +241,24 @@ function OperatorsTab({ session, canManageFloor }) {
         return fmtDate(row.join_date);
       case '_actions':
         return (
-          <button
-            onClick={(e) => { e.stopPropagation(); setEditTarget(row); }}
-            style={{ ...btnSecondary, padding: '4px 8px' }}
-            title="Edit"
-          >
-            ✎ Edit
-          </button>
+          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+            <button
+              onClick={(e) => { e.stopPropagation(); handlePrintQr(row); }}
+              style={{ ...btnSecondary, padding: '4px 8px' }}
+              title="Print QR card"
+            >
+              ⎙ Print QR
+            </button>
+            {canManageFloor && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setEditTarget(row); }}
+                style={{ ...btnSecondary, padding: '4px 8px' }}
+                title="Edit"
+              >
+                ✎ Edit
+              </button>
+            )}
+          </div>
         );
       default:
         return row[c.key];
@@ -996,19 +1056,49 @@ const PERFORMANCE_CATEGORIES = [
 
 function PerformanceTab({ session, canManageFloor, operators }) {
   const { showToast } = useToast();
-  const [operatorId, setOperatorId] = useState('');
+  const [selectedOp, setSelectedOp] = useState(null);
+  const [query, setQuery] = useState('');
+  const [showDropdown, setShowDropdown] = useState(false);
   const [data, setData] = useState({ total: 0, events: [] });
   const [loading, setLoading] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
+
+  const comboRef = useRef(null);
 
   const activeOperators = useMemo(
     () => (operators || []).filter((o) => o.status !== 'inactive'),
     [operators]
   );
-  const selectedOperator = useMemo(
-    () => activeOperators.find((o) => o.id === operatorId) || null,
-    [activeOperators, operatorId]
-  );
+
+  const filteredOps = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return activeOperators;
+    return activeOperators.filter((o) =>
+      (o.name || '').toLowerCase().includes(q) ||
+      (o.employee_id || '').toLowerCase().includes(q)
+    );
+  }, [activeOperators, query]);
+
+  // Close dropdown on outside click + ESC
+  useEffect(() => {
+    if (!showDropdown) return;
+    function onDocClick(e) {
+      if (comboRef.current && !comboRef.current.contains(e.target)) {
+        setShowDropdown(false);
+      }
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') setShowDropdown(false);
+    }
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [showDropdown]);
+
+  const operatorId = selectedOp?.id || '';
 
   const load = useCallback(async () => {
     if (!session || !canManageFloor || !operatorId) {
@@ -1036,6 +1126,12 @@ function PerformanceTab({ session, canManageFloor, operators }) {
   }, [session, canManageFloor, operatorId, showToast]);
 
   useEffect(() => { load(); }, [load]);
+
+  function pickOperator(op) {
+    setSelectedOp(op);
+    setQuery(`${op.name} — ${op.employee_id}`);
+    setShowDropdown(false);
+  }
 
   if (!canManageFloor) {
     return (
@@ -1088,18 +1184,62 @@ function PerformanceTab({ session, canManageFloor, operators }) {
       {/* Toolbar */}
       <div style={{ ...panelStyle, marginBottom: 12 }}>
         <div style={{ padding: '10px 14px', display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-          <div style={{ flex: '1 1 240px', minWidth: 200 }}>
+          <div ref={comboRef} style={{ flex: '1 1 280px', minWidth: 220, position: 'relative' }}>
             <span style={labelStyle}>Operator</span>
-            <select
-              value={operatorId}
-              onChange={(e) => setOperatorId(e.target.value)}
-              style={{ ...selectStyle, width: '100%' }}
-            >
-              <option value="">(Select operator)</option>
-              {activeOperators.map((op) => (
-                <option key={op.id} value={op.id}>{op.name} — {op.employee_id}</option>
-              ))}
-            </select>
+            <input
+              type="text"
+              value={query}
+              placeholder="Search by name or employee ID…"
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setSelectedOp(null);
+                setShowDropdown(true);
+              }}
+              onFocus={() => setShowDropdown(true)}
+              onClick={() => setShowDropdown(true)}
+              style={{ ...inputStyle, width: '100%' }}
+            />
+            {showDropdown && (
+              <div
+                style={{
+                  position: 'absolute', top: '100%', left: 0, right: 0,
+                  marginTop: 2, zIndex: 20,
+                  background: 'var(--surface2)', border: '1px solid var(--border)',
+                  borderRadius: 3, maxHeight: 280, overflowY: 'auto',
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+                }}
+              >
+                {filteredOps.length === 0 ? (
+                  <div style={{ padding: '8px 12px', color: 'var(--t3)', fontSize: 12, fontFamily: 'var(--mono)' }}>
+                    No operators found
+                  </div>
+                ) : (
+                  filteredOps.slice(0, 50).map((op) => {
+                    const isSel = selectedOp?.id === op.id;
+                    return (
+                      <div
+                        key={op.id}
+                        onMouseDown={(e) => { e.preventDefault(); pickOperator(op); }}
+                        style={{
+                          padding: '8px 12px',
+                          cursor: 'pointer',
+                          borderLeft: isSel ? '3px solid var(--yellow)' : '3px solid transparent',
+                          background: isSel ? 'rgba(255,200,0,0.05)' : 'transparent',
+                          fontSize: 12, color: 'var(--t1)',
+                        }}
+                        onMouseEnter={(e) => { if (!isSel) e.currentTarget.style.background = 'var(--surface)'; }}
+                        onMouseLeave={(e) => { if (!isSel) e.currentTarget.style.background = 'transparent'; }}
+                      >
+                        <div>{op.name}</div>
+                        <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', marginTop: 2 }}>
+                          {op.employee_id} · {capitalize(op.department || '')}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            )}
           </div>
           {operatorId && (
             <div style={{
@@ -1133,7 +1273,7 @@ function PerformanceTab({ session, canManageFloor, operators }) {
           ) : loading ? (
             <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
           ) : data.events.length === 0 ? (
-            <EmptyState message={`No performance events for ${selectedOperator?.name || 'this operator'}`} />
+            <EmptyState message={`No performance events for ${selectedOp?.name || 'this operator'}`} />
           ) : (
             <DataTable
               columns={columns}

@@ -7,13 +7,14 @@
     "build": "next build"
   },
   "dependencies": {
-    "next": "14.2.35",
-    "react": "^18",
-    "react-dom": "^18",
-    "lucide-react": "^0.469.0",
     "@throttle/auth": "*",
     "@throttle/db": "*",
+    "@throttle/domain": "*",
     "@throttle/ui": "*",
-    "@throttle/domain": "*"
+    "lucide-react": "^0.469.0",
+    "next": "14.2.35",
+    "qrcode": "^1.5.4",
+    "react": "^18",
+    "react-dom": "^18"
   }
 }
