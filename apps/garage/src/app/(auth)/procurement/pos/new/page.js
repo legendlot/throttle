@@ -499,7 +499,7 @@ function NewPOPage() {
         } catch {}
       }
       showToast(`${result.po_number} created`, 'success');
-      router.push(`/procurement/pos/${encodeURIComponent(result.po_number)}`);
+      router.push(`/procurement/pos/detail?po_number=${encodeURIComponent(result.po_number)}`);
     } catch (e) {
       showToast(e.message || 'PO creation failed', 'error');
     } finally {

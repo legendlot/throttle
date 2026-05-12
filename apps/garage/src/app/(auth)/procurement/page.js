@@ -225,7 +225,7 @@ export default function ProcurementOverviewPage() {
                   <tr
                     key={p.po_number}
                     style={{ cursor: 'pointer' }}
-                    onClick={() => router.push(`/procurement/pos/${encodeURIComponent(p.po_number)}`)}
+                    onClick={() => router.push(`/procurement/pos/detail?po_number=${encodeURIComponent(p.po_number)}`)}
                   >
                     <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{p.po_number}</td>
                     <td style={tableTdStyle}>{p.vendor_name || '—'}</td>

@@ -169,7 +169,7 @@ export default function POListPage() {
                   <tr
                     key={r.po_number}
                     style={{ cursor: 'pointer' }}
-                    onClick={() => router.push(`/procurement/pos/${encodeURIComponent(r.po_number)}`)}
+                    onClick={() => router.push(`/procurement/pos/detail?po_number=${encodeURIComponent(r.po_number)}`)}
                   >
                     <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{r.po_number}</td>
                     <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{r.revision ?? 0}</td>
@@ -186,7 +186,7 @@ export default function POListPage() {
                     <td style={{ ...tableTdStyle, textAlign: 'right' }}>
                       <button
                         style={btnSecondary}
-                        onClick={(e) => { e.stopPropagation(); router.push(`/procurement/pos/${encodeURIComponent(r.po_number)}`); }}
+                        onClick={(e) => { e.stopPropagation(); router.push(`/procurement/pos/detail?po_number=${encodeURIComponent(r.po_number)}`); }}
                       >
                         View →
                       </button>

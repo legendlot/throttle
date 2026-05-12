@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState, useCallback } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
@@ -68,11 +68,15 @@ function formatDateInput(raw) {
 }
 
 export default function PODetailPage() {
+  // BUG-C: support both the new query-string route (/pos/detail?po_number=X)
+  // and the legacy /pos/[poNumber]/ route (only renders the 'sample' placeholder
+  // on static export). search-param wins when both are present.
   const params = useParams();
+  const searchParams = useSearchParams();
   const router = useRouter();
   const { session, perms } = useAuth();
   const { showToast } = useToast();
-  const poNumber = params?.poNumber;
+  const poNumber = searchParams?.get('po_number') || params?.poNumber;
 
   const [poData, setPoData] = useState(null);
   const [loading, setLoading] = useState(true);
