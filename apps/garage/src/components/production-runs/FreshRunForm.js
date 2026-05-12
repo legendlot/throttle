@@ -49,6 +49,7 @@ function blankRow() {
   return {
     id: Math.random().toString(36).slice(2, 9),
     variant: '',
+    colour: '',
     qtyEcomm: '',
     qtyRetail: '',
     issueMode: 'components',
@@ -57,7 +58,7 @@ function blankRow() {
 
 export function FreshRunForm({ onSuccess, session }) {
   const { showToast } = useToast();
-  const { PRODUCTS, PRODUCT_VARIANTS, HAS_REMOTE, loading } = useProducts();
+  const { PRODUCTS, PRODUCT_VARIANTS, HAS_REMOTE, PRODUCT_COLORS, loading } = useProducts();
   const [product, setProduct] = useState('');
   const [runDate, setRunDate] = useState(tomorrowISO());
   const [line, setLine] = useState('L1');
@@ -103,7 +104,7 @@ export function FreshRunForm({ onSuccess, session }) {
         if (total <= 0) return null;
         return {
           variant:    r.variant || '',
-          colour:     '',
+          colour:     r.colour  || '',
           qty:        total,
           qty_ecomm:  e,
           qty_retail: ret,
@@ -119,6 +120,17 @@ export function FreshRunForm({ onSuccess, session }) {
     if (!runDate) next.runDate = 'Run date is required';
     const variants = buildVariantsPayload();
     if (!variants.length) next.rows = 'At least one variant must have a non-zero qty';
+    // BUG-010: enforce colour selection when the product/variant has colour options.
+    for (const r of variantRows) {
+      const totalQ = (parseInt(r.qtyEcomm) || 0) + (parseInt(r.qtyRetail) || 0);
+      if (totalQ <= 0) continue;
+      const opts = (product && r.variant && PRODUCT_COLORS?.[product]?.[r.variant]) || [];
+      if (opts.length > 0 && !r.colour) {
+        showToast(`Select a colour for ${r.variant} (${product})`, 'error');
+        next.rows = 'Pick a colour for each variant';
+        break;
+      }
+    }
     setErrors(next);
     return Object.keys(next).length === 0;
   }
@@ -265,14 +277,16 @@ export function FreshRunForm({ onSuccess, session }) {
         </div>
         {variantRows.map((row) => {
           const total = (parseInt(row.qtyEcomm) || 0) + (parseInt(row.qtyRetail) || 0);
+          // Colour sub-picker options for the picked variant (BUG-010 fix).
+          const colorOptions = (product && row.variant && PRODUCT_COLORS?.[product]?.[row.variant]) || [];
           return (
             <div
               key={row.id}
               style={{
                 display: 'grid',
                 gridTemplateColumns: isFbuFormat
-                  ? '1fr 0.8fr 0.8fr 60px 1fr 28px'
-                  : '1fr 0.8fr 0.8fr 60px 28px',
+                  ? '1fr 1fr 0.8fr 0.8fr 60px 1fr 28px'
+                  : '1fr 1fr 0.8fr 0.8fr 60px 28px',
                 gap: 6, alignItems: 'end', marginBottom: 8,
               }}
             >
@@ -281,7 +295,7 @@ export function FreshRunForm({ onSuccess, session }) {
                 <select
                   style={sel}
                   value={row.variant}
-                  onChange={(e) => updateRow(row.id, { variant: e.target.value })}
+                  onChange={(e) => updateRow(row.id, { variant: e.target.value, colour: '' })}
                   disabled={submitting || productVariants.length === 0}
                 >
                   {productVariants.length === 0 ? (
@@ -294,6 +308,20 @@ export function FreshRunForm({ onSuccess, session }) {
                       ))}
                     </>
                   )}
+                </select>
+              </div>
+              <div>
+                <span style={lbl}>Colour</span>
+                <select
+                  style={sel}
+                  value={row.colour}
+                  onChange={(e) => updateRow(row.id, { colour: e.target.value })}
+                  disabled={submitting || colorOptions.length === 0}
+                >
+                  <option value="">{colorOptions.length === 0 ? '—' : '— Select —'}</option>
+                  {colorOptions.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
                 </select>
               </div>
               <div>
