@@ -11,10 +11,11 @@ export const NAV_GROUPS = [
   {
     id: 'production', label: 'PRODUCTION', icon: Factory,
     items: [
-      { id: 'exec',   label: 'Dashboard', route: '/exec',    icon: BarChart3 },
-      { id: 'lines',  label: 'Lines',     route: '/lines',   icon: GitBranch },
-      { id: 'hourly', label: 'Hourly',    route: '/hourly',  icon: Clock },
-      { id: 'qc',     label: 'QC',        route: '/qc',      icon: ShieldCheck },
+      { id: 'exec',     label: 'Dashboard', route: '/exec',     icon: BarChart3 },
+      { id: 'lines',    label: 'Lines',     route: '/lines',    icon: GitBranch },
+      { id: 'manpower', label: 'Manpower',  route: '/manpower', icon: Users },
+      { id: 'hourly',   label: 'Hourly',    route: '/hourly',   icon: Clock },
+      { id: 'qc',       label: 'QC',        route: '/qc',       icon: ShieldCheck },
     ],
   },
   {
