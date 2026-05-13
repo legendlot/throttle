@@ -174,7 +174,11 @@ function NewPOPage() {
   // Caches
   const [vendorCache, setVendorCache] = useState([]);
   const [forwarderCache, setForwarderCache] = useState([]);
-  const [materialCache, setMaterialCache] = useState({});
+  const [partsCache, setPartsCache] = useState(null);     // null = not loaded yet
+  const [partsLoading, setPartsLoading] = useState(false);
+  const [pickerOpenIdx, setPickerOpenIdx] = useState(null); // which manual-mode line row has the picker open
+  const [pickerQuery, setPickerQuery] = useState('');
+  const pickerRef = useRef(null);
   const [companyAddresses, setCompanyAddresses] = useState([]);
   const [deliveryAddressId, setDeliveryAddressId] = useState('');
 
@@ -202,6 +206,29 @@ function NewPOPage() {
       announcedRR.current = true;
     }
   }, [rrParam, showToast]);
+
+  // Close the parts picker on outside click or ESC.
+  useEffect(() => {
+    if (pickerOpenIdx === null) return;
+    function onDocClick(e) {
+      if (pickerRef.current && !pickerRef.current.contains(e.target)) {
+        setPickerOpenIdx(null);
+        setPickerQuery('');
+      }
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') {
+        setPickerOpenIdx(null);
+        setPickerQuery('');
+      }
+    }
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [pickerOpenIdx]);
 
   function applyCategory(cat) {
     setSelectedCategory(cat);
@@ -326,20 +353,16 @@ function NewPOPage() {
   function removeLine(i) {
     setLineItems((prev) => prev.filter((_, j) => j !== i));
   }
-  async function lookupPart(i, code) {
-    if (!code) return;
-    if (!materialCache._loaded) {
-      try {
-        const data = await garageFetch('getMaterials', {}, session);
-        const map = { _loaded: true };
-        (data || []).forEach((m) => { map[m.part_code] = m; });
-        setMaterialCache(map);
-        const m = map[code];
-        if (m) updateLine(i, 'description', m.part_name || '');
-      } catch {}
-    } else {
-      const m = materialCache[code];
-      if (m) updateLine(i, 'description', m.part_name || '');
+  async function loadParts() {
+    if (partsCache || partsLoading) return;
+    setPartsLoading(true);
+    try {
+      const data = await garageFetch('getProcurementParts', {}, session);
+      setPartsCache(Array.isArray(data) ? data : []);
+    } catch {
+      setPartsCache([]);
+    } finally {
+      setPartsLoading(false);
     }
   }
 
@@ -747,8 +770,15 @@ function NewPOPage() {
               addManualLine={addManualLine}
               updateLine={updateLine}
               removeLine={removeLine}
-              lookupPart={lookupPart}
               currency={currency}
+              partsCache={partsCache}
+              partsLoading={partsLoading}
+              loadParts={loadParts}
+              pickerOpenIdx={pickerOpenIdx}
+              setPickerOpenIdx={setPickerOpenIdx}
+              pickerQuery={pickerQuery}
+              setPickerQuery={setPickerQuery}
+              pickerRef={pickerRef}
             />
           )}
 
@@ -942,7 +972,11 @@ function BomMode(props) {
   );
 }
 
-function ManualMode({ lineItems, addManualLine, updateLine, removeLine, lookupPart, currency }) {
+function ManualMode({
+  lineItems, addManualLine, updateLine, removeLine, currency,
+  partsCache, partsLoading, loadParts,
+  pickerOpenIdx, setPickerOpenIdx, pickerQuery, setPickerQuery, pickerRef,
+}) {
   return (
     <>
       <div style={{ marginBottom: 8 }}>
@@ -971,13 +1005,85 @@ function ManualMode({ lineItems, addManualLine, updateLine, removeLine, lookupPa
               {lineItems.map((l, i) => (
                 <tr key={i}>
                   <td style={tableTdStyle}>
-                    <input
-                      type="text"
-                      value={l.part_code}
-                      onChange={(e) => updateLine(i, 'part_code', e.target.value)}
-                      onBlur={(e) => lookupPart(i, e.target.value)}
-                      style={{ ...inputStyle, width: 130, fontFamily: 'var(--mono)' }}
-                    />
+                    <div
+                      ref={pickerOpenIdx === i ? pickerRef : null}
+                      style={{ position: 'relative', width: 130 }}
+                    >
+                      <input
+                        type="text"
+                        value={pickerOpenIdx === i ? pickerQuery : l.part_code}
+                        placeholder="Part code"
+                        onFocus={() => {
+                          setPickerOpenIdx(i);
+                          setPickerQuery(l.part_code || '');
+                          loadParts();
+                        }}
+                        onChange={(e) => {
+                          setPickerQuery(e.target.value);
+                          updateLine(i, 'part_code', e.target.value);
+                        }}
+                        style={{ ...inputStyle, width: 130, fontFamily: 'var(--mono)' }}
+                      />
+                      {pickerOpenIdx === i && (partsCache || partsLoading) && (
+                        <div style={{
+                          position: 'absolute', top: '100%', left: 0, zIndex: 200,
+                          background: 'var(--surface2)', border: '1px solid var(--border)',
+                          borderRadius: 4, maxHeight: 240, overflowY: 'auto',
+                          minWidth: 320, boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+                          marginTop: 2,
+                        }}>
+                          {!partsCache && partsLoading ? (
+                            <div style={{ padding: '8px 10px', color: 'var(--t3)', fontSize: 12 }}>
+                              Loading parts…
+                            </div>
+                          ) : (() => {
+                            const q = (pickerQuery || '').trim().toLowerCase();
+                            const matches = (partsCache || []).filter((p) =>
+                              !q ||
+                              (p.part_code || '').toLowerCase().includes(q) ||
+                              (p.part_name || '').toLowerCase().includes(q)
+                            ).slice(0, 50);
+                            if (matches.length === 0) {
+                              return (
+                                <div style={{ padding: '8px 10px', color: 'var(--t3)', fontSize: 12 }}>
+                                  No matching parts — value will be used as typed
+                                </div>
+                              );
+                            }
+                            return matches.map((p) => (
+                              <div
+                                key={p.part_code}
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  updateLine(i, 'part_code', p.part_code);
+                                  updateLine(i, 'description', p.part_name || '');
+                                  if (!l.unit || l.unit === 'pcs') {
+                                    const u = p.issue_uom === 'EA' ? 'pcs' : (p.issue_uom || 'pcs');
+                                    updateLine(i, 'unit', u);
+                                  }
+                                  setPickerOpenIdx(null);
+                                  setPickerQuery('');
+                                }}
+                                style={{
+                                  padding: '6px 10px', cursor: 'pointer',
+                                  borderBottom: '1px solid var(--border)',
+                                  display: 'flex', flexDirection: 'column', gap: 1,
+                                }}
+                                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
+                                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                              >
+                                <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t1)' }}>
+                                  {p.part_code}
+                                </span>
+                                <span style={{ fontSize: 11, color: 'var(--t3)' }}>
+                                  {p.part_name}{p.part_category ? ` · ${p.part_category}` : ''}
+                                </span>
+                              </div>
+                            ));
+                          })()}
+                        </div>
+                      )}
+                    </div>
                   </td>
                   <td style={tableTdStyle}>
                     <input type="text" value={l.description} onChange={(e) => updateLine(i, 'description', e.target.value)} style={{ ...inputStyle, width: 240 }} />
