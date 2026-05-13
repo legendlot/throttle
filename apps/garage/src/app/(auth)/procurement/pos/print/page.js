@@ -103,10 +103,23 @@ function PrintPOContent() {
     <>
       <style>{`
         @media print {
-          body { margin: 0; }
-          .no-print { display: none !important; }
           @page { size: A4; margin: 15mm; }
-          .po-print { box-shadow: none; }
+          html, body { margin: 0 !important; padding: 0 !important; background: #fff !important; }
+          /* Nuclear hide: hide everything, then reveal only the PO document */
+          body * { visibility: hidden !important; }
+          .po-print, .po-print * { visibility: visible !important; }
+          /* Lift the PO document to page top so hidden ancestors don't reserve space */
+          .po-print {
+            position: absolute !important;
+            left: 0 !important;
+            top: 0 !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            box-shadow: none !important;
+          }
+          .no-print { display: none !important; }
         }
         .po-print, .po-print * {
           color: #000;
