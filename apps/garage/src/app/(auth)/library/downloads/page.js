@@ -15,13 +15,13 @@ const btnPrimary       = { background: 'var(--yellow)', border: '1px solid var(-
 
 function bomToCSV(rows, includeProductCol) {
   const headers = includeProductCol
-    ? ['Product', 'Part Code', 'Part Name', 'Category', 'Tier', 'Variant Model', 'Qty Per Unit']
-    : ['Part Code', 'Part Name', 'Category', 'Tier', 'Variant Model', 'Qty Per Unit'];
+    ? ['Product', 'Part Code', 'Part Name', 'Category', 'Type', 'Tier', 'Variant Model', 'Qty Per Unit']
+    : ['Part Code', 'Part Name', 'Category', 'Type', 'Tier', 'Variant Model', 'Qty Per Unit'];
   const lines = [headers.join(',')];
   rows.forEach((r) => {
     const vals = includeProductCol
-      ? [r.product, r.part_code, r.part_name, r.part_category || '', r.common_variant || '', r.variant_model || '', r.qty_per_unit || 1]
-      : [r.part_code, r.part_name, r.part_category || '', r.common_variant || '', r.variant_model || '', r.qty_per_unit || 1];
+      ? [r.product, r.part_code, r.part_name, r.part_category || '', r.part_type || '', r.common_variant || '', r.variant_model || '', r.qty_per_unit || 1]
+      : [r.part_code, r.part_name, r.part_category || '', r.part_type || '', r.common_variant || '', r.variant_model || '', r.qty_per_unit || 1];
     lines.push(vals.map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(','));
   });
   return lines.join('\n');
