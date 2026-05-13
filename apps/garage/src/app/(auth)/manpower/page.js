@@ -6,7 +6,7 @@ import { Spinner, useToast, Modal, ConfirmModal, Badge, DataTable, EmptyState } 
 import QRCode from 'qrcode';
 
 // Line accent colours — used in Daily Roster.
-const LINE_COLORS = { L1: '#22c55e', L2: '#3b82f6', L3: '#a855f7' };
+const LINE_COLORS = { L1: '#22c55e', L2: '#3b82f6', L3: '#a855f7', Others: '#f97316' };
 
 // ── Shared styles ──────────────────────────────────────────────────────────
 const panelStyle       = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, marginBottom: 16 };
@@ -820,6 +820,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
         for (const row of sections[section] || []) s.add(row.operator_id);
       }
     }
+    for (const row of grouped.Others || []) s.add(row.operator_id);
     return s;
   }, [grouped]);
 
@@ -841,6 +842,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
       const sections = grouped[line] || {};
       for (const section of Object.keys(sections)) n += (sections[section] || []).length;
     }
+    n += (grouped.Others || []).length;
     return n;
   }, [grouped]);
 
@@ -886,15 +888,15 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
   }, [pickerOpen]);
 
   async function handleAssign(operatorId, line, station) {
-    if (!canManageFloor || !operatorId || !line || !station) return;
+    if (!canManageFloor || !operatorId || !line) return;
+    if (line !== 'Others' && !station) return;
     try {
-      await workerFetch(
-        'assignManpower',
-        { data: { operator_id: operatorId, line, shift_date: date, station } },
-        session
-      );
+      const data = { operator_id: operatorId, line, shift_date: date };
+      if (line !== 'Others') data.station = station;
+      await workerFetch('assignManpower', { data }, session);
       const op = activeOperators.find((o) => o.id === operatorId);
-      showToast(`Assigned ${op?.name || 'operator'} to ${line} · ${station}`, 'success');
+      const label = line === 'Others' ? line : `${line} · ${station}`;
+      showToast(`Assigned ${op?.name || 'operator'} to ${label}`, 'success');
       load();
     } catch (e) {
       showToast(e.message || 'Assign failed', 'error');
@@ -925,6 +927,12 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
     e.preventDefault();
     const operatorId = e.dataTransfer.getData('operatorId');
     if (operatorId) handleAssign(operatorId, line, station);
+  }
+
+  function onDropToOthers(e) {
+    e.preventDefault();
+    const operatorId = e.dataTransfer.getData('operatorId');
+    if (operatorId) handleAssign(operatorId, 'Others', null);
   }
 
   if (!canManageFloor) {
@@ -1004,7 +1012,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
         </div>
 
         {/* Line columns */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12 }}>
           {['L1', 'L2', 'L3'].map((line) => {
             const sections = grouped[line] || {};
             const accent = LINE_COLORS[line];
@@ -1213,6 +1221,153 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
               </div>
             );
           })}
+
+          {/* Others column — flat list, no sub-sections */}
+          {(() => {
+            const accent = LINE_COLORS.Others;
+            const rows = grouped.Others || [];
+            const key = 'Others';
+            const open = !!pickerOpen[key];
+            const q = (pickerQuery[key] || '').trim().toLowerCase();
+            const pickerOps = activeOperators.filter((op) => {
+              if (assignedOpIds.has(op.id)) return false;
+              if (!q) return true;
+              return (op.name || '').toLowerCase().includes(q) ||
+                     (op.employee_id || '').toLowerCase().includes(q);
+            });
+            return (
+              <div style={{ ...panelStyle, marginBottom: 0, minHeight: 220 }}>
+                <div style={{ ...panelHeaderStyle, color: accent }}>
+                  <span>Others ({rows.length})</span>
+                </div>
+                <div
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={onDropToOthers}
+                  style={{ padding: '8px 8px 10px' }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <span style={{
+                      fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 700,
+                      color: 'var(--t2)', textTransform: 'uppercase', letterSpacing: '0.08em',
+                    }}>
+                      Operators ({rows.length})
+                    </span>
+                    <div
+                      ref={(el) => { pickerRefs.current[key] = el; }}
+                      style={{ position: 'relative' }}
+                    >
+                      <button
+                        style={{ ...btnSecondary, padding: '1px 7px', fontSize: 11 }}
+                        onClick={() => {
+                          setPickerOpen((s) => ({ ...s, [key]: !s[key] }));
+                          setPickerQuery((s) => ({ ...s, [key]: '' }));
+                        }}
+                        title={open ? 'Close' : 'Assign to Others'}
+                      >
+                        {open ? '×' : '+'}
+                      </button>
+                      {open && (
+                        <div style={{
+                          position: 'absolute', top: '100%', right: 0,
+                          marginTop: 4, zIndex: 20, width: 240,
+                          background: 'var(--surface2)', border: '1px solid var(--border)',
+                          borderRadius: 3, boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+                        }}>
+                          <input
+                            type="text"
+                            autoFocus
+                            placeholder="Search name or ID…"
+                            value={pickerQuery[key] || ''}
+                            onChange={(e) => setPickerQuery((s) => ({ ...s, [key]: e.target.value }))}
+                            style={{ ...inputStyle, width: '100%', borderRadius: 0, border: 'none', borderBottom: '1px solid var(--border)' }}
+                          />
+                          <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+                            {pickerOps.length === 0 ? (
+                              <div style={{ padding: '8px 12px', color: 'var(--t3)', fontSize: 11, fontFamily: 'var(--mono)' }}>
+                                No available operators
+                              </div>
+                            ) : (
+                              pickerOps.slice(0, 50).map((op) => (
+                                <div
+                                  key={op.id}
+                                  onMouseDown={(e) => {
+                                    e.preventDefault();
+                                    handleAssign(op.id, 'Others', null);
+                                    setPickerOpen((s) => ({ ...s, [key]: false }));
+                                    setPickerQuery((s) => ({ ...s, [key]: '' }));
+                                  }}
+                                  style={{ padding: '6px 10px', cursor: 'pointer', fontSize: 12, color: 'var(--t1)' }}
+                                  onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
+                                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                                >
+                                  <div>{op.name}</div>
+                                  <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', marginTop: 1 }}>
+                                    {op.employee_id || '—'} · {(op.department || '').toUpperCase()}
+                                  </div>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  {loading ? (
+                    <div style={{ padding: 12, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+                  ) : rows.length === 0 ? (
+                    <div style={{
+                      border: '1px dashed var(--border)', borderRadius: 3,
+                      padding: '12px 10px', textAlign: 'center',
+                      color: 'var(--t3)', fontSize: 10, fontFamily: 'var(--mono)',
+                      textTransform: 'uppercase', letterSpacing: '0.08em',
+                    }}>
+                      Drop operator here
+                    </div>
+                  ) : (
+                    rows.map((row) => (
+                      <div
+                        key={row.id}
+                        style={{
+                          background: 'var(--surface2)',
+                          border: '1px solid var(--border)',
+                          borderLeft: `3px solid ${accent}`,
+                          borderRadius: 3,
+                          padding: '5px 8px',
+                          marginBottom: 4,
+                          display: 'flex', alignItems: 'flex-start', gap: 6,
+                        }}
+                      >
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 12, color: 'var(--t1)' }}>{row.operator_name || '(unknown)'}</div>
+                          <div style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 2 }}>
+                            {row.operator_department || '—'}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleUnassign(row, 'Others')}
+                          title={`Remove ${row.operator_name || 'operator'} from Others`}
+                          style={{
+                            background: 'transparent',
+                            border: '1px solid var(--border)',
+                            color: '#ff7070',
+                            cursor: 'pointer',
+                            borderRadius: 3,
+                            padding: '0 5px',
+                            fontSize: 12,
+                            lineHeight: '18px',
+                            height: 20,
+                            flexShrink: 0,
+                          }}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            );
+          })()}
         </div>
       </div>
     </div>

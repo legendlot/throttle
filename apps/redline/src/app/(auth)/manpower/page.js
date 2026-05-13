@@ -7,12 +7,12 @@ import { useAutoRefresh } from '../../../hooks/useAutoRefresh.js';
 import { useRefreshState } from '../layout.js';
 
 const LINE_ORDER  = ['L1', 'L2', 'L3'];
-const LINE_COLORS = { L1: 'var(--yellow)', L2: 'var(--blue)', L3: 'var(--green)' };
+const LINE_COLORS = { L1: 'var(--yellow)', L2: 'var(--blue)', L3: 'var(--green)', Others: '#f97316' };
 
-// getManpowerLog now returns { L1: { Assembly:[], QC:[], Packaging:[], Unassigned:[] }, ... }.
-// This read-only view flattens that back to { L1: [...], L2: [...], L3: [...] }.
+// getManpowerLog returns { L1: { Assembly:[], QC:[], Packaging:[], Unassigned:[] }, ...,
+// Others: [...] }. Flatten line buckets back to flat arrays; Others arrives flat.
 function flattenRoster(nested) {
-  const out = { L1: [], L2: [], L3: [] };
+  const out = { L1: [], L2: [], L3: [], Others: [] };
   for (const line of LINE_ORDER) {
     const sections = nested?.[line];
     if (!sections) continue;
@@ -24,6 +24,7 @@ function flattenRoster(nested) {
       ...(sections.Unassigned || []),
     ];
   }
+  if (Array.isArray(nested?.Others)) out.Others = nested.Others;
   return out;
 }
 
@@ -107,25 +108,29 @@ export default function ManpowerPage() {
 
   useAutoRefresh(loadData, 60000, !session || !canManageFloor);
 
-  // operator_id -> assigned line (only includes today's roster)
+  // operator_id -> assigned line (only includes today's roster).
+  // 'Others' is a valid line value alongside L1/L2/L3.
   const assignedLineByOpId = useMemo(() => {
     const m = {};
     for (const line of LINE_ORDER) {
       for (const a of rosterByLine[line] || []) m[a.operator_id] = line;
     }
+    for (const a of rosterByLine.Others || []) m[a.operator_id] = 'Others';
     return m;
   }, [rosterByLine]);
 
-  // Classify each open-shift row into a line or "unassigned".
-  const { byLine, unassigned } = useMemo(() => {
+  // Classify each open-shift row into a line bucket, Others, or unassigned.
+  const { byLine, others, unassigned } = useMemo(() => {
     const lines = { L1: [], L2: [], L3: [] };
+    const oth = [];
     const unas = [];
     for (const row of openShifts) {
       const line = assignedLineByOpId[row.operator_id];
-      if (line && lines[line]) lines[line].push(row);
+      if (line === 'Others') oth.push(row);
+      else if (line && lines[line]) lines[line].push(row);
       else unas.push(row);
     }
-    return { byLine: lines, unassigned: unas };
+    return { byLine: lines, others: oth, unassigned: unas };
   }, [openShifts, assignedLineByOpId]);
 
   if (perms && !canManageFloor) {
@@ -160,7 +165,7 @@ export default function ManpowerPage() {
       ) : (
         <>
           {/* Headcount bar */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12, marginBottom: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 12, marginBottom: 16 }}>
             {LINE_ORDER.map((line) => (
               <HeadcountCard
                 key={line}
@@ -170,6 +175,12 @@ export default function ManpowerPage() {
                 sub={`${(rosterByLine[line] || []).length} assigned`}
               />
             ))}
+            <HeadcountCard
+              label="Others"
+              accent={LINE_COLORS.Others}
+              count={others.length}
+              sub={`${(rosterByLine.Others || []).length} assigned`}
+            />
             <HeadcountCard
               label="Unassigned"
               accent="var(--t3)"
@@ -184,6 +195,11 @@ export default function ManpowerPage() {
               <LineColumn key={line} line={line} rows={byLine[line]} accent={LINE_COLORS[line]} />
             ))}
           </div>
+
+          {/* Others section — hidden when empty */}
+          {others.length > 0 && (
+            <OthersSection rows={others} accent={LINE_COLORS.Others} />
+          )}
 
           {/* Unassigned section — hidden when empty */}
           {unassigned.length > 0 && (
@@ -262,6 +278,29 @@ function UnassignedSection({ rows }) {
         {rows.map((row) => (
           <div key={row.id} style={{ minWidth: 220, flex: '0 1 240px' }}>
             <OperatorCard row={row} accent="var(--t3)" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function OthersSection({ rows, accent }) {
+  return (
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, marginBottom: 16 }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '10px 14px', borderBottom: '1px solid var(--border)',
+        fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700,
+        letterSpacing: '0.06em', textTransform: 'uppercase', color: accent,
+      }}>
+        <span>Others</span>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>({rows.length})</span>
+      </div>
+      <div style={{ padding: '12px 14px', display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        {rows.map((row) => (
+          <div key={row.id} style={{ minWidth: 220, flex: '0 1 240px' }}>
+            <OperatorCard row={row} accent={accent} />
           </div>
         ))}
       </div>
