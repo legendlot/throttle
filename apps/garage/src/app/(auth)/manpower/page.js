@@ -791,14 +791,18 @@ function AttendanceTab({ session, canManageFloor, operators }) {
 // fallback. assignManpower upserts (operator+date+line UNIQUE).
 // removeManpower DELETEs a single (operator_id, shift_date, line) row.
 // ═══════════════════════════════════════════════════════════════════════════
+const ROSTER_SECTIONS = ['Assembly', 'QC', 'Packaging'];
+
 function DailyRosterTab({ session, canManageFloor, operators }) {
   const { showToast } = useToast();
   const [date, setDate] = useState(istToday());
   const [grouped, setGrouped] = useState({});
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [assignOp, setAssignOp] = useState({ L1: '', L2: '', L3: '' });
-  const [showAssign, setShowAssign] = useState({ L1: false, L2: false, L3: false });
+  // Per-section picker state — keys are "L1-Assembly", "L2-QC", etc.
+  const [pickerOpen, setPickerOpen]   = useState({});
+  const [pickerQuery, setPickerQuery] = useState({});
+  const pickerRefs = useRef({});
 
   const activeOperators = useMemo(
     () => (operators || []).filter((o) => o.status !== 'inactive'),
@@ -815,9 +819,33 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
   const assignedLineByOpId = useMemo(() => {
     const m = {};
     for (const line of ['L1', 'L2', 'L3']) {
-      for (const row of grouped[line] || []) m[row.operator_id] = line;
+      const sections = grouped[line] || {};
+      for (const section of Object.keys(sections)) {
+        for (const row of sections[section] || []) m[row.operator_id] = line;
+      }
     }
     return m;
+  }, [grouped]);
+
+  // Set of all assigned operator_ids — used to filter combobox options.
+  const assignedOpIds = useMemo(() => {
+    const s = new Set();
+    for (const line of ['L1', 'L2', 'L3']) {
+      const sections = grouped[line] || {};
+      for (const section of Object.keys(sections)) {
+        for (const row of sections[section] || []) s.add(row.operator_id);
+      }
+    }
+    return s;
+  }, [grouped]);
+
+  const totalAssigned = useMemo(() => {
+    let n = 0;
+    for (const line of ['L1', 'L2', 'L3']) {
+      const sections = grouped[line] || {};
+      for (const section of Object.keys(sections)) n += (sections[section] || []).length;
+    }
+    return n;
   }, [grouped]);
 
   const load = useCallback(async () => {
@@ -838,16 +866,39 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
 
   useEffect(() => { load(); }, [load]);
 
-  async function handleAssign(operatorId, line) {
-    if (!canManageFloor || !operatorId || !line) return;
+  // Close any open picker on outside click or ESC.
+  useEffect(() => {
+    const openKeys = Object.keys(pickerOpen).filter((k) => pickerOpen[k]);
+    if (openKeys.length === 0) return;
+    function onDocClick(e) {
+      const stillOpen = {};
+      for (const key of openKeys) {
+        const el = pickerRefs.current[key];
+        if (el && el.contains(e.target)) stillOpen[key] = true;
+      }
+      setPickerOpen(stillOpen);
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') setPickerOpen({});
+    }
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [pickerOpen]);
+
+  async function handleAssign(operatorId, line, station) {
+    if (!canManageFloor || !operatorId || !line || !station) return;
     try {
       await workerFetch(
         'assignManpower',
-        { data: { operator_id: operatorId, line, shift_date: date } },
+        { data: { operator_id: operatorId, line, shift_date: date, station } },
         session
       );
       const op = activeOperators.find((o) => o.id === operatorId);
-      showToast(`Assigned ${op?.name || 'operator'} to ${line}`, 'success');
+      showToast(`Assigned ${op?.name || 'operator'} to ${line} · ${station}`, 'success');
       load();
     } catch (e) {
       showToast(e.message || 'Assign failed', 'error');
@@ -874,10 +925,10 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
     e.dataTransfer.effectAllowed = 'move';
   }
 
-  function onDropToLine(e, line) {
+  function onDropToSection(e, line, station) {
     e.preventDefault();
     const operatorId = e.dataTransfer.getData('operatorId');
-    if (operatorId) handleAssign(operatorId, line);
+    if (operatorId) handleAssign(operatorId, line, station);
   }
 
   if (!canManageFloor) {
@@ -906,7 +957,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
           </div>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
             <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-              {(['L1','L2','L3']).reduce((s, l) => s + ((grouped[l] || []).length), 0)} assigned
+              {totalAssigned} assigned
             </span>
             <button style={btnSecondary} onClick={load} disabled={loading}>↻</button>
           </div>
@@ -940,7 +991,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                     key={op.id}
                     draggable
                     onDragStart={(e) => onDragStart(e, op)}
-                    title={assignedLine ? `Already on ${assignedLine} (drag to add to another line)` : 'Drag to a line column'}
+                    title={assignedLine ? `Already on ${assignedLine} (drag to a section to reassign)` : 'Drag to a line section'}
                     style={{
                       display: 'flex', alignItems: 'center', gap: 8,
                       padding: '6px 8px', marginBottom: 4,
@@ -969,107 +1020,208 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
         {/* Line columns */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
           {['L1', 'L2', 'L3'].map((line) => {
-            const rows = grouped[line] || [];
+            const sections = grouped[line] || {};
             const accent = LINE_COLORS[line];
+            const lineCount = ROSTER_SECTIONS.reduce((s, sec) => s + ((sections[sec] || []).length), 0)
+                            + ((sections.Unassigned || []).length);
             return (
-              <div
-                key={line}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => onDropToLine(e, line)}
-                style={{ ...panelStyle, marginBottom: 0, minHeight: 220 }}
-              >
+              <div key={line} style={{ ...panelStyle, marginBottom: 0, minHeight: 220 }}>
                 <div style={{ ...panelHeaderStyle, color: accent }}>
-                  <span>{line} ({rows.length})</span>
-                  <button
-                    style={{ ...btnSecondary, padding: '2px 8px' }}
-                    onClick={() => setShowAssign((s) => ({ ...s, [line]: !s[line] }))}
-                    title={showAssign[line] ? 'Close' : 'Assign via dropdown'}
-                  >
-                    {showAssign[line] ? '×' : '+'}
-                  </button>
+                  <span>{line} ({lineCount})</span>
                 </div>
-                <div style={panelBodyStyle}>
-                  {showAssign[line] && (
-                    <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-                      <select
-                        value={assignOp[line]}
-                        onChange={(e) => setAssignOp((s) => ({ ...s, [line]: e.target.value }))}
-                        style={{ ...selectStyle, flex: 1, minWidth: 0 }}
-                      >
-                        <option value="">Select operator…</option>
-                        {activeOperators.map((op) => (
-                          <option key={op.id} value={op.id}>{op.name}</option>
-                        ))}
-                      </select>
-                      <button
-                        style={{ ...btnPrimary, padding: '6px 12px', fontSize: 11 }}
-                        onClick={async () => {
-                          const id = assignOp[line];
-                          if (!id) return;
-                          await handleAssign(id, line);
-                          setAssignOp((s) => ({ ...s, [line]: '' }));
-                          setShowAssign((s) => ({ ...s, [line]: false }));
-                        }}
-                        disabled={!assignOp[line]}
-                      >
-                        Assign
-                      </button>
-                    </div>
-                  )}
-                  {loading ? (
-                    <div style={{ padding: 12, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
-                  ) : rows.length === 0 ? (
-                    <div style={{
-                      border: '1px dashed var(--border)', borderRadius: 3,
-                      padding: '24px 12px', textAlign: 'center',
-                      color: 'var(--t3)', fontSize: 11, fontFamily: 'var(--mono)',
-                      textTransform: 'uppercase', letterSpacing: '0.08em',
-                    }}>
-                      Drop operator here
-                    </div>
-                  ) : (
-                    rows.map((row) => (
+                <div style={{ padding: 6 }}>
+                  {ROSTER_SECTIONS.map((station, idx) => {
+                    const rows = sections[station] || [];
+                    const key = `${line}-${station}`;
+                    const open = !!pickerOpen[key];
+                    const q = (pickerQuery[key] || '').trim().toLowerCase();
+                    const pickerOps = activeOperators.filter((op) => {
+                      if (assignedOpIds.has(op.id)) return false;
+                      if (!q) return true;
+                      return (op.name || '').toLowerCase().includes(q) ||
+                             (op.employee_id || '').toLowerCase().includes(q);
+                    });
+                    return (
                       <div
-                        key={row.id}
+                        key={station}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={(e) => onDropToSection(e, line, station)}
                         style={{
-                          background: 'var(--surface2)',
-                          border: '1px solid var(--border)',
-                          borderLeft: `3px solid ${accent}`,
-                          borderRadius: 3,
-                          padding: '6px 10px',
-                          marginBottom: 6,
-                          display: 'flex', alignItems: 'flex-start', gap: 8,
+                          borderTop: idx === 0 ? 'none' : '1px solid var(--border)',
+                          padding: '8px 8px 10px',
                         }}
                       >
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 12, color: 'var(--t1)' }}>{row.operator_name || '(unknown)'}</div>
-                          <div style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 2 }}>
-                            {row.operator_department || '—'}
-                            {row.station ? ` · ${row.station}` : ''}
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                          <span style={{
+                            fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 700,
+                            color: 'var(--t2)', textTransform: 'uppercase', letterSpacing: '0.08em',
+                          }}>
+                            {station} ({rows.length})
+                          </span>
+                          <div
+                            ref={(el) => { pickerRefs.current[key] = el; }}
+                            style={{ position: 'relative' }}
+                          >
+                            <button
+                              style={{ ...btnSecondary, padding: '1px 7px', fontSize: 11 }}
+                              onClick={() => {
+                                setPickerOpen((s) => ({ ...s, [key]: !s[key] }));
+                                setPickerQuery((s) => ({ ...s, [key]: '' }));
+                              }}
+                              title={open ? 'Close' : `Assign to ${station}`}
+                            >
+                              {open ? '×' : '+'}
+                            </button>
+                            {open && (
+                              <div style={{
+                                position: 'absolute', top: '100%', right: 0,
+                                marginTop: 4, zIndex: 20, width: 240,
+                                background: 'var(--surface2)', border: '1px solid var(--border)',
+                                borderRadius: 3, boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+                              }}>
+                                <input
+                                  type="text"
+                                  autoFocus
+                                  placeholder="Search name or ID…"
+                                  value={pickerQuery[key] || ''}
+                                  onChange={(e) => setPickerQuery((s) => ({ ...s, [key]: e.target.value }))}
+                                  style={{ ...inputStyle, width: '100%', borderRadius: 0, border: 'none', borderBottom: '1px solid var(--border)' }}
+                                />
+                                <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+                                  {pickerOps.length === 0 ? (
+                                    <div style={{ padding: '8px 12px', color: 'var(--t3)', fontSize: 11, fontFamily: 'var(--mono)' }}>
+                                      No available operators
+                                    </div>
+                                  ) : (
+                                    pickerOps.slice(0, 50).map((op) => (
+                                      <div
+                                        key={op.id}
+                                        onMouseDown={(e) => {
+                                          e.preventDefault();
+                                          handleAssign(op.id, line, station);
+                                          setPickerOpen((s) => ({ ...s, [key]: false }));
+                                          setPickerQuery((s) => ({ ...s, [key]: '' }));
+                                        }}
+                                        style={{ padding: '6px 10px', cursor: 'pointer', fontSize: 12, color: 'var(--t1)' }}
+                                        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
+                                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                                      >
+                                        <div>{op.name}</div>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', marginTop: 1 }}>
+                                          {op.employee_id || '—'} · {(op.department || '').toUpperCase()}
+                                        </div>
+                                      </div>
+                                    ))
+                                  )}
+                                </div>
+                              </div>
+                            )}
                           </div>
                         </div>
-                        {canManageFloor && (
-                          <button
-                            onClick={() => handleUnassign(row, line)}
-                            title={`Remove ${row.operator_name || 'operator'} from ${line}`}
-                            style={{
-                              background: 'transparent',
-                              border: '1px solid var(--border)',
-                              color: '#ff7070',
-                              cursor: 'pointer',
-                              borderRadius: 3,
-                              padding: '0 6px',
-                              fontSize: 13,
-                              lineHeight: '20px',
-                              height: 22,
-                              flexShrink: 0,
-                            }}
-                          >
-                            ×
-                          </button>
+                        {loading && idx === 0 ? (
+                          <div style={{ padding: 12, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+                        ) : rows.length === 0 ? (
+                          <div style={{
+                            border: '1px dashed var(--border)', borderRadius: 3,
+                            padding: '12px 10px', textAlign: 'center',
+                            color: 'var(--t3)', fontSize: 10, fontFamily: 'var(--mono)',
+                            textTransform: 'uppercase', letterSpacing: '0.08em',
+                          }}>
+                            Drop operator here
+                          </div>
+                        ) : (
+                          rows.map((row) => (
+                            <div
+                              key={row.id}
+                              style={{
+                                background: 'var(--surface2)',
+                                border: '1px solid var(--border)',
+                                borderLeft: `3px solid ${accent}`,
+                                borderRadius: 3,
+                                padding: '5px 8px',
+                                marginBottom: 4,
+                                display: 'flex', alignItems: 'flex-start', gap: 6,
+                              }}
+                            >
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontSize: 12, color: 'var(--t1)' }}>{row.operator_name || '(unknown)'}</div>
+                                <div style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 2 }}>
+                                  {row.operator_department || '—'}
+                                </div>
+                              </div>
+                              <button
+                                onClick={() => handleUnassign(row, line)}
+                                title={`Remove ${row.operator_name || 'operator'} from ${line}`}
+                                style={{
+                                  background: 'transparent',
+                                  border: '1px solid var(--border)',
+                                  color: '#ff7070',
+                                  cursor: 'pointer',
+                                  borderRadius: 3,
+                                  padding: '0 5px',
+                                  fontSize: 12,
+                                  lineHeight: '18px',
+                                  height: 20,
+                                  flexShrink: 0,
+                                }}
+                              >
+                                ×
+                              </button>
+                            </div>
+                          ))
                         )}
                       </div>
-                    ))
+                    );
+                  })}
+                  {(sections.Unassigned || []).length > 0 && (
+                    <div style={{ borderTop: '1px solid var(--border)', padding: '8px 8px 10px' }}>
+                      <span style={{
+                        fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 700,
+                        color: '#ff9d33', textTransform: 'uppercase', letterSpacing: '0.08em',
+                      }}>
+                        Unassigned ({sections.Unassigned.length})
+                      </span>
+                      <div style={{ marginTop: 6 }}>
+                        {sections.Unassigned.map((row) => (
+                          <div
+                            key={row.id}
+                            style={{
+                              background: 'var(--surface2)',
+                              border: '1px dashed #ff9d33',
+                              borderRadius: 3,
+                              padding: '5px 8px',
+                              marginBottom: 4,
+                              display: 'flex', alignItems: 'flex-start', gap: 6,
+                            }}
+                          >
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: 12, color: 'var(--t1)' }}>{row.operator_name || '(unknown)'}</div>
+                              <div style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 2 }}>
+                                Legacy row · re-drag to a section
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => handleUnassign(row, line)}
+                              title={`Remove ${row.operator_name || 'operator'} from ${line}`}
+                              style={{
+                                background: 'transparent',
+                                border: '1px solid var(--border)',
+                                color: '#ff7070',
+                                cursor: 'pointer',
+                                borderRadius: 3,
+                                padding: '0 5px',
+                                fontSize: 12,
+                                lineHeight: '18px',
+                                height: 20,
+                                flexShrink: 0,
+                              }}
+                            >
+                              ×
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   )}
                 </div>
               </div>
