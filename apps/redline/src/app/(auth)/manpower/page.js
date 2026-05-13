@@ -9,6 +9,24 @@ import { useRefreshState } from '../layout.js';
 const LINE_ORDER  = ['L1', 'L2', 'L3'];
 const LINE_COLORS = { L1: 'var(--yellow)', L2: 'var(--blue)', L3: 'var(--green)' };
 
+// getManpowerLog now returns { L1: { Assembly:[], QC:[], Packaging:[], Unassigned:[] }, ... }.
+// This read-only view flattens that back to { L1: [...], L2: [...], L3: [...] }.
+function flattenRoster(nested) {
+  const out = { L1: [], L2: [], L3: [] };
+  for (const line of LINE_ORDER) {
+    const sections = nested?.[line];
+    if (!sections) continue;
+    if (Array.isArray(sections)) { out[line] = sections; continue; } // legacy shape
+    out[line] = [
+      ...(sections.Assembly   || []),
+      ...(sections.QC         || []),
+      ...(sections.Packaging  || []),
+      ...(sections.Unassigned || []),
+    ];
+  }
+  return out;
+}
+
 const istToday = () =>
   new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
@@ -66,7 +84,7 @@ export default function ManpowerPage() {
       const grouped = rosterInner && typeof rosterInner === 'object' && !Array.isArray(rosterInner)
         ? rosterInner
         : {};
-      setRosterByLine(grouped);
+      setRosterByLine(flattenRoster(grouped));
       setForbidden(false);
     } catch (e) {
       const msg = e.message || 'Failed to load manpower';

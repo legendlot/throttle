@@ -809,25 +809,9 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
     [operators]
   );
 
-  const filteredOperators = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return activeOperators;
-    return activeOperators.filter((o) => (o.name || '').toLowerCase().includes(q));
-  }, [activeOperators, search]);
-
-  // operator_id -> line they're already on (for left-panel chip dot)
-  const assignedLineByOpId = useMemo(() => {
-    const m = {};
-    for (const line of ['L1', 'L2', 'L3']) {
-      const sections = grouped[line] || {};
-      for (const section of Object.keys(sections)) {
-        for (const row of sections[section] || []) m[row.operator_id] = line;
-      }
-    }
-    return m;
-  }, [grouped]);
-
-  // Set of all assigned operator_ids — used to filter combobox options.
+  // Set of all assigned operator_ids — drives pool exclusion + combobox filter.
+  // One slot per operator per day is enforced server-side by the
+  // (operator_id, shift_date) UNIQUE constraint; this just keeps the UI in sync.
   const assignedOpIds = useMemo(() => {
     const s = new Set();
     for (const line of ['L1', 'L2', 'L3']) {
@@ -838,6 +822,18 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
     }
     return s;
   }, [grouped]);
+
+  // Pool = active operators minus anyone already on the roster today.
+  const poolOperators = useMemo(
+    () => activeOperators.filter((o) => !assignedOpIds.has(o.id)),
+    [activeOperators, assignedOpIds]
+  );
+
+  const filteredOperators = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return poolOperators;
+    return poolOperators.filter((o) => (o.name || '').toLowerCase().includes(q));
+  }, [poolOperators, search]);
 
   const totalAssigned = useMemo(() => {
     let n = 0;
@@ -968,7 +964,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
         {/* Operators panel */}
         <div style={panelStyle}>
           <div style={panelHeaderStyle}>
-            <span>Operators ({activeOperators.length})</span>
+            <span>Operators ({poolOperators.length})</span>
           </div>
           <div style={panelBodyStyle}>
             <input
@@ -983,36 +979,26 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                 {activeOperators.length === 0 ? 'Loading operators…' : 'No matches'}
               </div>
             ) : (
-              filteredOperators.map((op) => {
-                const assignedLine = assignedLineByOpId[op.id];
-                const dotColor = assignedLine ? LINE_COLORS[assignedLine] : null;
-                return (
-                  <div
-                    key={op.id}
-                    draggable
-                    onDragStart={(e) => onDragStart(e, op)}
-                    title={assignedLine ? `Already on ${assignedLine} (drag to a section to reassign)` : 'Drag to a line section'}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 8,
-                      padding: '6px 8px', marginBottom: 4,
-                      background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3,
-                      cursor: 'grab', fontSize: 12, color: 'var(--t1)',
-                    }}
-                  >
-                    <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>≡</span>
-                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{op.name}</span>
-                    {dotColor && (
-                      <span
-                        style={{ width: 8, height: 8, borderRadius: '50%', background: dotColor, boxShadow: '0 0 0 1px var(--border)' }}
-                        title={`On ${assignedLine}`}
-                      />
-                    )}
-                    <span style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--t3)', textTransform: 'uppercase' }}>
-                      {(op.department || '').slice(0, 4)}
-                    </span>
-                  </div>
-                );
-              })
+              filteredOperators.map((op) => (
+                <div
+                  key={op.id}
+                  draggable
+                  onDragStart={(e) => onDragStart(e, op)}
+                  title="Drag to a line section"
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    padding: '6px 8px', marginBottom: 4,
+                    background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3,
+                    cursor: 'grab', fontSize: 12, color: 'var(--t1)',
+                  }}
+                >
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>≡</span>
+                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{op.name}</span>
+                  <span style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--t3)', textTransform: 'uppercase' }}>
+                    {(op.department || '').slice(0, 4)}
+                  </span>
+                </div>
+              ))
             )}
           </div>
         </div>
