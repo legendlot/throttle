@@ -175,6 +175,8 @@ function NewPOPage() {
   const [vendorCache, setVendorCache] = useState([]);
   const [forwarderCache, setForwarderCache] = useState([]);
   const [materialCache, setMaterialCache] = useState({});
+  const [companyAddresses, setCompanyAddresses] = useState([]);
+  const [deliveryAddressId, setDeliveryAddressId] = useState('');
 
   const [submitting, setSubmitting] = useState(false);
   const rrParam = searchParams?.get('rr') || null;
@@ -185,6 +187,12 @@ function NewPOPage() {
     if (!session) return;
     garageFetch('getVendors', {}, session).then((d) => setVendorCache(Array.isArray(d) ? d : [])).catch(() => {});
     garageFetch('getForwarders', {}, session).then((d) => setForwarderCache(Array.isArray(d) ? d : [])).catch(() => {});
+    garageFetch('getCompanyAddresses', {}, session).then((d) => {
+      const list = Array.isArray(d) ? d : [];
+      setCompanyAddresses(list);
+      const def = list.find((a) => a.is_default_delivery);
+      if (def) setDeliveryAddressId(String(def.id));
+    }).catch(() => {});
   }, [session]);
 
   // RR conversion toast
@@ -310,7 +318,7 @@ function NewPOPage() {
 
   // Manual mode
   function addManualLine() {
-    setLineItems((prev) => [...prev, { part_code: '', description: '', item_type: 'Part', qty_ordered: '', unit: 'pcs', unit_price: '' }]);
+    setLineItems((prev) => [...prev, { part_code: '', description: '', item_type: 'Part', qty_ordered: '', unit: 'pcs', unit_price: '', hsn_code: '', gst_percent: '' }]);
   }
   function updateLine(i, field, value) {
     setLineItems((prev) => prev.map((l, j) => (j === i ? { ...l, [field]: value } : l)));
@@ -472,6 +480,7 @@ function NewPOPage() {
       shipping_mode: shippingMode || null,
       forwarder_code: forwarderCode || null,
       transit_days: transitDays ? parseInt(transitDays, 10) : null,
+      delivery_address_id: deliveryAddressId ? parseInt(deliveryAddressId, 10) : null,
       notes: notes || null,
       lines: lines.map((l) => ({
         part_code:   l.part_code || null,
@@ -484,6 +493,8 @@ function NewPOPage() {
         variant:     l.variant || null,
         color:       l.color || null,
         receive_format: l.receive_format || null,
+        hsn_code:    l.hsn_code || null,
+        gst_percent: l.gst_percent !== '' && l.gst_percent != null ? parseFloat(l.gst_percent) : null,
       })),
     };
 
@@ -684,6 +695,19 @@ function NewPOPage() {
             <SelectField label="Payment Terms" value={paymentTerms} onChange={setPaymentTerms} options={['', ...PO_PAYMENT_TERMS]} />
             <Field label="Lead Time (days)" type="number" value={leadTimeDays} onChange={setLeadTimeDays} readOnly />
             <Field label="Port of Loading" value={portOfLoading} onChange={setPortOfLoading} />
+            <div>
+              <span style={labelStyle}>Delivery Address</span>
+              <select
+                value={deliveryAddressId}
+                onChange={(e) => setDeliveryAddressId(e.target.value)}
+                style={{ ...selectStyle, width: '100%' }}
+              >
+                {companyAddresses.length === 0 && <option value="">Loading…</option>}
+                {companyAddresses.map((a) => (
+                  <option key={a.id} value={a.id}>{a.label}</option>
+                ))}
+              </select>
+            </div>
             <div style={{ gridColumn: '1 / -1' }}>
               <span style={labelStyle}>Notes</span>
               <input type="text" value={notes} onChange={(e) => setNotes(e.target.value)} style={{ ...inputStyle, width: '100%' }} />
@@ -939,6 +963,8 @@ function ManualMode({ lineItems, addManualLine, updateLine, removeLine, lookupPa
               <th style={tableThStyle}>Qty</th>
               <th style={tableThStyle}>Unit Price</th>
               <th style={tableThStyle}>Unit</th>
+              <th style={tableThStyle}>HSN</th>
+              <th style={tableThStyle}>GST %</th>
               <th style={{ ...tableThStyle, width: 30 }}></th>
             </tr></thead>
             <tbody>
@@ -969,6 +995,12 @@ function ManualMode({ lineItems, addManualLine, updateLine, removeLine, lookupPa
                   </td>
                   <td style={tableTdStyle}>
                     <input type="text" value={l.unit} onChange={(e) => updateLine(i, 'unit', e.target.value)} style={{ ...inputStyle, width: 70 }} />
+                  </td>
+                  <td style={tableTdStyle}>
+                    <input type="text" maxLength={8} placeholder="e.g. 7318" value={l.hsn_code || ''} onChange={(e) => updateLine(i, 'hsn_code', e.target.value)} style={{ ...inputStyle, width: 80, fontFamily: 'var(--mono)' }} />
+                  </td>
+                  <td style={tableTdStyle}>
+                    <input type="number" min="0" max="28" step="0.1" placeholder="e.g. 18" value={l.gst_percent || ''} onChange={(e) => updateLine(i, 'gst_percent', e.target.value)} style={{ ...inputStyle, width: 70, fontFamily: 'var(--mono)' }} />
                   </td>
                   <td style={tableTdStyle}>
                     <button onClick={() => removeLine(i)} style={{ background: 'transparent', border: '1px solid var(--border)', color: '#ff7070', cursor: 'pointer', fontSize: 11, borderRadius: 3, padding: '2px 6px' }}>✕</button>

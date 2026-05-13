@@ -83,6 +83,7 @@ export default function VendorsPage() {
   const [paymentTerms, setPaymentTerms] = useState('');
   const [leadTime, setLeadTime] = useState('');
   const [address, setAddress] = useState('');
+  const [gstin, setGstin] = useState('');
   const [formNotes, setFormNotes] = useState('');
 
   // supplied items
@@ -126,6 +127,7 @@ export default function VendorsPage() {
     setPaymentTerms('');
     setLeadTime('');
     setAddress('');
+    setGstin('');
     setFormNotes('');
     setSuppliedItems([]);
     setVsiType('product');
@@ -161,6 +163,7 @@ export default function VendorsPage() {
       setPaymentTerms(vendor.payment_terms || '');
       setLeadTime(vendor.lead_time_days != null ? String(vendor.lead_time_days) : '');
       setAddress(vendor.address || '');
+      setGstin(vendor.gstin || '');
       setFormNotes(vendor.notes || '');
       loadSuppliedItems(code);
     } catch (e) {
@@ -190,6 +193,7 @@ export default function VendorsPage() {
         payment_terms: paymentTerms || null,
         lead_time_days: leadTime ? parseInt(leadTime, 10) : null,
         address: address || null,
+        gstin: gstin.trim() || null,
         notes: formNotes || null,
       };
       const action = editingCode ? 'updateVendor' : 'postVendor';
@@ -359,6 +363,7 @@ export default function VendorsPage() {
               <span style={labelStyle}>Address</span>
               <input type="text" value={address} onChange={(e) => setAddress(e.target.value)} style={{ ...inputStyle, width: '100%' }} disabled={submitting} />
             </div>
+            <Field label="GSTIN" value={gstin} onChange={setGstin} placeholder="e.g. 29AALFA6686P1ZE" disabled={submitting} />
             <div style={{ gridColumn: '1 / -1' }}>
               <span style={labelStyle}>Notes</span>
               <textarea value={formNotes} onChange={(e) => setFormNotes(e.target.value)} rows={2} style={{ ...inputStyle, width: '100%', resize: 'vertical' }} disabled={submitting} />
@@ -474,11 +479,11 @@ export default function VendorsPage() {
   );
 }
 
-function Field({ label, value, onChange, type = 'text', disabled }) {
+function Field({ label, value, onChange, type = 'text', disabled, placeholder }) {
   return (
     <div>
       <span style={labelStyle}>{label}</span>
-      <input type={type} value={value} onChange={(e) => onChange(e.target.value)} style={{ ...inputStyle, width: '100%' }} disabled={disabled} />
+      <input type={type} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} style={{ ...inputStyle, width: '100%' }} disabled={disabled} />
     </div>
   );
 }

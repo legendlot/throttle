@@ -233,6 +233,12 @@ export default function PODetailPage() {
           <StatusBadge label={status} tone={PO_STATUS_TONES[status] || 'gray'} />
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          <button
+            style={btnSecondary}
+            onClick={() => window.open(`/procurement/pos/print?po_number=${encodeURIComponent(po.po_number)}`, '_blank')}
+            disabled={actionLoading}
+            title="Open printable PO in a new tab"
+          >🖨 Print PO</button>
           {canApprove && <button style={btnPrimary} onClick={() => handleAction('approve')} disabled={actionLoading}>✅ Approve</button>}
           {canSend    && <button style={btnSecondary} onClick={() => handleAction('send')} disabled={actionLoading}>Mark Sent</button>}
           {canConfirm && <button style={btnPrimary} onClick={() => handleAction('confirm')} disabled={actionLoading}>Confirmed & Paid</button>}
