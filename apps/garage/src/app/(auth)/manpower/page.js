@@ -797,12 +797,22 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
   const { showToast } = useToast();
   const [date, setDate] = useState(istToday());
   const [grouped, setGrouped] = useState({});
+  const [attendanceRows, setAttendanceRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
   // Per-section picker state — keys are "L1-Assembly", "L2-QC", etc.
   const [pickerOpen, setPickerOpen]   = useState({});
   const [pickerQuery, setPickerQuery] = useState({});
   const pickerRefs = useRef({});
+
+  // Auto-assign target headcounts (fresh each day, no persistence).
+  const [targets, setTargets] = useState({
+    L1: { Assembly: '', QC: '', Packaging: '' },
+    L2: { Assembly: '', QC: '', Packaging: '' },
+    L3: { Assembly: '', QC: '', Packaging: '' },
+    Others: '',
+  });
+  // Multi-select drag from the available pool.
+  const [selectedOpIds, setSelectedOpIds] = useState(() => new Set());
 
   const activeOperators = useMemo(
     () => (operators || []).filter((o) => o.status !== 'inactive'),
@@ -824,17 +834,22 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
     return s;
   }, [grouped]);
 
-  // Pool = active operators minus anyone already on the roster today.
-  const poolOperators = useMemo(
-    () => activeOperators.filter((o) => !assignedOpIds.has(o.id)),
-    [activeOperators, assignedOpIds]
-  );
+  // Currently clocked-in operator IDs — drawn from getOperatorAttendance for the
+  // same shift_date. An operator is "clocked in" when there's an open attendance
+  // row (clock_out is null) for today.
+  const clockedInIds = useMemo(() => {
+    const s = new Set();
+    for (const a of attendanceRows || []) {
+      if (!a.clock_out) s.add(a.operator_id);
+    }
+    return s;
+  }, [attendanceRows]);
 
-  const filteredOperators = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return poolOperators;
-    return poolOperators.filter((o) => (o.name || '').toLowerCase().includes(q));
-  }, [poolOperators, search]);
+  // Available pool = active + clocked-in + not already on the roster.
+  const availableOperators = useMemo(
+    () => activeOperators.filter((o) => clockedInIds.has(o.id) && !assignedOpIds.has(o.id)),
+    [activeOperators, clockedInIds, assignedOpIds]
+  );
 
   const totalAssigned = useMemo(() => {
     let n = 0;
@@ -850,13 +865,19 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
     if (!session || !canManageFloor || !date) return;
     setLoading(true);
     try {
-      const res = await workerFetch('getManpowerLog', { data: { shift_date: date } }, session);
-      const inner = res?.data;
+      const [rosterRes, attRes] = await Promise.all([
+        workerFetch('getManpowerLog', { data: { shift_date: date } }, session),
+        workerFetch('getOperatorAttendance', { data: { date_from: date, date_to: date } }, session),
+      ]);
+      const inner = rosterRes?.data;
       const obj = inner && typeof inner === 'object' && !Array.isArray(inner) ? inner : {};
       setGrouped(obj);
+      const attList = Array.isArray(attRes?.data) ? attRes.data : Array.isArray(attRes) ? attRes : [];
+      setAttendanceRows(attList);
     } catch (e) {
       showToast(e.message || 'Failed to load roster', 'error');
       setGrouped({});
+      setAttendanceRows([]);
     } finally {
       setLoading(false);
     }
@@ -918,21 +939,127 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
     }
   }
 
-  function onDragStart(e, op) {
+  // Drag from the available pool: if the dragged chip is part of the current
+  // selection, the whole selection rides along; otherwise just this chip.
+  function onPoolDragStart(e, op) {
+    const isSelected = selectedOpIds.has(op.id);
+    const opIds = isSelected ? [...selectedOpIds] : [op.id];
+    e.dataTransfer.setData('application/json', JSON.stringify({ opIds }));
+    // Legacy single-id fallback so any handler reading 'operatorId' still works.
     e.dataTransfer.setData('operatorId', op.id);
     e.dataTransfer.effectAllowed = 'move';
   }
 
+  function readDropOpIds(e) {
+    const jsonRaw = e.dataTransfer.getData('application/json');
+    if (jsonRaw) {
+      try {
+        const parsed = JSON.parse(jsonRaw);
+        if (Array.isArray(parsed.opIds) && parsed.opIds.length) return parsed.opIds;
+      } catch {}
+    }
+    const single = e.dataTransfer.getData('operatorId');
+    return single ? [single] : [];
+  }
+
+  async function handleBulkAssign(opIds, line, station) {
+    if (!canManageFloor || !opIds.length) return;
+    if (line !== 'Others' && !station) return;
+    try {
+      if (opIds.length === 1) {
+        const data = { operator_id: opIds[0], line, shift_date: date };
+        if (line !== 'Others') data.station = station;
+        await workerFetch('assignManpower', { data }, session);
+      } else {
+        const assignments = opIds.map((id) => ({
+          operator_id: id,
+          line,
+          station: line === 'Others' ? null : station,
+        }));
+        await workerFetch('bulkAssignManpower', { data: { assignments, shift_date: date } }, session);
+      }
+      const label = line === 'Others' ? line : `${line} · ${station}`;
+      const noun  = opIds.length === 1 ? 'operator' : `${opIds.length} operators`;
+      showToast(`Assigned ${noun} to ${label}`, 'success');
+      setSelectedOpIds(new Set());
+      load();
+    } catch (e) {
+      showToast(e.message || 'Assign failed', 'error');
+    }
+  }
+
   function onDropToSection(e, line, station) {
     e.preventDefault();
-    const operatorId = e.dataTransfer.getData('operatorId');
-    if (operatorId) handleAssign(operatorId, line, station);
+    const opIds = readDropOpIds(e);
+    if (opIds.length) handleBulkAssign(opIds, line, station);
   }
 
   function onDropToOthers(e) {
     e.preventDefault();
-    const operatorId = e.dataTransfer.getData('operatorId');
-    if (operatorId) handleAssign(operatorId, 'Others', null);
+    const opIds = readDropOpIds(e);
+    if (opIds.length) handleBulkAssign(opIds, 'Others', null);
+  }
+
+  async function handleAutoAssign() {
+    if (!canManageFloor) return;
+    if (availableOperators.length === 0) {
+      showToast('No available operators (clocked-in and unassigned)', 'error');
+      return;
+    }
+
+    // Slot queue in fill order: L1/Assembly → L1/QC → L1/Packaging →
+    // L2/... → L3/... → Others.
+    const slots = [];
+    for (const line of ['L1', 'L2', 'L3']) {
+      for (const section of ROSTER_SECTIONS) {
+        const n = Math.max(0, parseInt(targets[line][section], 10) || 0);
+        for (let i = 0; i < n; i++) slots.push({ line, station: section });
+      }
+    }
+    const othersN = Math.max(0, parseInt(targets.Others, 10) || 0);
+    for (let i = 0; i < othersN; i++) slots.push({ line: 'Others', station: null });
+
+    if (slots.length === 0) {
+      showToast('Enter target headcounts before auto-assigning', 'error');
+      return;
+    }
+
+    const pairCount = Math.min(availableOperators.length, slots.length);
+    const assignments = [];
+    for (let i = 0; i < pairCount; i++) {
+      assignments.push({
+        operator_id: availableOperators[i].id,
+        line:        slots[i].line,
+        station:     slots[i].station,
+      });
+    }
+
+    const skipped  = availableOperators.length - assignments.length;
+    const unfilled = slots.length - assignments.length;
+
+    try {
+      await workerFetch('bulkAssignManpower',
+        { data: { assignments, shift_date: date } },
+        session
+      );
+      const pieces = [`Assigned ${assignments.length} operator${assignments.length === 1 ? '' : 's'}`];
+      if (skipped > 0)  pieces.push(`${skipped} had no slot`);
+      if (unfilled > 0) pieces.push(`${unfilled} slot${unfilled === 1 ? '' : 's'} unfilled`);
+      showToast(pieces.join(' · '), 'success');
+      setSelectedOpIds(new Set());
+      load();
+    } catch (e) {
+      showToast(e.message || 'Auto-assign failed', 'error');
+    }
+  }
+
+  function toggleSelected(opId) {
+    setSelectedOpIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(opId)) next.delete(opId);
+      else next.add(opId);
+      return next;
+    });
   }
 
   if (!canManageFloor) {
@@ -968,51 +1095,124 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 12, alignItems: 'start' }}>
-        {/* Operators panel */}
-        <div style={panelStyle}>
-          <div style={panelHeaderStyle}>
-            <span>Operators ({poolOperators.length})</span>
-          </div>
-          <div style={panelBodyStyle}>
+      {/* Auto-assign target headcounts */}
+      <div style={{ ...panelStyle, marginBottom: 12 }}>
+        <div style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            Targets
+          </span>
+          {['L1', 'L2', 'L3'].map((line) => (
+            <div key={line} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: LINE_COLORS[line], minWidth: 18, fontWeight: 700 }}>{line}</span>
+              {ROSTER_SECTIONS.map((section) => (
+                <label key={section} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
+                  <span style={{ textTransform: 'uppercase', letterSpacing: '0.06em' }}>{section.slice(0, 3)}</span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={targets[line][section]}
+                    onChange={(e) => setTargets((prev) => ({
+                      ...prev,
+                      [line]: { ...prev[line], [section]: e.target.value },
+                    }))}
+                    style={{ ...inputStyle, width: 48, fontFamily: 'var(--mono)', textAlign: 'center', padding: '3px 6px' }}
+                  />
+                </label>
+              ))}
+            </div>
+          ))}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
+            <span style={{ color: LINE_COLORS.Others, fontWeight: 700 }}>OTHERS</span>
             <input
-              type="text"
-              placeholder="Search…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              style={{ ...inputStyle, width: '100%', marginBottom: 10 }}
+              type="number"
+              min="0"
+              value={targets.Others}
+              onChange={(e) => setTargets((prev) => ({ ...prev, Others: e.target.value }))}
+              style={{ ...inputStyle, width: 48, fontFamily: 'var(--mono)', textAlign: 'center', padding: '3px 6px' }}
             />
-            {filteredOperators.length === 0 ? (
-              <div style={{ fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
-                {activeOperators.length === 0 ? 'Loading operators…' : 'No matches'}
-              </div>
-            ) : (
-              filteredOperators.map((op) => (
+          </label>
+          <button
+            onClick={handleAutoAssign}
+            disabled={availableOperators.length === 0}
+            style={{
+              marginLeft: 'auto',
+              ...btnPrimary,
+              padding: '6px 14px',
+              opacity: availableOperators.length === 0 ? 0.5 : 1,
+              cursor: availableOperators.length === 0 ? 'not-allowed' : 'pointer',
+            }}
+          >
+            Auto-assign ({availableOperators.length} available)
+          </button>
+        </div>
+      </div>
+
+      {/* Available pool — clocked-in, unassigned operators. Chips multi-selectable; drag any selected chip to move the whole selection. */}
+      <div style={{ ...panelStyle, marginBottom: 12 }}>
+        <div style={panelHeaderStyle}>
+          <span>Available ({availableOperators.length})</span>
+          {selectedOpIds.size > 0 && (
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--yellow)', letterSpacing: '0.06em' }}>
+              {selectedOpIds.size} selected · drag to assign
+            </span>
+          )}
+        </div>
+        <div style={{ padding: '10px 14px', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {availableOperators.length === 0 ? (
+            <div style={{ fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
+              {loading
+                ? 'Loading…'
+                : activeOperators.length === 0
+                  ? 'No operators loaded'
+                  : 'No clocked-in operators left to assign'}
+            </div>
+          ) : (
+            availableOperators.map((op) => {
+              const isSelected = selectedOpIds.has(op.id);
+              return (
                 <div
                   key={op.id}
                   draggable
-                  onDragStart={(e) => onDragStart(e, op)}
-                  title="Drag to a line section"
+                  onDragStart={(e) => onPoolDragStart(e, op)}
+                  title={isSelected ? 'Drag to assign selected operators' : 'Click checkbox to multi-select, or drag this chip'}
                   style={{
                     display: 'flex', alignItems: 'center', gap: 8,
-                    padding: '6px 8px', marginBottom: 4,
-                    background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3,
-                    cursor: 'grab', fontSize: 12, color: 'var(--t1)',
+                    padding: '4px 10px 4px 6px', borderRadius: 16,
+                    background: isSelected ? 'var(--yellow)' : 'var(--surface2)',
+                    color: isSelected ? '#000' : 'var(--t1)',
+                    border: `1px solid ${isSelected ? 'var(--yellow)' : 'var(--border)'}`,
+                    cursor: 'grab', fontSize: 12, userSelect: 'none',
                   }}
                 >
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>≡</span>
-                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{op.name}</span>
-                  <span style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--t3)', textTransform: 'uppercase' }}>
+                  <span
+                    onClick={(e) => { e.stopPropagation(); toggleSelected(op.id); }}
+                    style={{
+                      width: 14, height: 14, borderRadius: 3, flexShrink: 0,
+                      border: `1.5px solid ${isSelected ? '#000' : 'var(--border)'}`,
+                      background: isSelected ? '#000' : 'transparent',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {isSelected && (
+                      <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
+                        <path d="M1 4l2 2 4-4" stroke="var(--yellow)" strokeWidth="1.5" strokeLinecap="round" />
+                      </svg>
+                    )}
+                  </span>
+                  <span>{op.name}</span>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: isSelected ? '#000' : 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                     {(op.department || '').slice(0, 4)}
                   </span>
                 </div>
-              ))
-            )}
-          </div>
+              );
+            })
+          )}
         </div>
+      </div>
 
-        {/* Line columns */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12 }}>
+      {/* Line columns */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12 }}>
           {['L1', 'L2', 'L3'].map((line) => {
             const sections = grouped[line] || {};
             const accent = LINE_COLORS[line];
@@ -1369,7 +1569,6 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
             );
           })()}
         </div>
-      </div>
     </div>
   );
 }
