@@ -386,8 +386,12 @@ function CreateOperatorModal({ open, onClose, session, onSaved }) {
   }, [open]);
 
   async function save() {
-    if (!name.trim())  { showToast('Name required', 'error'); return; }
-    if (!department)   { showToast('Department required', 'error'); return; }
+    if (!name.trim())     { showToast('Name required', 'error'); return; }
+    if (!department)      { showToast('Department required', 'error'); return; }
+    if (!employmentType)  { showToast('Employment Type required', 'error'); return; }
+    if (!phone.trim())    { showToast('Phone required', 'error'); return; }
+    if (!joinDate)        { showToast('Join Date required', 'error'); return; }
+    if (!dob)             { showToast('Date of Birth required', 'error'); return; }
     setSaving(true);
     try {
       const res = await workerFetch('createOperator', {
@@ -430,15 +434,15 @@ function CreateOperatorModal({ open, onClose, session, onSaved }) {
             <option value="packaging">Packaging</option>
           </select>
         </Field>
-        <Field label="Employment Type">
-          <select value={employmentType} onChange={(e) => setEmploymentType(e.target.value)} style={{ ...selectStyle, width: '100%' }}>
+        <Field label="Employment Type *">
+          <select value={employmentType} onChange={(e) => setEmploymentType(e.target.value)} required style={{ ...selectStyle, width: '100%' }}>
             <option value="in_house">In House</option>
             <option value="contract">Contract</option>
           </select>
         </Field>
-        <Field label="Phone"><input type="text" value={phone} onChange={(e) => setPhone(e.target.value)} style={{ ...inputStyle, width: '100%' }} /></Field>
-        <Field label="Join Date"><input type="date" value={joinDate} onChange={(e) => setJoinDate(e.target.value)} style={{ ...inputStyle, width: '100%' }} /></Field>
-        <Field label="Date of Birth"><input type="date" value={dob} onChange={(e) => setDob(e.target.value)} style={{ ...inputStyle, width: '100%' }} /></Field>
+        <Field label="Phone *"><input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} required style={{ ...inputStyle, width: '100%' }} /></Field>
+        <Field label="Join Date *"><input type="date" value={joinDate} onChange={(e) => setJoinDate(e.target.value)} required style={{ ...inputStyle, width: '100%' }} /></Field>
+        <Field label="Date of Birth *"><input type="date" value={dob} onChange={(e) => setDob(e.target.value)} required style={{ ...inputStyle, width: '100%' }} /></Field>
         <Field label="Legacy Employee ID" full>
           <input type="text" value={legacyId} onChange={(e) => setLegacyId(e.target.value)} placeholder="G00XXX (old ID)" style={{ ...inputStyle, width: '100%' }} />
         </Field>
