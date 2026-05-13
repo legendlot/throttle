@@ -1188,7 +1188,7 @@ export default function ReceivingPage() {
                         else                        { statusLabel = 'Matched';    statusTone = 'green'; }
 
                         const bagsTotal = bagCountCache[l.line_id];
-                        const bagsOf    = l.bags_of || 25;
+                        const bagsOf    = l.bags_of || 50;
                         const expBags   = totalCounted > 0 ? Math.ceil(totalCounted / bagsOf) : 0;
 
                         return (
