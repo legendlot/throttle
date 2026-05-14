@@ -226,9 +226,13 @@ export default function PlannerPage() {
   const [expandedDateProducts, setExpandedDateProducts] = useState({}); // { '<dispatch_date>·<product>': true }
   const [scheduling, setScheduling] = useState(null);                // open scheduling panel state
   const [scheduleTarget, setScheduleTarget] = useState({ cartId: 'new', line_no: 'L1', production_date: '' });
+  const [schedulingError, setSchedulingError] = useState('');        // inline error in scheduling panel
   const [carts, setCarts] = useState([]);                            // [{ id, production_date, lines: [...] }]
   const [createStatus, setCreateStatus] = useState({});              // { [cartId]: { [lineId]: 'creating'|'done'|'error' } }
   const [creatingCart, setCreatingCart] = useState({});              // { [cartId]: true } while loop running
+  const [repeatPanel, setRepeatPanel] = useState(null);              // { lineId, cartId } | null
+  const [repeatTarget, setRepeatTarget] = useState({ date: '', line_no: 'L1' });
+  const [repeatError, setRepeatError] = useState('');
   const [batchConfig, setBatchConfig] = useState([]);
   const [editingBatch, setEditingBatch] = useState({});
   const fileRef = useRef();
@@ -314,12 +318,27 @@ export default function PlannerPage() {
     e.target.value = '';
   }
 
+  function isSlotTaken(cartList, cartId, line_no, product, production_date) {
+    const targetCart = cartId === 'new'
+      ? cartList.find(c => c.production_date === production_date)
+      : cartList.find(c => c.id === cartId);
+    if (!targetCart) return false;
+    return targetCart.lines.some(l => l.line_no === line_no && l.product === product);
+  }
+
+  function nextAvailableLine(cart) {
+    if (!cart) return 'L1';
+    const used = new Set(cart.lines.map(l => l.line_no));
+    return ['L1','L2','L3'].find(l => !used.has(l)) || 'L1';
+  }
+
   function openScheduler(dispatchDate, product) {
     const entry = (planData?.recommendations || []).find(r => r.dispatch_date === dispatchDate);
     if (!entry) return;
     const prodEntry = entry.products.find(p => p.product === product);
     if (!prodEntry) return;
     const suggested = entry.suggested_run_date || todayLocalISO;
+    const existingCart = carts.find(c => c.production_date === suggested);
     setScheduling({
       dispatchDate,
       product,
@@ -333,7 +352,12 @@ export default function PlannerPage() {
         qty_retail: v.gap_retail || 0,
       })),
     });
-    setScheduleTarget({ cartId: 'new', line_no: 'L1', production_date: suggested });
+    setScheduleTarget({
+      cartId:          existingCart ? existingCart.id : 'new',
+      line_no:         existingCart ? nextAvailableLine(existingCart) : 'L1',
+      production_date: suggested,
+    });
+    setSchedulingError('');
   }
 
   function setSchedulingVariantQty(idx, field, value) {
@@ -349,13 +373,22 @@ export default function PlannerPage() {
     if (!scheduling) return;
     const activeVariants = scheduling.variants.filter(v => v.qty_ecomm + v.qty_retail > 0);
     if (activeVariants.length === 0) {
-      showToast('No variants with qty > 0', 'error');
+      setSchedulingError('No variants with qty > 0');
       return;
     }
     if (!['L1','L2','L3'].includes(scheduleTarget.line_no)) {
-      showToast('Pick a line first', 'error');
+      setSchedulingError('Pick a line first');
       return;
     }
+    const productionDate = scheduleTarget.cartId === 'new'
+      ? (scheduleTarget.production_date || scheduling.suggestedRunDate || todayLocalISO)
+      : (carts.find(c => c.id === scheduleTarget.cartId)?.production_date || '');
+
+    if (isSlotTaken(carts, scheduleTarget.cartId, scheduleTarget.line_no, scheduling.product, productionDate)) {
+      setSchedulingError(`${scheduling.product} is already on ${scheduleTarget.line_no} for this date. Choose a different line or date.`);
+      return;
+    }
+
     const newLine = {
       id:      makeId(),
       line_no: scheduleTarget.line_no,
@@ -363,25 +396,86 @@ export default function PlannerPage() {
       variants: activeVariants.map(v => ({
         variant:    v.variant,
         colour:     v.colour,
+        gap_ecomm:  v.gap_ecomm  || 0,
+        gap_retail: v.gap_retail || 0,
         qty_ecomm:  v.qty_ecomm,
         qty_retail: v.qty_retail,
       })),
     };
     if (scheduleTarget.cartId === 'new') {
-      const productionDate = scheduleTarget.production_date || scheduling.suggestedRunDate || todayLocalISO;
-      const newCart = { id: makeId(), production_date: productionDate, lines: [newLine] };
-      setCarts(prev => [...prev, newCart]);
-    } else {
-      const targetCart = carts.find(c => c.id === scheduleTarget.cartId);
-      const lineConflict = targetCart && targetCart.lines.some(l => l.line_no === scheduleTarget.line_no);
-      if (lineConflict) {
-        if (!window.confirm(`${scheduleTarget.line_no} already has a line in that cart. Add this one anyway?`)) return;
+      // If a cart already exists for that date, merge into it instead of creating a duplicate.
+      const existing = carts.find(c => c.production_date === productionDate);
+      if (existing) {
+        setCarts(prev => prev.map(c =>
+          c.id === existing.id ? { ...c, lines: [...c.lines, newLine] } : c
+        ));
+      } else {
+        setCarts(prev => [...prev, { id: makeId(), production_date: productionDate, lines: [newLine] }]);
       }
+    } else {
       setCarts(prev => prev.map(c =>
         c.id === scheduleTarget.cartId ? { ...c, lines: [...c.lines, newLine] } : c
       ));
     }
     setScheduling(null);
+    setSchedulingError('');
+  }
+
+  function updateVariantQty(cartId, lineId, variant, colour, field, value) {
+    setCarts(prev => prev.map(c =>
+      c.id !== cartId ? c : {
+        ...c,
+        lines: c.lines.map(l =>
+          l.id !== lineId ? l : {
+            ...l,
+            variants: l.variants.map(v =>
+              (v.variant === variant && v.colour === colour)
+                ? { ...v, [field]: Math.max(0, Number(value) || 0) }
+                : v
+            ),
+          }
+        ),
+      }
+    ));
+  }
+
+  function openRepeatPanel(cart, line) {
+    setRepeatPanel({ lineId: line.id, cartId: cart.id });
+    setRepeatTarget({ date: '', line_no: line.line_no });
+    setRepeatError('');
+  }
+
+  function handleRepeatLine(sourceLine) {
+    const targetDate = repeatTarget.date;
+    const targetLine = repeatTarget.line_no;
+    if (!targetDate) {
+      setRepeatError('Pick a date');
+      return;
+    }
+    if (!['L1','L2','L3'].includes(targetLine)) {
+      setRepeatError('Pick a line');
+      return;
+    }
+    const existing = carts.find(c => c.production_date === targetDate);
+    if (isSlotTaken(carts, existing ? existing.id : 'new', targetLine, sourceLine.product, targetDate)) {
+      setRepeatError(`${sourceLine.product} is already on ${targetLine} for ${targetDate}.`);
+      return;
+    }
+    const newLine = {
+      id: makeId(),
+      line_no: targetLine,
+      product: sourceLine.product,
+      variants: sourceLine.variants.map(v => ({ ...v })),
+    };
+    if (existing) {
+      setCarts(prev => prev.map(c =>
+        c.id === existing.id ? { ...c, lines: [...c.lines, newLine] } : c
+      ));
+    } else {
+      setCarts(prev => [...prev, { id: makeId(), production_date: targetDate, lines: [newLine] }]);
+    }
+    setRepeatPanel(null);
+    setRepeatError('');
   }
 
   function deleteLine(cartId, lineId) {
@@ -887,17 +981,27 @@ export default function PlannerPage() {
                                           <label style={{ cursor: 'pointer', color: 'var(--text)' }}>
                                             <input type="radio" name="cartTarget"
                                               checked={scheduleTarget.cartId === 'new'}
-                                              onChange={() => setScheduleTarget(prev => ({
-                                                ...prev, cartId: 'new',
-                                                production_date: prev.production_date || scheduling.suggestedRunDate || todayLocalISO,
-                                              }))} />
+                                              onChange={() => {
+                                                setScheduleTarget(prev => ({
+                                                  ...prev, cartId: 'new',
+                                                  production_date: prev.production_date || scheduling.suggestedRunDate || todayLocalISO,
+                                                }));
+                                                setSchedulingError('');
+                                              }} />
                                             &nbsp;New day
                                           </label>
                                           {sortedCarts.map(c => (
                                             <label key={c.id} style={{ cursor: 'pointer', color: 'var(--text)' }}>
                                               <input type="radio" name="cartTarget"
                                                 checked={scheduleTarget.cartId === c.id}
-                                                onChange={() => setScheduleTarget(prev => ({ ...prev, cartId: c.id }))} />
+                                                onChange={() => {
+                                                  setScheduleTarget(prev => ({
+                                                    ...prev,
+                                                    cartId: c.id,
+                                                    line_no: nextAvailableLine(c),
+                                                  }));
+                                                  setSchedulingError('');
+                                                }} />
                                               &nbsp;{c.production_date
                                                 ? new Date(c.production_date + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
                                                 : 'Unscheduled'}
@@ -912,7 +1016,7 @@ export default function PlannerPage() {
                                             <input type="date"
                                               value={scheduleTarget.production_date}
                                               min={todayLocalISO}
-                                              onChange={e => setScheduleTarget(prev => ({ ...prev, production_date: e.target.value }))}
+                                              onChange={e => { setScheduleTarget(prev => ({ ...prev, production_date: e.target.value })); setSchedulingError(''); }}
                                               style={{ padding: '4px 8px', background: 'var(--s2)', border: '1px solid var(--b2)',
                                                 color: 'var(--text)', borderRadius: 3, fontSize: 12 }} />
                                           </div>
@@ -922,7 +1026,7 @@ export default function PlannerPage() {
                                           <span style={{ color: 'var(--t2)', marginRight: 4 }}>Line:</span>
                                           {['L1','L2','L3'].map(L => (
                                             <button key={L}
-                                              onClick={() => setScheduleTarget(prev => ({ ...prev, line_no: L }))}
+                                              onClick={() => { setScheduleTarget(prev => ({ ...prev, line_no: L })); setSchedulingError(''); }}
                                               style={{
                                                 padding: '5px 12px', fontSize: 11, fontWeight: 600,
                                                 background: scheduleTarget.line_no === L ? '#F2CD1A' : 'var(--s2)',
@@ -934,8 +1038,17 @@ export default function PlannerPage() {
                                         </div>
                                       </div>
 
+                                      {schedulingError && (
+                                        <div style={{
+                                          marginTop: 10, padding: '6px 10px',
+                                          background: '#DE2A2A1A', color: '#DE2A2A',
+                                          border: '1px solid #DE2A2A55', borderRadius: 4,
+                                          fontSize: 11, fontWeight: 600,
+                                        }}>{schedulingError}</div>
+                                      )}
+
                                       <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
-                                        <button onClick={() => setScheduling(null)}
+                                        <button onClick={() => { setScheduling(null); setSchedulingError(''); }}
                                           style={{ padding: '6px 12px', fontSize: 12, background: 'transparent',
                                             color: 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, cursor: 'pointer' }}>
                                           Cancel
@@ -961,15 +1074,23 @@ export default function PlannerPage() {
             )}
           </div>
 
-          {/* RIGHT: Production Schedule */}
-          <div style={{ position: 'sticky', top: 16, alignSelf: 'flex-start', maxHeight: 'calc(100vh - 32px)', overflowY: 'auto' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-              <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: 'var(--t2)' }}>
-                PRODUCTION SCHEDULE
+          {/* RIGHT: Production Schedule — yellow-accent treatment */}
+          <div style={{
+            position: 'sticky', top: 16, alignSelf: 'flex-start',
+            maxHeight: 'calc(100vh - 32px)', overflowY: 'auto',
+            borderLeft: '2px solid #F2CD1A', paddingLeft: 16,
+          }}>
+            <div style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              paddingBottom: 10, marginBottom: 14,
+              borderBottom: '1px solid #F2CD1A',
+            }}>
+              <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', color: '#F2CD1A', textTransform: 'uppercase' }}>
+                Production Schedule
               </span>
               <button onClick={createEmptyCart}
-                style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, background: 'var(--s1)',
-                  border: '1px solid var(--b2)', color: 'var(--text)', borderRadius: 3, cursor: 'pointer' }}>
+                style={{ padding: 0, fontSize: 11, fontWeight: 600, background: 'transparent',
+                  border: 'none', color: '#F2CD1A', cursor: 'pointer' }}>
                 + New Day
               </button>
             </div>
@@ -989,23 +1110,25 @@ export default function PlannerPage() {
 
                 return (
                   <div key={cart.id} style={{
-                    border: '1px solid var(--b1)', borderRadius: 6, padding: 10,
+                    border: '1px solid var(--b2)', borderRadius: 8, padding: 14,
                     background: 'var(--s1)',
                   }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <span style={{ fontSize: 11, color: 'var(--t2)' }}>📅</span>
-                        <input type="date"
-                          value={cart.production_date}
-                          min={todayLocalISO}
-                          onChange={e => setCartDate(cart.id, e.target.value)}
-                          style={{ padding: '3px 6px', background: 'var(--s2)', border: '1px solid var(--b2)',
-                            color: 'var(--text)', borderRadius: 3, fontSize: 12, width: 130 }} />
-                      </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                      <span style={{ fontSize: 13, color: '#F2CD1A' }}>📅</span>
+                      <input type="date"
+                        value={cart.production_date}
+                        min={todayLocalISO}
+                        onChange={e => setCartDate(cart.id, e.target.value)}
+                        style={{
+                          padding: '3px 0', background: 'transparent',
+                          border: 'none', borderBottom: '1px solid var(--b2)',
+                          color: 'var(--text)', fontSize: 13, width: 138,
+                          outline: 'none',
+                        }} />
                       <button onClick={() => deleteCart(cart.id)}
                         title="Delete cart"
-                        style={{ padding: '2px 8px', fontSize: 11, background: 'transparent',
-                          color: 'var(--t3)', border: '1px solid var(--b2)', borderRadius: 3, cursor: 'pointer' }}>
+                        style={{ marginLeft: 'auto', padding: 0, fontSize: 13, background: 'transparent',
+                          color: 'var(--t3)', border: 'none', cursor: 'pointer' }}>
                         ✕
                       </button>
                     </div>
@@ -1015,58 +1138,150 @@ export default function PlannerPage() {
                       if (!line) {
                         return (
                           <div key={L} style={{
-                            padding: '6px 4px', fontSize: 11, color: 'var(--t3)',
+                            padding: '8px 4px', fontSize: 11, color: 'var(--t3)',
                             borderTop: '1px dashed var(--b1)',
+                            display: 'flex', alignItems: 'center', gap: 8,
                           }}>
-                            <strong style={{ marginRight: 6 }}>{L}</strong>
+                            <span style={{ fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{L}</span>
                             <span style={{ fontStyle: 'italic' }}>(empty)</span>
                           </div>
                         );
                       }
                       const status = cartStatus[line.id];
                       const runNo = cartStatus.run_no_by_line?.[line.id];
+                      const isRepeatOpen = repeatPanel?.lineId === line.id && repeatPanel?.cartId === cart.id;
                       return (
                         <div key={line.id} style={{
-                          padding: '6px 4px', borderTop: '1px solid var(--b1)',
+                          padding: '8px 4px', borderTop: '1px solid var(--b1)',
                         }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <span style={{ fontSize: 12, color: 'var(--text)' }}>
-                              <strong style={{ marginRight: 6 }}>{L}</strong>
-                              {line.product}
-                              {status === 'creating' && <span style={{ marginLeft: 6, color: 'var(--t3)' }}>…</span>}
-                              {status === 'done' && <span style={{ marginLeft: 6, color: '#22c55e' }}>✓ {runNo || ''}</span>}
-                              {status === 'error' && <span style={{ marginLeft: 6, color: '#DE2A2A' }}>✗</span>}
-                              {status === 'skipped' && <span style={{ marginLeft: 6, color: 'var(--t3)' }}>(skipped)</span>}
-                            </span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)' }}>{L}</span>
+                            <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text)' }}>{line.product}</span>
+                            {status === 'creating' && <span style={{ fontSize: 11, color: 'var(--t3)' }}>…</span>}
+                            {status === 'done' && <span style={{ fontSize: 11, color: '#22c55e' }}>✓ {runNo || ''}</span>}
+                            {status === 'error' && <span style={{ fontSize: 11, color: '#DE2A2A' }}>✗</span>}
+                            {status === 'skipped' && <span style={{ fontSize: 11, color: 'var(--t3)' }}>(skipped)</span>}
+                            <button
+                              onClick={() => isRepeatOpen ? setRepeatPanel(null) : openRepeatPanel(cart, line)}
+                              title="Repeat on another day"
+                              style={{ marginLeft: 'auto', padding: 0, fontSize: 13, background: 'transparent',
+                                color: isRepeatOpen ? '#F2CD1A' : 'var(--t3)', border: 'none', cursor: 'pointer' }}>
+                              ↻
+                            </button>
                             <button onClick={() => deleteLine(cart.id, line.id)}
                               title="Remove line"
-                              style={{ padding: '1px 6px', fontSize: 10, background: 'transparent',
-                                color: 'var(--t3)', border: '1px solid var(--b2)', borderRadius: 3, cursor: 'pointer' }}>
+                              style={{ padding: 0, fontSize: 12, background: 'transparent',
+                                color: 'var(--t3)', border: 'none', cursor: 'pointer' }}>
                               ✕
                             </button>
                           </div>
-                          <div style={{ marginTop: 3, paddingLeft: 16, fontSize: 11, color: 'var(--t2)' }}>
+
+                          <div style={{ marginTop: 6, paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 4 }}>
                             {line.variants.map((v, vi) => {
-                              const total = (v.qty_ecomm || 0) + (v.qty_retail || 0);
+                              const gapLabel = [
+                                v.gap_ecomm  > 0 ? `${v.gap_ecomm}e`  : null,
+                                v.gap_retail > 0 ? `${v.gap_retail}r` : null,
+                              ].filter(Boolean).join(' · ');
                               return (
-                                <div key={vi}>
-                                  {v.variant} {v.colour}: {total}
-                                  {v.qty_ecomm > 0 && <span> ({v.qty_ecomm}e</span>}
-                                  {v.qty_ecomm > 0 && v.qty_retail > 0 && <span>+</span>}
-                                  {v.qty_retail > 0 && <span>{v.qty_retail}r</span>}
-                                  {(v.qty_ecomm > 0 || v.qty_retail > 0) && <span>)</span>}
+                                <div key={vi} style={{
+                                  display: 'flex', alignItems: 'center', gap: 6, fontSize: 11,
+                                }}>
+                                  <span style={{ flex: 1, color: 'var(--text)', minWidth: 0 }}>
+                                    {v.variant} <span style={{ color: 'var(--t2)' }}>{v.colour}</span>
+                                  </span>
+                                  {v.gap_ecomm > 0 && (
+                                    <>
+                                      <input type="number" min={0} value={v.qty_ecomm}
+                                        onChange={e => updateVariantQty(cart.id, line.id, v.variant, v.colour, 'qty_ecomm', e.target.value)}
+                                        style={{
+                                          width: 56, padding: '2px 6px',
+                                          background: 'var(--s2)', border: '1px solid var(--b2)',
+                                          color: 'var(--text)', borderRadius: 3,
+                                          fontSize: 11, textAlign: 'right',
+                                        }} />
+                                      <span style={{ color: 'var(--t3)' }}>e</span>
+                                    </>
+                                  )}
+                                  {v.gap_retail > 0 && (
+                                    <>
+                                      <input type="number" min={0} value={v.qty_retail}
+                                        onChange={e => updateVariantQty(cart.id, line.id, v.variant, v.colour, 'qty_retail', e.target.value)}
+                                        style={{
+                                          width: 56, padding: '2px 6px',
+                                          background: 'var(--s2)', border: '1px solid var(--b2)',
+                                          color: 'var(--text)', borderRadius: 3,
+                                          fontSize: 11, textAlign: 'right',
+                                        }} />
+                                      <span style={{ color: 'var(--t3)' }}>r</span>
+                                    </>
+                                  )}
+                                  <span style={{ color: 'var(--t3)', fontSize: 10, marginLeft: 4, whiteSpace: 'nowrap' }}>
+                                    gap: {gapLabel || '—'}
+                                  </span>
                                 </div>
                               );
                             })}
                           </div>
+
+                          {isRepeatOpen && (
+                            <div style={{
+                              marginTop: 8, padding: 10,
+                              background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4,
+                            }}>
+                              <div style={{ fontSize: 11, color: 'var(--t2)', marginBottom: 8 }}>
+                                ↻ Repeat <strong style={{ color: 'var(--text)' }}>{line.product}</strong> on another day
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 11 }}>
+                                <span style={{ color: 'var(--t2)' }}>Date:</span>
+                                <input type="date"
+                                  value={repeatTarget.date}
+                                  min={todayLocalISO}
+                                  onChange={e => { setRepeatTarget(prev => ({ ...prev, date: e.target.value })); setRepeatError(''); }}
+                                  style={{ padding: '3px 6px', background: 'var(--s1)', border: '1px solid var(--b2)',
+                                    color: 'var(--text)', borderRadius: 3, fontSize: 11 }} />
+                                <span style={{ color: 'var(--t2)', marginLeft: 4 }}>Line:</span>
+                                {['L1','L2','L3'].map(LL => (
+                                  <button key={LL}
+                                    onClick={() => { setRepeatTarget(prev => ({ ...prev, line_no: LL })); setRepeatError(''); }}
+                                    style={{
+                                      padding: '3px 10px', fontSize: 10, fontWeight: 600,
+                                      background: repeatTarget.line_no === LL ? '#F2CD1A' : 'var(--s1)',
+                                      color:      repeatTarget.line_no === LL ? '#080808' : 'var(--t2)',
+                                      border: '1px solid ' + (repeatTarget.line_no === LL ? '#F2CD1A' : 'var(--b2)'),
+                                      borderRadius: 3, cursor: 'pointer',
+                                    }}>{LL}</button>
+                                ))}
+                              </div>
+                              {repeatError && (
+                                <div style={{
+                                  marginTop: 6, padding: '4px 8px',
+                                  background: '#DE2A2A1A', color: '#DE2A2A',
+                                  border: '1px solid #DE2A2A55', borderRadius: 3,
+                                  fontSize: 10, fontWeight: 600,
+                                }}>{repeatError}</div>
+                              )}
+                              <div style={{ marginTop: 8, display: 'flex', gap: 6 }}>
+                                <button onClick={() => { setRepeatPanel(null); setRepeatError(''); }}
+                                  style={{ padding: '4px 10px', fontSize: 10, background: 'transparent',
+                                    color: 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 3, cursor: 'pointer' }}>
+                                  Cancel
+                                </button>
+                                <button onClick={() => handleRepeatLine(line)}
+                                  style={{ padding: '4px 12px', fontSize: 10, fontWeight: 600,
+                                    background: '#F2CD1A', color: '#080808', border: 'none', borderRadius: 3, cursor: 'pointer' }}>
+                                  Add to Schedule
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       );
                     })}
 
-                    <div style={{ marginTop: 10 }}>
+                    <div style={{ marginTop: 12 }}>
                       {allDone ? (
                         <button disabled
-                          style={{ width: '100%', padding: '6px 10px', fontSize: 12, fontWeight: 600,
+                          style={{ width: '100%', padding: '8px 10px', fontSize: 12, fontWeight: 600,
                             background: 'var(--s2)', color: '#22c55e',
                             border: '1px solid #22c55e44', borderRadius: 4, cursor: 'default' }}>
                           ✓ All Created
@@ -1076,7 +1291,7 @@ export default function PlannerPage() {
                           onClick={() => handleCreateAll(cart)}
                           disabled={!cart.production_date || cart.lines.length === 0 || cartCreating}
                           style={{
-                            width: '100%', padding: '6px 10px', fontSize: 12, fontWeight: 600,
+                            width: '100%', padding: '8px 10px', fontSize: 12, fontWeight: 600,
                             background: (!cart.production_date || cart.lines.length === 0 || cartCreating)
                               ? 'var(--s2)' : '#F2CD1A',
                             color: (!cart.production_date || cart.lines.length === 0 || cartCreating)
