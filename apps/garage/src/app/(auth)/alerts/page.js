@@ -35,7 +35,7 @@ export default function AlertsPage() {
       try {
         const [flagsData, runsData] = await Promise.all([
           garageFetch('getDashboard', {}, session).then(d => d?.reorder_flags || []),
-          garageFetch('getProductionRuns', { status: 'submitted' }, session).then(d => Array.isArray(d) ? d : []),
+          garageFetch('getProductionRuns', { status: 'Submitted' }, session).then(d => Array.isArray(d) ? d : []),
         ]);
         setReorderFlags(flagsData);
         setSubmittedRuns(runsData);
