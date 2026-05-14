@@ -134,15 +134,33 @@ function parseDispatchCsv(csvText) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
+  const seenMappings = new Set();
   const lines = [];
   for (let i = headerIdx + 1; i < rows.length; i++) {
     const row = rows[i];
     const sku     = row[colIdx.sku]?.trim();
     const product = row[colIdx.product]?.trim();
     const channel = row[colIdx.channel]?.trim();
-    const mapping = row[colIdx.mapping]?.trim();
     if (!sku || !product || !channel) continue;
-    if (mapping !== 'Ecom' && mapping !== 'Retail') continue;
+
+    const rawMapping = (row[colIdx.mapping] ?? '').trim().toLowerCase();
+    if (!seenMappings.has(rawMapping)) {
+      seenMappings.add(rawMapping);
+      console.log('[planner] mapping value seen:', JSON.stringify(rawMapping));
+    }
+
+    let mapping;
+    if (rawMapping === '') {
+      continue;
+    } else if (rawMapping.includes('ecom') || rawMapping.includes('e-com') ||
+               rawMapping === 'amazon' || rawMapping === 'online') {
+      mapping = 'Ecom';
+    } else if (rawMapping.includes('retail') || rawMapping.includes('gt') ||
+               rawMapping.includes('mt') || rawMapping === 'offline') {
+      mapping = 'Retail';
+    } else {
+      mapping = rawMapping.charAt(0).toUpperCase() + rawMapping.slice(1);
+    }
 
     for (const { col, date } of dateCols) {
       if (date < today) continue;
@@ -159,6 +177,10 @@ function parseDispatchCsv(csvText) {
         qty,
       });
     }
+  }
+  if (seenMappings.size > 0) {
+    console.log('[planner] all mapping values:', Array.from(seenMappings));
+    console.log('[planner] parsed', lines.length, 'demand rows from', rows.length - headerIdx - 1, 'data rows');
   }
   return lines;
 }
@@ -222,7 +244,14 @@ export default function PlannerPage() {
         return;
       }
       if (rows.length === 0) {
-        showToast('No upcoming demand rows found in file', 'error');
+        showToast(
+          'No demand rows found after parsing. Possible causes: ' +
+          '(1) all quantities are zero, ' +
+          '(2) all dispatch dates are in the past, or ' +
+          '(3) the Mapping column values were not recognised — expected "Ecom" or "Retail". ' +
+          'Open the browser console to see which mapping values were detected.',
+          'error'
+        );
         setUploading(false);
         e.target.value = '';
         return;
