@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
@@ -16,6 +16,7 @@ const LEAD_LABELS = {
   warning:    'CAUTION',
   ok:         'ON TRACK',
 };
+const STATUS_RANK = { impossible: 0, critical: 1, warning: 2, ok: 3 };
 
 function parseCSVRows(text) {
   return text.split(/\r?\n/).map(line => {
@@ -185,6 +186,20 @@ function parseDispatchCsv(csvText) {
   return lines;
 }
 
+const variantKey = (variant, colour) => `${variant ?? ''}·${colour ?? ''}`;
+
+function StatusBadge({ status, label }) {
+  if (!status) return null;
+  return (
+    <span style={{
+      fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 3,
+      letterSpacing: '0.04em', textTransform: 'uppercase',
+      color: status === 'ok' ? '#080808' : '#fff',
+      background: LEAD_COLORS[status] || 'var(--t3)',
+    }}>{label || LEAD_LABELS[status] || status}</span>
+  );
+}
+
 export default function PlannerPage() {
   const { session } = useAuth();
   const { showToast } = useToast();
@@ -193,8 +208,11 @@ export default function PlannerPage() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [view, setView] = useState('timeline');
-  const [schedDates, setSchedDates] = useState({});
-  const [creatingRun, setCreatingRun] = useState(null);
+  const [viewMode, setViewMode] = useState('cascaded');
+  const [expandedProducts, setExpandedProducts] = useState({});
+  const [expandedRecs, setExpandedRecs] = useState({});
+  const [runDraft, setRunDraft] = useState({});
+  const [creating, setCreating] = useState({});
   const [batchConfig, setBatchConfig] = useState([]);
   const [editingBatch, setEditingBatch] = useState({});
   const fileRef = useRef();
@@ -205,11 +223,6 @@ export default function PlannerPage() {
     try {
       const data = await garageFetch('getDispatchPlan', {}, session);
       setPlanData(data);
-      const defaults = {};
-      (data?.recommendations || []).forEach((rec, i) => {
-        defaults[i] = rec.deadline_date;
-      });
-      setSchedDates(defaults);
     } catch (e) {
       showToast('Failed to load planner data: ' + e.message, 'error');
     }
@@ -228,6 +241,34 @@ export default function PlannerPage() {
 
   useEffect(() => { loadPlan(); }, [loadPlan]);
   useEffect(() => { if (view === 'config') loadBatchConfig(); }, [view, loadBatchConfig]);
+
+  // Pre-populate runDraft and expand recommendations from worker data
+  useEffect(() => {
+    const recs = planData?.recommendations || [];
+    const todayISO = new Date().toISOString().slice(0, 10);
+    const draft = {};
+    const recExpand = {};
+    for (const rec of recs) {
+      if (rec.all_covered) continue;
+      const variants = {};
+      for (const v of rec.variants) {
+        if ((v.gap_ecomm || 0) + (v.gap_retail || 0) === 0) continue;
+        variants[variantKey(v.variant, v.colour)] = {
+          qty_ecomm:  v.suggested_qty_ecomm  ?? v.gap_ecomm  ?? 0,
+          qty_retail: v.suggested_qty_retail ?? v.gap_retail ?? 0,
+        };
+      }
+      if (Object.keys(variants).length === 0) continue;
+      draft[rec.product] = {
+        line_no: '',
+        run_date: todayISO,
+        variants,
+      };
+      recExpand[rec.product] = true;
+    }
+    setRunDraft(draft);
+    setExpandedRecs(recExpand);
+  }, [planData]);
 
   async function handleFileChange(e) {
     const file = e.target.files[0];
@@ -272,37 +313,71 @@ export default function PlannerPage() {
     e.target.value = '';
   }
 
-  async function handleCreateRun(rec, schedDate) {
-    const key = rec.sku + rec.mapping;
-    setCreatingRun(key);
-    const res = await workerFetch('createRunFromPlan', {
-      product: rec.product,
-      variant: rec.variant,
-      color:   rec.color,
-      mapping: rec.mapping,
-      qty:     rec.batch_size * rec.runs_needed,
-      scheduled_date: schedDate,
-      sku:     rec.sku,
-    }, session);
-    if (res.ok) {
-      showToast(`Run ${res.data.run_no} created — ${rec.product} ${rec.variant || ''} · ${res.data.qty} units`, 'success');
-    } else {
-      showToast('Failed to create run: ' + (res.error || 'unknown'), 'error');
-    }
-    setCreatingRun(null);
-    return res.ok;
+  function setVariantQty(product, key, field, value) {
+    setRunDraft(prev => {
+      const cur = prev[product] || { line_no: '', run_date: new Date().toISOString().slice(0,10), variants: {} };
+      const variants = { ...cur.variants };
+      const v = { ...(variants[key] || { qty_ecomm: 0, qty_retail: 0 }) };
+      const n = Math.max(0, parseInt(value, 10) || 0);
+      v[field] = n;
+      variants[key] = v;
+      return { ...prev, [product]: { ...cur, variants } };
+    });
   }
 
-  async function handleCreateAll() {
-    const recs = planData?.recommendations || [];
-    let successCount = 0;
-    for (let i = 0; i < recs.length; i++) {
-      const rec = recs[i];
-      const date = schedDates[i] || rec.deadline_date;
-      const okFlag = await handleCreateRun(rec, date);
-      if (okFlag) successCount++;
+  function setDraftField(product, field, value) {
+    setRunDraft(prev => {
+      const cur = prev[product] || { line_no: '', run_date: new Date().toISOString().slice(0,10), variants: {} };
+      return { ...prev, [product]: { ...cur, [field]: value } };
+    });
+  }
+
+  async function handleCreateRun(product) {
+    const draft = runDraft[product];
+    if (!draft?.line_no) {
+      showToast('Pick a production line first', 'error');
+      return;
     }
-    showToast(`Created ${successCount} of ${recs.length} runs`, successCount === recs.length ? 'success' : 'info');
+    const variants = Object.entries(draft.variants || {})
+      .map(([key, q]) => {
+        const idx = key.indexOf('·');
+        const variant = key.slice(0, idx);
+        const colour  = key.slice(idx + 1);
+        return {
+          variant: variant || 'Common',
+          colour:  colour === '' ? null : colour,
+          qty_ecomm:  parseInt(q.qty_ecomm,  10) || 0,
+          qty_retail: parseInt(q.qty_retail, 10) || 0,
+        };
+      })
+      .filter(v => v.qty_ecomm + v.qty_retail > 0);
+
+    if (variants.length === 0) {
+      showToast('No variants have qty > 0', 'error');
+      return;
+    }
+
+    setCreating(c => ({ ...c, [product]: true }));
+    try {
+      const res = await workerFetch('createPlannerRun', {
+        product,
+        run_date: draft.run_date,
+        line_no:  draft.line_no,
+        shift:    'Morning',
+        upload_id: planData?.upload?.id || null,
+        variants,
+      }, session);
+
+      if (res.ok) {
+        showToast(`Run ${res.data.run_no} created — ${res.data.wo_count} work orders · ${res.data.total_qty} units`, 'success');
+        await loadPlan();
+      } else {
+        showToast('Failed: ' + (res.error || 'unknown'), 'error');
+      }
+    } catch (err) {
+      showToast('Create-run error: ' + err.message, 'error');
+    }
+    setCreating(c => ({ ...c, [product]: false }));
   }
 
   async function handleSaveBatch(product) {
@@ -319,12 +394,20 @@ export default function PlannerPage() {
     }
   }
 
+  const activeDates = useMemo(() => {
+    if (!planData) return [];
+    return viewMode === 'cascaded' ? (planData.dates_cascaded || []) : (planData.dates_normal || []);
+  }, [planData, viewMode]);
+
+  const recommendations = planData?.recommendations || [];
+  const recsWithGaps = recommendations.filter(r => !r.all_covered);
+
   if (loading) return <div style={{ padding: 32 }}><Spinner /></div>;
 
-  const { upload, dates = [], recommendations = [] } = planData || {};
+  const { upload } = planData || {};
 
   return (
-    <div style={{ padding: '24px 32px', maxWidth: 1100 }}>
+    <div style={{ padding: '24px 32px', maxWidth: 1180 }}>
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
         <div>
@@ -359,7 +442,7 @@ export default function PlannerPage() {
       <div style={{ display: 'flex', gap: 4, marginBottom: 24, borderBottom: '1px solid var(--b1)' }}>
         {[
           { key: 'timeline',        label: 'Dispatch Timeline' },
-          { key: 'recommendations', label: `Recommended Runs (${recommendations.length})` },
+          { key: 'recommendations', label: `Recommended Runs (${recsWithGaps.length})` },
           { key: 'config',          label: 'Batch Sizes' },
         ].map(tab => (
           <button key={tab.key} onClick={() => setView(tab.key)}
@@ -376,160 +459,299 @@ export default function PlannerPage() {
       </div>
 
       {view === 'timeline' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {dates.length === 0 && (
-            <p style={{ color: 'var(--t2)', fontSize: 14 }}>No upcoming dispatch dates in plan.</p>
-          )}
-          {dates.map(dateEntry => {
-            const hasGaps = dateEntry.skus.some(s => s.gap > 0);
-            const label = dateEntry.days_away === 0 ? 'TODAY'
-                        : dateEntry.days_away === 1 ? 'TOMORROW'
-                        : `In ${dateEntry.days_away} days`;
-            return (
-              <div key={dateEntry.date} style={{
-                border: `1px solid ${hasGaps ? '#DE2A2A44' : 'var(--b1)'}`,
-                borderRadius: 8, overflow: 'hidden',
-              }}>
-                <div style={{
-                  padding: '12px 16px', background: 'var(--s1)',
-                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        <div>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center' }}>
+            <span style={{ fontSize: 12, color: 'var(--t2)' }}>View:</span>
+            {[
+              { key: 'cascaded', label: 'Cascaded Waterfall' },
+              { key: 'normal',   label: 'Normal' },
+            ].map(opt => (
+              <button key={opt.key}
+                onClick={() => setViewMode(opt.key)}
+                style={{
+                  padding: '6px 12px', fontSize: 12,
+                  background: viewMode === opt.key ? '#F2CD1A' : 'var(--s1)',
+                  color:      viewMode === opt.key ? '#080808' : 'var(--t2)',
+                  border: '1px solid ' + (viewMode === opt.key ? '#F2CD1A' : 'var(--b2)'),
+                  borderRadius: 4, cursor: 'pointer',
+                  fontWeight: viewMode === opt.key ? 600 : 400,
                 }}>
-                  <div>
-                    <span style={{ fontFamily: 'Tomorrow, sans-serif', fontSize: 15, color: 'var(--text)', fontWeight: 600 }}>
-                      {new Date(dateEntry.date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}
+                {opt.label}
+              </button>
+            ))}
+            <span style={{ fontSize: 11, color: 'var(--t3)', marginLeft: 8 }}>
+              {viewMode === 'cascaded'
+                ? '— stock balance carries forward across dates per SKU'
+                : '— each date compared against current static stock'}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {activeDates.length === 0 && (
+              <p style={{ color: 'var(--t2)', fontSize: 14 }}>No upcoming dispatch dates in plan.</p>
+            )}
+            {activeDates.map(dateEntry => {
+              const dateLabel = dateEntry.days_away === 0 ? 'TODAY'
+                              : dateEntry.days_away === 1 ? 'TOMORROW'
+                              : `In ${dateEntry.days_away} days`;
+              const hasGaps = dateEntry.total_gap > 0;
+              return (
+                <div key={dateEntry.date} style={{
+                  border: `1px solid ${hasGaps ? '#DE2A2A44' : 'var(--b1)'}`,
+                  borderRadius: 8, overflow: 'hidden',
+                }}>
+                  <div style={{
+                    padding: '12px 16px', background: 'var(--s1)',
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  }}>
+                    <div>
+                      <span style={{ fontFamily: 'Tomorrow, sans-serif', fontSize: 15, color: 'var(--text)', fontWeight: 600 }}>
+                        {new Date(dateEntry.date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}
+                      </span>
+                      <span style={{ marginLeft: 10, fontSize: 12, color: 'var(--t2)' }}>{dateLabel}</span>
+                    </div>
+                    <span style={{ fontSize: 12, color: 'var(--t2)' }}>
+                      {dateEntry.total_demand.toLocaleString()} units · {dateEntry.products.length} product{dateEntry.products.length === 1 ? '' : 's'}
+                      {hasGaps && <span style={{ color: '#DE2A2A', fontWeight: 600, marginLeft: 8 }}>⚠ {dateEntry.total_gap} gap</span>}
                     </span>
-                    <span style={{ marginLeft: 10, fontSize: 12, color: 'var(--t2)' }}>{label}</span>
                   </div>
-                  <span style={{ fontSize: 13, color: 'var(--t2)' }}>
-                    {dateEntry.total_demand.toLocaleString()} units · {dateEntry.skus.length} SKUs
-                    {hasGaps && <span style={{ color: '#DE2A2A', fontWeight: 600, marginLeft: 8 }}>⚠ Gaps</span>}
-                  </span>
+                  <div>
+                    {dateEntry.products.map(prod => {
+                      const expandKey = `${prod.product}·${dateEntry.date}`;
+                      const isOpen = !!expandedProducts[expandKey];
+                      return (
+                        <div key={prod.product} style={{ borderTop: '1px solid var(--b1)' }}>
+                          <button
+                            onClick={() => setExpandedProducts(prev => ({ ...prev, [expandKey]: !prev[expandKey] }))}
+                            style={{
+                              width: '100%', textAlign: 'left',
+                              padding: '10px 16px', background: 'transparent', border: 'none',
+                              cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                              color: 'var(--text)', fontSize: 13,
+                            }}>
+                            <span>
+                              <span style={{ display: 'inline-block', width: 14, color: 'var(--t2)' }}>
+                                {isOpen ? '▼' : '▶'}
+                              </span>
+                              <strong>{prod.product}</strong>
+                              <span style={{ marginLeft: 12, color: 'var(--t2)' }}>
+                                Need <strong style={{ color: 'var(--text)' }}>{prod.total_need}</strong> ·
+                                Gap <strong style={{ color: prod.total_gap > 0 ? '#DE2A2A' : 'var(--text)' }}>{prod.total_gap}</strong> ·
+                                {prod.variants.length} variant{prod.variants.length === 1 ? '' : 's'}
+                              </span>
+                            </span>
+                            <StatusBadge
+                              status={prod.all_covered ? 'ok' : prod.lead_status}
+                              label={prod.all_covered ? '✓ COVERED' : null}
+                            />
+                          </button>
+                          {isOpen && (
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                              <thead>
+                                <tr style={{ background: 'var(--s2)', color: 'var(--t2)' }}>
+                                  {[
+                                    'Variant', 'Mapping', 'Need', 'RTD', 'Allocated',
+                                    viewMode === 'cascaded' ? 'Balance' : 'Available',
+                                    'Gap', 'Status'
+                                  ].map(h => (
+                                    <th key={h} style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 500 }}>{h}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {prod.variants.map((v, vi) => (
+                                  <tr key={vi} style={{
+                                    borderTop: '1px solid var(--b1)',
+                                    background: v.gap > 0 ? '#DE2A2A0A' : 'transparent',
+                                  }}>
+                                    <td style={{ padding: '6px 10px', color: 'var(--text)' }}>
+                                      {v.variant} {v.colour}
+                                    </td>
+                                    <td style={{ padding: '6px 10px', color: 'var(--t2)' }}>{v.mapping}</td>
+                                    <td style={{ padding: '6px 10px' }}>{v.need}</td>
+                                    <td style={{ padding: '6px 10px' }}>{v.rtd}</td>
+                                    <td style={{ padding: '6px 10px' }}>{v.allocated}</td>
+                                    <td style={{ padding: '6px 10px' }}>
+                                      {viewMode === 'cascaded'
+                                        ? (v.balance_before ?? 0)
+                                        : (v.rtd + v.allocated)}
+                                    </td>
+                                    <td style={{ padding: '6px 10px',
+                                      color: v.gap > 0 ? '#DE2A2A' : 'inherit',
+                                      fontWeight: v.gap > 0 ? 600 : 400 }}>
+                                      {v.gap > 0 ? v.gap : '—'}
+                                    </td>
+                                    <td style={{ padding: '6px 10px' }}>
+                                      {v.gap === 0
+                                        ? <span style={{ color: '#22c55e', fontWeight: 600 }}>✓</span>
+                                        : <StatusBadge status={v.lead_status} />
+                                      }
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                  <thead>
-                    <tr style={{ background: 'var(--s2)', color: 'var(--t2)' }}>
-                      {['SKU', 'Mapping', 'Need', 'RTD', 'Allocated', 'Gap', 'Runs', 'Status'].map(h => (
-                        <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 500 }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {dateEntry.skus.map((s, si) => (
-                      <tr key={si} style={{ borderTop: '1px solid var(--b1)',
-                        background: s.gap > 0 ? '#DE2A2A0A' : 'transparent' }}>
-                        <td style={{ padding: '8px 12px', color: 'var(--text)' }}>
-                          {s.product} {s.variant} {s.color}
-                        </td>
-                        <td style={{ padding: '8px 12px', color: 'var(--t2)' }}>{s.mapping}</td>
-                        <td style={{ padding: '8px 12px' }}>{s.demand}</td>
-                        <td style={{ padding: '8px 12px' }}>{s.rtd_available}</td>
-                        <td style={{ padding: '8px 12px' }}>{s.allocated}</td>
-                        <td style={{ padding: '8px 12px', color: s.gap > 0 ? '#DE2A2A' : 'inherit', fontWeight: s.gap > 0 ? 600 : 400 }}>
-                          {s.gap > 0 ? s.gap : '—'}
-                        </td>
-                        <td style={{ padding: '8px 12px' }}>
-                          {s.runs_needed > 0 ? `${s.runs_needed} run${s.runs_needed > 1 ? 's' : ''}` : '—'}
-                        </td>
-                        <td style={{ padding: '8px 12px' }}>
-                          {s.status === 'covered'
-                            ? <span style={{ color: '#22c55e', fontWeight: 600 }}>✓ Covered</span>
-                            : s.status === 'impossible'
-                              ? <span style={{ color: '#DE2A2A', fontWeight: 600 }}>✗ Too late</span>
-                              : <span style={{ color: LEAD_COLORS[s.lead_status], fontWeight: 600 }}>
-                                  {LEAD_LABELS[s.lead_status]}
-                                </span>
-                          }
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
       )}
 
       {view === 'recommendations' && (
         <div>
-          {recommendations.length === 0 && (
+          {recsWithGaps.length === 0 && (
             <p style={{ color: '#22c55e', fontSize: 14 }}>
               ✓ All upcoming dispatch dates are covered. No production runs needed.
             </p>
           )}
-          {recommendations.length > 1 && (
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
-              <button onClick={handleCreateAll}
-                style={{ padding: '10px 20px', background: '#213CE2', color: '#fff',
-                  border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
-                Create All {recommendations.length} Runs
-              </button>
-            </div>
-          )}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {recommendations.map((rec, i) => {
-              const schedDate = schedDates[i] || rec.deadline_date;
-              const isCreating = creatingRun === rec.sku + rec.mapping;
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {recsWithGaps.map(rec => {
+              const isOpen = !!expandedRecs[rec.product];
+              const draft = runDraft[rec.product] || { line_no: '', run_date: '', variants: {} };
+              const totalQty = Object.values(draft.variants || {}).reduce(
+                (s, v) => s + (parseInt(v.qty_ecomm,10) || 0) + (parseInt(v.qty_retail,10) || 0), 0);
+              const batchSize = rec.batch_size || 400;
+              const histLabel = rec.history_suggested_qty && rec.history_suggested_qty !== batchSize
+                ? ` · Historical avg: ${rec.history_suggested_qty} u/run` : '';
+              const counterColor = totalQty === 0          ? 'var(--t2)'
+                                  : totalQty < batchSize    ? 'var(--t2)'
+                                  : totalQty === batchSize  ? '#22c55e'
+                                  : '#F2CD1A';
+              const variantsWithGaps = rec.variants.filter(v => (v.gap_ecomm || 0) + (v.gap_retail || 0) > 0);
+              const lineSelected = draft.line_no === 'L1' || draft.line_no === 'L2' || draft.line_no === 'L3';
+              const createDisabled = !lineSelected || totalQty === 0 || !!creating[rec.product];
+
               return (
-                <div key={i} style={{
-                  border: '1px solid var(--b1)', borderRadius: 8, padding: '16px 20px',
-                  borderLeft: `4px solid ${LEAD_COLORS[rec.lead_status]}`,
+                <div key={rec.product} style={{
+                  border: '1px solid var(--b1)', borderRadius: 8, overflow: 'hidden',
                 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                    <div>
-                      <div style={{ fontFamily: 'Tomorrow, sans-serif', fontSize: 15, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>
-                        {rec.product} {rec.variant} {rec.color} — {rec.mapping}
+                  <button
+                    onClick={() => setExpandedRecs(prev => ({ ...prev, [rec.product]: !prev[rec.product] }))}
+                    style={{
+                      width: '100%', textAlign: 'left',
+                      padding: '12px 18px', background: 'var(--s1)', border: 'none',
+                      cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      color: 'var(--text)',
+                    }}>
+                    <span>
+                      <span style={{ display: 'inline-block', width: 16, color: 'var(--t2)' }}>
+                        {isOpen ? '▼' : '▶'}
+                      </span>
+                      <strong style={{ fontFamily: 'Tomorrow, sans-serif', fontSize: 15 }}>{rec.product}</strong>
+                    </span>
+                    <span style={{ fontSize: 12, color: 'var(--t2)' }}>
+                      Total gap: <strong style={{ color: '#DE2A2A' }}>{rec.total_gap}u</strong> ·
+                      Batch: <strong style={{ color: 'var(--text)' }}>{batchSize}u</strong> ·
+                      {variantsWithGaps.length} variant{variantsWithGaps.length === 1 ? '' : 's'}
+                    </span>
+                  </button>
+
+                  {isOpen && (
+                    <div style={{ padding: 18 }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                        <thead>
+                          <tr style={{ background: 'var(--s2)', color: 'var(--t2)' }}>
+                            {['Variant', 'Colour', 'Gap Ecom', 'Gap Retail', 'Qty Ecom', 'Qty Retail'].map(h => (
+                              <th key={h} style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 500 }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {variantsWithGaps.map((v, vi) => {
+                            const k = variantKey(v.variant, v.colour);
+                            const cur = draft.variants?.[k] || { qty_ecomm: 0, qty_retail: 0 };
+                            return (
+                              <tr key={vi} style={{ borderTop: '1px solid var(--b1)' }}>
+                                <td style={{ padding: '6px 10px', color: 'var(--text)' }}>{v.variant}</td>
+                                <td style={{ padding: '6px 10px', color: 'var(--t2)' }}>{v.colour}</td>
+                                <td style={{ padding: '6px 10px', color: v.gap_ecomm > 0 ? '#DE2A2A' : 'var(--t3)' }}>
+                                  {v.gap_ecomm || 0}
+                                </td>
+                                <td style={{ padding: '6px 10px', color: v.gap_retail > 0 ? '#DE2A2A' : 'var(--t3)' }}>
+                                  {v.gap_retail || 0}
+                                </td>
+                                <td style={{ padding: '6px 10px' }}>
+                                  <input type="number" min={0}
+                                    value={cur.qty_ecomm}
+                                    onChange={e => setVariantQty(rec.product, k, 'qty_ecomm', e.target.value)}
+                                    style={{ width: 70, padding: '4px 6px', background: 'var(--s1)',
+                                      border: '1px solid var(--b2)', color: 'var(--text)', borderRadius: 3, fontSize: 12 }} />
+                                </td>
+                                <td style={{ padding: '6px 10px' }}>
+                                  <input type="number" min={0}
+                                    value={cur.qty_retail}
+                                    onChange={e => setVariantQty(rec.product, k, 'qty_retail', e.target.value)}
+                                    style={{ width: 70, padding: '4px 6px', background: 'var(--s1)',
+                                      border: '1px solid var(--b2)', color: 'var(--text)', borderRadius: 3, fontSize: 12 }} />
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+
+                      <div style={{ marginTop: 12, fontSize: 12 }}>
+                        <span style={{ color: counterColor, fontWeight: 600 }}>
+                          Total qty: {totalQty} / {batchSize} batch size
+                        </span>
+                        <span style={{ color: 'var(--t2)' }}>{histLabel}</span>
                       </div>
-                      <div style={{ fontSize: 13, color: 'var(--t2)', lineHeight: 1.6 }}>
-                        Need <strong style={{ color: 'var(--text)' }}>{rec.gap} more units</strong> for&nbsp;
-                        {new Date(rec.urgency_date + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} dispatch
-                        &nbsp;·&nbsp;
-                        Run size: <strong style={{ color: 'var(--text)' }}>{rec.batch_size} units</strong>
-                        {rec.surplus > 0 && <span style={{ color: 'var(--t2)' }}> ({rec.surplus} surplus)</span>}
-                        {rec.runs_needed > 1 && <span> · <strong>{rec.runs_needed} runs</strong> needed</span>}
-                      </div>
-                      <div style={{ marginTop: 6, fontSize: 12, fontWeight: 600, color: LEAD_COLORS[rec.lead_status] }}>
-                        {LEAD_LABELS[rec.lead_status]}
-                        {rec.days_to_deadline > 0
-                          ? ` — ${rec.days_to_deadline} day${rec.days_to_deadline > 1 ? 's' : ''} to complete run by ${rec.deadline_date}`
-                          : rec.days_to_deadline === 0
-                            ? ' — Run must complete today'
-                            : ' — Dispatch date already passed'
-                        }
-                      </div>
-                      {rec.history_suggested_qty && rec.history_suggested_qty !== rec.batch_size && (
-                        <div style={{ marginTop: 4, fontSize: 12, color: 'var(--t2)' }}>
-                          Historical avg: {rec.history_suggested_qty} units/run
+
+                      <div style={{ marginTop: 14, display: 'flex', gap: 18, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                          <span style={{ fontSize: 12, color: 'var(--t2)', marginRight: 6 }}>Line:</span>
+                          {['L1', 'L2', 'L3'].map(L => (
+                            <button key={L}
+                              onClick={() => setDraftField(rec.product, 'line_no', L)}
+                              style={{
+                                padding: '6px 14px', fontSize: 12, fontWeight: 600,
+                                background: draft.line_no === L ? '#F2CD1A' : 'var(--s1)',
+                                color:      draft.line_no === L ? '#080808' : 'var(--t2)',
+                                border: '1px solid ' + (draft.line_no === L ? '#F2CD1A' : 'var(--b2)'),
+                                borderRadius: 4, cursor: 'pointer',
+                              }}>
+                              {L}
+                            </button>
+                          ))}
                         </div>
-                      )}
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end', minWidth: 280 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <label style={{ fontSize: 12, color: 'var(--t2)' }}>Schedule:</label>
-                        <input type="date" value={schedDate}
-                          min={new Date().toISOString().split('T')[0]}
-                          max={rec.deadline_date}
-                          onChange={e => setSchedDates(prev => ({ ...prev, [i]: e.target.value }))}
-                          style={{ padding: '6px 8px', background: 'var(--s1)', border: '1px solid var(--b2)',
-                            color: 'var(--text)', borderRadius: 4, fontSize: 13 }} />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontSize: 12, color: 'var(--t2)' }}>Date:</span>
+                          <input type="date"
+                            value={draft.run_date}
+                            min={new Date().toISOString().slice(0,10)}
+                            onChange={e => setDraftField(rec.product, 'run_date', e.target.value)}
+                            style={{ padding: '5px 8px', background: 'var(--s1)', border: '1px solid var(--b2)',
+                              color: 'var(--text)', borderRadius: 4, fontSize: 12 }} />
+                        </div>
                       </div>
-                      <div style={{ display: 'flex', gap: 8 }}>
+
+                      <div style={{ marginTop: 14 }}>
                         <button
-                          onClick={() => handleCreateRun(rec, schedDate)}
-                          disabled={isCreating}
-                          style={{ padding: '8px 16px', background: '#F2CD1A', color: '#080808',
-                            border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
-                          {isCreating ? 'Creating…' : 'Create Run'}
+                          onClick={() => handleCreateRun(rec.product)}
+                          disabled={createDisabled}
+                          style={{
+                            padding: '8px 18px', fontSize: 13, fontWeight: 600,
+                            background: createDisabled ? 'var(--s1)' : '#F2CD1A',
+                            color:      createDisabled ? 'var(--t3)' : '#080808',
+                            border: 'none', borderRadius: 6,
+                            cursor: createDisabled ? 'not-allowed' : 'pointer',
+                          }}>
+                          {creating[rec.product] ? 'Creating…' : 'Create Run'}
                         </button>
-                        <a href="/lines"
-                          style={{ padding: '8px 16px', background: 'transparent', color: 'var(--t2)',
-                            border: '1px solid var(--b2)', borderRadius: 6, fontSize: 13,
-                            textDecoration: 'none', display: 'flex', alignItems: 'center' }}>
-                          Go to Lines →
-                        </a>
+                        {!lineSelected && (
+                          <span style={{ marginLeft: 12, fontSize: 11, color: 'var(--t3)' }}>
+                            Pick a line first
+                          </span>
+                        )}
                       </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               );
             })}
@@ -540,7 +762,7 @@ export default function PlannerPage() {
       {view === 'config' && (
         <div>
           <p style={{ fontSize: 13, color: 'var(--t2)', marginBottom: 16 }}>
-            Set the default production run size per product. This is used to calculate
+            Set the default production run size per product. Used to calculate
             how many runs are needed to cover a dispatch gap.
             &quot;History&quot; shows the most common run size from past production runs.
           </p>
