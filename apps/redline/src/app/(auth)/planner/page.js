@@ -188,15 +188,26 @@ function parseDispatchCsv(csvText) {
 
 const variantKey = (variant, colour) => `${variant ?? ''}·${colour ?? ''}`;
 
-function StatusBadge({ status, label }) {
-  if (!status) return null;
+function resolveStatus(gap, leadStatus) {
+  if (!gap || gap <= 0) return { label: 'Covered', color: '#22c55e' };
+  switch (leadStatus) {
+    case 'ok':         return { label: 'Plan Run',  color: '#eab308' };
+    case 'warning':    return { label: 'Urgent',    color: '#f97316' };
+    case 'critical':   return { label: 'Critical',  color: '#ef4444' };
+    case 'impossible': return { label: 'Too Late',  color: '#991b1b' };
+    default:           return { label: 'Plan Run',  color: '#eab308' };
+  }
+}
+
+function StatusBadge({ gap, leadStatus }) {
+  const { label, color } = resolveStatus(gap, leadStatus);
+  const fg = (color === '#eab308' || color === '#22c55e') ? '#080808' : '#fff';
   return (
     <span style={{
       fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 3,
       letterSpacing: '0.04em', textTransform: 'uppercase',
-      color: status === 'ok' ? '#080808' : '#fff',
-      background: LEAD_COLORS[status] || 'var(--t3)',
-    }}>{label || LEAD_LABELS[status] || status}</span>
+      color: fg, background: color,
+    }}>{label}</span>
   );
 }
 
@@ -541,8 +552,8 @@ export default function PlannerPage() {
                               </span>
                             </span>
                             <StatusBadge
-                              status={prod.all_covered ? 'ok' : prod.lead_status}
-                              label={prod.all_covered ? '✓ COVERED' : null}
+                              gap={prod.total_gap}
+                              leadStatus={prod.lead_status}
                             />
                           </button>
                           {isOpen && (
@@ -582,10 +593,7 @@ export default function PlannerPage() {
                                       {v.gap > 0 ? v.gap : '—'}
                                     </td>
                                     <td style={{ padding: '6px 10px' }}>
-                                      {v.gap === 0
-                                        ? <span style={{ color: '#22c55e', fontWeight: 600 }}>✓</span>
-                                        : <StatusBadge status={v.lead_status} />
-                                      }
+                                      <StatusBadge gap={v.gap} leadStatus={v.lead_status} />
                                     </td>
                                   </tr>
                                 ))}
