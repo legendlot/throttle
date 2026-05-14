@@ -32,15 +32,47 @@ function parseCSVRows(text) {
   });
 }
 
+const MONTHS = ['january','february','march','april','may','june',
+                'july','august','september','october','november','december'];
+
+function formatLocalISO(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 function parseDateStr(str) {
-  if (!str) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
-  const parts = str.split('/');
-  if (parts.length === 3 && parts[2].length === 4) {
-    const m = parts[0].padStart(2, '0');
-    const d = parts[1].padStart(2, '0');
-    return `${parts[2]}-${m}-${d}`;
+  if (!str || !str.trim()) return null;
+  const s = str.trim();
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const d = new Date(s + 'T00:00:00');
+    return isNaN(d) ? null : d;
   }
+
+  if (/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(s)) {
+    const [m, day, yr] = s.split('/').map(Number);
+    const year = yr < 100 ? 2000 + yr : yr;
+    const d = new Date(year, m - 1, day);
+    return isNaN(d) ? null : d;
+  }
+
+  const mdy = s.match(/^([A-Za-z]+)\s+(\d{1,2})(?:,?\s*(\d{4}))?$/);
+  if (mdy) {
+    const monthIdx = MONTHS.indexOf(mdy[1].toLowerCase());
+    if (monthIdx !== -1) {
+      const year = mdy[3] ? parseInt(mdy[3]) : new Date().getFullYear();
+      return new Date(year, monthIdx, parseInt(mdy[2]));
+    }
+  }
+
+  const dmy = s.match(/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})$/);
+  if (dmy) {
+    const monthIdx = MONTHS.indexOf(dmy[2].toLowerCase());
+    if (monthIdx !== -1) return new Date(parseInt(dmy[3]), monthIdx, parseInt(dmy[1]));
+  }
+
   return null;
 }
 
@@ -49,31 +81,55 @@ function parseDispatchCsv(csvText) {
 
   let headerIdx = -1;
   for (let i = 0; i < rows.length; i++) {
-    if (rows[i].some(cell => cell === 'SKU')) { headerIdx = i; break; }
+    if (rows[i].some(cell => cell.trim().toLowerCase() === 'sku')) { headerIdx = i; break; }
   }
-  if (headerIdx === -1) throw new Error('Cannot find header row (expected "SKU" column)');
+  if (headerIdx === -1) throw new Error(
+    "Cannot find a header row. Make sure you exported the 'Projection V2' tab " +
+    'from the Dispatch Plan Google Sheet (File → Download → Comma Separated Values).'
+  );
 
-  const header = rows[headerIdx];
+  const header = rows[headerIdx].map(h => h.trim().toLowerCase());
   const colIdx = {
-    ean:     header.indexOf('EAN'),
-    channel: header.indexOf('Channel'),
-    product: header.indexOf('Product'),
-    variant: header.indexOf('Variant'),
-    color:   header.indexOf('Color'),
-    sku:     header.indexOf('SKU'),
-    mapping: header.indexOf('Mapping'),
-    total:   header.indexOf('Total'),
+    channel: header.indexOf('channel'),
+    product: header.indexOf('product'),
+    variant: header.indexOf('variant'),
+    color:   header.indexOf('color'),
+    sku:     header.indexOf('sku'),
+    mapping: header.indexOf('mapping'),
+    total:   header.indexOf('total'),
   };
-  if (colIdx.sku === -1 || colIdx.product === -1 || colIdx.channel === -1 || colIdx.mapping === -1)
-    throw new Error('Required columns missing — need SKU, Product, Channel, Mapping');
+
+  if (colIdx.sku === -1) {
+    throw new Error(
+      'Cannot find a SKU column. Make sure you exported the correct tab — ' +
+      "open the Dispatch Plan Google Sheet, go to the 'Projection V2' tab, " +
+      'then File → Download → CSV.'
+    );
+  }
+  if (colIdx.channel === -1 || colIdx.mapping === -1) {
+    const missing = [colIdx.channel === -1 && 'Channel', colIdx.mapping === -1 && 'Mapping']
+      .filter(Boolean).join(' and ');
+    throw new Error(
+      `Missing columns: ${missing}. This looks like the wrong tab was exported. ` +
+      "Please export the 'Projection V2' tab from the Dispatch Plan spreadsheet " +
+      '(File → Download → Comma Separated Values). Do NOT export Sheet39 or any ' +
+      'other tab — only Projection V2 has the channel and ecom/retail mapping data.'
+    );
+  }
+  if (colIdx.product === -1) {
+    throw new Error('Required column missing: Product. Check that the exported tab is Projection V2.');
+  }
 
   const dateCols = [];
   const startCol = colIdx.total >= 0 ? colIdx.total + 1 : Math.max(colIdx.mapping, colIdx.sku) + 1;
-  for (let i = startCol; i < header.length; i++) {
-    const parsed = parseDateStr(header[i]);
+  for (let i = startCol; i < rows[headerIdx].length; i++) {
+    const parsed = parseDateStr(rows[headerIdx][i]);
     if (parsed) dateCols.push({ col: i, date: parsed });
   }
-  if (dateCols.length === 0) throw new Error('No date columns found after Total column');
+  if (dateCols.length === 0) throw new Error(
+    'No date columns found after the Total column. The Projection V2 tab should have ' +
+    'one column per dispatch date (e.g. "5/15/2026" or "May 15, 2026") to the right of Total.'
+  );
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -89,7 +145,7 @@ function parseDispatchCsv(csvText) {
     if (mapping !== 'Ecom' && mapping !== 'Retail') continue;
 
     for (const { col, date } of dateCols) {
-      if (new Date(date + 'T00:00:00') < today) continue;
+      if (date < today) continue;
       const qty = parseInt(row[col], 10);
       if (!qty || qty <= 0) continue;
       lines.push({
@@ -99,7 +155,7 @@ function parseDispatchCsv(csvText) {
         color:   row[colIdx.color]?.trim()   || null,
         channel,
         mapping,
-        dispatch_date: date,
+        dispatch_date: formatLocalISO(date),
         qty,
       });
     }
