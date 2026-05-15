@@ -1,5 +1,5 @@
 # Throttle — Technical Build Document
-**Version:** 15 | **Last Updated:** 2026-04-24 (Phase 15 — task IDs, stale-token fixes, sprint/dashboard polish)
+**Version:** 16 | **Last Updated:** 2026-05-15 (Session 50 — Social Media Management Suite Phase 1, submitter name on approval cards, requester_id schema fact)
 **Purpose:** Technical reference for the Throttle brand team work OS.
 Feed this file when continuing development in a new session.
 
@@ -51,7 +51,9 @@ Feed this file when continuing development in a new session.
     │   │   ├── board/page.js
     │   │   ├── sprints/page.js
     │   │   ├── dashboard/page.js     ← manager dashboard: stats, deliverables, workload
-    │   │   └── settings/page.js
+    │   │   ├── settings/page.js
+    │   │   ├── social/page.js           ← Social calendar + post management (Phase 1 — Session 50)
+    │   │   └── social/SocialPanels.js   ← PostDetailPanel, CreateEditPanel, PlatformPreview
     │   ├── components/
     │   │   ├── Layout.js             ← role-aware nav shell
     │   │   ├── TaskSidePanel.js      ← stage/priority/assignees/submit-for-review/approval
@@ -91,6 +93,17 @@ Worker uses `Accept-Profile: brand` / `Content-Profile: brand` headers.
 - `brand.activity_log` — immutable ledger, INSERT via Worker only
 - `brand.task_feedback` — requester feedback per delivered task (verdict, comment, reference_links, batch_id)
 - `brand.ageing_config` — per-stage warning/critical/auto-close hour thresholds
+- `brand.social_channels` — Instagram / LinkedIn / YouTube channel definitions; seeded with 3 rows (@legendoftoys); platform CHECK ('instagram','linkedin','youtube')
+- `brand.social_campaigns` — optional grouping for posts; status CHECK ('active','completed','archived')
+- `brand.social_posts` — post concept with scheduled_date, status CHECK ('idea','draft','approved','published','cancelled'); FKs to social_campaigns (SET NULL), brand.tasks (SET NULL); product_code plain text (no FK — matches brand.request_products pattern)
+- `brand.social_post_channels` — per-channel variant (caption, content_type, asset_url, status); UNIQUE (post_id, channel_id); ON DELETE CASCADE from social_posts
+
+### Critical schema facts
+
+- `brand.requests.requester_id` (uuid NOT NULL) — the column for who submitted a request. **Not `submitted_by`** — that column does not exist. Regression history: Session 50 submitter-name feature used wrong column name; caused all approval cards to show "Unknown". Verified via information_schema.columns 2026-05-15.
+- `brand.tasks` uses `stage` (not `status`) for kanban state — the `brand.task_stage` enum drives board column placement.
+- `node --check` does NOT work for the throttleops worker file — ESM/CJS detection issue (`Unexpected token 'export'`). Use `npx wrangler deploy --dry-run` for syntax validation instead. Future CC_TASK specs must use `wrangler deploy --dry-run`.
+- Actual monorepo app path is `apps/throttle/src/app/` (inside `05_Throttle/`) — not `app/src/app/`. Board page is `apps/throttle/src/app/board/page.js`. Layout (nav) is `apps/throttle/src/components/Layout.js`. Throttle uses a **horizontal top-nav**, not a sidebar.
 
 ### Stage enum (brand.task_stage)
 backlog → in_sprint → in_progress → ext_blocked → in_review → approved → **delivered** → done (or abandoned at any step)
