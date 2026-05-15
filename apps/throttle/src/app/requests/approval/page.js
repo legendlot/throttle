@@ -63,7 +63,7 @@ export default function ApprovalQueuePage() {
     if (error) { setRequests([]); setLoading(false); return; }
     const rows = data || [];
 
-    const submitterIds = [...new Set(rows.map(r => r.submitted_by).filter(Boolean))];
+    const submitterIds = [...new Set(rows.map(r => r.requester_id).filter(Boolean))];
     let userMap = {};
     if (submitterIds.length > 0) {
       const { data: users } = await supabase
@@ -75,7 +75,7 @@ export default function ApprovalQueuePage() {
       }
     }
 
-    setRequests(rows.map(r => ({ ...r, submitter_name: userMap[r.submitted_by] ?? 'Unknown' })));
+    setRequests(rows.map(r => ({ ...r, submitter_name: userMap[r.requester_id] ?? 'Unknown' })));
     setLoading(false);
   }
 
