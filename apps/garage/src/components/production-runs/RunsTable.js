@@ -154,6 +154,7 @@ export function RunsTable({
               <th style={th}>Variants</th>
               <th style={{ ...th, textAlign: 'right' }}>Units</th>
               <th style={th}>Line</th>
+              <th style={th}>Type</th>
               <th style={th}>Status</th>
               <th style={th} />
             </tr>
@@ -161,13 +162,13 @@ export function RunsTable({
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={9} style={{ padding: 24, textAlign: 'center' }}>
+                <td colSpan={10} style={{ padding: 24, textAlign: 'center' }}>
                   <Spinner size="sm" />
                 </td>
               </tr>
             ) : merged.length === 0 ? (
               <tr>
-                <td colSpan={9} style={{ padding: 24, textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>
+                <td colSpan={10} style={{ padding: 24, textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>
                   No runs yet
                 </td>
               </tr>
@@ -200,6 +201,25 @@ export function RunsTable({
                       </td>
                       <td style={{ ...td, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>
                         {row.line_no || '—'}
+                      </td>
+                      <td style={td}>
+                        {row.run_type === 'outsourced' ? (
+                          <span>
+                            <span style={{
+                              padding: '1px 6px', borderRadius: 2,
+                              background: 'rgba(245,158,11,.15)', color: '#fbbf24',
+                              fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '.06em',
+                              textTransform: 'uppercase',
+                            }}>Outsourced</span>
+                            {row.vendor?.vendor_name && (
+                              <span style={{ marginLeft: 6, color: 'var(--t3)', fontSize: 11 }}>
+                                {row.vendor.vendor_name}
+                              </span>
+                            )}
+                          </span>
+                        ) : (
+                          <span style={{ color: 'var(--t3)' }}>In-House</span>
+                        )}
                       </td>
                       <td style={{ ...td, fontFamily: 'var(--mono)', color: FRESH_STATUS_COLOR[row.status] || 'var(--t2)' }}>
                         {row.status || '—'}
@@ -244,6 +264,7 @@ export function RunsTable({
                     <td style={{ ...td, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>
                       {row.line || '—'}
                     </td>
+                    <td style={{ ...td, color: 'var(--t3)' }}>—</td>
                     <td
                       style={{
                         ...td, fontFamily: 'var(--mono)',

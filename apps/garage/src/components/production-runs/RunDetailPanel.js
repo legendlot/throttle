@@ -219,6 +219,37 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
       </div>
 
       <div style={{ padding: 16 }}>
+        {/* Outsourced vendor info */}
+        {run.run_type === 'outsourced' && (
+          <div
+            style={{
+              marginBottom: 16, padding: '10px 12px', borderRadius: 4,
+              background: 'rgba(245,158,11,.08)', border: '1px solid rgba(245,158,11,.3)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <span
+                style={{
+                  padding: '2px 8px', borderRadius: 2, fontFamily: 'var(--mono)', fontSize: 10,
+                  textTransform: 'uppercase', letterSpacing: '.06em',
+                  background: 'rgba(245,158,11,.15)', color: '#fbbf24',
+                  border: '1px solid rgba(245,158,11,.3)',
+                }}
+              >
+                Outsourced
+              </span>
+              <span style={{ fontSize: 13, color: 'var(--t1)', fontWeight: 600 }}>
+                {run.vendor?.vendor_name || '—'}
+              </span>
+              {run.vendor?.vendor_code && (
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>
+                  {run.vendor.vendor_code}
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* WOs in this run */}
         <div style={{ marginBottom: 16 }}>
           <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>

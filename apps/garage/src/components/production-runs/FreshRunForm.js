@@ -1,7 +1,7 @@
 'use client';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { ConfirmModal, useToast } from '@throttle/ui';
-import { workerFetch } from '@throttle/db';
+import { workerFetch, garageFetch } from '@throttle/db';
 import { useProducts } from '../../hooks/useProducts.js';
 
 const panel = { backgroundColor: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4 };
@@ -72,6 +72,21 @@ export function FreshRunForm({ onSuccess, session }) {
   const [warningMessage, setWarningMessage] = useState('');
   const [pendingPayload, setPendingPayload] = useState(null);
 
+  const [runType, setRunType] = useState('in-house');
+  const [vendorId, setVendorId] = useState('');
+  const [vendors, setVendors] = useState([]);
+  const [vendorsLoading, setVendorsLoading] = useState(false);
+
+  useEffect(() => {
+    if (runType !== 'outsourced') return;
+    if (vendors.length > 0) return;
+    setVendorsLoading(true);
+    garageFetch('getVendors', {}, session)
+      .then(data => setVendors(Array.isArray(data) ? data : []))
+      .catch(() => {})
+      .finally(() => setVendorsLoading(false));
+  }, [runType, session, vendors.length]);
+
   const isFbuFormat = useMemo(() => HAS_REMOTE.has(product), [product]);
   const productVariants = product ? PRODUCT_VARIANTS[product] || [] : [];
 
@@ -118,6 +133,7 @@ export function FreshRunForm({ onSuccess, session }) {
     const next = {};
     if (!product) next.product = 'Select a product';
     if (!runDate) next.runDate = 'Run date is required';
+    if (runType === 'outsourced' && !vendorId) next.vendor = 'Vendor is required for outsourced runs';
     const variants = buildVariantsPayload();
     if (!variants.length) next.rows = 'At least one variant must have a non-zero qty';
     // BUG-010: enforce colour selection when the product/variant has colour options.
@@ -163,10 +179,12 @@ export function FreshRunForm({ onSuccess, session }) {
       const payload = basePayload || {
         product,
         run_date: runDate,
-        line_no: line,
+        line_no: runType === 'outsourced' && !line ? null : line,
         shift,
         notes: notes.trim() || null,
         variants,
+        run_type: runType,
+        vendor_id: runType === 'outsourced' ? (Number(vendorId) || null) : null,
       };
       const finalPayload = force ? { ...payload, force: true } : payload;
 
@@ -196,6 +214,8 @@ export function FreshRunForm({ onSuccess, session }) {
       setErrors({});
       setWarningOpen(false);
       setPendingPayload(null);
+      setRunType('in-house');
+      setVendorId('');
       onSuccess();
     } catch (e) {
       showToast(e.message || 'Failed to create run', 'error');
@@ -219,6 +239,55 @@ export function FreshRunForm({ onSuccess, session }) {
         <span>New Run — Fresh</span>
       </div>
       <div style={{ padding: 16 }}>
+        <div style={{ marginBottom: 12 }}>
+          <span style={lbl}>Run Type</span>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {['in-house', 'outsourced'].map((type) => {
+              const active = runType === type;
+              return (
+                <button
+                  key={type}
+                  type="button"
+                  onClick={() => { setRunType(type); if (type === 'in-house') setVendorId(''); setErrors((e) => ({ ...e, vendor: undefined })); }}
+                  disabled={submitting}
+                  style={{
+                    background: active ? 'var(--yellow)' : 'var(--surface2)',
+                    color: active ? '#000' : 'var(--t3)',
+                    border: active ? '1px solid var(--yellow)' : '1px solid var(--border)',
+                    borderRadius: 4, padding: '5px 14px',
+                    fontFamily: 'var(--mono)', fontSize: 11,
+                    textTransform: 'uppercase', letterSpacing: 1,
+                    cursor: submitting ? 'not-allowed' : 'pointer',
+                    fontWeight: active ? 700 : 500,
+                  }}
+                >
+                  {type === 'in-house' ? 'In-House' : 'Outsourced'}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {runType === 'outsourced' && (
+          <div style={{ marginBottom: 10 }}>
+            <span style={lbl}>Vendor *</span>
+            <select
+              style={sel}
+              value={vendorId}
+              onChange={(e) => { setVendorId(e.target.value); setErrors((er) => ({ ...er, vendor: undefined })); }}
+              disabled={submitting || vendorsLoading}
+            >
+              <option value="">{vendorsLoading ? 'Loading vendors…' : '— Select vendor —'}</option>
+              {vendors.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.vendor_name} ({v.vendor_code})
+                </option>
+              ))}
+            </select>
+            {errors.vendor && <div style={fieldErr}>{errors.vendor}</div>}
+          </div>
+        )}
+
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
           <div>
             <span style={lbl}>Product *</span>
@@ -250,8 +319,9 @@ export function FreshRunForm({ onSuccess, session }) {
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
           <div>
-            <span style={lbl}>Line</span>
+            <span style={lbl}>Line{runType === 'outsourced' ? '' : ' *'}</span>
             <select style={sel} value={line} onChange={(e) => setLine(e.target.value)} disabled={submitting}>
+              {runType === 'outsourced' && <option value="">— None (no floor line) —</option>}
               <option value="L1">L1</option>
               <option value="L2">L2</option>
               <option value="L3">L3</option>
@@ -401,7 +471,9 @@ export function FreshRunForm({ onSuccess, session }) {
             color: '#7b93ff', borderRadius: 4,
           }}
         >
-          ℹ Run is created and immediately submitted to store. Store will see it in their issue queue.
+          ℹ {runType === 'in-house'
+              ? 'Run is created and immediately submitted to store. Store will see it in their issue queue.'
+              : 'Outsourced run is created and submitted. Store will issue materials and prepare them for vendor dispatch.'}
         </div>
       </div>
 

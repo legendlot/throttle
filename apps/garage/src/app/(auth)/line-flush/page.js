@@ -165,10 +165,12 @@ export default function LineFlushPage() {
         ...(completedData  || []),
       ];
 
-      // Deduplicate by run_no in case any run appears in multiple fetches
+      // Deduplicate by run_no in case any run appears in multiple fetches.
+      // Exclude outsourced runs — they don't generate physical return-to-store flushes.
       const seen = new Set();
       const deduped = combined.filter((r) => {
         if (seen.has(r.run_no)) return false;
+        if (r.run_type && r.run_type !== 'in-house') return false;
         seen.add(r.run_no);
         return true;
       });

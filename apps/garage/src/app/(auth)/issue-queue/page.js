@@ -16,6 +16,7 @@ const TONE_STYLES = {
   red:    { bg: 'rgba(222,42,42,.15)',  fg: '#ff7070', border: 'rgba(222,42,42,.25)' },
   blue:   { bg: 'rgba(33,60,226,.2)',   fg: '#7b93ff', border: 'rgba(33,60,226,.3)' },
   orange: { bg: 'rgba(255,140,0,.15)',  fg: '#ffaa33', border: 'rgba(255,140,0,.25)' },
+  amber:  { bg: 'rgba(245,158,11,.15)', fg: '#fbbf24', border: 'rgba(245,158,11,.3)' },
   gray:   { bg: 'rgba(80,80,80,.2)',    fg: '#aaa',    border: 'rgba(80,80,80,.3)' },
 };
 
@@ -120,19 +121,22 @@ export default function IssueQueuePage() {
       ]);
       const rows = [];
       (runs || []).forEach((run) => {
+        const isOutsourced = run.run_type === 'outsourced';
+        const variantStr = (run.variants || []).map((v) => {
+          const e    = v.qty_ecomm || 0;
+          const r    = v.qty_retail || 0;
+          const name = v.variant || 'Common';
+          if (e > 0 || r > 0) return `${name} E:${e} R:${r}`;
+          return `${name} ×${v.qty}`;
+        }).join(', ');
+        const vendorSuffix = isOutsourced && run.vendor ? `Vendor: ${run.vendor.vendor_name}` : null;
         rows.push({
           type:     'run',
           ref:      run.run_no,
-          badge:    'PROD RUN',
-          badgeTone: 'blue',
+          badge:    isOutsourced ? 'OUTSOURCED' : 'PROD RUN',
+          badgeTone: isOutsourced ? 'amber' : 'blue',
           product:  run.product,
-          details: (run.variants || []).map((v) => {
-            const e    = v.qty_ecomm || 0;
-            const r    = v.qty_retail || 0;
-            const name = v.variant || 'Common';
-            if (e > 0 || r > 0) return `${name} E:${e} R:${r}`;
-            return `${name} ×${v.qty}`;
-          }).join(', '),
+          details: [variantStr, vendorSuffix].filter(Boolean).join(' — '),
           units:    run.total_units || 0,
           run_date: run.run_date,
           submitted: run.released_at,
