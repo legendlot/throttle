@@ -284,6 +284,18 @@ export default {
       case 'getRequestDelivery':    return handleGetRequestDelivery(body, ctx, env);
       case 'getAgeingConfig':       return handleGetAgeingConfig(body, ctx, env);
       case 'updateAgeingConfig':    return handleUpdateAgeingConfig(body, ctx, env);
+      // ── Social Media Management ──────────────────────────────────────────
+      case 'getChannels':           return handleGetChannels(body, ctx, env);
+      case 'getCampaigns':          return handleGetCampaigns(body, ctx, env);
+      case 'createCampaign':        return handleCreateCampaign(body, ctx, env);
+      case 'getSocialFeed':         return handleGetSocialFeed(body, ctx, env);
+      case 'getSocialPost':         return handleGetSocialPost(body, ctx, env);
+      case 'createSocialPost':      return handleCreateSocialPost(body, ctx, env);
+      case 'updateSocialPost':      return handleUpdateSocialPost(body, ctx, env);
+      case 'deleteSocialPost':      return handleDeleteSocialPost(body, ctx, env);
+      case 'publishVariant':        return handlePublishVariant(body, ctx, env);
+      case 'updatePostStatus':      return handleUpdatePostStatus(body, ctx, env);
+      case 'linkTaskToPost':        return handleLinkTaskToPost(body, ctx, env);
       default:
         return err(`Unknown action: ${action}`, 404);
     }
@@ -2475,6 +2487,344 @@ async function autoCloseStaleTasks(env) {
   }
 
   console.log(`[autoClose] Auto-closed ${staleTasks.length} task(s)`);
+}
+
+// ── Social Media Management ──────────────────────────────────────────────────
+
+const VALID_CONTENT_TYPES = {
+  instagram: ['photo', 'carousel', 'reel', 'story'],
+  linkedin:  ['post', 'article', 'video'],
+  youtube:   ['video', 'short'],
+};
+
+async function handleGetChannels(body, ctx, env) {
+  const res = await sbFetch(
+    'social_channels?is_active=eq.true&order=name.asc',
+    { method: 'GET' },
+    env,
+  );
+  if (!res.ok) return err('Failed to load channels', res.status);
+  const rows = await res.json();
+  return json({ channels: rows });
+}
+
+async function handleGetCampaigns(body, ctx, env) {
+  const res = await sbFetch(
+    'social_campaigns?status=neq.archived&order=created_at.desc&limit=50',
+    { method: 'GET' },
+    env,
+  );
+  if (!res.ok) return err('Failed to load campaigns', res.status);
+  const rows = await res.json();
+  return json({ campaigns: rows });
+}
+
+async function handleCreateCampaign(body, ctx, env) {
+  const g = requireRole(ctx, 'member', 'lead', 'admin'); if (g) return g;
+  const { name, description, start_date, end_date } = body;
+  if (!name?.trim()) return err('name is required');
+
+  const res = await sbFetch('social_campaigns', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: name.trim(),
+      description: description ?? null,
+      start_date: start_date ?? null,
+      end_date:   end_date   ?? null,
+      created_by: ctx.userId,
+    }),
+  }, env);
+  if (!res.ok) {
+    const e = await res.text();
+    return err(`Failed to create campaign: ${e.slice(0, 200)}`, res.status);
+  }
+  const [campaign] = await res.json();
+  return json({ ok: true, campaign });
+}
+
+async function handleGetSocialFeed(body, ctx, env) {
+  const { from_date, to_date } = body;
+  if (!from_date || !to_date) return err('from_date and to_date are required');
+
+  const postsRes = await sbFetch(
+    `social_posts?scheduled_date=gte.${from_date}&scheduled_date=lte.${to_date}` +
+    `&order=scheduled_date.asc,scheduled_time.asc`,
+    { method: 'GET' }, env,
+  );
+  if (!postsRes.ok) return err('Failed to load posts', postsRes.status);
+  const posts = await postsRes.json();
+  if (posts.length === 0) return json({ feed: [] });
+
+  const postIds = posts.map(p => p.id);
+  const taskIds = [...new Set(posts.map(p => p.task_id).filter(Boolean))];
+
+  const [variantsRes, channelsRes, tasksRes] = await Promise.all([
+    sbFetch(
+      `social_post_channels?post_id=in.(${postIds.join(',')})&order=created_at.asc`,
+      { method: 'GET' }, env,
+    ),
+    sbFetch('social_channels?is_active=eq.true', { method: 'GET' }, env),
+    taskIds.length > 0
+      ? sbFetch(`tasks?id=in.(${taskIds.join(',')})&select=id,title,stage,status`, { method: 'GET' }, env)
+      : Promise.resolve({ ok: true, json: async () => [] }),
+  ]);
+
+  if (!variantsRes.ok || !channelsRes.ok || !tasksRes.ok) {
+    return err('Failed to load feed details');
+  }
+
+  const variants = await variantsRes.json();
+  const channels = await channelsRes.json();
+  const tasks    = await tasksRes.json();
+
+  const channelMap = Object.fromEntries(channels.map(c => [c.id, c]));
+  const taskMap    = Object.fromEntries(tasks.map(t => [t.id, t]));
+  const variantsByPost = {};
+  for (const v of variants) {
+    if (!variantsByPost[v.post_id]) variantsByPost[v.post_id] = [];
+    variantsByPost[v.post_id].push({ ...v, channel: channelMap[v.channel_id] ?? null });
+  }
+
+  const feed = posts.map(p => ({
+    ...p,
+    variants:    variantsByPost[p.id] ?? [],
+    linked_task: p.task_id ? (taskMap[p.task_id] ?? null) : null,
+  }));
+
+  return json({ feed });
+}
+
+async function handleGetSocialPost(body, ctx, env) {
+  const { post_id } = body;
+  if (!post_id) return err('post_id is required');
+
+  const [postRes, variantsRes, channelsRes] = await Promise.all([
+    sbFetch(`social_posts?id=eq.${post_id}&limit=1`, { method: 'GET' }, env),
+    sbFetch(`social_post_channels?post_id=eq.${post_id}&order=created_at.asc`, { method: 'GET' }, env),
+    sbFetch('social_channels?is_active=eq.true', { method: 'GET' }, env),
+  ]);
+  if (!postRes.ok || !variantsRes.ok || !channelsRes.ok) {
+    return err('Failed to load post');
+  }
+  const [post]   = await postRes.json();
+  if (!post) return err('Post not found', 404);
+  const variantsRaw = await variantsRes.json();
+  const channels    = await channelsRes.json();
+
+  const channelMap = Object.fromEntries(channels.map(c => [c.id, c]));
+  const variants = variantsRaw.map(v => ({ ...v, channel: channelMap[v.channel_id] ?? null }));
+
+  let linked_task = null;
+  if (post.task_id) {
+    const taskRes = await sbFetch(
+      `tasks?id=eq.${post.task_id}&select=id,title,stage,status&limit=1`,
+      { method: 'GET' }, env,
+    );
+    if (taskRes.ok) {
+      const [t] = await taskRes.json();
+      linked_task = t ?? null;
+    }
+  }
+
+  return json({ post: { ...post, variants, linked_task } });
+}
+
+async function validateVariantContentTypes(variants, env) {
+  const channelIds = [...new Set(variants.map(v => v.channel_id).filter(Boolean))];
+  if (channelIds.length === 0) return { error: err('variant.channel_id is required') };
+  const chRes = await sbFetch(
+    `social_channels?id=in.(${channelIds.join(',')})`,
+    { method: 'GET' }, env,
+  );
+  if (!chRes.ok) return { error: err('Failed to validate channels') };
+  const channels = await chRes.json();
+  const channelMap = Object.fromEntries(channels.map(c => [c.id, c]));
+
+  for (const v of variants) {
+    if (v.content_type === undefined) continue;
+    const ch = channelMap[v.channel_id];
+    if (!ch) return { error: err(`Channel ${v.channel_id} not found`, 404) };
+    const allowed = VALID_CONTENT_TYPES[ch.platform] ?? [];
+    if (!allowed.includes(v.content_type)) {
+      return { error: err(
+        `content_type '${v.content_type}' is not valid for ${ch.platform}. Allowed: ${allowed.join(', ')}`,
+      ) };
+    }
+  }
+  return { ok: true };
+}
+
+async function handleCreateSocialPost(body, ctx, env) {
+  const g = requireRole(ctx, 'member', 'lead', 'admin'); if (g) return g;
+  const {
+    title, scheduled_date, scheduled_time, notes, status,
+    campaign_id, task_id, product_code, variants,
+  } = body;
+
+  if (!title?.trim())  return err('title is required');
+  if (!scheduled_date) return err('scheduled_date is required');
+  if (!Array.isArray(variants) || variants.length === 0) {
+    return err('at least one variant is required');
+  }
+
+  const validation = await validateVariantContentTypes(variants, env);
+  if (validation.error) return validation.error;
+
+  const postRes = await sbFetch('social_posts', {
+    method: 'POST',
+    body: JSON.stringify({
+      title:          title.trim(),
+      scheduled_date,
+      scheduled_time: scheduled_time ?? null,
+      notes:          notes          ?? null,
+      status:         status         ?? 'draft',
+      campaign_id:    campaign_id    ?? null,
+      task_id:        task_id        ?? null,
+      product_code:   product_code   ?? null,
+      created_by:     ctx.userId,
+    }),
+  }, env);
+  if (!postRes.ok) {
+    const e = await postRes.text();
+    return err(`Failed to create post: ${e.slice(0, 200)}`, postRes.status);
+  }
+  const [post] = await postRes.json();
+
+  const variantRows = variants.map(v => ({
+    post_id:       post.id,
+    channel_id:    v.channel_id,
+    content_type:  v.content_type,
+    caption_draft: v.caption_draft ?? null,
+    asset_url:     v.asset_url     ?? null,
+    status:        'draft',
+  }));
+  const varRes = await sbFetch('social_post_channels', {
+    method: 'POST',
+    body: JSON.stringify(variantRows),
+  }, env);
+  if (!varRes.ok) {
+    const e = await varRes.text();
+    return err(
+      `Post ${post.id} created but variants failed: ${e.slice(0, 200)}. Roll back or retry.`,
+      varRes.status,
+    );
+  }
+  const variantsOut = await varRes.json();
+  return json({ ok: true, post: { ...post, variants: variantsOut } });
+}
+
+async function handleUpdateSocialPost(body, ctx, env) {
+  const g = requireRole(ctx, 'member', 'lead', 'admin'); if (g) return g;
+  const { post_id, variants, ...fields } = body;
+  if (!post_id) return err('post_id is required');
+
+  const UPDATE_ALLOWED = [
+    'title', 'scheduled_date', 'scheduled_time', 'notes', 'status',
+    'campaign_id', 'task_id', 'product_code',
+  ];
+  const postPatch = {};
+  for (const k of UPDATE_ALLOWED) {
+    if (k in fields) postPatch[k] = fields[k];
+  }
+  postPatch.updated_at = new Date().toISOString();
+
+  const postRes = await sbFetch(`social_posts?id=eq.${post_id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(postPatch),
+    prefer: 'return=minimal',
+  }, env);
+  if (!postRes.ok) return err('Failed to update post', postRes.status);
+
+  if (Array.isArray(variants) && variants.length > 0) {
+    const validation = await validateVariantContentTypes(variants, env);
+    if (validation.error) return validation.error;
+
+    const upsertRows = variants.map(v => ({
+      post_id,
+      channel_id:    v.channel_id,
+      content_type:  v.content_type,
+      caption_draft: v.caption_draft ?? null,
+      asset_url:     v.asset_url     ?? null,
+      status:        v.status        ?? 'draft',
+    }));
+    const varRes = await sbFetch('social_post_channels', {
+      method: 'POST',
+      body: JSON.stringify(upsertRows),
+      prefer: 'resolution=merge-duplicates,return=minimal',
+    }, env);
+    if (!varRes.ok) {
+      const e = await varRes.text();
+      return err(`Failed to update variants: ${e.slice(0, 200)}`, varRes.status);
+    }
+  }
+
+  return json({ ok: true, post_id });
+}
+
+async function handleDeleteSocialPost(body, ctx, env) {
+  const g = requireRole(ctx, 'lead', 'admin'); if (g) return g;
+  const { post_id } = body;
+  if (!post_id) return err('post_id is required');
+
+  const res = await sbFetch(`social_posts?id=eq.${post_id}`, {
+    method: 'DELETE',
+    prefer: 'return=minimal',
+  }, env);
+  if (!res.ok) return err('Failed to delete post', res.status);
+  return json({ ok: true, post_id });
+}
+
+async function handlePublishVariant(body, ctx, env) {
+  const g = requireRole(ctx, 'member', 'lead', 'admin'); if (g) return g;
+  const { variant_id } = body;
+  if (!variant_id) return err('variant_id is required');
+
+  const res = await sbFetch(`social_post_channels?id=eq.${variant_id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      status: 'published',
+      published_at: new Date().toISOString(),
+    }),
+    prefer: 'return=minimal',
+  }, env);
+  if (!res.ok) return err('Failed to publish variant', res.status);
+  return json({ ok: true, variant_id });
+}
+
+async function handleUpdatePostStatus(body, ctx, env) {
+  const g = requireRole(ctx, 'member', 'lead', 'admin'); if (g) return g;
+  const { post_id, status } = body;
+  if (!post_id) return err('post_id is required');
+
+  const VALID = ['idea', 'draft', 'approved', 'published', 'cancelled'];
+  if (!VALID.includes(status)) {
+    return err(`status must be one of: ${VALID.join(', ')}`);
+  }
+  if (status === 'approved' && !['lead', 'admin'].includes(ctx.role)) {
+    return err('Only lead or admin can approve posts', 403);
+  }
+
+  const res = await sbFetch(`social_posts?id=eq.${post_id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status, updated_at: new Date().toISOString() }),
+    prefer: 'return=minimal',
+  }, env);
+  if (!res.ok) return err('Failed to update post status', res.status);
+  return json({ ok: true, post_id, status });
+}
+
+async function handleLinkTaskToPost(body, ctx, env) {
+  const g = requireRole(ctx, 'member', 'lead', 'admin'); if (g) return g;
+  const { post_id, task_id } = body;
+  if (!post_id) return err('post_id is required');
+
+  const res = await sbFetch(`social_posts?id=eq.${post_id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ task_id: task_id ?? null, updated_at: new Date().toISOString() }),
+    prefer: 'return=minimal',
+  }, env);
+  if (!res.ok) return err('Failed to link task', res.status);
+  return json({ ok: true, post_id, task_id: task_id ?? null });
 }
 
 // ── Helper functions ──────────────────────────────────────────────────────────
