@@ -1,11 +1,17 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { workerFetch } from '@throttle/db';
 
 export const VALID_CONTENT_TYPES = {
   instagram: ['photo', 'carousel', 'reel', 'story'],
   linkedin:  ['post', 'article', 'video'],
   youtube:   ['video', 'short'],
+};
+
+const STAGE_LABEL = {
+  backlog: 'Backlog', in_sprint: 'In Sprint', in_progress: 'In Progress',
+  ext_blocked: 'Blocked', in_review: 'In Review', approved: 'Approved',
+  delivered: 'Delivered', done: 'Done', abandoned: 'Abandoned',
 };
 
 const STATUS_COLORS = {
@@ -475,6 +481,43 @@ export function CreateEditPanel({ channels, campaigns, prefillDate, editPost, ro
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
 
+  // Task-search combobox state
+  const [taskSearch, setTaskSearch]           = useState('');
+  const [taskResults, setTaskResults]         = useState([]);
+  const [linkedTask, setLinkedTask]           = useState(null);
+  const [taskSearching, setTaskSearching]     = useState(false);
+  const [showTaskDropdown, setShowTaskDropdown] = useState(false);
+  const searchTimeout = useRef(null);
+
+  // Pre-populate linkedTask when editing a post that already has a task_id
+  useEffect(() => {
+    const tid = editPost?.task_id;
+    if (!tid) { setLinkedTask(null); return; }
+    workerFetch('searchTasksForSocial', { task_id: tid }, session)
+      .then(res => {
+        if (res?.tasks?.length) setLinkedTask(res.tasks[0]);
+      })
+      .catch(() => {});
+  }, [editPost?.task_id, session]);
+
+  function handleTaskSearchChange(val) {
+    setTaskSearch(val);
+    setShowTaskDropdown(true);
+    clearTimeout(searchTimeout.current);
+    if (!val.trim()) { setTaskResults([]); return; }
+    searchTimeout.current = setTimeout(async () => {
+      setTaskSearching(true);
+      try {
+        const res = await workerFetch('searchTasksForSocial', { query: val.trim(), limit: 8 }, session);
+        setTaskResults(res?.tasks ?? []);
+      } catch {
+        setTaskResults([]);
+      } finally {
+        setTaskSearching(false);
+      }
+    }, 300);
+  }
+
   function update(field, value) {
     setForm(f => ({ ...f, [field]: value }));
   }
@@ -537,12 +580,16 @@ export function CreateEditPanel({ channels, campaigns, prefillDate, editPost, ro
         scheduled_time: form.scheduled_time || null,
         status:       form.status,
         campaign_id:  form.campaign_id || null,
-        task_id:      form.task_id     || null,
+        task_id:      linkedTask?.id ?? null,
         product_code: form.product_code || null,
         notes:        form.notes        || null,
       };
       if (isEdit) {
         await workerFetch('updateSocialPost', { post_id: editPost.id, ...basePayload, variants }, session);
+        // Belt-and-braces: ensure task link is in sync if it changed
+        if ((linkedTask?.id ?? null) !== (editPost?.task_id ?? null)) {
+          await workerFetch('linkTaskToPost', { post_id: editPost.id, task_id: linkedTask?.id ?? null }, session);
+        }
       } else {
         await workerFetch('createSocialPost', { ...basePayload, variants }, session);
       }
@@ -601,14 +648,109 @@ export function CreateEditPanel({ channels, campaigns, prefillDate, editPost, ro
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-          <Field label="Linked task (UUID)">
-            <input
-              type="text"
-              value={form.task_id}
-              onChange={e => update('task_id', e.target.value)}
-              placeholder="optional"
-              style={INPUT_STYLE}
-            />
+          <Field label="Linked task">
+            {linkedTask ? (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '6px 10px', background: 'var(--s2)',
+                border: '1px solid var(--b1)', borderRadius: 4,
+              }}>
+                <span style={{
+                  fontFamily: 'var(--mono)', fontSize: 10,
+                  background: 'var(--bg)', color: 'var(--t2)',
+                  padding: '2px 6px', borderRadius: 3, whiteSpace: 'nowrap',
+                }}>
+                  T-{String(linkedTask.task_number ?? '').padStart(3, '0')}
+                </span>
+                <span style={{
+                  flex: 1, fontSize: 12, color: 'var(--text)',
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}>
+                  {linkedTask.title}
+                </span>
+                {linkedTask.product_code && (
+                  <span style={{
+                    fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)',
+                  }}>
+                    {linkedTask.product_code}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => { setLinkedTask(null); setTaskSearch(''); setTaskResults([]); }}
+                  style={{
+                    background: 'none', border: 'none', cursor: 'pointer',
+                    color: 'var(--t2)', fontSize: 14, lineHeight: 1, padding: '0 2px',
+                  }}
+                  title="Unlink task"
+                >×</button>
+              </div>
+            ) : (
+              <div style={{ position: 'relative' }}>
+                <input
+                  type="text"
+                  value={taskSearch}
+                  onChange={e => handleTaskSearchChange(e.target.value)}
+                  onFocus={() => taskSearch && setShowTaskDropdown(true)}
+                  onBlur={() => setTimeout(() => setShowTaskDropdown(false), 150)}
+                  placeholder="Search T-NNN or title…"
+                  style={INPUT_STYLE}
+                />
+                {showTaskDropdown && (taskSearching || taskResults.length > 0 || taskSearch.trim()) && (
+                  <div style={{
+                    position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 100,
+                    background: 'var(--s1)', border: '1px solid var(--b1)', borderRadius: 4,
+                    marginTop: 2, maxHeight: 240, overflowY: 'auto',
+                    boxShadow: '0 4px 16px rgba(0,0,0,0.35)',
+                  }}>
+                    {taskSearching && (
+                      <div style={{ padding: '8px 12px', color: 'var(--t3)', fontSize: 12 }}>
+                        Searching…
+                      </div>
+                    )}
+                    {!taskSearching && taskResults.length === 0 && taskSearch.trim() && (
+                      <div style={{ padding: '8px 12px', color: 'var(--t3)', fontSize: 12 }}>
+                        No tasks found
+                      </div>
+                    )}
+                    {taskResults.map(t => (
+                      <div
+                        key={t.id}
+                        onMouseDown={() => {
+                          setLinkedTask(t);
+                          setTaskSearch('');
+                          setTaskResults([]);
+                          setShowTaskDropdown(false);
+                        }}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 8,
+                          padding: '7px 10px', cursor: 'pointer',
+                        }}
+                        onMouseEnter={e => e.currentTarget.style.background = 'var(--s2)'}
+                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                      >
+                        <span style={{
+                          fontFamily: 'var(--mono)', fontSize: 10,
+                          background: 'var(--bg)', color: 'var(--t2)',
+                          padding: '2px 6px', borderRadius: 3, whiteSpace: 'nowrap',
+                        }}>
+                          T-{String(t.task_number ?? '').padStart(3, '0')}
+                        </span>
+                        <span style={{
+                          flex: 1, fontSize: 12, color: 'var(--text)',
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}>
+                          {t.title}
+                        </span>
+                        <span style={{ fontSize: 10, color: 'var(--t3)', whiteSpace: 'nowrap' }}>
+                          {STAGE_LABEL[t.stage] || t.stage}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </Field>
           <Field label="Product code">
             <input
