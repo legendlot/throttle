@@ -296,6 +296,9 @@ export default {
       case 'publishVariant':        return handlePublishVariant(body, ctx, env);
       case 'updatePostStatus':      return handleUpdatePostStatus(body, ctx, env);
       case 'linkTaskToPost':        return handleLinkTaskToPost(body, ctx, env);
+      case 'updateCampaign':        return handleUpdateCampaign(body, ctx, env);
+      case 'searchTasksForSocial':  return handleSearchTasksForSocial(body, ctx, env);
+      case 'getSocialMonitoring':   return handleGetSocialMonitoring(body, ctx, env);
       default:
         return err(`Unknown action: ${action}`, 404);
     }
@@ -2825,6 +2828,191 @@ async function handleLinkTaskToPost(body, ctx, env) {
   }, env);
   if (!res.ok) return err('Failed to link task', res.status);
   return json({ ok: true, post_id, task_id: task_id ?? null });
+}
+
+async function handleUpdateCampaign(body, ctx, env) {
+  const g = requireRole(ctx, 'member', 'lead', 'admin'); if (g) return g;
+  const { campaign_id, name, description, start_date, end_date, status } = body;
+  if (!campaign_id) return err('campaign_id is required');
+
+  const patch = {};
+  if (name !== undefined)        patch.name        = name;
+  if (description !== undefined) patch.description = description;
+  if (start_date !== undefined)  patch.start_date  = start_date;
+  if (end_date !== undefined)    patch.end_date    = end_date;
+  if (status !== undefined) {
+    const valid = ['active', 'completed', 'archived'];
+    if (!valid.includes(status)) return err('Invalid status');
+    patch.status = status;
+  }
+  if (Object.keys(patch).length === 0) return err('No fields to update');
+
+  const res = await sbFetch(`social_campaigns?id=eq.${campaign_id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+    prefer: 'return=minimal',
+  }, env);
+  if (!res.ok) return err('Failed to update campaign', res.status);
+  return json({ ok: true, campaign_id });
+}
+
+async function handleSearchTasksForSocial(body, ctx, env) {
+  const g = requireRole(ctx, 'member', 'lead', 'admin'); if (g) return g;
+  const { query, task_id, limit = 10 } = body;
+
+  // Pre-populate path: single task lookup by id
+  if (task_id) {
+    const res = await sbFetch(
+      `tasks?id=eq.${task_id}&select=id,task_number,title,stage,product_code&limit=1`,
+      { method: 'GET' }, env,
+    );
+    if (!res.ok) return err('Failed to fetch task', res.status);
+    const data = await res.json();
+    return json({ tasks: Array.isArray(data) ? data : [] });
+  }
+
+  if (!query || query.trim().length === 0) return json({ tasks: [] });
+
+  const q = query.trim();
+  const cap = Math.min(Number(limit) || 10, 20);
+
+  // Title search
+  const titleRes = await sbFetch(
+    `tasks?title=ilike.*${encodeURIComponent(q)}*&stage=not.in.(done,abandoned)` +
+    `&select=id,task_number,title,stage,product_code&order=task_number.desc&limit=${cap}`,
+    { method: 'GET' }, env,
+  );
+  if (!titleRes.ok) return err('Failed to search tasks', titleRes.status);
+  const byTitle = (await titleRes.json()) || [];
+
+  // If query is numeric, also search by task_number exact match
+  let byNumber = [];
+  if (/^\d+$/.test(q)) {
+    const numRes = await sbFetch(
+      `tasks?task_number=eq.${q}&stage=not.in.(done,abandoned)` +
+      `&select=id,task_number,title,stage,product_code&limit=1`,
+      { method: 'GET' }, env,
+    );
+    if (numRes.ok) byNumber = (await numRes.json()) || [];
+  }
+
+  // Merge, dedupe by id (number match first so it appears at top)
+  const seen = new Set();
+  const tasks = [];
+  for (const t of [...byNumber, ...byTitle]) {
+    if (!seen.has(t.id)) { seen.add(t.id); tasks.push(t); }
+  }
+
+  return json({ tasks: tasks.slice(0, cap) });
+}
+
+async function handleGetSocialMonitoring(body, ctx, env) {
+  const g = requireRole(ctx, 'member', 'lead', 'admin'); if (g) return g;
+
+  // ── Date anchors (IST) ──────────────────────────────────────────────────
+  const now = new Date();
+  const todayIST = new Date(now.toLocaleString('en-CA', { timeZone: 'Asia/Kolkata' }));
+  const today = todayIST.toISOString().slice(0, 10);
+  const tomorrow = new Date(todayIST);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowStr = tomorrow.toISOString().slice(0, 10);
+
+  const eightWeeksAgo = new Date(todayIST);
+  eightWeeksAgo.setDate(eightWeeksAgo.getDate() - 56);
+  const eightWeeksAgoStr = eightWeeksAgo.toISOString().slice(0, 10);
+
+  // ── At-risk posts (non-finished, due ≤ tomorrow) + their variants ──────
+  const atRiskRes = await sbFetch(
+    `social_posts?status=not.in.(published,cancelled)&scheduled_date=lte.${tomorrowStr}` +
+    `&select=id,title,scheduled_date,status,campaign_id,task_id,social_post_channels(id,channel_id,asset_url,status)` +
+    `&order=scheduled_date.asc`,
+    { method: 'GET' }, env,
+  );
+  if (!atRiskRes.ok) return err('Failed to load at-risk posts', atRiskRes.status);
+  const allPosts = (await atRiskRes.json()) || [];
+
+  const atRisk = allPosts.map(post => {
+    const variants = post.social_post_channels || [];
+    const hasAnyAsset = variants.some(v => v.asset_url);
+    const isOverdue = post.scheduled_date < today;
+    const isMissingAsset = !hasAnyAsset && post.scheduled_date <= tomorrowStr;
+    const { social_post_channels, ...rest } = post;
+    return {
+      ...rest,
+      variants,
+      is_overdue: isOverdue,
+      is_missing_asset: isMissingAsset,
+    };
+  }).filter(p => p.is_overdue || p.is_missing_asset);
+
+  // ── Cadence — last 8 weeks of published variants ───────────────────────
+  const cadenceRes = await sbFetch(
+    `social_post_channels?status=eq.published&published_at=gte.${eightWeeksAgoStr}` +
+    `&select=id,channel_id,published_at,social_channels(id,name,platform,color)` +
+    `&order=published_at.asc`,
+    { method: 'GET' }, env,
+  );
+  if (!cadenceRes.ok) return err('Failed to load cadence', cadenceRes.status);
+  const published = (await cadenceRes.json()) || [];
+
+  // Build 8 week-start dates (Sundays, IST), oldest → newest
+  const weeks = [];
+  const weekStart = new Date(todayIST);
+  weekStart.setDate(weekStart.getDate() - weekStart.getDay()); // rewind to Sunday
+  for (let i = 7; i >= 0; i--) {
+    const w = new Date(weekStart);
+    w.setDate(w.getDate() - i * 7);
+    weeks.push(w.toISOString().slice(0, 10));
+  }
+
+  const cadenceMap = {};   // { channel_id: { weekStartIso: count } }
+  const channelMeta = {};
+  for (const v of published) {
+    const ch = v.social_channels;
+    if (!ch) continue;
+    if (!channelMeta[v.channel_id]) channelMeta[v.channel_id] = ch;
+    const pubDate = new Date(v.published_at)
+      .toLocaleString('en-CA', { timeZone: 'Asia/Kolkata' })
+      .slice(0, 10);
+    // Find bucket: latest week start ≤ pubDate
+    let wk = weeks[0];
+    for (let i = weeks.length - 1; i >= 0; i--) {
+      if (pubDate >= weeks[i]) { wk = weeks[i]; break; }
+    }
+    if (!cadenceMap[v.channel_id]) cadenceMap[v.channel_id] = {};
+    cadenceMap[v.channel_id][wk] = (cadenceMap[v.channel_id][wk] || 0) + 1;
+  }
+
+  const cadence = Object.entries(channelMeta).map(([channel_id, meta]) => ({
+    channel_id,
+    channel_name: meta.name,
+    platform: meta.platform,
+    color: meta.color,
+    weeks: weeks.map(w => ({ week: w, count: cadenceMap[channel_id]?.[w] || 0 })),
+  }));
+
+  // Add zero-activity channels
+  const chRes = await sbFetch(
+    `social_channels?is_active=eq.true&order=name.asc`,
+    { method: 'GET' }, env,
+  );
+  if (chRes.ok) {
+    const allChannels = (await chRes.json()) || [];
+    for (const ch of allChannels) {
+      if (!channelMeta[ch.id]) {
+        cadence.push({
+          channel_id: ch.id,
+          channel_name: ch.name,
+          platform: ch.platform,
+          color: ch.color,
+          weeks: weeks.map(w => ({ week: w, count: 0 })),
+        });
+      }
+    }
+  }
+  cadence.sort((a, b) => a.channel_name.localeCompare(b.channel_name));
+
+  return json({ at_risk: atRisk, cadence, weeks });
 }
 
 // ── Helper functions ──────────────────────────────────────────────────────────
