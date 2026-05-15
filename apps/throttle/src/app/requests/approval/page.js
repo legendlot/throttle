@@ -60,7 +60,22 @@ export default function ApprovalQueuePage() {
       .eq('status', 'pending')
       .order('created_at', { ascending: true }); // oldest first
 
-    if (!error) setRequests(data || []);
+    if (error) { setRequests([]); setLoading(false); return; }
+    const rows = data || [];
+
+    const submitterIds = [...new Set(rows.map(r => r.submitted_by).filter(Boolean))];
+    let userMap = {};
+    if (submitterIds.length > 0) {
+      const { data: users } = await supabase
+        .from('users')
+        .select('id, name')
+        .in('id', submitterIds);
+      if (Array.isArray(users)) {
+        for (const u of users) userMap[u.id] = u.name;
+      }
+    }
+
+    setRequests(rows.map(r => ({ ...r, submitter_name: userMap[r.submitted_by] ?? 'Unknown' })));
     setLoading(false);
   }
 
@@ -246,6 +261,14 @@ export default function ApprovalQueuePage() {
                       fontFamily: 'var(--mono)',
                       fontSize: 10,
                       color: 'var(--t3)',
+                      marginTop: 2,
+                    }}>
+                      Submitted by {req.submitter_name}
+                    </div>
+                    <div style={{
+                      fontFamily: 'var(--mono)',
+                      fontSize: 10,
+                      color: 'var(--t3)',
                       marginTop: 4,
                       display: 'flex',
                       alignItems: 'center',
@@ -333,6 +356,14 @@ export default function ApprovalQueuePage() {
                       }}>
                         {selected.title}
                       </h2>
+                      <div style={{
+                        fontFamily: 'var(--mono)',
+                        fontSize: 11,
+                        color: 'var(--t3)',
+                        marginTop: 4,
+                      }}>
+                        Submitted by {selected.submitter_name}
+                      </div>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <RequestStatusBadge status={selected.status} />
