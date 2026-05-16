@@ -242,7 +242,12 @@ export default function LineDesignPage() {
       {/* Right panel — editor */}
       <div style={{ flex: 1, overflowY: 'auto' }}>
         {!selectedProduct ? (
-          <EmptyState message="Select a product to view or edit its line design." />
+          <LineDesignLanding
+            productList={productList}
+            loading={loadingList}
+            onSelect={setSelectedProduct}
+            onNew={() => setShowCreate(true)}
+          />
         ) : loadingDesign ? (
           <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}><Spinner /></div>
         ) : !activeVersion ? (
@@ -389,6 +394,153 @@ export default function LineDesignPage() {
         version={historyVersion}
         onClose={() => setHistoryVersion(null)}
       />
+    </div>
+  );
+}
+
+function LineDesignLanding({ productList, loading, onSelect, onNew }) {
+  const rows = (productList || []).map(p => {
+    const active = (p.versions || []).find(v => v.is_active) || (p.versions || [])[0] || null;
+    return { product: p.product, active };
+  });
+
+  const tagged = rows.filter(r => r.active).length;
+
+  if (loading) {
+    return <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}><Spinner /></div>;
+  }
+
+  const thStyle = (align = 'center') => ({
+    textAlign: align,
+    padding: '8px 12px',
+    fontFamily: 'var(--cond)',
+    fontSize: 10,
+    fontWeight: 800,
+    color: 'var(--t2)',
+    textTransform: 'uppercase',
+    letterSpacing: '0.08em',
+    borderBottom: '1px solid var(--border)',
+    background: 'var(--surface)',
+    position: 'sticky',
+    top: 0,
+  });
+  const tdStyle = (align = 'center') => ({
+    textAlign: align,
+    padding: '12px',
+    borderBottom: '1px solid var(--border)',
+    fontFamily: 'var(--mono)',
+    fontSize: 12,
+  });
+  const chip = (bg, fg) => ({
+    fontSize: 9,
+    fontWeight: 800,
+    fontFamily: 'var(--cond)',
+    background: bg,
+    color: fg,
+    borderRadius: 3,
+    padding: '1px 5px',
+    letterSpacing: '0.05em',
+  });
+
+  return (
+    <div style={{ padding: '4px 4px 24px' }}>
+      <div style={{
+        display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+        marginBottom: 14, paddingBottom: 10, borderBottom: '1px solid var(--border)',
+      }}>
+        <div>
+          <h2 style={{
+            margin: 0,
+            fontFamily: 'var(--cond)', fontSize: 22, fontWeight: 900,
+            textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--t1)',
+          }}>
+            Line Designs
+          </h2>
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginTop: 4 }}>
+            {tagged} product{tagged === 1 ? '' : 's'} configured · pick a row or use the left list to edit
+          </div>
+        </div>
+      </div>
+
+      {rows.length === 0 ? (
+        <EmptyState message="No line designs yet — click + NEW on the left to create the first one." />
+      ) : (
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                <th style={thStyle('left')}>Product</th>
+                <th style={thStyle()}>Version</th>
+                <th style={thStyle()}>Effective</th>
+                {DEPT_ORDER.map(d => <th key={d} style={thStyle()}>{d}</th>)}
+                <th style={thStyle()}>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(({ product, active }) => {
+                const s = active?.dept_summary || {};
+                return (
+                  <tr
+                    key={product}
+                    onClick={() => onSelect(product)}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface2)'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                    style={{ cursor: 'pointer', transition: 'background 0.1s' }}
+                  >
+                    <td style={{ ...tdStyle('left'), fontFamily: 'var(--cond)', fontWeight: 800, fontSize: 14, color: 'var(--t1)', letterSpacing: '0.03em' }}>
+                      {product}
+                    </td>
+                    <td style={tdStyle()}>
+                      {active ? (
+                        <span style={{
+                          fontFamily: 'var(--mono)', fontSize: 10,
+                          background: 'var(--surface2)', border: '1px solid var(--border)',
+                          padding: '1px 6px', borderRadius: 3, color: 'var(--t2)',
+                        }}>v{active.version_number}</span>
+                      ) : <span style={{ color: 'var(--t3)' }}>—</span>}
+                    </td>
+                    <td style={{ ...tdStyle(), color: 'var(--t3)' }}>
+                      {active ? fmtIstDate(active.effective_from) : '—'}
+                    </td>
+                    {DEPT_ORDER.map(dept => {
+                      const info = s[dept] || { stations: 0, workers: 0, car_workers: 0, remote_workers: 0 };
+                      const hasBreakdown = (info.car_workers || 0) > 0 || (info.remote_workers || 0) > 0;
+                      return (
+                        <td key={dept} style={tdStyle()}>
+                          <div style={{
+                            fontFamily: 'var(--cond)', fontSize: 16, fontWeight: 800,
+                            color: info.workers > 0 ? 'var(--t1)' : 'var(--t3)',
+                          }}>
+                            {info.workers}
+                          </div>
+                          {hasBreakdown && (dept === 'Assembly' || dept === 'Prep') && (
+                            <div style={{ display: 'flex', gap: 4, justifyContent: 'center', marginTop: 3 }}>
+                              {info.car_workers > 0 && (
+                                <span style={chip('#213CE2', '#fff')}>{info.car_workers}C</span>
+                              )}
+                              {info.remote_workers > 0 && (
+                                <span style={chip('#9333ea', '#fff')}>{info.remote_workers}R</span>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                      );
+                    })}
+                    <td style={tdStyle()}>
+                      <span style={{
+                        fontFamily: 'var(--cond)', fontSize: 16, fontWeight: 800,
+                        color: 'var(--yellow)',
+                      }}>
+                        {active?.total_workers || 0}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -666,6 +818,8 @@ function StationCard({ department, position, capacity, unitType, onDragStart, on
 
 function CreateDesignModal({ open, onClose, catalogue, existingProducts, session, showToast, onCreated }) {
   const [product, setProduct]             = useState('');
+  const [productQuery, setProductQuery]   = useState('');
+  const [productDropOpen, setProductDropOpen] = useState(false);
   const [effectiveFrom, setEffectiveFrom] = useState(istToday());
   const [notes, setNotes]                 = useState('');
   const [copyFrom, setCopyFrom]           = useState('');
@@ -675,6 +829,8 @@ function CreateDesignModal({ open, onClose, catalogue, existingProducts, session
   useEffect(() => {
     if (open) {
       setProduct('');
+      setProductQuery('');
+      setProductDropOpen(false);
       setEffectiveFrom(istToday());
       setNotes('');
       setCopyFrom('');
@@ -683,6 +839,14 @@ function CreateDesignModal({ open, onClose, catalogue, existingProducts, session
   }, [open]);
 
   const existingSet = useMemo(() => new Set(existingProducts || []), [existingProducts]);
+  const availableProducts = useMemo(
+    () => (catalogue || []).filter(p => !existingSet.has(p)),
+    [catalogue, existingSet],
+  );
+  const filteredProducts = useMemo(
+    () => availableProducts.filter(p => p.toLowerCase().includes(productQuery.toLowerCase())),
+    [availableProducts, productQuery],
+  );
   const copyCandidates = useMemo(
     () => (existingProducts || []).filter(p => p !== product),
     [existingProducts, product],
@@ -746,18 +910,56 @@ function CreateDesignModal({ open, onClose, catalogue, existingProducts, session
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <label style={labelStyle()}>
           Product
-          <select
-            value={product}
-            onChange={(e) => setProduct(e.target.value)}
-            style={inputStyle()}
-          >
-            <option value="">— Select a product —</option>
-            {(catalogue || []).map(p => (
-              <option key={p} value={p} disabled={existingSet.has(p)}>
-                {p}{existingSet.has(p) ? ' (design exists)' : ''}
-              </option>
-            ))}
-          </select>
+          <div style={{ position: 'relative' }}>
+            <input
+              type="text"
+              placeholder={availableProducts.length === 0 ? 'No products available' : 'Search products…'}
+              value={productQuery}
+              autoComplete="off"
+              disabled={availableProducts.length === 0}
+              onChange={(e) => { setProductQuery(e.target.value); setProductDropOpen(true); setProduct(''); }}
+              onFocus={() => setProductDropOpen(true)}
+              onBlur={() => setTimeout(() => setProductDropOpen(false), 150)}
+              style={{
+                ...inputStyle(),
+                borderRadius: productDropOpen ? '4px 4px 0 0' : 4,
+              }}
+            />
+            {productDropOpen && availableProducts.length > 0 && (
+              <div style={{
+                position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
+                background: 'var(--surface2)', border: '1px solid var(--border)', borderTop: 'none',
+                borderRadius: '0 0 4px 4px', maxHeight: 220, overflowY: 'auto',
+              }}>
+                {filteredProducts.length === 0 ? (
+                  <div style={{ padding: '8px 10px', color: 'var(--t3)', fontSize: 12, fontFamily: 'var(--mono)' }}>
+                    No products found
+                  </div>
+                ) : filteredProducts.map(p => (
+                  <div
+                    key={p}
+                    onMouseDown={() => {
+                      setProduct(p);
+                      setProductQuery(p);
+                      setProductDropOpen(false);
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = product === p ? 'var(--surface)' : 'transparent'; }}
+                    style={{
+                      padding: '8px 10px',
+                      cursor: 'pointer',
+                      fontSize: 13,
+                      color: 'var(--t1)',
+                      background: product === p ? 'var(--surface)' : 'transparent',
+                      borderBottom: '1px solid var(--border)',
+                    }}
+                  >
+                    {p}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </label>
         <label style={labelStyle()}>
           Effective from
