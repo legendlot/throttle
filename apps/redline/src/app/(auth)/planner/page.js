@@ -235,6 +235,8 @@ export default function PlannerPage() {
   const [repeatError, setRepeatError] = useState('');
   const [batchConfig, setBatchConfig] = useState([]);
   const [editingBatch, setEditingBatch] = useState({});
+  // FEAT-018 — per-line BOM stock warnings: { [lineId]: { loading, short: [{ part_code, part_name, required, available }] } }
+  const [stockWarnings, setStockWarnings] = useState({});
   const fileRef = useRef();
 
   const todayLocalISO = formatLocalISO(new Date());
@@ -332,6 +334,40 @@ export default function PlannerPage() {
     return ['L1','L2','L3'].find(l => !used.has(l)) || 'L1';
   }
 
+  // FEAT-018 — fire stock check per variant of a cart line, aggregate short parts
+  function checkLineStock(line) {
+    if (!session || !line?.variants?.length) return;
+    setStockWarnings(prev => ({ ...prev, [line.id]: { loading: true, short: [] } }));
+    const calls = line.variants.map(v => {
+      const q = (Number(v.qty_ecomm) || 0) + (Number(v.qty_retail) || 0);
+      if (q <= 0) return Promise.resolve({ parts: [] });
+      return garageFetch('checkRunBomStock', {
+        product: line.product, variant: v.variant || '', colour: v.colour || '', qty: q,
+      }, session).catch(() => ({ parts: [] }));
+    });
+    Promise.all(calls).then(results => {
+      // Aggregate by part_code: sum required across variants, take min available
+      const merged = {};
+      for (const res of results) {
+        for (const p of (res?.parts || [])) {
+          if (!merged[p.part_code]) {
+            merged[p.part_code] = {
+              part_code: p.part_code,
+              part_name: p.part_name,
+              required:  0,
+              available: Number(p.available) || 0,
+            };
+          }
+          merged[p.part_code].required += Number(p.required) || 0;
+        }
+      }
+      const short = Object.values(merged)
+        .filter(p => p.available < p.required)
+        .sort((a, b) => (b.required - b.available) - (a.required - a.available));
+      setStockWarnings(prev => ({ ...prev, [line.id]: { loading: false, short } }));
+    });
+  }
+
   function openScheduler(dispatchDate, product) {
     const entry = (planData?.recommendations || []).find(r => r.dispatch_date === dispatchDate);
     if (!entry) return;
@@ -417,6 +453,7 @@ export default function PlannerPage() {
         c.id === scheduleTarget.cartId ? { ...c, lines: [...c.lines, newLine] } : c
       ));
     }
+    checkLineStock(newLine);
     setScheduling(null);
     setSchedulingError('');
   }
@@ -474,6 +511,7 @@ export default function PlannerPage() {
     } else {
       setCarts(prev => [...prev, { id: makeId(), production_date: targetDate, lines: [newLine] }]);
     }
+    checkLineStock(newLine);
     setRepeatPanel(null);
     setRepeatError('');
   }
@@ -495,6 +533,11 @@ export default function PlannerPage() {
         delete cs[cartId][lineId];
       }
       return cs;
+    });
+    setStockWarnings(prev => {
+      const next = { ...prev };
+      delete next[lineId];
+      return next;
     });
   }
 
@@ -1244,6 +1287,27 @@ export default function PlannerPage() {
                               );
                             })}
                           </div>
+
+                          {stockWarnings[line.id]?.short?.length > 0 && (() => {
+                            const shortList = stockWarnings[line.id].short;
+                            const head = shortList.slice(0, 3);
+                            const moreCount = shortList.length - head.length;
+                            return (
+                              <div style={{
+                                marginTop: 6, marginLeft: 16,
+                                padding: '4px 8px',
+                                background: 'rgba(242,205,26,0.12)',
+                                border: '1px solid rgba(242,205,26,0.4)',
+                                borderRadius: 4,
+                                fontSize: 11,
+                                color: '#a07c00',
+                              }}>
+                                ⚠ Stock short: {head.map(p =>
+                                  `${p.part_name || p.part_code} (need ${p.required}, have ${p.available})`
+                                ).join(' · ')}{moreCount > 0 ? ` · +${moreCount} more` : ''}
+                              </div>
+                            );
+                          })()}
 
                           {isRepeatOpen && (
                             <div style={{
