@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { EmptyState, Modal, Spinner, useToast } from '@throttle/ui';
@@ -474,6 +474,14 @@ function PartsGrnPanel({ session, onSuccess }) {
   const [lines, setLines]           = useState([{ search: '', partCode: '', partName: '', product: '', qty: '', damaged: '' }]);
   const [matCache, setMatCache]     = useState({});
   const [submitting, setSubmitting] = useState(false);
+  const [partHighlight, setPartHighlight] = useState({});
+  const highlightedPartRef = useRef(null);
+
+  useEffect(() => {
+    if (highlightedPartRef.current) {
+      highlightedPartRef.current.scrollIntoView({ block: 'nearest' });
+    }
+  }, [partHighlight]);
 
   useEffect(() => {
     if (!session) return;
@@ -611,7 +619,30 @@ function PartsGrnPanel({ session, onSuccess }) {
                 <input
                   style={inp}
                   value={l.search}
-                  onChange={e => updateSearch(i, e.target.value)}
+                  onChange={e => { updateSearch(i, e.target.value); setPartHighlight(s => ({ ...s, [i]: -1 })); }}
+                  onKeyDown={(e) => {
+                    if (!showDropdown || results.length === 0) {
+                      if (e.key === 'Escape') setPartHighlight(s => ({ ...s, [i]: -1 }));
+                      return;
+                    }
+                    const hi = partHighlight[i] ?? -1;
+                    if (e.key === 'ArrowDown') {
+                      e.preventDefault();
+                      setPartHighlight(s => ({ ...s, [i]: Math.min((hi < 0 ? -1 : hi) + 1, results.length - 1) }));
+                    } else if (e.key === 'ArrowUp') {
+                      e.preventDefault();
+                      setPartHighlight(s => ({ ...s, [i]: Math.max(hi - 1, 0) }));
+                    } else if (e.key === 'Enter') {
+                      if (hi >= 0 && results[hi]) {
+                        e.preventDefault();
+                        selectPart(i, results[hi]);
+                        setPartHighlight(s => ({ ...s, [i]: -1 }));
+                      }
+                    } else if (e.key === 'Escape') {
+                      e.currentTarget.blur();
+                      setPartHighlight(s => ({ ...s, [i]: -1 }));
+                    }
+                  }}
                   placeholder="e.g. flare pcb, knox licence…"
                   autoComplete="off"
                 />
@@ -623,33 +654,37 @@ function PartsGrnPanel({ session, onSuccess }) {
                     borderRadius: 4, boxShadow: '0 6px 20px rgba(0,0,0,.5)',
                     maxHeight: 300, overflowY: 'auto', marginTop: 2,
                   }}>
-                    {results.map((m, ri) => (
-                      <div
-                        key={ri}
-                        onMouseDown={e => { e.preventDefault(); selectPart(i, m); }}
-                        style={{
-                          padding: '9px 12px', cursor: 'pointer',
-                          borderBottom: ri < results.length - 1 ? '1px solid var(--border)' : 'none',
-                          display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
-                        }}
-                        onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)'; }}
-                        onMouseLeave={e => { e.currentTarget.style.background = ''; }}
-                      >
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {m.part_name || m.part_code}
-                          </div>
-                          {m.product && (
-                            <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', marginTop: 1 }}>
-                              {m.product}
+                    {results.map((m, ri) => {
+                      const isHi = (partHighlight[i] ?? -1) === ri;
+                      return (
+                        <div
+                          key={ri}
+                          ref={isHi ? highlightedPartRef : null}
+                          onMouseDown={e => { e.preventDefault(); selectPart(i, m); setPartHighlight(s => ({ ...s, [i]: -1 })); }}
+                          onMouseEnter={() => setPartHighlight(s => ({ ...s, [i]: ri }))}
+                          style={{
+                            padding: '9px 12px', cursor: 'pointer',
+                            borderBottom: ri < results.length - 1 ? '1px solid var(--border)' : 'none',
+                            display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
+                            background: isHi ? 'var(--surface2)' : 'transparent',
+                          }}
+                        >
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {m.part_name || m.part_code}
                             </div>
-                          )}
+                            {m.product && (
+                              <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', marginTop: 1 }}>
+                                {m.product}
+                              </div>
+                            )}
+                          </div>
+                          <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--yellow)', flexShrink: 0 }}>
+                            {m.part_code}
+                          </span>
                         </div>
-                        <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--yellow)', flexShrink: 0 }}>
-                          {m.part_code}
-                        </span>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
                 {showDropdown && tokens.length > 0 && results.length === 0 && (

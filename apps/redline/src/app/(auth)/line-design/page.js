@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { EmptyState, Modal, Spinner, useToast } from '@throttle/ui';
@@ -820,6 +820,8 @@ function CreateDesignModal({ open, onClose, catalogue, existingProducts, session
   const [product, setProduct]             = useState('');
   const [productQuery, setProductQuery]   = useState('');
   const [productDropOpen, setProductDropOpen] = useState(false);
+  const [productHighlight, setProductHighlight] = useState(-1);
+  const highlightedProductRef = useRef(null);
   const [effectiveFrom, setEffectiveFrom] = useState(istToday());
   const [notes, setNotes]                 = useState('');
   const [copyFrom, setCopyFrom]           = useState('');
@@ -831,12 +833,26 @@ function CreateDesignModal({ open, onClose, catalogue, existingProducts, session
       setProduct('');
       setProductQuery('');
       setProductDropOpen(false);
+      setProductHighlight(-1);
       setEffectiveFrom(istToday());
       setNotes('');
       setCopyFrom('');
       setDraft({ Prep: [], Assembly: [], QC: [], Packaging: [] });
     }
   }, [open]);
+
+  useEffect(() => {
+    if (highlightedProductRef.current) {
+      highlightedProductRef.current.scrollIntoView({ block: 'nearest' });
+    }
+  }, [productHighlight]);
+
+  const selectProductOption = (p) => {
+    setProduct(p);
+    setProductQuery(p);
+    setProductDropOpen(false);
+    setProductHighlight(-1);
+  };
 
   const existingSet = useMemo(() => new Set(existingProducts || []), [existingProducts]);
   const availableProducts = useMemo(
@@ -917,9 +933,27 @@ function CreateDesignModal({ open, onClose, catalogue, existingProducts, session
               value={productQuery}
               autoComplete="off"
               disabled={availableProducts.length === 0}
-              onChange={(e) => { setProductQuery(e.target.value); setProductDropOpen(true); setProduct(''); }}
+              onChange={(e) => { setProductQuery(e.target.value); setProductDropOpen(true); setProduct(''); setProductHighlight(-1); }}
               onFocus={() => setProductDropOpen(true)}
-              onBlur={() => setTimeout(() => setProductDropOpen(false), 150)}
+              onBlur={() => setTimeout(() => { setProductDropOpen(false); setProductHighlight(-1); }, 150)}
+              onKeyDown={(e) => {
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setProductDropOpen(true);
+                  setProductHighlight((i) => Math.min((i < 0 ? -1 : i) + 1, filteredProducts.length - 1));
+                } else if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setProductHighlight((i) => Math.max(i - 1, 0));
+                } else if (e.key === 'Enter') {
+                  if (productDropOpen && productHighlight >= 0 && filteredProducts[productHighlight]) {
+                    e.preventDefault();
+                    selectProductOption(filteredProducts[productHighlight]);
+                  }
+                } else if (e.key === 'Escape') {
+                  setProductDropOpen(false);
+                  setProductHighlight(-1);
+                }
+              }}
               style={{
                 ...inputStyle(),
                 borderRadius: productDropOpen ? '4px 4px 0 0' : 4,
@@ -935,28 +969,27 @@ function CreateDesignModal({ open, onClose, catalogue, existingProducts, session
                   <div style={{ padding: '8px 10px', color: 'var(--t3)', fontSize: 12, fontFamily: 'var(--mono)' }}>
                     No products found
                   </div>
-                ) : filteredProducts.map(p => (
-                  <div
-                    key={p}
-                    onMouseDown={() => {
-                      setProduct(p);
-                      setProductQuery(p);
-                      setProductDropOpen(false);
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = product === p ? 'var(--surface)' : 'transparent'; }}
-                    style={{
-                      padding: '8px 10px',
-                      cursor: 'pointer',
-                      fontSize: 13,
-                      color: 'var(--t1)',
-                      background: product === p ? 'var(--surface)' : 'transparent',
-                      borderBottom: '1px solid var(--border)',
-                    }}
-                  >
-                    {p}
-                  </div>
-                ))}
+                ) : filteredProducts.map((p, idx) => {
+                  const highlighted = idx === productHighlight;
+                  return (
+                    <div
+                      key={p}
+                      ref={highlighted ? highlightedProductRef : null}
+                      onMouseDown={() => selectProductOption(p)}
+                      onMouseEnter={() => setProductHighlight(idx)}
+                      style={{
+                        padding: '8px 10px',
+                        cursor: 'pointer',
+                        fontSize: 13,
+                        color: 'var(--t1)',
+                        background: highlighted ? 'var(--surface)' : 'transparent',
+                        borderBottom: '1px solid var(--border)',
+                      }}
+                    >
+                      {p}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>

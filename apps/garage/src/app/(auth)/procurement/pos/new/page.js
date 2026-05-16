@@ -977,6 +977,19 @@ function ManualMode({
   partsCache, partsLoading, loadParts,
   pickerOpenIdx, setPickerOpenIdx, pickerQuery, setPickerQuery, pickerRef,
 }) {
+  const [partHighlight, setPartHighlight] = useState(-1);
+  const highlightedPartRef = useRef(null);
+
+  useEffect(() => {
+    if (highlightedPartRef.current) {
+      highlightedPartRef.current.scrollIntoView({ block: 'nearest' });
+    }
+  }, [partHighlight]);
+
+  useEffect(() => {
+    setPartHighlight(-1);
+  }, [pickerOpenIdx, pickerQuery]);
+
   return (
     <>
       <div style={{ marginBottom: 8 }}>
@@ -1002,16 +1015,38 @@ function ManualMode({
               <th style={{ ...tableThStyle, width: 30 }}></th>
             </tr></thead>
             <tbody>
-              {lineItems.map((l, i) => (
+              {lineItems.map((l, i) => {
+                const isActivePicker = pickerOpenIdx === i;
+                const pickerQ = isActivePicker ? (pickerQuery || '').trim().toLowerCase() : '';
+                const matches = isActivePicker
+                  ? (partsCache || []).filter((p) =>
+                      !pickerQ ||
+                      (p.part_code || '').toLowerCase().includes(pickerQ) ||
+                      (p.part_name || '').toLowerCase().includes(pickerQ)
+                    ).slice(0, 50)
+                  : [];
+                const selectPart = (p) => {
+                  updateLine(i, 'part_code', p.part_code);
+                  updateLine(i, 'description', p.part_name || '');
+                  if (!l.unit || l.unit === 'pcs') {
+                    const u = p.issue_uom === 'EA' ? 'pcs' : (p.issue_uom || 'pcs');
+                    updateLine(i, 'unit', u);
+                  }
+                  setPickerOpenIdx(null);
+                  setPickerQuery('');
+                  setPartHighlight(-1);
+                };
+
+                return (
                 <tr key={i}>
                   <td style={tableTdStyle}>
                     <div
-                      ref={pickerOpenIdx === i ? pickerRef : null}
+                      ref={isActivePicker ? pickerRef : null}
                       style={{ position: 'relative', width: 130 }}
                     >
                       <input
                         type="text"
-                        value={pickerOpenIdx === i ? pickerQuery : l.part_code}
+                        value={isActivePicker ? pickerQuery : l.part_code}
                         placeholder="Part code"
                         onFocus={() => {
                           setPickerOpenIdx(i);
@@ -1022,9 +1057,32 @@ function ManualMode({
                           setPickerQuery(e.target.value);
                           updateLine(i, 'part_code', e.target.value);
                         }}
+                        onKeyDown={(e) => {
+                          if (!isActivePicker) return;
+                          if (matches.length === 0) {
+                            if (e.key === 'Escape') { setPickerOpenIdx(null); setPickerQuery(''); setPartHighlight(-1); }
+                            return;
+                          }
+                          if (e.key === 'ArrowDown') {
+                            e.preventDefault();
+                            setPartHighlight((idx) => Math.min((idx < 0 ? -1 : idx) + 1, matches.length - 1));
+                          } else if (e.key === 'ArrowUp') {
+                            e.preventDefault();
+                            setPartHighlight((idx) => Math.max(idx - 1, 0));
+                          } else if (e.key === 'Enter') {
+                            if (partHighlight >= 0 && matches[partHighlight]) {
+                              e.preventDefault();
+                              selectPart(matches[partHighlight]);
+                            }
+                          } else if (e.key === 'Escape') {
+                            setPickerOpenIdx(null);
+                            setPickerQuery('');
+                            setPartHighlight(-1);
+                          }
+                        }}
                         style={{ ...inputStyle, width: 130, fontFamily: 'var(--mono)' }}
                       />
-                      {pickerOpenIdx === i && (partsCache || partsLoading) && (
+                      {isActivePicker && (partsCache || partsLoading) && (
                         <div style={{
                           position: 'absolute', top: '100%', left: 0, zIndex: 200,
                           background: 'var(--surface2)', border: '1px solid var(--border)',
@@ -1036,41 +1094,24 @@ function ManualMode({
                             <div style={{ padding: '8px 10px', color: 'var(--t3)', fontSize: 12 }}>
                               Loading parts…
                             </div>
-                          ) : (() => {
-                            const q = (pickerQuery || '').trim().toLowerCase();
-                            const matches = (partsCache || []).filter((p) =>
-                              !q ||
-                              (p.part_code || '').toLowerCase().includes(q) ||
-                              (p.part_name || '').toLowerCase().includes(q)
-                            ).slice(0, 50);
-                            if (matches.length === 0) {
-                              return (
-                                <div style={{ padding: '8px 10px', color: 'var(--t3)', fontSize: 12 }}>
-                                  No matching parts — value will be used as typed
-                                </div>
-                              );
-                            }
-                            return matches.map((p) => (
+                          ) : matches.length === 0 ? (
+                            <div style={{ padding: '8px 10px', color: 'var(--t3)', fontSize: 12 }}>
+                              No matching parts — value will be used as typed
+                            </div>
+                          ) : matches.map((p, ri) => {
+                            const isHi = ri === partHighlight;
+                            return (
                               <div
                                 key={p.part_code}
-                                onMouseDown={(e) => {
-                                  e.preventDefault();
-                                  updateLine(i, 'part_code', p.part_code);
-                                  updateLine(i, 'description', p.part_name || '');
-                                  if (!l.unit || l.unit === 'pcs') {
-                                    const u = p.issue_uom === 'EA' ? 'pcs' : (p.issue_uom || 'pcs');
-                                    updateLine(i, 'unit', u);
-                                  }
-                                  setPickerOpenIdx(null);
-                                  setPickerQuery('');
-                                }}
+                                ref={isHi ? highlightedPartRef : null}
+                                onMouseDown={(e) => { e.preventDefault(); selectPart(p); }}
+                                onMouseEnter={() => setPartHighlight(ri)}
                                 style={{
                                   padding: '6px 10px', cursor: 'pointer',
                                   borderBottom: '1px solid var(--border)',
                                   display: 'flex', flexDirection: 'column', gap: 1,
+                                  background: isHi ? 'var(--surface)' : 'transparent',
                                 }}
-                                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
-                                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
                               >
                                 <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t1)' }}>
                                   {p.part_code}
@@ -1079,8 +1120,8 @@ function ManualMode({
                                   {p.part_name}{p.part_category ? ` · ${p.part_category}` : ''}
                                 </span>
                               </div>
-                            ));
-                          })()}
+                            );
+                          })}
                         </div>
                       )}
                     </div>
@@ -1112,7 +1153,8 @@ function ManualMode({
                     <button onClick={() => removeLine(i)} style={{ background: 'transparent', border: '1px solid var(--border)', color: '#ff7070', cursor: 'pointer', fontSize: 11, borderRadius: 3, padding: '2px 6px' }}>✕</button>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>

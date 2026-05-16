@@ -806,9 +806,11 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
   const [attendanceRows, setAttendanceRows] = useState([]);
   const [loading, setLoading] = useState(true);
   // Per-section picker state — keys are "L1-Assembly", "L2-QC", etc.
-  const [pickerOpen, setPickerOpen]   = useState({});
-  const [pickerQuery, setPickerQuery] = useState({});
+  const [pickerOpen, setPickerOpen]       = useState({});
+  const [pickerQuery, setPickerQuery]     = useState({});
+  const [pickerHighlight, setPickerHighlight] = useState({});
   const pickerRefs = useRef({});
+  const highlightedPickerRef = useRef(null);
 
   // Auto-assign target headcounts (fresh each day, no persistence).
   const [targets, setTargets] = useState({
@@ -904,7 +906,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
       setPickerOpen(stillOpen);
     }
     function onKey(e) {
-      if (e.key === 'Escape') setPickerOpen({});
+      if (e.key === 'Escape') { setPickerOpen({}); setPickerHighlight({}); }
     }
     document.addEventListener('mousedown', onDocClick);
     document.addEventListener('keydown', onKey);
@@ -913,6 +915,12 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
       document.removeEventListener('keydown', onKey);
     };
   }, [pickerOpen]);
+
+  useEffect(() => {
+    if (highlightedPickerRef.current) {
+      highlightedPickerRef.current.scrollIntoView({ block: 'nearest' });
+    }
+  }, [pickerHighlight]);
 
   async function handleAssign(operatorId, line, station) {
     if (!canManageFloor || !operatorId || !line) return;
@@ -1284,7 +1292,32 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                                   autoFocus
                                   placeholder="Search name or ID…"
                                   value={pickerQuery[key] || ''}
-                                  onChange={(e) => setPickerQuery((s) => ({ ...s, [key]: e.target.value }))}
+                                  onChange={(e) => {
+                                    setPickerQuery((s) => ({ ...s, [key]: e.target.value }));
+                                    setPickerHighlight((s) => ({ ...s, [key]: -1 }));
+                                  }}
+                                  onKeyDown={(e) => {
+                                    const visible = pickerOps.slice(0, 50);
+                                    const hi = pickerHighlight[key] ?? -1;
+                                    if (e.key === 'ArrowDown') {
+                                      e.preventDefault();
+                                      setPickerHighlight((s) => ({ ...s, [key]: Math.min((hi < 0 ? -1 : hi) + 1, visible.length - 1) }));
+                                    } else if (e.key === 'ArrowUp') {
+                                      e.preventDefault();
+                                      setPickerHighlight((s) => ({ ...s, [key]: Math.max(hi - 1, 0) }));
+                                    } else if (e.key === 'Enter') {
+                                      if (hi >= 0 && visible[hi]) {
+                                        e.preventDefault();
+                                        handleAssign(visible[hi].id, line, station);
+                                        setPickerOpen((s) => ({ ...s, [key]: false }));
+                                        setPickerQuery((s) => ({ ...s, [key]: '' }));
+                                        setPickerHighlight((s) => ({ ...s, [key]: -1 }));
+                                      }
+                                    } else if (e.key === 'Escape') {
+                                      setPickerOpen((s) => ({ ...s, [key]: false }));
+                                      setPickerHighlight((s) => ({ ...s, [key]: -1 }));
+                                    }
+                                  }}
                                   style={{ ...inputStyle, width: '100%', borderRadius: 0, border: 'none', borderBottom: '1px solid var(--border)' }}
                                 />
                                 <div style={{ maxHeight: 220, overflowY: 'auto' }}>
@@ -1293,25 +1326,29 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                                       No available operators
                                     </div>
                                   ) : (
-                                    pickerOps.slice(0, 50).map((op) => (
-                                      <div
-                                        key={op.id}
-                                        onMouseDown={(e) => {
-                                          e.preventDefault();
-                                          handleAssign(op.id, line, station);
-                                          setPickerOpen((s) => ({ ...s, [key]: false }));
-                                          setPickerQuery((s) => ({ ...s, [key]: '' }));
-                                        }}
-                                        style={{ padding: '6px 10px', cursor: 'pointer', fontSize: 12, color: 'var(--t1)' }}
-                                        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
-                                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                                      >
-                                        <div>{op.name}</div>
-                                        <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', marginTop: 1 }}>
-                                          {op.employee_id || '—'} · {(op.department || '').toUpperCase()}
+                                    pickerOps.slice(0, 50).map((op, opIdx) => {
+                                      const isHi = (pickerHighlight[key] ?? -1) === opIdx;
+                                      return (
+                                        <div
+                                          key={op.id}
+                                          ref={isHi ? highlightedPickerRef : null}
+                                          onMouseDown={(e) => {
+                                            e.preventDefault();
+                                            handleAssign(op.id, line, station);
+                                            setPickerOpen((s) => ({ ...s, [key]: false }));
+                                            setPickerQuery((s) => ({ ...s, [key]: '' }));
+                                            setPickerHighlight((s) => ({ ...s, [key]: -1 }));
+                                          }}
+                                          onMouseEnter={() => setPickerHighlight((s) => ({ ...s, [key]: opIdx }))}
+                                          style={{ padding: '6px 10px', cursor: 'pointer', fontSize: 12, color: 'var(--t1)', background: isHi ? 'var(--surface)' : 'transparent' }}
+                                        >
+                                          <div>{op.name}</div>
+                                          <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', marginTop: 1 }}>
+                                            {op.employee_id || '—'} · {(op.department || '').toUpperCase()}
+                                          </div>
                                         </div>
-                                      </div>
-                                    ))
+                                      );
+                                    })
                                   )}
                                 </div>
                               </div>
@@ -1484,7 +1521,32 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                             autoFocus
                             placeholder="Search name or ID…"
                             value={pickerQuery[key] || ''}
-                            onChange={(e) => setPickerQuery((s) => ({ ...s, [key]: e.target.value }))}
+                            onChange={(e) => {
+                              setPickerQuery((s) => ({ ...s, [key]: e.target.value }));
+                              setPickerHighlight((s) => ({ ...s, [key]: -1 }));
+                            }}
+                            onKeyDown={(e) => {
+                              const visible = pickerOps.slice(0, 50);
+                              const hi = pickerHighlight[key] ?? -1;
+                              if (e.key === 'ArrowDown') {
+                                e.preventDefault();
+                                setPickerHighlight((s) => ({ ...s, [key]: Math.min((hi < 0 ? -1 : hi) + 1, visible.length - 1) }));
+                              } else if (e.key === 'ArrowUp') {
+                                e.preventDefault();
+                                setPickerHighlight((s) => ({ ...s, [key]: Math.max(hi - 1, 0) }));
+                              } else if (e.key === 'Enter') {
+                                if (hi >= 0 && visible[hi]) {
+                                  e.preventDefault();
+                                  handleAssign(visible[hi].id, 'Others', null);
+                                  setPickerOpen((s) => ({ ...s, [key]: false }));
+                                  setPickerQuery((s) => ({ ...s, [key]: '' }));
+                                  setPickerHighlight((s) => ({ ...s, [key]: -1 }));
+                                }
+                              } else if (e.key === 'Escape') {
+                                setPickerOpen((s) => ({ ...s, [key]: false }));
+                                setPickerHighlight((s) => ({ ...s, [key]: -1 }));
+                              }
+                            }}
                             style={{ ...inputStyle, width: '100%', borderRadius: 0, border: 'none', borderBottom: '1px solid var(--border)' }}
                           />
                           <div style={{ maxHeight: 220, overflowY: 'auto' }}>
@@ -1493,25 +1555,29 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                                 No available operators
                               </div>
                             ) : (
-                              pickerOps.slice(0, 50).map((op) => (
-                                <div
-                                  key={op.id}
-                                  onMouseDown={(e) => {
-                                    e.preventDefault();
-                                    handleAssign(op.id, 'Others', null);
-                                    setPickerOpen((s) => ({ ...s, [key]: false }));
-                                    setPickerQuery((s) => ({ ...s, [key]: '' }));
-                                  }}
-                                  style={{ padding: '6px 10px', cursor: 'pointer', fontSize: 12, color: 'var(--t1)' }}
-                                  onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
-                                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                                >
-                                  <div>{op.name}</div>
-                                  <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', marginTop: 1 }}>
-                                    {op.employee_id || '—'} · {(op.department || '').toUpperCase()}
+                              pickerOps.slice(0, 50).map((op, opIdx) => {
+                                const isHi = (pickerHighlight[key] ?? -1) === opIdx;
+                                return (
+                                  <div
+                                    key={op.id}
+                                    ref={isHi ? highlightedPickerRef : null}
+                                    onMouseDown={(e) => {
+                                      e.preventDefault();
+                                      handleAssign(op.id, 'Others', null);
+                                      setPickerOpen((s) => ({ ...s, [key]: false }));
+                                      setPickerQuery((s) => ({ ...s, [key]: '' }));
+                                      setPickerHighlight((s) => ({ ...s, [key]: -1 }));
+                                    }}
+                                    onMouseEnter={() => setPickerHighlight((s) => ({ ...s, [key]: opIdx }))}
+                                    style={{ padding: '6px 10px', cursor: 'pointer', fontSize: 12, color: 'var(--t1)', background: isHi ? 'var(--surface)' : 'transparent' }}
+                                  >
+                                    <div>{op.name}</div>
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', marginTop: 1 }}>
+                                      {op.employee_id || '—'} · {(op.department || '').toUpperCase()}
+                                    </div>
                                   </div>
-                                </div>
-                              ))
+                                );
+                              })
                             )}
                           </div>
                         </div>
@@ -1598,11 +1664,13 @@ function PerformanceTab({ session, canManageFloor, operators }) {
   const [selectedOp, setSelectedOp] = useState(null);
   const [query, setQuery] = useState('');
   const [showDropdown, setShowDropdown] = useState(false);
+  const [highlightedIdx, setHighlightedIdx] = useState(-1);
   const [data, setData] = useState({ total: 0, events: [] });
   const [loading, setLoading] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
 
   const comboRef = useRef(null);
+  const highlightedOpRef = useRef(null);
 
   const activeOperators = useMemo(
     () => (operators || []).filter((o) => o.status !== 'inactive'),
@@ -1624,10 +1692,11 @@ function PerformanceTab({ session, canManageFloor, operators }) {
     function onDocClick(e) {
       if (comboRef.current && !comboRef.current.contains(e.target)) {
         setShowDropdown(false);
+        setHighlightedIdx(-1);
       }
     }
     function onKey(e) {
-      if (e.key === 'Escape') setShowDropdown(false);
+      if (e.key === 'Escape') { setShowDropdown(false); setHighlightedIdx(-1); }
     }
     document.addEventListener('mousedown', onDocClick);
     document.addEventListener('keydown', onKey);
@@ -1636,6 +1705,12 @@ function PerformanceTab({ session, canManageFloor, operators }) {
       document.removeEventListener('keydown', onKey);
     };
   }, [showDropdown]);
+
+  useEffect(() => {
+    if (highlightedOpRef.current) {
+      highlightedOpRef.current.scrollIntoView({ block: 'nearest' });
+    }
+  }, [highlightedIdx]);
 
   const operatorId = selectedOp?.id || '';
 
@@ -1731,9 +1806,30 @@ function PerformanceTab({ session, canManageFloor, operators }) {
                 setQuery(e.target.value);
                 setSelectedOp(null);
                 setShowDropdown(true);
+                setHighlightedIdx(-1);
               }}
               onFocus={() => setShowDropdown(true)}
               onClick={() => setShowDropdown(true)}
+              onKeyDown={(e) => {
+                const visible = filteredOps.slice(0, 50);
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setShowDropdown(true);
+                  setHighlightedIdx((i) => Math.min((i < 0 ? -1 : i) + 1, visible.length - 1));
+                } else if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setHighlightedIdx((i) => Math.max(i - 1, 0));
+                } else if (e.key === 'Enter') {
+                  if (showDropdown && highlightedIdx >= 0 && visible[highlightedIdx]) {
+                    e.preventDefault();
+                    pickOperator(visible[highlightedIdx]);
+                    setHighlightedIdx(-1);
+                  }
+                } else if (e.key === 'Escape') {
+                  setShowDropdown(false);
+                  setHighlightedIdx(-1);
+                }
+              }}
               style={{ ...inputStyle, width: '100%' }}
             />
             {showDropdown && (
@@ -1751,21 +1847,25 @@ function PerformanceTab({ session, canManageFloor, operators }) {
                     No operators found
                   </div>
                 ) : (
-                  filteredOps.slice(0, 50).map((op) => {
+                  filteredOps.slice(0, 50).map((op, idx) => {
                     const isSel = selectedOp?.id === op.id;
+                    const isHi = idx === highlightedIdx;
+                    let bg = 'transparent';
+                    if (isSel) bg = 'rgba(255,200,0,0.05)';
+                    else if (isHi) bg = 'var(--surface)';
                     return (
                       <div
                         key={op.id}
-                        onMouseDown={(e) => { e.preventDefault(); pickOperator(op); }}
+                        ref={isHi ? highlightedOpRef : null}
+                        onMouseDown={(e) => { e.preventDefault(); pickOperator(op); setHighlightedIdx(-1); }}
+                        onMouseEnter={() => setHighlightedIdx(idx)}
                         style={{
                           padding: '8px 12px',
                           cursor: 'pointer',
                           borderLeft: isSel ? '3px solid var(--yellow)' : '3px solid transparent',
-                          background: isSel ? 'rgba(255,200,0,0.05)' : 'transparent',
+                          background: bg,
                           fontSize: 12, color: 'var(--t1)',
                         }}
-                        onMouseEnter={(e) => { if (!isSel) e.currentTarget.style.background = 'var(--surface)'; }}
-                        onMouseLeave={(e) => { if (!isSel) e.currentTarget.style.background = 'transparent'; }}
                       >
                         <div>{op.name}</div>
                         <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', marginTop: 2 }}>
