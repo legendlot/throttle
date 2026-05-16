@@ -913,6 +913,28 @@ export default function PlannerPage() {
                                     </button>
                                   </div>
 
+                                  {prod.planned_runs?.length > 0 && (
+                                    <div style={{ paddingLeft: 22, paddingBottom: 6, paddingTop: 2 }}>
+                                      {prod.planned_runs.map(pr => (
+                                        <div key={pr.run_id} style={{
+                                          display: 'inline-flex', alignItems: 'center', gap: 4,
+                                          background: 'rgba(33, 60, 226, 0.12)',
+                                          color: '#213CE2',
+                                          border: '1px solid rgba(33, 60, 226, 0.35)',
+                                          borderRadius: 4, padding: '2px 8px',
+                                          fontSize: 11, fontWeight: 600,
+                                          marginRight: 6, marginBottom: 4,
+                                        }}>
+                                          ✓ {pr.run_no} planned — {pr.quantity} units
+                                          {pr.days_covered > 0 ? ` · covers ${pr.days_covered}d` : ''}
+                                          <span style={{ color: '#888', fontWeight: 400, marginLeft: 4 }}>
+                                            ({pr.status})
+                                          </span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+
                                   {isProdOpen && (
                                     <div style={{ fontSize: 12, color: 'var(--t2)', paddingLeft: 22, paddingBottom: 6 }}>
                                       {prod.variants.map((v, vi) => (
