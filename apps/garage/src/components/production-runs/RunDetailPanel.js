@@ -82,6 +82,7 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
+  const [completing, setCompleting] = useState(false);
   const [receiptPanelMode, setReceiptPanelMode] = useState(null);
 
   const [forceResolveOpen, setForceResolveOpen] = useState(false);
@@ -144,6 +145,7 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
   const showReject = run.status === 'Issued' && !receipt;
   const showReappeal = receipt && receipt.status === 'Contested';
   const showForceResolve = receipt && receipt.status === 'Locked' && !!perms?.procurement_approve;
+  const showMarkComplete = ['Issued', 'In Progress'].includes(run.status);
 
   const totalUnits = pickList.reduce((s, p) => s + (Number(p.total_qty) || 0), 0);
   const shortCount = pickList.filter((p) => (Number(p.shortfall) || 0) > 0).length;
@@ -159,6 +161,20 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
       showToast(e.message || 'Cancel failed', 'error');
     } finally {
       setCancelling(false);
+    }
+  }
+
+  async function handleMarkComplete() {
+    if (!window.confirm(`Mark ${run.run_no} as Completed?`)) return;
+    setCompleting(true);
+    try {
+      await workerFetch('completeProductionRun', { data: { run_no: run.run_no } }, session);
+      showToast(`Run ${run.run_no} marked Completed`, 'success');
+      onRunChange(run.run_no);
+    } catch (e) {
+      showToast(e.message || 'Complete failed', 'error');
+    } finally {
+      setCompleting(false);
     }
   }
 
@@ -213,6 +229,11 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
           )}
           {showForceResolve && (
             <button style={btnDanger} onClick={() => setForceResolveOpen(true)}>Force Resolve</button>
+          )}
+          {showMarkComplete && (
+            <button style={btnPri} disabled={completing} onClick={handleMarkComplete}>
+              {completing ? 'COMPLETING…' : 'Mark Complete'}
+            </button>
           )}
           <button style={btnSec} onClick={onClose}>✕ Close</button>
         </div>
