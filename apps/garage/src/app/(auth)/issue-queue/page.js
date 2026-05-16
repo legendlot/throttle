@@ -93,6 +93,8 @@ export default function IssueQueuePage() {
   const [rejectedRefs, setRejectedRefs] = useState(() => new Set());
   const [issuedState, setIssuedState] = useState(null);
   // { ref, issueNo, product } — set on successful issue, cleared on close
+  // FEAT-016 Phase 2 — run-type filter chip on the queue
+  const [runTypeFilter, setRunTypeFilter] = useState('all'); // 'all' | 'in-house' | 'outsourced'
 
   // Refs to read uncontrolled inputs at submit time
   const detailFormRef = useRef(null);
@@ -129,12 +131,15 @@ export default function IssueQueuePage() {
           if (e > 0 || r > 0) return `${name} E:${e} R:${r}`;
           return `${name} ×${v.qty}`;
         }).join(', ');
-        const vendorSuffix = isOutsourced && run.vendor ? `Vendor: ${run.vendor.vendor_name}` : null;
+        const vendorName   = isOutsourced && run.vendor ? run.vendor.vendor_name : null;
+        const vendorSuffix = vendorName ? `Vendor: ${vendorName}` : null;
         rows.push({
           type:     'run',
           ref:      run.run_no,
-          badge:    isOutsourced ? 'OUTSOURCED' : 'PROD RUN',
+          // FEAT-016 Phase 2 — outsourced runs show vendor name as the badge label
+          badge:    isOutsourced ? (vendorName || 'OUTSOURCED') : 'PROD RUN',
           badgeTone: isOutsourced ? 'amber' : 'blue',
+          run_type: run.run_type || 'in-house',
           product:  run.product,
           details: [variantStr, vendorSuffix].filter(Boolean).join(' — '),
           units:    run.total_units || 0,
@@ -214,8 +219,15 @@ export default function IssueQueuePage() {
   useEffect(() => { loadHistory(); }, [loadHistory]);
 
   const visibleQueue = useMemo(
-    () => queue.filter((r) => !rejectedRefs.has(r.ref)),
-    [queue, rejectedRefs]
+    () => queue.filter((r) => {
+      if (rejectedRefs.has(r.ref)) return false;
+      if (runTypeFilter === 'all') return true;
+      // WO-type rows aren't production runs — always shown except when filtering for outsourced.
+      if (r.type !== 'run') return runTypeFilter === 'in-house';
+      const rt = r.run_type || 'in-house';
+      return runTypeFilter === 'outsourced' ? rt === 'outsourced' : rt !== 'outsourced';
+    }),
+    [queue, rejectedRefs, runTypeFilter]
   );
 
   async function openItem(row) {
@@ -625,7 +637,30 @@ export default function IssueQueuePage() {
       <div style={panelStyle}>
         <div style={panelHeaderStyle}>
           <span>Open Requests {visibleQueue.length > 0 && <span style={{ color: 'var(--t3)', marginLeft: 6, fontSize: 11 }}>({visibleQueue.length})</span>}</span>
-          <button style={btnSecondary} onClick={loadQueue} disabled={loading}>↻ Refresh</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            {[
+              { key: 'all',        label: 'All' },
+              { key: 'in-house',   label: 'In-House' },
+              { key: 'outsourced', label: 'Outsourced' },
+            ].map(opt => (
+              <button
+                key={opt.key}
+                onClick={() => setRunTypeFilter(opt.key)}
+                style={{
+                  padding: '3px 10px', fontSize: 10, fontWeight: 600,
+                  fontFamily: 'var(--mono)', letterSpacing: '0.04em',
+                  textTransform: 'uppercase',
+                  background:   runTypeFilter === opt.key ? 'var(--yellow)' : 'var(--surface2)',
+                  color:        runTypeFilter === opt.key ? '#000'          : 'var(--t3)',
+                  border: '1px solid ' + (runTypeFilter === opt.key ? 'var(--yellow)' : 'var(--border)'),
+                  borderRadius: 4, cursor: 'pointer',
+                }}
+              >
+                {opt.label}
+              </button>
+            ))}
+            <button style={btnSecondary} onClick={loadQueue} disabled={loading}>↻ Refresh</button>
+          </div>
         </div>
         <div style={{ overflowX: 'auto' }}>
           {loading ? (

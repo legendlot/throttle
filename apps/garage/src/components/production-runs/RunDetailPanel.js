@@ -84,6 +84,10 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
   const [rejectOpen, setRejectOpen] = useState(false);
   const [completing, setCompleting] = useState(false);
   const [receiptPanelMode, setReceiptPanelMode] = useState(null);
+  // FEAT-016 Phase 2 — outsourced controls
+  const [sendingOut, setSendingOut] = useState(false);
+  const [returnLineSelect, setReturnLineSelect] = useState('L1');
+  const [assigningLine, setAssigningLine] = useState(false);
 
   const [forceResolveOpen, setForceResolveOpen] = useState(false);
   const [forceResolveReason, setForceResolveReason] = useState('');
@@ -146,6 +150,10 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
   const showReappeal = receipt && receipt.status === 'Contested';
   const showForceResolve = receipt && receipt.status === 'Locked' && !!perms?.procurement_approve;
   const showMarkComplete = ['Issued', 'In Progress'].includes(run.status);
+  // FEAT-016 Phase 2 — outsourced flow
+  const isOutsourced = run.run_type === 'outsourced';
+  const showMarkSentOut = isOutsourced && run.status === 'Issued';
+  const showAssignReturnLine = isOutsourced && run.status === 'In Progress' && !run.line_no;
 
   const totalUnits = pickList.reduce((s, p) => s + (Number(p.total_qty) || 0), 0);
   const shortCount = pickList.filter((p) => (Number(p.shortfall) || 0) > 0).length;
@@ -175,6 +183,35 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
       showToast(e.message || 'Complete failed', 'error');
     } finally {
       setCompleting(false);
+    }
+  }
+
+  async function handleMarkSentOut() {
+    if (!window.confirm(`Mark ${run.run_no} as sent out to vendor?`)) return;
+    setSendingOut(true);
+    try {
+      await workerFetch('markRunSentOut', { data: { run_no: run.run_no } }, session);
+      showToast(`Run ${run.run_no} sent to vendor`, 'success');
+      onRunChange(run.run_no);
+    } catch (e) {
+      showToast(e.message || 'Mark sent out failed', 'error');
+    } finally {
+      setSendingOut(false);
+    }
+  }
+
+  async function handleAssignLine() {
+    if (!returnLineSelect) return;
+    setAssigningLine(true);
+    try {
+      await workerFetch('assignOutsourcedLine',
+        { data: { run_no: run.run_no, line_no: returnLineSelect } }, session);
+      showToast(`Return line set to ${returnLineSelect}`, 'success');
+      onRunChange(run.run_no);
+    } catch (e) {
+      showToast(e.message || 'Assign line failed', 'error');
+    } finally {
+      setAssigningLine(false);
     }
   }
 
@@ -230,6 +267,29 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
           {showForceResolve && (
             <button style={btnDanger} onClick={() => setForceResolveOpen(true)}>Force Resolve</button>
           )}
+          {showMarkSentOut && (
+            <button style={btnPri} disabled={sendingOut} onClick={handleMarkSentOut}>
+              {sendingOut ? 'SENDING…' : 'Mark Sent Out'}
+            </button>
+          )}
+          {showAssignReturnLine && (
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <select
+                value={returnLineSelect}
+                onChange={(e) => setReturnLineSelect(e.target.value)}
+                style={{
+                  padding: '4px 8px', fontSize: 12,
+                  background: 'var(--surface2)', color: 'var(--text)',
+                  border: '1px solid var(--border)', borderRadius: 4,
+                }}
+              >
+                {['L1','L2','L3','L4','L5'].map(L => <option key={L} value={L}>{L}</option>)}
+              </select>
+              <button style={btnPri} disabled={assigningLine} onClick={handleAssignLine}>
+                {assigningLine ? 'ASSIGNING…' : 'Assign Return Line'}
+              </button>
+            </div>
+          )}
           {showMarkComplete && (
             <button style={btnPri} disabled={completing} onClick={handleMarkComplete}>
               {completing ? 'COMPLETING…' : 'Mark Complete'}
@@ -265,6 +325,16 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
               {run.vendor?.vendor_code && (
                 <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>
                   {run.vendor.vendor_code}
+                </span>
+              )}
+              {run.sent_out_at && (
+                <span style={{ fontSize: 12, color: 'var(--t2)' }}>
+                  · Sent to vendor: <strong style={{ color: 'var(--t1)' }}>{new Date(run.sent_out_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</strong>
+                </span>
+              )}
+              {run.line_no && (
+                <span style={{ fontSize: 12, color: 'var(--t2)' }}>
+                  · Receiving line: <strong style={{ color: 'var(--t1)' }}>{run.line_no}</strong>
                 </span>
               )}
             </div>
