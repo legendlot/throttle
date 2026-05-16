@@ -30,7 +30,7 @@ function tomorrowISO() {
   return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 }
 
-// Normalise a versions[] entry into editor state: { Prep:[{capacity,notes}], ... }
+// Normalise a versions[] entry into editor state: { Prep:[{capacity,notes,unit_type}], ... }
 function buildEditorState(version) {
   const out = { Prep: [], Assembly: [], QC: [], Packaging: [] };
   for (const d of (version?.departments || [])) {
@@ -38,6 +38,7 @@ function buildEditorState(version) {
     out[d.department] = (d.stations || []).map(s => ({
       capacity: s.capacity,
       notes: s.notes || null,
+      unit_type: s.unit_type || null,
     }));
   }
   return out;
@@ -140,7 +141,11 @@ export default function LineDesignPage() {
     const departments = DEPT_ORDER
       .map(dept => ({
         department: dept,
-        stations: (editorState[dept] || []).map(s => ({ capacity: s.capacity, notes: s.notes })),
+        stations: (editorState[dept] || []).map(s => ({
+          capacity: s.capacity,
+          notes: s.notes,
+          unit_type: s.unit_type ?? null,
+        })),
       }))
       .filter(d => d.stations.length > 0);
     if (departments.length === 0) {
@@ -395,6 +400,14 @@ function LineDesignSummaryBar({ editorState }) {
   }, {});
   const totalWorkers = Object.values(deptTotals).reduce((a, b) => a + b, 0);
 
+  const carWorkers = DEPT_ORDER.reduce((sum, dept) => sum +
+    (editorState?.[dept] || []).filter(s => s.unit_type === 'car').reduce((a, s) => a + (Number(s.capacity) || 0), 0), 0);
+  const remoteWorkers = DEPT_ORDER.reduce((sum, dept) => sum +
+    (editorState?.[dept] || []).filter(s => s.unit_type === 'remote').reduce((a, s) => a + (Number(s.capacity) || 0), 0), 0);
+  const untaggedWorkers = ['Assembly', 'Prep'].reduce((sum, dept) => sum +
+    (editorState?.[dept] || []).filter(s => !s.unit_type).reduce((a, s) => a + (Number(s.capacity) || 0), 0), 0);
+  const hasAnyTag = carWorkers > 0 || remoteWorkers > 0;
+
   const cellStyle = {
     flex: 1,
     padding: '10px 16px',
@@ -418,38 +431,82 @@ function LineDesignSummaryBar({ editorState }) {
   });
   const subStyle = { fontSize: 10, color: 'var(--t3)', marginTop: 4, fontFamily: 'var(--mono)' };
 
+  const chipStyle = (bg, fg) => ({
+    background: bg,
+    color: fg,
+    fontSize: 10,
+    fontWeight: 800,
+    padding: '2px 7px',
+    borderRadius: 3,
+    letterSpacing: '0.06em',
+    textTransform: 'uppercase',
+    fontFamily: 'var(--cond)',
+  });
+
   return (
     <div style={{
-      display: 'flex',
-      alignItems: 'stretch',
       background: 'var(--surface)',
       border: '1px solid var(--border)',
       borderRadius: 4,
       marginBottom: 16,
       overflow: 'hidden',
     }}>
-      {DEPT_ORDER.map((dept, i) => (
-        <div
-          key={dept}
-          style={{
-            ...cellStyle,
-            borderRight: '1px solid var(--border)',
-          }}
-        >
-          <div style={labelStyleS}>{dept}</div>
-          <div style={numStyle('var(--t1)')}>{deptTotals[dept]}</div>
-          <div style={subStyle}>{deptTotals[dept] === 1 ? 'worker' : 'workers'}</div>
+      <div style={{ display: 'flex', alignItems: 'stretch' }}>
+        {DEPT_ORDER.map((dept) => (
+          <div
+            key={dept}
+            style={{ ...cellStyle, borderRight: '1px solid var(--border)' }}
+          >
+            <div style={labelStyleS}>{dept}</div>
+            <div style={numStyle('var(--t1)')}>{deptTotals[dept]}</div>
+            <div style={subStyle}>{deptTotals[dept] === 1 ? 'worker' : 'workers'}</div>
+          </div>
+        ))}
+        <div style={{
+          ...cellStyle,
+          background: 'var(--surface2)',
+          minWidth: 110,
+        }}>
+          <div style={labelStyleS}>Total</div>
+          <div style={numStyle('var(--yellow)')}>{totalWorkers}</div>
+          <div style={subStyle}>{totalWorkers === 1 ? 'worker' : 'workers'}</div>
         </div>
-      ))}
-      <div style={{
-        ...cellStyle,
-        background: 'var(--surface2)',
-        minWidth: 110,
-      }}>
-        <div style={labelStyleS}>Total</div>
-        <div style={numStyle('var(--yellow)')}>{totalWorkers}</div>
-        <div style={subStyle}>{totalWorkers === 1 ? 'worker' : 'workers'}</div>
       </div>
+      {hasAnyTag && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 24,
+          padding: '8px 16px',
+          borderTop: '1px solid var(--border)',
+          background: 'var(--surface)',
+        }}>
+          <span style={{
+            fontSize: 10,
+            color: 'var(--t2)',
+            textTransform: 'uppercase',
+            letterSpacing: '0.08em',
+            fontFamily: 'var(--cond)',
+            fontWeight: 700,
+          }}>
+            Breakdown
+          </span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={chipStyle('#213CE2', '#fff')}>Car</span>
+            <span style={{ fontSize: 16, fontWeight: 800, color: 'var(--t1)', fontFamily: 'var(--cond)' }}>{carWorkers}</span>
+          </span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={chipStyle('#9333ea', '#fff')}>Rem</span>
+            <span style={{ fontSize: 16, fontWeight: 800, color: 'var(--t1)', fontFamily: 'var(--cond)' }}>{remoteWorkers}</span>
+          </span>
+          {untaggedWorkers > 0 && (
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={chipStyle('var(--surface2)', 'var(--t2)')}>Untagged</span>
+              <span style={{ fontSize: 16, fontWeight: 800, color: 'var(--t2)', fontFamily: 'var(--cond)' }}>{untaggedWorkers}</span>
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -481,7 +538,12 @@ function DepartmentSection({ department, stations, onChange }) {
     onChange(list => list.filter((_, i) => i !== idx));
   };
   const addStation = () => {
-    onChange(list => [...list, { capacity: 1, notes: null }]);
+    onChange(list => [...list, { capacity: 1, notes: null, unit_type: null }]);
+  };
+  const setUnitType = (idx, type) => {
+    onChange(list => list.map((s, i) =>
+      i === idx ? { ...s, unit_type: s.unit_type === type ? null : type } : s,
+    ));
   };
 
   return (
@@ -505,11 +567,13 @@ function DepartmentSection({ department, stations, onChange }) {
             department={department}
             position={idx + 1}
             capacity={s.capacity}
+            unitType={s.unit_type || null}
             onDragStart={(e) => handleDragStart(e, idx)}
             onDragOver={handleDragOver}
             onDrop={(e) => handleDrop(e, idx)}
             onToggle={() => toggleCapacity(idx)}
             onRemove={() => removeStation(idx)}
+            onSetUnitType={(type) => setUnitType(idx, type)}
           />
         ))}
         <button onClick={addStation} style={addStationBtnStyle()}>+ Add station</button>
@@ -518,7 +582,8 @@ function DepartmentSection({ department, stations, onChange }) {
   );
 }
 
-function StationCard({ department, position, capacity, onDragStart, onDragOver, onDrop, onToggle, onRemove }) {
+function StationCard({ department, position, capacity, unitType, onDragStart, onDragOver, onDrop, onToggle, onRemove, onSetUnitType }) {
+  const showUnitToggle = department === 'Assembly' || department === 'Prep';
   return (
     <div
       draggable
@@ -526,7 +591,7 @@ function StationCard({ department, position, capacity, onDragStart, onDragOver, 
       onDragOver={onDragOver}
       onDrop={onDrop}
       style={{
-        width: 84, height: 104, background: 'var(--surface2)',
+        width: 84, minHeight: 104, background: 'var(--surface2)',
         border: '1px solid var(--border)', borderRadius: 4,
         display: 'flex', flexDirection: 'column', alignItems: 'center',
         padding: 6, gap: 4, cursor: 'grab', position: 'relative',
@@ -561,6 +626,40 @@ function StationCard({ department, position, capacity, onDragStart, onDragOver, 
       <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)' }}>
         cap {capacity}
       </div>
+      {showUnitToggle && (
+        <div style={{
+          display: 'flex', gap: 3, marginTop: 2, justifyContent: 'center', width: '100%',
+        }}>
+          {['car', 'remote'].map(type => {
+            const selected = unitType === type;
+            const accent = type === 'car' ? '#213CE2' : '#9333ea';
+            return (
+              <button
+                key={type}
+                onClick={(e) => { e.stopPropagation(); onSetUnitType && onSetUnitType(type); }}
+                title={selected ? `Click to clear ${type === 'car' ? 'Car' : 'Remote'} tag` : `Tag as ${type === 'car' ? 'Car' : 'Remote'}`}
+                style={{
+                  flex: 1,
+                  padding: '2px 0',
+                  fontSize: 9,
+                  fontWeight: 800,
+                  letterSpacing: '0.06em',
+                  textTransform: 'uppercase',
+                  borderRadius: 3,
+                  border: '1px solid ' + (selected ? accent : 'var(--border)'),
+                  cursor: 'pointer',
+                  background: selected ? accent : 'transparent',
+                  color: selected ? '#fff' : 'var(--t3)',
+                  fontFamily: 'var(--cond)',
+                  transition: 'background 0.15s, color 0.15s',
+                }}
+              >
+                {type === 'car' ? 'CAR' : 'REM'}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -616,7 +715,11 @@ function CreateDesignModal({ open, onClose, catalogue, existingProducts, session
         const departments = DEPT_ORDER
           .map(dept => ({
             department: dept,
-            stations: (draft[dept] || []).map(s => ({ capacity: s.capacity, notes: s.notes })),
+            stations: (draft[dept] || []).map(s => ({
+              capacity: s.capacity,
+              notes: s.notes,
+              unit_type: s.unit_type ?? null,
+            })),
           }))
           .filter(d => d.stations.length > 0);
         res = await workerFetch('createLineDesign',
