@@ -273,6 +273,9 @@ export default function LineDesignPage() {
               >NEW VERSION</button>
             </div>
 
+            {/* Summary bar — derived from editorState capacities */}
+            {editorState && <LineDesignSummaryBar editorState={editorState} />}
+
             {/* Department sections */}
             {DEPT_ORDER.map((dept) => (
               <DepartmentSection
@@ -381,6 +384,72 @@ export default function LineDesignPage() {
         version={historyVersion}
         onClose={() => setHistoryVersion(null)}
       />
+    </div>
+  );
+}
+
+function LineDesignSummaryBar({ editorState }) {
+  const deptTotals = DEPT_ORDER.reduce((acc, dept) => {
+    acc[dept] = (editorState?.[dept] || []).reduce((sum, s) => sum + (Number(s.capacity) || 0), 0);
+    return acc;
+  }, {});
+  const totalWorkers = Object.values(deptTotals).reduce((a, b) => a + b, 0);
+
+  const cellStyle = {
+    flex: 1,
+    padding: '10px 16px',
+    textAlign: 'center',
+  };
+  const labelStyleS = {
+    fontSize: 11,
+    color: 'var(--t2)',
+    textTransform: 'uppercase',
+    letterSpacing: '0.08em',
+    marginBottom: 4,
+    fontFamily: 'var(--cond)',
+    fontWeight: 700,
+  };
+  const numStyle = (color) => ({
+    fontSize: 22,
+    fontWeight: 800,
+    color,
+    fontFamily: 'var(--cond)',
+    lineHeight: 1,
+  });
+  const subStyle = { fontSize: 10, color: 'var(--t3)', marginTop: 4, fontFamily: 'var(--mono)' };
+
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'stretch',
+      background: 'var(--surface)',
+      border: '1px solid var(--border)',
+      borderRadius: 4,
+      marginBottom: 16,
+      overflow: 'hidden',
+    }}>
+      {DEPT_ORDER.map((dept, i) => (
+        <div
+          key={dept}
+          style={{
+            ...cellStyle,
+            borderRight: '1px solid var(--border)',
+          }}
+        >
+          <div style={labelStyleS}>{dept}</div>
+          <div style={numStyle('var(--t1)')}>{deptTotals[dept]}</div>
+          <div style={subStyle}>{deptTotals[dept] === 1 ? 'worker' : 'workers'}</div>
+        </div>
+      ))}
+      <div style={{
+        ...cellStyle,
+        background: 'var(--surface2)',
+        minWidth: 110,
+      }}>
+        <div style={labelStyleS}>Total</div>
+        <div style={numStyle('var(--yellow)')}>{totalWorkers}</div>
+        <div style={subStyle}>{totalWorkers === 1 ? 'worker' : 'workers'}</div>
+      </div>
     </div>
   );
 }
@@ -500,6 +569,7 @@ function CreateDesignModal({ open, onClose, catalogue, existingProducts, session
   const [product, setProduct]             = useState('');
   const [effectiveFrom, setEffectiveFrom] = useState(istToday());
   const [notes, setNotes]                 = useState('');
+  const [copyFrom, setCopyFrom]           = useState('');
   const [draft, setDraft]                 = useState({ Prep: [], Assembly: [], QC: [], Packaging: [] });
   const [submitting, setSubmitting]       = useState(false);
 
@@ -508,11 +578,16 @@ function CreateDesignModal({ open, onClose, catalogue, existingProducts, session
       setProduct('');
       setEffectiveFrom(istToday());
       setNotes('');
+      setCopyFrom('');
       setDraft({ Prep: [], Assembly: [], QC: [], Packaging: [] });
     }
   }, [open]);
 
   const existingSet = useMemo(() => new Set(existingProducts || []), [existingProducts]);
+  const copyCandidates = useMemo(
+    () => (existingProducts || []).filter(p => p !== product),
+    [existingProducts, product],
+  );
 
   const mutate = (dept, mutator) => setDraft(prev => ({ ...prev, [dept]: mutator([...(prev[dept] || [])]) }));
 
@@ -521,19 +596,40 @@ function CreateDesignModal({ open, onClose, catalogue, existingProducts, session
   const handleSubmit = async () => {
     if (!product) { showToast('Product required', 'error'); return; }
     if (!effectiveFrom) { showToast('Effective date required', 'error'); return; }
-    if (totalStations === 0) { showToast('Add at least one station', 'error'); return; }
-    const departments = DEPT_ORDER
-      .map(dept => ({
-        department: dept,
-        stations: (draft[dept] || []).map(s => ({ capacity: s.capacity, notes: s.notes })),
-      }))
-      .filter(d => d.stations.length > 0);
     setSubmitting(true);
     try {
-      const res = await workerFetch('createLineDesign',
-        { data: { product, effective_from: effectiveFrom, notes: notes || null, departments } }, session);
+      let res;
+      if (copyFrom) {
+        if (copyFrom === product) {
+          showToast('Source and target must be different products', 'error');
+          setSubmitting(false);
+          return;
+        }
+        res = await workerFetch('copyLineDesign',
+          { data: { source_product: copyFrom, target_product: product, effective_from: effectiveFrom, notes: notes || null } }, session);
+      } else {
+        if (totalStations === 0) {
+          showToast('Add at least one station or pick a product to copy from', 'error');
+          setSubmitting(false);
+          return;
+        }
+        const departments = DEPT_ORDER
+          .map(dept => ({
+            department: dept,
+            stations: (draft[dept] || []).map(s => ({ capacity: s.capacity, notes: s.notes })),
+          }))
+          .filter(d => d.stations.length > 0);
+        res = await workerFetch('createLineDesign',
+          { data: { product, effective_from: effectiveFrom, notes: notes || null, departments } }, session);
+      }
       if (!res?.ok) throw new Error(res?.error || 'Create failed');
-      showToast(`Created line design for ${product}`, 'success');
+      const copiedCount = copyFrom ? (res.data?.stations_copied ?? 0) : null;
+      showToast(
+        copyFrom
+          ? `Created ${product} by copying ${copiedCount} station${copiedCount === 1 ? '' : 's'} from ${copyFrom}`
+          : `Created line design for ${product}`,
+        'success',
+      );
       onCreated(product);
     } catch (e) {
       showToast(e.message || 'Create failed', 'error');
@@ -565,24 +661,48 @@ function CreateDesignModal({ open, onClose, catalogue, existingProducts, session
           <input type="date" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} style={inputStyle()} />
         </label>
         <label style={labelStyle()}>
+          Copy stations from (optional)
+          <select
+            value={copyFrom}
+            onChange={(e) => setCopyFrom(e.target.value)}
+            disabled={copyCandidates.length === 0}
+            style={inputStyle()}
+          >
+            <option value="">— Start blank —</option>
+            {copyCandidates.map(p => (
+              <option key={p} value={p}>{p}</option>
+            ))}
+          </select>
+        </label>
+        <label style={labelStyle()}>
           Notes (optional)
           <input type="text" value={notes} onChange={(e) => setNotes(e.target.value)} style={inputStyle()} />
         </label>
 
-        <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border)' }}>
+        {copyFrom ? (
           <div style={{
-            fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 800,
-            textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8, color: 'var(--t2)',
-          }}>Stations</div>
-          {DEPT_ORDER.map((dept) => (
-            <DepartmentSection
-              key={dept}
-              department={dept}
-              stations={draft[dept] || []}
-              onChange={(m) => mutate(dept, m)}
-            />
-          ))}
-        </div>
+            marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border)',
+            fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)',
+          }}>
+            Stations will be copied from <strong style={{ color: 'var(--t1)' }}>{copyFrom}</strong>{"'"}s active version.
+            Clear the dropdown above to build stations manually.
+          </div>
+        ) : (
+          <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border)' }}>
+            <div style={{
+              fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 800,
+              textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8, color: 'var(--t2)',
+            }}>Stations</div>
+            {DEPT_ORDER.map((dept) => (
+              <DepartmentSection
+                key={dept}
+                department={dept}
+                stations={draft[dept] || []}
+                onChange={(m) => mutate(dept, m)}
+              />
+            ))}
+          </div>
+        )}
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
           <button onClick={onClose} disabled={submitting} style={btnSecondaryStyle()}>CANCEL</button>
