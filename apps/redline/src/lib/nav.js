@@ -5,7 +5,7 @@ import {
   Wrench,
   BarChart3, Clock,
   QrCode, Users, Printer,
-  CalendarClock, LayoutGrid,
+  CalendarClock, LayoutGrid, ClipboardList,
 } from 'lucide-react';
 
 export const NAV_GROUPS = [
@@ -15,6 +15,7 @@ export const NAV_GROUPS = [
       { id: 'exec',     label: 'Dashboard', route: '/exec',     icon: BarChart3 },
       { id: 'planner',     label: 'Planner',     route: '/planner',     icon: CalendarClock },
       { id: 'line-design', label: 'Line Design', route: '/line-design', icon: LayoutGrid },
+      { id: 'line-setup',  label: 'Line Setup',  route: '/line-setup',  icon: ClipboardList },
       { id: 'lines',       label: 'Lines',       route: '/lines',       icon: GitBranch },
       { id: 'manpower', label: 'Manpower',  route: '/manpower', icon: Users },
       { id: 'hourly',   label: 'Hourly',    route: '/hourly',   icon: Clock },
