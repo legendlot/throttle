@@ -291,6 +291,8 @@ function OperatorsTab({ session, canManageFloor }) {
               <option value="assembly">Assembly</option>
               <option value="qc">QC</option>
               <option value="packaging">Packaging</option>
+              <option value="admin">Admin</option>
+              <option value="store">Store</option>
             </select>
           </div>
           <div>
@@ -432,6 +434,8 @@ function CreateOperatorModal({ open, onClose, session, onSaved }) {
             <option value="assembly">Assembly</option>
             <option value="qc">QC</option>
             <option value="packaging">Packaging</option>
+            <option value="admin">Admin</option>
+            <option value="store">Store</option>
           </select>
         </Field>
         <Field label="Employment Type *">
@@ -534,6 +538,8 @@ function EditOperatorModal({ target, onClose, session, onSaved }) {
             <option value="assembly">Assembly</option>
             <option value="qc">QC</option>
             <option value="packaging">Packaging</option>
+            <option value="admin">Admin</option>
+            <option value="store">Store</option>
           </select>
         </Field>
         <Field label="Employment Type">
