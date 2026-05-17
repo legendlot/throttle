@@ -267,6 +267,30 @@ function OperatorsTab({ session, canManageFloor }) {
 
   return (
     <div>
+      {/* FEAT-022 — deprecation banner pointing to Redline */}
+      <div style={{
+        marginBottom: 12,
+        padding: '10px 14px',
+        background: 'rgba(245,158,11,0.10)',
+        border: '1px solid rgba(245,158,11,0.30)',
+        borderRadius: 4,
+        color: '#fbbf24',
+        fontSize: 12,
+        lineHeight: 1.5,
+      }}>
+        <strong>Operators management has moved to Redline.</strong>
+        {' '}Use the{' '}
+        <a
+          href="https://redline.legendoftoys.com/operators"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ color: '#fcd34d', textDecoration: 'underline', fontWeight: 600 }}
+        >
+          Redline Operators page
+        </a>
+        {' '}to add operators, manage roles, and set supervisor status.
+        This tab will be removed in a future update.
+      </div>
       {/* Toolbar */}
       <div style={{ ...panelStyle, marginBottom: 12 }}>
         <div style={{ padding: '10px 14px', display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
