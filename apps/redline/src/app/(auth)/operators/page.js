@@ -34,32 +34,6 @@ const sectionLabel  = { fontFamily: 'var(--cond)', fontSize: 10, fontWeight: 700
 const thStyle       = { padding: '8px 12px', fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
 const tdStyle       = { padding: '8px 12px', fontSize: 12, borderBottom: '1px solid rgba(42,42,42,.6)', whiteSpace: 'nowrap' };
 
-// ── Small toggle component ───────────────────────────────────
-function SupervisorToggle({ on, disabled, onChange }) {
-  return (
-    <button
-      type="button"
-      onClick={() => !disabled && onChange(!on)}
-      disabled={disabled}
-      title={on ? 'Supervisor' : 'Not a supervisor'}
-      style={{
-        position: 'relative', width: 38, height: 20, border: 'none', padding: 0,
-        borderRadius: 11, cursor: disabled ? 'wait' : 'pointer',
-        background: on ? 'var(--yellow)' : 'var(--surface2)',
-        border: `1px solid ${on ? 'var(--yellow)' : 'var(--border)'}`,
-        opacity: disabled ? 0.55 : 1,
-        transition: 'background 120ms',
-      }}
-    >
-      <span style={{
-        position: 'absolute', top: 1, left: on ? 19 : 1, width: 16, height: 16,
-        borderRadius: '50%', background: on ? '#000' : 'var(--t2)',
-        transition: 'left 120ms',
-      }} />
-    </button>
-  );
-}
-
 // ── Operators Page ───────────────────────────────────────────
 export default function OperatorsPage() {
   const { session, perms } = useAuth();
@@ -75,7 +49,6 @@ export default function OperatorsPage() {
   const [search,       setSearch]     = useState('');
   const [deptFilter,   setDeptFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('active');
-  const [pendingToggle, setPendingToggle] = useState({}); // { [operator_id]: true } while toggle is in flight
 
   // Modal state
   const [modal,   setModal]   = useState(null); // { mode: 'add' | 'edit', op? }
@@ -83,7 +56,6 @@ export default function OperatorsPage() {
   const [mDept,   setMDept]   = useState('assembly');
   const [mType,   setMType]   = useState('in_house');
   const [mStatus, setMStatus] = useState('active');
-  const [mSup,    setMSup]    = useState(false);
   const [mPhone,  setMPhone]  = useState('');
   const [mError,  setMError]  = useState('');
   const [mSaving, setMSaving] = useState(false);
@@ -123,7 +95,7 @@ export default function OperatorsPage() {
   function openAdd() {
     setModal({ mode: 'add', op: null });
     setMName(''); setMDept('assembly'); setMType('in_house');
-    setMStatus('active'); setMSup(false); setMPhone(''); setMError('');
+    setMStatus('active'); setMPhone(''); setMError('');
   }
   function openEdit(op) {
     setModal({ mode: 'edit', op });
@@ -131,7 +103,6 @@ export default function OperatorsPage() {
     setMDept(op.department || 'assembly');
     setMType(op.employment_type || 'in_house');
     setMStatus(op.status || 'active');
-    setMSup(!!op.is_supervisor);
     setMPhone(op.phone || '');
     setMError('');
   }
@@ -147,7 +118,6 @@ export default function OperatorsPage() {
             department:      mDept,
             employment_type: mType,
             phone:           mPhone.trim() || null,
-            is_supervisor:   mSup,
           },
         }, session);
         showToast('Operator added', 'success');
@@ -160,7 +130,6 @@ export default function OperatorsPage() {
             employment_type: mType,
             status:          mStatus,
             phone:           mPhone.trim() || null,
-            is_supervisor:   mSup,
           },
         }, session);
         showToast('Operator updated', 'success');
@@ -184,30 +153,6 @@ export default function OperatorsPage() {
       await loadData();
     } catch (e) {
       showToast(e?.message || 'Failed to deactivate', 'error');
-    }
-  }
-
-  // ── is_supervisor row toggle ──────────────────────────────
-  async function toggleSupervisor(op, next) {
-    if (pendingToggle[op.id]) return;
-    setPendingToggle(prev => ({ ...prev, [op.id]: true }));
-    // Optimistic flip
-    setOperators(prev => prev.map(r => r.id === op.id ? { ...r, is_supervisor: next } : r));
-    try {
-      await workerFetch('updateOperator', {
-        data: { operator_id: op.id, is_supervisor: next },
-      }, session);
-      showToast(next ? `${op.name} promoted to supervisor` : `${op.name} demoted`, 'success');
-    } catch (e) {
-      // Revert
-      setOperators(prev => prev.map(r => r.id === op.id ? { ...r, is_supervisor: !next } : r));
-      showToast(e?.message || 'Toggle failed', 'error');
-    } finally {
-      setPendingToggle(prev => {
-        const copy = { ...prev };
-        delete copy[op.id];
-        return copy;
-      });
     }
   }
 
@@ -315,14 +260,6 @@ export default function OperatorsPage() {
               </div>
             </div>
 
-            <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, cursor: 'pointer' }}>
-              <SupervisorToggle on={mSup} onChange={setMSup} />
-              <span style={{ fontSize: 12, color: 'var(--t1)' }}>Supervisor</span>
-              <span style={{ fontSize: 10, color: 'var(--t3)', marginLeft: 6 }}>
-                (can set up scanner devices via QR or PIN)
-              </span>
-            </label>
-
             {mError && <div style={{ color: 'var(--red)', fontSize: 11, marginBottom: 10, fontFamily: 'var(--mono)' }}>{mError}</div>}
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
@@ -375,7 +312,7 @@ export default function OperatorsPage() {
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
-                  {['Name','Employee ID','Department','Type','Status','Supervisor','Actions'].map(h => (
+                  {['Name','Employee ID','Department','Type','Status','Actions'].map(h => (
                     <th key={h} style={thStyle}>{h}</th>
                   ))}
                 </tr>
@@ -393,13 +330,6 @@ export default function OperatorsPage() {
                         {(op.status || '').toLowerCase() === 'active'
                           ? <span style={{ color: 'var(--green)', fontSize: 11, fontWeight: 700 }}>Active</span>
                           : <span style={{ color: 'var(--t3)', fontSize: 11 }}>{op.status || 'Inactive'}</span>}
-                      </td>
-                      <td style={tdStyle}>
-                        <SupervisorToggle
-                          on={!!op.is_supervisor}
-                          disabled={!canEdit || !!pendingToggle[op.id]}
-                          onChange={(next) => toggleSupervisor(op, next)}
-                        />
                       </td>
                       <td style={tdStyle}>
                         <button onClick={() => printOperatorQr(op)} style={{ ...btnStyle, color: 'var(--blue)', borderColor: 'var(--blue)', marginRight: 4 }}>
