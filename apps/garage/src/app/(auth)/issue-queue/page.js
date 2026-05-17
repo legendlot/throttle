@@ -3,7 +3,7 @@ import { Fragment, useEffect, useMemo, useRef, useState, useCallback } from 'rea
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, useToast, printWindow } from '@throttle/ui';
+import { Spinner, useToast, printWindow, Modal } from '@throttle/ui';
 import { RejectRunModal } from '../../../components/production-runs/RejectRunModal.js';
 import { RejectWorkOrderModal } from '../../../components/work-orders/RejectWorkOrderModal.js';
 
@@ -95,6 +95,12 @@ export default function IssueQueuePage() {
   // { ref, issueNo, product } — set on successful issue, cleared on close
   // FEAT-016 Phase 2 — run-type filter chip on the queue
   const [runTypeFilter, setRunTypeFilter] = useState('all'); // 'all' | 'in-house' | 'outsourced'
+  // FEAT-020 — pick status for the currently-open run (null unless run is Picking)
+  const [pickStatus, setPickStatus]           = useState(null);
+  const [pickStatusLoading, setPickStatusLoading] = useState(false);
+  const [voidModal, setVoidModal]             = useState(null); // line being voided, or null
+  const [voidReason, setVoidReason]           = useState('');
+  const [voidSubmitting, setVoidSubmitting]   = useState(false);
 
   // Refs to read uncontrolled inputs at submit time
   const detailFormRef = useRef(null);
@@ -117,13 +123,17 @@ export default function IssueQueuePage() {
     setLoading(true);
     try {
       await ensureMaterialCache();
-      const [runs, wos] = await Promise.all([
+      // FEAT-020: getProductionRuns uses status=eq.X (no IN-list support), so call twice and merge.
+      const [submittedRuns, pickingRuns, wos] = await Promise.all([
         garageFetch('getProductionRuns', { status: 'Submitted' }, session),
+        garageFetch('getProductionRuns', { status: 'Picking' }, session),
         garageFetch('getWorkOrders', {}, session),
       ]);
+      const runs = [ ...(submittedRuns || []), ...(pickingRuns || []) ];
       const rows = [];
       (runs || []).forEach((run) => {
         const isOutsourced = run.run_type === 'outsourced';
+        const isPicking    = run.status === 'Picking';
         const variantStr = (run.variants || []).map((v) => {
           const e    = v.qty_ecomm || 0;
           const r    = v.qty_retail || 0;
@@ -133,13 +143,18 @@ export default function IssueQueuePage() {
         }).join(', ');
         const vendorName   = isOutsourced && run.vendor ? run.vendor.vendor_name : null;
         const vendorSuffix = vendorName ? `Vendor: ${vendorName}` : null;
+        // FEAT-020 — Picking runs show a distinct badge/tone; outsourced still wins on label
+        const badge = isPicking
+          ? (isOutsourced ? `${vendorName || 'OUTSOURCED'} · PICKING` : 'PICKING')
+          : (isOutsourced ? (vendorName || 'OUTSOURCED') : 'PROD RUN');
+        const badgeTone = isPicking ? 'amber' : (isOutsourced ? 'amber' : 'blue');
         rows.push({
           type:     'run',
           ref:      run.run_no,
-          // FEAT-016 Phase 2 — outsourced runs show vendor name as the badge label
-          badge:    isOutsourced ? (vendorName || 'OUTSOURCED') : 'PROD RUN',
-          badgeTone: isOutsourced ? 'amber' : 'blue',
+          badge,
+          badgeTone,
           run_type: run.run_type || 'in-house',
+          run_status: run.status,
           product:  run.product,
           details: [variantStr, vendorSuffix].filter(Boolean).join(' — '),
           units:    run.total_units || 0,
@@ -233,6 +248,9 @@ export default function IssueQueuePage() {
   async function openItem(row) {
     setSelectedItem({ ...row, loading: true });
     setConfirmChecked(false);
+    setPickStatus(null);
+    setVoidModal(null);
+    setVoidReason('');
     setDetailLoading(true);
     try {
       if (row.type === 'run') {
@@ -244,6 +262,18 @@ export default function IssueQueuePage() {
           lines: data.pick_list || [],
           fbu_lines: data.fbu_lines || [],
         });
+        // FEAT-020 — fetch pick status if the run is in Picking state
+        if (data.run?.status === 'Picking') {
+          setPickStatusLoading(true);
+          try {
+            const pickData = await garageFetch('getRunPickStatus', { run_no: row.ref }, session);
+            setPickStatus(pickData);
+          } catch {
+            // Soft fail — pick panel just won't render
+          } finally {
+            setPickStatusLoading(false);
+          }
+        }
       } else if (row.type === 'short-issue') {
         const [woParts, materials] = await Promise.all([
           garageFetch('getWOParts', { wo_no: row.ref }, session),
@@ -298,6 +328,9 @@ export default function IssueQueuePage() {
   function closeItem() {
     setSelectedItem(null);
     setConfirmChecked(false);
+    setPickStatus(null);
+    setVoidModal(null);
+    setVoidReason('');
   }
 
   function setAllAsPlanned() {
@@ -345,6 +378,13 @@ export default function IssueQueuePage() {
     }
     setSubmitting(true);
     try {
+      // FEAT-020 — warn (but don't block) when issuing a Picking run before all bags are scanned
+      if (selectedItem.type === 'run' && pickStatus && !pickStatus.pick_complete) {
+        showToast(
+          `Pick incomplete (${pickStatus.lines_complete}/${pickStatus.lines_total} parts). Issuing with current quantities.`,
+          'info'
+        );
+      }
       let res;
       if (selectedItem.type === 'run') {
         res = await workerFetch('issueAgainstRun', {
@@ -413,6 +453,43 @@ export default function IssueQueuePage() {
     setRejectWOModalOpen(false);
     closeItem();
     loadQueue();
+  }
+
+  async function handleVoidLine() {
+    if (!voidModal) return;
+    if (!pickStatus?.run_id) {
+      showToast('Pick status missing run_id — refresh and retry', 'error');
+      return;
+    }
+    setVoidSubmitting(true);
+    try {
+      await workerFetch('voidRunPickLine', {
+        data: {
+          run_id:      pickStatus.run_id,
+          part_code:   voidModal.part_code,
+          void_reason: voidReason || null,
+        },
+      }, session);
+      showToast(`${voidModal.part_code} marked as not needed`, 'success');
+      const closing = voidModal;
+      setVoidModal(null);
+      setVoidReason('');
+      // Refresh pick status from the worker
+      try {
+        const updated = await garageFetch('getRunPickStatus', { run_no: selectedItem.ref }, session);
+        setPickStatus(updated);
+        if (updated?.pick_complete) {
+          showToast('All parts accounted for — run is ready to issue', 'success');
+        }
+      } catch {
+        // Soft fail
+      }
+      void closing;
+    } catch (e) {
+      showToast(e.message || 'Failed to void line', 'error');
+    } finally {
+      setVoidSubmitting(false);
+    }
   }
 
   async function buildPickListHtml(item) {
@@ -744,12 +821,25 @@ export default function IssueQueuePage() {
             </div>
           </div>
           <div style={panelBodyStyle} ref={detailFormRef}>
+            {/* FEAT-020 — Pick Status panel for runs in Picking state */}
+            {selectedItem.type === 'run' && (pickStatus || pickStatusLoading) && (
+              <PickStatusPanel
+                pickStatus={pickStatus}
+                loading={pickStatusLoading}
+                onVoid={(line) => { setVoidModal(line); setVoidReason(''); }}
+              />
+            )}
             {detailLoading ? (
               <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
             ) : (
               <DetailBody
                 item={selectedItem}
                 materialCache={materialCache}
+                pickedMap={pickStatus?.pick_lines ? Object.fromEntries(
+                  pickStatus.pick_lines
+                    .filter((l) => !l.is_void)
+                    .map((l) => [l.part_code, l.scanned_qty || 0])
+                ) : null}
               />
             )}
 
@@ -792,6 +882,41 @@ export default function IssueQueuePage() {
           </div>
         </div>
       )}
+
+      {/* FEAT-020 — void pick line modal */}
+      <Modal
+        open={!!voidModal}
+        onClose={() => { if (!voidSubmitting) { setVoidModal(null); setVoidReason(''); } }}
+        title="Mark part as not needed"
+        confirmLabel="Confirm"
+        confirmColor="red"
+        onConfirm={handleVoidLine}
+        loading={voidSubmitting}
+      >
+        {voidModal && (
+          <div style={{ fontSize: 12, lineHeight: 1.5 }}>
+            <p style={{ margin: '0 0 10px' }}>
+              Mark <strong style={{ fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{voidModal.part_code}</strong>
+              {' '}as not needed for{' '}
+              <strong style={{ fontFamily: 'var(--mono)' }}>{selectedItem?.ref}</strong>?
+            </p>
+            <p style={{ margin: '0 0 12px', color: 'var(--t3)', fontSize: 11 }}>
+              This signals a possible BOM correction. The line is excluded from the pick-complete check.
+            </p>
+            <textarea
+              placeholder="Reason (optional)"
+              value={voidReason}
+              onChange={(e) => setVoidReason(e.target.value)}
+              rows={2}
+              style={{
+                width: '100%', padding: '8px 10px', fontSize: 12,
+                background: 'var(--surface2)', border: '1px solid var(--border)',
+                borderRadius: 3, color: 'var(--t1)', fontFamily: 'inherit', resize: 'vertical',
+              }}
+            />
+          </div>
+        )}
+      </Modal>
 
       {/* RECENT ISSUES */}
       <div style={panelStyle}>
@@ -877,7 +1002,7 @@ export default function IssueQueuePage() {
   );
 }
 
-function DetailBody({ item, materialCache }) {
+function DetailBody({ item, materialCache, pickedMap }) {
   if (!item) return null;
 
   if (item.type === 'run') {
@@ -906,7 +1031,7 @@ function DetailBody({ item, materialCache }) {
           </div>
         </div>
 
-        <RunPickListTable lines={item.lines || []} fbu={fbu} run={item.run} materialCache={materialCache} />
+        <RunPickListTable lines={item.lines || []} fbu={fbu} run={item.run} materialCache={materialCache} pickedMap={pickedMap} />
       </>
     );
   }
@@ -998,7 +1123,7 @@ function SimplePartTable({ lines, showProduct }) {
   );
 }
 
-function RunPickListTable({ lines, fbu, run, materialCache }) {
+function RunPickListTable({ lines, fbu, run, materialCache, pickedMap }) {
   const sorted = useMemo(() => {
     return (lines || []).slice().sort((a, b) => pickSortKey(a, materialCache) - pickSortKey(b, materialCache));
   }, [lines, materialCache]);
@@ -1074,7 +1199,7 @@ function RunPickListTable({ lines, fbu, run, materialCache }) {
             </>
           )}
           {groups.map((g) => (
-            <CategoryGroup key={g.cat} group={g} run={run} />
+            <CategoryGroup key={g.cat} group={g} run={run} pickedMap={pickedMap} />
           ))}
           {sorted.length === 0 && fbu.length === 0 && (
             <tr>
@@ -1087,7 +1212,7 @@ function RunPickListTable({ lines, fbu, run, materialCache }) {
   );
 }
 
-function CategoryGroup({ group, run }) {
+function CategoryGroup({ group, run, pickedMap }) {
   return (
     <>
       <tr style={{ background: 'rgba(242,205,26,.07)' }}>
@@ -1105,6 +1230,11 @@ function CategoryGroup({ group, run }) {
           {t.parts.map((p) => {
             const planned = p.total_qty || 0;
             const short = (p.available || 0) < planned;
+            // FEAT-020 — pre-fill input from scanned_qty when in Picking state
+            const scanned = pickedMap && Object.prototype.hasOwnProperty.call(pickedMap, p.part_code)
+              ? pickedMap[p.part_code]
+              : null;
+            const defaultQty = scanned != null ? scanned : planned;
             return (
               <tr key={p.part_code}>
                 <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{p.part_code}</td>
@@ -1125,11 +1255,17 @@ function CategoryGroup({ group, run }) {
                     type="number"
                     min="0"
                     step="0.01"
-                    defaultValue={planned}
+                    defaultValue={defaultQty}
                     data-part-code={p.part_code}
                     data-part-name={p.part_name || ''}
                     data-planned={planned}
-                    style={{ ...inputStyle, width: 110, fontFamily: 'var(--mono)' }}
+                    style={{
+                      ...inputStyle, width: 110, fontFamily: 'var(--mono)',
+                      ...(scanned != null && scanned !== planned
+                        ? { borderColor: '#fbbf24', color: '#fbbf24' }
+                        : {}),
+                    }}
+                    title={scanned != null ? `Pre-filled from scanned qty (BOM: ${planned})` : undefined}
                   />
                 </td>
               </tr>
@@ -1138,6 +1274,89 @@ function CategoryGroup({ group, run }) {
         </Fragment>
       ))}
     </>
+  );
+}
+
+// FEAT-020 — pick-status panel rendered above the detail body for Picking runs
+function PickStatusPanel({ pickStatus, loading, onVoid }) {
+  if (loading) {
+    return (
+      <div style={{ padding: 16, marginBottom: 12, border: '1px solid var(--border)', borderRadius: 3, background: 'var(--surface2)' }}>
+        <Spinner />
+      </div>
+    );
+  }
+  if (!pickStatus) return null;
+
+  const { pick_lines: lines = [], pick_complete, lines_complete, lines_total } = pickStatus;
+  const headline = pick_complete
+    ? `✓ ALL PARTS PICKED (${lines_complete}/${lines_total})`
+    : `${lines_complete} / ${lines_total} PARTS COMPLETE`;
+  const headlineColor = pick_complete ? '#4ade80' : '#fbbf24';
+
+  return (
+    <div style={{ marginBottom: 12, border: '1px solid var(--border)', borderRadius: 3, background: 'var(--surface2)' }}>
+      <div style={{
+        padding: '8px 12px', borderBottom: '1px solid var(--border)',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        fontFamily: 'var(--cond)', fontSize: 11, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase',
+      }}>
+        <span style={{ color: 'var(--t2)' }}>Pick Status</span>
+        <span style={{ color: headlineColor, fontFamily: 'var(--mono)' }}>{headline}</span>
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr>
+              <th style={tableThStyle}>Part Code</th>
+              <th style={tableThStyle}>Part Name</th>
+              <th style={tableThStyle}>Required</th>
+              <th style={tableThStyle}>Scanned</th>
+              <th style={tableThStyle}>Status</th>
+              <th style={{ ...tableThStyle, textAlign: 'right' }}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {lines.map((l) => {
+              const tone =
+                l.is_void                              ? 'gray'
+                : l.pick_status === 'complete'         ? 'green'
+                : l.pick_status === 'partial'          ? 'amber'
+                :                                        'red';
+              const label =
+                l.is_void                              ? 'Not needed'
+                : l.pick_status === 'complete'         ? 'Complete'
+                : l.pick_status === 'partial'          ? 'Partial'
+                :                                        'Pending';
+              return (
+                <tr key={l.part_code} style={{ opacity: l.is_void ? 0.55 : 1 }}>
+                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{l.part_code}</td>
+                  <td style={tableTdStyle}>{l.part_name || '—'}</td>
+                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{l.required_qty}</td>
+                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{l.scanned_qty || 0}</td>
+                  <td style={tableTdStyle}><StatusBadge label={label} tone={tone} /></td>
+                  <td style={{ ...tableTdStyle, textAlign: 'right' }}>
+                    {!l.is_void && l.pick_status !== 'complete' && (
+                      <button
+                        onClick={() => onVoid(l)}
+                        style={{ ...btnSecondary, padding: '4px 10px', fontSize: 10 }}
+                      >
+                        Mark not needed
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+            {lines.length === 0 && (
+              <tr>
+                <td colSpan={6} style={{ ...tableTdStyle, textAlign: 'center', color: 'var(--t3)' }}>No pick lines</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 
