@@ -1,146 +1,228 @@
 'use client';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from '@throttle/auth';
-import { garageFetch } from '@throttle/db';
+import { workerFetch } from '@throttle/db';
 import { Spinner, EmptyState, useToast, printWindow } from '@throttle/ui';
-import { todayStr } from '@throttle/domain';
 
 // ── Constants ────────────────────────────────────────────────
-const ROLE_LABELS = {
-  assembly:           'Assembly',
-  qc_inline:          'QC Inline',
-  qc_audit:           'QC Audit',
-  repair:             'Repair',
-  packing:            'Packing',
-  rtd:                'RTD',
-  store:              'Store',
-  supervisor:         'Supervisor',
-  line_manager:       'Line Manager',
-  production_manager: 'Production Manager',
-  admin:              'Admin',
-};
+// Department values must match the CHECK constraint on public.operators.
+const DEPARTMENTS = [
+  { value: 'assembly',  label: 'Assembly'  },
+  { value: 'qc',        label: 'QC'        },
+  { value: 'packaging', label: 'Packaging' },
+  { value: 'admin',     label: 'Admin'     },
+  { value: 'store',     label: 'Store'     },
+];
+const DEPT_LABEL = Object.fromEntries(DEPARTMENTS.map(d => [d.value, d.label]));
 
-function formatDate(ts) {
-  if (!ts) return '—';
-  const d = new Date(ts);
-  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit', timeZone: 'Asia/Kolkata' }).replace(/ /g, '-');
+const EMPLOYMENT_TYPES = [
+  { value: 'in_house', label: 'In House' },
+  { value: 'contract', label: 'Contract' },
+];
+
+const STATUSES = [
+  { value: 'active',   label: 'Active'   },
+  { value: 'inactive', label: 'Inactive' },
+];
+
+// ── Styles ───────────────────────────────────────────────────
+const btnStyle      = { padding: '4px 10px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontSize: 11, cursor: 'pointer', fontFamily: 'var(--mono)', letterSpacing: '0.04em' };
+const inputStyle    = { background: 'var(--surface)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '6px 10px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 12 };
+const selectStyle   = { background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--t1)', fontSize: 11, fontFamily: 'var(--mono)', padding: '5px 8px', borderRadius: 3 };
+const labelStyle    = { fontSize: 10, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase', display: 'block', marginBottom: 6 };
+const sectionLabel  = { fontFamily: 'var(--cond)', fontSize: 10, fontWeight: 700, letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--t3)' };
+const thStyle       = { padding: '8px 12px', fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
+const tdStyle       = { padding: '8px 12px', fontSize: 12, borderBottom: '1px solid rgba(42,42,42,.6)', whiteSpace: 'nowrap' };
+
+// ── Small toggle component ───────────────────────────────────
+function SupervisorToggle({ on, disabled, onChange }) {
+  return (
+    <button
+      type="button"
+      onClick={() => !disabled && onChange(!on)}
+      disabled={disabled}
+      title={on ? 'Supervisor' : 'Not a supervisor'}
+      style={{
+        position: 'relative', width: 38, height: 20, border: 'none', padding: 0,
+        borderRadius: 11, cursor: disabled ? 'wait' : 'pointer',
+        background: on ? 'var(--yellow)' : 'var(--surface2)',
+        border: `1px solid ${on ? 'var(--yellow)' : 'var(--border)'}`,
+        opacity: disabled ? 0.55 : 1,
+        transition: 'background 120ms',
+      }}
+    >
+      <span style={{
+        position: 'absolute', top: 1, left: on ? 19 : 1, width: 16, height: 16,
+        borderRadius: '50%', background: on ? '#000' : 'var(--t2)',
+        transition: 'left 120ms',
+      }} />
+    </button>
+  );
 }
-
-// ── Common styles ────────────────────────────────────────────
-const btnStyle = { padding: '4px 10px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontSize: 11, cursor: 'pointer', fontFamily: 'var(--mono)', letterSpacing: '0.04em' };
-const inputStyle = { background: 'var(--surface)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '6px 10px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 12 };
-const selectStyle = { background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--t1)', fontSize: 11, fontFamily: 'var(--mono)', padding: '5px 8px', borderRadius: 3 };
-const labelStyle = { fontSize: 10, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase', display: 'block', marginBottom: 6 };
-const sectionLabel = { fontFamily: 'var(--cond)', fontSize: 10, fontWeight: 700, letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--t3)' };
-const thStyle = { padding: '8px 12px', fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
-const tdStyle = { padding: '8px 12px', fontSize: 12, borderBottom: '1px solid rgba(42,42,42,.6)', whiteSpace: 'nowrap' };
 
 // ── Operators Page ───────────────────────────────────────────
 export default function OperatorsPage() {
-  const { session, role } = useAuth();
+  const { session, perms } = useAuth();
   const { showToast } = useToast();
 
-  const canEdit = ['admin', 'production_manager'].includes(role);
+  // Permission: anyone with the floor-management role (or admin) can manage
+  // operators. The worker itself gates by canManageFloor — this guards the UI.
+  const canEdit = !!(perms?.users_manage || perms?.production_view || perms?.procurement_approve);
 
-  const [operators,   setOperators]   = useState([]);
-  const [sessions,    setSessions]    = useState({});
-  const [loading,     setLoading]     = useState(false);
+  const [operators, setOperators]     = useState([]);
+  const [loading,   setLoading]       = useState(false);
 
-  const [roleFilter,  setRoleFilter]  = useState('');
-  const [lineFilter,  setLineFilter]  = useState('');
-  const [activeOnly,  setActiveOnly]  = useState(true);
+  const [search,       setSearch]     = useState('');
+  const [deptFilter,   setDeptFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('active');
+  const [pendingToggle, setPendingToggle] = useState({}); // { [operator_id]: true } while toggle is in flight
 
   // Modal state
-  const [modal,       setModal]       = useState(null);
-  const [mName,       setMName]       = useState('');
-  const [mRole,       setMRole]       = useState('assembly');
-  const [mLine,       setMLine]       = useState('');
-  const [mError,      setMError]      = useState('');
-  const [mSaving,     setMSaving]     = useState(false);
+  const [modal,   setModal]   = useState(null); // { mode: 'add' | 'edit', op? }
+  const [mName,   setMName]   = useState('');
+  const [mDept,   setMDept]   = useState('assembly');
+  const [mType,   setMType]   = useState('in_house');
+  const [mStatus, setMStatus] = useState('active');
+  const [mSup,    setMSup]    = useState(false);
+  const [mPhone,  setMPhone]  = useState('');
+  const [mError,  setMError]  = useState('');
+  const [mSaving, setMSaving] = useState(false);
 
+  // ── Load operators ────────────────────────────────────────
   const loadData = useCallback(async () => {
     if (!session) return;
     setLoading(true);
     try {
-      const today = todayStr();
-      const [opsRes, sesRes] = await Promise.allSettled([
-        garageFetch('getOperators',         { active: 'false' }, session),
-        garageFetch('getOperatorSessions',  { date_from: today, date_to: today }, session),
-      ]);
-      const ops = opsRes.status === 'fulfilled' && Array.isArray(opsRes.value) ? opsRes.value : [];
-      setOperators(ops);
-      const ses = sesRes.status === 'fulfilled' && Array.isArray(sesRes.value) ? sesRes.value : [];
-      const counts = {};
-      for (const s of ses) {
-        if (!s.operator_id) continue;
-        counts[s.operator_id] = (counts[s.operator_id] || 0) + 1;
-      }
-      setSessions(counts);
-    } catch (_) {
-      setOperators([]); setSessions({});
+      const res = await workerFetch('getOperators', { data: {} }, session);
+      const rows = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : []);
+      setOperators(rows);
+    } catch (e) {
+      showToast(e?.message || 'Failed to load operators', 'error');
+      setOperators([]);
     } finally {
       setLoading(false);
     }
-  }, [session]);
+  }, [session, showToast]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
   // ── Filtered rows ─────────────────────────────────────────
-  const displayRows = operators
-    .filter(o => activeOnly ? o.is_active : true)
-    .filter(o => roleFilter ? o.role === roleFilter : true)
-    .filter(o => lineFilter ? o.line === lineFilter : true);
+  const displayRows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return operators
+      .filter(o => statusFilter ? (o.status || '').toLowerCase() === statusFilter : true)
+      .filter(o => deptFilter   ? o.department === deptFilter : true)
+      .filter(o => !q ? true : (
+        (o.name || '').toLowerCase().includes(q) ||
+        (o.employee_id || '').toLowerCase().includes(q) ||
+        (o.legacy_employee_id || '').toLowerCase().includes(q)
+      ));
+  }, [operators, search, deptFilter, statusFilter]);
 
-  // ── Modal handlers ────────────────────────────────────────
+  // ── Add / Edit modal ──────────────────────────────────────
   function openAdd() {
     setModal({ mode: 'add', op: null });
-    setMName(''); setMRole('assembly'); setMLine(''); setMError('');
+    setMName(''); setMDept('assembly'); setMType('in_house');
+    setMStatus('active'); setMSup(false); setMPhone(''); setMError('');
   }
-
   function openEdit(op) {
     setModal({ mode: 'edit', op });
     setMName(op.name || '');
-    setMRole(op.role || 'assembly');
-    setMLine(op.line || '');
+    setMDept(op.department || 'assembly');
+    setMType(op.employment_type || 'in_house');
+    setMStatus(op.status || 'active');
+    setMSup(!!op.is_supervisor);
+    setMPhone(op.phone || '');
     setMError('');
   }
 
   async function submitModal() {
     if (!mName.trim()) { setMError('Name is required'); return; }
     setMSaving(true); setMError('');
-    const payload = { name: mName.trim(), role: mRole };
-    if (modal.mode === 'edit') payload.id = modal.op.id;
-    if (mLine) payload.line = mLine;
     try {
-      // saveOperator is a GET action — use garageFetch
-      await garageFetch('saveOperator', payload, session);
+      if (modal.mode === 'add') {
+        await workerFetch('createOperator', {
+          data: {
+            name:            mName.trim(),
+            department:      mDept,
+            employment_type: mType,
+            phone:           mPhone.trim() || null,
+            is_supervisor:   mSup,
+          },
+        }, session);
+        showToast('Operator added', 'success');
+      } else {
+        await workerFetch('updateOperator', {
+          data: {
+            operator_id:     modal.op.id,
+            name:            mName.trim(),
+            department:      mDept,
+            employment_type: mType,
+            status:          mStatus,
+            phone:           mPhone.trim() || null,
+            is_supervisor:   mSup,
+          },
+        }, session);
+        showToast('Operator updated', 'success');
+      }
       setModal(null);
-      showToast(modal.mode === 'add' ? 'Operator added' : 'Operator updated', 'success');
       await loadData();
     } catch (e) {
-      setMError(e.message || 'Save failed');
+      setMError(e?.message || 'Save failed');
     } finally {
       setMSaving(false);
     }
   }
 
-  async function toggleActive(op) {
+  async function deactivate(op) {
+    if (!confirm(`Deactivate ${op.name}?`)) return;
     try {
-      await garageFetch('saveOperator', { id: op.id, is_active: String(!op.is_active) }, session);
-      showToast(op.is_active ? 'Operator deactivated' : 'Operator reactivated', 'success');
+      await workerFetch('updateOperator', {
+        data: { operator_id: op.id, status: 'inactive' },
+      }, session);
+      showToast('Operator deactivated', 'success');
       await loadData();
     } catch (e) {
-      showToast(e.message || 'Failed', 'error');
+      showToast(e?.message || 'Failed to deactivate', 'error');
     }
   }
 
-  // ── Print operator QR ─────────────────────────────────────
+  // ── is_supervisor row toggle ──────────────────────────────
+  async function toggleSupervisor(op, next) {
+    if (pendingToggle[op.id]) return;
+    setPendingToggle(prev => ({ ...prev, [op.id]: true }));
+    // Optimistic flip
+    setOperators(prev => prev.map(r => r.id === op.id ? { ...r, is_supervisor: next } : r));
+    try {
+      await workerFetch('updateOperator', {
+        data: { operator_id: op.id, is_supervisor: next },
+      }, session);
+      showToast(next ? `${op.name} promoted to supervisor` : `${op.name} demoted`, 'success');
+    } catch (e) {
+      // Revert
+      setOperators(prev => prev.map(r => r.id === op.id ? { ...r, is_supervisor: !next } : r));
+      showToast(e?.message || 'Toggle failed', 'error');
+    } finally {
+      setPendingToggle(prev => {
+        const copy = { ...prev };
+        delete copy[op.id];
+        return copy;
+      });
+    }
+  }
+
+  // ── Print attendance QR ──────────────────────────────────
+  // The QR encodes the operator's employee_id. This is the same value
+  // matched by clockIn/getOperatorByCode for the ATTENDANCE scanner station.
+  // It is NOT the legacy operators_v0.qr_code used by scannerLogin — scanner
+  // station login still requires a QR card from the legacy table until that
+  // login flow migrates to public.operators.
   function printOperatorQr(op) {
-    if (!op.qr_code) { showToast('No QR code for this operator', 'error'); return; }
-    const roleLabel = (ROLE_LABELS[op.role] || op.role || '').toUpperCase();
-    const lineLabel = op.line ? ' · ' + op.line : '';
+    if (!op.employee_id) { showToast('No employee_id for this operator', 'error'); return; }
+    const deptLabel = (DEPT_LABEL[op.department] || op.department || '').toUpperCase();
+    const supBadge  = op.is_supervisor ? ' · SUPERVISOR' : '';
     const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
-<title>QR Card — ${op.name}</title>
+<title>Attendance QR — ${escapeHtml(op.name)}</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"><\/script>
 <style>
   body{margin:0;padding:20px;font-family:'JetBrains Mono',monospace;background:#fff;display:flex;justify-content:center}
@@ -149,20 +231,22 @@ export default function OperatorsPage() {
   .name{font-size:15px;font-weight:700;text-align:center;line-height:1.2}
   .role{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#555}
   .qr{margin:8px 0}
-  .code{font-size:8px;color:#aaa;letter-spacing:.06em}
+  .code{font-size:10px;color:#333;letter-spacing:.06em;font-weight:700}
+  .sub{font-size:8px;color:#888;letter-spacing:.06em}
   @media print{body{padding:0}@page{margin:10mm}}
 <\/style></head><body>
 <div class="card">
   <div class="logo">Legend of Toys</div>
-  <div class="name">${op.name}</div>
-  <div class="role">${roleLabel}${lineLabel}</div>
+  <div class="name">${escapeHtml(op.name)}</div>
+  <div class="role">${escapeHtml(deptLabel)}${escapeHtml(supBadge)}</div>
   <div class="qr" id="qr"></div>
-  <div class="code">${op.qr_code}</div>
+  <div class="code">${escapeHtml(op.employee_id)}</div>
+  <div class="sub">ATTENDANCE</div>
 </div>
 <script>
   function render() {
     new QRCode(document.getElementById('qr'), {
-      text: ${JSON.stringify(op.qr_code)}, width:120, height:120,
+      text: ${JSON.stringify(op.employee_id)}, width:120, height:120,
       colorDark:'#000000', colorLight:'#ffffff', correctLevel: QRCode.CorrectLevel.H
     });
   }
@@ -177,40 +261,70 @@ export default function OperatorsPage() {
     printWindow(html);
   }
 
+  // ── Render ───────────────────────────────────────────────
   return (
     <>
       {/* Add/Edit Modal */}
       {modal && (
         <div
           style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-          onClick={(e) => { if (e.target === e.currentTarget) setModal(null); }}
+          onClick={(e) => { if (e.target === e.currentTarget && !mSaving) setModal(null); }}
         >
-          <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: 24, width: 460, maxWidth: '90vw' }}>
+          <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: 24, width: 480, maxWidth: '92vw' }}>
             <div style={{ ...sectionLabel, color: 'var(--yellow)', marginBottom: 16 }}>
               {modal.mode === 'add' ? 'Add Operator' : `Edit ${modal.op?.name}`}
             </div>
+            {modal.mode === 'edit' && modal.op?.employee_id && (
+              <div style={{ marginBottom: 12, fontSize: 11, color: 'var(--t3)' }}>
+                Employee ID: <span style={{ color: 'var(--t1)', fontFamily: 'var(--mono)' }}>{modal.op.employee_id}</span>
+              </div>
+            )}
+
             <div style={{ marginBottom: 12 }}>
               <label style={labelStyle}>Name <span style={{ color: 'var(--red)' }}>*</span></label>
               <input style={{ ...inputStyle, width: '100%' }} value={mName} onChange={e => setMName(e.target.value)} placeholder="Full name" />
             </div>
+
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
               <div>
-                <label style={labelStyle}>Role</label>
-                <select style={{ ...selectStyle, width: '100%' }} value={mRole} onChange={e => setMRole(e.target.value)}>
-                  {Object.entries(ROLE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                <label style={labelStyle}>Department</label>
+                <select style={{ ...selectStyle, width: '100%' }} value={mDept} onChange={e => setMDept(e.target.value)}>
+                  {DEPARTMENTS.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
                 </select>
               </div>
               <div>
-                <label style={labelStyle}>Line (optional)</label>
-                <select style={{ ...selectStyle, width: '100%' }} value={mLine} onChange={e => setMLine(e.target.value)}>
-                  <option value="">— None —</option>
-                  <option value="L1">L1</option>
-                  <option value="L2">L2</option>
-                  <option value="L3">L3</option>
+                <label style={labelStyle}>Employment</label>
+                <select style={{ ...selectStyle, width: '100%' }} value={mType} onChange={e => setMType(e.target.value)}>
+                  {EMPLOYMENT_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                 </select>
               </div>
             </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+              {modal.mode === 'edit' && (
+                <div>
+                  <label style={labelStyle}>Status</label>
+                  <select style={{ ...selectStyle, width: '100%' }} value={mStatus} onChange={e => setMStatus(e.target.value)}>
+                    {STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                  </select>
+                </div>
+              )}
+              <div>
+                <label style={labelStyle}>Phone (optional)</label>
+                <input style={{ ...inputStyle, width: '100%' }} value={mPhone} onChange={e => setMPhone(e.target.value)} placeholder="" />
+              </div>
+            </div>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, cursor: 'pointer' }}>
+              <SupervisorToggle on={mSup} onChange={setMSup} />
+              <span style={{ fontSize: 12, color: 'var(--t1)' }}>Supervisor</span>
+              <span style={{ fontSize: 10, color: 'var(--t3)', marginLeft: 6 }}>
+                (can set up scanner devices via QR or PIN)
+              </span>
+            </label>
+
             {mError && <div style={{ color: 'var(--red)', fontSize: 11, marginBottom: 10, fontFamily: 'var(--mono)' }}>{mError}</div>}
+
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <button onClick={() => setModal(null)} style={btnStyle} disabled={mSaving}>Cancel</button>
               <button
@@ -225,95 +339,106 @@ export default function OperatorsPage() {
         </div>
       )}
 
-      {/* Page content */}
-      <div>
-        {/* Filter bar */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
-          <select style={selectStyle} value={roleFilter} onChange={e => setRoleFilter(e.target.value)}>
-            <option value="">All Roles</option>
-            {Object.entries(ROLE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-          </select>
-          <select style={selectStyle} value={lineFilter} onChange={e => setLineFilter(e.target.value)}>
-            <option value="">All Lines</option>
-            <option value="L1">L1</option>
-            <option value="L2">L2</option>
-            <option value="L3">L3</option>
-          </select>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--t2)', fontFamily: 'var(--mono)', cursor: 'pointer' }}>
-            <input type="checkbox" checked={activeOnly} onChange={e => setActiveOnly(e.target.checked)} />
-            Active only
-          </label>
-          <div style={{ flex: 1 }} />
-          <button style={btnStyle} onClick={loadData} disabled={loading}>↻ Refresh</button>
-          {canEdit && (
-            <button onClick={openAdd} style={{ ...btnStyle, background: 'var(--yellow)', color: '#000', border: '1px solid var(--yellow)' }}>
-              + Add Operator
-            </button>
-          )}
-        </div>
+      {/* Filter bar */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+        <input
+          style={{ ...inputStyle, width: 220 }}
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Search name / employee ID"
+        />
+        <select style={selectStyle} value={deptFilter} onChange={e => setDeptFilter(e.target.value)}>
+          <option value="">All Departments</option>
+          {DEPARTMENTS.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
+        </select>
+        <select style={selectStyle} value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+          <option value="">All Statuses</option>
+          {STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+        </select>
+        <div style={{ flex: 1 }} />
+        <button style={btnStyle} onClick={loadData} disabled={loading}>↻ Refresh</button>
+        {canEdit && (
+          <button onClick={openAdd} style={{ ...btnStyle, background: 'var(--yellow)', color: '#000', border: '1px solid var(--yellow)' }}>
+            + Add Operator
+          </button>
+        )}
+      </div>
 
-        {/* Table */}
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
-          {loading && operators.length === 0 ? (
-            <div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}><Spinner /></div>
-          ) : displayRows.length === 0 ? (
-            <EmptyState icon="👥" message="No operators match these filters" />
-          ) : (
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr>
-                    {['Name','Role','Line','Status','QR Generated','Sessions Today','Actions'].map(h => (
-                      <th key={h} style={thStyle}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {displayRows.map(op => {
-                    const inactive = !op.is_active;
-                    return (
-                      <tr key={op.id} style={{ opacity: inactive ? 0.45 : 1 }}>
-                        <td style={{ ...tdStyle, color: 'var(--t1)', fontWeight: 600 }}>{op.name}</td>
-                        <td style={{ ...tdStyle, color: 'var(--t2)' }}>{ROLE_LABELS[op.role] || op.role || '—'}</td>
-                        <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--t1)' }}>{op.line || '—'}</td>
-                        <td style={tdStyle}>
-                          {op.is_active
-                            ? <span style={{ color: 'var(--green)', fontSize: 11, fontWeight: 700 }}>Active</span>
-                            : <span style={{ color: 'var(--t3)', fontSize: 11 }}>Inactive</span>}
-                        </td>
-                        <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>
-                          {op.qr_generated_at ? formatDate(op.qr_generated_at) : '—'}
-                        </td>
-                        <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--t1)', textAlign: 'center' }}>
-                          {sessions[op.id] || 0}
-                        </td>
-                        <td style={tdStyle}>
-                          <button onClick={() => printOperatorQr(op)} style={{ ...btnStyle, color: 'var(--blue)', borderColor: 'var(--blue)', marginRight: 4 }}>
-                            🖨 QR
-                          </button>
-                          {canEdit && (
-                            <>
-                              <button onClick={() => openEdit(op)} style={{ ...btnStyle, color: 'var(--yellow)', borderColor: 'var(--yellow)', marginRight: 4 }}>
-                                Edit
-                              </button>
+      {/* Table */}
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+        {loading && operators.length === 0 ? (
+          <div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+        ) : displayRows.length === 0 ? (
+          <EmptyState icon="👥" message="No operators match these filters" />
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  {['Name','Employee ID','Department','Type','Status','Supervisor','Actions'].map(h => (
+                    <th key={h} style={thStyle}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {displayRows.map(op => {
+                  const inactive = (op.status || '').toLowerCase() !== 'active';
+                  return (
+                    <tr key={op.id} style={{ opacity: inactive ? 0.55 : 1 }}>
+                      <td style={{ ...tdStyle, color: 'var(--t1)', fontWeight: 600 }}>{op.name}</td>
+                      <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--t2)' }}>{op.employee_id || '—'}</td>
+                      <td style={{ ...tdStyle, color: 'var(--t2)' }}>{DEPT_LABEL[op.department] || op.department || '—'}</td>
+                      <td style={{ ...tdStyle, color: 'var(--t2)' }}>{op.employment_type === 'contract' ? 'Contract' : 'In House'}</td>
+                      <td style={tdStyle}>
+                        {(op.status || '').toLowerCase() === 'active'
+                          ? <span style={{ color: 'var(--green)', fontSize: 11, fontWeight: 700 }}>Active</span>
+                          : <span style={{ color: 'var(--t3)', fontSize: 11 }}>{op.status || 'Inactive'}</span>}
+                      </td>
+                      <td style={tdStyle}>
+                        <SupervisorToggle
+                          on={!!op.is_supervisor}
+                          disabled={!canEdit || !!pendingToggle[op.id]}
+                          onChange={(next) => toggleSupervisor(op, next)}
+                        />
+                      </td>
+                      <td style={tdStyle}>
+                        <button onClick={() => printOperatorQr(op)} style={{ ...btnStyle, color: 'var(--blue)', borderColor: 'var(--blue)', marginRight: 4 }}>
+                          🖨 QR
+                        </button>
+                        {canEdit && (
+                          <>
+                            <button onClick={() => openEdit(op)} style={{ ...btnStyle, color: 'var(--yellow)', borderColor: 'var(--yellow)', marginRight: 4 }}>
+                              Edit
+                            </button>
+                            {!inactive && (
                               <button
-                                onClick={() => toggleActive(op)}
-                                style={{ ...btnStyle, color: op.is_active ? 'var(--red)' : 'var(--green)', borderColor: op.is_active ? 'var(--red)' : 'var(--green)' }}
+                                onClick={() => deactivate(op)}
+                                style={{ ...btnStyle, color: 'var(--red)', borderColor: 'var(--red)' }}
                               >
-                                {op.is_active ? 'Deactivate' : 'Reactivate'}
+                                Deactivate
                               </button>
-                            </>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+                            )}
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div style={{ marginTop: 10, fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
+        Showing {displayRows.length} of {operators.length} operators
       </div>
     </>
   );
+}
+
+function escapeHtml(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
