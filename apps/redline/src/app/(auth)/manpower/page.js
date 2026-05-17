@@ -1,7 +1,7 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@throttle/auth';
-import { workerFetch } from '@throttle/db';
+import { garageFetch, workerFetch } from '@throttle/db';
 import { Badge, ConfirmModal, DataTable, EmptyState, Modal, Spinner, useToast } from '@throttle/ui';
 import { useAutoRefresh } from '../../../hooks/useAutoRefresh.js';
 import { useRefreshState } from '../layout.js';
@@ -652,6 +652,8 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
     L3: { Assembly: '', QC: '', Packaging: '' },
     Others: '',
   });
+  // null = no active run for that line; { product, run_no } = run that seeded its targets
+  const [targetHints, setTargetHints] = useState({ L1: null, L2: null, L3: null });
   const [selectedOpIds, setSelectedOpIds] = useState(() => new Set());
 
   const activeOperators = useMemo(
@@ -698,15 +700,45 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
     if (!session || !canManageFloor || !date) return;
     setLoading(true);
     try {
-      const [rosterRes, attRes] = await Promise.all([
+      // getLineSetup is parallel-fetched purely to seed the TARGETS row from the
+      // active production run's line design; .catch swallow keeps a failure here
+      // from breaking the roster itself.
+      const [rosterRes, attRes, lineSetupRes] = await Promise.all([
         workerFetch('getManpowerLog', { data: { shift_date: date } }, session),
         workerFetch('getOperatorAttendance', { data: { date_from: date, date_to: date } }, session),
+        garageFetch('getLineSetup', { date }, session).catch(() => null),
       ]);
       const inner = rosterRes?.data;
       const obj = inner && typeof inner === 'object' && !Array.isArray(inner) ? inner : {};
       setGrouped(obj);
       const attList = Array.isArray(attRes?.data) ? attRes.data : Array.isArray(attRes) ? attRes : [];
       setAttendanceRows(attList);
+
+      // Seed TARGETS from active run line designs; preserve Others (not run-driven).
+      // garageFetch unwraps { data: ... } already, but tolerate both shapes.
+      const lineSetupPayload = (lineSetupRes && lineSetupRes.lines) ? lineSetupRes : (lineSetupRes?.data || {});
+      const lineDesigns = lineSetupPayload.lines || {};
+      const lineTargets = {
+        L1: { Assembly: '', QC: '', Packaging: '' },
+        L2: { Assembly: '', QC: '', Packaging: '' },
+        L3: { Assembly: '', QC: '', Packaging: '' },
+      };
+      const newHints = { L1: null, L2: null, L3: null };
+      for (const line of ['L1', 'L2', 'L3']) {
+        const lineData = lineDesigns[line];
+        if (!lineData?.run || !Array.isArray(lineData?.design?.departments)) continue;
+        newHints[line] = {
+          product: lineData.run.product,
+          run_no:  lineData.run.run_no,
+        };
+        for (const dept of lineData.design.departments) {
+          if (dept.department === 'Assembly')  lineTargets[line].Assembly  = String(dept.total_headcount || '');
+          if (dept.department === 'QC')        lineTargets[line].QC        = String(dept.total_headcount || '');
+          if (dept.department === 'Packaging') lineTargets[line].Packaging = String(dept.total_headcount || '');
+        }
+      }
+      setTargets((prev) => ({ ...lineTargets, Others: prev.Others }));
+      setTargetHints(newHints);
     } catch (e) {
       showToast(e.message || 'Failed to load roster', 'error');
       setGrouped({});
@@ -975,6 +1007,22 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
           >
             Auto-assign ({availableOperators.length} available)
           </button>
+        </div>
+        {/* Hint row — shows which active run seeded each line's targets, or "no run". */}
+        <div style={{ padding: '0 14px 10px', display: 'flex', gap: 18, flexWrap: 'wrap', fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', letterSpacing: '0.04em' }}>
+          {['L1', 'L2', 'L3'].map((line) => (
+            targetHints[line] ? (
+              <span key={line}>
+                <span style={{ color: ROSTER_LINE_COLORS[line], fontWeight: 700, marginRight: 4 }}>{line}</span>
+                seeded from {targetHints[line].product} · {targetHints[line].run_no}
+              </span>
+            ) : (
+              <span key={line} style={{ opacity: 0.55 }}>
+                <span style={{ color: ROSTER_LINE_COLORS[line], fontWeight: 700, marginRight: 4 }}>{line}</span>
+                no active run
+              </span>
+            )
+          ))}
         </div>
       </div>
 
