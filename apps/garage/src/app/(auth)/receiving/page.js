@@ -169,6 +169,7 @@ export default function ReceivingPage() {
   const [boxQtys,      setBoxQtys]       = useState({});    // key: `${lineId}:OK` or `${lineId}:Damaged`
   const [unexpected,   setUnexpected]    = useState([]);    // [{desc, ok, damaged}]
   const [boxSubmitting, setBoxSubmitting] = useState(false);
+  const [isAmendMode,  setIsAmendMode]   = useState(false); // true when reopening a box that already has entries
 
   // ── Permission check ─────────────────────────────────────────────────────────
   if (perms && (!perms.receiving || perms.receiving === 'none')) {
@@ -355,9 +356,24 @@ export default function ReceivingPage() {
 
   // ── Box intake ────────────────────────────────────────────────────────────────
   function openBoxIntake(markId) {
+    // Pre-fill from already-loaded line entries (refreshDetail loads them per line).
+    // Amend mode kicks in if any prior entry exists on this mark.
+    const prefilled = {};
+    let hasPrior = false;
+    (lines || []).forEach(l => {
+      (l._entries || [])
+        .filter(e => e.mark_id === markId && l.line_type !== 'unexpected')
+        .forEach(e => {
+          const cond = e.condition === 'Damaged' ? 'Damaged' : 'OK';
+          const key  = `${l.line_id}:${cond}`;
+          prefilled[key] = (prefilled[key] || 0) + (parseInt(e.qty) || 0);
+          hasPrior = true;
+        });
+    });
     setActiveMarkId(markId);
-    setBoxQtys({});
+    setBoxQtys(prefilled);
     setUnexpected([]);
+    setIsAmendMode(hasPrior);
     if (!reconExpanded) setReconExpanded(true);
   }
 
@@ -365,6 +381,7 @@ export default function ReceivingPage() {
     setActiveMarkId(null);
     setBoxQtys({});
     setUnexpected([]);
+    setIsAmendMode(false);
   }
 
   function setBoxQty(lineId, condition, value) {
@@ -386,6 +403,33 @@ export default function ReceivingPage() {
 
   async function submitBoxIntake() {
     if (!activeMarkId || !currentShipmentId) return;
+    if (isAmendMode) {
+      // Overwrite-mode: send every expected line's current OK/Damaged values
+      // (including zeros) so the worker can clear cells the user emptied.
+      const expectedLineIds = (lines || [])
+        .filter(l => l.line_type !== 'unexpected')
+        .map(l => l.line_id);
+      const amendLines = expectedLineIds.map(lid => ({
+        line_id: lid,
+        ok_qty:  parseInt(boxQtys[`${lid}:OK`])      || 0,
+        dmg_qty: parseInt(boxQtys[`${lid}:Damaged`]) || 0,
+      }));
+      setBoxSubmitting(true);
+      try {
+        const res = await workerFetch('amendBoxIntake', {
+          data: { shipment_id: currentShipmentId, mark_id: activeMarkId, lines: amendLines }
+        }, session);
+        showToast('Box updated — ' + res.data.entries_created + ' entries', 'success');
+        closeBoxIntake();
+        await refreshDetail();
+      } catch (e) {
+        showToast(e.message || 'Amend failed', 'error');
+      } finally {
+        setBoxSubmitting(false);
+      }
+      return;
+    }
+
     const entries = Object.entries(boxQtys)
       .filter(([, qty]) => qty > 0)
       .map(([key, qty]) => {
@@ -1015,7 +1059,7 @@ export default function ReceivingPage() {
                             style={isActive ? { ...btnBlue, padding: '2px 8px', fontSize: 10 } : { ...btnSec, padding: '2px 8px', fontSize: 10 }}
                             onClick={() => isActive ? closeBoxIntake() : openBoxIntake(m.mark_id)}
                           >
-                            {isActive ? '✎ Editing' : 'Open Box'}
+                            {isActive ? '✎ Editing' : (okQty + dmgQty) > 0 ? '✎ Edit' : 'Open Box'}
                           </button>
                         </td>
                       </tr>
@@ -1034,7 +1078,12 @@ export default function ReceivingPage() {
                   📦 Box Intake — {marks.find(m => m.mark_id === activeMarkId)?.mark_code || activeMarkId}
                 </span>
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                  {Object.values(boxQtys).some(v => v > 0) && (
+                  {isAmendMode && (
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 10, padding: '2px 6px', borderRadius: 2, background: 'rgba(255,180,0,.12)', color: 'var(--yellow)', border: '1px solid rgba(255,180,0,.25)' }}>
+                      AMEND
+                    </span>
+                  )}
+                  {!isAmendMode && Object.values(boxQtys).some(v => v > 0) && (
                     <button
                       style={{ ...btnSec, padding: '2px 10px', fontSize: 11 }}
                       onClick={submitAndPrintBoxLabels}
@@ -1108,7 +1157,8 @@ export default function ReceivingPage() {
                   );
                 })()}
 
-                {/* Unexpected items */}
+                {/* Unexpected items — hidden in amend mode (amend overwrites expected lines only) */}
+                {!isAmendMode && (
                 <div style={{ marginTop: 14 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                     <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '.06em' }}>Unexpected Items</span>
@@ -1123,10 +1173,11 @@ export default function ReceivingPage() {
                     </div>
                   ))}
                 </div>
+                )}
 
                 <div style={{ marginTop: 14 }}>
                   <button style={btnPri} onClick={submitBoxIntake} disabled={boxSubmitting}>
-                    {boxSubmitting ? 'Submitting…' : 'Submit Box'}
+                    {boxSubmitting ? 'Submitting…' : isAmendMode ? 'Save Changes' : 'Submit Box'}
                   </button>
                 </div>
               </div>
