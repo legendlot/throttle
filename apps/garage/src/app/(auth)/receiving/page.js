@@ -419,7 +419,14 @@ export default function ReceivingPage() {
         const res = await workerFetch('amendBoxIntake', {
           data: { shipment_id: currentShipmentId, mark_id: activeMarkId, lines: amendLines }
         }, session);
-        showToast('Box updated — ' + res.data.entries_created + ' entries', 'success');
+        const cleaned = res.data?.bags_cleaned_up || 0;
+        const topup   = !!res.data?.bags_topped_up_needed;
+        let msg = 'Box updated — ' + res.data.entries_created + ' entries';
+        if (cleaned > 0) msg += ` · ${cleaned} surplus label${cleaned === 1 ? '' : 's'} removed`;
+        showToast(msg, 'success');
+        if (topup) {
+          showToast('Some lines have more counted qty than generated bags — use "Generate Bags" on the reconciliation row to print additional labels', 'info');
+        }
         closeBoxIntake();
         await refreshDetail();
       } catch (e) {
