@@ -1,8 +1,8 @@
 'use client';
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { Fragment, useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { EmptyState, Modal, Spinner, useToast } from '@throttle/ui';
+import { EmptyState, Modal, Spinner, useToast, buildBagLabelsHtml, printWindow } from '@throttle/ui';
 import { useProducts } from '../../../hooks/useProducts.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -67,9 +67,14 @@ function VariantSelects({ product, variant, setVariant }) {
 
 // ── GRN Detail Modal ───────────────────────────────────────────────────────────
 function GrnDetailModal({ grnNo, onClose, session }) {
+  const { showToast }         = useToast();
   const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState(null);
+  const [bagPart, setBagPart]         = useState(null); // part_code expanded
+  const [bagExisting, setBagExisting] = useState([]);
+  const [bagsOf, setBagsOf]           = useState(50);
+  const [bagBusy, setBagBusy]         = useState(false);
 
   useEffect(() => {
     if (!grnNo || !session) return;
@@ -80,6 +85,59 @@ function GrnDetailModal({ grnNo, onClose, session }) {
       .catch(e => setError(e.message))
       .finally(() => setLoading(false));
   }, [grnNo, session]);
+
+  const isDirect = data?.summary?.is_direct === true
+    || (data?.lines && data.lines.every(l => !(l.notes || '').startsWith('From ')));
+
+  async function toggleBagPanel(line) {
+    if (bagPart === line.part_code) {
+      setBagPart(null); setBagExisting([]); return;
+    }
+    setBagPart(line.part_code);
+    setBagBusy(true);
+    try {
+      const res = await workerFetch('getBagsByGrn',
+        { data: { grn_no: grnNo, part_code: line.part_code } }, session);
+      setBagExisting(Array.isArray(res?.data) ? res.data : []);
+    } catch (e) {
+      setBagExisting([]);
+      showToast('Failed to load bag info: ' + (e.message || e), 'error');
+    } finally {
+      setBagBusy(false);
+    }
+  }
+
+  function reprintExistingBags() {
+    if (!bagExisting.length) return;
+    printWindow(buildBagLabelsHtml(bagExisting, grnNo));
+  }
+
+  async function generateAndPrintBags(line) {
+    if (!bagsOf || bagsOf < 1) { showToast('Pack size must be at least 1', 'error'); return; }
+    const qty = parseInt(line.qty_received) || 0;
+    if (qty <= 0) { showToast('Line has no qty_received', 'error'); return; }
+    setBagBusy(true);
+    try {
+      const res = await workerFetch('generateBagsForGrn', {
+        data: { grn_no: grnNo, part_code: line.part_code, part_name: line.part_name, qty, bags_of: bagsOf }
+      }, session);
+      const created = res?.data?.bags || [];
+      if (!created.length) {
+        showToast('No new bags to generate (already complete)', 'info');
+      } else {
+        showToast(`${created.length} bag label${created.length === 1 ? '' : 's'} generated for ${line.part_code}`, 'success');
+        printWindow(buildBagLabelsHtml(created, grnNo));
+      }
+      // Refresh existing bags so the panel shows the new total
+      const fresh = await workerFetch('getBagsByGrn',
+        { data: { grn_no: grnNo, part_code: line.part_code } }, session);
+      setBagExisting(Array.isArray(fresh?.data) ? fresh.data : []);
+    } catch (e) {
+      showToast(e.message || 'Bag generation failed', 'error');
+    } finally {
+      setBagBusy(false);
+    }
+  }
 
   return (
     <div
@@ -140,11 +198,13 @@ function GrnDetailModal({ grnNo, onClose, session }) {
                         <th style={{ ...th, textAlign: 'right' }}>Rejected</th>
                         <th style={th}>Inspection</th>
                         <th style={th}>PO Ref</th>
+                        {isDirect && <th style={th}>Labels</th>}
                       </tr>
                     </thead>
                     <tbody>
                       {data.lines.map((l, i) => (
-                        <tr key={i}>
+                        <Fragment key={i}>
+                        <tr>
                           <td style={{ ...td, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--yellow)' }}>{l.part_code || '—'}</td>
                           <td style={{ ...td, fontSize: 11 }}>{l.part_name || '—'}</td>
                           <td style={{ ...td, fontSize: 11, color: 'var(--t3)' }}>{l.product || '—'}</td>
@@ -154,7 +214,60 @@ function GrnDetailModal({ grnNo, onClose, session }) {
                           <td style={{ ...td, fontFamily: 'var(--mono)', textAlign: 'right', color: 'var(--red)' }}>{l.qty_rejected || 0}</td>
                           <td style={td}><span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: l.inspection === 'Fail' ? 'var(--red)' : 'var(--green)' }}>{l.inspection || '—'}</span></td>
                           <td style={{ ...td, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>{l.po_reference || '—'}</td>
+                          {isDirect && (
+                            <td style={td}>
+                              <button
+                                style={{ ...btnSec, padding: '2px 8px', fontSize: 10 }}
+                                onClick={() => toggleBagPanel(l)}
+                                disabled={bagBusy && bagPart !== l.part_code}
+                              >
+                                {bagPart === l.part_code ? '✕ Close' : '🏷 Bag Labels'}
+                              </button>
+                            </td>
+                          )}
                         </tr>
+                        {isDirect && bagPart === l.part_code && (
+                          <tr>
+                            <td colSpan={10} style={{ ...td, padding: '12px 14px', background: 'var(--surface2)' }}>
+                              {bagBusy && <Spinner />}
+                              {!bagBusy && (
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
+                                  <div style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>
+                                    {bagExisting.length > 0
+                                      ? <>Already generated: <span style={{ color: 'var(--yellow)' }}>{bagExisting.length}</span> bag{bagExisting.length === 1 ? '' : 's'} · <span style={{ color: 'var(--t3)' }}>{bagExisting.reduce((s, b) => s + (parseInt(b.qty) || 0), 0)} pcs</span></>
+                                      : <>No bags generated yet for this part.</>}
+                                  </div>
+                                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                                    <span style={{ ...label, marginBottom: 0 }}>Pack size</span>
+                                    <input
+                                      type="number" min="1"
+                                      value={bagsOf}
+                                      onChange={e => setBagsOf(Math.max(1, parseInt(e.target.value) || 1))}
+                                      style={{ ...inp, width: 80, padding: '4px 8px', fontSize: 11 }}
+                                    />
+                                  </div>
+                                  <button
+                                    style={{ ...btnPri, padding: '4px 12px', fontSize: 11 }}
+                                    onClick={() => generateAndPrintBags(l)}
+                                    disabled={bagBusy}
+                                  >
+                                    Generate &amp; Print
+                                  </button>
+                                  {bagExisting.length > 0 && (
+                                    <button
+                                      style={{ ...btnSec, padding: '4px 12px', fontSize: 11 }}
+                                      onClick={reprintExistingBags}
+                                      disabled={bagBusy}
+                                    >
+                                      Reprint All
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                        </Fragment>
                       ))}
                     </tbody>
                   </table>
