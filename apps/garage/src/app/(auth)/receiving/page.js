@@ -369,7 +369,7 @@ export default function ReceivingPage() {
 
   function setBoxQty(lineId, condition, value) {
     const key = `${lineId}:${condition}`;
-    setBoxQtys(prev => ({ ...prev, [key]: parseInt(value) || 0 }));
+    setBoxQtys(prev => ({ ...prev, [key]: Math.max(0, parseInt(value) || 0) }));
   }
 
   function addUnexpectedRow() {
@@ -377,7 +377,7 @@ export default function ReceivingPage() {
   }
 
   function updateUnexpected(idx, field, value) {
-    setUnexpected(prev => prev.map((r, i) => i !== idx ? r : { ...r, [field]: field === 'desc' ? value : parseInt(value) || 0 }));
+    setUnexpected(prev => prev.map((r, i) => i !== idx ? r : { ...r, [field]: field === 'desc' ? value : Math.max(0, parseInt(value) || 0) }));
   }
 
   function removeUnexpected(idx) {
@@ -1089,7 +1089,7 @@ export default function ReceivingPage() {
                           <div>
                             <input
                               type="number" min="0"
-                              value={boxQtys[`${l.line_id}:OK`] || 0}
+                              value={boxQtys[`${l.line_id}:OK`] || ''}
                               onChange={e => setBoxQty(l.line_id, 'OK', e.target.value)}
                               style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 2, padding: '4px 6px', color: 'var(--t1)', fontFamily: 'var(--mono)', fontSize: 13, width: '100%', textAlign: 'center' }}
                             />
@@ -1097,7 +1097,7 @@ export default function ReceivingPage() {
                           <div>
                             <input
                               type="number" min="0"
-                              value={boxQtys[`${l.line_id}:Damaged`] || 0}
+                              value={boxQtys[`${l.line_id}:Damaged`] || ''}
                               onChange={e => setBoxQty(l.line_id, 'Damaged', e.target.value)}
                               style={{ background: 'rgba(222,42,42,.06)', border: '1px solid rgba(222,42,42,.2)', borderRadius: 2, padding: '4px 6px', color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 13, width: '100%', textAlign: 'center' }}
                             />
