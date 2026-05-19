@@ -982,7 +982,7 @@ function BomMode(props) {
             <button style={btnSecondary} onClick={() => toggleAll(true)}>Select All</button>
             <button style={btnSecondary} onClick={() => toggleAll(false)}>Clear All</button>
           </div>
-          <div style={{ maxHeight: 260, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 3 }}>
+          <div style={{ maxHeight: 460, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 3 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr>
                 <th style={{ ...tableThStyle, width: 30 }}></th>
@@ -1142,7 +1142,7 @@ function ManualMode({
                         <div style={{
                           position: 'absolute', top: '100%', left: 0, zIndex: 200,
                           background: 'var(--surface2)', border: '1px solid var(--border)',
-                          borderRadius: 4, maxHeight: 240, overflowY: 'auto',
+                          borderRadius: 4, maxHeight: 320, overflowY: 'auto',
                           minWidth: 320, boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
                           marginTop: 2,
                         }}>
