@@ -179,6 +179,9 @@ function NewPOPage() {
   const [partsLoading, setPartsLoading] = useState(false);
   const [pickerOpenIdx, setPickerOpenIdx] = useState(null); // which manual-mode line row has the picker open
   const [pickerQuery, setPickerQuery] = useState('');
+  // Rect of the focused picker input — used to render the dropdown as
+  // position:fixed so it escapes the parent <table>'s overflow clipping.
+  const [pickerRect, setPickerRect] = useState(null);
   const pickerRef = useRef(null);
   const [companyAddresses, setCompanyAddresses] = useState([]);
   const [deliveryAddressId, setDeliveryAddressId] = useState('');
@@ -219,26 +222,45 @@ function NewPOPage() {
     }
   }, [rrParam, showToast]);
 
-  // Close the parts picker on outside click or ESC.
+  // Close the parts picker on outside click, ESC, scroll, or resize. Scroll/
+  // resize handling matters because the dropdown is position:fixed against a
+  // captured rect — if the page scrolls, the rect becomes stale and the
+  // dropdown would float disconnected from the input. Closing is the
+  // simplest correct behaviour.
   useEffect(() => {
     if (pickerOpenIdx === null) return;
     function onDocClick(e) {
+      // pickerRef covers the input wrapper only — when the dropdown is
+      // position:fixed it lives outside that subtree, so explicitly skip
+      // clicks targeting an element flagged data-picker-dropdown.
+      if (e.target.closest && e.target.closest('[data-picker-dropdown="1"]')) return;
       if (pickerRef.current && !pickerRef.current.contains(e.target)) {
         setPickerOpenIdx(null);
         setPickerQuery('');
+        setPickerRect(null);
       }
     }
     function onKey(e) {
       if (e.key === 'Escape') {
         setPickerOpenIdx(null);
         setPickerQuery('');
+        setPickerRect(null);
       }
+    }
+    function close() {
+      setPickerOpenIdx(null);
+      setPickerQuery('');
+      setPickerRect(null);
     }
     document.addEventListener('mousedown', onDocClick);
     document.addEventListener('keydown', onKey);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
     return () => {
       document.removeEventListener('mousedown', onDocClick);
       document.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
     };
   }, [pickerOpenIdx]);
 
@@ -1091,6 +1113,7 @@ function ManualMode({
                   setPickerOpenIdx(null);
                   setPickerQuery('');
                   setPartHighlight(-1);
+                  setPickerRect(null);
                 };
 
                 return (
@@ -1104,9 +1127,18 @@ function ManualMode({
                         type="text"
                         value={isActivePicker ? pickerQuery : l.part_code}
                         placeholder="Part code"
-                        onFocus={() => {
+                        onFocus={(e) => {
                           setPickerOpenIdx(i);
                           setPickerQuery(l.part_code || '');
+                          // Capture the input's rect so the dropdown (rendered
+                          // as position:fixed) lands directly below it,
+                          // escaping the table's overflow clipping.
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          setPickerRect({
+                            top: rect.top, left: rect.left,
+                            bottom: rect.bottom, right: rect.right,
+                            width: rect.width, height: rect.height,
+                          });
                           loadParts();
                         }}
                         onChange={(e) => {
@@ -1116,7 +1148,7 @@ function ManualMode({
                         onKeyDown={(e) => {
                           if (!isActivePicker) return;
                           if (matches.length === 0) {
-                            if (e.key === 'Escape') { setPickerOpenIdx(null); setPickerQuery(''); setPartHighlight(-1); }
+                            if (e.key === 'Escape') { setPickerOpenIdx(null); setPickerQuery(''); setPartHighlight(-1); setPickerRect(null); }
                             return;
                           }
                           if (e.key === 'ArrowDown') {
@@ -1134,18 +1166,25 @@ function ManualMode({
                             setPickerOpenIdx(null);
                             setPickerQuery('');
                             setPartHighlight(-1);
+                            setPickerRect(null);
                           }
                         }}
                         style={{ ...inputStyle, width: 130, fontFamily: 'var(--mono)' }}
                       />
-                      {isActivePicker && (partsCache || partsLoading) && (
-                        <div style={{
-                          position: 'absolute', top: '100%', left: 0, zIndex: 200,
-                          background: 'var(--surface2)', border: '1px solid var(--border)',
-                          borderRadius: 4, maxHeight: 320, overflowY: 'auto',
-                          minWidth: 320, boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
-                          marginTop: 2,
-                        }}>
+                      {isActivePicker && pickerRect && (partsCache || partsLoading) && (
+                        <div
+                          data-picker-dropdown="1"
+                          style={{
+                            position: 'fixed',
+                            top:  pickerRect.bottom + 4,
+                            left: pickerRect.left,
+                            width: Math.max(pickerRect.width, 320),
+                            maxHeight: 320, overflowY: 'auto',
+                            zIndex: 9999,
+                            background: 'var(--surface2)', border: '1px solid var(--border)',
+                            borderRadius: 4, boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+                          }}
+                        >
                           {!partsCache && partsLoading ? (
                             <div style={{ padding: '8px 10px', color: 'var(--t3)', fontSize: 12 }}>
                               Loading parts…
