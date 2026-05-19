@@ -7,10 +7,12 @@ import { useAutoRefresh } from '../../../hooks/useAutoRefresh.js';
 import { useRefreshState } from '../layout.js';
 
 // ── Constants ───────────────────────────────────────────────────────────────
-const LINE_ORDER       = ['L1', 'L2', 'L3'];
-const LINE_COLORS      = { L1: 'var(--yellow)', L2: 'var(--blue)', L3: 'var(--green)', Others: '#f97316' };
-const ROSTER_LINE_COLORS = { L1: '#22c55e', L2: '#3b82f6', L3: '#a855f7', Others: '#f97316' };
-const ROSTER_SECTIONS  = ['Assembly', 'QC', 'Packaging'];
+const LINE_ORDER          = ['L1', 'L2', 'L3'];
+const DISPATCH_LINE_ORDER = ['D1', 'D2'];
+const OTHERS_DEPT_BUCKETS = ['Admin', 'Store'];  // visual split of line='Others' by operator department
+const LINE_COLORS         = { L1: 'var(--yellow)', L2: 'var(--blue)', L3: 'var(--green)', D1: '#ec4899', D2: '#06b6d4', Others: '#f97316', Admin: '#f59e0b', Store: '#f97316' };
+const ROSTER_LINE_COLORS  = { L1: '#22c55e', L2: '#3b82f6', L3: '#a855f7', D1: '#ec4899', D2: '#06b6d4', Others: '#f97316', Admin: '#f59e0b', Store: '#f97316' };
+const ROSTER_SECTIONS     = ['Assembly', 'QC', 'Packaging'];
 const PERFORMANCE_CATEGORIES = [
   { value: 'attendance', label: 'Attendance' },
   { value: 'quality',    label: 'Quality' },
@@ -66,9 +68,10 @@ function fmtDuration(clockIn, clockOut) {
 }
 
 // getManpowerLog returns { L1: { Assembly:[], QC:[], Packaging:[], Unassigned:[] }, ...,
-// Others: [...] }. Flatten line buckets back to flat arrays; Others arrives flat.
+// Others: [...], D1: [...], D2: [...] }. L1/L2/L3 nested by station; D1/D2 and
+// Others arrive flat. flattenRoster collapses everything to flat arrays per line.
 function flattenRoster(nested) {
-  const out = { L1: [], L2: [], L3: [], Others: [] };
+  const out = { L1: [], L2: [], L3: [], D1: [], D2: [], Others: [] };
   for (const line of LINE_ORDER) {
     const sections = nested?.[line];
     if (!sections) continue;
@@ -79,6 +82,9 @@ function flattenRoster(nested) {
       ...(sections.Packaging  || []),
       ...(sections.Unassigned || []),
     ];
+  }
+  for (const line of DISPATCH_LINE_ORDER) {
+    if (Array.isArray(nested?.[line])) out[line] = nested[line];
   }
   if (Array.isArray(nested?.Others)) out.Others = nested.Others;
   return out;
@@ -241,21 +247,26 @@ function LiveViewTab({ session, canManageFloor }) {
     for (const line of LINE_ORDER) {
       for (const a of rosterByLine[line] || []) m[a.operator_id] = line;
     }
+    for (const line of DISPATCH_LINE_ORDER) {
+      for (const a of rosterByLine[line] || []) m[a.operator_id] = line;
+    }
     for (const a of rosterByLine.Others || []) m[a.operator_id] = 'Others';
     return m;
   }, [rosterByLine]);
 
-  const { byLine, others, unassigned } = useMemo(() => {
+  const { byLine, dispatch, others, unassigned } = useMemo(() => {
     const lines = { L1: [], L2: [], L3: [] };
+    const disp = [];
     const oth = [];
     const unas = [];
     for (const row of openShifts) {
       const line = assignedLineByOpId[row.operator_id];
-      if (line === 'Others') oth.push(row);
+      if (line === 'D1' || line === 'D2') disp.push(row);
+      else if (line === 'Others') oth.push(row);
       else if (line && lines[line]) lines[line].push(row);
       else unas.push(row);
     }
-    return { byLine: lines, others: oth, unassigned: unas };
+    return { byLine: lines, dispatch: disp, others: oth, unassigned: unas };
   }, [openShifts, assignedLineByOpId]);
 
   if (forbidden) {
@@ -279,7 +290,7 @@ function LiveViewTab({ session, canManageFloor }) {
       ) : (
         <>
           {/* Headcount bar */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 12, marginBottom: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', gap: 12, marginBottom: 16 }}>
             {LINE_ORDER.map((line) => (
               <HeadcountCard
                 key={line}
@@ -289,6 +300,12 @@ function LiveViewTab({ session, canManageFloor }) {
                 sub={`${(rosterByLine[line] || []).length} assigned`}
               />
             ))}
+            <HeadcountCard
+              label="Dispatch"
+              accent={LINE_COLORS.D1}
+              count={dispatch.length}
+              sub={`${((rosterByLine.D1 || []).length) + ((rosterByLine.D2 || []).length)} assigned`}
+            />
             <HeadcountCard
               label="Others"
               accent={LINE_COLORS.Others}
@@ -650,6 +667,8 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
     L1: { Assembly: '', QC: '', Packaging: '' },
     L2: { Assembly: '', QC: '', Packaging: '' },
     L3: { Assembly: '', QC: '', Packaging: '' },
+    D1: '',
+    D2: '',
     Others: '',
   });
   // null = no active run for that line; { product, run_no } = run that seeded its targets
@@ -669,6 +688,8 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
         for (const row of sections[section] || []) s.add(row.operator_id);
       }
     }
+    for (const row of grouped.D1 || []) s.add(row.operator_id);
+    for (const row of grouped.D2 || []) s.add(row.operator_id);
     for (const row of grouped.Others || []) s.add(row.operator_id);
     return s;
   }, [grouped]);
@@ -692,6 +713,8 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
       const sections = grouped[line] || {};
       for (const section of Object.keys(sections)) n += (sections[section] || []).length;
     }
+    n += (grouped.D1 || []).length;
+    n += (grouped.D2 || []).length;
     n += (grouped.Others || []).length;
     return n;
   }, [grouped]);
@@ -737,7 +760,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
           if (dept.department === 'Packaging') lineTargets[line].Packaging = String(dept.total_headcount || '');
         }
       }
-      setTargets((prev) => ({ ...lineTargets, Others: prev.Others }));
+      setTargets((prev) => ({ ...lineTargets, D1: prev.D1, D2: prev.D2, Others: prev.Others }));
       setTargetHints(newHints);
     } catch (e) {
       showToast(e.message || 'Failed to load roster', 'error');
@@ -880,6 +903,10 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
         const n = Math.max(0, parseInt(targets[line][section], 10) || 0);
         for (let i = 0; i < n; i++) slots.push({ line, station: section });
       }
+    }
+    for (const line of ['D1', 'D2']) {
+      const n = Math.max(0, parseInt(targets[line], 10) || 0);
+      for (let i = 0; i < n; i++) slots.push({ line, station: null });
     }
     const othersN = Math.max(0, parseInt(targets.Others, 10) || 0);
     for (let i = 0; i < othersN; i++) slots.push({ line: 'Others', station: null });
@@ -1328,10 +1355,23 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
             );
           })}
 
-          {(() => {
-            const accent = ROSTER_LINE_COLORS.Others;
-            const rows = grouped.Others || [];
-            const key = 'Others';
+          {/* D1, D2, Admin, Store — all flat (no station sub-sections). D1/D2
+              map to line='D1'/'D2' in store.manpower_assignments. Admin and
+              Store are a visual department-based split of line='Others' rows
+              (no schema change — option γ from the scope diagnostic). */}
+          {([
+            { key: 'D1',    label: 'D1',    accent: ROSTER_LINE_COLORS.D1,    rows: grouped.D1 || [],    assignLine: 'D1' },
+            { key: 'D2',    label: 'D2',    accent: ROSTER_LINE_COLORS.D2,    rows: grouped.D2 || [],    assignLine: 'D2' },
+            { key: 'Admin', label: 'Admin', accent: ROSTER_LINE_COLORS.Admin,
+              rows: (grouped.Others || []).filter((r) => (r.operator_department || '').toLowerCase() === 'admin'),
+              assignLine: 'Others' },
+            { key: 'Store', label: 'Store', accent: ROSTER_LINE_COLORS.Store,
+              rows: (grouped.Others || []).filter((r) => (r.operator_department || '').toLowerCase() !== 'admin'),
+              assignLine: 'Others' },
+          ]).map((panel) => {
+            const accent = panel.accent;
+            const rows = panel.rows;
+            const key = panel.key;
             const open = !!pickerOpen[key];
             const q = (pickerQuery[key] || '').trim().toLowerCase();
             const pickerOps = activeOperators.filter((op) => {
@@ -1341,13 +1381,17 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                      (op.employee_id || '').toLowerCase().includes(q);
             });
             return (
-              <div style={{ ...panelStyle, marginBottom: 0, minHeight: 220 }}>
+              <div key={key} style={{ ...panelStyle, marginBottom: 0, minHeight: 220 }}>
                 <div style={{ ...panelHeaderStyle, color: accent }}>
-                  <span>Others ({rows.length})</span>
+                  <span>{panel.label} ({rows.length})</span>
                 </div>
                 <div
                   onDragOver={(e) => e.preventDefault()}
-                  onDrop={onDropToOthers}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const opIds = readDropOpIds(e);
+                    if (opIds.length) handleBulkAssign(opIds, panel.assignLine, null);
+                  }}
                   style={{ padding: '8px 8px 10px' }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -1367,7 +1411,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                           setPickerOpen((s) => ({ ...s, [key]: !s[key] }));
                           setPickerQuery((s) => ({ ...s, [key]: '' }));
                         }}
-                        title={open ? 'Close' : 'Assign to Others'}
+                        title={open ? 'Close' : `Assign to ${panel.label}`}
                       >
                         {open ? '×' : '+'}
                       </button>
@@ -1399,7 +1443,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                               } else if (e.key === 'Enter') {
                                 if (hi >= 0 && visible[hi]) {
                                   e.preventDefault();
-                                  handleAssign(visible[hi].id, 'Others', null);
+                                  handleAssign(visible[hi].id, panel.assignLine, null);
                                   setPickerOpen((s) => ({ ...s, [key]: false }));
                                   setPickerQuery((s) => ({ ...s, [key]: '' }));
                                   setPickerHighlight((s) => ({ ...s, [key]: -1 }));
@@ -1425,7 +1469,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                                     ref={isHi ? highlightedPickerRef : null}
                                     onMouseDown={(e) => {
                                       e.preventDefault();
-                                      handleAssign(op.id, 'Others', null);
+                                      handleAssign(op.id, panel.assignLine, null);
                                       setPickerOpen((s) => ({ ...s, [key]: false }));
                                       setPickerQuery((s) => ({ ...s, [key]: '' }));
                                       setPickerHighlight((s) => ({ ...s, [key]: -1 }));
@@ -1478,8 +1522,8 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                           </div>
                         </div>
                         <button
-                          onClick={() => handleUnassign(row, 'Others')}
-                          title={`Remove ${row.operator_name || 'operator'} from Others`}
+                          onClick={() => handleUnassign(row, panel.assignLine)}
+                          title={`Remove ${row.operator_name || 'operator'} from ${panel.label}`}
                           style={{
                             background: 'transparent',
                             border: '1px solid var(--border)',
@@ -1501,7 +1545,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                 </div>
               </div>
             );
-          })()}
+          })}
         </div>
     </div>
   );

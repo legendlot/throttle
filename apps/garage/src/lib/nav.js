@@ -9,6 +9,7 @@ import {
   ShoppingCart, FileText, RefreshCw, Building, Truck,
   Users,
   Package, Factory, Store,
+  Send,
   Bell,
 } from 'lucide-react';
 
@@ -50,6 +51,7 @@ const GROUPS = [
       { id: 'store-history', label: 'Store History', route: '/store-history', icon: History },
       { separator: true },
       { id: 'manpower',      label: 'Manpower',      route: '/manpower',      icon: UserCog,     gate: (p) => hasPermission(p, 'dashboard') },
+      { id: 'dispatch',      label: 'Dispatch',      route: '/dispatch',      icon: Send,        gate: (p) => hasPermission(p, 'dashboard') },
     ],
   },
   {
