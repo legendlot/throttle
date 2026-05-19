@@ -98,7 +98,8 @@ export default function DispatchPipelinePage() {
                 <tr>
                   <th style={{ ...thStyle, minWidth: 220 }}>Product / Variant</th>
                   <th style={numTh}>With Production</th>
-                  <th style={numTh}>Unallocated</th>
+                  <th style={numTh}>Unalloc (R)</th>
+                  <th style={numTh}>Unalloc (E)</th>
                   <th style={numTh}>Total Allocated</th>
                   {channels.map(ch => (
                     <th key={ch} style={numTh}>{ch}</th>
@@ -121,7 +122,8 @@ export default function DispatchPipelinePage() {
                           {p.product}
                         </td>
                         <td style={numCell(p.totals?.with_production, 'var(--t1)')}>{fmt(p.totals?.with_production)}</td>
-                        <td style={numCell(p.totals?.unallocated, 'var(--yellow)')}>{fmt(p.totals?.unallocated)}</td>
+                        <td style={numCell(p.totals?.unallocated_retail, 'var(--yellow)')}>{fmt(p.totals?.unallocated_retail)}</td>
+                        <td style={numCell(p.totals?.unallocated_ecom, 'var(--yellow)')}>{fmt(p.totals?.unallocated_ecom)}</td>
                         <td style={numCell(totalAlloc, 'var(--green)')}>{fmt(totalAlloc)}</td>
                         {channels.map(ch => (
                           <td key={ch} style={numCell(p.totals?.channels?.[ch], 'var(--blue)')}>{fmt(p.totals?.channels?.[ch])}</td>
@@ -136,7 +138,8 @@ export default function DispatchPipelinePage() {
                               {[v.model, v.color].filter(Boolean).join(' ') || '—'}
                             </td>
                             <td style={numCell(v.with_production, 'var(--t1)')}>{fmt(v.with_production)}</td>
-                            <td style={numCell(v.unallocated, 'var(--yellow)')}>{fmt(v.unallocated)}</td>
+                            <td style={numCell(v.unallocated_retail, 'var(--yellow)')}>{fmt(v.unallocated_retail)}</td>
+                            <td style={numCell(v.unallocated_ecom, 'var(--yellow)')}>{fmt(v.unallocated_ecom)}</td>
                             <td style={numCell(vTotal, 'var(--green)')}>{fmt(vTotal)}</td>
                             {channels.map(ch => (
                               <td key={ch} style={numCell(v.channels?.[ch], 'var(--blue)')}>{fmt(v.channels?.[ch])}</td>
