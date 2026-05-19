@@ -3,6 +3,11 @@ import { useState, useMemo } from 'react';
 import { useAuth, hasPermission } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
 import { KpiCard, EmptyState, Spinner } from '@throttle/ui';
+import {
+  Inbox, PackageOpen, ClipboardList, PackageMinus,
+  Undo2, Truck, Workflow, CheckSquare,
+  FileText, CheckCircle2, RefreshCw, XCircle, Dot,
+} from 'lucide-react';
 import { useAutoRefresh } from '../../../hooks/useAutoRefresh.js';
 import { useRefreshState } from '../layout.js';
 import { useProducts } from '../../../hooks/useProducts.js';
@@ -19,13 +24,19 @@ const ACT_TONES = {
   Run:      'gray',
 };
 
+// Reuses nav icon choices for the matching operations (Inbox = GRN Entry,
+// PackageOpen = Receiving, ClipboardList = Ad Hoc Requests, Undo2 = Returns,
+// Workflow = Line Flush, CheckSquare = Flush Verify, FileText = Purchase Orders,
+// RefreshCw = Reorders, Truck = Forwarders). PackageMinus, CheckCircle2, and
+// XCircle are added for issue-out / approved / cancelled — closest available
+// lucide-react matches with no nav equivalent.
 const ACT_ICONS = {
-  GRN_CREATED:       '📥', GRN_FROM_RECEIVING: '📦',
-  WO_CREATED:        '🏭', STOCK_ISSUED:       '📤',
-  RETURN_LOGGED:     '🔄', SHIPMENT_CREATED:   '🚢',
-  FLUSH_CREATED:     '🔁', FLUSH_VERIFIED:     '✅',
-  PO_CREATED:        '📋', PO_APPROVED:        '✔',
-  PO_STATUS_UPDATED: '🔀', PO_CANCELLED:       '✖',
+  GRN_CREATED:       Inbox,         GRN_FROM_RECEIVING: PackageOpen,
+  WO_CREATED:        ClipboardList, STOCK_ISSUED:       PackageMinus,
+  RETURN_LOGGED:     Undo2,         SHIPMENT_CREATED:   Truck,
+  FLUSH_CREATED:     Workflow,      FLUSH_VERIFIED:     CheckSquare,
+  PO_CREATED:        FileText,      PO_APPROVED:        CheckCircle2,
+  PO_STATUS_UPDATED: RefreshCw,     PO_CANCELLED:       XCircle,
 };
 
 function formatActivityTime(ts) {
@@ -605,8 +616,8 @@ export default function DashboardPage() {
         ) : (
           <div>
             {activity.map((a, i) => {
-              const tone  = ACT_TONES[a.entity_type] || 'gray';
-              const icon  = ACT_ICONS[a.action] || '·';
+              const tone = ACT_TONES[a.entity_type] || 'gray';
+              const Icon = ACT_ICONS[a.action] || Dot;
               return (
                 <div key={i} style={{
                   display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -614,8 +625,9 @@ export default function DashboardPage() {
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
                     <StatusBadge label={a.entity_type || '—'} tone={tone} />
-                    <span style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {icon} {a.summary || a.message || '—'}
+                    <span style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                      <Icon size={14} strokeWidth={1.75} style={{ flexShrink: 0, color: 'var(--t3)' }} />
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.summary || a.message || '—'}</span>
                     </span>
                   </div>
                   <div style={{ flexShrink: 0, marginLeft: 12, textAlign: 'right' }}>

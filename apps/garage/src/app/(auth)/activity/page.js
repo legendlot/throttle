@@ -3,15 +3,22 @@ import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
 import { Spinner } from '@throttle/ui';
+import {
+  Inbox, PackageOpen, ClipboardList, PackageMinus,
+  Undo2, Truck, Workflow, CheckSquare,
+  FileText, CheckCircle2, RefreshCw, XCircle,
+  AlertTriangle, Dot,
+} from 'lucide-react';
 
+// Matches the dashboard ACT_ICONS map — same icon choices for the same actions.
 const ACT_ICONS = {
-  GRN_CREATED: '📥', GRN_FROM_RECEIVING: '📦',
-  WO_CREATED: '🏭', STOCK_ISSUED: '📤',
-  RETURN_LOGGED: '🔄', SHIPMENT_CREATED: '🚢',
-  FLUSH_CREATED: '🔁', FLUSH_VERIFIED: '✅',
-  PO_CREATED: '📋', PO_APPROVED: '✔',
-  PO_STATUS_UPDATED: '🔀', PO_CANCELLED: '✖',
-  RECEIPT_CONFIRMED: '✅', RECEIPT_SHORT_PENDING: '⚠',
+  GRN_CREATED:       Inbox,         GRN_FROM_RECEIVING:    PackageOpen,
+  WO_CREATED:        ClipboardList, STOCK_ISSUED:          PackageMinus,
+  RETURN_LOGGED:     Undo2,         SHIPMENT_CREATED:      Truck,
+  FLUSH_CREATED:     Workflow,      FLUSH_VERIFIED:        CheckSquare,
+  PO_CREATED:        FileText,      PO_APPROVED:           CheckCircle2,
+  PO_STATUS_UPDATED: RefreshCw,     PO_CANCELLED:          XCircle,
+  RECEIPT_CONFIRMED: CheckCircle2,  RECEIPT_SHORT_PENDING: AlertTriangle,
 };
 
 const ACT_COLORS = {
@@ -167,7 +174,7 @@ export default function ActivityPage() {
               <tbody>
                 {displayRows.map((r) => {
                   const tone = ACT_COLORS[r.entity_type] || 'var(--t2)';
-                  const icon = ACT_ICONS[r.action] || '·';
+                  const Icon = ACT_ICONS[r.action] || Dot;
                   return (
                     <tr key={r.id || `${r.logged_at}-${r.action}-${r.entity_id}`}>
                       <td style={{ ...tableTdStyle, color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 11 }}>{formatActivityTime(r.logged_at)}</td>
@@ -183,7 +190,12 @@ export default function ActivityPage() {
                         </span>
                       </td>
                       <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--yellow)' }}>{r.entity_id || '—'}</td>
-                      <td style={{ ...tableTdStyle, whiteSpace: 'normal', maxWidth: 600 }}>{icon} {r.summary || '—'}</td>
+                      <td style={{ ...tableTdStyle, whiteSpace: 'normal', maxWidth: 600 }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <Icon size={14} strokeWidth={1.75} style={{ flexShrink: 0, color: 'var(--t3)' }} />
+                          <span>{r.summary || '—'}</span>
+                        </span>
+                      </td>
                     </tr>
                   );
                 })}
