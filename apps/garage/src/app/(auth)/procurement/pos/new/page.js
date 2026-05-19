@@ -824,6 +824,7 @@ function NewPOPage() {
               pickerRect={pickerRect}
               setPickerRect={setPickerRect}
               hsnMap={hsnMap}
+              setLineItems={setLineItems}
             />
           )}
 
@@ -1048,7 +1049,7 @@ function ManualMode({
   lineItems, addManualLine, updateLine, removeLine, currency,
   partsCache, partsLoading, loadParts,
   pickerOpenIdx, setPickerOpenIdx, pickerQuery, setPickerQuery, pickerRef,
-  pickerRect, setPickerRect, hsnMap,
+  pickerRect, setPickerRect, hsnMap, setLineItems,
 }) {
   const [partHighlight, setPartHighlight] = useState(-1);
   const highlightedPartRef = useRef(null);
