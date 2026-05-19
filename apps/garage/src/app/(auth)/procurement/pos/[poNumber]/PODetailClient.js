@@ -4,6 +4,7 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
+import { computeTax } from '@/lib/poTax';
 
 const PO_STATUS_TONES = {
   Draft:                          'gray',
@@ -131,8 +132,10 @@ export default function PODetailPage() {
     );
   }
 
-  const { po, lines = [], revisions = [] } = poData;
+  const { po, vendor = null, lines = [], revisions = [] } = poData;
   const status = po.status || 'Draft';
+  const tax = computeTax(lines, po.currency, vendor?.gstin || null);
+  const isInr = po.currency === 'INR';
 
   function openAmend() {
     setAmendData({
@@ -213,9 +216,12 @@ export default function PODetailPage() {
     }
   }
 
-  const lineTotal = lines.reduce((s, l) => s + ((parseFloat(l.unit_price) || 0) * (parseFloat(l.qty_ordered) || 0)), 0);
+  const lineTotal = tax.taxable;
   const invoiceValue = parseFloat(po.invoice_value) || 0;
-  const mismatch = invoiceValue > 0 && Math.abs(invoiceValue - lineTotal) / Math.max(1, lineTotal) > 0.01;
+  // Invoice mismatch compares against grand total (incl. GST) for INR;
+  // taxable subtotal otherwise (CN/RMB POs have no GST anyway).
+  const comparisonTotal = isInr ? tax.grand : lineTotal;
+  const mismatch = invoiceValue > 0 && Math.abs(invoiceValue - comparisonTotal) / Math.max(1, comparisonTotal) > 0.01;
 
   const canApprove = status === 'Draft' && perms?.procurement_approve;
   const canSend    = (status === 'Draft' && perms?.procurement_raise) || status === 'Approved';
@@ -283,7 +289,7 @@ export default function PODetailPage() {
               ['Currency', po.currency || '—'],
               ['Payment Terms', po.payment_terms || '—'],
               ['Incoterms', po.incoterms || '—'],
-              ['PO Value', `${po.currency || ''} ${(po.po_value ?? lineTotal).toLocaleString('en-IN')}`],
+              ['PO Value', `${po.currency || ''} ${(isInr ? tax.grand : (po.po_value ?? lineTotal)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`],
               ['Invoice No.', po.invoice_number || '—'],
               [
                 'Invoice Value',
@@ -316,6 +322,8 @@ export default function PODetailPage() {
                 <th style={tableThStyle}>Received</th>
                 <th style={tableThStyle}>Unit</th>
                 <th style={tableThStyle}>Unit Price</th>
+                {isInr && <th style={tableThStyle}>HSN</th>}
+                {isInr && <th style={tableThStyle}>GST %</th>}
                 <th style={tableThStyle}>Total</th>
               </tr></thead>
               <tbody>
@@ -338,12 +346,46 @@ export default function PODetailPage() {
                       </td>
                       <td style={tableTdStyle}>{l.unit || '—'}</td>
                       <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{l.unit_price != null ? l.unit_price.toLocaleString('en-IN') : '—'}</td>
+                      {isInr && <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{l.hsn_code || '—'}</td>}
+                      {isInr && <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{l.gst_percent != null ? `${parseFloat(l.gst_percent)}%` : '—'}</td>}
                       <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{total.toLocaleString('en-IN')}</td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
+          )}
+          {lines.length > 0 && (
+            <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'flex-end' }}>
+              <div style={{ minWidth: 280, fontSize: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}>
+                  <span style={{ color: 'var(--t3)' }}>Subtotal</span>
+                  <span style={{ fontFamily: 'var(--mono)' }}>{po.currency || ''} {tax.taxable.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                </div>
+                {tax.showGst && tax.isCgstSgst && (
+                  <>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}>
+                      <span style={{ color: 'var(--t3)' }}>CGST {tax.halfRate > 0 ? `@ ${tax.halfRate}%` : ''}</span>
+                      <span style={{ fontFamily: 'var(--mono)' }}>₹ {tax.cgst.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}>
+                      <span style={{ color: 'var(--t3)' }}>SGST {tax.halfRate > 0 ? `@ ${tax.halfRate}%` : ''}</span>
+                      <span style={{ fontFamily: 'var(--mono)' }}>₹ {tax.sgst.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    </div>
+                  </>
+                )}
+                {tax.showGst && !tax.isCgstSgst && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}>
+                    <span style={{ color: 'var(--t3)' }}>IGST {tax.fullRate > 0 ? `@ ${tax.fullRate}%` : ''}</span>
+                    <span style={{ fontFamily: 'var(--mono)' }}>₹ {tax.igst.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  </div>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0 0 0', borderTop: '1px solid var(--border)', marginTop: 4, fontWeight: 700, color: 'var(--yellow)' }}>
+                  <span>Grand Total</span>
+                  <span style={{ fontFamily: 'var(--mono)' }}>{po.currency || ''} {tax.grand.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                </div>
+              </div>
+            </div>
           )}
         </div>
       </section>

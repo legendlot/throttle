@@ -6,6 +6,7 @@ import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { todayStr } from '@throttle/domain';
 import { useProducts } from '../../../../../hooks/useProducts.js';
+import { computeTax } from '@/lib/poTax';
 
 const PO_SOURCES = ['China', 'India', 'USA', 'Germany', 'Taiwan', 'Vietnam', 'Bangladesh', 'Japan', 'South Korea', 'UK', 'Italy', 'Turkey', 'Other'];
 const PO_TYPES   = ['Product', 'Packaging', 'Para', 'Consumable', 'Component', 'Tools', 'Machines'];
@@ -182,6 +183,10 @@ function NewPOPage() {
   const [companyAddresses, setCompanyAddresses] = useState([]);
   const [deliveryAddressId, setDeliveryAddressId] = useState('');
 
+  // HSN → GST rate map (PO-GST feature). Loaded once on mount; powers
+  // auto-fill + lock on the GST% column when a known HSN is entered.
+  const [hsnMap, setHsnMap] = useState({});
+
   const [submitting, setSubmitting] = useState(false);
   const rrParam = searchParams?.get('rr') || null;
   const announcedRR = useRef(false);
@@ -196,6 +201,13 @@ function NewPOPage() {
       setCompanyAddresses(list);
       const def = list.find((a) => a.is_default_delivery);
       if (def) setDeliveryAddressId(String(def.id));
+    }).catch(() => {});
+    garageFetch('getHsnRates', {}, session).then((d) => {
+      const map = {};
+      (Array.isArray(d) ? d : []).forEach((r) => {
+        if (r.hsn_code) map[r.hsn_code] = parseFloat(r.gst_percent);
+      });
+      setHsnMap(map);
     }).catch(() => {});
   }, [session]);
 
@@ -296,6 +308,7 @@ function NewPOPage() {
         part_name: r.part_name,
         category:  r.part_category || '',
         type:      r.part_type || '',
+        hsn_code:  r.hsn_code || '',
         bom_qty:   parseFloat(r.qty_per_unit) || 0,
         qty:       String((parseFloat(r.qty_per_unit) || 0) * (parseInt(bomQty, 10) || 1)),
         checked:   true,
@@ -327,16 +340,22 @@ function NewPOPage() {
     if (!picked.length) { showToast('No parts selected', 'error'); return; }
     setLineItems((prev) => [
       ...prev,
-      ...picked.map((r) => ({
-        part_code:    r.part_code,
-        description:  r.part_name,
-        item_type:    'Part',
-        qty_ordered:  String(r.qty),
-        unit:         'pcs',
-        unit_price:   '',
-        product:      bomProduct,
-        variant:      bomVariant || null,
-      })),
+      ...picked.map((r) => {
+        const hsn = r.hsn_code || '';
+        const gst = hsn && hsnMap[hsn] != null ? hsnMap[hsn] : '';
+        return {
+          part_code:    r.part_code,
+          description:  r.part_name,
+          item_type:    'Part',
+          qty_ordered:  String(r.qty),
+          unit:         'pcs',
+          unit_price:   '',
+          product:      bomProduct,
+          variant:      bomVariant || null,
+          hsn_code:     hsn,
+          gst_percent:  gst === '' ? '' : String(gst),
+        };
+      }),
     ]);
     setBomChecklist([]);
     setBomGroup(null);
@@ -451,15 +470,15 @@ function NewPOPage() {
     showToast(`Added ${picked.length} parts`, 'success');
   }
 
-  // Total
-  const lineTotal = useMemo(() => {
-    let t = 0;
-    lineItems.forEach((l) => { t += (parseFloat(l.qty_ordered) || 0) * (parseFloat(l.unit_price) || 0); });
-    if (selectedCategory?.key === 'fbu') {
-      unitsRows.forEach((r) => { t += 0; }); // unit prices not collected per row in FBU mini-grid; user enters in lines table after explode
-    }
-    return t;
-  }, [lineItems, unitsRows, selectedCategory]);
+  // Tax-aware totals: subtotal + (CGST+SGST | IGST) + grand total. Live updates
+  // as the user edits qty / unit_price / HSN / GST% on any line. Uses the
+  // selected vendor's GSTIN (when known) to decide intra-state vs interstate.
+  const selectedVendor = useMemo(() => vendorMatch(vendor), [vendor, vendorCache]);
+  const tax = useMemo(
+    () => computeTax(lineItems, currency, selectedVendor?.gstin || null),
+    [lineItems, currency, selectedVendor]
+  );
+  const lineTotal = tax.taxable;
 
   // Submit
   async function handleSubmit() {
@@ -492,6 +511,7 @@ function NewPOPage() {
       po_category: selectedCategory?.key || null,
       source,
       vendor_name: vendor.trim(),
+      vendor_code: selectedVendor?.vendor_code || null,
       currency,
       payment_terms: paymentTerms || null,
       incoterms: incoterms || null,
@@ -848,8 +868,35 @@ function NewPOPage() {
             </div>
           )}
 
-          <div style={{ marginTop: 12, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: 13 }}>
-            Total: <strong style={{ color: 'var(--yellow)' }}>{currency} {lineTotal.toLocaleString('en-IN')}</strong>
+          <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end', fontFamily: 'var(--mono)', fontSize: 12 }}>
+            <div style={{ minWidth: 260 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}>
+                <span style={{ color: 'var(--t3)' }}>Subtotal</span>
+                <span>{currency} {tax.taxable.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+              </div>
+              {tax.showGst && tax.isCgstSgst && (
+                <>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}>
+                    <span style={{ color: 'var(--t3)' }}>CGST {tax.halfRate > 0 ? `@ ${tax.halfRate}%` : ''}</span>
+                    <span>₹ {tax.cgst.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}>
+                    <span style={{ color: 'var(--t3)' }}>SGST {tax.halfRate > 0 ? `@ ${tax.halfRate}%` : ''}</span>
+                    <span>₹ {tax.sgst.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  </div>
+                </>
+              )}
+              {tax.showGst && !tax.isCgstSgst && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}>
+                  <span style={{ color: 'var(--t3)' }}>IGST {tax.fullRate > 0 ? `@ ${tax.fullRate}%` : ''}</span>
+                  <span>₹ {tax.igst.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                </div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0 0 0', borderTop: '1px solid var(--border)', marginTop: 4, fontWeight: 700, color: 'var(--yellow)' }}>
+                <span>Grand Total</span>
+                <span>{currency} {tax.grand.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -1010,8 +1057,8 @@ function ManualMode({
               <th style={tableThStyle}>Qty</th>
               <th style={tableThStyle}>Unit Price</th>
               <th style={tableThStyle}>Unit</th>
-              <th style={tableThStyle}>HSN</th>
-              <th style={tableThStyle}>GST %</th>
+              {currency === 'INR' && <th style={tableThStyle}>HSN</th>}
+              {currency === 'INR' && <th style={tableThStyle}>GST %</th>}
               <th style={{ ...tableThStyle, width: 30 }}></th>
             </tr></thead>
             <tbody>
@@ -1026,12 +1073,21 @@ function ManualMode({
                     ).slice(0, 50)
                   : [];
                 const selectPart = (p) => {
-                  updateLine(i, 'part_code', p.part_code);
-                  updateLine(i, 'description', p.part_name || '');
-                  if (!l.unit || l.unit === 'pcs') {
-                    const u = p.issue_uom === 'EA' ? 'pcs' : (p.issue_uom || 'pcs');
-                    updateLine(i, 'unit', u);
-                  }
+                  // Multi-field update — go through setLineItems directly so HSN /
+                  // GST auto-fill lands atomically rather than racing per-field
+                  // updateLine calls.
+                  setLineItems((prev) => prev.map((row, j) => {
+                    if (j !== i) return row;
+                    const next = { ...row, part_code: p.part_code, description: p.part_name || '' };
+                    if (!row.unit || row.unit === 'pcs') {
+                      next.unit = p.issue_uom === 'EA' ? 'pcs' : (p.issue_uom || 'pcs');
+                    }
+                    if (p.hsn_code) {
+                      next.hsn_code = p.hsn_code;
+                      if (hsnMap[p.hsn_code] != null) next.gst_percent = String(hsnMap[p.hsn_code]);
+                    }
+                    return next;
+                  }));
                   setPickerOpenIdx(null);
                   setPickerQuery('');
                   setPartHighlight(-1);
@@ -1143,12 +1199,49 @@ function ManualMode({
                   <td style={tableTdStyle}>
                     <input type="text" value={l.unit} onChange={(e) => updateLine(i, 'unit', e.target.value)} style={{ ...inputStyle, width: 70 }} />
                   </td>
-                  <td style={tableTdStyle}>
-                    <input type="text" maxLength={8} placeholder="e.g. 7318" value={l.hsn_code || ''} onChange={(e) => updateLine(i, 'hsn_code', e.target.value)} style={{ ...inputStyle, width: 80, fontFamily: 'var(--mono)' }} />
-                  </td>
-                  <td style={tableTdStyle}>
-                    <input type="number" min="0" max="28" step="0.1" placeholder="e.g. 18" value={l.gst_percent || ''} onChange={(e) => updateLine(i, 'gst_percent', e.target.value)} style={{ ...inputStyle, width: 70, fontFamily: 'var(--mono)' }} />
-                  </td>
+                  {currency === 'INR' && (
+                    <td style={tableTdStyle}>
+                      <input
+                        type="text"
+                        maxLength={8}
+                        placeholder="e.g. 7318"
+                        value={l.hsn_code || ''}
+                        onChange={(e) => {
+                          const hsn = e.target.value;
+                          setLineItems((prev) => prev.map((row, j) => {
+                            if (j !== i) return row;
+                            const next = { ...row, hsn_code: hsn };
+                            // Auto-fill GST% when HSN matches a known rate; leave
+                            // GST untouched (manual entry) when no match.
+                            if (hsn && hsnMap[hsn] != null) next.gst_percent = String(hsnMap[hsn]);
+                            return next;
+                          }));
+                        }}
+                        style={{ ...inputStyle, width: 80, fontFamily: 'var(--mono)' }}
+                      />
+                    </td>
+                  )}
+                  {currency === 'INR' && (() => {
+                    const locked = !!l.hsn_code && hsnMap[l.hsn_code] != null;
+                    return (
+                      <td style={tableTdStyle}>
+                        <input
+                          type="number" min="0" max="28" step="0.1"
+                          placeholder="e.g. 18"
+                          value={l.gst_percent ?? ''}
+                          readOnly={locked}
+                          onChange={(e) => updateLine(i, 'gst_percent', e.target.value)}
+                          title={locked ? `Locked: HSN ${l.hsn_code} → ${hsnMap[l.hsn_code]}%` : 'Enter GST % manually'}
+                          style={{
+                            ...inputStyle,
+                            width: 70,
+                            fontFamily: 'var(--mono)',
+                            ...(locked ? { opacity: 0.65, cursor: 'not-allowed', background: 'transparent' } : {}),
+                          }}
+                        />
+                      </td>
+                    );
+                  })()}
                   <td style={tableTdStyle}>
                     <button onClick={() => removeLine(i)} style={{ background: 'transparent', border: '1px solid var(--border)', color: '#ff7070', cursor: 'pointer', fontSize: 11, borderRadius: 3, padding: '2px 6px' }}>✕</button>
                   </td>

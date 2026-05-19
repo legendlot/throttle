@@ -4,6 +4,7 @@ import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
 import { Spinner } from '@throttle/ui';
+import { computeTax } from '@/lib/poTax';
 
 // Wrap useSearchParams in Suspense for static-export prerender (BUG-009 pattern).
 export default function Page() {
@@ -46,23 +47,6 @@ function fmtMoney(n, curr) {
   return `${sym}${v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function computeTax(lines, currency) {
-  const taxable = lines.reduce((s, l) => s + (parseFloat(l.total_value || l.qty_ordered * l.unit_price || 0) || 0), 0);
-  if (currency !== 'INR') {
-    return { taxable, cgst: 0, sgst: 0, grand: taxable, showGst: false, cgstRate: 0, sgstRate: 0 };
-  }
-  const gst = lines.reduce((s, l) => {
-    const amt = parseFloat(l.total_value || l.qty_ordered * l.unit_price || 0) || 0;
-    const pct = parseFloat(l.gst_percent || 0) || 0;
-    return s + (amt * pct / 100);
-  }, 0);
-  const cgst = gst / 2;
-  const sgst = gst / 2;
-  // Blended display rate
-  const blended = taxable > 0 ? (gst / taxable) * 100 : 0;
-  const halfRate = Math.round(blended / 2);
-  return { taxable, cgst, sgst, grand: taxable + gst, showGst: true, cgstRate: halfRate, sgstRate: halfRate };
-}
 
 function PrintPOContent() {
   const { session } = useAuth();
@@ -96,7 +80,7 @@ function PrintPOContent() {
   if (!data)     return <div style={{ padding: 40, display: 'flex', justifyContent: 'center' }}><Spinner /></div>;
 
   const { po, vendor, company, deliveryAddress, lines } = data;
-  const tax = computeTax(lines || [], po.currency);
+  const tax = computeTax(lines || [], po.currency, vendor?.gstin || null, company?.gstin || null);
   const formattedPo = formatPONumber(po.po_number, po.raised_date);
 
   return (
@@ -254,17 +238,23 @@ function PrintPOContent() {
                       <td>Total Taxable Value</td>
                       <td className="num">{fmtMoney(tax.taxable, po.currency)}</td>
                     </tr>
-                    {tax.showGst && (
+                    {tax.showGst && tax.isCgstSgst && (
                       <>
                         <tr>
-                          <td>CGST {tax.cgstRate > 0 ? `@ ${tax.cgstRate}%` : ''}</td>
+                          <td>CGST {tax.halfRate > 0 ? `@ ${tax.halfRate}%` : ''}</td>
                           <td className="num">{fmtMoney(tax.cgst, po.currency)}</td>
                         </tr>
                         <tr>
-                          <td>SGST {tax.sgstRate > 0 ? `@ ${tax.sgstRate}%` : ''}</td>
+                          <td>SGST {tax.halfRate > 0 ? `@ ${tax.halfRate}%` : ''}</td>
                           <td className="num">{fmtMoney(tax.sgst, po.currency)}</td>
                         </tr>
                       </>
+                    )}
+                    {tax.showGst && !tax.isCgstSgst && (
+                      <tr>
+                        <td>IGST {tax.fullRate > 0 ? `@ ${tax.fullRate}%` : ''}</td>
+                        <td className="num">{fmtMoney(tax.igst, po.currency)}</td>
+                      </tr>
                     )}
                     <tr style={{ fontWeight: 700, fontSize: 12, borderTop: '2px solid #000' }}>
                       <td style={{ borderTop: '1px solid #000', paddingTop: 4 }}>Grand Total</td>
