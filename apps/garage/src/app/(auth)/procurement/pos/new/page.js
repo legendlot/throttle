@@ -821,6 +821,9 @@ function NewPOPage() {
               pickerQuery={pickerQuery}
               setPickerQuery={setPickerQuery}
               pickerRef={pickerRef}
+              pickerRect={pickerRect}
+              setPickerRect={setPickerRect}
+              hsnMap={hsnMap}
             />
           )}
 
@@ -1045,6 +1048,7 @@ function ManualMode({
   lineItems, addManualLine, updateLine, removeLine, currency,
   partsCache, partsLoading, loadParts,
   pickerOpenIdx, setPickerOpenIdx, pickerQuery, setPickerQuery, pickerRef,
+  pickerRect, setPickerRect, hsnMap,
 }) {
   const [partHighlight, setPartHighlight] = useState(-1);
   const highlightedPartRef = useRef(null);
