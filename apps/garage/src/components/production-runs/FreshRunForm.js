@@ -1,5 +1,5 @@
 'use client';
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { ConfirmModal, useToast } from '@throttle/ui';
 import { workerFetch, garageFetch } from '@throttle/db';
 import { useProducts } from '../../hooks/useProducts.js';
@@ -77,6 +77,19 @@ export function FreshRunForm({ onSuccess, session }) {
   const [vendors, setVendors] = useState([]);
   const [vendorsLoading, setVendorsLoading] = useState(false);
 
+  // Vendor combobox state
+  const [vendorQuery, setVendorQuery] = useState('');
+  const [vendorDropOpen, setVendorDropOpen] = useState(false);
+  const [vendorHighlight, setVendorHighlight] = useState(-1);
+  const [selectedVendor, setSelectedVendor] = useState(null);
+  const highlightedVendorRef = useRef(null);
+
+  // Product combobox state
+  const [productQuery, setProductQuery] = useState('');
+  const [productDropOpen, setProductDropOpen] = useState(false);
+  const [productHighlight, setProductHighlight] = useState(-1);
+  const highlightedProductRef = useRef(null);
+
   useEffect(() => {
     if (runType !== 'outsourced') return;
     if (vendors.length > 0) return;
@@ -87,13 +100,54 @@ export function FreshRunForm({ onSuccess, session }) {
       .finally(() => setVendorsLoading(false));
   }, [runType, session, vendors.length]);
 
+  useEffect(() => {
+    if (highlightedVendorRef.current) {
+      highlightedVendorRef.current.scrollIntoView({ block: 'nearest' });
+    }
+  }, [vendorHighlight]);
+
+  useEffect(() => {
+    if (highlightedProductRef.current) {
+      highlightedProductRef.current.scrollIntoView({ block: 'nearest' });
+    }
+  }, [productHighlight]);
+
   const isFbuFormat = useMemo(() => HAS_REMOTE.has(product), [product]);
   const productVariants = product ? PRODUCT_VARIANTS[product] || [] : [];
+
+  const filteredVendors = useMemo(
+    () => vendors.filter(v =>
+      (v.vendor_name || '').toLowerCase().includes(vendorQuery.toLowerCase()) ||
+      (v.vendor_code || '').toLowerCase().includes(vendorQuery.toLowerCase())
+    ),
+    [vendors, vendorQuery],
+  );
+
+  const filteredProducts = useMemo(
+    () => PRODUCTS.filter(p => p.toLowerCase().includes(productQuery.toLowerCase())),
+    [PRODUCTS, productQuery],
+  );
 
   function setProductAndReset(next) {
     setProduct(next);
     setVariantRows([blankRow()]);
     setErrors((e) => ({ ...e, product: undefined, rows: undefined }));
+  }
+
+  function selectVendorOption(v) {
+    setSelectedVendor(v);
+    setVendorId(v.id);
+    setVendorQuery(v.vendor_name || '');
+    setVendorDropOpen(false);
+    setVendorHighlight(-1);
+    setErrors((er) => ({ ...er, vendor: undefined }));
+  }
+
+  function selectProductOption(p) {
+    setProductAndReset(p);
+    setProductQuery(p);
+    setProductDropOpen(false);
+    setProductHighlight(-1);
   }
 
   function updateRow(id, patch) {
@@ -206,6 +260,9 @@ export function FreshRunForm({ onSuccess, session }) {
 
       showToast(`Run ${runNo} created and submitted to store`, 'success');
       setProduct('');
+      setProductQuery('');
+      setProductDropOpen(false);
+      setProductHighlight(-1);
       setRunDate(tomorrowISO());
       setLine('L1');
       setShift('Morning');
@@ -216,6 +273,10 @@ export function FreshRunForm({ onSuccess, session }) {
       setPendingPayload(null);
       setRunType('in-house');
       setVendorId('');
+      setSelectedVendor(null);
+      setVendorQuery('');
+      setVendorDropOpen(false);
+      setVendorHighlight(-1);
       onSuccess();
     } catch (e) {
       showToast(e.message || 'Failed to create run', 'error');
@@ -248,7 +309,17 @@ export function FreshRunForm({ onSuccess, session }) {
                 <button
                   key={type}
                   type="button"
-                  onClick={() => { setRunType(type); if (type === 'in-house') setVendorId(''); setErrors((e) => ({ ...e, vendor: undefined })); }}
+                  onClick={() => {
+                    setRunType(type);
+                    if (type === 'in-house') {
+                      setVendorId('');
+                      setSelectedVendor(null);
+                      setVendorQuery('');
+                      setVendorDropOpen(false);
+                      setVendorHighlight(-1);
+                    }
+                    setErrors((e) => ({ ...e, vendor: undefined }));
+                  }}
                   disabled={submitting}
                   style={{
                     background: active ? 'var(--yellow)' : 'var(--surface2)',
@@ -271,19 +342,79 @@ export function FreshRunForm({ onSuccess, session }) {
         {runType === 'outsourced' && (
           <div style={{ marginBottom: 10 }}>
             <span style={lbl}>Vendor *</span>
-            <select
-              style={sel}
-              value={vendorId}
-              onChange={(e) => { setVendorId(e.target.value); setErrors((er) => ({ ...er, vendor: undefined })); }}
-              disabled={submitting || vendorsLoading}
-            >
-              <option value="">{vendorsLoading ? 'Loading vendors…' : '— Select vendor —'}</option>
-              {vendors.map((v) => (
-                <option key={v.id} value={v.id}>
-                  {v.vendor_name} ({v.vendor_code})
-                </option>
-              ))}
-            </select>
+            <div style={{ position: 'relative' }}>
+              <input
+                type="text"
+                placeholder={vendorsLoading ? 'Loading vendors…' : 'Search vendors…'}
+                value={vendorQuery}
+                autoComplete="off"
+                disabled={submitting || vendorsLoading}
+                onChange={(e) => {
+                  setVendorQuery(e.target.value);
+                  setVendorDropOpen(true);
+                  setVendorHighlight(-1);
+                  if (selectedVendor) {
+                    setSelectedVendor(null);
+                    setVendorId('');
+                  }
+                  setErrors((er) => ({ ...er, vendor: undefined }));
+                }}
+                onFocus={() => setVendorDropOpen(true)}
+                onBlur={() => setTimeout(() => { setVendorDropOpen(false); setVendorHighlight(-1); }, 150)}
+                onKeyDown={(e) => {
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    setVendorDropOpen(true);
+                    setVendorHighlight((i) => Math.min((i < 0 ? -1 : i) + 1, filteredVendors.length - 1));
+                  } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    setVendorHighlight((i) => Math.max(i - 1, 0));
+                  } else if (e.key === 'Enter') {
+                    if (vendorDropOpen && vendorHighlight >= 0 && filteredVendors[vendorHighlight]) {
+                      e.preventDefault();
+                      selectVendorOption(filteredVendors[vendorHighlight]);
+                    }
+                  } else if (e.key === 'Escape') {
+                    setVendorDropOpen(false);
+                    setVendorHighlight(-1);
+                  }
+                }}
+                style={{ ...inp, borderRadius: vendorDropOpen ? '4px 4px 0 0' : 4 }}
+              />
+              {vendorDropOpen && vendors.length > 0 && (
+                <div style={{
+                  position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
+                  background: 'var(--surface2)', border: '1px solid var(--border)', borderTop: 'none',
+                  borderRadius: '0 0 4px 4px', maxHeight: 220, overflowY: 'auto',
+                }}>
+                  {filteredVendors.length === 0 ? (
+                    <div style={{ padding: '8px 10px', color: 'var(--t3)', fontSize: 12, fontFamily: 'var(--mono)' }}>
+                      No vendors found
+                    </div>
+                  ) : filteredVendors.map((v, idx) => {
+                    const highlighted = idx === vendorHighlight;
+                    return (
+                      <div
+                        key={v.id}
+                        ref={highlighted ? highlightedVendorRef : null}
+                        onMouseDown={() => selectVendorOption(v)}
+                        onMouseEnter={() => setVendorHighlight(idx)}
+                        style={{
+                          padding: '8px 10px', cursor: 'pointer', fontSize: 12,
+                          fontFamily: 'var(--mono)', color: 'var(--t1)',
+                          background: highlighted ? 'var(--surface)' : 'transparent',
+                          borderBottom: '1px solid var(--border)',
+                          display: 'flex', alignItems: 'baseline', gap: 8,
+                        }}
+                      >
+                        <span>{v.vendor_name}</span>
+                        <span style={{ color: 'var(--t3)', fontSize: 11 }}>{v.vendor_code}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
             {errors.vendor && <div style={fieldErr}>{errors.vendor}</div>}
           </div>
         )}
@@ -291,17 +422,75 @@ export function FreshRunForm({ onSuccess, session }) {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
           <div>
             <span style={lbl}>Product *</span>
-            <select
-              style={sel}
-              value={product}
-              onChange={(e) => setProductAndReset(e.target.value)}
-              disabled={submitting || loading}
-            >
-              <option value="">{loading ? 'Loading products…' : 'Select product…'}</option>
-              {PRODUCTS.map((p) => (
-                <option key={p} value={p}>{p}</option>
-              ))}
-            </select>
+            <div style={{ position: 'relative' }}>
+              <input
+                type="text"
+                placeholder={loading ? 'Loading products…' : 'Search products…'}
+                value={productQuery}
+                autoComplete="off"
+                disabled={submitting || loading}
+                onChange={(e) => {
+                  setProductQuery(e.target.value);
+                  setProductDropOpen(true);
+                  setProductHighlight(-1);
+                  if (product) {
+                    setProductAndReset('');
+                  }
+                }}
+                onFocus={() => setProductDropOpen(true)}
+                onBlur={() => setTimeout(() => { setProductDropOpen(false); setProductHighlight(-1); }, 150)}
+                onKeyDown={(e) => {
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    setProductDropOpen(true);
+                    setProductHighlight((i) => Math.min((i < 0 ? -1 : i) + 1, filteredProducts.length - 1));
+                  } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    setProductHighlight((i) => Math.max(i - 1, 0));
+                  } else if (e.key === 'Enter') {
+                    if (productDropOpen && productHighlight >= 0 && filteredProducts[productHighlight]) {
+                      e.preventDefault();
+                      selectProductOption(filteredProducts[productHighlight]);
+                    }
+                  } else if (e.key === 'Escape') {
+                    setProductDropOpen(false);
+                    setProductHighlight(-1);
+                  }
+                }}
+                style={{ ...inp, borderRadius: productDropOpen ? '4px 4px 0 0' : 4 }}
+              />
+              {productDropOpen && PRODUCTS.length > 0 && (
+                <div style={{
+                  position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
+                  background: 'var(--surface2)', border: '1px solid var(--border)', borderTop: 'none',
+                  borderRadius: '0 0 4px 4px', maxHeight: 220, overflowY: 'auto',
+                }}>
+                  {filteredProducts.length === 0 ? (
+                    <div style={{ padding: '8px 10px', color: 'var(--t3)', fontSize: 12, fontFamily: 'var(--mono)' }}>
+                      No products found
+                    </div>
+                  ) : filteredProducts.map((p, idx) => {
+                    const highlighted = idx === productHighlight;
+                    return (
+                      <div
+                        key={p}
+                        ref={highlighted ? highlightedProductRef : null}
+                        onMouseDown={() => selectProductOption(p)}
+                        onMouseEnter={() => setProductHighlight(idx)}
+                        style={{
+                          padding: '8px 10px', cursor: 'pointer', fontSize: 12,
+                          fontFamily: 'var(--mono)', color: 'var(--t1)',
+                          background: highlighted ? 'var(--surface)' : 'transparent',
+                          borderBottom: '1px solid var(--border)',
+                        }}
+                      >
+                        {p}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
             {errors.product && <div style={fieldErr}>{errors.product}</div>}
           </div>
           <div>
