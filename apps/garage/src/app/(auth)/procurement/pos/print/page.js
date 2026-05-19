@@ -79,7 +79,7 @@ function PrintPOContent() {
   if (error)     return <div style={{ padding: 40, color: '#c33' }}>{error}</div>;
   if (!data)     return <div style={{ padding: 40, display: 'flex', justifyContent: 'center' }}><Spinner /></div>;
 
-  const { po, vendor, company, deliveryAddress, lines } = data;
+  const { po, vendor, company, deliveryAddress, lines, prepared_by_name } = data;
   const tax = computeTax(lines || [], po.currency, vendor?.gstin || null, company?.gstin || null);
   const formattedPo = formatPONumber(po.po_number, po.raised_date);
 
@@ -286,20 +286,16 @@ function PrintPOContent() {
           )}
         </div>
 
-        {/* Page 2 — Prepared by + signatory. Page break before. */}
+        {/* Prepared-by footer. Page break before to mirror the printed-PO
+            convention (signature block on its own page). */}
         <div style={{ pageBreakBefore: 'always', marginTop: 24 }}>
           <table style={{ marginTop: 40 }}>
             <tbody>
               <tr>
-                <td style={{ width: '50%', verticalAlign: 'bottom', fontSize: 11, paddingRight: 20 }}>
+                <td style={{ width: '60%', verticalAlign: 'bottom', fontSize: 11 }}></td>
+                <td style={{ width: '40%', verticalAlign: 'bottom', fontSize: 11, textAlign: 'right' }}>
                   <div style={{ marginBottom: 4 }}>Prepared by:</div>
-                  <div style={{ fontWeight: 700 }}>{po.raised_by || ''}</div>
-                </td>
-                <td style={{ width: '50%', verticalAlign: 'bottom', fontSize: 11 }}>
-                  <div style={{ border: '1px solid #000', height: 120, padding: 8, textAlign: 'right', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
-                    <div style={{ fontWeight: 700 }}>Authorised Signatory</div>
-                    <div>For {company?.legal_name || ''}</div>
-                  </div>
+                  <div style={{ fontWeight: 700 }}>{prepared_by_name || po.raised_by || ''}</div>
                 </td>
               </tr>
             </tbody>
