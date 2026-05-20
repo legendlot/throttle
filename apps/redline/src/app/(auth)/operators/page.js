@@ -12,6 +12,7 @@ const DEPARTMENTS = [
   { value: 'packaging', label: 'Packaging' },
   { value: 'admin',     label: 'Admin'     },
   { value: 'store',     label: 'Store'     },
+  { value: 'dispatch',  label: 'Dispatch'  },
 ];
 const DEPT_LABEL = Object.fromEntries(DEPARTMENTS.map(d => [d.value, d.label]));
 
