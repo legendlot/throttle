@@ -12,7 +12,7 @@ function fmt(n) { return n != null ? Number(n).toLocaleString('en-IN') : '0'; }
 // ── Line Cards ────────────────────────────────────────────────
 function LineCards({ lines, crMap }) {
   crMap = crMap || {};
-  const filtered = (lines || []).filter(l => l.line !== 'SHARED');
+  const filtered = (lines || []).filter(l => l.line !== 'SHARED' && !(l.line || '').startsWith('D'));
 
   if (!filtered.length) {
     return <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>🏭 No line data for today</div>;

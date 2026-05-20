@@ -35,6 +35,7 @@ export const NAV_GROUPS = [
     id: 'dispatch', label: 'DISPATCH', icon: Truck,
     items: [
       { id: 'dispatch',           label: 'Overview',        route: '/dispatch',           icon: Truck },
+      { id: 'dispatch-lines',     label: 'Lines',           route: '/dispatch/lines',     icon: GitBranch },
       { id: 'dispatch-pipeline',  label: 'Pipeline',        route: '/dispatch-pipeline',  icon: Network },
       { id: 'dispatch-shipments', label: 'Shipments',       route: '/dispatch-shipments', icon: Send },
       { id: 'dispatch-channels',  label: 'Channel Master',  route: '/dispatch-channels',  icon: Tag },
