@@ -33,6 +33,10 @@ const btnSec = {
   padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: 11,
   textTransform: 'uppercase', letterSpacing: 1, cursor: 'pointer',
 };
+const tinyBtn = {
+  background: 'transparent', border: 'none', color: 'var(--t3)',
+  cursor: 'pointer', fontSize: 16, padding: 0,
+};
 
 function tomorrowISO() {
   const d = new Date();
@@ -40,30 +44,14 @@ function tomorrowISO() {
   return d.toISOString().slice(0, 10);
 }
 
-function buildRowsForProduct(product, variantMap, colorMap) {
-  const variants = variantMap[product] || [];
-  if (variants.length === 0) {
-    return [{ model: null, color: '', label: 'Common', carQty: 0, remoteQty: 0 }];
-  }
-  const singleModel = variants.length === 1;
-  const rows = [];
-  for (const v of variants) {
-    const opts = colorMap?.[product]?.[v] || [];
-    if (opts.length === 0) {
-      rows.push({ model: v, color: '', label: v, carQty: 0, remoteQty: 0 });
-      continue;
-    }
-    for (const c of opts) {
-      rows.push({
-        model: v,
-        color: c,
-        label: singleModel ? c : `${v} - ${c}`,
-        carQty: 0,
-        remoteQty: 0,
-      });
-    }
-  }
-  return rows;
+function blankRow() {
+  return {
+    id: Math.random().toString(36).slice(2, 9),
+    model: '',
+    color: '',
+    carQty: '',
+    remoteQty: '',
+  };
 }
 
 export function RepairRunForm({ onSuccess, session }) {
@@ -85,7 +73,7 @@ export function RepairRunForm({ onSuccess, session }) {
     }
     setProductBlocks((prev) => [
       ...prev,
-      { product: productToAdd, rows: buildRowsForProduct(productToAdd, PRODUCT_VARIANTS, PRODUCT_COLORS) },
+      { product: productToAdd, rows: [blankRow()] },
     ]);
     setProductToAdd('');
   }
@@ -94,17 +82,26 @@ export function RepairRunForm({ onSuccess, session }) {
     setProductBlocks((prev) => prev.filter((b) => b.product !== product));
   }
 
-  function updateRowQty(product, idx, field, value) {
-    const num = parseInt(value);
-    const safe = isNaN(num) ? 0 : num;
+  function updateRow(product, rowId, patch) {
     setProductBlocks((prev) =>
       prev.map((b) => {
         if (b.product !== product) return b;
-        const rows = b.rows.map((r, i) => {
-          if (i !== idx) return r;
+        return { ...b, rows: b.rows.map((r) => (r.id === rowId ? { ...r, ...patch } : r)) };
+      }),
+    );
+  }
+
+  function updateRowQty(product, rowId, field, value) {
+    const num = parseInt(value);
+    const safe = isNaN(num) ? '' : num;
+    setProductBlocks((prev) =>
+      prev.map((b) => {
+        if (b.product !== product) return b;
+        const rows = b.rows.map((r) => {
+          if (r.id !== rowId) return r;
           const next = { ...r, [field]: safe };
-          // Mirror legacy syncRepairRemote: if changing CAR and REMOTE is still 0, mirror value
-          if (field === 'carQty' && (r.remoteQty === 0 || r.remoteQty === '' || r.remoteQty == null)) {
+          // Mirror legacy syncRepairRemote: if CAR is set and REMOTE is still blank/0, mirror.
+          if (field === 'carQty' && (r.remoteQty === '' || r.remoteQty === 0 || r.remoteQty == null)) {
             next.remoteQty = safe;
           }
           return next;
@@ -114,12 +111,18 @@ export function RepairRunForm({ onSuccess, session }) {
     );
   }
 
-  function updateRowColor(product, idx, color) {
+  function addRow(product) {
+    setProductBlocks((prev) =>
+      prev.map((b) => (b.product !== product ? b : { ...b, rows: [...b.rows, blankRow()] })),
+    );
+  }
+
+  function removeRow(product, rowId) {
     setProductBlocks((prev) =>
       prev.map((b) => {
         if (b.product !== product) return b;
-        const rows = b.rows.map((r, i) => (i === idx ? { ...r, color } : r));
-        return { ...b, rows };
+        if (b.rows.length === 1) return b; // keep at least one row
+        return { ...b, rows: b.rows.filter((r) => r.id !== rowId) };
       }),
     );
   }
@@ -144,15 +147,20 @@ export function RepairRunForm({ onSuccess, session }) {
   }
 
   async function handleSubmit() {
-    // Colour validation — require a colour when the product/variant has options.
+    // Validation: any row with non-zero qty must have variant + colour picked when options exist.
     for (const block of productBlocks) {
+      const variants = PRODUCT_VARIANTS?.[block.product] || [];
       for (const row of block.rows) {
         const car = parseInt(row.carQty) || 0;
         const remote = parseInt(row.remoteQty) || 0;
         if (car <= 0 && remote <= 0) continue;
-        const opts = PRODUCT_COLORS?.[block.product]?.[row.model] || [];
+        if (variants.length > 0 && !row.model) {
+          showToast(`Select a variant for ${block.product}`, 'error');
+          return;
+        }
+        const opts = (row.model && PRODUCT_COLORS?.[block.product]?.[row.model]) || [];
         if (opts.length > 0 && !row.color) {
-          showToast(`Select a colour for ${block.product} — ${row.label}`, 'error');
+          showToast(`Select a colour for ${block.product} — ${row.model}`, 'error');
           return;
         }
       }
@@ -237,91 +245,115 @@ export function RepairRunForm({ onSuccess, session }) {
             Add a product to get started.
           </div>
         ) : (
-          productBlocks.map((block) => (
-            <div
-              key={block.product}
-              style={{
-                marginBottom: 12, padding: 12, border: '1px solid var(--border)', borderRadius: 4,
-                background: 'var(--surface2)',
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--yellow)' }}>
-                  {block.product.toUpperCase()}
-                </span>
-                <button
-                  style={{ background: 'transparent', border: 'none', color: 'var(--t3)', cursor: 'pointer', fontSize: 16 }}
-                  onClick={() => removeBlock(block.product)}
-                  disabled={submitting}
-                  title="Remove product block"
-                >
-                  ×
-                </button>
-              </div>
+          productBlocks.map((block) => {
+            const productVariants = PRODUCT_VARIANTS?.[block.product] || [];
+            return (
               <div
+                key={block.product}
                 style={{
-                  display: 'grid',
-                  gridTemplateColumns: '1fr 140px 90px 90px 30px',
-                  gap: 6, marginBottom: 4, alignItems: 'center',
+                  marginBottom: 12, padding: 12, border: '1px solid var(--border)', borderRadius: 4,
+                  background: 'var(--surface2)',
                 }}
               >
-                <span style={lbl}>Variant</span>
-                <span style={lbl}>Colour</span>
-                <span style={{ ...lbl, textAlign: 'right' }}>Cars</span>
-                <span style={{ ...lbl, textAlign: 'right' }}>Remotes</span>
-                <span style={{ ...lbl, textAlign: 'center' }}>U</span>
-              </div>
-              {block.rows.map((row, idx) => {
-                const colorOptions = PRODUCT_COLORS?.[block.product]?.[row.model] || [];
-                return (
-                  <div
-                    key={idx}
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: '1fr 140px 90px 90px 30px',
-                      gap: 6, alignItems: 'center', padding: '4px 0',
-                    }}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--yellow)' }}>
+                    {block.product.toUpperCase()}
+                  </span>
+                  <button
+                    style={tinyBtn}
+                    onClick={() => removeBlock(block.product)}
+                    disabled={submitting}
+                    title="Remove product block"
                   >
-                    <div style={{ fontSize: 12 }}>{row.label}</div>
-                    {row.color ? (
-                      <span style={{ fontSize: 12, color: 'var(--t2)' }}>{row.color}</span>
-                    ) : colorOptions.length > 0 ? (
-                      <select
-                        style={sel}
-                        value={row.color || ''}
-                        onChange={(e) => updateRowColor(block.product, idx, e.target.value)}
-                        disabled={submitting}
+                    ×
+                  </button>
+                </div>
+
+                {block.rows.map((row) => {
+                  const colorOptions = (row.model && PRODUCT_COLORS?.[block.product]?.[row.model]) || [];
+                  return (
+                    <div
+                      key={row.id}
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '1fr 1fr 90px 90px 28px',
+                        gap: 6, alignItems: 'end', marginBottom: 8,
+                      }}
+                    >
+                      <div>
+                        <span style={lbl}>Variant</span>
+                        <select
+                          style={sel}
+                          value={row.model}
+                          onChange={(e) => updateRow(block.product, row.id, { model: e.target.value, color: '' })}
+                          disabled={submitting || productVariants.length === 0}
+                        >
+                          {productVariants.length === 0 ? (
+                            <option value="">Common</option>
+                          ) : (
+                            <>
+                              <option value="">— Select —</option>
+                              {productVariants.map((v) => (
+                                <option key={v} value={v}>{v}</option>
+                              ))}
+                            </>
+                          )}
+                        </select>
+                      </div>
+                      <div>
+                        <span style={lbl}>Colour</span>
+                        <select
+                          style={sel}
+                          value={row.color}
+                          onChange={(e) => updateRow(block.product, row.id, { color: e.target.value })}
+                          disabled={submitting || colorOptions.length === 0}
+                        >
+                          <option value="">{colorOptions.length === 0 ? '—' : '— Select —'}</option>
+                          {colorOptions.map((c) => (
+                            <option key={c} value={c}>{c}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <span style={lbl}>Cars</span>
+                        <input
+                          style={{ ...inp, textAlign: 'right' }}
+                          type="number"
+                          min="0"
+                          value={row.carQty}
+                          onChange={(e) => updateRowQty(block.product, row.id, 'carQty', e.target.value)}
+                          disabled={submitting}
+                        />
+                      </div>
+                      <div>
+                        <span style={lbl}>Remotes</span>
+                        <input
+                          style={{ ...inp, textAlign: 'right' }}
+                          type="number"
+                          min="0"
+                          value={row.remoteQty}
+                          onChange={(e) => updateRowQty(block.product, row.id, 'remoteQty', e.target.value)}
+                          disabled={submitting}
+                        />
+                      </div>
+                      <button
+                        style={tinyBtn}
+                        onClick={() => removeRow(block.product, row.id)}
+                        disabled={submitting || block.rows.length === 1}
+                        title="Remove row"
                       >
-                        <option value="">— Select —</option>
-                        {colorOptions.map((c) => (
-                          <option key={c} value={c}>{c}</option>
-                        ))}
-                      </select>
-                    ) : (
-                      <span style={{ fontSize: 12, color: 'var(--t3)', textAlign: 'center' }}>—</span>
-                    )}
-                    <input
-                      style={{ ...inp, textAlign: 'right' }}
-                      type="number"
-                      min="0"
-                      value={row.carQty || ''}
-                      onChange={(e) => updateRowQty(block.product, idx, 'carQty', e.target.value)}
-                      disabled={submitting}
-                    />
-                    <input
-                      style={{ ...inp, textAlign: 'right' }}
-                      type="number"
-                      min="0"
-                      value={row.remoteQty || ''}
-                      onChange={(e) => updateRowQty(block.product, idx, 'remoteQty', e.target.value)}
-                      disabled={submitting}
-                    />
-                    <span style={{ fontSize: 10, color: 'var(--t3)', textAlign: 'center' }}>units</span>
-                  </div>
-                );
-              })}
-            </div>
-          ))
+                        ×
+                      </button>
+                    </div>
+                  );
+                })}
+
+                <div style={{ marginTop: 6 }}>
+                  <button style={btnSec} onClick={() => addRow(block.product)} disabled={submitting}>+ Add Variant</button>
+                </div>
+              </div>
+            );
+          })
         )}
 
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
