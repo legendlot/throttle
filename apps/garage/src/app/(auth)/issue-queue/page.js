@@ -589,7 +589,10 @@ export default function IssueQueuePage() {
           <td class="${status === 'SHORT' ? 'short' : 'ok'}">${status}</td>
         </tr>`;
     }).join('');
-    const variants = (item.wos || []).map((w) => `${w.variant || 'Common'} ×${w.qty}`).join(', ');
+    const variants = (item.wos || []).map((w) => {
+      const v = w.variant || 'Common';
+      return w.colour ? `${v} ${w.colour} ×${w.qty}` : `${v} ×${w.qty}`;
+    }).join(', ');
     const totalUnits = (item.wos || []).reduce((s, w) => s + (w.qty || 0), 0);
     return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Pick List — ${escapeHtml(item.ref)}</title>
 <style>
@@ -597,7 +600,7 @@ export default function IssueQueuePage() {
   .hdr { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 14px; }
   .brand { font-weight: 900; font-size: 18px; letter-spacing: 0.04em; }
   .title { font-size: 16px; font-weight: 700; text-transform: uppercase; }
-  .meta { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; font-size: 11px; margin-bottom: 16px; }
+  .meta { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; font-size: 11px; margin-bottom: 16px; }
   .meta div { border: 1px solid #ddd; padding: 6px 8px; }
   .meta strong { display: block; font-size: 9px; color: #666; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 2px; }
   table { width: 100%; border-collapse: collapse; font-size: 11px; }
@@ -618,6 +621,8 @@ export default function IssueQueuePage() {
   <div class="meta">
     <div><strong>Run No</strong>${escapeHtml(item.ref)}</div>
     <div><strong>Product</strong>${escapeHtml(run?.product || '')}</div>
+    <div><strong>Line</strong>${escapeHtml(run?.line_no || '—')}</div>
+    <div><strong>Shift</strong>${escapeHtml(run?.shift || '—')}</div>
     <div><strong>Total Units</strong>${totalUnits}</div>
     <div><strong>Date Printed</strong>${today}</div>
     <div><strong>Variants</strong>${escapeHtml(variants)}</div>
