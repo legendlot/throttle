@@ -40,17 +40,26 @@ function tomorrowISO() {
   return d.toISOString().slice(0, 10);
 }
 
-function buildRowsForProduct(product, variantMap) {
+function buildRowsForProduct(product, variantMap, colorMap) {
   const variants = variantMap[product] || [];
   if (variants.length === 0) {
-    return [{ model: null, color: null, label: 'Common', carQty: 0, remoteQty: 0 }];
+    return [{ model: null, color: '', label: 'Common', carQty: 0, remoteQty: 0 }];
   }
-  return variants.map((v) => ({ model: v, color: null, label: v, carQty: 0, remoteQty: 0 }));
+  return variants.map((v) => {
+    const opts = colorMap?.[product]?.[v] || [];
+    return {
+      model: v,
+      color: opts.length === 1 ? opts[0] : '',
+      label: v,
+      carQty: 0,
+      remoteQty: 0,
+    };
+  });
 }
 
 export function RepairRunForm({ onSuccess, session }) {
   const { showToast } = useToast();
-  const { PRODUCTS, PRODUCT_VARIANTS, loading } = useProducts();
+  const { PRODUCTS, PRODUCT_VARIANTS, PRODUCT_COLORS, loading } = useProducts();
   const [runDate, setRunDate] = useState(tomorrowISO());
   const [line, setLine] = useState('L1');
   const [shift, setShift] = useState('Morning');
@@ -67,7 +76,7 @@ export function RepairRunForm({ onSuccess, session }) {
     }
     setProductBlocks((prev) => [
       ...prev,
-      { product: productToAdd, rows: buildRowsForProduct(productToAdd, PRODUCT_VARIANTS) },
+      { product: productToAdd, rows: buildRowsForProduct(productToAdd, PRODUCT_VARIANTS, PRODUCT_COLORS) },
     ]);
     setProductToAdd('');
   }
@@ -96,6 +105,16 @@ export function RepairRunForm({ onSuccess, session }) {
     );
   }
 
+  function updateRowColor(product, idx, color) {
+    setProductBlocks((prev) =>
+      prev.map((b) => {
+        if (b.product !== product) return b;
+        const rows = b.rows.map((r, i) => (i === idx ? { ...r, color } : r));
+        return { ...b, rows };
+      }),
+    );
+  }
+
   function buildLines() {
     const lines = [];
     for (const block of productBlocks) {
@@ -116,6 +135,19 @@ export function RepairRunForm({ onSuccess, session }) {
   }
 
   async function handleSubmit() {
+    // Colour validation — require a colour when the product/variant has options.
+    for (const block of productBlocks) {
+      for (const row of block.rows) {
+        const car = parseInt(row.carQty) || 0;
+        const remote = parseInt(row.remoteQty) || 0;
+        if (car <= 0 && remote <= 0) continue;
+        const opts = PRODUCT_COLORS?.[block.product]?.[row.model] || [];
+        if (opts.length > 0 && !row.color) {
+          showToast(`Select a colour for ${block.product} — ${row.label}`, 'error');
+          return;
+        }
+      }
+    }
     const lines = buildLines();
     if (!lines.length) {
       showToast('Add at least one row with a non-zero quantity', 'error');
@@ -220,44 +252,63 @@ export function RepairRunForm({ onSuccess, session }) {
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: '1fr 90px 90px 30px',
+                  gridTemplateColumns: '1fr 140px 90px 90px 30px',
                   gap: 6, marginBottom: 4, alignItems: 'center',
                 }}
               >
-                <span style={lbl}>Variant / Colour</span>
+                <span style={lbl}>Variant</span>
+                <span style={lbl}>Colour</span>
                 <span style={{ ...lbl, textAlign: 'right' }}>Cars</span>
                 <span style={{ ...lbl, textAlign: 'right' }}>Remotes</span>
                 <span style={{ ...lbl, textAlign: 'center' }}>U</span>
               </div>
-              {block.rows.map((row, idx) => (
-                <div
-                  key={idx}
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: '1fr 90px 90px 30px',
-                    gap: 6, alignItems: 'center', padding: '4px 0',
-                  }}
-                >
-                  <div style={{ fontSize: 12 }}>{row.label}</div>
-                  <input
-                    style={{ ...inp, textAlign: 'right' }}
-                    type="number"
-                    min="0"
-                    value={row.carQty || ''}
-                    onChange={(e) => updateRowQty(block.product, idx, 'carQty', e.target.value)}
-                    disabled={submitting}
-                  />
-                  <input
-                    style={{ ...inp, textAlign: 'right' }}
-                    type="number"
-                    min="0"
-                    value={row.remoteQty || ''}
-                    onChange={(e) => updateRowQty(block.product, idx, 'remoteQty', e.target.value)}
-                    disabled={submitting}
-                  />
-                  <span style={{ fontSize: 10, color: 'var(--t3)', textAlign: 'center' }}>units</span>
-                </div>
-              ))}
+              {block.rows.map((row, idx) => {
+                const colorOptions = PRODUCT_COLORS?.[block.product]?.[row.model] || [];
+                return (
+                  <div
+                    key={idx}
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '1fr 140px 90px 90px 30px',
+                      gap: 6, alignItems: 'center', padding: '4px 0',
+                    }}
+                  >
+                    <div style={{ fontSize: 12 }}>{row.label}</div>
+                    {colorOptions.length > 0 ? (
+                      <select
+                        style={sel}
+                        value={row.color || ''}
+                        onChange={(e) => updateRowColor(block.product, idx, e.target.value)}
+                        disabled={submitting}
+                      >
+                        <option value="">— Select —</option>
+                        {colorOptions.map((c) => (
+                          <option key={c} value={c}>{c}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span style={{ fontSize: 12, color: 'var(--t3)', textAlign: 'center' }}>—</span>
+                    )}
+                    <input
+                      style={{ ...inp, textAlign: 'right' }}
+                      type="number"
+                      min="0"
+                      value={row.carQty || ''}
+                      onChange={(e) => updateRowQty(block.product, idx, 'carQty', e.target.value)}
+                      disabled={submitting}
+                    />
+                    <input
+                      style={{ ...inp, textAlign: 'right' }}
+                      type="number"
+                      min="0"
+                      value={row.remoteQty || ''}
+                      onChange={(e) => updateRowQty(block.product, idx, 'remoteQty', e.target.value)}
+                      disabled={submitting}
+                    />
+                    <span style={{ fontSize: 10, color: 'var(--t3)', textAlign: 'center' }}>units</span>
+                  </div>
+                );
+              })}
             </div>
           ))
         )}
