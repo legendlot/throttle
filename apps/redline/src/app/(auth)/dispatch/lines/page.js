@@ -25,7 +25,7 @@ function DispatchLineCards({ lines }) {
           ? new Date(l.last_scan_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' })
           : null;
 
-        const shipments = Array.isArray(l.active_shipments) ? l.active_shipments : [];
+        const channels = Array.isArray(l.active_channels) ? l.active_channels : [];
 
         const statStyle = { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 };
         const valStyle  = (color) => ({ fontFamily: 'var(--mono)', fontSize: 18, fontWeight: 700, color: color || 'var(--t1)' });
@@ -38,9 +38,9 @@ function DispatchLineCards({ lines }) {
               <div>
                 <div style={{ fontFamily: 'var(--cond)', fontSize: 16, fontWeight: 700, color: 'var(--t1)' }}>{l.line || '—'}</div>
                 <div style={{ fontSize: 11, color: 'var(--t2)', marginTop: 2 }}>
-                  {shipments.length
-                    ? shipments.join(', ')
-                    : <span style={{ color: 'var(--t3)' }}>No active shipment</span>}
+                  {channels.length
+                    ? channels.join(', ')
+                    : <span style={{ color: 'var(--t3)' }}>No channel activity</span>}
                 </div>
               </div>
               <div style={{ textAlign: 'right' }}>
