@@ -10,7 +10,7 @@ import { useRefreshState } from '../layout.js';
 const LINE_ORDER          = ['L1', 'L2', 'L3'];
 const DISPATCH_LINE_ORDER = ['D1', 'D2'];
 const OTHERS_DEPT_BUCKETS = ['Admin', 'Store'];  // visual split of line='Others' by operator department
-const LINE_COLORS         = { L1: 'var(--yellow)', L2: 'var(--blue)', L3: 'var(--green)', D1: '#ec4899', D2: '#06b6d4', Others: '#f97316', Admin: '#f59e0b', Store: '#f97316' };
+const LINE_COLORS         = { L1: 'var(--yellow)', L2: 'var(--blue)', L3: 'var(--green)', D1: '#ec4899', D2: '#06b6d4', Others: '#f97316', Admin: '#f59e0b', Store: '#a855f7' };
 const ROSTER_LINE_COLORS  = { L1: '#22c55e', L2: '#3b82f6', L3: '#a855f7', D1: '#ec4899', D2: '#06b6d4', Others: '#f97316', Admin: '#f59e0b', Store: '#f97316' };
 const ROSTER_SECTIONS     = ['Assembly', 'QC', 'Packaging'];
 const PERFORMANCE_CATEGORIES = [
@@ -254,19 +254,23 @@ function LiveViewTab({ session, canManageFloor }) {
     return m;
   }, [rosterByLine]);
 
-  const { byLine, dispatch, others, unassigned } = useMemo(() => {
+  const { byLine, dispatch, store, others, unassigned } = useMemo(() => {
     const lines = { L1: [], L2: [], L3: [] };
     const disp = [];
+    const str = [];
     const oth = [];
     const unas = [];
     for (const row of openShifts) {
       const line = assignedLineByOpId[row.operator_id];
       if (line === 'D1' || line === 'D2') disp.push(row);
-      else if (line === 'Others') oth.push(row);
+      else if (line === 'Others') {
+        if ((row.operator_department || '').toLowerCase() === 'store') str.push(row);
+        else oth.push(row);
+      }
       else if (line && lines[line]) lines[line].push(row);
       else unas.push(row);
     }
-    return { byLine: lines, dispatch: disp, others: oth, unassigned: unas };
+    return { byLine: lines, dispatch: disp, store: str, others: oth, unassigned: unas };
   }, [openShifts, assignedLineByOpId]);
 
   if (forbidden) {
@@ -290,7 +294,15 @@ function LiveViewTab({ session, canManageFloor }) {
       ) : (
         <>
           {/* Headcount bar */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', gap: 12, marginBottom: 16 }}>
+          {(() => {
+            const othersAssigned = (rosterByLine.Others || []).filter(
+              (r) => (r.operator_department || '').toLowerCase() !== 'store',
+            );
+            const storeAssigned = (rosterByLine.Others || []).filter(
+              (r) => (r.operator_department || '').toLowerCase() === 'store',
+            );
+            return (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 12, marginBottom: 16 }}>
             {LINE_ORDER.map((line) => (
               <HeadcountCard
                 key={line}
@@ -307,10 +319,16 @@ function LiveViewTab({ session, canManageFloor }) {
               sub={`${((rosterByLine.D1 || []).length) + ((rosterByLine.D2 || []).length)} assigned`}
             />
             <HeadcountCard
+              label="Store"
+              accent={LINE_COLORS.Store}
+              count={store.length}
+              sub={`${storeAssigned.length} assigned`}
+            />
+            <HeadcountCard
               label="Others"
               accent={LINE_COLORS.Others}
               count={others.length}
-              sub={`${(rosterByLine.Others || []).length} assigned`}
+              sub={`${othersAssigned.length} assigned`}
             />
             <HeadcountCard
               label="Unassigned"
@@ -319,6 +337,8 @@ function LiveViewTab({ session, canManageFloor }) {
               sub="open shift, no line"
             />
           </div>
+            );
+          })()}
 
           {/* Line sections */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12, marginBottom: 16 }}>
