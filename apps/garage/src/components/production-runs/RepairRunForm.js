@@ -45,16 +45,25 @@ function buildRowsForProduct(product, variantMap, colorMap) {
   if (variants.length === 0) {
     return [{ model: null, color: '', label: 'Common', carQty: 0, remoteQty: 0 }];
   }
-  return variants.map((v) => {
+  const singleModel = variants.length === 1;
+  const rows = [];
+  for (const v of variants) {
     const opts = colorMap?.[product]?.[v] || [];
-    return {
-      model: v,
-      color: opts.length === 1 ? opts[0] : '',
-      label: v,
-      carQty: 0,
-      remoteQty: 0,
-    };
-  });
+    if (opts.length === 0) {
+      rows.push({ model: v, color: '', label: v, carQty: 0, remoteQty: 0 });
+      continue;
+    }
+    for (const c of opts) {
+      rows.push({
+        model: v,
+        color: c,
+        label: singleModel ? c : `${v} - ${c}`,
+        carQty: 0,
+        remoteQty: 0,
+      });
+    }
+  }
+  return rows;
 }
 
 export function RepairRunForm({ onSuccess, session }) {
@@ -274,7 +283,9 @@ export function RepairRunForm({ onSuccess, session }) {
                     }}
                   >
                     <div style={{ fontSize: 12 }}>{row.label}</div>
-                    {colorOptions.length > 0 ? (
+                    {row.color ? (
+                      <span style={{ fontSize: 12, color: 'var(--t2)' }}>{row.color}</span>
+                    ) : colorOptions.length > 0 ? (
                       <select
                         style={sel}
                         value={row.color || ''}
