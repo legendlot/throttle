@@ -125,7 +125,7 @@ function NewPOPage() {
   const searchParams = useSearchParams();
   const { session, perms } = useAuth();
   const { showToast } = useToast();
-  const { PRODUCTS, PRODUCT_VARIANTS, loading: productsLoading } = useProducts();
+  const { PRODUCTS, PRODUCT_VARIANTS, PRODUCT_COLORS, HAS_REMOTE, loading: productsLoading } = useProducts();
 
   const [step, setStep] = useState('category');
   const [selectedCategory, setSelectedCategory] = useState(null);
@@ -164,7 +164,7 @@ function NewPOPage() {
 
   // Units mode
   const [fbuProduct, setFbuProduct] = useState('');
-  const [unitsRows, setUnitsRows] = useState([]); // for FBU unit-grid: {variant, color, qty}
+  const [unitsRows, setUnitsRows] = useState([]); // for FBU unit-grid: {variant, color, qty, withRemote}
 
   // CKD mode
   const [ckdProductSel, setCkdProductSel] = useState('');
@@ -400,11 +400,20 @@ function NewPOPage() {
 
   // Units mode (FBU)
   const fbuVariants = useMemo(() => fbuProduct ? (PRODUCT_VARIANTS[fbuProduct] || []) : [], [fbuProduct, PRODUCT_VARIANTS]);
+  const fbuColors = useMemo(() => (fbuProduct ? (PRODUCT_COLORS[fbuProduct] || {}) : {}), [fbuProduct, PRODUCT_COLORS]);
+  const productHasRemote = !!(fbuProduct && HAS_REMOTE && HAS_REMOTE.has?.(fbuProduct));
   function addUnitRow() {
-    setUnitsRows((prev) => [...prev, { variant: '', color: '', qty: '' }]);
+    setUnitsRows((prev) => [...prev, { variant: '', color: '', qty: '', withRemote: false }]);
   }
   function updateUnitRow(i, field, value) {
     setUnitsRows((prev) => prev.map((r, j) => (j === i ? { ...r, [field]: value } : r)));
+  }
+  function handleVariantChange(i, variant) {
+    setUnitsRows((prev) => prev.map((r, j) => {
+      if (j !== i) return r;
+      const colours = (PRODUCT_COLORS[fbuProduct]?.[variant]) || [];
+      return { ...r, variant, color: colours.length === 1 ? colours[0] : '' };
+    }));
   }
   function removeUnitRow(i) {
     setUnitsRows((prev) => prev.filter((_, j) => j !== i));
@@ -416,14 +425,18 @@ function NewPOPage() {
     if (ckdQueue.find((q) => q.product === ckdProductSel)) {
       showToast('Already in queue', 'error'); return;
     }
-    const variants = (PRODUCT_VARIANTS[ckdProductSel] || []).map((v) => ({ variant: v, color: '', qty: '' }));
+    const colorMap = PRODUCT_COLORS[ckdProductSel] || {};
+    const variants = (PRODUCT_VARIANTS[ckdProductSel] || []).map((v) => {
+      const cs = colorMap[v] || [];
+      return { variant: v, color: cs.length === 1 ? cs[0] : '', qty: '' };
+    });
     setCkdQueue((prev) => [...prev, { product: ckdProductSel, variants: variants.length ? variants : [{ variant: 'Common', color: '', qty: '' }] }]);
     setCkdProductSel('');
   }
-  function updateCkdQty(productIdx, varIdx, value) {
+  function updateCkdField(productIdx, varIdx, field, value) {
     setCkdQueue((prev) => prev.map((p, i) => {
       if (i !== productIdx) return p;
-      return { ...p, variants: p.variants.map((v, j) => (j === varIdx ? { ...v, qty: value } : v)) };
+      return { ...p, variants: p.variants.map((v, j) => (j === varIdx ? { ...v, [field]: value } : v)) };
     }));
   }
   function removeCkdProduct(idx) {
@@ -512,7 +525,7 @@ function NewPOPage() {
           qty_ordered:  q,
           unit:         'units',
           unit_price:   '',
-          description:  `${fbuProduct} ${u.variant || ''} ${u.color || ''}`.trim(),
+          description:  `${fbuProduct} ${u.variant || ''} ${u.color || ''}${u.withRemote ? ' + Remote' : ''}`.trim().replace(/\s+/g, ' '),
         });
       });
     }
@@ -679,20 +692,35 @@ function NewPOPage() {
                     <strong style={{ fontFamily: 'var(--cond)', fontSize: 14 }}>{p.product}</strong>
                     <button onClick={() => removeCkdProduct(pi)} style={{ background: 'transparent', border: '1px solid var(--border)', color: '#ff7070', cursor: 'pointer', fontSize: 11, borderRadius: 3, padding: '2px 8px' }}>✕</button>
                   </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 6 }}>
-                    {p.variants.map((v, vi) => (
-                      <div key={`${v.variant}-${vi}`} style={{ display: 'grid', gridTemplateColumns: '1fr 100px', gap: 4 }}>
-                        <span style={{ fontSize: 11, color: 'var(--t2)', alignSelf: 'center' }}>{v.variant || 'Common'}</span>
-                        <input
-                          type="number"
-                          min="0"
-                          placeholder="0"
-                          value={v.qty}
-                          onChange={(e) => updateCkdQty(pi, vi, e.target.value)}
-                          style={{ ...inputStyle, fontFamily: 'var(--mono)' }}
-                        />
-                      </div>
-                    ))}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6 }}>
+                    {p.variants.map((v, vi) => {
+                      const variantColors = (PRODUCT_COLORS[p.product]?.[v.variant]) || [];
+                      return (
+                        <div key={`${v.variant}-${vi}`} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 80px', gap: 4, alignItems: 'center' }}>
+                          <span style={{ fontSize: 11, color: 'var(--t2)' }}>{v.variant || 'Common'}</span>
+                          {variantColors.length > 0 ? (
+                            <select
+                              value={v.color || ''}
+                              onChange={(e) => updateCkdField(pi, vi, 'color', e.target.value)}
+                              style={{ ...selectStyle, fontFamily: 'var(--mono)', fontSize: 11 }}
+                            >
+                              <option value="">Colour…</option>
+                              {variantColors.map((c) => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                          ) : (
+                            <span style={{ fontSize: 11, color: 'var(--t3)' }}>—</span>
+                          )}
+                          <input
+                            type="number"
+                            min="0"
+                            placeholder="0"
+                            value={v.qty}
+                            onChange={(e) => updateCkdField(pi, vi, 'qty', e.target.value)}
+                            style={{ ...inputStyle, fontFamily: 'var(--mono)' }}
+                          />
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               ))
@@ -831,9 +859,12 @@ function NewPOPage() {
             <UnitsMode
               fbuProduct={fbuProduct}
               fbuVariants={fbuVariants}
+              fbuColors={fbuColors}
+              productHasRemote={productHasRemote}
               unitsRows={unitsRows}
               addUnitRow={addUnitRow}
               updateUnitRow={updateUnitRow}
+              handleVariantChange={handleVariantChange}
               removeUnitRow={removeUnitRow}
             />
           )}
@@ -1299,7 +1330,7 @@ function ManualMode({
   );
 }
 
-function UnitsMode({ fbuProduct, fbuVariants, unitsRows, addUnitRow, updateUnitRow, removeUnitRow }) {
+function UnitsMode({ fbuProduct, fbuVariants, fbuColors = {}, productHasRemote = false, unitsRows, addUnitRow, updateUnitRow, handleVariantChange, removeUnitRow }) {
   if (!fbuProduct) {
     return <div style={{ color: 'var(--t3)', fontSize: 11, fontStyle: 'italic' }}>Select a product first.</div>;
   }
@@ -1316,19 +1347,41 @@ function UnitsMode({ fbuProduct, fbuVariants, unitsRows, addUnitRow, updateUnitR
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr>
             <th style={tableThStyle}>Variant</th>
+            <th style={tableThStyle}>Colour</th>
+            {productHasRemote && <th style={{ ...tableThStyle, textAlign: 'center' }}>Remote</th>}
             <th style={tableThStyle}>Qty</th>
             <th style={{ ...tableThStyle, width: 30 }}></th>
           </tr></thead>
           <tbody>
             {unitsRows.map((r, i) => {
+              const variantColors = (r.variant && fbuColors[r.variant]) || [];
               return (
                 <tr key={i}>
                   <td style={tableTdStyle}>
-                    <select value={r.variant} onChange={(e) => updateUnitRow(i, 'variant', e.target.value)} style={{ ...selectStyle, width: 160 }}>
+                    <select value={r.variant} onChange={(e) => handleVariantChange(i, e.target.value)} style={{ ...selectStyle, width: 160 }}>
                       <option value="">Select…</option>
                       {fbuVariants.map((v) => <option key={v} value={v}>{v}</option>)}
                     </select>
                   </td>
+                  <td style={tableTdStyle}>
+                    {variantColors.length > 0 ? (
+                      <select value={r.color || ''} onChange={(e) => updateUnitRow(i, 'color', e.target.value)} style={{ ...selectStyle, width: 140 }}>
+                        <option value="">Select colour…</option>
+                        {variantColors.map((c) => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    ) : (
+                      <span style={{ color: 'var(--t3)', fontSize: 11 }}>—</span>
+                    )}
+                  </td>
+                  {productHasRemote && (
+                    <td style={{ ...tableTdStyle, textAlign: 'center' }}>
+                      <input
+                        type="checkbox"
+                        checked={!!r.withRemote}
+                        onChange={(e) => updateUnitRow(i, 'withRemote', e.target.checked)}
+                      />
+                    </td>
+                  )}
                   <td style={tableTdStyle}>
                     <input type="number" min="0" value={r.qty} onChange={(e) => updateUnitRow(i, 'qty', e.target.value)} style={{ ...inputStyle, width: 100, fontFamily: 'var(--mono)' }} />
                   </td>
