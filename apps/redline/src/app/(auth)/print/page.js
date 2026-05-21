@@ -30,7 +30,7 @@ export default function PrintPage() {
   const { session } = useAuth();
   const { showToast } = useToast();
 
-  const PRINTERS = ['L1', 'L2', 'L3', 'DISPATCH'];
+  const PRINTERS = ['L1', 'L2', 'L3', 'D1', 'D2'];
 
   const [mode,            setMode]           = useState('single');
   const [singleVal,       setSingleVal]      = useState('');
