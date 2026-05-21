@@ -2,7 +2,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, useToast } from '@throttle/ui';
+import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { useProducts } from '../../../../hooks/useProducts.js';
 
 const PO_SOURCES = ['China', 'India', 'USA', 'Germany', 'Taiwan', 'Vietnam', 'Bangladesh', 'Japan', 'South Korea', 'UK', 'Italy', 'Turkey', 'Other'];
@@ -422,10 +422,13 @@ export default function VendorsPage() {
                 <div>
                   <span style={labelStyle}>Reference</span>
                   {vsiType === 'product' ? (
-                    <select value={vsiProduct} onChange={(e) => setVsiProduct(e.target.value)} style={{ ...selectStyle, width: '100%' }} disabled={productsLoading}>
-                      <option value="">{productsLoading ? 'Loading…' : 'Select…'}</option>
-                      {PRODUCTS.map((p) => <option key={p} value={p}>{p}</option>)}
-                    </select>
+                    <Combobox
+                      value={vsiProduct}
+                      options={PRODUCTS.map((p) => ({ value: p, label: p }))}
+                      onChange={(v) => setVsiProduct(v)}
+                      placeholder="Search products…"
+                      loading={productsLoading}
+                    />
                   ) : vsiType === 'part' ? (
                     <div style={{ position: 'relative' }}>
                       <input

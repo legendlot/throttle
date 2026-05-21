@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, useToast } from '@throttle/ui';
+import { Spinner, useToast, Combobox } from '@throttle/ui';
 
 const COMPONENT_TYPES = [
   { value: 'car',       label: '🚗 Car' },
@@ -236,18 +236,18 @@ export default function ProductRegisterPage() {
             {familiesLoading ? (
               <div style={{ padding: 20, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
             ) : (
-              <select
-                value={selectedFamily?.product || ''}
-                onChange={(e) => setSelectedFamily(families.find((f) => f.product === e.target.value) || null)}
-                style={{ ...selectStyle, maxWidth: 400 }}
-              >
-                <option value="">Select existing product family…</option>
-                {families.map((f) => (
-                  <option key={f.product} value={f.product}>
-                    {f.product} — {f.variants.length} variants{f.has_remote ? ' · has remote' : ''}
-                  </option>
-                ))}
-              </select>
+              <div style={{ maxWidth: 400 }}>
+                <Combobox
+                  value={selectedFamily?.product || ''}
+                  options={families.map((f) => ({
+                    value: f.product,
+                    label: f.product,
+                    hint: `${f.variants.length} variants${f.has_remote ? ' · has remote' : ''}`,
+                  }))}
+                  onChange={(v) => setSelectedFamily(families.find((f) => f.product === v) || null)}
+                  placeholder="Search existing families…"
+                />
+              </div>
             )}
           </div>
         </div>

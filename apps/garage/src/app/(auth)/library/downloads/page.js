@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
-import { Spinner, useToast } from '@throttle/ui';
+import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { useProducts } from '../../../../hooks/useProducts.js';
 
 const panelStyle       = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, marginBottom: 16 };
@@ -179,15 +179,13 @@ export default function LibraryDownloadsPage() {
             </p>
             <div style={{ maxWidth: 300, marginBottom: 12 }}>
               <span style={labelStyle}>Product</span>
-              <select
+              <Combobox
                 value={selectedProduct}
-                onChange={(e) => setSelectedProduct(e.target.value)}
-                style={{ ...selectStyle, width: '100%' }}
-                disabled={productsLoading}
-              >
-                <option value="">{productsLoading ? 'Loading…' : 'Select…'}</option>
-                {PRODUCTS.map((p) => <option key={p} value={p}>{p}</option>)}
-              </select>
+                options={PRODUCTS.map((p) => ({ value: p, label: p }))}
+                onChange={(v) => setSelectedProduct(v)}
+                placeholder="Search products…"
+                loading={productsLoading}
+              />
             </div>
 
             {previewStats && (

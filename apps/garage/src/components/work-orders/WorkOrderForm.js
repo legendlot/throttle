@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
-import { useToast } from '@throttle/ui';
+import { useToast, Combobox } from '@throttle/ui';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { useProducts } from '../../hooks/useProducts.js';
 
@@ -234,17 +234,14 @@ export function WorkOrderForm({ onSuccess, session }) {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 8, alignItems: 'end', marginBottom: 12 }}>
               <div>
                 <span style={lbl}>Product</span>
-                <select
-                  style={sel}
+                <Combobox
                   value={bomProduct}
-                  onChange={(e) => { setBomProduct(e.target.value); setBomCategory(''); }}
-                  disabled={submitting || loading}
-                >
-                  <option value="">{loading ? 'Loading…' : 'Select product…'}</option>
-                  {PRODUCTS.map((p) => (
-                    <option key={p} value={p}>{p}</option>
-                  ))}
-                </select>
+                  options={PRODUCTS.map((p) => ({ value: p, label: p }))}
+                  onChange={(v) => { setBomProduct(v); setBomCategory(''); }}
+                  placeholder="Search products…"
+                  loading={loading}
+                  disabled={submitting}
+                />
               </div>
               <div>
                 <span style={lbl}>Category</span>

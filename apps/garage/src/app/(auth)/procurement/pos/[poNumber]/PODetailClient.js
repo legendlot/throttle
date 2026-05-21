@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, useToast } from '@throttle/ui';
+import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { computeTax } from '@/lib/poTax';
 
 const PO_STATUS_TONES = {
@@ -518,25 +518,25 @@ function AmendModal({ po, session, data, setData, onClose, onSubmit, submitting 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
           <div>
             <span style={labelStyle}>Vendor *</span>
-            <select
+            <Combobox
               value={data.vendor_code || ''}
-              onChange={(e) => {
-                const v = vendorCache.find((x) => x.vendor_code === e.target.value) || null;
-                set('vendor_code', v ? v.vendor_code : '');
-                set('vendor_name', v ? v.vendor_name : '');
+              options={(() => {
+                const opts = vendorCache.map((v) => ({ value: v.vendor_code, label: v.vendor_name, hint: v.vendor_code }));
+                // Surface the current PO's vendor even if it's no longer active.
+                if (data.vendor_name && !vendorCache.find((v) => v.vendor_code === data.vendor_code)) {
+                  opts.unshift({ value: data.vendor_code || '__stale__', label: `${data.vendor_name} (inactive)`, hint: 'legacy' });
+                }
+                return opts;
+              })()}
+              onChange={(_, opt) => {
+                const v = opt ? vendorCache.find((x) => x.vendor_code === opt.value) : null;
+                set('vendor_code', v ? v.vendor_code : (opt?.value || ''));
+                set('vendor_name', v ? v.vendor_name : (opt?.label?.replace(/ \(inactive\)$/, '') || ''));
               }}
+              placeholder="Search vendors…"
               disabled={submitting}
               required
-              style={{ ...selectStyle, width: '100%' }}
-            >
-              <option value="">Select vendor…</option>
-              {vendorCache.map((v) => (
-                <option key={v.vendor_code} value={v.vendor_code}>{v.vendor_name}</option>
-              ))}
-              {data.vendor_name && !vendorCache.find((v) => v.vendor_code === data.vendor_code) && (
-                <option value={data.vendor_code || '__stale__'}>{data.vendor_name} (inactive)</option>
-              )}
-            </select>
+            />
           </div>
           <SelectField label="Currency" value={data.currency || ''} onChange={(v) => set('currency', v)} options={['', ...PO_CURRENCIES]} disabled={submitting} />
           <SelectField label="Payment Terms" value={data.payment_terms || ''} onChange={(v) => set('payment_terms', v)} options={['', ...PO_PAYMENT_TERMS]} disabled={submitting} />

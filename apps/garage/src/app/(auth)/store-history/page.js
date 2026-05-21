@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
-import { Spinner, useToast } from '@throttle/ui';
+import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { useProducts } from '../../../hooks/useProducts.js';
 
 const LF_STATUS_TONES = { 'Pending Verification': 'yellow', Verified: 'green', Disputed: 'red' };
@@ -176,15 +176,15 @@ export default function StoreHistoryPage() {
           <div style={panelHeaderStyle}>
             <span>Issues {filteredIssues.length > 0 && <span style={{ color: 'var(--t3)', marginLeft: 6, fontSize: 11 }}>({filteredIssues.length})</span>}</span>
             <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-              <select
-                value={issueFilters.product}
-                onChange={(e) => setIssueFilters((f) => ({ ...f, product: e.target.value }))}
-                style={selectStyle}
-                disabled={productsLoading}
-              >
-                <option value="">{productsLoading ? 'Loading…' : 'All Products'}</option>
-                {PRODUCTS.map((p) => <option key={p} value={p}>{p}</option>)}
-              </select>
+              <div style={{ minWidth: 180 }}>
+                <Combobox
+                  value={issueFilters.product}
+                  options={PRODUCTS.map((p) => ({ value: p, label: p }))}
+                  onChange={(v) => setIssueFilters((f) => ({ ...f, product: v }))}
+                  placeholder="All products"
+                  loading={productsLoading}
+                />
+              </div>
               <select
                 value={issueFilters.type}
                 onChange={(e) => setIssueFilters((f) => ({ ...f, type: e.target.value }))}

@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useAuth, hasPermission } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
-import { EmptyState, Spinner } from '@throttle/ui';
+import { EmptyState, Spinner, Combobox } from '@throttle/ui';
 
 const btnBase = {
   padding: '6px 14px', borderRadius: 4, cursor: 'pointer',
@@ -194,10 +194,14 @@ export default function StockPage() {
               onChange={e => setSearch(e.target.value)}
               placeholder="Search part code or name"
             />
-            <select style={inputStyle} value={productFilter} onChange={e => setProductFilter(e.target.value)}>
-              <option value="">All Products</option>
-              {products.map(p => <option key={p} value={p}>{p}</option>)}
-            </select>
+            <div style={{ minWidth: 180 }}>
+              <Combobox
+                value={productFilter}
+                options={products.map((p) => ({ value: p, label: p }))}
+                onChange={(v) => setProductFilter(v)}
+                placeholder="All products"
+              />
+            </div>
             <select style={inputStyle} value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)}>
               <option value="">All Categories</option>
               {categories.map(c => <option key={c} value={c}>{c}</option>)}

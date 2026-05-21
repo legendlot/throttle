@@ -3,7 +3,7 @@ import { Fragment, Suspense, useEffect, useMemo, useRef, useState, useCallback }
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, useToast } from '@throttle/ui';
+import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { todayStr } from '@throttle/domain';
 import { useProducts } from '../../../../../hooks/useProducts.js';
 import { computeTax } from '@/lib/poTax';
@@ -742,10 +742,13 @@ function NewPOPage() {
             <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: 10, alignItems: 'end' }}>
               <div>
                 <span style={labelStyle}>Product *</span>
-                <select value={fbuProduct} onChange={(e) => { setFbuProduct(e.target.value); setUnitsRows([]); }} style={{ ...selectStyle, width: '100%' }} disabled={productsLoading}>
-                  <option value="">{productsLoading ? 'Loading…' : 'Select…'}</option>
-                  {PRODUCTS.map((p) => <option key={p} value={p}>{p}</option>)}
-                </select>
+                <Combobox
+                  value={fbuProduct}
+                  options={PRODUCTS.map((p) => ({ value: p, label: p }))}
+                  onChange={(v) => { setFbuProduct(v); setUnitsRows([]); }}
+                  placeholder="Search products…"
+                  loading={productsLoading}
+                />
               </div>
               {fbuProduct && <StatusBadge label={`Product · ${fbuProduct}`} tone="blue" />}
             </div>
@@ -850,10 +853,15 @@ function NewPOPage() {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             <div>
               <span style={labelStyle}>Vendor *</span>
-              <select
+              <Combobox
                 value={selectedVendor?.vendor_code || ''}
-                onChange={(e) => {
-                  const v = vendorCache.find((x) => x.vendor_code === e.target.value) || null;
+                options={vendorCache
+                  .filter((v) => chinaMode
+                    ? v.source_country === 'China'
+                    : v.source_country !== 'China')
+                  .map((v) => ({ value: v.vendor_code, label: v.vendor_name, hint: v.vendor_code }))}
+                onChange={(_, opt) => {
+                  const v = opt ? vendorCache.find((x) => x.vendor_code === opt.value) : null;
                   setVendor(v ? v.vendor_name : '');
                   if (v) {
                     if (v.payment_terms) setPaymentTerms(v.payment_terms);
@@ -862,18 +870,9 @@ function NewPOPage() {
                     if (v.lead_time_days != null) setLeadTimeDays(String(v.lead_time_days));
                   }
                 }}
+                placeholder="Search vendors…"
                 required
-                style={{ ...selectStyle, width: '100%' }}
-              >
-                <option value="">Select vendor…</option>
-                {vendorCache
-                  .filter((v) => chinaMode
-                    ? v.source_country === 'China'
-                    : v.source_country !== 'China')
-                  .map((v) => (
-                    <option key={v.vendor_code} value={v.vendor_code}>{v.vendor_name}</option>
-                  ))}
-              </select>
+              />
             </div>
             <SelectField label="Payment Terms" value={paymentTerms} onChange={setPaymentTerms} options={['', ...PO_PAYMENT_TERMS]} />
             <Field label="Lead Time (days)" type="number" value={leadTimeDays} onChange={setLeadTimeDays} readOnly />

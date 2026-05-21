@@ -1,6 +1,6 @@
 'use client';
 import { useState } from 'react';
-import { useToast } from '@throttle/ui';
+import { useToast, Combobox } from '@throttle/ui';
 import { workerFetch } from '@throttle/db';
 import { useProducts } from '../../hooks/useProducts.js';
 
@@ -230,12 +230,14 @@ export function RepairRunForm({ onSuccess, session }) {
         <div style={{ display: 'flex', gap: 8, marginBottom: 14, alignItems: 'flex-end' }}>
           <div style={{ flex: 1 }}>
             <span style={lbl}>Add Product</span>
-            <select style={sel} value={productToAdd} onChange={(e) => setProductToAdd(e.target.value)} disabled={submitting || loading}>
-              <option value="">{loading ? 'Loading…' : 'Select product…'}</option>
-              {availableProducts.map((p) => (
-                <option key={p} value={p}>{p}</option>
-              ))}
-            </select>
+            <Combobox
+              value={productToAdd}
+              options={availableProducts.map((p) => ({ value: p, label: p }))}
+              onChange={(v) => setProductToAdd(v)}
+              placeholder="Search products…"
+              loading={loading}
+              disabled={submitting}
+            />
           </div>
           <button style={btnSec} onClick={addProductBlock} disabled={submitting || !productToAdd}>+ Add</button>
         </div>

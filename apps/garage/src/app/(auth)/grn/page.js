@@ -2,7 +2,7 @@
 import { Fragment, useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { EmptyState, Modal, Spinner, useToast, buildBagLabelsHtml, printWindow } from '@throttle/ui';
+import { EmptyState, Modal, Spinner, useToast, buildBagLabelsHtml, printWindow, Combobox } from '@throttle/ui';
 import { useProducts } from '../../../hooks/useProducts.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -370,10 +370,13 @@ function BulkGrnPanel({ session, onSuccess }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
         <div>
           <span style={label}>Product *</span>
-          <select style={{ ...sel, width: '100%' }} value={product} onChange={e => { setProduct(e.target.value); setVariant(''); }} disabled={productsLoading}>
-            <option value="">{productsLoading ? 'Loading…' : 'Select product…'}</option>
-            {PRODUCTS.map(p => <option key={p} value={p}>{p}</option>)}
-          </select>
+          <Combobox
+            value={product}
+            options={PRODUCTS.map((p) => ({ value: p, label: p }))}
+            onChange={(v) => { setProduct(v); setVariant(''); }}
+            placeholder="Search products…"
+            loading={productsLoading}
+          />
         </div>
         <div>
           <span style={label}>Units Received *</span>
@@ -540,10 +543,13 @@ function FbuGrnPanel({ session, onSuccess }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
         <div>
           <span style={label}>Product *</span>
-          <select style={{ ...sel, width: '100%' }} value={product} onChange={e => { setProduct(e.target.value); setVariant(''); }} disabled={productsLoading}>
-            <option value="">{productsLoading ? 'Loading…' : 'Select product…'}</option>
-            {PRODUCTS.map(p => <option key={p} value={p}>{p}</option>)}
-          </select>
+          <Combobox
+            value={product}
+            options={PRODUCTS.map((p) => ({ value: p, label: p }))}
+            onChange={(v) => { setProduct(v); setVariant(''); }}
+            placeholder="Search products…"
+            loading={productsLoading}
+          />
         </div>
         <div>
           <span style={label}>Units Received *</span>

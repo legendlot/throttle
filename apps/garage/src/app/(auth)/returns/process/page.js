@@ -3,7 +3,7 @@ import { Suspense, useEffect, useMemo, useState, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, useToast } from '@throttle/ui';
+import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { useProducts } from '../../../../hooks/useProducts.js';
 
 const RETURN_CATEGORIES = [
@@ -404,10 +404,14 @@ function ProcessPage() {
               </div>
               <div>
                 <span style={labelStyle}>Product *</span>
-                <select value={product} onChange={(e) => setProduct(e.target.value)} style={{ ...selectStyle, width: '100%' }} disabled={submittingUnit || productsLoading}>
-                  <option value="">{productsLoading ? 'Loading…' : 'Select…'}</option>
-                  {PRODUCTS.map((p) => <option key={p} value={p}>{p}</option>)}
-                </select>
+                <Combobox
+                  value={product}
+                  options={PRODUCTS.map((p) => ({ value: p, label: p }))}
+                  onChange={(v) => setProduct(v)}
+                  placeholder="Search products…"
+                  loading={productsLoading}
+                  disabled={submittingUnit}
+                />
               </div>
               {category === 'UDR' && (
                 <div style={{ gridColumn: '1 / -1' }}>

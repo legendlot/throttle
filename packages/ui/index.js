@@ -14,3 +14,4 @@ export { printWindow } from './printWindow.js';
 export { buildBagLabelsHtml } from './buildBagLabelsHtml.js';
 export { QuickCreate } from './QuickCreate.js';
 export { Topbar } from './Topbar.js';
+export { Combobox } from './Combobox.js';

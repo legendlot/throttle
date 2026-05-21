@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
-import { Spinner } from '@throttle/ui';
+import { Spinner, Combobox } from '@throttle/ui';
 import { useProducts } from '../../../../hooks/useProducts.js';
 
 const TONE_STYLES = {
@@ -151,10 +151,13 @@ export default function LibraryPartsPage() {
             </div>
             <div style={{ flex: '0 0 180px' }}>
               <span style={labelStyle}>Product</span>
-              <select value={filterProduct} onChange={(e) => setFilterProduct(e.target.value)} style={{ ...selectStyle, width: '100%' }} disabled={productsLoading}>
-                <option value="">{productsLoading ? 'Loading…' : 'All Products'}</option>
-                {PRODUCTS.map((p) => <option key={p} value={p}>{p}</option>)}
-              </select>
+              <Combobox
+                value={filterProduct}
+                options={PRODUCTS.map((p) => ({ value: p, label: p }))}
+                onChange={(v) => setFilterProduct(v)}
+                placeholder="All products"
+                loading={productsLoading}
+              />
             </div>
             <div style={{ flex: '0 0 140px' }}>
               <span style={labelStyle}>Tier</span>

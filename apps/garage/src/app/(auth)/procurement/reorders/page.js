@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, useToast } from '@throttle/ui';
+import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { useProducts } from '../../../../hooks/useProducts.js';
 
 const TONE_STYLES = {
@@ -303,10 +303,13 @@ export default function ReordersPage() {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
                 <div>
                   <span style={labelStyle}>Product</span>
-                  <select value={product} onChange={(e) => { setProduct(e.target.value); setVariant(''); }} style={{ ...selectStyle, width: '100%' }} disabled={productsLoading}>
-                    <option value="">{productsLoading ? 'Loading…' : 'Select product…'}</option>
-                    {PRODUCTS.map((p) => <option key={p} value={p}>{p}</option>)}
-                  </select>
+                  <Combobox
+                    value={product}
+                    options={PRODUCTS.map((p) => ({ value: p, label: p }))}
+                    onChange={(v) => { setProduct(v); setVariant(''); }}
+                    placeholder="Search products…"
+                    loading={productsLoading}
+                  />
                 </div>
                 <div>
                   <span style={labelStyle}>Variant</span>
