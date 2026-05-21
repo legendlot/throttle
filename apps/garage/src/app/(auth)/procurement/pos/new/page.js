@@ -130,6 +130,11 @@ function NewPOPage() {
   const [step, setStep] = useState('category');
   const [selectedCategory, setSelectedCategory] = useState(null);
   const [hoverCard, setHoverCard] = useState(null);
+  // China PO mode (procurement redesign, 2026-05-21):
+  // Set true when the user enters via the gated "China PO" card. Forces source=China,
+  // currency=RMB, incoterms=FOB on category selection; filters vendor picker to Chinese vendors;
+  // exposes the "Save as Soft PO" submit option.
+  const [chinaMode, setChinaMode] = useState(false);
 
   // Header
   const [orderType, setOrderType] = useState('');
@@ -264,12 +269,13 @@ function NewPOPage() {
     };
   }, [pickerOpenIdx]);
 
-  function applyCategory(cat) {
+  function applyCategory(cat, isChina = false) {
     setSelectedCategory(cat);
     setOrderType(cat.order_type || '');
-    setSource(cat.source || 'India');
-    setCurrency(cat.currency || 'INR');
-    setIncoterms(cat.incoterms || '');
+    // China mode: force China sourcing defaults regardless of card defaults.
+    setSource(isChina ? 'China' : (cat.source || 'India'));
+    setCurrency(isChina ? 'RMB' : (cat.currency || 'INR'));
+    setIncoterms(isChina ? 'FOB' : (cat.incoterms || ''));
     const modes = ModesByCategory(cat.key);
     setLineMode(modes[0]);
     setLineItems([]);
@@ -507,8 +513,10 @@ function NewPOPage() {
   const lineTotal = tax.taxable;
 
   // Submit
-  async function handleSubmit() {
+  async function handleSubmit(opts = {}) {
+    const isSoft = !!opts.soft;
     if (!vendor.trim()) { showToast('Vendor required', 'error'); return; }
+    if (isSoft && !chinaMode) { showToast('Soft PO is only valid in China mode', 'error'); return; }
 
     let lines = [...lineItems];
 
@@ -536,6 +544,7 @@ function NewPOPage() {
       order_type: orderType,
       po_category: selectedCategory?.key || null,
       source,
+      ...(isSoft ? { status: 'Soft' } : {}),
       vendor_name: vendor.trim(),
       vendor_code: selectedVendor?.vendor_code || null,
       currency,
@@ -599,19 +608,28 @@ function NewPOPage() {
     return (
       <div style={{ color: 'var(--t1)' }}>
         <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
-          <button style={btnSecondary} onClick={() => router.push('/procurement/pos')}>← Back to POs</button>
+          {chinaMode ? (
+            <button style={btnSecondary} onClick={() => setChinaMode(false)}>← Back to standard categories</button>
+          ) : (
+            <button style={btnSecondary} onClick={() => router.push('/procurement/pos')}>← Back to POs</button>
+          )}
           {rrParam && (
             <span style={{ fontSize: 11, color: 'var(--yellow)', fontFamily: 'var(--mono)' }}>
               Linking to {rrParam}
             </span>
           )}
+          {chinaMode && (
+            <StatusBadge label="🇨🇳 China PO mode" tone="orange" />
+          )}
         </div>
         <div style={{ marginBottom: 20 }}>
           <h1 style={{ fontFamily: 'var(--cond)', fontSize: 24, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.03em', margin: 0 }}>
-            New Purchase Order
+            {chinaMode ? 'New China PO — Select Category' : 'New Purchase Order'}
           </h1>
           <p style={{ color: 'var(--t3)', fontSize: 11, marginTop: 4, fontFamily: 'var(--mono)' }}>
-            Pick a category — the PO defaults to source/currency/incoterms below.
+            {chinaMode
+              ? 'Pick the sub-category for this China-sourced PO. Vendor picker will be filtered to Chinese vendors.'
+              : 'Pick a category — the PO defaults to source/currency/incoterms below.'}
           </p>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12, maxWidth: 960 }}>
@@ -621,15 +639,54 @@ function NewPOPage() {
               style={hoverCard === cat.key ? { ...cardStyle, ...cardHover } : cardStyle}
               onMouseEnter={() => setHoverCard(cat.key)}
               onMouseLeave={() => setHoverCard(null)}
-              onClick={() => applyCategory(cat)}
+              onClick={() => applyCategory(cat, chinaMode)}
             >
               <div style={{ fontSize: 36 }}>{cat.icon}</div>
               <div style={{ fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 15, marginTop: 8 }}>{cat.title}</div>
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', marginTop: 2, letterSpacing: '0.04em' }}>{cat.sub}</div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', marginTop: 2, letterSpacing: '0.04em' }}>
+                {chinaMode ? 'China · RMB · FOB' : cat.sub}
+              </div>
               <div style={{ fontSize: 11, color: 'var(--t3)', marginTop: 8, lineHeight: 1.4 }}>{cat.desc}</div>
             </div>
           ))}
         </div>
+
+        {/* China PO card — visible only to procurement_china holders, on the top-level (not sub) view. */}
+        {!chinaMode && perms?.procurement_china && (
+          <div style={{ maxWidth: 960, marginTop: 24 }}>
+            <div style={{ ...labelStyle, marginBottom: 8 }}>Restricted Access</div>
+            <div
+              style={hoverCard === '__china' ? {
+                ...cardStyle,
+                ...cardHover,
+                background: 'rgba(255,140,0,.08)',
+                borderColor: '#ffaa33',
+                display: 'flex', alignItems: 'center', justifyContent: 'flex-start',
+                textAlign: 'left', gap: 16,
+              } : {
+                ...cardStyle,
+                background: 'rgba(255,140,0,.05)',
+                borderColor: 'rgba(255,140,0,.3)',
+                display: 'flex', alignItems: 'center', justifyContent: 'flex-start',
+                textAlign: 'left', gap: 16,
+              }}
+              onMouseEnter={() => setHoverCard('__china')}
+              onMouseLeave={() => setHoverCard(null)}
+              onClick={() => setChinaMode(true)}
+            >
+              <div style={{ fontSize: 40 }}>🇨🇳</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 16 }}>China PO</div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: '#ffaa33', marginTop: 2, letterSpacing: '0.04em' }}>
+                  Restricted · Financial fields hidden from non-procurement_china
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--t3)', marginTop: 6, lineHeight: 1.4 }}>
+                  China-sourced orders. Opens a sub-grid of the standard categories with Chinese vendor filter + Soft PO option for unnamed-product orders.
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -779,9 +836,13 @@ function NewPOPage() {
                 style={{ ...selectStyle, width: '100%' }}
               >
                 <option value="">Select vendor…</option>
-                {vendorCache.map((v) => (
-                  <option key={v.vendor_code} value={v.vendor_code}>{v.vendor_name}</option>
-                ))}
+                {vendorCache
+                  .filter((v) => chinaMode
+                    ? v.source_country === 'China'
+                    : v.source_country !== 'China')
+                  .map((v) => (
+                    <option key={v.vendor_code} value={v.vendor_code}>{v.vendor_name}</option>
+                  ))}
               </select>
             </div>
             <SelectField label="Payment Terms" value={paymentTerms} onChange={setPaymentTerms} options={['', ...PO_PAYMENT_TERMS]} />
@@ -988,9 +1049,20 @@ function NewPOPage() {
 
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
         <button style={btnSecondary} onClick={() => router.push('/procurement/pos')} disabled={submitting}>Cancel</button>
+        {/* Soft PO submit option — only in China mode (gated by procurement_china implicitly). */}
+        {chinaMode && (
+          <button
+            style={{ ...btnSecondary, opacity: submitting ? 0.6 : 1, cursor: submitting ? 'wait' : 'pointer', borderColor: '#ffaa33', color: '#ffaa33' }}
+            onClick={() => handleSubmit({ soft: true })}
+            disabled={submitting}
+            title="Save as Soft PO — for unnamed products. Lines can have free-text description without a registered product."
+          >
+            {submitting ? 'Saving…' : 'Save as Soft PO'}
+          </button>
+        )}
         <button
           style={{ ...btnPrimary, opacity: submitting ? 0.6 : 1, cursor: submitting ? 'wait' : 'pointer' }}
-          onClick={handleSubmit}
+          onClick={() => handleSubmit()}
           disabled={submitting}
         >
           {submitting ? 'Creating…' : 'Create PO'}

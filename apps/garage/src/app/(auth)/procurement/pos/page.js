@@ -6,6 +6,7 @@ import { garageFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 
 const PO_STATUS_TONES = {
+  Soft:                           'orange',
   Draft:                          'gray',
   Approved:                       'blue',
   Sent:                           'yellow',
@@ -178,7 +179,10 @@ export default function POListPage() {
                     <td style={tableTdStyle}>{r.vendor_name || '—'}</td>
                     <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.line_count ?? r.lines ?? 0}</td>
                     <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>
-                      {r.currency || ''} {(r.po_value ?? 0).toLocaleString('en-IN')}
+                      {r.source === 'China' && !perms?.procurement_china
+                        ? <span style={{ color: 'var(--t3)', fontStyle: 'italic' }}>Restricted</span>
+                        : <>{r.currency || ''} {(r.po_value ?? 0).toLocaleString('en-IN')}</>
+                      }
                     </td>
                     <td style={tableTdStyle}>{formatDate(r.expected_delivery)}</td>
                     <td style={tableTdStyle}>{r.raised_by || '—'}</td>

@@ -80,7 +80,13 @@ function PrintPOContent() {
   if (!data)     return <div style={{ padding: 40, display: 'flex', justifyContent: 'center' }}><Spinner /></div>;
 
   const { po, vendor, company, deliveryAddress, lines, prepared_by_name } = data;
-  const tax = computeTax(lines || [], po.currency, vendor?.gstin || null, company?.gstin || null);
+  // China financial-strip — worker sets _china_restricted=true when caller lacks
+  // procurement_china on a China-sourced PO. Print renders as a "Receiving Copy"
+  // with all unit_price / line_total / tax / payment_terms fields omitted.
+  const chinaRestricted = !!data._china_restricted;
+  const tax = chinaRestricted
+    ? { showGst: false, isCgstSgst: false, halfRate: 0, fullRate: 0, taxable: 0, cgst: 0, sgst: 0, igst: 0, grand: 0 }
+    : computeTax(lines || [], po.currency, vendor?.gstin || null, company?.gstin || null);
   const formattedPo = formatPONumber(po.po_number, po.raised_date);
 
   return (
@@ -165,6 +171,14 @@ function PrintPOContent() {
             <strong>Revision:</strong> {po.revision}
           </div>
         )}
+        {chinaRestricted && (
+          <div style={{
+            border: '1px solid #000', padding: '6px 10px', marginBottom: 10,
+            fontSize: 11, fontWeight: 700, textAlign: 'center', textTransform: 'uppercase',
+          }}>
+            Receiving Copy — financial details restricted to procurement
+          </div>
+        )}
 
         <hr />
 
@@ -203,8 +217,8 @@ function PrintPOContent() {
               {tax.showGst && <th className="num" style={{ width: 50 }}>GST %</th>}
               <th className="num" style={{ width: 60 }}>Qty</th>
               <th style={{ width: 50 }}>Unit</th>
-              <th className="num" style={{ width: 80 }}>Rate</th>
-              <th className="num" style={{ width: 100 }}>Amount</th>
+              {!chinaRestricted && <th className="num" style={{ width: 80 }}>Rate</th>}
+              {!chinaRestricted && <th className="num" style={{ width: 100 }}>Amount</th>}
             </tr>
           </thead>
           <tbody>
@@ -218,15 +232,16 @@ function PrintPOContent() {
                   {tax.showGst && <td className="num">{l.gst_percent != null ? `${parseFloat(l.gst_percent)}%` : ''}</td>}
                   <td className="num">{Number(l.qty_ordered || 0).toLocaleString('en-IN')}</td>
                   <td>{l.unit || ''}</td>
-                  <td className="num">{l.unit_price != null ? fmtMoney(l.unit_price, po.currency) : ''}</td>
-                  <td className="num">{fmtMoney(amount, po.currency)}</td>
+                  {!chinaRestricted && <td className="num">{l.unit_price != null ? fmtMoney(l.unit_price, po.currency) : ''}</td>}
+                  {!chinaRestricted && <td className="num">{fmtMoney(amount, po.currency)}</td>}
                 </tr>
               );
             })}
           </tbody>
         </table>
 
-        {/* Tax summary, right-aligned */}
+        {/* Tax summary, right-aligned. Hidden entirely for China-restricted prints. */}
+        {!chinaRestricted && (
         <table style={{ marginTop: 10 }}>
           <tbody>
             <tr>
@@ -266,6 +281,7 @@ function PrintPOContent() {
             </tr>
           </tbody>
         </table>
+        )}
 
         {/* Delivery address + notes block */}
         <div style={{ marginTop: 16, fontSize: 11, lineHeight: 1.45 }}>

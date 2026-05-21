@@ -7,6 +7,7 @@ import { Spinner, useToast } from '@throttle/ui';
 import { computeTax } from '@/lib/poTax';
 
 const PO_STATUS_TONES = {
+  Soft:                           'orange',
   Draft:                          'gray',
   Approved:                       'blue',
   Sent:                           'yellow',
@@ -16,6 +17,16 @@ const PO_STATUS_TONES = {
   Cancelled:                      'red',
   'Pending Approval':             'yellow',
 };
+
+function RestrictedField() {
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 4,
+      color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 11,
+      fontStyle: 'italic',
+    }}>🔒 Restricted</span>
+  );
+}
 const PO_CURRENCIES   = ['INR', 'USD', 'RMB'];
 const PO_INCOTERMS    = ['FOB', 'CIF', 'DDP', 'Ex-Works', 'Local delivery'];
 const PO_PAYMENT_TERMS = ['Advance', 'Credit 30', 'Credit 60', 'LC', 'TT'];
@@ -224,11 +235,18 @@ export default function PODetailPage() {
   const comparisonTotal = isInr ? tax.grand : lineTotal;
   const mismatch = invoiceValue > 0 && Math.abs(invoiceValue - comparisonTotal) / Math.max(1, comparisonTotal) > 0.01;
 
-  const canApprove = status === 'Draft' && perms?.procurement_approve;
-  const canSend    = (status === 'Draft' && perms?.procurement_raise) || status === 'Approved';
-  const canConfirm = status === 'Sent';
-  const canAmend   = ['Draft', 'Approved', 'Sent', 'Confirmed & Payment Done'].includes(status) && perms?.procurement_raise;
+  // China PO gating (procurement redesign, 2026-05-21)
+  // - China-source POs restrict financial fields to procurement_china holders.
+  // - Approval requires procurement_china_approve + four-eyes (enforced server-side).
+  const isChina = po.source === 'China';
+  const isFinanceVisible = !isChina || !!perms?.procurement_china;
+  const isSoft = status === 'Soft';
+  const canApprove = status === 'Draft' && (isChina ? perms?.procurement_china_approve : perms?.procurement_approve);
+  const canSend    = !isSoft && ((status === 'Draft' && perms?.procurement_raise) || status === 'Approved');
+  const canConfirm = !isSoft && status === 'Sent';
+  const canAmend   = !isSoft && ['Draft', 'Approved', 'Sent', 'Confirmed & Payment Done'].includes(status) && perms?.procurement_raise;
   const canCancel  = !['Closed', 'Cancelled'].includes(status);
+  const canPromote = isSoft && !!perms?.procurement_china;
 
   return (
     <div style={{ color: 'var(--t1)' }}>
@@ -284,20 +302,27 @@ export default function PODetailPage() {
         </section>
 
         <section style={panelStyle}>
-          <div style={panelHeaderStyle}><span>Financial</span></div>
+          <div style={panelHeaderStyle}>
+            <span>Financial</span>
+            {!isFinanceVisible && <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)' }}>🔒 China PO — restricted to procurement</span>}
+          </div>
           <div style={panelBodyStyle}>
             <KvGrid cols={2} items={[
-              ['Currency', po.currency || '—'],
-              ['Payment Terms', po.payment_terms || '—'],
+              ['Currency', isFinanceVisible ? (po.currency || '—') : <RestrictedField key="cur" />],
+              ['Payment Terms', isFinanceVisible ? (po.payment_terms || '—') : <RestrictedField key="pt" />],
               ['Incoterms', po.incoterms || '—'],
-              ['PO Value', `${po.currency || ''} ${(isInr ? tax.grand : (po.po_value ?? lineTotal)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`],
-              ['Invoice No.', po.invoice_number || '—'],
+              ['PO Value', isFinanceVisible
+                ? `${po.currency || ''} ${(isInr ? tax.grand : (po.po_value ?? lineTotal)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                : <RestrictedField key="pv" />],
+              ['Invoice No.', isFinanceVisible ? (po.invoice_number || '—') : <RestrictedField key="inv" />],
               [
                 'Invoice Value',
-                <span key="iv">
-                  {po.currency || ''} {(invoiceValue || 0).toLocaleString('en-IN')}
-                  {mismatch && <span style={{ color: '#ff7070', marginLeft: 6, fontFamily: 'var(--mono)', fontSize: 10 }}>⚠ MISMATCH</span>}
-                </span>,
+                isFinanceVisible
+                  ? (<span key="iv">
+                      {po.currency || ''} {(invoiceValue || 0).toLocaleString('en-IN')}
+                      {mismatch && <span style={{ color: '#ff7070', marginLeft: 6, fontFamily: 'var(--mono)', fontSize: 10 }}>⚠ MISMATCH</span>}
+                    </span>)
+                  : <RestrictedField key="iv" />,
               ],
             ]} />
           </div>
@@ -346,10 +371,16 @@ export default function PODetailPage() {
                         {rec.toLocaleString('en-IN')} {ord > 0 && <span style={{ fontSize: 9, marginLeft: 4 }}>({pct}%)</span>}
                       </td>
                       <td style={tableTdStyle}>{l.unit || '—'}</td>
-                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{l.unit_price != null ? l.unit_price.toLocaleString('en-IN') : '—'}</td>
+                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>
+                        {isFinanceVisible
+                          ? (l.unit_price != null ? l.unit_price.toLocaleString('en-IN') : '—')
+                          : <RestrictedField />}
+                      </td>
                       {isInr && <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{l.hsn_code || '—'}</td>}
                       {isInr && <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{l.gst_percent != null ? `${parseFloat(l.gst_percent)}%` : '—'}</td>}
-                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{total.toLocaleString('en-IN')}</td>
+                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>
+                        {isFinanceVisible ? total.toLocaleString('en-IN') : <RestrictedField />}
+                      </td>
                     </tr>
                   );
                 })}

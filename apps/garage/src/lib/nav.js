@@ -74,6 +74,9 @@ const GROUPS = [
       { id: 'procurement-reorders',   label: 'Reorders',         route: '/procurement/reorders',      icon: RefreshCw,  gate: (p) => hasPermission(p, 'procurement_view') },
       { id: 'procurement-vendors',    label: 'Vendors',          route: '/procurement/vendors',       icon: Building,   gate: (p) => hasPermission(p, 'procurement_view') },
       { id: 'procurement-forwarders', label: 'Forwarders',       route: '/procurement/forwarders',    icon: Truck,      gate: (p) => hasPermission(p, 'procurement_view') },
+      { separator: true },
+      // New Product Registration — gated on procurement_china (same restriction as China POs).
+      { id: 'products-register',      label: 'New Product',      route: '/products/register',         icon: Package,    gate: (p) => hasPermission(p, 'procurement_china') },
     ],
   },
   {
