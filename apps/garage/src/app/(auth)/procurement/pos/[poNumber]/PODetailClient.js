@@ -141,6 +141,7 @@ export default function PODetailPage() {
     setAmendData({
       change_summary: '',
       vendor_name: po.vendor_name || '',
+      vendor_code: po.vendor_code || '',
       currency: po.currency || 'INR',
       payment_terms: po.payment_terms || '',
       incoterms: po.incoterms || '',
@@ -184,7 +185,7 @@ export default function PODetailPage() {
     setAmendSubmitting(true);
     try {
       const payload = { po_number: po.po_number, change_summary: amendData.change_summary.trim() };
-      const fields = ['vendor_name', 'currency', 'payment_terms', 'incoterms', 'invoice_number', 'expected_ready_date', 'shipping_date', 'shipping_mode', 'forwarder_code', 'actual_arrival_date', 'notes'];
+      const fields = ['vendor_name', 'vendor_code', 'currency', 'payment_terms', 'incoterms', 'invoice_number', 'expected_ready_date', 'shipping_date', 'shipping_mode', 'forwarder_code', 'actual_arrival_date', 'notes'];
       fields.forEach((k) => { if (amendData[k] !== undefined && amendData[k] !== '') payload[k] = amendData[k]; });
       if (amendData.invoice_value !== '') payload.invoice_value = parseFloat(amendData.invoice_value);
       if (amendData.transit_days !== '')  payload.transit_days  = parseInt(amendData.transit_days, 10);
@@ -423,6 +424,7 @@ export default function PODetailPage() {
       {amendOpen && (
         <AmendModal
           po={po}
+          session={session}
           data={amendData}
           setData={setAmendData}
           onClose={() => !amendSubmitting && setAmendOpen(false)}
@@ -457,8 +459,15 @@ function KvGrid({ cols, items }) {
   );
 }
 
-function AmendModal({ po, data, setData, onClose, onSubmit, submitting }) {
+function AmendModal({ po, session, data, setData, onClose, onSubmit, submitting }) {
   function set(field, value) { setData((d) => ({ ...d, [field]: value })); }
+  const [vendorCache, setVendorCache] = useState([]);
+  useEffect(() => {
+    if (!session) return;
+    garageFetch('getVendors', {}, session)
+      .then((d) => setVendorCache(Array.isArray(d) ? d : []))
+      .catch(() => {});
+  }, [session]);
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 9000, padding: 24, overflowY: 'auto' }}>
       <div onClick={(e) => e.stopPropagation()} style={{ background: '#111', border: '1px solid #333', borderRadius: 6, padding: 20, color: '#eee', minWidth: 720, maxWidth: 960, width: '100%', maxHeight: 'calc(100vh - 48px)', overflowY: 'auto' }}>
@@ -476,7 +485,28 @@ function AmendModal({ po, data, setData, onClose, onSubmit, submitting }) {
 
         <div style={{ ...labelStyle, marginBottom: 6, marginTop: 8 }}>PO Header</div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
-          <Field label="Vendor" value={data.vendor_name || ''} onChange={(v) => set('vendor_name', v)} disabled={submitting} />
+          <div>
+            <span style={labelStyle}>Vendor *</span>
+            <select
+              value={data.vendor_code || ''}
+              onChange={(e) => {
+                const v = vendorCache.find((x) => x.vendor_code === e.target.value) || null;
+                set('vendor_code', v ? v.vendor_code : '');
+                set('vendor_name', v ? v.vendor_name : '');
+              }}
+              disabled={submitting}
+              required
+              style={{ ...selectStyle, width: '100%' }}
+            >
+              <option value="">Select vendor…</option>
+              {vendorCache.map((v) => (
+                <option key={v.vendor_code} value={v.vendor_code}>{v.vendor_name}</option>
+              ))}
+              {data.vendor_name && !vendorCache.find((v) => v.vendor_code === data.vendor_code) && (
+                <option value={data.vendor_code || '__stale__'}>{data.vendor_name} (inactive)</option>
+              )}
+            </select>
+          </div>
           <SelectField label="Currency" value={data.currency || ''} onChange={(v) => set('currency', v)} options={['', ...PO_CURRENCIES]} disabled={submitting} />
           <SelectField label="Payment Terms" value={data.payment_terms || ''} onChange={(v) => set('payment_terms', v)} options={['', ...PO_PAYMENT_TERMS]} disabled={submitting} />
           <SelectField label="Incoterms" value={data.incoterms || ''} onChange={(v) => set('incoterms', v)} options={['', ...PO_INCOTERMS]} disabled={submitting} />

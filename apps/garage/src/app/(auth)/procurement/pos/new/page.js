@@ -282,15 +282,6 @@ function NewPOPage() {
     return vendorCache.find((v) => (v.vendor_name || '').toLowerCase() === lo) || null;
   }
 
-  function onVendorBlur() {
-    const m = vendorMatch(vendor);
-    if (!m) return;
-    if (m.payment_terms) setPaymentTerms(m.payment_terms);
-    if (m.currency) setCurrency(m.currency);
-    if (m.source_country) setSource(m.source_country);
-    if (m.lead_time_days != null) setLeadTimeDays(String(m.lead_time_days));
-  }
-
   function onForwarderChange(code) {
     setForwarderCode(code);
     const f = forwarderCache.find((x) => x.forwarder_code === code);
@@ -744,18 +735,26 @@ function NewPOPage() {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             <div>
               <span style={labelStyle}>Vendor *</span>
-              <input
-                type="text"
-                value={vendor}
-                onChange={(e) => setVendor(e.target.value)}
-                onBlur={onVendorBlur}
-                list="vendor-list"
-                placeholder="Type or pick…"
-                style={{ ...inputStyle, width: '100%' }}
-              />
-              <datalist id="vendor-list">
-                {vendorCache.map((v) => <option key={v.vendor_code} value={v.vendor_name} />)}
-              </datalist>
+              <select
+                value={selectedVendor?.vendor_code || ''}
+                onChange={(e) => {
+                  const v = vendorCache.find((x) => x.vendor_code === e.target.value) || null;
+                  setVendor(v ? v.vendor_name : '');
+                  if (v) {
+                    if (v.payment_terms) setPaymentTerms(v.payment_terms);
+                    if (v.currency) setCurrency(v.currency);
+                    if (v.source_country) setSource(v.source_country);
+                    if (v.lead_time_days != null) setLeadTimeDays(String(v.lead_time_days));
+                  }
+                }}
+                required
+                style={{ ...selectStyle, width: '100%' }}
+              >
+                <option value="">Select vendor…</option>
+                {vendorCache.map((v) => (
+                  <option key={v.vendor_code} value={v.vendor_code}>{v.vendor_name}</option>
+                ))}
+              </select>
             </div>
             <SelectField label="Payment Terms" value={paymentTerms} onChange={setPaymentTerms} options={['', ...PO_PAYMENT_TERMS]} />
             <Field label="Lead Time (days)" type="number" value={leadTimeDays} onChange={setLeadTimeDays} readOnly />
