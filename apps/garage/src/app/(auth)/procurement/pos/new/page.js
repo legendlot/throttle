@@ -15,15 +15,21 @@ const PO_INCOTERMS  = ['FOB', 'CIF', 'DDP', 'Ex-Works', 'Local delivery'];
 const PO_PAYMENT_TERMS = ['Advance', 'Credit 30', 'Credit 60', 'LC', 'TT'];
 const PO_SHIP_MODES = ['Sea', 'Air', 'Land'];
 
+// PO_CATEGORIES — procurement redesign (Session C, 2026-05-21).
+// Each card carries a `bom_filter` describing which `bom_register` rows the line-group flow shows.
+// Filter axis is intentionally hybrid: some cards use part_category (Packaging/Para/Sticker),
+// others use part_type (Metal/Electronic/Hardware). Components has no pre-filter — it's the
+// umbrella search across all active BOM rows.
 const PO_CATEGORIES = [
-  { key: 'fbu',         icon: '🚗', title: 'Full Units',     sub: 'FBU · China',         desc: 'Finished cars + remotes from supplier',    order_type: 'Product',   source: 'China',  currency: 'RMB', incoterms: 'FOB' },
-  { key: 'ckd',         icon: '🔧', title: 'Components',     sub: 'CKD · China / India',  desc: 'Parts ordered via BOM explosion',          order_type: 'Component', source: 'China',  currency: 'RMB', incoterms: 'FOB' },
-  { key: 'packaging',   icon: '📦', title: 'Packaging',      sub: 'India',                desc: 'Boxes, trays, shrink wrap, inserts',        order_type: 'Packaging', source: 'India',  currency: 'INR', incoterms: 'Local delivery' },
-  { key: 'metal',       icon: '⚙️', title: 'Metal Parts',    sub: 'India',                desc: 'Springs, axles, metal hardware',           order_type: 'Component', source: 'India',  currency: 'INR', incoterms: 'Local delivery' },
-  { key: 'electronics', icon: '🔋', title: 'Electronics',    sub: 'India',                desc: 'Batteries, PCBs, chargers',                order_type: 'Component', source: 'India',  currency: 'INR', incoterms: 'Local delivery' },
-  { key: 'consumables', icon: '🔩', title: 'Consumables',    sub: 'India',                desc: 'Screws, fasteners, elastic bands',          order_type: 'Consumable',source: 'India',  currency: 'INR', incoterms: 'Local delivery' },
-  { key: 'para',        icon: '📄', title: 'Para',           sub: 'India',                desc: 'Comics, licences, stickers',               order_type: 'Para',      source: 'India',  currency: 'INR', incoterms: 'Local delivery' },
-  { key: 'other',       icon: '✏️', title: 'Custom / Other', sub: 'Any',                  desc: 'Free-form lines, one-offs',                order_type: '',          source: 'India',  currency: 'INR', incoterms: '' },
+  { key: 'full_products', icon: '🚗', title: 'Full Products',  sub: 'FBU / CKD',          desc: 'Finished units ordered at product level',     order_type: 'Product',    source: 'India', currency: 'INR', incoterms: '',                bom_filter: null },
+  { key: 'components',    icon: '🔧', title: 'Components',     sub: 'All categories',     desc: 'Multi-product BOM line entry (any category)', order_type: 'Component',  source: 'India', currency: 'INR', incoterms: 'Local delivery', bom_filter: null },
+  { key: 'packaging',     icon: '📦', title: 'Packaging',      sub: 'India',              desc: 'Boxes, trays, shrink wrap, inserts',          order_type: 'Packaging',  source: 'India', currency: 'INR', incoterms: 'Local delivery', bom_filter: { type: 'part_category', value: ['Packaging','Primary Packaging'] } },
+  { key: 'metal',         icon: '⚙️', title: 'Metal Parts',    sub: 'India',              desc: 'Springs, axles, metal hardware',              order_type: 'Component',  source: 'India', currency: 'INR', incoterms: 'Local delivery', bom_filter: { type: 'part_type', value: 'Metal' } },
+  { key: 'electronics',   icon: '🔋', title: 'Electronics',    sub: 'India',              desc: 'Batteries, PCBs, chargers',                   order_type: 'Component',  source: 'India', currency: 'INR', incoterms: 'Local delivery', bom_filter: { type: 'part_type', value: 'Electronic' } },
+  { key: 'consumables',   icon: '🔩', title: 'Consumables',    sub: 'India',              desc: 'Screws, fasteners, elastic bands',            order_type: 'Consumable', source: 'India', currency: 'INR', incoterms: 'Local delivery', bom_filter: { type: 'part_type', value: 'Hardware' } },
+  { key: 'para',          icon: '📄', title: 'Para',           sub: 'India',              desc: 'Comics, licences, manuals',                   order_type: 'Para',       source: 'India', currency: 'INR', incoterms: 'Local delivery', bom_filter: { type: 'part_category', value: 'Para' } },
+  { key: 'stickers',      icon: '🏷️', title: 'Stickers',       sub: 'India',              desc: 'Product stickers, decals',                    order_type: 'Para',       source: 'India', currency: 'INR', incoterms: 'Local delivery', bom_filter: { type: 'part_category', value: 'Sticker' } },
+  { key: 'other',         icon: '✏️', title: 'Custom / Other', sub: 'Any',                desc: 'Free-form lines, factory ad-hoc',             order_type: '',           source: 'India', currency: 'INR', incoterms: '',                bom_filter: null },
 ];
 
 const BOM_GROUPS = [
@@ -107,9 +113,16 @@ function daysBetween(fromStr, toStr) {
 }
 
 function ModesByCategory(catKey) {
-  if (catKey === 'fbu') return ['units'];
-  if (catKey === 'ckd') return ['ckd', 'manual'];
-  return ['bom', 'manual'];
+  // Full Products → unit-row entry with per-line FBU/CKD + remote_qty.
+  if (catKey === 'full_products') return ['units'];
+  // Components (umbrella) + 5 BOM-pre-filtered cards → bom (line-group) + manual escape hatch.
+  if (catKey === 'components' || catKey === 'packaging' || catKey === 'metal'
+      || catKey === 'electronics' || catKey === 'consumables'
+      || catKey === 'para' || catKey === 'stickers') {
+    return ['bom', 'manual'];
+  }
+  // Custom / Other → manual only.
+  return ['manual'];
 }
 
 export default function NewPOPageWrapper() {
@@ -409,7 +422,13 @@ function NewPOPage() {
   const fbuColors = useMemo(() => (fbuProduct ? (PRODUCT_COLORS[fbuProduct] || {}) : {}), [fbuProduct, PRODUCT_COLORS]);
   const productHasRemote = !!(fbuProduct && HAS_REMOTE && HAS_REMOTE.has?.(fbuProduct));
   function addUnitRow() {
-    setUnitsRows((prev) => [...prev, { variant: '', color: '', qty: '', withRemote: false }]);
+    // Default receive_format inherits from the previous row when present so
+    // operators don't have to reselect for every variant; falls back to 'FBU'
+    // (most common case for China procurement).
+    setUnitsRows((prev) => {
+      const lastFormat = prev.length ? (prev[prev.length - 1].receive_format || 'FBU') : 'FBU';
+      return [...prev, { variant: '', color: '', qty: '', remote_qty: '', receive_format: lastFormat }];
+    });
   }
   function updateUnitRow(i, field, value) {
     setUnitsRows((prev) => prev.map((r, j) => (j === i ? { ...r, [field]: value } : r)));
@@ -520,20 +539,28 @@ function NewPOPage() {
 
     let lines = [...lineItems];
 
-    // FBU units mode: convert unitsRows into lines
-    if (selectedCategory?.key === 'fbu' && unitsRows.length) {
+    // Full Products mode (Session C redesign): each unitsRow emits ONE line
+    // (the product) with per-line receive_format + a separate remote_qty number.
+    // The remote_qty is stored on the line itself (po_lines.remote_qty) — no
+    // longer encoded in description as "+ Remote" suffix.
+    if (selectedCategory?.key === 'full_products' && unitsRows.length) {
       unitsRows.forEach((u) => {
         const q = parseInt(u.qty, 10) || 0;
         if (q <= 0) return;
+        const rq = parseInt(u.remote_qty, 10) || 0;
+        const rf = u.receive_format || 'FBU';
+        const remoteLabel = rq > 0 ? ` (+${rq} remote)` : '';
         lines.push({
-          item_type:    'FBU Unit',
-          product:      fbuProduct,
-          variant:      u.variant || null,
-          color:        u.color || null,
-          qty_ordered:  q,
-          unit:         'units',
-          unit_price:   '',
-          description:  `${fbuProduct} ${u.variant || ''} ${u.color || ''}${u.withRemote ? ' + Remote' : ''}`.trim().replace(/\s+/g, ' '),
+          item_type:      rf === 'FBU' ? 'FBU Unit' : 'CKD Unit',
+          product:        fbuProduct,
+          variant:        u.variant || null,
+          color:          u.color || null,
+          qty_ordered:    q,
+          remote_qty:     rq,
+          receive_format: rf,
+          unit:           'units',
+          unit_price:     '',
+          description:    `${fbuProduct} ${u.variant || ''} ${u.color || ''} [${rf}]${remoteLabel}`.trim().replace(/\s+/g, ' '),
         });
       });
     }
@@ -561,18 +588,19 @@ function NewPOPage() {
       delivery_address_id: deliveryAddressId ? parseInt(deliveryAddressId, 10) : null,
       notes: notes || null,
       lines: lines.map((l) => ({
-        part_code:   l.part_code || null,
-        description: l.description || null,
-        item_type:   l.item_type || 'Part',
-        qty_ordered: parseFloat(l.qty_ordered) || 0,
-        unit:        l.unit || 'pcs',
-        unit_price:  l.unit_price ? parseFloat(l.unit_price) : null,
-        product:     l.product || null,
-        variant:     l.variant || null,
-        color:       l.color || null,
+        part_code:      l.part_code || null,
+        description:    l.description || null,
+        item_type:      l.item_type || 'Part',
+        qty_ordered:    parseFloat(l.qty_ordered) || 0,
+        unit:           l.unit || 'pcs',
+        unit_price:     l.unit_price ? parseFloat(l.unit_price) : null,
+        product:        l.product || null,
+        variant:        l.variant || null,
+        color:          l.color || null,
         receive_format: l.receive_format || null,
-        hsn_code:    l.hsn_code || null,
-        gst_percent: l.gst_percent !== '' && l.gst_percent != null ? parseFloat(l.gst_percent) : null,
+        remote_qty:     parseInt(l.remote_qty, 10) || 0,
+        hsn_code:       l.hsn_code || null,
+        gst_percent:    l.gst_percent !== '' && l.gst_percent != null ? parseFloat(l.gst_percent) : null,
       })),
     };
 
@@ -706,8 +734,8 @@ function NewPOPage() {
         {rrParam && <StatusBadge label={`Linking ${rrParam}`} tone="yellow" />}
       </div>
 
-      {/* Product selector for FBU/CKD */}
-      {selectedCategory?.key === 'fbu' && (
+      {/* Product selector for Full Products */}
+      {selectedCategory?.key === 'full_products' && (
         <div style={panelStyle}>
           <div style={panelHeaderStyle}><span>Product</span></div>
           <div style={panelBodyStyle}>
@@ -719,13 +747,15 @@ function NewPOPage() {
                   {PRODUCTS.map((p) => <option key={p} value={p}>{p}</option>)}
                 </select>
               </div>
-              {fbuProduct && <StatusBadge label={`FBU · ${fbuProduct}`} tone="blue" />}
+              {fbuProduct && <StatusBadge label={`Product · ${fbuProduct}`} tone="blue" />}
             </div>
           </div>
         </div>
       )}
 
-      {selectedCategory?.key === 'ckd' && (
+      {/* Legacy CKD queue UI — retained for backward compat but never reached by
+          the new card layout. CkdMode itself is unreferenced as of Session C. */}
+      {selectedCategory?.key === '__legacy_ckd_unused' && (
         <div style={panelStyle}>
           <div style={panelHeaderStyle}><span>Products to Order (CKD Queue)</span></div>
           <div style={panelBodyStyle}>
@@ -916,7 +946,7 @@ function NewPOPage() {
             />
           )}
 
-          {lineMode === 'units' && selectedCategory?.key === 'fbu' && (
+          {lineMode === 'units' && selectedCategory?.key === 'full_products' && (
             <UnitsMode
               fbuProduct={fbuProduct}
               fbuVariants={fbuVariants}
@@ -1418,10 +1448,11 @@ function UnitsMode({ fbuProduct, fbuVariants, fbuColors = {}, productHasRemote =
       ) : (
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr>
+            <th style={tableThStyle}>Format</th>
             <th style={tableThStyle}>Variant</th>
             <th style={tableThStyle}>Colour</th>
-            {productHasRemote && <th style={{ ...tableThStyle, textAlign: 'center' }}>Remote</th>}
-            <th style={tableThStyle}>Qty</th>
+            <th style={tableThStyle}>Product Qty</th>
+            {productHasRemote && <th style={tableThStyle}>Remote Qty</th>}
             <th style={{ ...tableThStyle, width: 30 }}></th>
           </tr></thead>
           <tbody>
@@ -1429,6 +1460,19 @@ function UnitsMode({ fbuProduct, fbuVariants, fbuColors = {}, productHasRemote =
               const variantColors = (r.variant && fbuColors[r.variant]) || [];
               return (
                 <tr key={i}>
+                  <td style={tableTdStyle}>
+                    {/* Per-line receive_format. FBU = assembled units arrive as full
+                        product. CKD = arrives as parts; expected BOM is derived at
+                        receiving time via store.get_expected_ckd_parts. */}
+                    <select
+                      value={r.receive_format || 'FBU'}
+                      onChange={(e) => updateUnitRow(i, 'receive_format', e.target.value)}
+                      style={{ ...selectStyle, width: 90 }}
+                    >
+                      <option value="FBU">FBU</option>
+                      <option value="CKD">CKD</option>
+                    </select>
+                  </td>
                   <td style={tableTdStyle}>
                     <select value={r.variant} onChange={(e) => handleVariantChange(i, e.target.value)} style={{ ...selectStyle, width: 160 }}>
                       <option value="">Select…</option>
@@ -1445,18 +1489,24 @@ function UnitsMode({ fbuProduct, fbuVariants, fbuColors = {}, productHasRemote =
                       <span style={{ color: 'var(--t3)', fontSize: 11 }}>—</span>
                     )}
                   </td>
+                  <td style={tableTdStyle}>
+                    <input type="number" min="0" value={r.qty} onChange={(e) => updateUnitRow(i, 'qty', e.target.value)} style={{ ...inputStyle, width: 100, fontFamily: 'var(--mono)' }} placeholder="0" />
+                  </td>
                   {productHasRemote && (
-                    <td style={{ ...tableTdStyle, textAlign: 'center' }}>
+                    <td style={tableTdStyle}>
+                      {/* Remote qty per line — replaces the old withRemote boolean.
+                          0 = product-only. Different from product qty = mismatched
+                          batches (some remotes already in stock, damage, etc.). */}
                       <input
-                        type="checkbox"
-                        checked={!!r.withRemote}
-                        onChange={(e) => updateUnitRow(i, 'withRemote', e.target.checked)}
+                        type="number"
+                        min="0"
+                        value={r.remote_qty ?? ''}
+                        onChange={(e) => updateUnitRow(i, 'remote_qty', e.target.value)}
+                        style={{ ...inputStyle, width: 100, fontFamily: 'var(--mono)' }}
+                        placeholder="0"
                       />
                     </td>
                   )}
-                  <td style={tableTdStyle}>
-                    <input type="number" min="0" value={r.qty} onChange={(e) => updateUnitRow(i, 'qty', e.target.value)} style={{ ...inputStyle, width: 100, fontFamily: 'var(--mono)' }} />
-                  </td>
                   <td style={tableTdStyle}>
                     <button onClick={() => removeUnitRow(i)} style={{ background: 'transparent', border: '1px solid var(--border)', color: '#ff7070', cursor: 'pointer', fontSize: 11, borderRadius: 3, padding: '2px 6px' }}>✕</button>
                   </td>
