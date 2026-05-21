@@ -3,6 +3,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useAuth, hasPermission } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
 import { EmptyState, Spinner, Combobox } from '@throttle/ui';
+import { useProducts } from '../../../hooks/useProducts.js';
 
 const btnBase = {
   padding: '6px 14px', borderRadius: 4, cursor: 'pointer',
@@ -65,8 +66,13 @@ function downloadCsv(rows, filename, showCost) {
   URL.revokeObjectURL(url);
 }
 
+// Sentinel for the "Common (UNV/HW)" filter option — cross-product parts have
+// `product=''` (RULE-003) so a normal product-equality filter can't pick them.
+const COMMON_PRODUCT_KEY = '__common__';
+
 export default function StockPage() {
   const { session, perms } = useAuth();
+  const { PRODUCTS: CATALOGUE_PRODUCTS } = useProducts();
   const [tab, setTab] = useState('components');
 
   const [stockData, setStockData] = useState([]);
@@ -114,15 +120,40 @@ export default function StockPage() {
     loadFbu();
   }, [session]);
 
-  const products   = useMemo(() => [...new Set(stockData.map(r => r.product).filter(Boolean))].sort(), [stockData]);
+  // Categories + types are still derived from stockData (only what exists in
+  // the ledger today is filterable). Products are pulled from the canonical
+  // product_master catalogue so all registered products show — including ones
+  // that don't yet have any BOM / stock rows. Falls back to stockData-derived
+  // list while the catalogue is loading.
+  const stockProducts = useMemo(() => [...new Set(stockData.map(r => r.product).filter(Boolean))].sort(), [stockData]);
+  const products      = useMemo(() => {
+    const fromCatalogue = (CATALOGUE_PRODUCTS && CATALOGUE_PRODUCTS.length) ? CATALOGUE_PRODUCTS : stockProducts;
+    // Union with anything in stockData that isn't in the catalogue (defensive — never lose visibility).
+    return [...new Set([...fromCatalogue, ...stockProducts])].sort();
+  }, [CATALOGUE_PRODUCTS, stockProducts]);
   const categories = useMemo(() => [...new Set(stockData.map(r => r.category).filter(Boolean))].sort(), [stockData]);
   const types      = useMemo(() => [...new Set(stockData.map(r => r.part_type).filter(Boolean))].sort(), [stockData]);
 
+  // Multi-token search: split the query on whitespace, treat each token as a
+  // sub-filter that must match at least one of part_code / part_name / product
+  // / category / part_type. Lets users type "Flare metal" or "Shadow packaging"
+  // and get the intuitive result. Single-token queries match the same fields.
   const filteredStock = useMemo(() => {
+    const tokens = (search || '').toLowerCase().trim().split(/\s+/).filter(Boolean);
     return stockData.filter(r => {
-      const s = search.toLowerCase();
-      if (s && !(r.part_code || '').toLowerCase().includes(s) && !(r.part_name || '').toLowerCase().includes(s)) return false;
-      if (productFilter  && r.product  !== productFilter)  return false;
+      if (tokens.length) {
+        const fields = [r.part_code, r.part_name, r.product, r.category, r.part_type]
+          .map((v) => (v || '').toLowerCase());
+        for (const t of tokens) {
+          if (!fields.some((f) => f.includes(t))) return false;
+        }
+      }
+      if (productFilter === COMMON_PRODUCT_KEY) {
+        // Common (UNV/HW) — RULE-003 says product='' for cross-product parts.
+        if (r.product && r.product !== '') return false;
+      } else if (productFilter && r.product !== productFilter) {
+        return false;
+      }
       if (categoryFilter && r.category !== categoryFilter) return false;
       if (typeFilter     && r.part_type !== typeFilter)    return false;
       if (statusFilter === 'low') {
@@ -189,15 +220,18 @@ export default function StockPage() {
         <>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
             <input
-              style={inputStyle}
+              style={{ ...inputStyle, minWidth: 260 }}
               value={search}
               onChange={e => setSearch(e.target.value)}
-              placeholder="Search part code or name"
+              placeholder="Search — try “Flare metal” or “Shadow packaging”"
             />
-            <div style={{ minWidth: 180 }}>
+            <div style={{ minWidth: 200 }}>
               <Combobox
                 value={productFilter}
-                options={products.map((p) => ({ value: p, label: p }))}
+                options={[
+                  { value: COMMON_PRODUCT_KEY, label: 'Common (UNV/HW)', hint: 'cross-product' },
+                  ...products.map((p) => ({ value: p, label: p })),
+                ]}
                 onChange={(v) => setProductFilter(v)}
                 placeholder="All products"
               />
