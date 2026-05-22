@@ -590,7 +590,7 @@ function PartsGrnPanel({ session, onSuccess }) {
   const [supplier, setSupplier]     = useState('');
   const [grnDate, setGrnDate]       = useState(todayISO());
   const [poRef, setPoRef]           = useState('');
-  const [lines, setLines]           = useState([{ search: '', partCode: '', partName: '', product: '', qty: '', damaged: '' }]);
+  const [lines, setLines]           = useState([{ search: '', partCode: '', partName: '', product: '', qty: '', damaged: '', bagsOf: '' }]);
   const [matCache, setMatCache]     = useState({});
   const [submitting, setSubmitting] = useState(false);
   const [partHighlight, setPartHighlight] = useState({});
@@ -614,13 +614,13 @@ function PartsGrnPanel({ session, onSuccess }) {
   }, [session]);
 
   function addLine() {
-    setLines(prev => [...prev, { search: '', partCode: '', partName: '', product: '', qty: '', damaged: '' }]);
+    setLines(prev => [...prev, { search: '', partCode: '', partName: '', product: '', qty: '', damaged: '', bagsOf: '' }]);
   }
 
   function removeLine(idx) {
     setLines(prev => {
       const next = prev.filter((_, i) => i !== idx);
-      return next.length ? next : [{ search: '', partCode: '', partName: '', product: '', qty: '', damaged: '' }];
+      return next.length ? next : [{ search: '', partCode: '', partName: '', product: '', qty: '', damaged: '', bagsOf: '' }];
     });
   }
 
@@ -639,6 +639,10 @@ function PartsGrnPanel({ session, onSuccess }) {
     setLines(prev => prev.map((l, i) => i !== idx ? l : { ...l, damaged: value }));
   }
 
+  function updateBagsOf(idx, value) {
+    setLines(prev => prev.map((l, i) => i !== idx ? l : { ...l, bagsOf: value }));
+  }
+
   function selectPart(idx, mat) {
     setLines(prev => prev.map((l, i) =>
       i !== idx ? l : {
@@ -654,12 +658,12 @@ function PartsGrnPanel({ session, onSuccess }) {
   function clearForm() {
     setSupplier(''); setPoRef('');
     setGrnDate(todayISO());
-    setLines([{ search: '', partCode: '', partName: '', product: '', qty: '', damaged: '' }]);
+    setLines([{ search: '', partCode: '', partName: '', product: '', qty: '', damaged: '', bagsOf: '' }]);
   }
 
   async function submit() {
     if (!grnDate) { showToast('Select a GRN date', 'error'); return; }
-    const validLines = lines
+    const validRows = lines
       .filter(l => l.partCode.trim() && ((parseInt(l.qty) || 0) > 0 || (parseInt(l.damaged) || 0) > 0))
       .map(l => ({
         part_code:    l.partCode.trim().toUpperCase(),
@@ -667,9 +671,12 @@ function PartsGrnPanel({ session, onSuccess }) {
         product:      l.product || '',
         qty_received: parseInt(l.qty) || 0,
         damaged_qty:  parseInt(l.damaged) || 0,
+        bags_of:      parseInt(l.bagsOf) || 0,
         inspection:   'Pass',
       }));
-    if (!validLines.length) { showToast('Select at least one part and enter a received or damaged qty', 'error'); return; }
+    if (!validRows.length) { showToast('Select at least one part and enter a received or damaged qty', 'error'); return; }
+    const validLines = validRows.map(({ bags_of, ...rest }) => rest);
+    const bagRequests = validRows.filter(r => r.bags_of > 0 && r.qty_received > 0);
     // Derive top-level product from first line so batch number has a clean prefix
     const headerProduct = validLines[0]?.product || '';
     setSubmitting(true);
@@ -677,7 +684,41 @@ function PartsGrnPanel({ session, onSuccess }) {
       const res = await workerFetch('postGRN', {
         data: { product: headerProduct, supplier, grn_date: grnDate, po_ref: poRef, lines: validLines }
       }, session);
-      showToast(`GRN ${res.data.grn_no} created — ${res.data.lines} line(s)`, 'success');
+      const grnNo = res.data.grn_no;
+      showToast(`GRN ${grnNo} created — ${res.data.lines} line(s)`, 'success');
+
+      // Bag-label generation: per-line, sequential (each is its own worker call).
+      // GRN already exists, so partial failure here doesn't roll back the GRN —
+      // unprinted lines can be re-attempted from the GRN detail modal later.
+      if (bagRequests.length > 0) {
+        const allBags = [];
+        const failed = [];
+        for (const r of bagRequests) {
+          try {
+            const bagRes = await workerFetch('generateBagsForGrn', {
+              data: {
+                grn_no:    grnNo,
+                part_code: r.part_code,
+                part_name: r.part_name,
+                qty:       r.qty_received,
+                bags_of:   r.bags_of,
+              }
+            }, session);
+            const created = bagRes?.data?.bags || [];
+            allBags.push(...created);
+          } catch (e) {
+            failed.push(`${r.part_code}: ${e.message || e}`);
+          }
+        }
+        if (allBags.length > 0) {
+          showToast(`${allBags.length} bag label${allBags.length === 1 ? '' : 's'} generated`, 'success');
+          printWindow(buildBagLabelsHtml(allBags, grnNo));
+        }
+        if (failed.length > 0) {
+          showToast(`Bag generation failed for ${failed.length} part(s) — reprint from GRN detail`, 'error');
+        }
+      }
+
       clearForm();
       onSuccess();
     } catch (e) {
@@ -710,10 +751,11 @@ function PartsGrnPanel({ session, onSuccess }) {
       </div>
 
       {/* Column headers */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 130px 80px 60px 28px', gap: 6, marginBottom: 4, padding: '0 2px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 130px 70px 70px 60px 28px', gap: 6, marginBottom: 4, padding: '0 2px' }}>
         <span style={label}>Part Search</span>
         <span style={label}>Code · Product</span>
         <span style={{ ...label, textAlign: 'right' }}>Qty</span>
+        <span style={{ ...label, textAlign: 'right' }}>Qty/Bag</span>
         <span style={{ ...label, textAlign: 'right', color: 'var(--red)' }}>Damaged</span>
         <span />
       </div>
@@ -732,7 +774,7 @@ function PartsGrnPanel({ session, onSuccess }) {
             : [];
 
           return (
-            <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 130px 80px 60px 28px', gap: 6, alignItems: 'center' }}>
+            <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 130px 70px 70px 60px 28px', gap: 6, alignItems: 'center' }}>
               {/* Search input with dropdown */}
               <div style={{ position: 'relative' }}>
                 <input
@@ -842,6 +884,15 @@ function PartsGrnPanel({ session, onSuccess }) {
                 value={l.qty}
                 onChange={e => updateQty(i, e.target.value)}
                 placeholder="Qty"
+              />
+
+              {/* Qty per bag — drives bag-label generation on submit */}
+              <input
+                style={{ ...inp, textAlign: 'right' }}
+                type="number" min="0"
+                value={l.bagsOf}
+                onChange={e => updateBagsOf(i, e.target.value)}
+                placeholder="Bag"
               />
 
               {/* Damaged */}
