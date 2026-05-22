@@ -2742,7 +2742,13 @@ async function handleUpdateSocialPost(body, ctx, env) {
     const validation = await validateVariantContentTypes(variants, env);
     if (validation.error) return validation.error;
 
-    const upsertRows = variants.map(v => ({
+    const delRes = await sbFetch(`social_post_channels?post_id=eq.${post_id}`, {
+      method: 'DELETE',
+      prefer: 'return=minimal',
+    }, env);
+    if (!delRes.ok) return err('Failed to clear existing variants', delRes.status);
+
+    const insertRows = variants.map(v => ({
       post_id,
       channel_id:    v.channel_id,
       content_type:  v.content_type,
@@ -2752,8 +2758,8 @@ async function handleUpdateSocialPost(body, ctx, env) {
     }));
     const varRes = await sbFetch('social_post_channels', {
       method: 'POST',
-      body: JSON.stringify(upsertRows),
-      prefer: 'resolution=merge-duplicates,return=minimal',
+      body: JSON.stringify(insertRows),
+      prefer: 'return=minimal',
     }, env);
     if (!varRes.ok) {
       const e = await varRes.text();
