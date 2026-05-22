@@ -301,7 +301,7 @@ function BulkGrnPanel({ session, onSuccess }) {
     setBomLoading(true);
     try {
       const data = await garageFetch('calcKit', { product, variant: variant || '', colour: '', qty }, session);
-      setBomLines((data.kit || []).map(r => ({ ...r, _received: r.total_qty || 0, _rejected: 0, _damaged: 0, _inspection: 'Pass' })));
+      setBomLines((data.kit || []).map(r => ({ ...r, _received: r.total_qty || 0, _rejected: 0, _damaged: 0, _bagsOf: 0, _inspection: 'Pass' })));
     } catch (e) {
       showToast('Failed to load BOM: ' + e.message, 'error');
       setBomLines([]);
@@ -335,7 +335,7 @@ function BulkGrnPanel({ session, onSuccess }) {
       showToast('Select product and enter units received', 'error'); return;
     }
     if (!grnDate) { showToast('Select a GRN date', 'error'); return; }
-    const lines = bomLines
+    const rows = bomLines
       .filter(l => l._received > 0 || l._damaged > 0)
       .map(l => ({
         part_code:    l.part_code,
@@ -347,12 +347,47 @@ function BulkGrnPanel({ session, onSuccess }) {
         damaged_qty:  l._damaged || 0,
         inspection:   l._inspection,
         notes:        l._received !== (l.total_qty || 0) ? `Expected ${l.total_qty}, received ${l._received}` : '',
+        bags_of:      parseInt(l._bagsOf) || 0,
       }));
-    if (!lines.length) { showToast('No lines with received or damaged qty > 0', 'error'); return; }
+    if (!rows.length) { showToast('No lines with received or damaged qty > 0', 'error'); return; }
+    const lines = rows.map(({ bags_of, ...rest }) => rest);
+    const bagRequests = rows.filter(r => r.bags_of > 0 && r.qty_received > 0);
     setSubmitting(true);
     try {
       const res = await workerFetch('postGRN', { data: { product, supplier, grn_date: grnDate, po_ref: poRef, lines } }, session);
-      showToast(`GRN ${res.data.grn_no} created — ${res.data.lines} lines for ${qty} units`, 'success');
+      const grnNo = res.data.grn_no;
+      showToast(`GRN ${grnNo} created — ${res.data.lines} lines for ${qty} units`, 'success');
+
+      // Bag-label generation per-line. GRN already exists, so partial failure
+      // here is recoverable from the GRN detail modal.
+      if (bagRequests.length > 0) {
+        const allBags = [];
+        const failed = [];
+        for (const r of bagRequests) {
+          try {
+            const bagRes = await workerFetch('generateBagsForGrn', {
+              data: {
+                grn_no:    grnNo,
+                part_code: r.part_code,
+                part_name: r.part_name,
+                qty:       r.qty_received,
+                bags_of:   r.bags_of,
+              }
+            }, session);
+            allBags.push(...(bagRes?.data?.bags || []));
+          } catch (e) {
+            failed.push(`${r.part_code}: ${e.message || e}`);
+          }
+        }
+        if (allBags.length > 0) {
+          showToast(`${allBags.length} bag label${allBags.length === 1 ? '' : 's'} generated`, 'success');
+          printWindow(buildBagLabelsHtml(allBags, grnNo));
+        }
+        if (failed.length > 0) {
+          showToast(`Bag generation failed for ${failed.length} part(s) — reprint from GRN detail`, 'error');
+        }
+      }
+
       clearForm();
       onSuccess();
     } catch (e) {
@@ -428,6 +463,7 @@ function BulkGrnPanel({ session, onSuccess }) {
                   <th style={{ ...th, textAlign: 'right' }}>BOM Qty</th>
                   <th style={{ ...th, textAlign: 'right' }}>Expected</th>
                   <th style={{ ...th, textAlign: 'right' }}>Received</th>
+                  <th style={{ ...th, textAlign: 'right' }}>Qty/Bag</th>
                   <th style={{ ...th, textAlign: 'right' }}>Damaged</th>
                   <th style={{ ...th, textAlign: 'right' }}>Rejected</th>
                   <th style={th}>Insp.</th>
@@ -449,6 +485,14 @@ function BulkGrnPanel({ session, onSuccess }) {
                           type="number" min="0" value={l._received}
                           onChange={e => updateLine(i, '_received', e.target.value)}
                           style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 2, padding: '3px 6px', color: 'var(--t1)', fontFamily: 'var(--mono)', fontSize: 12, width: 80, textAlign: 'right' }}
+                        />
+                      </td>
+                      <td style={td}>
+                        <input
+                          type="number" min="0" value={l._bagsOf}
+                          onChange={e => updateLine(i, '_bagsOf', e.target.value)}
+                          placeholder="Bag"
+                          style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 2, padding: '3px 6px', color: 'var(--t1)', fontFamily: 'var(--mono)', fontSize: 12, width: 60, textAlign: 'right' }}
                         />
                       </td>
                       <td style={td}>
