@@ -70,6 +70,7 @@ export default function VendorsPage() {
   const [loading, setLoading] = useState(true);
   const [editingCode, setEditingCode] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const [search, setSearch] = useState('');
 
   // form fields
   const [name, setName] = useState('');
@@ -283,16 +284,52 @@ export default function VendorsPage() {
           )}
         </div>
 
+        {(() => {
+        const tokens = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
+        const filtered = tokens.length === 0 ? vendors : vendors.filter(v => {
+          const hay = `${v.vendor_code || ''} ${v.vendor_name || ''} ${v.category || ''} ${v.source_country || ''} ${v.location || ''} ${v.contact_name || ''} ${v.contact_phone || ''} ${v.contact_email || ''} ${v.gstin || ''}`.toLowerCase();
+          return tokens.every(t => hay.includes(t));
+        });
+        return (
         <div style={panelStyle}>
           <div style={panelHeaderStyle}>
-            <span>All Vendors {vendors.length > 0 && <span style={{ color: 'var(--t3)', marginLeft: 6, fontSize: 11 }}>({vendors.length})</span>}</span>
-            <button style={btnSecondary} onClick={loadList} disabled={loading}>↻ Refresh</button>
+            <span>
+              All Vendors {vendors.length > 0 && (
+                <span style={{ color: 'var(--t3)', marginLeft: 6, fontSize: 11 }}>
+                  ({tokens.length > 0 ? `${filtered.length} of ${vendors.length}` : vendors.length})
+                </span>
+              )}
+            </span>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <div style={{ position: 'relative' }}>
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search code, name, category, country, contact, GSTIN…"
+                  style={{ ...inputStyle, width: 360, paddingRight: search ? 26 : 10 }}
+                  autoComplete="off"
+                />
+                {search && (
+                  <button
+                    onClick={() => setSearch('')}
+                    style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: 'var(--t3)', cursor: 'pointer', fontSize: 14, padding: '2px 6px', lineHeight: 1 }}
+                    title="Clear search"
+                  >×</button>
+                )}
+              </div>
+              <button style={btnSecondary} onClick={loadList} disabled={loading}>↻ Refresh</button>
+            </div>
           </div>
           <div style={{ overflowX: 'auto' }}>
             {loading ? (
               <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
             ) : vendors.length === 0 ? (
               <div style={{ padding: 24, textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>No vendors yet</div>
+            ) : filtered.length === 0 ? (
+              <div style={{ padding: 24, textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>
+                No vendors match <span style={{ fontFamily: 'var(--mono)', color: 'var(--t2)' }}>{search}</span>
+              </div>
             ) : (
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead><tr>
@@ -307,7 +344,7 @@ export default function VendorsPage() {
                   <th style={{ ...tableThStyle, textAlign: 'right' }}></th>
                 </tr></thead>
                 <tbody>
-                  {vendors.map((v) => (
+                  {filtered.map((v) => (
                     <tr key={v.vendor_code}>
                       <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{v.vendor_code}</td>
                       <td style={tableTdStyle}>{v.vendor_name}</td>
@@ -331,6 +368,8 @@ export default function VendorsPage() {
             )}
           </div>
         </div>
+        );
+        })()}
       </div>
     );
   }
