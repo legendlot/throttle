@@ -217,8 +217,12 @@ function LogTab({ date, setDate, rounds, session, userId, perms, onRefresh }) {
     setClosingId(null)
   }
 
-  function handleFindingSaved(roundId) {
+  async function handleFindingSaved(roundId) {
     setRoundFindings(p => { const n = { ...p }; delete n[roundId]; return n })
+    setLoadingRound(p => ({ ...p, [roundId]: true }))
+    const { data } = await workerFetch('getAuditRoundDetail', { data: { round_id: roundId } }, session)
+    setRoundFindings(p => ({ ...p, [roundId]: data?.findings || [] }))
+    setLoadingRound(p => ({ ...p, [roundId]: false }))
     onRefresh()
   }
 
