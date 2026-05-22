@@ -29,11 +29,12 @@ export function useProducts() {
   const PRODUCTS         = data?.products || [];
   const PRODUCT_VARIANTS = data?.variants  || {};
   const PRODUCT_COLORS   = data?.colors    || {}; // { product: { model: [color, ...] } }
+  const RECEIVE_FORMAT   = data?.receive_format || {}; // { product: 'FBU' | 'CKD' | 'SKD' }
   const HAS_REMOTE       = new Set(
     Object.entries(data?.has_remote || {})
       .filter(([, v]) => v)
       .map(([k]) => k),
   );
 
-  return { PRODUCTS, PRODUCT_VARIANTS, HAS_REMOTE, PRODUCT_COLORS, loading };
+  return { PRODUCTS, PRODUCT_VARIANTS, HAS_REMOTE, PRODUCT_COLORS, RECEIVE_FORMAT, loading };
 }

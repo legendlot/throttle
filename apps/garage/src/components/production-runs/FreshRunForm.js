@@ -58,7 +58,7 @@ function blankRow() {
 
 export function FreshRunForm({ onSuccess, session }) {
   const { showToast } = useToast();
-  const { PRODUCTS, PRODUCT_VARIANTS, HAS_REMOTE, PRODUCT_COLORS, loading } = useProducts();
+  const { PRODUCTS, PRODUCT_VARIANTS, HAS_REMOTE, PRODUCT_COLORS, RECEIVE_FORMAT, loading } = useProducts();
   const [product, setProduct] = useState('');
   const [runDate, setRunDate] = useState(tomorrowISO());
   const [line, setLine] = useState('L1');
@@ -112,8 +112,21 @@ export function FreshRunForm({ onSuccess, session }) {
     }
   }, [productHighlight]);
 
-  const isFbuFormat = useMemo(() => HAS_REMOTE.has(product), [product]);
+  // isFbuFormat drives the Issue-As dropdown visibility AND the default issue_mode
+  // on each variant row. Anchored on product_master.receive_format — not has_remote,
+  // since drones like Wisp are FBU without a remote.
+  const isFbuFormat = useMemo(() => RECEIVE_FORMAT[product] === 'FBU', [product, RECEIVE_FORMAT]);
   const productVariants = product ? PRODUCT_VARIANTS[product] || [] : [];
+
+  // Sync each row's issueMode to the product's receive_format when the product changes.
+  // Preserves any per-row override the user already made.
+  useEffect(() => {
+    if (!product) return;
+    const targetMode = isFbuFormat ? 'fbu' : 'components';
+    setVariantRows((prev) => prev.map((r) => (
+      r.issueMode === targetMode ? r : { ...r, issueMode: targetMode }
+    )));
+  }, [product, isFbuFormat]);
 
   const filteredVendors = useMemo(
     () => vendors.filter(v =>
