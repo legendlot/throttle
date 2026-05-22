@@ -6,6 +6,7 @@ import {
   BarChart3, Clock,
   QrCode, Users, Printer,
   CalendarClock, LayoutGrid, ClipboardList,
+  ClipboardCheck,
 } from 'lucide-react';
 
 export const NAV_GROUPS = [
@@ -20,6 +21,7 @@ export const NAV_GROUPS = [
       { id: 'manpower', label: 'Manpower',  route: '/manpower', icon: Users },
       { id: 'hourly',   label: 'Hourly',    route: '/hourly',   icon: Clock },
       { id: 'qc',       label: 'QC',        route: '/qc',       icon: ShieldCheck },
+      { id: 'audit',    label: 'Audit',     route: '/audit',    icon: ClipboardCheck },
     ],
   },
   {
