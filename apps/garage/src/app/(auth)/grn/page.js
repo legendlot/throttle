@@ -399,6 +399,7 @@ function BulkGrnPanel({ session, onSuccess }) {
 
   const hasExceptions = bomLines.filter(l => l._received !== (l.total_qty || 0)).length;
   const hasRejected   = bomLines.filter(l => l._rejected > 0).length;
+  const bagLineCount  = bomLines.filter(l => (parseInt(l._bagsOf) || 0) > 0 && (parseInt(l._received) || 0) > 0).length;
 
   return (
     <div>
@@ -531,11 +532,16 @@ function BulkGrnPanel({ session, onSuccess }) {
         <div style={{ padding: '12px 0', color: 'var(--t3)', fontSize: 12 }}>No BOM data for this product/variant combination.</div>
       )}
 
-      <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+      <div style={{ display: 'flex', gap: 8, marginTop: 14, alignItems: 'center' }}>
         <button style={btnPri} onClick={submit} disabled={submitting || bomLines.length === 0}>
-          {submitting ? 'Submitting…' : 'Submit Bulk GRN'}
+          {submitting ? 'Submitting…' : (bagLineCount > 0 ? `🏷 Submit Bulk GRN & Print ${bagLineCount} Part${bagLineCount === 1 ? '' : 's'}` : 'Submit Bulk GRN')}
         </button>
         <button style={btnSec} onClick={clearForm} disabled={submitting}>Clear</button>
+        {bagLineCount > 0 && (
+          <span style={{ fontSize: 10, color: 'var(--t3)', fontFamily: 'var(--mono)', marginLeft: 'auto' }}>
+            Bag labels will print after submit
+          </span>
+        )}
       </div>
     </div>
   );
@@ -958,13 +964,23 @@ function PartsGrnPanel({ session, onSuccess }) {
         })}
       </div>
 
-      <div style={{ display: 'flex', gap: 8 }}>
-        <button style={btnPri} onClick={submit} disabled={submitting}>
-          {submitting ? 'Submitting…' : 'Submit GRN'}
-        </button>
-        <button style={btnSec} onClick={addLine}>+ Add Line</button>
-        <button style={btnSec} onClick={clearForm} disabled={submitting}>Clear</button>
-      </div>
+      {(() => {
+        const bagLineCount = lines.filter(l => (parseInt(l.bagsOf) || 0) > 0 && (parseInt(l.qty) || 0) > 0).length;
+        return (
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button style={btnPri} onClick={submit} disabled={submitting}>
+              {submitting ? 'Submitting…' : (bagLineCount > 0 ? `🏷 Submit GRN & Print ${bagLineCount} Part${bagLineCount === 1 ? '' : 's'}` : 'Submit GRN')}
+            </button>
+            <button style={btnSec} onClick={addLine}>+ Add Line</button>
+            <button style={btnSec} onClick={clearForm} disabled={submitting}>Clear</button>
+            {bagLineCount > 0 && (
+              <span style={{ fontSize: 10, color: 'var(--t3)', fontFamily: 'var(--mono)', marginLeft: 'auto' }}>
+                Bag labels will print after submit
+              </span>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }
