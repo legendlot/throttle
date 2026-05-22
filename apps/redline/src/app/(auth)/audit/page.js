@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '@throttle/auth'
 import { workerFetch } from '@throttle/db'
 
-// ── Constants ────────────────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
 
 const LINES = ['L1', 'L2', 'L3', 'D1', 'D2', 'Store', 'Other']
 
@@ -33,19 +33,53 @@ const ACTIONS_REQUIRED = [
 ]
 
 const SEV = {
-  critical: { dot: 'bg-red-400',    pill: 'bg-red-900/30 text-red-400 border-red-900',    btn: 'bg-red-900/30 text-red-400 border-red-700',    label: '🔴 Critical' },
-  high:     { dot: 'bg-orange-400', pill: 'bg-orange-900/30 text-orange-400 border-orange-900', btn: 'bg-orange-900/30 text-orange-400 border-orange-700', label: '🟠 High'     },
-  medium:   { dot: 'bg-yellow-400', pill: 'bg-yellow-900/30 text-yellow-400 border-yellow-900', btn: 'bg-yellow-900/30 text-yellow-400 border-yellow-700', label: '🟡 Medium'   },
-  low:      { dot: 'bg-green-400',  pill: 'bg-green-900/30 text-green-400 border-green-900',  btn: 'bg-green-900/30 text-green-400 border-green-700',  label: '🟢 Low'      },
+  critical: {
+    dot:   'var(--red)',
+    badge: { background: 'rgba(222,42,42,0.12)', color: 'var(--red)',    border: '1px solid rgba(222,42,42,0.3)' },
+    btn:   { background: 'rgba(222,42,42,0.12)', color: 'var(--red)',    border: '1px solid rgba(222,42,42,0.4)' },
+    label: '🔴 Critical',
+  },
+  high: {
+    dot:   'var(--orange)',
+    badge: { background: 'rgba(249,115,22,0.12)', color: 'var(--orange)', border: '1px solid rgba(249,115,22,0.3)' },
+    btn:   { background: 'rgba(249,115,22,0.12)', color: 'var(--orange)', border: '1px solid rgba(249,115,22,0.4)' },
+    label: '🟠 High',
+  },
+  medium: {
+    dot:   '#d4b200',
+    badge: { background: 'rgba(212,178,0,0.12)',  color: '#d4b200',       border: '1px solid rgba(212,178,0,0.3)' },
+    btn:   { background: 'rgba(212,178,0,0.12)',  color: '#d4b200',       border: '1px solid rgba(212,178,0,0.4)' },
+    label: '🟡 Medium',
+  },
+  low: {
+    dot:   'var(--green)',
+    badge: { background: 'rgba(34,197,94,0.12)',  color: 'var(--green)',  border: '1px solid rgba(34,197,94,0.3)' },
+    btn:   { background: 'rgba(34,197,94,0.12)',  color: 'var(--green)',  border: '1px solid rgba(34,197,94,0.4)' },
+    label: '🟢 Low',
+  },
 }
 
-const STATUS_STYLES = {
-  open:      'bg-indigo-900/30 text-indigo-400 border border-indigo-900',
-  resolved:  'bg-green-900/30 text-green-400 border border-green-900',
-  confirmed: 'bg-sky-900/30 text-sky-400 border border-sky-900',
+const STATUS_BADGE = {
+  open:      { background: 'rgba(99,102,241,0.12)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.3)' },
+  resolved:  { background: 'rgba(34,197,94,0.12)',  color: 'var(--green)', border: '1px solid rgba(34,197,94,0.3)' },
+  confirmed: { background: 'rgba(56,189,248,0.12)', color: '#38bdf8', border: '1px solid rgba(56,189,248,0.3)' },
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Style constants ───────────────────────────────────────────────────────────
+
+const S = {
+  input:    { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: '6px 10px', fontSize: 12, color: 'var(--t1)', outline: 'none', fontFamily: 'inherit' },
+  select:   { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: '5px 8px',  fontSize: 12, color: 'var(--t1)', outline: 'none', fontFamily: 'inherit', cursor: 'pointer' },
+  textarea: { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: '6px 10px', fontSize: 12, color: 'var(--t1)', outline: 'none', fontFamily: 'inherit', resize: 'none', width: '100%' },
+  label:    { fontFamily: 'inherit', fontSize: 9, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4, display: 'block' },
+  btnYellow:{ background: 'var(--yellow)', color: '#000', fontWeight: 700, fontSize: 11, padding: '6px 12px', border: 'none', borderRadius: 3, cursor: 'pointer', fontFamily: 'inherit' },
+  btnGhost: { background: 'transparent', border: '1px solid var(--border)', color: 'var(--t2)', fontSize: 11, padding: '5px 10px', borderRadius: 3, cursor: 'pointer', fontFamily: 'inherit' },
+  card:     { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4 },
+  badge:    { fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 3, textTransform: 'uppercase', letterSpacing: '0.06em' },
+  lineBadge:{ fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 3, background: 'rgba(33,60,226,0.18)', color: '#6882ff', border: '1px solid rgba(33,60,226,0.35)', flexShrink: 0 },
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function todayIST() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })
@@ -102,68 +136,66 @@ function AddFindingModal({ roundId, roundNumber, session, onClose, onSaved }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50"
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}
       onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="bg-zinc-900 border border-zinc-700 rounded-lg w-[480px] p-5">
-        <h2 className="text-xs font-bold text-yellow-400 uppercase tracking-widest mb-4">
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 6, width: 480, padding: 20 }}>
+        <div style={{ fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--yellow)', marginBottom: 16 }}>
           Add Finding — R{roundNumber}
-        </h2>
+        </div>
 
-        <div className="grid grid-cols-2 gap-3 mb-3">
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
           <div>
-            <label className="block text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Line *</label>
-            <select className="w-full bg-zinc-950 border border-zinc-700 text-zinc-200 text-xs px-2 py-2 rounded"
-              value={form.line} onChange={e => set('line', e.target.value)}>
+            <label style={S.label}>Line *</label>
+            <select style={{ ...S.select, width: '100%' }} value={form.line} onChange={e => set('line', e.target.value)}>
               <option value="">— select —</option>
               {LINES.map(l => <option key={l}>{l}</option>)}
             </select>
           </div>
           <div>
-            <label className="block text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Category *</label>
-            <select className="w-full bg-zinc-950 border border-zinc-700 text-zinc-200 text-xs px-2 py-2 rounded"
-              value={form.category} onChange={e => set('category', e.target.value)}>
+            <label style={S.label}>Category *</label>
+            <select style={{ ...S.select, width: '100%' }} value={form.category} onChange={e => set('category', e.target.value)}>
               <option value="">— select —</option>
               {CATEGORIES.map(c => <option key={c}>{c}</option>)}
             </select>
           </div>
         </div>
 
-        <div className="mb-3">
-          <label className="block text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Severity *</label>
-          <div className="grid grid-cols-4 gap-2">
+        <div style={{ marginBottom: 12 }}>
+          <label style={S.label}>Severity *</label>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
             {Object.entries(SEV).map(([k, s]) => (
               <button key={k} onClick={() => set('severity', k)}
-                className={`border text-xs py-2 rounded transition-colors ${
-                  form.severity === k ? `${s.btn} border` : 'border-zinc-700 bg-zinc-950 text-zinc-500'
-                }`}>
+                style={{
+                  ...s.btn,
+                  fontSize: 10, padding: '7px 4px', borderRadius: 3, cursor: 'pointer', fontFamily: 'inherit',
+                  fontWeight: form.severity === k ? 700 : 400,
+                  opacity: form.severity && form.severity !== k ? 0.45 : 1,
+                }}>
                 {s.label}
               </button>
             ))}
           </div>
         </div>
 
-        <div className="mb-3">
-          <label className="block text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Description *</label>
-          <textarea className="w-full bg-zinc-950 border border-zinc-700 text-zinc-200 text-xs px-2 py-2 rounded resize-none h-16"
+        <div style={{ marginBottom: 12 }}>
+          <label style={S.label}>Description *</label>
+          <textarea style={{ ...S.textarea, height: 64 }}
             placeholder="What did you observe?"
             value={form.description} onChange={e => set('description', e.target.value)} />
         </div>
 
-        <div className="mb-4">
-          <label className="block text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Action Required</label>
-          <select className="w-full bg-zinc-950 border border-zinc-700 text-zinc-200 text-xs px-2 py-2 rounded"
-            value={form.action_required} onChange={e => set('action_required', e.target.value)}>
+        <div style={{ marginBottom: 16 }}>
+          <label style={S.label}>Action Required</label>
+          <select style={{ ...S.select, width: '100%' }} value={form.action_required} onChange={e => set('action_required', e.target.value)}>
             {ACTIONS_REQUIRED.map(a => <option key={a}>{a}</option>)}
           </select>
         </div>
 
-        {formErr && <p className="text-red-400 text-xs mb-3">{formErr}</p>}
+        {formErr && <p style={{ color: 'var(--red)', fontSize: 11, marginBottom: 12 }}>{formErr}</p>}
 
-        <div className="flex gap-2 justify-end">
-          <button onClick={onClose}
-            className="border border-zinc-700 text-zinc-500 text-xs px-3 py-2 rounded">Cancel</button>
-          <button onClick={handleSave} disabled={saving}
-            className="bg-yellow-400 text-black font-bold text-xs px-4 py-2 rounded disabled:opacity-50">
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button onClick={onClose} style={S.btnGhost}>Cancel</button>
+          <button onClick={handleSave} disabled={saving} style={{ ...S.btnYellow, opacity: saving ? 0.5 : 1 }}>
             {saving ? 'Saving…' : 'Save Finding'}
           </button>
         </div>
@@ -233,105 +265,114 @@ function LogTab({ date, setDate, rounds, session, userId, perms, onRefresh }) {
 
   return (
     <div>
-      <div className="flex items-center gap-3 mb-4">
-        <input type="date" value={date} onChange={e => setDate(e.target.value)}
-          className="bg-zinc-900 border border-zinc-700 text-zinc-300 text-xs px-2 py-1.5 rounded" />
-        <button onClick={handleNewRound}
-          className="bg-yellow-400 text-black font-bold text-xs px-3 py-1.5 rounded">
-          + Start New Round
-        </button>
+      {/* Header row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+        <input type="date" value={date} onChange={e => setDate(e.target.value)} style={S.input} />
+        <button onClick={handleNewRound} style={S.btnYellow}>+ Start New Round</button>
       </div>
 
-      <div className="flex gap-3 mb-4">
+      {/* Day summary strip */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
         {[
-          { val: rounds.length, lbl: 'Rounds today' },
-          { val: critOpen,      lbl: 'Critical open', cls: 'text-red-400' },
-          { val: highOpen,      lbl: 'High open',     cls: 'text-orange-400' },
-          { val: totalFindings, lbl: 'Total findings' },
-          { val: confirmed,     lbl: 'Confirmed',     cls: 'text-green-400' },
-        ].map(({ val, lbl, cls }) => (
-          <div key={lbl} className="bg-zinc-900 border border-zinc-800 rounded-md px-3 py-2">
-            <div className={`text-xl font-bold ${cls || 'text-yellow-400'}`}>{val}</div>
-            <div className="text-[10px] text-zinc-500 uppercase tracking-wider mt-0.5">{lbl}</div>
+          { val: rounds.length, lbl: 'Rounds today',   color: 'var(--yellow)' },
+          { val: critOpen,      lbl: 'Critical open',  color: 'var(--red)'    },
+          { val: highOpen,      lbl: 'High open',      color: 'var(--orange)' },
+          { val: totalFindings, lbl: 'Total findings', color: 'var(--yellow)' },
+          { val: confirmed,     lbl: 'Confirmed',      color: 'var(--green)'  },
+        ].map(({ val, lbl, color }) => (
+          <div key={lbl} style={{ ...S.card, padding: '10px 14px' }}>
+            <div style={{ fontFamily: 'var(--cond)', fontSize: 24, fontWeight: 800, color, lineHeight: 1 }}>{val}</div>
+            <div style={{ fontFamily: 'inherit', fontSize: 9, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 3 }}>{lbl}</div>
           </div>
         ))}
       </div>
 
+      {/* Empty state */}
       {rounds.length === 0 && (
-        <p className="text-zinc-600 text-xs italic">No rounds for this date. Start one above.</p>
+        <p style={{ color: 'var(--t3)', fontSize: 12, fontStyle: 'italic' }}>No rounds for this date. Start one above.</p>
       )}
 
+      {/* Round cards */}
       {rounds.map(round => {
         const isActive   = !round.completed_at
         const isExpanded = expanded.has(round.id)
         const findings   = roundFindings[round.id] || []
 
         return (
-          <div key={round.id} className="bg-zinc-900 border border-zinc-800 rounded-md mb-2 overflow-hidden">
-            <div className="flex items-center gap-3 px-3 py-2.5 cursor-pointer select-none"
+          <div key={round.id} style={{ ...S.card, marginBottom: 6, overflow: 'hidden' }}>
+            {/* Round card header */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', cursor: 'pointer', userSelect: 'none' }}
               onClick={() => toggleExpand(round.id)}>
-              <span className={`text-[11px] font-bold px-2 py-0.5 rounded ${
-                isActive ? 'bg-yellow-400 text-black' : 'bg-zinc-700 text-zinc-400'}`}>
+              <span style={{
+                fontFamily: 'var(--cond)', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 3,
+                background: isActive ? 'var(--yellow)' : 'var(--surface3)',
+                color: isActive ? '#000' : 'var(--t2)',
+              }}>
                 R{round.round_number}
               </span>
-              <span className="text-zinc-500 text-[11px]">
+              <span style={{ fontSize: 11, color: 'var(--t2)' }}>
                 {fmtTime(round.started_at)}
                 {round.completed_at ? ` – ${fmtTime(round.completed_at)}` : ''}
               </span>
-              <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wide ${
-                isActive ? 'bg-green-900/30 text-green-400 border border-green-900'
-                         : 'bg-zinc-800 text-zinc-500 border border-zinc-700'}`}>
+              <span style={{
+                ...S.badge,
+                ...(isActive
+                  ? { background: 'rgba(34,197,94,0.12)', color: 'var(--green)', border: '1px solid rgba(34,197,94,0.3)' }
+                  : { background: 'var(--surface2)', color: 'var(--t3)', border: '1px solid var(--border)' }),
+              }}>
                 {isActive ? 'Active' : 'Closed'}
               </span>
-              <div className="flex gap-1.5 ml-auto">
+              <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
                 {['critical', 'high', 'medium', 'low'].map(sev => {
                   const count = round[`${sev}_open`] || 0
                   if (!count) return null
                   return (
-                    <span key={sev} className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${SEV[sev].pill}`}>
+                    <span key={sev} style={{ ...S.badge, ...SEV[sev].badge }}>
                       {count} {sev.charAt(0).toUpperCase() + sev.slice(1)}
                     </span>
                   )
                 })}
               </div>
-              <span className="text-zinc-600 text-[11px] ml-2">{isExpanded ? '▲' : '▼'}</span>
+              <span style={{ fontSize: 10, color: 'var(--t3)', marginLeft: 6 }}>{isExpanded ? '▲' : '▼'}</span>
             </div>
 
+            {/* Expanded content */}
             {isExpanded && (
-              <div className="border-t border-zinc-800">
+              <div style={{ borderTop: '1px solid var(--border)' }}>
                 {loadingRound[round.id] ? (
-                  <p className="text-zinc-600 text-xs italic px-4 py-3">Loading…</p>
+                  <p style={{ color: 'var(--t3)', fontSize: 11, fontStyle: 'italic', padding: '12px 16px' }}>Loading…</p>
                 ) : findings.length === 0 ? (
-                  <p className="text-zinc-600 text-xs italic px-4 py-3">No findings yet.</p>
+                  <p style={{ color: 'var(--t3)', fontSize: 11, fontStyle: 'italic', padding: '12px 16px' }}>No findings yet.</p>
                 ) : (
                   findings.map(f => (
-                    <div key={f.id} className="px-3 py-2 border-b border-zinc-800 last:border-0">
-                      <div className="flex items-start gap-2">
-                        <span className={`w-2 h-2 rounded-full flex-shrink-0 mt-1.5 ${SEV[f.severity]?.dot}`} />
-                        <span className="text-[10px] font-bold bg-blue-900/20 text-blue-400 border border-blue-900 px-1.5 py-0.5 rounded flex-shrink-0">{f.line}</span>
-                        <span className="text-[10px] bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded flex-shrink-0 max-w-[160px] truncate">{f.category}</span>
-                        <span className="flex-1 text-xs text-zinc-300 leading-snug">{f.description}</span>
+                    <div key={f.id} style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                        <span style={{ width: 8, height: 8, borderRadius: '50%', background: SEV[f.severity]?.dot || 'var(--t3)', flexShrink: 0, marginTop: 4 }} />
+                        <span style={S.lineBadge}>{f.line}</span>
+                        <span style={{ fontSize: 10, background: 'var(--surface2)', color: 'var(--t2)', padding: '2px 6px', borderRadius: 3, flexShrink: 0, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.category}</span>
+                        <span style={{ flex: 1, fontSize: 12, color: 'var(--t1)', lineHeight: 1.4 }}>{f.description}</span>
                         {f.is_repeat && (
-                          <span className="text-[10px] bg-amber-900/20 text-amber-400 border border-amber-900 px-1.5 py-0.5 rounded flex-shrink-0">↻ Repeat</span>
+                          <span style={{ ...S.badge, background: 'rgba(251,191,36,0.1)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)', flexShrink: 0 }}>↻ Repeat</span>
                         )}
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wide flex-shrink-0 ${STATUS_STYLES[f.status]}`}>{f.status}</span>
+                        <span style={{ ...S.badge, ...STATUS_BADGE[f.status], flexShrink: 0 }}>{f.status}</span>
                       </div>
                       {f.resolution_note && (
-                        <div className="mt-1.5 ml-4 pl-2 border-l-2 border-green-700 text-xs text-zinc-400">
-                          <span className="text-green-500 font-semibold">Resolution: </span>{f.resolution_note}
+                        <div style={{ marginTop: 6, marginLeft: 16, paddingLeft: 8, borderLeft: '2px solid var(--green)', fontSize: 11, color: 'var(--t2)' }}>
+                          <span style={{ color: 'var(--green)', fontWeight: 700 }}>Resolution: </span>{f.resolution_note}
                         </div>
                       )}
                     </div>
                   ))
                 )}
+                {/* Active round footer */}
                 {isActive && (
-                  <div className="flex items-center gap-2 px-3 py-2 bg-zinc-950/50">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: 'var(--surface2)' }}>
                     <button onClick={() => setAddModal({ roundId: round.id, roundNumber: round.round_number })}
-                      className="border border-dashed border-yellow-600 text-yellow-400 text-[11px] px-3 py-1 rounded">
+                      style={{ background: 'transparent', border: '1px dashed rgba(242,205,26,0.5)', color: 'var(--yellow)', fontSize: 11, padding: '4px 12px', borderRadius: 3, cursor: 'pointer', fontFamily: 'inherit' }}>
                       + Add Finding
                     </button>
                     <button onClick={() => handleCloseRound(round.id)} disabled={closingId === round.id}
-                      className="ml-auto border border-zinc-700 text-zinc-500 text-[11px] px-3 py-1 rounded disabled:opacity-50">
+                      style={{ ...S.btnGhost, marginLeft: 'auto', opacity: closingId === round.id ? 0.5 : 1 }}>
                       {closingId === round.id ? 'Closing…' : 'Close Round'}
                     </button>
                   </div>
@@ -342,7 +383,7 @@ function LogTab({ date, setDate, rounds, session, userId, perms, onRefresh }) {
         )
       })}
 
-      <p className="text-zinc-600 text-[11px] italic mt-2">
+      <p style={{ color: 'var(--t3)', fontSize: 10, fontStyle: 'italic', marginTop: 8 }}>
         Closed rounds expand on click. Findings inside can still be resolved and confirmed.
       </p>
 
@@ -433,60 +474,55 @@ function TrackerTab({ session, userId, perms }) {
     else load()
   }
 
+  const thStyle = { fontSize: 9, fontWeight: 700, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', padding: '8px 12px', textAlign: 'left', whiteSpace: 'nowrap', borderBottom: '1px solid var(--border)' }
+  const tdStyle = { padding: '10px 12px', verticalAlign: 'top', borderBottom: '1px solid var(--border)' }
+
   return (
     <div>
       {/* Filter bar */}
-      <div className="flex flex-wrap gap-2 mb-4">
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
         {[
           { key: 'line',     label: 'Line',     opts: LINES },
           { key: 'status',   label: 'Status',   opts: ['open', 'resolved', 'confirmed'] },
           { key: 'severity', label: 'Severity', opts: ['critical', 'high', 'medium', 'low'] },
         ].map(({ key, label, opts }) => (
-          <select key={key}
-            className="bg-zinc-900 border border-zinc-700 text-zinc-300 text-xs px-2 py-1.5 rounded"
-            value={filters[key]} onChange={e => setFilter(key, e.target.value)}>
+          <select key={key} style={S.select} value={filters[key]} onChange={e => setFilter(key, e.target.value)}>
             <option value="">All {label}s</option>
             {opts.map(o => <option key={o} value={o}>{o.charAt(0).toUpperCase() + o.slice(1)}</option>)}
           </select>
         ))}
-        <select
-          className="bg-zinc-900 border border-zinc-700 text-zinc-300 text-xs px-2 py-1.5 rounded min-w-[180px]"
-          value={filters.category} onChange={e => setFilter('category', e.target.value)}>
+        <select style={{ ...S.select, minWidth: 180 }} value={filters.category} onChange={e => setFilter('category', e.target.value)}>
           <option value="">All Categories</option>
           {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
-        <input type="date" className="bg-zinc-900 border border-zinc-700 text-zinc-300 text-xs px-2 py-1.5 rounded"
-          value={filters.from_date} onChange={e => setFilter('from_date', e.target.value)} />
-        <input type="date" className="bg-zinc-900 border border-zinc-700 text-zinc-300 text-xs px-2 py-1.5 rounded"
-          value={filters.to_date} onChange={e => setFilter('to_date', e.target.value)} />
+        <input type="date" style={S.input} value={filters.from_date} onChange={e => setFilter('from_date', e.target.value)} />
+        <input type="date" style={S.input} value={filters.to_date}   onChange={e => setFilter('to_date',   e.target.value)} />
       </div>
 
       {/* Per-line scorecards */}
-      <div className="grid grid-cols-4 gap-3 mb-4">
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 16 }}>
         {['L1', 'L2', 'L3', 'All'].map(line => {
           const sc = scorecard(line)
-          const openTotal = sc.critical + sc.high + sc.medium + sc.low
+          const openTotal  = sc.critical + sc.high + sc.medium + sc.low
           const overdueAge = sc.oldest ? (Date.now() - sc.oldest) / 3600000 : 0
-          const hasOverdue = sc.oldest && (
-            sc.critical > 0 || sc.high > 0 ? overdueAge > 24 : overdueAge > 48
-          )
+          const hasOverdue = sc.oldest && (sc.critical > 0 || sc.high > 0 ? overdueAge > 24 : overdueAge > 48)
           return (
-            <div key={line} className={`bg-zinc-900 border rounded-md p-3 ${hasOverdue ? 'border-red-900' : 'border-zinc-800'}`}>
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-bold text-zinc-300">{line}</span>
+            <div key={line} style={{ ...S.card, padding: 12, borderColor: hasOverdue ? 'rgba(222,42,42,0.5)' : 'var(--border)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                <span style={{ fontFamily: 'var(--cond)', fontSize: 14, fontWeight: 700, color: 'var(--t1)' }}>{line}</span>
                 {sc.oldest && (
-                  <span className={`text-[10px] ${hasOverdue ? 'text-red-400' : 'text-zinc-500'}`}>
+                  <span style={{ fontSize: 10, color: hasOverdue ? 'var(--red)' : 'var(--t3)' }}>
                     {ageLabel(new Date(sc.oldest))} oldest
                   </span>
                 )}
               </div>
-              <div className="flex gap-1.5 flex-wrap">
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                 {[['critical', sc.critical], ['high', sc.high], ['medium', sc.medium], ['low', sc.low]].map(([sev, cnt]) =>
                   cnt > 0 ? (
-                    <span key={sev} className={`text-[10px] px-1.5 py-0.5 rounded border ${SEV[sev].pill}`}>{cnt}</span>
+                    <span key={sev} style={{ ...S.badge, ...SEV[sev].badge }}>{cnt}</span>
                   ) : null
                 )}
-                {openTotal === 0 && <span className="text-zinc-600 text-[10px]">✓ Clear</span>}
+                {openTotal === 0 && <span style={{ fontSize: 10, color: 'var(--t3)' }}>✓ Clear</span>}
               </div>
             </div>
           )
@@ -495,16 +531,16 @@ function TrackerTab({ session, userId, perms }) {
 
       {/* Findings table */}
       {loading ? (
-        <p className="text-zinc-600 text-xs italic">Loading findings…</p>
+        <p style={{ color: 'var(--t3)', fontSize: 12, fontStyle: 'italic' }}>Loading findings…</p>
       ) : findings.length === 0 ? (
-        <p className="text-zinc-600 text-xs italic">No findings match the current filters.</p>
+        <p style={{ color: 'var(--t3)', fontSize: 12, fontStyle: 'italic' }}>No findings match the current filters.</p>
       ) : (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-md overflow-hidden mb-6">
-          <table className="w-full text-xs">
+        <div style={{ ...S.card, overflow: 'hidden', marginBottom: 24 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
-              <tr className="border-b border-zinc-800">
+              <tr>
                 {['Sev', 'Line', 'Category · Description', 'Round', 'Age', 'Status', 'Action'].map(h => (
-                  <th key={h} className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider px-3 py-2 text-left whitespace-nowrap">{h}</th>
+                  <th key={h} style={thStyle}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -517,55 +553,55 @@ function TrackerTab({ session, userId, perms }) {
 
                 return (
                   <>
-                    <tr key={f.id} className={`border-b border-zinc-800 ${dimmed ? 'opacity-40' : ''}`}>
-                      <td className="px-3 py-2.5">
-                        <span className={`w-2 h-2 rounded-full inline-block ${SEV[f.severity]?.dot || 'bg-zinc-500'}`} />
+                    <tr key={f.id} style={{ opacity: dimmed ? 0.4 : 1 }}>
+                      <td style={tdStyle}>
+                        <span style={{ width: 8, height: 8, borderRadius: '50%', background: SEV[f.severity]?.dot || 'var(--t3)', display: 'inline-block' }} />
                       </td>
-                      <td className="px-3 py-2.5 whitespace-nowrap">
-                        <span className="text-[10px] font-bold bg-blue-900/20 text-blue-400 border border-blue-900 px-1.5 py-0.5 rounded">{f.line}</span>
+                      <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
+                        <span style={S.lineBadge}>{f.line}</span>
                       </td>
-                      <td className="px-3 py-2.5 max-w-xs">
-                        <div className="text-[10px] text-zinc-500 mb-0.5 truncate">{f.category}</div>
-                        <div className="text-zinc-300 leading-snug">{f.description}</div>
+                      <td style={{ ...tdStyle, maxWidth: 320 }}>
+                        <div style={{ fontSize: 10, color: 'var(--t3)', marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.category}</div>
+                        <div style={{ color: 'var(--t1)', lineHeight: 1.4 }}>{f.description}</div>
                         {f.is_repeat && (
-                          <span className="text-[10px] bg-amber-900/20 text-amber-400 border border-amber-900 px-1 py-0.5 rounded mt-1 inline-block">
+                          <span style={{ ...S.badge, background: 'rgba(251,191,36,0.1)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)', marginTop: 4, display: 'inline-block' }}>
                             ↻ {f.recurrence_count > 1 ? `${f.recurrence_count}× in 30d` : 'Repeat'}
                           </span>
                         )}
                         {f.resolution_note && (
-                          <div className="mt-1.5 pl-2 border-l-2 border-green-700 text-[11px] text-zinc-400">
-                            <span className="text-green-500 font-semibold">Resolution: </span>{f.resolution_note}
+                          <div style={{ marginTop: 6, paddingLeft: 8, borderLeft: '2px solid var(--green)', fontSize: 11, color: 'var(--t2)' }}>
+                            <span style={{ color: 'var(--green)', fontWeight: 700 }}>Resolution: </span>{f.resolution_note}
                           </div>
                         )}
                       </td>
-                      <td className="px-3 py-2.5 text-zinc-500 whitespace-nowrap">R{f.round_number}</td>
-                      <td className={`px-3 py-2.5 whitespace-nowrap ${overdue ? 'text-red-400 font-semibold' : 'text-zinc-500'}`}>
+                      <td style={{ ...tdStyle, color: 'var(--t2)', whiteSpace: 'nowrap' }}>R{f.round_number}</td>
+                      <td style={{ ...tdStyle, whiteSpace: 'nowrap', color: overdue ? 'var(--red)' : 'var(--t2)', fontWeight: overdue ? 700 : 400 }}>
                         {ageLabel(f.created_at)}
                       </td>
-                      <td className="px-3 py-2.5">
+                      <td style={tdStyle}>
                         {f.status === 'confirmed'
-                          ? <span className="text-zinc-500 text-[10px]">Closed</span>
-                          : <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wide ${STATUS_STYLES[f.status]}`}>{f.status}</span>
+                          ? <span style={{ fontSize: 10, color: 'var(--t3)' }}>Closed</span>
+                          : <span style={{ ...S.badge, ...STATUS_BADGE[f.status] }}>{f.status}</span>
                         }
                       </td>
-                      <td className="px-3 py-2.5">
-                        <div className="flex flex-col gap-1">
+                      <td style={tdStyle}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                           {f.status === 'open' && canManageFloor && !isRoundAuditor && (
                             <button
                               onClick={() => setResolveOpen(s => { const n = new Set(s); n.add(f.id); return n })}
-                              className="text-[10px] border border-green-800 text-green-400 px-2 py-0.5 rounded hover:bg-green-900/20 whitespace-nowrap">
+                              style={{ ...S.badge, ...{ background: 'rgba(34,197,94,0.1)', color: 'var(--green)', border: '1px solid rgba(34,197,94,0.3)' }, padding: '4px 8px', cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
                               Mark Resolved
                             </button>
                           )}
                           {f.status === 'resolved' && (isRoundAuditor || isSuperAdmin) && (
                             <button onClick={() => handleConfirm(f.id)} disabled={saving[f.id]}
-                              className="text-[10px] border border-sky-800 text-sky-400 px-2 py-0.5 rounded hover:bg-sky-900/20 disabled:opacity-50 whitespace-nowrap">
+                              style={{ ...S.badge, background: 'rgba(56,189,248,0.1)', color: '#38bdf8', border: '1px solid rgba(56,189,248,0.3)', padding: '4px 8px', cursor: 'pointer', fontFamily: 'inherit', opacity: saving[f.id] ? 0.5 : 1, whiteSpace: 'nowrap' }}>
                               {saving[f.id] ? '…' : '✓ Confirm Fixed'}
                             </button>
                           )}
                           {f.status === 'resolved' && (isRoundAuditor || canManageFloor) && (
                             <button onClick={() => handleReopen(f.id)} disabled={saving[f.id]}
-                              className="text-[10px] border border-zinc-700 text-zinc-400 px-2 py-0.5 rounded hover:bg-zinc-800 disabled:opacity-50 whitespace-nowrap">
+                              style={{ ...S.badge, background: 'transparent', color: 'var(--t2)', border: '1px solid var(--border)', padding: '4px 8px', cursor: 'pointer', fontFamily: 'inherit', opacity: saving[f.id] ? 0.5 : 1, whiteSpace: 'nowrap' }}>
                               {saving[f.id] ? '…' : 'Reopen'}
                             </button>
                           )}
@@ -573,25 +609,22 @@ function TrackerTab({ session, userId, perms }) {
                       </td>
                     </tr>
                     {resolveFormOpen && (
-                      <tr key={`resolve-${f.id}`} className="border-b border-zinc-800 bg-zinc-950/60">
-                        <td colSpan={7} className="px-4 py-3">
-                          <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">
-                            What was done to fix this? (required)
-                          </p>
-                          <textarea
-                            className="w-full bg-zinc-900 border border-zinc-700 text-zinc-200 text-xs px-2 py-1.5 rounded resize-none h-14 mb-2"
+                      <tr key={`resolve-${f.id}`}>
+                        <td colSpan={7} style={{ padding: '12px 16px', background: 'var(--surface2)', borderBottom: '1px solid var(--border)' }}>
+                          <p style={{ ...S.label, marginBottom: 6 }}>What was done to fix this? (required)</p>
+                          <textarea style={{ ...S.textarea, height: 56, marginBottom: 8 }}
                             placeholder="Describe the resolution…"
                             value={resolveDraft[f.id] || ''}
                             onChange={e => setResolveDraft(d => ({ ...d, [f.id]: e.target.value }))} />
-                          <div className="flex gap-2">
+                          <div style={{ display: 'flex', gap: 8 }}>
                             <button onClick={() => handleResolve(f.id)} disabled={saving[f.id]}
-                              className="bg-green-700 text-white text-[10px] font-bold px-3 py-1 rounded disabled:opacity-50">
+                              style={{ background: 'var(--green)', color: '#000', fontWeight: 700, fontSize: 11, padding: '5px 12px', border: 'none', borderRadius: 3, cursor: 'pointer', fontFamily: 'inherit', opacity: saving[f.id] ? 0.5 : 1 }}>
                               {saving[f.id] ? 'Saving…' : 'Save Resolution'}
                             </button>
                             <button onClick={() => {
                               setResolveOpen(s => { const n = new Set(s); n.delete(f.id); return n })
                               setResolveDraft(d => { const n = { ...d }; delete n[f.id]; return n })
-                            }} className="border border-zinc-700 text-zinc-500 text-[10px] px-3 py-1 rounded">
+                            }} style={S.btnGhost}>
                               Cancel
                             </button>
                           </div>
@@ -608,22 +641,24 @@ function TrackerTab({ session, userId, perms }) {
 
       {/* Repeat Offenders panel */}
       {repeatOffenders.length > 0 && (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-md p-4">
-          <h3 className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-3">
+        <div style={{ ...S.card, padding: 16 }}>
+          <div style={{ fontFamily: 'var(--cond)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--t2)', marginBottom: 12 }}>
             Repeat Offenders — Last 30 Days
-          </h3>
-          <div className="space-y-2">
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {repeatOffenders.map((o, i) => (
-              <div key={i} className="flex items-center gap-3">
-                <span className="text-yellow-400 font-bold text-sm w-6 flex-shrink-0">{o.occurrence_count}×</span>
-                <span className="text-[10px] font-bold bg-blue-900/20 text-blue-400 border border-blue-900 px-1.5 py-0.5 rounded flex-shrink-0">{o.line}</span>
-                <span className="text-xs text-zinc-300 flex-1 truncate">{o.category}</span>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 ${
-                  o.has_active
-                    ? 'bg-orange-900/30 text-orange-400 border border-orange-900'
-                    : 'bg-zinc-800 text-zinc-500 border border-zinc-700'
-                }`}>{o.has_active ? 'Active' : 'Resolved'}</span>
-                <span className="text-[10px] text-zinc-600 flex-shrink-0">
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontFamily: 'var(--cond)', fontSize: 18, fontWeight: 800, color: 'var(--yellow)', width: 28, flexShrink: 0 }}>{o.occurrence_count}×</span>
+                <span style={S.lineBadge}>{o.line}</span>
+                <span style={{ flex: 1, fontSize: 12, color: 'var(--t1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.category}</span>
+                <span style={{
+                  ...S.badge,
+                  ...(o.has_active
+                    ? { background: 'rgba(249,115,22,0.12)', color: 'var(--orange)', border: '1px solid rgba(249,115,22,0.3)' }
+                    : { background: 'var(--surface2)', color: 'var(--t3)', border: '1px solid var(--border)' }),
+                  flexShrink: 0,
+                }}>{o.has_active ? 'Active' : 'Resolved'}</span>
+                <span style={{ fontSize: 10, color: 'var(--t3)', flexShrink: 0 }}>
                   {new Date(o.last_raised_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
                 </span>
               </div>
@@ -657,30 +692,41 @@ export default function AuditPage() {
   useEffect(() => { loadRounds() }, [loadRounds])
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-200 text-sm font-mono">
-      <div className="bg-zinc-900 border-b border-zinc-800 px-5 py-3 flex items-center gap-4">
-        <span className="text-yellow-400 font-bold text-sm uppercase tracking-widest">QC Audit</span>
-        <div className="flex">
+    <div style={{ color: 'var(--t1)' }}>
+      {/* Page header */}
+      <div style={{ borderBottom: '1px solid var(--border)', padding: '12px 20px', display: 'flex', alignItems: 'center', gap: 20, marginBottom: 0 }}>
+        <span style={{ fontFamily: 'var(--cond)', fontSize: 16, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--yellow)' }}>
+          QC Audit
+        </span>
+        <div style={{ display: 'flex' }}>
           {['log', 'tracker'].map(t => (
             <button key={t} onClick={() => setTab(t)}
-              className={`px-4 py-1.5 text-[11px] uppercase tracking-widest border-b-2 transition-colors ${
-                tab === t
-                  ? 'border-yellow-400 text-yellow-400'
-                  : 'border-transparent text-zinc-500 hover:text-zinc-300'
-              }`}>
+              style={{
+                padding: '6px 16px',
+                fontSize: 10,
+                textTransform: 'uppercase',
+                letterSpacing: '0.1em',
+                fontFamily: 'inherit',
+                border: 'none',
+                borderBottom: tab === t ? '2px solid var(--yellow)' : '2px solid transparent',
+                background: 'transparent',
+                color: tab === t ? 'var(--yellow)' : 'var(--t3)',
+                cursor: 'pointer',
+              }}>
               {t}
             </button>
           ))}
         </div>
       </div>
 
-      <div className="px-5 py-4 max-w-5xl">
+      {/* Tab content */}
+      <div style={{ padding: '16px 20px', maxWidth: 1100 }}>
         {tab === 'log' ? (
           loading ? (
-            <p className="text-zinc-600 text-xs italic">Loading…</p>
+            <p style={{ color: 'var(--t3)', fontSize: 12, fontStyle: 'italic' }}>Loading…</p>
           ) : (
             <LogTab
-              date={date} setDate={d => { setDate(d) }}
+              date={date} setDate={d => setDate(d)}
               rounds={rounds}
               session={session} userId={userId} perms={perms}
               onRefresh={loadRounds}
