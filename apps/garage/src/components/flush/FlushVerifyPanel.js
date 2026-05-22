@@ -2,9 +2,17 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, useToast } from '@throttle/ui';
+import { Spinner, useToast, buildBagLabelsHtml, printWindow } from '@throttle/ui';
 
+// Canonical disposition values (kept stable — worker logic keys on these).
+// LF_DISP_LABELS provides clearer floor-facing display labels.
 const LF_DISPOSITIONS = ['Return to Stock', 'Quarantine', 'Scrap', 'Rework Queue'];
+const LF_DISP_LABELS = {
+  'Return to Stock': 'Restocked',
+  Quarantine:        'Quarantine',
+  Scrap:             'Damaged / Scratched',
+  'Rework Queue':    'Rework Queue',
+};
 const LF_DISP_TONES = {
   'Return to Stock': 'green',
   Quarantine:        'red',
@@ -30,7 +38,7 @@ const labelStyle = {
 };
 
 function newSplit() {
-  return { disposition: 'Return to Stock', qty: 0, bin: '', notes: '' };
+  return { disposition: 'Return to Stock', qty: 0, bin: '', notes: '', bagsOf: 0 };
 }
 
 function balanceOf(part) {
@@ -65,7 +73,7 @@ export function FlushVerifyPanel({ flushId, onClose, onVerified }) {
           part_name: l.part_name || '',
           return_type: l.return_type || '—',
           qty_raised: parseFloat(l.qty_raised) || 0,
-          splits: [{ disposition: 'Return to Stock', qty: parseFloat(l.qty_raised) || 0, bin: '', notes: '' }],
+          splits: [{ disposition: 'Return to Stock', qty: parseFloat(l.qty_raised) || 0, bin: '', notes: '', bagsOf: 0 }],
         }));
         setParts(initial);
       } catch (e) {
@@ -111,6 +119,7 @@ export function FlushVerifyPanel({ flushId, onClose, onVerified }) {
       return;
     }
     const dispositions = [];
+    const bagRequests = [];
     parts.forEach((p) => {
       p.splits.forEach((sp) => {
         const qty = parseFloat(sp.qty) || 0;
@@ -124,6 +133,15 @@ export function FlushVerifyPanel({ flushId, onClose, onVerified }) {
           bin_code: sp.disposition === 'Quarantine' ? (sp.bin || null) : null,
           notes: sp.notes || null,
         });
+        const bagsOf = parseInt(sp.bagsOf) || 0;
+        if (sp.disposition === 'Return to Stock' && bagsOf > 0) {
+          bagRequests.push({
+            part_code: p.part_code,
+            part_name: p.part_name,
+            qty,
+            bags_of: bagsOf,
+          });
+        }
       });
     });
     if (!dispositions.length) {
@@ -135,6 +153,37 @@ export function FlushVerifyPanel({ flushId, onClose, onVerified }) {
       const res = await workerFetch('verifyFlush', { data: { flush_id: flush.flush_id, dispositions } }, session);
       const result = res.data || res;
       showToast(`Flush ${flush.flush_id} verified — ${result.stock_returned || 0} returned to stock`, 'success');
+
+      // Bag-label generation against the auto-created Line Flush GRN.
+      // Worker returns grn_no when stock was restocked; if absent, skip silently.
+      if (result.grn_no && bagRequests.length > 0) {
+        const allBags = [];
+        const failed = [];
+        for (const r of bagRequests) {
+          try {
+            const bagRes = await workerFetch('generateBagsForGrn', {
+              data: {
+                grn_no:    result.grn_no,
+                part_code: r.part_code,
+                part_name: r.part_name,
+                qty:       r.qty,
+                bags_of:   r.bags_of,
+              }
+            }, session);
+            allBags.push(...(bagRes?.data?.bags || []));
+          } catch (e) {
+            failed.push(`${r.part_code}: ${e.message || e}`);
+          }
+        }
+        if (allBags.length > 0) {
+          showToast(`${allBags.length} bag label${allBags.length === 1 ? '' : 's'} generated`, 'success');
+          printWindow(buildBagLabelsHtml(allBags, result.grn_no));
+        }
+        if (failed.length > 0) {
+          showToast(`Bag generation failed for ${failed.length} part(s) — reprint from GRN detail`, 'error');
+        }
+      }
+
       if (onVerified) onVerified(result);
       if (onClose) onClose();
     } catch (e) {
@@ -218,9 +267,10 @@ export function FlushVerifyPanel({ flushId, onClose, onVerified }) {
                 </div>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '180px 90px 130px 1fr 24px', gap: 6, fontSize: 9, color: 'var(--t3)', marginBottom: 4, paddingLeft: 2, fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '180px 80px 80px 130px 1fr 24px', gap: 6, fontSize: 9, color: 'var(--t3)', marginBottom: 4, paddingLeft: 2, fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                 <div>Disposition</div>
                 <div>Qty</div>
+                <div>Qty/Bag</div>
                 <div>Bin</div>
                 <div>Notes</div>
                 <div></div>
@@ -229,15 +279,16 @@ export function FlushVerifyPanel({ flushId, onClose, onVerified }) {
               {p.splits.map((sp, si) => {
                 const tone = LF_DISP_TONES[sp.disposition] || 'gray';
                 const tc = TONE_COLORS[tone];
+                const isRestock = sp.disposition === 'Return to Stock';
                 return (
-                  <div key={si} style={{ display: 'grid', gridTemplateColumns: '180px 90px 130px 1fr 24px', gap: 6, marginBottom: 4 }}>
+                  <div key={si} style={{ display: 'grid', gridTemplateColumns: '180px 80px 80px 130px 1fr 24px', gap: 6, marginBottom: 4 }}>
                     <select
                       value={sp.disposition}
                       onChange={(e) => updateSplit(pi, si, 'disposition', e.target.value)}
                       style={{ ...selectStyle, background: tc.bg, color: tc.fg }}
                       disabled={submitting}
                     >
-                      {LF_DISPOSITIONS.map((d) => <option key={d} value={d}>{d}</option>)}
+                      {LF_DISPOSITIONS.map((d) => <option key={d} value={d}>{LF_DISP_LABELS[d] || d}</option>)}
                     </select>
                     <input
                       type="number"
@@ -248,6 +299,18 @@ export function FlushVerifyPanel({ flushId, onClose, onVerified }) {
                       style={{ ...inputStyle, fontFamily: 'var(--mono)' }}
                       disabled={submitting}
                     />
+                    {isRestock ? (
+                      <input
+                        type="number"
+                        min="0"
+                        placeholder="Bag"
+                        value={sp.bagsOf}
+                        onChange={(e) => updateSplit(pi, si, 'bagsOf', e.target.value)}
+                        style={{ ...inputStyle, fontFamily: 'var(--mono)' }}
+                        disabled={submitting}
+                        title="Units per bag — leave 0 to skip bag-label printing"
+                      />
+                    ) : <div />}
                     <input
                       type="text"
                       placeholder="Bin"
