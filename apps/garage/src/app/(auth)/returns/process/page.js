@@ -13,7 +13,7 @@ const RETURN_CATEGORIES = [
 ];
 
 const DISPOSITIONS = [
-  { value: 'rtd_direct',     icon: '📦', title: 'RTD Direct',      sub: 'Sealed, intact. Goes straight to dispatch stock.', loss: false },
+  { value: 'udr',     icon: '📦', title: 'UDR (Undamaged Return)', sub: 'Sealed, intact. Re-enters dispatch stock via PKG_OUT.', loss: false },
   { value: 'wks_repair',     icon: '🔧', title: 'Send to Workshop', sub: 'Product present, needs inspection or repair.',     loss: false },
   { value: 'loss_damage',    icon: '💥', title: 'Loss — Damage',    sub: 'Beyond repair or destroyed. Raise damage note.',  loss: true  },
   { value: 'loss_rejection', icon: '🚫', title: 'Loss — Rejection', sub: 'Switcheroo, empty box, wrong product. Raise rejection note.', loss: true },
@@ -173,7 +173,7 @@ function ProcessPage() {
       setBoxCondition('sealed');
       setProductPresent(true);
       setProductCondition('good');
-      setSelectedDisp('rtd_direct');
+      setSelectedDisp('udr');
     } else {
       setBoxCondition('open');
       setProductPresent(true);
@@ -309,7 +309,7 @@ function ProcessPage() {
     const groups = {};
     units.forEach((u) => {
       if (u.status !== 'inspected') return;
-      if (!['rtd_direct', 'wks_repair'].includes(u.disposition)) return;
+      if (!['udr', 'wks_repair'].includes(u.disposition)) return;
       const key = `${u.product || '—'}|${u.disposition}`;
       if (!groups[key]) groups[key] = { product: u.product || '—', disposition: u.disposition, count: 0 };
       groups[key].count += 1;
@@ -370,8 +370,8 @@ function ProcessPage() {
                   <div key={`${g.product}-${g.disposition}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: '8px 10px' }}>
                     <div>
                       <strong style={{ fontFamily: 'var(--cond)', fontSize: 13 }}>{g.product}</strong>
-                      <span style={{ marginLeft: 8, fontSize: 11, color: g.disposition === 'rtd_direct' ? '#4ade80' : '#ffaa33' }}>
-                        {g.disposition === 'rtd_direct' ? 'RTD Direct' : 'Workshop Repair'}
+                      <span style={{ marginLeft: 8, fontSize: 11, color: g.disposition === 'udr' ? '#4ade80' : '#ffaa33' }}>
+                        {g.disposition === 'udr' ? 'UDR' : 'Workshop Repair'}
                       </span>
                     </div>
                     <span style={{ fontFamily: 'var(--mono)', fontSize: 14, fontWeight: 700 }}>×{g.count}</span>
