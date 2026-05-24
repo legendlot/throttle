@@ -3,16 +3,13 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth, hasPermission } from '@throttle/auth';
 import { workerFetch } from '@throttle/db';
-import { Spinner, EmptyState, useToast } from '@throttle/ui';
+import { Spinner, EmptyState, Panel, Chip, StatusBadge, useToast } from '@throttle/ui';
 import { STAGES, StageBadge, fmtDate } from '../page.js';
 
-const panel = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, marginBottom: 16 };
-const phdr  = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid var(--border)', fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--t2)' };
-const pbody = { padding: '14px 16px' };
-const input = { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: '8px 12px', fontSize: 13, color: 'var(--t1)', outline: 'none', fontFamily: 'inherit', width: '100%' };
-const lbl   = { fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4, display: 'block' };
-const btnP  = { background: '#f2cd1a', border: 'none', borderRadius: 3, padding: '10px 18px', fontSize: 12, color: '#0a0a0a', cursor: 'pointer', fontFamily: 'var(--cond)', fontWeight: 700, letterSpacing: '0.05em' };
-const btnS  = { background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, padding: '7px 14px', fontSize: 11, color: 'var(--t2)', cursor: 'pointer', fontFamily: 'var(--cond)', letterSpacing: '0.05em' };
+const input = { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: '8px 12px', fontSize: 13, color: 'var(--t1)', outline: 'none', fontFamily: 'var(--mono)', width: '100%' };
+const lbl   = { fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4, display: 'block', fontWeight: 600 };
+const btnP  = { background: 'var(--yellow)', border: '1px solid var(--yellow)', borderRadius: 3, padding: '8px 14px', fontSize: 13, color: '#0a0a0a', cursor: 'pointer', fontFamily: 'var(--cond)', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' };
+const btnS  = { background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, padding: '8px 14px', fontSize: 13, color: 'var(--t2)', cursor: 'pointer', fontFamily: 'var(--mono)' };
 
 const EDITABLE_FIELDS = [
   'customer_name','customer_phone','customer_address',
@@ -109,7 +106,7 @@ function CustomerRepairDetailInner() {
   if (!allowed) {
     return (
       <div style={{ padding: 16 }}>
-        <EmptyState title="Access denied" subtitle="You need customer_repair_manage permission." />
+        <EmptyState icon="🔒" message="Access denied — you need customer_repair_manage permission." />
       </div>
     );
   }
@@ -117,7 +114,7 @@ function CustomerRepairDetailInner() {
   if (!id) {
     return (
       <div style={{ padding: 16 }}>
-        <EmptyState title="Missing id" subtitle="No repair id supplied in the URL." />
+        <EmptyState icon="❓" message="Missing id — no repair id supplied in the URL." />
       </div>
     );
   }
@@ -129,7 +126,7 @@ function CustomerRepairDetailInner() {
   if (!repair) {
     return (
       <div style={{ padding: 16 }}>
-        <EmptyState title="Not found" subtitle="That repair record does not exist." />
+        <EmptyState icon="🔍" message="Not found — that repair record does not exist." />
         <button onClick={() => router.push('/customer-repairs')} style={btnS}>← Back to list</button>
       </div>
     );
@@ -145,26 +142,25 @@ function CustomerRepairDetailInner() {
       {/* Header strip */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
         <button onClick={() => router.push('/customer-repairs')} style={btnS}>← Back</button>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 18, color: '#f2cd1a', fontWeight: 700 }}>{repair.repair_no}</span>
+        <span style={{ fontFamily: 'var(--cond)', fontSize: 22, color: 'var(--yellow)', fontWeight: 700, letterSpacing: '0.04em' }}>{repair.repair_no}</span>
         <StageBadge stage={repair.stage} />
-        <span style={{ fontSize: 11, color: 'var(--t3)' }}>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', letterSpacing: '0.04em' }}>
           Captured {fmtDate(repair.captured_at)}{repair.captured_by_name ? ` · ${repair.captured_by_name}` : ''}
         </span>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16 }}>
         {/* LEFT — editable form */}
-        <div style={panel}>
-          <div style={phdr}>
-            <span>Details</span>
-            {dirty && (
-              <button onClick={saveChanges} style={btnP} disabled={saving}>
-                {saving ? 'SAVING…' : 'SAVE CHANGES'}
-              </button>
-            )}
-          </div>
-          <div style={pbody}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <div style={{ marginBottom: 16 }}>
+        <Panel
+          header="Details"
+          headerAction={dirty ? (
+            <button onClick={saveChanges} style={btnP} disabled={saving}>
+              {saving ? 'Saving…' : 'Save Changes'}
+            </button>
+          ) : null}
+        >
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
               <div>
                 <label style={lbl}>Customer name *</label>
                 <input value={form.customer_name || ''} onChange={e => setForm({ ...form, customer_name: e.target.value })} style={input} />
@@ -206,15 +202,14 @@ function CustomerRepairDetailInner() {
                 <textarea rows={2} value={form.notes || ''} onChange={e => setForm({ ...form, notes: e.target.value })} style={{ ...input, resize: 'vertical' }} />
               </div>
             </div>
-          </div>
+        </Panel>
         </div>
 
         {/* RIGHT — stage timeline + advance + history */}
         <div>
           {/* Stage timeline */}
-          <div style={panel}>
-            <div style={phdr}><span>Stage Timeline</span></div>
-            <div style={pbody}>
+          <div style={{ marginBottom: 16 }}>
+          <Panel header="Stage Timeline">
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {STAGES.map((s, i) => {
                   const done    = i < currentIdx;
@@ -227,16 +222,17 @@ function CustomerRepairDetailInner() {
                       border: current ? '1px solid rgba(242,205,26,.3)' : '1px solid transparent',
                     }}>
                       <span style={{
-                        width: 16, height: 16, borderRadius: '50%',
+                        width: 18, height: 18, borderRadius: '50%',
                         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: 10, fontWeight: 700,
-                        background: done ? '#4ade80' : current ? '#f2cd1a' : 'var(--surface2)',
+                        fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 700,
+                        background: done ? '#22c55e' : current ? 'var(--yellow)' : 'var(--surface2)',
                         color: done || current ? '#0a0a0a' : 'var(--t3)',
-                        border: '1px solid ' + (done ? '#4ade80' : current ? '#f2cd1a' : 'var(--border)'),
+                        border: '1px solid ' + (done ? '#22c55e' : current ? 'var(--yellow)' : 'var(--border)'),
                       }}>{done ? '✓' : i + 1}</span>
                       <span style={{
-                        fontSize: 12,
-                        color: current ? '#f2cd1a' : done ? 'var(--t2)' : 'var(--t3)',
+                        fontFamily: 'var(--mono)',
+                        fontSize: 13,
+                        color: current ? 'var(--yellow)' : done ? 'var(--t2)' : 'var(--t3)',
                         fontWeight: current ? 700 : 400,
                       }}>{s.label}</span>
                     </div>
@@ -249,7 +245,7 @@ function CustomerRepairDetailInner() {
                   <label style={lbl}>Stage change note (optional)</label>
                   <input value={advanceNote} onChange={e => setAdvanceNote(e.target.value)} placeholder="e.g. AWB confirmed by courier" style={input} />
                   <button onClick={() => advance()} style={{ ...btnP, width: '100%', marginTop: 10 }} disabled={advancing}>
-                    {advancing ? 'ADVANCING…' : `→ ${nextStage.label.toUpperCase()}`}
+                    {advancing ? 'Advancing…' : `→ ${nextStage.label}`}
                   </button>
 
                   {laterStages.length > 0 && (
@@ -264,50 +260,49 @@ function CustomerRepairDetailInner() {
                           onClick={() => jumpTarget && advance(jumpTarget)}
                           disabled={!jumpTarget || advancing}
                           style={btnS}
-                        >JUMP</button>
+                        >Jump</button>
                       </div>
                     </div>
                   )}
                 </div>
               ) : (
-                <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)', textAlign: 'center', color: '#4ade80', fontSize: 12, fontFamily: 'var(--mono)' }}>
-                  ✓ CLOSED · DISPATCHED
+                <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)', textAlign: 'center' }}>
+                  <StatusBadge variant="success" icon="✓">Closed · Dispatched</StatusBadge>
                 </div>
               )}
-            </div>
+          </Panel>
           </div>
 
           {/* History */}
-          <div style={panel}>
-            <div style={phdr}><span>History · {history.length}</span></div>
-            <div style={{ ...pbody, maxHeight: 380, overflowY: 'auto' }}>
+          <Panel header={`History · ${history.length}`} padding={0}>
+            <div style={{ padding: 16, maxHeight: 380, overflowY: 'auto' }}>
               {history.length === 0 ? (
-                <div style={{ padding: 12, textAlign: 'center', color: 'var(--t3)', fontSize: 11 }}>No events</div>
+                <div style={{ padding: 12, textAlign: 'center', color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12 }}>No events</div>
               ) : history.map(h => (
-                <div key={h.id} style={{ marginBottom: 10, paddingBottom: 10, borderBottom: '1px solid rgba(42,42,42,.5)' }}>
-                  <div style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--t3)', marginBottom: 2 }}>
+                <div key={h.id} style={{ marginBottom: 10, paddingBottom: 10, borderBottom: '1px solid rgba(64,64,64,.5)' }}>
+                  <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginBottom: 2, letterSpacing: '0.04em' }}>
                     {fmtDate(h.created_at)} · {h.actor_name || '—'}
                   </div>
                   {h.event_type === 'created' && (
-                    <div style={{ fontSize: 12, color: 'var(--t2)' }}>Created repair record</div>
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t2)' }}>Created repair record</div>
                   )}
                   {h.event_type === 'stage_changed' && (
-                    <div style={{ fontSize: 12, color: 'var(--t1)' }}>
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t1)' }}>
                       Stage: <em style={{ color: 'var(--t3)' }}>{(h.old_stage || '').replace(/_/g, ' ')}</em>
                       {' → '}
-                      <strong style={{ color: '#f2cd1a' }}>{(h.new_stage || '').replace(/_/g, ' ')}</strong>
-                      {h.note && <div style={{ fontSize: 11, color: 'var(--t2)', marginTop: 2, fontStyle: 'italic' }}>"{h.note}"</div>}
+                      <strong style={{ color: 'var(--yellow)' }}>{(h.new_stage || '').replace(/_/g, ' ')}</strong>
+                      {h.note && <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t2)', marginTop: 2, fontStyle: 'italic' }}>"{h.note}"</div>}
                     </div>
                   )}
                   {h.event_type === 'updated' && (
-                    <div style={{ fontSize: 12, color: 'var(--t2)' }}>
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t2)' }}>
                       Updated: {Object.keys(h.changes || {}).join(', ')}
                     </div>
                   )}
                 </div>
               ))}
             </div>
-          </div>
+          </Panel>
         </div>
       </div>
     </div>

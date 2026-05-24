@@ -2,39 +2,28 @@
 import { Fragment, useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
-import { Spinner, EmptyState } from '@throttle/ui';
+import { Spinner, EmptyState, Panel, StatusBadge } from '@throttle/ui';
 
 // ── Helpers ───────────────────────────────────────────────────
 function fmt(n) { return n != null ? Number(n).toLocaleString('en-IN') : '0'; }
 
-const STATUS_COLORS = {
-  qc_fail:         'var(--red)',
-  rto_in:          'var(--orange)',
-  scrapped_repair: 'var(--t3)',
+// Map unit status → StatusBadge variant.
+const STATUS_MAP = {
+  qc_fail:         { variant: 'error',   label: 'QC Fail',   icon: '✗' },
+  rto_in:          { variant: 'warning', label: 'RTO In',    icon: '⚠' },
+  scrapped_repair: { variant: 'neutral', label: 'Scrapped' },
 };
 
-const STATUS_LABELS = {
-  qc_fail:         'QC Fail',
-  rto_in:          'RTO In',
-  scrapped_repair: 'Scrapped',
-};
-
-function StatusBadge({ status }) {
-  const color = STATUS_COLORS[status] || 'var(--t3)';
-  return (
-    <span style={{
-      fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 2,
-      letterSpacing: '0.06em', textTransform: 'uppercase', whiteSpace: 'nowrap',
-      fontFamily: 'var(--mono)', color, border: `1px solid ${color}`,
-    }}>{STATUS_LABELS[status] || status || '—'}</span>
-  );
+function RepairStatusBadge({ status }) {
+  const meta = STATUS_MAP[status] || { variant: 'neutral', label: status || '—' };
+  return <StatusBadge variant={meta.variant} icon={meta.icon}>{meta.label}</StatusBadge>;
 }
 
 // ── Common styles ────────────────────────────────────────────
-const btnStyle = { padding: '4px 10px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontSize: 11, cursor: 'pointer', fontFamily: 'var(--mono)', letterSpacing: '0.04em' };
-const sectionLabel = { fontFamily: 'var(--cond)', fontSize: 10, fontWeight: 700, letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--t3)' };
-const thStyle = { padding: '8px 12px', fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
-const tdStyle = { padding: '8px 12px', fontSize: 12, borderBottom: '1px solid rgba(42,42,42,.6)', whiteSpace: 'nowrap' };
+const refreshBtnStyle = { padding: '7px 12px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t1)', fontFamily: 'var(--mono)', fontSize: 12, cursor: 'pointer' };
+const sectionLabel = { margin: 0, fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t2)' };
+const thStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
+const tdStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 13, borderBottom: '1px solid rgba(64,64,64,.5)', whiteSpace: 'nowrap', color: 'var(--t1)' };
 
 // ── Repair Queue Page ────────────────────────────────────────
 export default function RepairQueuePage() {
@@ -72,23 +61,23 @@ export default function RepairQueuePage() {
   return (
     <div>
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-        <div style={sectionLabel}>Repair Queue — Awaiting Repair Run</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18, flexWrap: 'wrap' }}>
+        <h2 style={sectionLabel}>Repair Queue — Awaiting Repair Run</h2>
         <div style={{ flex: 1 }} />
-        <span style={{ fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)', letterSpacing: '0.04em' }}>
           Total: <span style={{ color: 'var(--yellow)', fontWeight: 700 }}>{fmt(grandTotal)}</span> units
         </span>
-        <button style={btnStyle} onClick={load} disabled={loading}>↻ Refresh</button>
+        <button style={refreshBtnStyle} onClick={load} disabled={loading}>↻ Refresh</button>
       </div>
 
       {error && (
-        <div style={{ background: 'rgba(222,42,42,.1)', border: '1px solid rgba(222,42,42,.25)', borderRadius: 4, padding: '10px 14px', fontSize: 12, color: 'var(--red)', marginBottom: 14 }}>
-          {error}
+        <div style={{ background: 'rgba(222,42,42,.1)', border: '1px solid rgba(222,42,42,.3)', borderRadius: 4, padding: '12px 14px', fontFamily: 'var(--mono)', fontSize: 13, color: '#ff7070', marginBottom: 16 }}>
+          ⚠ {error}
         </div>
       )}
 
       {/* Table */}
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+      <Panel padding={0}>
         {loading && rows.length === 0 ? (
           <div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}><Spinner /></div>
         ) : products.length === 0 ? (
@@ -112,20 +101,20 @@ export default function RepairQueuePage() {
                   return (
                     <Fragment key={p}>
                       <tr style={{ background: 'var(--surface2)' }}>
-                        <td colSpan={4} style={{ padding: '10px 12px', fontSize: 12, fontWeight: 700, color: 'var(--t1)', fontFamily: 'var(--cond)', letterSpacing: '0.06em' }}>
+                        <td colSpan={4} style={{ padding: '10px 14px', fontFamily: 'var(--cond)', fontSize: 14, fontWeight: 700, color: 'var(--t1)', letterSpacing: '0.04em' }}>
                           {p}
                         </td>
-                        <td style={{ padding: '10px 12px', fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--yellow)', fontWeight: 700, textAlign: 'right' }}>
+                        <td style={{ padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--yellow)', fontWeight: 700, textAlign: 'right' }}>
                           {fmt(productTotal)}
                         </td>
                       </tr>
                       {productRows.map((r, i) => (
                         <tr key={`${p}-${i}`}>
-                          <td style={{ ...tdStyle, color: 'var(--t3)', paddingLeft: 28 }}>—</td>
-                          <td style={{ ...tdStyle, color: 'var(--t1)' }}>{r.model || '—'}</td>
+                          <td style={{ ...tdStyle, color: 'var(--t3)', paddingLeft: 32 }}>—</td>
+                          <td style={tdStyle}>{r.model || '—'}</td>
                           <td style={{ ...tdStyle, color: 'var(--t2)' }}>{r.color || '—'}</td>
-                          <td style={tdStyle}><StatusBadge status={r.status} /></td>
-                          <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--t1)', textAlign: 'right' }}>{fmt(r.count)}</td>
+                          <td style={tdStyle}><RepairStatusBadge status={r.status} /></td>
+                          <td style={{ ...tdStyle, textAlign: 'right' }}>{fmt(r.count)}</td>
                         </tr>
                       ))}
                     </Fragment>
@@ -135,10 +124,10 @@ export default function RepairQueuePage() {
             </table>
           </div>
         )}
-      </div>
+      </Panel>
 
       {/* Footer note */}
-      <div style={{ marginTop: 12, fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
+      <div style={{ marginTop: 14, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)', letterSpacing: '0.04em' }}>
         Units available for repair — grouped by product. Create runs in the Store system.
       </div>
     </div>
