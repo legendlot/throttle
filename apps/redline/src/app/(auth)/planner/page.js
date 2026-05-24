@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, useToast } from '@throttle/ui';
+import { Spinner, useToast, Panel, Chip } from '@throttle/ui';
 
 const LEAD_COLORS = {
   impossible: '#DE2A2A',
@@ -199,7 +199,7 @@ function resolveStatus(gap, leadStatus) {
   }
 }
 
-function StatusBadge({ gap, leadStatus }) {
+function LeadStatusPill({ gap, leadStatus }) {
   const { label, color } = resolveStatus(gap, leadStatus);
   const fg = (color === '#eab308' || color === '#22c55e') ? '#080808' : '#fff';
   return (
@@ -703,22 +703,15 @@ export default function PlannerPage() {
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 4, marginBottom: 24, borderBottom: '1px solid var(--b1)' }}>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 24, paddingBottom: 12, borderBottom: '1px solid var(--b1)' }}>
         {[
           { key: 'timeline',        label: 'Dispatch Timeline' },
           { key: 'recommendations', label: `Recommended Runs (${recDateCount} date${recDateCount === 1 ? '' : 's'})` },
           { key: 'config',          label: 'Batch Sizes' },
         ].map(tab => (
-          <button key={tab.key} onClick={() => setView(tab.key)}
-            style={{
-              padding: '8px 16px', border: 'none', cursor: 'pointer',
-              background: view === tab.key ? '#F2CD1A' : 'transparent',
-              color:      view === tab.key ? '#080808' : 'var(--t2)',
-              borderRadius: '6px 6px 0 0', fontWeight: view === tab.key ? 600 : 400,
-              fontSize: 13,
-            }}>
+          <Chip key={tab.key} active={view === tab.key} onClick={() => setView(tab.key)}>
             {tab.label}
-          </button>
+          </Chip>
         ))}
       </div>
 
@@ -730,18 +723,9 @@ export default function PlannerPage() {
               { key: 'cascaded', label: 'Cascaded Waterfall' },
               { key: 'normal',   label: 'Normal' },
             ].map(opt => (
-              <button key={opt.key}
-                onClick={() => setViewMode(opt.key)}
-                style={{
-                  padding: '6px 12px', fontSize: 12,
-                  background: viewMode === opt.key ? '#F2CD1A' : 'var(--s1)',
-                  color:      viewMode === opt.key ? '#080808' : 'var(--t2)',
-                  border: '1px solid ' + (viewMode === opt.key ? '#F2CD1A' : 'var(--b2)'),
-                  borderRadius: 4, cursor: 'pointer',
-                  fontWeight: viewMode === opt.key ? 600 : 400,
-                }}>
+              <Chip key={opt.key} active={viewMode === opt.key} onClick={() => setViewMode(opt.key)}>
                 {opt.label}
-              </button>
+              </Chip>
             ))}
             <span style={{ fontSize: 11, color: 'var(--t3)', marginLeft: 8 }}>
               {viewMode === 'cascaded'
@@ -804,7 +788,7 @@ export default function PlannerPage() {
                                 {prod.variants.length} variant{prod.variants.length === 1 ? '' : 's'}
                               </span>
                             </span>
-                            <StatusBadge
+                            <LeadStatusPill
                               gap={prod.total_gap}
                               leadStatus={prod.lead_status}
                             />
@@ -846,7 +830,7 @@ export default function PlannerPage() {
                                       {v.gap > 0 ? v.gap : '—'}
                                     </td>
                                     <td style={{ padding: '6px 10px' }}>
-                                      <StatusBadge gap={v.gap} leadStatus={v.lead_status} />
+                                      <LeadStatusPill gap={v.gap} leadStatus={v.lead_status} />
                                     </td>
                                   </tr>
                                 ))}
@@ -905,7 +889,7 @@ export default function PlannerPage() {
                           <strong style={{ fontFamily: 'Tomorrow, sans-serif', fontSize: 15 }}>{dateLabel}</strong>
                           <span style={{ marginLeft: 10, fontSize: 12, color: 'var(--t2)' }}>{daysLabel}</span>
                         </span>
-                        <StatusBadge gap={1} leadStatus={rec.lead_status} />
+                        <LeadStatusPill gap={1} leadStatus={rec.lead_status} />
                       </button>
 
                       {dateExpanded && (
@@ -959,21 +943,13 @@ export default function PlannerPage() {
                                   {prod.planned_runs?.length > 0 && (
                                     <div style={{ paddingLeft: 22, paddingBottom: 6, paddingTop: 2 }}>
                                       {prod.planned_runs.map(pr => (
-                                        <div key={pr.run_id} style={{
-                                          display: 'inline-flex', alignItems: 'center', gap: 4,
-                                          background: 'rgba(33, 60, 226, 0.12)',
-                                          color: '#213CE2',
-                                          border: '1px solid rgba(33, 60, 226, 0.35)',
-                                          borderRadius: 4, padding: '2px 8px',
-                                          fontSize: 11, fontWeight: 600,
-                                          marginRight: 6, marginBottom: 4,
-                                        }}>
-                                          ✓ {pr.run_no} planned — {pr.quantity} units
-                                          {pr.days_covered > 0 ? ` · covers ${pr.days_covered}d` : ''}
-                                          <span style={{ color: '#888', fontWeight: 400, marginLeft: 4 }}>
-                                            ({pr.status})
-                                          </span>
-                                        </div>
+                                        <span key={pr.run_id} style={{ marginRight: 6, marginBottom: 4, display: 'inline-block' }}>
+                                          <StatusBadge variant="info" icon="✓">
+                                            {pr.run_no} planned — {pr.quantity} units
+                                            {pr.days_covered > 0 ? ` · covers ${pr.days_covered}d` : ''}
+                                            {` (${pr.status})`}
+                                          </StatusBadge>
+                                        </span>
                                       ))}
                                     </div>
                                   )}

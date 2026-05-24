@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth, hasPermission } from '@throttle/auth';
 import { workerFetch } from '@throttle/db';
-import { Modal, Spinner, useToast, EmptyState } from '@throttle/ui';
+import { Modal, Spinner, useToast, EmptyState, Panel, Chip, StatusBadge } from '@throttle/ui';
 
 const TYPE_OPTIONS = [
   { id: 'material_substitution',    label: 'Material Substitution' },
@@ -17,35 +17,22 @@ const TYPE_OPTIONS = [
 ];
 
 const SEVERITY_OPTIONS = [
-  { id: 'low',      label: 'Low',      tone: 'green',  desc: 'L1 supervisor approves' },
-  { id: 'medium',   label: 'Medium',   tone: 'yellow', desc: 'L1 + L2 (second-eye)' },
-  { id: 'high',     label: 'High',     tone: 'orange', desc: 'L3 admin only' },
-  { id: 'critical', label: 'Critical', tone: 'red',    desc: 'L3 admin only · reactive blocked' },
+  { id: 'low',      label: 'Low',      variant: 'success', desc: 'L1 supervisor approves' },
+  { id: 'medium',   label: 'Medium',   variant: 'brand',   desc: 'L1 + L2 (second-eye)' },
+  { id: 'high',     label: 'High',     variant: 'warning', desc: 'L3 admin only' },
+  { id: 'critical', label: 'Critical', variant: 'error',   desc: 'L3 admin only · reactive blocked' },
 ];
 
-const TONE = {
-  yellow: { bg: 'rgba(242,205,26,.12)', fg: '#f2cd1a', border: 'rgba(242,205,26,.25)' },
-  green:  { bg: 'rgba(34,197,94,.12)',  fg: '#4ade80', border: 'rgba(34,197,94,.25)'  },
-  red:    { bg: 'rgba(222,42,42,.15)',  fg: '#ff7070', border: 'rgba(222,42,42,.3)'   },
-  blue:   { bg: 'rgba(33,60,226,.2)',   fg: '#7b93ff', border: 'rgba(33,60,226,.35)'  },
-  orange: { bg: 'rgba(245,158,11,.15)', fg: '#fbbf24', border: 'rgba(245,158,11,.3)'  },
-  gray:   { bg: 'rgba(80,80,80,.2)',    fg: '#aaa',    border: 'rgba(80,80,80,.3)'    },
-};
-
-const panel = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, marginBottom: 16 };
-const phdr  = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid var(--border)', fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--t2)' };
-const pbody = { padding: '12px 14px' };
-const th    = { padding: '8px 10px', fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', textAlign: 'left' };
-const td    = { padding: '8px 10px', borderBottom: '1px solid rgba(42,42,42,.6)', fontSize: 12, verticalAlign: 'top' };
-const input = { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: '6px 10px', fontSize: 12, color: 'var(--t1)', outline: 'none', fontFamily: 'inherit' };
-const lbl   = { fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4, display: 'block' };
-const btnP  = { background: 'var(--accent, #213ce2)', border: 'none', borderRadius: 3, padding: '8px 14px', fontSize: 12, color: '#fff', cursor: 'pointer', fontFamily: 'var(--cond)', fontWeight: 700, letterSpacing: '0.05em' };
-const btnS  = { background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, padding: '6px 12px', fontSize: 11, color: 'var(--t2)', cursor: 'pointer', fontFamily: 'var(--cond)' };
+const th    = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', textAlign: 'left', fontWeight: 600 };
+const td    = { padding: '10px 14px', borderBottom: '1px solid rgba(64,64,64,.5)', fontSize: 13, color: 'var(--t1)', fontFamily: 'var(--mono)', verticalAlign: 'top' };
+const input = { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: '8px 12px', fontSize: 13, color: 'var(--t1)', outline: 'none', fontFamily: 'var(--mono)' };
+const lbl   = { fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4, display: 'block' };
+const btnP  = { padding: '8px 14px', background: 'var(--yellow)', color: '#0a0a0a', border: '1px solid var(--yellow)', borderRadius: 3, fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer' };
+const btnS  = { padding: '8px 14px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 13, cursor: 'pointer' };
 
 function SeverityBadge({ severity }) {
-  const cfg = SEVERITY_OPTIONS.find(s => s.id === severity) || { label: severity, tone: 'gray' };
-  const s = TONE[cfg.tone];
-  return <span style={{ display: 'inline-block', padding: '2px 7px', borderRadius: 2, fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '.04em', textTransform: 'uppercase', background: s.bg, color: s.fg, border: `1px solid ${s.border}` }}>{cfg.label}</span>;
+  const cfg = SEVERITY_OPTIONS.find(s => s.id === severity) || { label: severity, variant: 'neutral' };
+  return <StatusBadge variant={cfg.variant}>{cfg.label}</StatusBadge>;
 }
 
 function fmtTs(ts) { if (!ts) return '—'; try { return new Date(ts).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }); } catch { return ts; } }
@@ -101,22 +88,21 @@ export default function RedlineProcessDeviationsPage() {
 
   return (
     <div style={{ padding: 16 }}>
-      <div style={panel}>
-        <div style={phdr}>
-          <span>Process Deviations · Floor View</span>
-          {canPropose && <button onClick={() => setNewOpen(true)} style={btnP}>+ PROPOSE DEVIATION</button>}
-        </div>
-        <div style={pbody}>
-          <div style={{ marginBottom: 12, padding: '8px 10px', background: 'var(--surface2)', borderRadius: 3, fontSize: 11, color: 'var(--t2)' }}>
+      <div style={{ marginBottom: 16 }}>
+      <Panel
+        header="Process Deviations · Floor View"
+        headerAction={canPropose && <button onClick={() => setNewOpen(true)} style={btnP}>+ Propose Deviation</button>}
+      >
+          <div style={{ marginBottom: 12, padding: '8px 10px', background: 'var(--surface2)', borderRadius: 3, fontSize: 12, color: 'var(--t2)' }}>
             Active deviations apply <strong>right now</strong>. Operators must follow them.
             Use the Garage <code>/process-deviations</code> page for the full approval queue + history.
           </div>
 
           {/* ACTIVE BY LINE */}
           <div style={{ marginBottom: 18 }}>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 8 }}>ACTIVE ON FLOOR · {active.length}</div>
+            <h3 style={{ margin: '0 0 8px 0', fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, color: 'var(--t2)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Active on Floor · {active.length}</h3>
             {loading ? <Spinner /> : active.length === 0 ? (
-              <div style={{ padding: 24, textAlign: 'center', color: '#4ade80', fontSize: 12 }}>✓ No active deviations</div>
+              <EmptyState icon="✓" message="No active deviations" />
             ) : (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 10 }}>
                 {Object.entries(activeByLine).filter(([_, devs]) => devs.length > 0).map(([line, devs]) => (
@@ -147,7 +133,7 @@ export default function RedlineProcessDeviationsPage() {
 
           {/* PENDING APPROVAL */}
           <div style={{ marginBottom: 18 }}>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 8 }}>PENDING APPROVAL · {pending.length}</div>
+            <h3 style={{ margin: '0 0 8px 0', fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, color: 'var(--t2)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Pending Approval · {pending.length}</h3>
             {pending.length === 0 ? (
               <div style={{ padding: 14, textAlign: 'center', color: 'var(--t3)', fontSize: 11 }}>None waiting</div>
             ) : (
@@ -163,8 +149,12 @@ export default function RedlineProcessDeviationsPage() {
                       <td style={td}>{d.title}</td>
                       <td style={{ ...td, fontFamily: 'var(--mono)', fontSize: 11 }}>{d.line || '—'}</td>
                       <td style={td}><SeverityBadge severity={d.severity} /></td>
-                      <td style={{ ...td, fontFamily: 'var(--mono)', fontSize: 10, color: d.current_tier === 'l3' ? '#ff7070' : d.current_tier === 'l2' ? '#fbbf24' : '#7b93ff' }}>{d.current_tier.toUpperCase()}</td>
-                      <td style={{ ...td, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>{fmtTs(d.proposed_at)}<div style={{ color: 'var(--t2)' }}>{d.proposed_by_name}</div></td>
+                      <td style={td}>
+                        <StatusBadge variant={d.current_tier === 'l3' ? 'error' : d.current_tier === 'l2' ? 'warning' : 'info'}>
+                          {d.current_tier.toUpperCase()}
+                        </StatusBadge>
+                      </td>
+                      <td style={{ ...td, color: 'var(--t3)' }}>{fmtTs(d.proposed_at)}<div style={{ color: 'var(--t2)' }}>{d.proposed_by_name}</div></td>
                     </tr>
                   ))}
                 </tbody>
@@ -175,8 +165,8 @@ export default function RedlineProcessDeviationsPage() {
           {/* RETRO SIGNOFF NEEDED (supervisor handover) */}
           {canApproveL1 && retro.length > 0 && (
             <div style={{ marginBottom: 18, padding: 10, background: 'rgba(245,158,11,.08)', border: '1px solid rgba(245,158,11,.3)', borderRadius: 4 }}>
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: '#fbbf24', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 8 }}>⚐ AWAITING YOUR SIGN-OFF · {retro.length}</div>
-              <div style={{ fontSize: 11, color: 'var(--t2)', marginBottom: 8 }}>
+              <h3 style={{ margin: '0 0 8px 0', fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--yellow)' }}>⚐ Awaiting Your Sign-Off · {retro.length}</h3>
+              <div style={{ fontSize: 12, color: 'var(--t2)', marginBottom: 8 }}>
                 These reactive deviations were applied while you were out. Review each and either confirm or reject the after-the-fact sign-off.
               </div>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -187,13 +177,13 @@ export default function RedlineProcessDeviationsPage() {
                 <tbody>
                   {retro.map(d => (
                     <tr key={d.id}>
-                      <td style={{ ...td, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{d.deviation_no} ⚡</td>
+                      <td style={{ ...td, color: 'var(--yellow)' }}>{d.deviation_no} ⚡</td>
                       <td style={td}>{d.title}</td>
                       <td style={td}><SeverityBadge severity={d.severity} /></td>
-                      <td style={{ ...td, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>{fmtTs(d.proposed_at)}<div style={{ color: 'var(--t2)' }}>{d.proposed_by_name}</div></td>
+                      <td style={{ ...td, color: 'var(--t3)' }}>{fmtTs(d.proposed_at)}<div style={{ color: 'var(--t2)' }}>{d.proposed_by_name}</div></td>
                       <td style={{ ...td, textAlign: 'right' }}>
                         <button onClick={() => quickAck(d.deviation_no)} disabled={ackBusy === d.deviation_no} style={btnS}>
-                          {ackBusy === d.deviation_no ? '…' : '👁 ACK'}
+                          {ackBusy === d.deviation_no ? '…' : '👁 Ack'}
                         </button>
                       </td>
                     </tr>
@@ -202,7 +192,7 @@ export default function RedlineProcessDeviationsPage() {
               </table>
             </div>
           )}
-        </div>
+      </Panel>
       </div>
 
       {newOpen && (

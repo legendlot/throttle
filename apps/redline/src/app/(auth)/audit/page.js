@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '@throttle/auth'
 import { workerFetch } from '@throttle/db'
+import { Panel, Chip, StatusBadge } from '@throttle/ui'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -68,16 +69,21 @@ const STATUS_BADGE = {
 // ── Style constants ───────────────────────────────────────────────────────────
 
 const S = {
-  input:    { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: '6px 10px', fontSize: 12, color: 'var(--t1)', outline: 'none', fontFamily: 'inherit' },
-  select:   { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: '5px 8px',  fontSize: 12, color: 'var(--t1)', outline: 'none', fontFamily: 'inherit', cursor: 'pointer' },
-  textarea: { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: '6px 10px', fontSize: 12, color: 'var(--t1)', outline: 'none', fontFamily: 'inherit', resize: 'none', width: '100%' },
-  label:    { fontFamily: 'inherit', fontSize: 9, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4, display: 'block' },
-  btnYellow:{ background: 'var(--yellow)', color: '#000', fontWeight: 700, fontSize: 11, padding: '6px 12px', border: 'none', borderRadius: 3, cursor: 'pointer', fontFamily: 'inherit' },
-  btnGhost: { background: 'transparent', border: '1px solid var(--border)', color: 'var(--t2)', fontSize: 11, padding: '5px 10px', borderRadius: 3, cursor: 'pointer', fontFamily: 'inherit' },
+  input:    { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: '8px 12px', fontSize: 13, color: 'var(--t1)', outline: 'none', fontFamily: 'var(--mono)' },
+  select:   { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: '8px 12px', fontSize: 13, color: 'var(--t1)', outline: 'none', fontFamily: 'var(--mono)', cursor: 'pointer' },
+  textarea: { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: '8px 12px', fontSize: 13, color: 'var(--t1)', outline: 'none', fontFamily: 'var(--mono)', resize: 'none', width: '100%' },
+  label:    { fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6, display: 'block' },
+  btnYellow:{ padding: '8px 14px', background: 'var(--yellow)', color: '#0a0a0a', border: '1px solid var(--yellow)', borderRadius: 3, fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer' },
+  btnGhost: { padding: '8px 14px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 13, cursor: 'pointer' },
   card:     { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4 },
   badge:    { fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 3, textTransform: 'uppercase', letterSpacing: '0.06em' },
   lineBadge:{ fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 3, background: 'rgba(33,60,226,0.18)', color: '#6882ff', border: '1px solid rgba(33,60,226,0.35)', flexShrink: 0 },
 }
+
+// Map severity to StatusBadge variant
+const SEV_VARIANT = { critical: 'error', high: 'error', medium: 'warning', low: 'success' }
+const SEV_LABEL   = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low' }
+const STATUS_VARIANT = { open: 'info', resolved: 'success', confirmed: 'info' }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -139,9 +145,9 @@ function AddFindingModal({ roundId, roundNumber, session, onClose, onSaved }) {
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}
       onClick={e => e.target === e.currentTarget && onClose()}>
       <div style={{ background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 6, width: 480, padding: 20 }}>
-        <div style={{ fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--yellow)', marginBottom: 16 }}>
+        <h2 style={{ margin: '0 0 16px 0', fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--yellow)' }}>
           Add Finding — R{roundNumber}
-        </div>
+        </h2>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
           <div>
@@ -314,22 +320,17 @@ function LogTab({ date, setDate, rounds, session, userId, perms, onRefresh }) {
                 {fmtTime(round.started_at)}
                 {round.completed_at ? ` – ${fmtTime(round.completed_at)}` : ''}
               </span>
-              <span style={{
-                ...S.badge,
-                ...(isActive
-                  ? { background: 'rgba(34,197,94,0.12)', color: 'var(--green)', border: '1px solid rgba(34,197,94,0.3)' }
-                  : { background: 'var(--surface2)', color: 'var(--t3)', border: '1px solid var(--border)' }),
-              }}>
-                {isActive ? 'Active' : 'Closed'}
-              </span>
+              {isActive
+                ? <StatusBadge variant="success" icon="●">Active</StatusBadge>
+                : <StatusBadge variant="neutral">Closed</StatusBadge>}
               <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
                 {['critical', 'high', 'medium', 'low'].map(sev => {
                   const count = round[`${sev}_open`] || 0
                   if (!count) return null
                   return (
-                    <span key={sev} style={{ ...S.badge, ...SEV[sev].badge }}>
-                      {count} {sev.charAt(0).toUpperCase() + sev.slice(1)}
-                    </span>
+                    <StatusBadge key={sev} variant={SEV_VARIANT[sev]}>
+                      {count} {SEV_LABEL[sev]}
+                    </StatusBadge>
                   )
                 })}
               </div>
@@ -352,9 +353,9 @@ function LogTab({ date, setDate, rounds, session, userId, perms, onRefresh }) {
                         <span style={{ fontSize: 10, background: 'var(--surface2)', color: 'var(--t2)', padding: '2px 6px', borderRadius: 3, flexShrink: 0, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.category}</span>
                         <span style={{ flex: 1, fontSize: 12, color: 'var(--t1)', lineHeight: 1.4 }}>{f.description}</span>
                         {f.is_repeat && (
-                          <span style={{ ...S.badge, background: 'rgba(251,191,36,0.1)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)', flexShrink: 0 }}>↻ Repeat</span>
+                          <StatusBadge variant="warning" icon="↻">Repeat</StatusBadge>
                         )}
-                        <span style={{ ...S.badge, ...STATUS_BADGE[f.status], flexShrink: 0 }}>{f.status}</span>
+                        <StatusBadge variant={STATUS_VARIANT[f.status] || 'neutral'}>{f.status}</StatusBadge>
                       </div>
                       {f.resolution_note && (
                         <div style={{ marginTop: 6, marginLeft: 16, paddingLeft: 8, borderLeft: '2px solid var(--green)', fontSize: 11, color: 'var(--t2)' }}>
@@ -519,7 +520,7 @@ function TrackerTab({ session, userId, perms }) {
               <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                 {[['critical', sc.critical], ['high', sc.high], ['medium', sc.medium], ['low', sc.low]].map(([sev, cnt]) =>
                   cnt > 0 ? (
-                    <span key={sev} style={{ ...S.badge, ...SEV[sev].badge }}>{cnt}</span>
+                    <StatusBadge key={sev} variant={SEV_VARIANT[sev]}>{cnt}</StatusBadge>
                   ) : null
                 )}
                 {openTotal === 0 && <span style={{ fontSize: 10, color: 'var(--t3)' }}>✓ Clear</span>}
@@ -564,9 +565,11 @@ function TrackerTab({ session, userId, perms }) {
                         <div style={{ fontSize: 10, color: 'var(--t3)', marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.category}</div>
                         <div style={{ color: 'var(--t1)', lineHeight: 1.4 }}>{f.description}</div>
                         {f.is_repeat && (
-                          <span style={{ ...S.badge, background: 'rgba(251,191,36,0.1)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)', marginTop: 4, display: 'inline-block' }}>
-                            ↻ {f.recurrence_count > 1 ? `${f.recurrence_count}× in 30d` : 'Repeat'}
-                          </span>
+                          <div style={{ marginTop: 4, display: 'inline-block' }}>
+                            <StatusBadge variant="warning" icon="↻">
+                              {f.recurrence_count > 1 ? `${f.recurrence_count}× in 30d` : 'Repeat'}
+                            </StatusBadge>
+                          </div>
                         )}
                         {f.resolution_note && (
                           <div style={{ marginTop: 6, paddingLeft: 8, borderLeft: '2px solid var(--green)', fontSize: 11, color: 'var(--t2)' }}>
@@ -580,8 +583,8 @@ function TrackerTab({ session, userId, perms }) {
                       </td>
                       <td style={tdStyle}>
                         {f.status === 'confirmed'
-                          ? <span style={{ fontSize: 10, color: 'var(--t3)' }}>Closed</span>
-                          : <span style={{ ...S.badge, ...STATUS_BADGE[f.status] }}>{f.status}</span>
+                          ? <StatusBadge variant="neutral">Closed</StatusBadge>
+                          : <StatusBadge variant={STATUS_VARIANT[f.status] || 'neutral'}>{f.status}</StatusBadge>
                         }
                       </td>
                       <td style={tdStyle}>
@@ -641,30 +644,23 @@ function TrackerTab({ session, userId, perms }) {
 
       {/* Repeat Offenders panel */}
       {repeatOffenders.length > 0 && (
-        <div style={{ ...S.card, padding: 16 }}>
-          <div style={{ fontFamily: 'var(--cond)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--t2)', marginBottom: 12 }}>
-            Repeat Offenders — Last 30 Days
-          </div>
+        <Panel header="Repeat Offenders — Last 30 Days">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {repeatOffenders.map((o, i) => (
               <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <span style={{ fontFamily: 'var(--cond)', fontSize: 18, fontWeight: 800, color: 'var(--yellow)', width: 28, flexShrink: 0 }}>{o.occurrence_count}×</span>
                 <span style={S.lineBadge}>{o.line}</span>
                 <span style={{ flex: 1, fontSize: 12, color: 'var(--t1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.category}</span>
-                <span style={{
-                  ...S.badge,
-                  ...(o.has_active
-                    ? { background: 'rgba(249,115,22,0.12)', color: 'var(--orange)', border: '1px solid rgba(249,115,22,0.3)' }
-                    : { background: 'var(--surface2)', color: 'var(--t3)', border: '1px solid var(--border)' }),
-                  flexShrink: 0,
-                }}>{o.has_active ? 'Active' : 'Resolved'}</span>
+                {o.has_active
+                  ? <StatusBadge variant="warning">Active</StatusBadge>
+                  : <StatusBadge variant="neutral">Resolved</StatusBadge>}
                 <span style={{ fontSize: 10, color: 'var(--t3)', flexShrink: 0 }}>
                   {new Date(o.last_raised_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
                 </span>
               </div>
             ))}
           </div>
-        </div>
+        </Panel>
       )}
     </div>
   )
@@ -694,27 +690,13 @@ export default function AuditPage() {
   return (
     <div style={{ color: 'var(--t1)' }}>
       {/* Page header */}
-      <div style={{ borderBottom: '1px solid var(--border)', padding: '12px 20px', display: 'flex', alignItems: 'center', gap: 20, marginBottom: 0 }}>
-        <span style={{ fontFamily: 'var(--cond)', fontSize: 16, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--yellow)' }}>
+      <div style={{ borderBottom: '1px solid var(--border)', padding: '12px 20px', display: 'flex', alignItems: 'center', gap: 14, marginBottom: 0 }}>
+        <h1 style={{ margin: 0, fontFamily: 'var(--cond)', fontSize: 16, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--yellow)' }}>
           QC Audit
-        </span>
-        <div style={{ display: 'flex' }}>
+        </h1>
+        <div style={{ display: 'flex', gap: 6 }}>
           {['log', 'tracker'].map(t => (
-            <button key={t} onClick={() => setTab(t)}
-              style={{
-                padding: '6px 16px',
-                fontSize: 10,
-                textTransform: 'uppercase',
-                letterSpacing: '0.1em',
-                fontFamily: 'inherit',
-                border: 'none',
-                borderBottom: tab === t ? '2px solid var(--yellow)' : '2px solid transparent',
-                background: 'transparent',
-                color: tab === t ? 'var(--yellow)' : 'var(--t3)',
-                cursor: 'pointer',
-              }}>
-              {t}
-            </button>
+            <Chip key={t} active={tab === t} onClick={() => setTab(t)}>{t}</Chip>
           ))}
         </div>
       </div>

@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from '@throttle/auth';
 import { workerFetch } from '@throttle/db';
-import { Spinner, EmptyState, useToast, printWindow } from '@throttle/ui';
+import { Spinner, EmptyState, Panel, Chip, StatusBadge, useToast, printWindow } from '@throttle/ui';
 
 // ── Constants ────────────────────────────────────────────────
 // Department values must match the CHECK constraint on public.operators.
@@ -27,13 +27,15 @@ const STATUSES = [
 ];
 
 // ── Styles ───────────────────────────────────────────────────
-const btnStyle      = { padding: '4px 10px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontSize: 11, cursor: 'pointer', fontFamily: 'var(--mono)', letterSpacing: '0.04em' };
-const inputStyle    = { background: 'var(--surface)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '6px 10px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 12 };
-const selectStyle   = { background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--t1)', fontSize: 11, fontFamily: 'var(--mono)', padding: '5px 8px', borderRadius: 3 };
-const labelStyle    = { fontSize: 10, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase', display: 'block', marginBottom: 6 };
-const sectionLabel  = { fontFamily: 'var(--cond)', fontSize: 10, fontWeight: 700, letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--t3)' };
-const thStyle       = { padding: '8px 12px', fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
-const tdStyle       = { padding: '8px 12px', fontSize: 12, borderBottom: '1px solid rgba(42,42,42,.6)', whiteSpace: 'nowrap' };
+const primaryBtn    = { padding: '8px 14px', background: 'var(--yellow)', color: '#0a0a0a', border: '1px solid var(--yellow)', borderRadius: 3, fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer' };
+const secondaryBtn  = { padding: '8px 14px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 13, cursor: 'pointer' };
+const smallBtn      = { padding: '5px 11px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 12, cursor: 'pointer', letterSpacing: '0.04em' };
+const inputStyle    = { background: 'var(--surface)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '8px 12px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 13, outline: 'none' };
+const selectStyle   = { background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--t1)', fontSize: 13, fontFamily: 'var(--mono)', padding: '8px 12px', borderRadius: 3 };
+const labelStyle    = { fontSize: 11, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase', display: 'block', marginBottom: 6, fontFamily: 'var(--mono)' };
+const sectionLabel  = { fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t2)', margin: 0 };
+const thStyle       = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
+const tdStyle       = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 13, borderBottom: '1px solid rgba(64,64,64,.5)', whiteSpace: 'nowrap', color: 'var(--t1)' };
 
 // ── Operators Page ───────────────────────────────────────────
 export default function OperatorsPage() {
@@ -217,9 +219,9 @@ export default function OperatorsPage() {
           onClick={(e) => { if (e.target === e.currentTarget && !mSaving) setModal(null); }}
         >
           <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: 24, width: 480, maxWidth: '92vw' }}>
-            <div style={{ ...sectionLabel, color: 'var(--yellow)', marginBottom: 16 }}>
+            <h2 style={{ ...sectionLabel, color: 'var(--yellow)', marginBottom: 16 }}>
               {modal.mode === 'add' ? 'Add Operator' : `Edit ${modal.op?.name}`}
-            </div>
+            </h2>
             {modal.mode === 'edit' && modal.op?.employee_id && (
               <div style={{ marginBottom: 12, fontSize: 11, color: 'var(--t3)' }}>
                 Employee ID: <span style={{ color: 'var(--t1)', fontFamily: 'var(--mono)' }}>{modal.op.employee_id}</span>
@@ -264,11 +266,11 @@ export default function OperatorsPage() {
             {mError && <div style={{ color: 'var(--red)', fontSize: 11, marginBottom: 10, fontFamily: 'var(--mono)' }}>{mError}</div>}
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <button onClick={() => setModal(null)} style={btnStyle} disabled={mSaving}>Cancel</button>
+              <button onClick={() => setModal(null)} style={secondaryBtn} disabled={mSaving}>Cancel</button>
               <button
                 onClick={submitModal}
                 disabled={mSaving}
-                style={{ ...btnStyle, background: 'var(--yellow)', color: '#000', border: '1px solid var(--yellow)', opacity: mSaving ? 0.5 : 1 }}
+                style={{ ...primaryBtn, opacity: mSaving ? 0.5 : 1 }}
               >
                 {mSaving ? 'Saving…' : (modal.mode === 'add' ? 'Add' : 'Save')}
               </button>
@@ -294,16 +296,16 @@ export default function OperatorsPage() {
           {STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
         <div style={{ flex: 1 }} />
-        <button style={btnStyle} onClick={loadData} disabled={loading}>↻ Refresh</button>
+        <button style={secondaryBtn} onClick={loadData} disabled={loading}>↻ Refresh</button>
         {canEdit && (
-          <button onClick={openAdd} style={{ ...btnStyle, background: 'var(--yellow)', color: '#000', border: '1px solid var(--yellow)' }}>
+          <button onClick={openAdd} style={primaryBtn}>
             + Add Operator
           </button>
         )}
       </div>
 
       {/* Table */}
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+      <Panel padding={0}>
         {loading && operators.length === 0 ? (
           <div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}><Spinner /></div>
         ) : displayRows.length === 0 ? (
@@ -323,28 +325,28 @@ export default function OperatorsPage() {
                   const inactive = (op.status || '').toLowerCase() !== 'active';
                   return (
                     <tr key={op.id} style={{ opacity: inactive ? 0.55 : 1 }}>
-                      <td style={{ ...tdStyle, color: 'var(--t1)', fontWeight: 600 }}>{op.name}</td>
-                      <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--t2)' }}>{op.employee_id || '—'}</td>
+                      <td style={{ ...tdStyle, fontWeight: 600 }}>{op.name}</td>
+                      <td style={{ ...tdStyle, color: 'var(--t2)' }}>{op.employee_id || '—'}</td>
                       <td style={{ ...tdStyle, color: 'var(--t2)' }}>{DEPT_LABEL[op.department] || op.department || '—'}</td>
                       <td style={{ ...tdStyle, color: 'var(--t2)' }}>{op.employment_type === 'contract' ? 'Contract' : 'In House'}</td>
                       <td style={tdStyle}>
                         {(op.status || '').toLowerCase() === 'active'
-                          ? <span style={{ color: 'var(--green)', fontSize: 11, fontWeight: 700 }}>Active</span>
-                          : <span style={{ color: 'var(--t3)', fontSize: 11 }}>{op.status || 'Inactive'}</span>}
+                          ? <StatusBadge variant="success" icon="●">Active</StatusBadge>
+                          : <StatusBadge variant="neutral">{op.status || 'Inactive'}</StatusBadge>}
                       </td>
                       <td style={tdStyle}>
-                        <button onClick={() => printOperatorQr(op)} style={{ ...btnStyle, color: 'var(--blue)', borderColor: 'var(--blue)', marginRight: 4 }}>
+                        <button onClick={() => printOperatorQr(op)} style={{ ...smallBtn, color: 'var(--blue)', borderColor: 'var(--blue)', marginRight: 4 }}>
                           🖨 QR
                         </button>
                         {canEdit && (
                           <>
-                            <button onClick={() => openEdit(op)} style={{ ...btnStyle, color: 'var(--yellow)', borderColor: 'var(--yellow)', marginRight: 4 }}>
+                            <button onClick={() => openEdit(op)} style={{ ...smallBtn, color: 'var(--yellow)', borderColor: 'var(--yellow)', marginRight: 4 }}>
                               Edit
                             </button>
                             {!inactive && (
                               <button
                                 onClick={() => deactivate(op)}
-                                style={{ ...btnStyle, color: 'var(--red)', borderColor: 'var(--red)' }}
+                                style={{ ...smallBtn, color: 'var(--red)', borderColor: 'var(--red)' }}
                               >
                                 Deactivate
                               </button>
@@ -359,7 +361,7 @@ export default function OperatorsPage() {
             </table>
           </div>
         )}
-      </div>
+      </Panel>
 
       <div style={{ marginTop: 10, fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
         Showing {displayRows.length} of {operators.length} operators

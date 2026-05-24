@@ -2,7 +2,7 @@
 import { useCallback, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
-import { Spinner } from '@throttle/ui';
+import { Spinner, Panel, EmptyState, StatusBadge } from '@throttle/ui';
 import { todayStr } from '@throttle/domain';
 import { useAutoRefresh } from '../../../hooks/useAutoRefresh.js';
 import { useRefreshState } from '../layout.js';
@@ -28,7 +28,7 @@ function CycleTimeSection({ ct, ctByLine }) {
     return (
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 10 }}>
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: 16 }}>
-          <div style={{ fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 8 }}>Avg QC Cycle Time</div>
+          <div style={{ fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 8 }}>Avg QC Cycle Time</div>
           <div style={{ fontSize: 20, color: 'var(--t1)', fontWeight: 600 }}>—</div>
           <div style={{ fontSize: 11, color: 'var(--t3)', marginTop: 4 }}>No data for period</div>
         </div>
@@ -42,7 +42,7 @@ function CycleTimeSection({ ct, ctByLine }) {
     background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4,
     padding: 16, fontFamily: 'var(--mono)',
   };
-  const cardLbl = { fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 8 };
+  const cardLbl = { fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 8 };
   const cardVal = (color) => ({ fontSize: 22, color: color || 'var(--t1)', lineHeight: 1, fontWeight: 600 });
   const cardSub = { fontSize: 11, color: 'var(--t3)', marginTop: 4 };
 
@@ -114,7 +114,7 @@ function CycleTimeSection({ ct, ctByLine }) {
                     { lbl: 'Slowest',    val: fmtMins(l.slowest_normal_mins),                      sub: 'within fence' },
                   ].map(({ lbl, val, color, sub }) => (
                     <div key={lbl}>
-                      <div style={{ fontSize: 9, color: 'var(--t3)', letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 3 }}>{lbl}</div>
+                      <div style={{ fontSize: 9, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 3 }}>{lbl}</div>
                       <div style={{ fontFamily: 'var(--mono)', fontWeight: 700, fontSize: 14, color: color || 'var(--t1)' }}>{val}</div>
                       {sub && <div style={{ fontSize: 9, color: 'var(--t3)', marginTop: 2 }}>{sub}</div>}
                     </div>
@@ -132,7 +132,7 @@ function CycleTimeSection({ ct, ctByLine }) {
 // ── FPY Table ─────────────────────────────────────────────────
 function FpyTable({ rows }) {
   if (!rows.length) {
-    return <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>No QC data for selected period</div>;
+    return <EmptyState icon="🎯" message="No QC data for selected period" />;
   }
 
   return (
@@ -158,11 +158,7 @@ function FpyTable({ rows }) {
 // ── Top Defects grid ──────────────────────────────────────────
 function DefectGrid({ rows }) {
   if (!rows.length) {
-    return (
-      <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>
-        ✅ No defects logged
-      </div>
-    );
+    return <EmptyState icon="✓" message="No defects logged" />;
   }
 
   // Group: line → functional|visual → defect_code → aggregated entry
@@ -192,9 +188,7 @@ function DefectGrid({ rows }) {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
           <div style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 700, color: 'var(--t1)', display: 'flex', alignItems: 'center', gap: 5 }}>
             {d.code}
-            {d.training && (
-              <span style={{ fontSize: 8, padding: '1px 5px', borderRadius: 2, background: 'rgba(33,60,226,.2)', color: '#7b93ff', border: '1px solid rgba(33,60,226,.3)' }}>Flag</span>
-            )}
+            {d.training && <StatusBadge variant="info">Flag</StatusBadge>}
           </div>
           <div style={{ fontFamily: 'var(--mono)', fontWeight: 700, fontSize: 14, color: 'var(--t1)' }}>{d.count}</div>
         </div>
@@ -219,13 +213,13 @@ function DefectGrid({ rows }) {
 
         return (
           <div key={line}>
-            <div style={{ fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 11, color: 'var(--yellow)', letterSpacing: '0.15em', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 10, textTransform: 'uppercase' }}>
+            <div style={{ fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 11, color: 'var(--yellow)', letterSpacing: '0.08em', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 10, textTransform: 'uppercase' }}>
               {line}
               <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', fontWeight: 400, textTransform: 'none' }}>{fTotal + vTotal} total occurrences</span>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, alignItems: 'start' }}>
               <div>
-                <div style={{ fontSize: 9, letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ fontSize: 9, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
                   Functional <span style={{ color: 'var(--red)', fontWeight: 700 }}>{fTotal}</span>
                 </div>
                 {fCards.length
@@ -233,7 +227,7 @@ function DefectGrid({ rows }) {
                   : <div style={{ fontSize: 11, color: 'var(--t3)', padding: '4px 0' }}>None</div>}
               </div>
               <div>
-                <div style={{ fontSize: 9, letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ fontSize: 9, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
                   Visual <span style={{ color: 'var(--orange)', fontWeight: 700 }}>{vTotal}</span>
                 </div>
                 {vCards.length
@@ -261,7 +255,7 @@ function DefectBreakdown({ rows }) {
   }
 
   if (!rows.length) {
-    return <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>No defect data for selected period</div>;
+    return <EmptyState icon="📊" message="No defect data for selected period" />;
   }
 
   const SEV_ORDER = { Critical: 0, Major: 1, Minor: 2 };
@@ -322,7 +316,7 @@ function DefectBreakdown({ rows }) {
 
                   return (
                     <div key={comp} style={{ marginBottom: 14 }}>
-                      <div style={{ fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 11, color: compColor, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                      <div style={{ fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 11, color: compColor, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                         {compLabel} <span style={{ color: 'var(--t3)', fontSize: 9, fontWeight: 400, textTransform: 'none' }}>{cd.total} occurrences</span>
                       </div>
                       {sevs.map(sev => {
@@ -338,9 +332,7 @@ function DefectBreakdown({ rows }) {
                               <div key={di} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px', fontSize: 11, borderBottom: '1px solid rgba(42,42,42,.4)' }}>
                                 <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t2)', minWidth: 80 }}>{d.code}</span>
                                 <span style={{ color: 'var(--t2)', flex: 1 }}>{d.issue || '—'}</span>
-                                {d.training && (
-                                  <span style={{ fontSize: 8, padding: '1px 5px', borderRadius: 2, background: 'rgba(33,60,226,.2)', color: '#7b93ff', border: '1px solid rgba(33,60,226,.3)' }}>Training</span>
-                                )}
+                                {d.training && <StatusBadge variant="info">Training</StatusBadge>}
                                 <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, fontSize: 12, color: 'var(--t1)', minWidth: 24, textAlign: 'right' }}>{d.count}</span>
                               </div>
                             ))}
@@ -362,11 +354,11 @@ function DefectBreakdown({ rows }) {
 // ── Repeat Defects Table ──────────────────────────────────────
 function RepeatDefectsTable({ rows }) {
   if (!rows.length) {
-    return <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>No repeat failures</div>;
+    return <EmptyState icon="↻" message="No repeat failures" />;
   }
 
-  const thStyle = { padding: '8px 12px', fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
-  const tdStyle = { padding: '9px 12px', fontSize: 12, borderBottom: '1px solid rgba(42,42,42,.6)', whiteSpace: 'nowrap' };
+  const thStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
+  const tdStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--t1)', borderBottom: '1px solid rgba(64,64,64,.5)', whiteSpace: 'nowrap' };
 
   return (
     <div style={{ overflowX: 'auto' }}>
@@ -395,9 +387,9 @@ function RepeatDefectsTable({ rows }) {
 function Section({ label, children }) {
   return (
     <div style={{ marginBottom: 28 }}>
-      <div style={{ fontFamily: 'var(--cond)', fontSize: 10, fontWeight: 700, letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 12 }}>
+      <h2 style={{ margin: '0 0 14px 0', fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t2)' }}>
         {label}
-      </div>
+      </h2>
       {children}
     </div>
   );
@@ -480,9 +472,9 @@ export default function QcPage() {
       </Section>
 
       <Section label="Repeat Failures">
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+        <Panel padding={0}>
           <RepeatDefectsTable rows={repeats} />
-        </div>
+        </Panel>
       </Section>
     </div>
   );

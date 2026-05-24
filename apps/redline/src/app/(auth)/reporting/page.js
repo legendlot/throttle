@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
-import { KpiCard, Spinner, EmptyState, useToast } from '@throttle/ui';
+import { KpiCard, Spinner, EmptyState, useToast, Panel, Chip, StatusBadge } from '@throttle/ui';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer,
   PieChart, Pie, Cell,
@@ -40,17 +40,15 @@ const SEVERITY_COLOR = {
 };
 
 // ── Common styles ────────────────────────────────────────────
-const btnStyle = { padding: '4px 10px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontSize: 11, cursor: 'pointer', fontFamily: 'var(--mono)', letterSpacing: '0.04em' };
-const btnActiveStyle = { ...btnStyle, background: 'rgba(242,205,26,.12)', color: 'var(--yellow)', border: '1px solid rgba(242,205,26,.3)' };
-const dateInputStyle = { background: 'var(--surface2)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '3px 6px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 12 };
-const dateLabelStyle = { fontSize: 11, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase' };
-const sectionLabel = { fontFamily: 'var(--cond)', fontSize: 10, fontWeight: 700, letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 12 };
+const dateInputStyle = { background: 'var(--surface2)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '6px 10px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 13, outline: 'none' };
+const dateLabelStyle = { fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase' };
+const sectionLabel = { margin: 0, fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t2)' };
 const cardStyle = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: 14, fontFamily: 'var(--mono)' };
-const cardLbl = { fontSize: 9, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 6 };
-const cardVal = (color) => ({ fontSize: 22, color: color || 'var(--t1)', lineHeight: 1, fontWeight: 600 });
-const cardSub = { fontSize: 10, color: 'var(--t3)', marginTop: 4 };
-const thStyle = { padding: '8px 12px', fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
-const tdStyle = { padding: '8px 12px', fontSize: 12, borderBottom: '1px solid rgba(42,42,42,.6)', whiteSpace: 'nowrap' };
+const cardLbl = { fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 6 };
+const cardVal = (color) => ({ fontSize: 22, color: color || 'var(--t1)', lineHeight: 1, fontWeight: 700 });
+const cardSub = { fontSize: 11, color: 'var(--t3)', marginTop: 4 };
+const thStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
+const tdStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 13, borderBottom: '1px solid rgba(64,64,64,.5)', whiteSpace: 'nowrap', color: 'var(--t1)' };
 
 // ── CSV download helper ──────────────────────────────────────
 function downloadCsv(filename, rows, headers) {
@@ -319,21 +317,17 @@ export default function ReportingPage() {
       {/* Section selector */}
       <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
         {SECTIONS.map(s => (
-          <button
-            key={s.id}
-            onClick={() => setSection(s.id)}
-            style={section === s.id ? btnActiveStyle : btnStyle}
-          >{s.label}</button>
+          <Chip key={s.id} active={section === s.id} onClick={() => setSection(s.id)}>{s.label}</Chip>
         ))}
       </div>
 
       {/* Time bar (hidden on Downloads) */}
       {section !== 'downloads' && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
-          <button style={preset === '10days'    ? btnActiveStyle : btnStyle} onClick={() => applyPreset('10days')}>10 Days</button>
-          <button style={preset === 'thisweek'  ? btnActiveStyle : btnStyle} onClick={() => applyPreset('thisweek')}>This Week</button>
-          <button style={preset === 'thismonth' ? btnActiveStyle : btnStyle} onClick={() => applyPreset('thismonth')}>This Month</button>
-          <button style={preset === 'custom'    ? btnActiveStyle : btnStyle} onClick={() => applyPreset('custom')}>Custom</button>
+          <Chip active={preset === '10days'}    onClick={() => applyPreset('10days')}>10 Days</Chip>
+          <Chip active={preset === 'thisweek'}  onClick={() => applyPreset('thisweek')}>This Week</Chip>
+          <Chip active={preset === 'thismonth'} onClick={() => applyPreset('thismonth')}>This Month</Chip>
+          <Chip active={preset === 'custom'}    onClick={() => applyPreset('custom')}>Custom</Chip>
           {preset === 'custom' && (
             <>
               <span style={dateLabelStyle}>From</span>
@@ -388,29 +382,31 @@ function ProductionSection({ aggs, fpyPct, fpyColor, vsTargetColor, prodView, se
         <KpiCard label="Runs"          value={fmt(t.runs)}                                      sub={`${fmt(t.totalTarget)} target`} />
       </div>
 
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: 14, marginBottom: 18, height: 280 }}>
-        {aggs.chartRows.length === 0 ? (
-          <EmptyState icon="📊" message="No production data in this period" />
-        ) : (
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={aggs.chartRows} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
-              <XAxis dataKey="date" stroke="#666" tick={{ fontSize: 11, fontFamily: 'var(--mono)' }} />
-              <YAxis stroke="#666" tick={{ fontSize: 11, fontFamily: 'var(--mono)' }} />
-              <Tooltip contentStyle={{ background: '#111', border: '1px solid #333', fontSize: 12 }} />
-              <Legend wrapperStyle={{ fontSize: 11, fontFamily: 'var(--mono)' }} />
-              <Bar dataKey="qcPass"     name="QC Pass"     fill="#22c55e" />
-              <Bar dataKey="dispatched" name="Dispatched"  fill="#F2CD1A" />
-            </BarChart>
-          </ResponsiveContainer>
-        )}
+      <div style={{ marginBottom: 18 }}>
+        <Panel padding={14} style={{ height: 280 }}>
+          {aggs.chartRows.length === 0 ? (
+            <EmptyState icon="📊" message="No production data in this period" />
+          ) : (
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={aggs.chartRows} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                <XAxis dataKey="date" stroke="#666" tick={{ fontSize: 11, fontFamily: 'var(--mono)' }} />
+                <YAxis stroke="#666" tick={{ fontSize: 11, fontFamily: 'var(--mono)' }} />
+                <Tooltip contentStyle={{ background: '#111', border: '1px solid #333', fontSize: 12 }} />
+                <Legend wrapperStyle={{ fontSize: 11, fontFamily: 'var(--mono)' }} />
+                <Bar dataKey="qcPass"     name="QC Pass"     fill="#22c55e" />
+                <Bar dataKey="dispatched" name="Dispatched"  fill="var(--yellow)" />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </Panel>
       </div>
 
       <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-        <button style={prodView === 'product' ? btnActiveStyle : btnStyle} onClick={() => setProdView('product')}>By Product</button>
-        <button style={prodView === 'line'    ? btnActiveStyle : btnStyle} onClick={() => setProdView('line')}>By Line</button>
+        <Chip active={prodView === 'product'} onClick={() => setProdView('product')}>By Product</Chip>
+        <Chip active={prodView === 'line'}    onClick={() => setProdView('line')}>By Line</Chip>
       </div>
 
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+      <Panel padding={0}>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -442,7 +438,7 @@ function ProductionSection({ aggs, fpyPct, fpyColor, vsTargetColor, prodView, se
             </tbody>
           </table>
         </div>
-      </div>
+      </Panel>
     </>
   );
 }
@@ -455,9 +451,9 @@ function CycleSection({ ct }) {
 
   if (!ct || sections.every(s => !ct[s]?.units_measured)) {
     return (
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4 }}>
+      <Panel padding={0}>
         <EmptyState icon="⏱" message="No cycle time data in this period" />
-      </div>
+      </Panel>
     );
   }
 
@@ -483,18 +479,20 @@ function CycleSection({ ct }) {
       </div>
 
       {/* Stacked horizontal bar */}
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: 14, marginBottom: 18, height: 130 }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart layout="vertical" data={stackedData}>
-            <XAxis type="number" stroke="#666" tick={{ fontSize: 11, fontFamily: 'var(--mono)' }} unit=" min" />
-            <YAxis type="category" dataKey="name" stroke="#666" tick={{ fontSize: 11, fontFamily: 'var(--mono)' }} />
-            <Tooltip contentStyle={{ background: '#111', border: '1px solid #333', fontSize: 12 }} formatter={(v) => fmtMins(v)} />
-            <Legend wrapperStyle={{ fontSize: 11, fontFamily: 'var(--mono)' }} />
-            <Bar dataKey="qc"  name="QC"  stackId="a" fill="#22c55e" />
-            <Bar dataKey="pkg" name="PKG" stackId="a" fill="#F2CD1A" />
-            <Bar dataKey="rtd" name="RTD" stackId="a" fill="#60a5fa" />
-          </BarChart>
-        </ResponsiveContainer>
+      <div style={{ marginBottom: 18 }}>
+        <Panel padding={14} style={{ height: 130 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart layout="vertical" data={stackedData}>
+              <XAxis type="number" stroke="#666" tick={{ fontSize: 11, fontFamily: 'var(--mono)' }} unit=" min" />
+              <YAxis type="category" dataKey="name" stroke="#666" tick={{ fontSize: 11, fontFamily: 'var(--mono)' }} />
+              <Tooltip contentStyle={{ background: '#111', border: '1px solid #333', fontSize: 12 }} formatter={(v) => fmtMins(v)} />
+              <Legend wrapperStyle={{ fontSize: 11, fontFamily: 'var(--mono)' }} />
+              <Bar dataKey="qc"  name="QC"  stackId="a" fill="#22c55e" />
+              <Bar dataKey="pkg" name="PKG" stackId="a" fill="var(--yellow)" />
+              <Bar dataKey="rtd" name="RTD" stackId="a" fill="#60a5fa" />
+            </BarChart>
+          </ResponsiveContainer>
+        </Panel>
       </div>
 
       {/* Detail panels */}
@@ -503,8 +501,8 @@ function CycleSection({ ct }) {
           const seg = ct[k];
           if (!seg) return null;
           return (
-            <div key={k} style={{ ...cardStyle, padding: 16 }}>
-              <div style={{ ...sectionLabel, marginBottom: 10 }}>{labels[k]}</div>
+            <Panel key={k} padding={16}>
+              <h3 style={{ ...sectionLabel, marginBottom: 10 }}>{labels[k]}</h3>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: 11, fontFamily: 'var(--mono)' }}>
                 <Stat label="Avg"               value={fmtMins(seg.avg_mins_all)}     valueColor={ctColor(seg.avg_mins_all)} />
                 <Stat label="Median"            value={fmtMins(seg.median_mins)} />
@@ -515,7 +513,7 @@ function CycleSection({ ct }) {
                 <Stat label="Units measured"    value={fmt(seg.units_measured)} />
                 {seg.outlier_count > 0 && <Stat label="Outliers" value={`${fmt(seg.outlier_count)} (max ${fmtMins(seg.outlier_max_mins)})`} valueColor="var(--orange)" />}
               </div>
-            </div>
+            </Panel>
           );
         })}
       </div>
@@ -526,8 +524,8 @@ function CycleSection({ ct }) {
 function Stat({ label, value, valueColor }) {
   return (
     <div>
-      <div style={{ fontSize: 9, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 2 }}>{label}</div>
-      <div style={{ color: valueColor || 'var(--t1)', fontWeight: 600, fontSize: 12 }}>{value}</div>
+      <div style={{ fontSize: 11, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 2 }}>{label}</div>
+      <div style={{ color: valueColor || 'var(--t1)', fontWeight: 600, fontSize: 13 }}>{value}</div>
     </div>
   );
 }
@@ -536,9 +534,9 @@ function Stat({ label, value, valueColor }) {
 function DefectsSection({ aggs, fpyPct, fpyColor, defView, setDefView }) {
   if (!aggs.total) {
     return (
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4 }}>
+      <Panel padding={0}>
         <EmptyState icon="⚠" message="No defect data in this period" />
-      </div>
+      </Panel>
     );
   }
   return (
@@ -551,8 +549,8 @@ function DefectsSection({ aggs, fpyPct, fpyColor, defView, setDefView }) {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 12, marginBottom: 18 }}>
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: 14, height: 280 }}>
-          <div style={{ ...sectionLabel, marginBottom: 8 }}>Top 8 Defect Codes</div>
+        <Panel padding={14} style={{ height: 280 }}>
+          <h3 style={{ ...sectionLabel, marginBottom: 8 }}>Top 8 Defect Codes</h3>
           <ResponsiveContainer width="100%" height="90%">
             <BarChart data={aggs.top8}>
               <XAxis dataKey="code" stroke="#666" tick={{ fontSize: 10, fontFamily: 'var(--mono)' }} />
@@ -563,9 +561,9 @@ function DefectsSection({ aggs, fpyPct, fpyColor, defView, setDefView }) {
               </Bar>
             </BarChart>
           </ResponsiveContainer>
-        </div>
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: 14, height: 280 }}>
-          <div style={{ ...sectionLabel, marginBottom: 8 }}>Severity Split</div>
+        </Panel>
+        <Panel padding={14} style={{ height: 280 }}>
+          <h3 style={{ ...sectionLabel, marginBottom: 8 }}>Severity Split</h3>
           <ResponsiveContainer width="100%" height="90%">
             <PieChart>
               <Pie data={aggs.sevPie} dataKey="value" nameKey="name" innerRadius={50} outerRadius={80} paddingAngle={2}>
@@ -575,15 +573,15 @@ function DefectsSection({ aggs, fpyPct, fpyColor, defView, setDefView }) {
               <Legend wrapperStyle={{ fontSize: 11, fontFamily: 'var(--mono)' }} />
             </PieChart>
           </ResponsiveContainer>
-        </div>
+        </Panel>
       </div>
 
       <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-        <button style={defView === 'code'    ? btnActiveStyle : btnStyle} onClick={() => setDefView('code')}>By Code</button>
-        <button style={defView === 'product' ? btnActiveStyle : btnStyle} onClick={() => setDefView('product')}>By Product</button>
+        <Chip active={defView === 'code'}    onClick={() => setDefView('code')}>By Code</Chip>
+        <Chip active={defView === 'product'} onClick={() => setDefView('product')}>By Product</Chip>
       </div>
 
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+      <Panel padding={0}>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -617,7 +615,7 @@ function DefectsSection({ aggs, fpyPct, fpyColor, defView, setDefView }) {
             </tbody>
           </table>
         </div>
-      </div>
+      </Panel>
     </>
   );
 }
@@ -626,9 +624,9 @@ function DefectsSection({ aggs, fpyPct, fpyColor, defView, setDefView }) {
 function ThroughputSection({ taktAggs, taktLoading }) {
   if (taktLoading || !taktAggs) {
     return (
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: 40, display: 'flex', justifyContent: 'center' }}>
+      <Panel padding={40} style={{ display: 'flex', justifyContent: 'center' }}>
         <Spinner />
-      </div>
+      </Panel>
     );
   }
   const { byStation, lines, stations, grid } = taktAggs;
@@ -637,9 +635,9 @@ function ThroughputSection({ taktAggs, taktLoading }) {
   const allEmpty = stations.every(st => !byStation[st]);
   if (allEmpty) {
     return (
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4 }}>
+      <Panel padding={0}>
         <EmptyState icon="⏱" message="No takt data in this period" />
-      </div>
+      </Panel>
     );
   }
 
@@ -660,8 +658,9 @@ function ThroughputSection({ taktAggs, taktLoading }) {
       </div>
 
       {/* Bottleneck per line */}
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: 14, marginBottom: 18 }}>
-        <div style={sectionLabel}>Per-Line Bottleneck</div>
+      <div style={{ marginBottom: 18 }}>
+      <Panel padding={14}>
+        <h3 style={{ ...sectionLabel, marginBottom: 12 }}>Per-Line Bottleneck</h3>
         {lines.map(line => {
           const lineRows = stations.map(st => grid[`${line}|${st}`]).filter(Boolean);
           if (!lineRows.length) return null;
@@ -669,8 +668,8 @@ function ThroughputSection({ taktAggs, taktLoading }) {
           return (
             <div key={line} style={{ marginBottom: 14, paddingBottom: 12, borderBottom: '1px solid var(--border)' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--t1)' }}>{line}</span>
-                {maxRow && <span style={{ fontSize: 9, color: 'var(--red)', fontWeight: 700, padding: '1px 6px', border: '1px solid var(--red)', borderRadius: 2, letterSpacing: '0.05em', textTransform: 'uppercase' }}>Bottleneck: {maxRow.station}</span>}
+                <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--t1)', fontFamily: 'var(--mono)' }}>{line}</span>
+                {maxRow && <StatusBadge variant="error">Bottleneck: {maxRow.station}</StatusBadge>}
               </div>
               <div style={{ display: 'flex', gap: 4 }}>
                 {lineRows.map(r => {
@@ -687,10 +686,11 @@ function ThroughputSection({ taktAggs, taktLoading }) {
             </div>
           );
         })}
+      </Panel>
       </div>
 
       {/* Takt grid table */}
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+      <Panel padding={0}>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -721,7 +721,7 @@ function ThroughputSection({ taktAggs, taktLoading }) {
             </tbody>
           </table>
         </div>
-      </div>
+      </Panel>
     </>
   );
 }
@@ -729,8 +729,8 @@ function ThroughputSection({ taktAggs, taktLoading }) {
 // ── Downloads section ────────────────────────────────────────
 function DownloadsSection({ downloadQc, downloadPva, downloadDefects, periodLabel }) {
   return (
-    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: 18 }}>
-      <div style={sectionLabel}>Data Exports{periodLabel && ` — ${periodLabel}`}</div>
+    <Panel padding={18}>
+      <h2 style={{ ...sectionLabel, marginBottom: 14 }}>Data Exports{periodLabel && ` — ${periodLabel}`}</h2>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 10 }}>
         <DownloadCard
           title="QC View"
@@ -751,7 +751,7 @@ function DownloadsSection({ downloadQc, downloadPva, downloadDefects, periodLabe
       <div style={{ fontSize: 11, color: 'var(--t3)', marginTop: 14, fontFamily: 'var(--mono)' }}>
         CSV files are UTF-8 with BOM — Excel opens them correctly.
       </div>
-    </div>
+    </Panel>
   );
 }
 

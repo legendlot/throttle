@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Badge, ConfirmModal, DataTable, EmptyState, Modal, Spinner, useToast } from '@throttle/ui';
+import { Badge, ConfirmModal, DataTable, EmptyState, Modal, Spinner, useToast, Panel, Chip, StatusBadge } from '@throttle/ui';
 import { useAutoRefresh } from '../../../hooks/useAutoRefresh.js';
 import { useRefreshState } from '../layout.js';
 
@@ -25,11 +25,11 @@ const PERFORMANCE_CATEGORIES = [
 const panelStyle       = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, marginBottom: 16 };
 const panelHeaderStyle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid var(--border)', fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--t2)', gap: 8, flexWrap: 'wrap' };
 const panelBodyStyle   = { padding: '12px 14px' };
-const inputStyle       = { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: '6px 10px', fontSize: 12, color: 'var(--t1)', outline: 'none', fontFamily: 'inherit' };
+const inputStyle       = { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: '8px 12px', fontSize: 13, color: 'var(--t1)', outline: 'none', fontFamily: 'var(--mono)' };
 const selectStyle      = { ...inputStyle, cursor: 'pointer' };
-const labelStyle       = { fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4, display: 'block' };
-const btnPrimary       = { background: 'var(--yellow)', border: '1px solid var(--yellow)', borderRadius: 3, padding: '10px 16px', fontSize: 12, fontWeight: 700, color: '#000', cursor: 'pointer', fontFamily: 'var(--cond)', letterSpacing: '0.04em' };
-const btnSecondary     = { background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, padding: '6px 12px', fontSize: 11, color: 'var(--t2)', cursor: 'pointer', fontFamily: 'var(--cond)' };
+const labelStyle       = { fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4, display: 'block' };
+const btnPrimary       = { padding: '8px 14px', background: 'var(--yellow)', color: '#0a0a0a', border: '1px solid var(--yellow)', borderRadius: 3, fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer' };
+const btnSecondary     = { padding: '8px 14px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 13, cursor: 'pointer' };
 
 // ── Display helpers ─────────────────────────────────────────────────────────
 function capitalize(s) { return (s || '').charAt(0).toUpperCase() + (s || '').slice(1); }
@@ -473,10 +473,10 @@ function OperatorCard({ row, accent }) {
         {row.operator_name || '(unknown)'}
       </div>
       <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-        <Badge color="var(--t3)">{capitalize(row.operator_department || '—')}</Badge>
-        <Badge color={isOvertime ? 'var(--yellow)' : 'var(--t2)'}>
-          {isOvertime ? 'OVERTIME' : 'STANDARD'}
-        </Badge>
+        <StatusBadge variant="neutral">{capitalize(row.operator_department || '—')}</StatusBadge>
+        <StatusBadge variant={isOvertime ? 'brand' : 'neutral'}>
+          {isOvertime ? 'Overtime' : 'Standard'}
+        </StatusBadge>
       </div>
       <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>
         Clock In · {fmtIstTime(row.clock_in) || '—'}
@@ -587,7 +587,7 @@ function AttendanceTab({ session, canManageFloor, operators }) {
       case 'clock_out':
         return row.clock_out
           ? <span style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>{fmtIstTime(row.clock_out)}</span>
-          : <Badge color="var(--yellow)">OPEN</Badge>;
+          : <StatusBadge variant="warning" icon="⚠">Open</StatusBadge>;
       case 'duration':
         return <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)' }}>{fmtDuration(row.clock_in, row.clock_out)}</span>;
       case 'device':

@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { EmptyState, Modal, Spinner, useToast } from '@throttle/ui';
+import { EmptyState, Modal, Spinner, useToast, Panel, Chip, StatusBadge } from '@throttle/ui';
 
 const DEPT_ORDER  = ['Prep', 'Assembly', 'QC', 'Packaging'];
 const DEPT_PREFIX = { Prep: 'PR', Assembly: 'AS', QC: 'QC', Packaging: 'PK' };
@@ -465,7 +465,7 @@ function LineDesignLanding({ productList, loading, onSelect, onNew }) {
       {rows.length === 0 ? (
         <EmptyState message="No line designs yet — click + NEW on the left to create the first one." />
       ) : (
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+        <Panel padding={0}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
@@ -539,7 +539,7 @@ function LineDesignLanding({ productList, loading, onSelect, onNew }) {
               })}
             </tbody>
           </table>
-        </div>
+        </Panel>
       )}
     </div>
   );
@@ -699,37 +699,31 @@ function DepartmentSection({ department, stations, onChange }) {
   };
 
   return (
-    <div style={{ marginBottom: 16, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4 }}>
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '10px 14px', borderBottom: '1px solid var(--border)',
-      }}>
-        <div style={{
-          fontFamily: 'var(--cond)', fontSize: 14, fontWeight: 800,
-          textTransform: 'uppercase', letterSpacing: '0.06em',
-        }}>{department}</div>
-        <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>
-          {stations.length} station{stations.length === 1 ? '' : 's'} · {total} worker{total === 1 ? '' : 's'}
+    <div style={{ marginBottom: 16 }}>
+      <Panel
+        header={department}
+        headerAction={`${stations.length} station${stations.length === 1 ? '' : 's'} · ${total} worker${total === 1 ? '' : 's'}`}
+        padding={12}
+      >
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-start' }}>
+          {stations.map((s, idx) => (
+            <StationCard
+              key={idx}
+              department={department}
+              position={idx + 1}
+              capacity={s.capacity}
+              unitType={s.unit_type || null}
+              onDragStart={(e) => handleDragStart(e, idx)}
+              onDragOver={handleDragOver}
+              onDrop={(e) => handleDrop(e, idx)}
+              onToggle={() => toggleCapacity(idx)}
+              onRemove={() => removeStation(idx)}
+              onSetUnitType={(type) => setUnitType(idx, type)}
+            />
+          ))}
+          <button onClick={addStation} style={addStationBtnStyle()}>+ Add station</button>
         </div>
-      </div>
-      <div style={{ padding: 12, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-start' }}>
-        {stations.map((s, idx) => (
-          <StationCard
-            key={idx}
-            department={department}
-            position={idx + 1}
-            capacity={s.capacity}
-            unitType={s.unit_type || null}
-            onDragStart={(e) => handleDragStart(e, idx)}
-            onDragOver={handleDragOver}
-            onDrop={(e) => handleDrop(e, idx)}
-            onToggle={() => toggleCapacity(idx)}
-            onRemove={() => removeStation(idx)}
-            onSetUnitType={(type) => setUnitType(idx, type)}
-          />
-        ))}
-        <button onClick={addStation} style={addStationBtnStyle()}>+ Add station</button>
-      </div>
+      </Panel>
     </div>
   );
 }
@@ -1130,30 +1124,25 @@ function HistoryVersionModal({ version, onClose }) {
         const d = (version.departments || []).find(x => x.department === dept);
         if (!d || d.stations.length === 0) return null;
         return (
-          <div key={dept} style={{ marginBottom: 12, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4 }}>
-            <div style={{
-              padding: '8px 12px', borderBottom: '1px solid var(--border)',
-              fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 800,
-              textTransform: 'uppercase', letterSpacing: '0.06em',
-              display: 'flex', justifyContent: 'space-between',
-            }}>
-              <span>{dept}</span>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>
-                {d.stations.length} stations · {d.total_headcount} workers
-              </span>
-            </div>
-            <div style={{ padding: 10, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {d.stations.map((s) => (
-                <div key={s.id} style={{
-                  width: 70, padding: '4px 6px', background: 'var(--surface2)',
-                  border: '1px solid var(--border)', borderRadius: 3,
-                  fontFamily: 'var(--mono)', fontSize: 10, textAlign: 'center',
-                }}>
-                  <div style={{ fontWeight: 700, color: 'var(--t2)' }}>{getStationCode(dept, s.position)}</div>
-                  <div style={{ color: 'var(--t3)', marginTop: 2 }}>cap {s.capacity}</div>
-                </div>
-              ))}
-            </div>
+          <div key={dept} style={{ marginBottom: 12 }}>
+            <Panel
+              header={dept}
+              headerAction={`${d.stations.length} stations · ${d.total_headcount} workers`}
+              padding={10}
+            >
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {d.stations.map((s) => (
+                  <div key={s.id} style={{
+                    width: 70, padding: '4px 6px', background: 'var(--surface2)',
+                    border: '1px solid var(--border)', borderRadius: 3,
+                    fontFamily: 'var(--mono)', fontSize: 10, textAlign: 'center',
+                  }}>
+                    <div style={{ fontWeight: 700, color: 'var(--t2)' }}>{getStationCode(dept, s.position)}</div>
+                    <div style={{ color: 'var(--t3)', marginTop: 2 }}>cap {s.capacity}</div>
+                  </div>
+                ))}
+              </div>
+            </Panel>
           </div>
         );
       })}
@@ -1164,18 +1153,18 @@ function HistoryVersionModal({ version, onClose }) {
 // ── style helpers ─────────────────────────────────────────────
 function btnPrimaryStyle(size) {
   return {
-    background: 'var(--yellow)', color: '#000', border: 'none',
-    padding: size === 'sm' ? '4px 8px' : '8px 14px',
+    background: 'var(--yellow)', color: '#0a0a0a', border: '1px solid var(--yellow)',
+    padding: size === 'sm' ? '5px 10px' : '8px 14px',
     borderRadius: 3, cursor: 'pointer',
-    fontFamily: 'var(--cond)', fontWeight: 800, fontSize: size === 'sm' ? 10 : 12,
+    fontFamily: 'var(--cond)', fontWeight: 700, fontSize: size === 'sm' ? 11 : 13,
     textTransform: 'uppercase', letterSpacing: '0.06em',
   };
 }
 function btnSecondaryStyle() {
   return {
-    background: 'transparent', color: 'var(--t1)', border: '1px solid var(--border)',
-    padding: '6px 12px', borderRadius: 3, cursor: 'pointer',
-    fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 11,
+    background: 'transparent', color: 'var(--t2)', border: '1px solid var(--border)',
+    padding: '8px 14px', borderRadius: 3, cursor: 'pointer',
+    fontFamily: 'var(--mono)', fontWeight: 400, fontSize: 13,
     textTransform: 'uppercase', letterSpacing: '0.06em',
   };
 }
@@ -1183,19 +1172,21 @@ function addStationBtnStyle() {
   return {
     width: 84, height: 104, background: 'transparent',
     border: '1px dashed var(--border)', borderRadius: 4, cursor: 'pointer',
-    color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 10,
+    color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 11,
   };
 }
 function labelStyle() {
   return {
-    display: 'flex', flexDirection: 'column', gap: 4,
-    fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)',
+    display: 'flex', flexDirection: 'column', gap: 6,
+    fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)',
+    letterSpacing: '0.08em', textTransform: 'uppercase',
   };
 }
 function inputStyle() {
   return {
     background: 'var(--surface)', color: 'var(--t1)',
     border: '1px solid var(--border)', borderRadius: 3,
-    padding: '6px 8px', fontFamily: 'var(--mono)', fontSize: 12,
+    padding: '8px 12px', fontFamily: 'var(--mono)', fontSize: 13, outline: 'none',
+    textTransform: 'none', letterSpacing: 'normal',
   };
 }

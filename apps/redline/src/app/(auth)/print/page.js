@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, EmptyState, useToast } from '@throttle/ui';
+import { Spinner, EmptyState, Panel, Chip, StatusBadge, useToast } from '@throttle/ui';
 
 // ── Helpers ───────────────────────────────────────────────────
 function normalizeLot(raw) {
@@ -19,11 +19,12 @@ function formatPackedDate(ts) {
 }
 
 // ── Common styles ────────────────────────────────────────────
-const btnStyle = { padding: '4px 10px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontSize: 11, cursor: 'pointer', fontFamily: 'var(--mono)', letterSpacing: '0.04em' };
-const inputStyle = { background: 'var(--surface)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '8px 10px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 13 };
-const sectionLabel = { fontFamily: 'var(--cond)', fontSize: 10, fontWeight: 700, letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 12 };
-const thStyle = { padding: '8px 12px', fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
-const tdStyle = { padding: '8px 12px', fontSize: 12, borderBottom: '1px solid rgba(42,42,42,.6)', whiteSpace: 'nowrap' };
+const primaryBtn = { padding: '8px 14px', background: 'var(--yellow)', color: '#0a0a0a', border: '1px solid var(--yellow)', borderRadius: 3, fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer' };
+const secondaryBtn = { padding: '8px 14px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 13, cursor: 'pointer' };
+const inputStyle = { background: 'var(--surface)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '8px 12px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 13, outline: 'none' };
+const sectionLabel = { fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t2)', margin: 0 };
+const thStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
+const tdStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 13, borderBottom: '1px solid rgba(64,64,64,.5)', whiteSpace: 'nowrap', color: 'var(--t1)' };
 
 // ── Print Page ────────────────────────────────────────────────
 export default function PrintPage() {
@@ -133,23 +134,13 @@ export default function PrintPage() {
     <div>
       {/* Mode toggle */}
       <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
-        <button
-          onClick={() => setMode_('single')}
-          style={mode === 'single'
-            ? { ...btnStyle, background: 'var(--yellow)', color: '#000', border: '1px solid var(--yellow)' }
-            : { ...btnStyle, background: 'var(--surface2)' }}
-        >Single</button>
-        <button
-          onClick={() => setMode_('bulk')}
-          style={mode === 'bulk'
-            ? { ...btnStyle, background: 'var(--yellow)', color: '#000', border: '1px solid var(--yellow)' }
-            : { ...btnStyle, background: 'var(--surface2)' }}
-        >Bulk</button>
+        <Chip active={mode === 'single'} onClick={() => setMode_('single')}>Single</Chip>
+        <Chip active={mode === 'bulk'} onClick={() => setMode_('bulk')}>Bulk</Chip>
       </div>
 
       {/* Search input */}
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: 16, marginBottom: 18 }}>
-        <div style={sectionLabel}>{mode === 'single' ? 'Search by Batch Label or Car UPC' : 'Bulk Lookup — One label/UPC per line'}</div>
+      <Panel style={{ marginBottom: 18 }}>
+        <h2 style={{ ...sectionLabel, marginBottom: 12 }}>{mode === 'single' ? 'Search by Batch Label or Car UPC' : 'Bulk Lookup — One label/UPC per line'}</h2>
 
         {mode === 'single' ? (
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -163,7 +154,7 @@ export default function PrintPage() {
             <button
               onClick={searchSingle}
               disabled={searching || !singleVal.trim()}
-              style={{ ...btnStyle, background: 'var(--yellow)', color: '#000', border: '1px solid var(--yellow)', padding: '8px 18px', opacity: (searching || !singleVal.trim()) ? 0.5 : 1 }}
+              style={{ ...primaryBtn, opacity: (searching || !singleVal.trim()) ? 0.5 : 1 }}
             >{searching ? 'Searching…' : '🔍 Search'}</button>
           </div>
         ) : (
@@ -178,69 +169,64 @@ export default function PrintPage() {
               <button
                 onClick={searchBulk}
                 disabled={searching || !bulkVal.trim()}
-                style={{ ...btnStyle, background: 'var(--yellow)', color: '#000', border: '1px solid var(--yellow)', padding: '8px 18px', opacity: (searching || !bulkVal.trim()) ? 0.5 : 1 }}
+                style={{ ...primaryBtn, opacity: (searching || !bulkVal.trim()) ? 0.5 : 1 }}
               >{searching ? 'Looking up…' : '🔍 Look Up All'}</button>
             </div>
           </>
         )}
-      </div>
+      </Panel>
 
       {/* Printer selector */}
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: '12px 16px', marginBottom: 18, display: 'flex', alignItems: 'center', gap: 12 }}>
-        <div style={{ fontFamily: 'var(--cond)', fontSize: 10, fontWeight: 700, letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--t3)', whiteSpace: 'nowrap' }}>Print To</div>
-        <div style={{ display: 'flex', gap: 6 }}>
-          {PRINTERS.map(p => (
-            <button
-              key={p}
-              onClick={() => setSelectedPrinter(prev => prev === p ? '' : p)}
-              style={{
-                padding: '5px 14px',
-                background: selectedPrinter === p ? 'var(--yellow)' : 'var(--surface2)',
-                color: selectedPrinter === p ? '#000' : 'var(--t2)',
-                border: selectedPrinter === p ? '1px solid var(--yellow)' : '1px solid var(--border)',
-                borderRadius: 3,
-                fontSize: 11,
-                fontFamily: 'var(--mono)',
-                fontWeight: 700,
-                letterSpacing: '0.06em',
-                cursor: 'pointer',
-              }}
-            >{p}</button>
-          ))}
-        </div>
-        {!selectedPrinter && (
-          <div style={{ fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)', marginLeft: 4 }}>
-            — select before printing
+      <Panel compact style={{ marginBottom: 18 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <h2 style={{ ...sectionLabel, whiteSpace: 'nowrap' }}>Print To</h2>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {PRINTERS.map(p => (
+              <Chip
+                key={p}
+                active={selectedPrinter === p}
+                onClick={() => setSelectedPrinter(prev => prev === p ? '' : p)}
+              >{p}</Chip>
+            ))}
           </div>
-        )}
-      </div>
+          {!selectedPrinter && (
+            <div style={{ fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)', marginLeft: 4 }}>
+              — select before printing
+            </div>
+          )}
+        </div>
+      </Panel>
 
       {/* Results */}
       {searching ? (
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: 40, display: 'flex', justifyContent: 'center' }}>
-          <Spinner />
-        </div>
+        <Panel>
+          <div style={{ padding: '24px 0', display: 'flex', justifyContent: 'center' }}>
+            <Spinner />
+          </div>
+        </Panel>
       ) : !results ? (
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: '40px 16px', textAlign: 'center', color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 13 }}>
-          Enter a batch label or car UPC above to search
-        </div>
+        <Panel>
+          <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 13 }}>
+            Enter a batch label or car UPC above to search
+          </div>
+        </Panel>
       ) : (
         <>
           {/* Found rows */}
           {results.rows.length > 0 && (
             <div style={{ marginBottom: 14 }}>
               <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
-                <div style={sectionLabel}>Found {results.rows.length} unit{results.rows.length !== 1 ? 's' : ''}</div>
+                <h2 style={sectionLabel}>Found {results.rows.length} unit{results.rows.length !== 1 ? 's' : ''}</h2>
                 <div style={{ flex: 1 }} />
                 {results.rows.length > 1 && (
                   <button
                     onClick={printAll}
-                    style={{ ...btnStyle, background: 'var(--yellow)', color: '#000', border: '1px solid var(--yellow)' }}
+                    style={primaryBtn}
                   >🖨 PRINT ALL</button>
                 )}
               </div>
 
-              <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+              <Panel padding={0}>
                 <div style={{ overflowX: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead>
@@ -255,22 +241,22 @@ export default function PrintPage() {
                         const status = printStatus[i];
                         return (
                           <tr key={`${row.batch_label}-${i}`}>
-                            <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{row.batch_label || '—'}</td>
+                            <td style={{ ...tdStyle, color: 'var(--yellow)' }}>{row.batch_label || '—'}</td>
                             <td style={{ ...tdStyle, color: 'var(--t1)' }}>
                               {row.product || '—'}
                               {(row.model || row.color) && <span style={{ color: 'var(--t3)', marginLeft: 6, fontSize: 11 }}>{[row.model, row.color].filter(Boolean).join(' ')}</span>}
                             </td>
                             <td style={{ ...tdStyle, color: 'var(--t1)' }}>{row.line || '—'}</td>
                             <td style={{ ...tdStyle, color: 'var(--t2)' }}>{row.channel || '—'}</td>
-                            <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{formatPackedDate(row.packed_at)}</td>
+                            <td style={{ ...tdStyle, color: 'var(--t3)' }}>{formatPackedDate(row.packed_at)}</td>
                             <td style={tdStyle}>
                               {status === 'queuing'
-                                ? <span style={{ color: 'var(--t3)', fontSize: 11, fontFamily: 'var(--mono)' }}>Queuing…</span>
+                                ? <StatusBadge variant="neutral">Queuing…</StatusBadge>
                                 : status === 'done'
-                                ? <span style={{ color: 'var(--green)', fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700 }}>✅ Queued</span>
+                                ? <StatusBadge variant="success" icon="✓">Queued</StatusBadge>
                                 : status === 'error'
-                                ? <span style={{ color: 'var(--red)', fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 700 }}>✗ Failed</span>
-                                : <button onClick={() => queueReprint(i, row)} style={{ ...btnStyle, background: 'var(--yellow)', color: '#000', border: '1px solid var(--yellow)' }}>🖨 PRINT</button>}
+                                ? <StatusBadge variant="error" icon="✗">Failed</StatusBadge>
+                                : <button onClick={() => queueReprint(i, row)} style={primaryBtn}>🖨 PRINT</button>}
                             </td>
                           </tr>
                         );
@@ -278,7 +264,7 @@ export default function PrintPage() {
                     </tbody>
                   </table>
                 </div>
-              </div>
+              </Panel>
             </div>
           )}
 

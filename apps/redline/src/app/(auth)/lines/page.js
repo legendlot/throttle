@@ -2,7 +2,7 @@
 import { useCallback, useRef, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
-import { Spinner } from '@throttle/ui';
+import { Spinner, Panel, StatusBadge } from '@throttle/ui';
 import { todayStr } from '@throttle/domain';
 import { useAutoRefresh } from '../../../hooks/useAutoRefresh.js';
 import { useRefreshState } from '../layout.js';
@@ -25,10 +25,7 @@ function LineCards({ lines, crMap }) {
         const passRate = l.pass_rate_pct  || 0;
         const pctColor = pct >= 90 ? 'var(--green)' : pct >= 60 ? 'var(--yellow)' : pct >= 30 ? 'var(--orange)' : 'var(--red)';
         const fillBg   = pct >= 90 ? 'var(--green)' : pct >= 60 ? 'var(--yellow)'  : pct >= 30 ? 'var(--orange)' : 'var(--red)';
-        const badgeTone = pct >= 90 ? { bg: 'rgba(34,197,94,.12)', color: '#4ade80', border: '1px solid rgba(34,197,94,.2)' }
-                        : pct >= 60 ? { bg: 'rgba(242,205,26,.12)', color: '#f2cd1a', border: '1px solid rgba(242,205,26,.2)' }
-                        : pct >= 30 ? { bg: 'rgba(249,115,22,.15)', color: '#fb923c', border: '1px solid rgba(249,115,22,.25)' }
-                        :             { bg: 'rgba(222,42,42,.15)',   color: '#ff7070', border: '1px solid rgba(222,42,42,.25)'  };
+        const badgeVariant = pct >= 90 ? 'success' : pct >= 60 ? 'brand' : pct >= 30 ? 'warning' : 'error';
 
         const inwCar  = crMap[`${l.line}:INW:car`];
         const inwRem  = crMap[`${l.line}:INW:remote`];
@@ -47,7 +44,7 @@ function LineCards({ lines, crMap }) {
         const subStyle  = { fontSize: 8, color: 'var(--t3)', marginTop: 1 };
 
         return (
-          <div key={l.line} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, padding: 14 }}>
+          <Panel key={l.line} style={{ borderRadius: 6 }} padding={14}>
             {/* Header */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
               <div>
@@ -96,13 +93,13 @@ function LineCards({ lines, crMap }) {
             {/* Footer rows */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 10, color: 'var(--t3)', paddingTop: 8, borderTop: '1px solid var(--border)' }}>
               <span>{fmt(l.active_operators)} operators · {fmt(l.downtime_mins)}m downtime</span>
-              <span style={{ fontSize: 9, padding: '2px 6px', borderRadius: 2, ...badgeTone }}>{pct}% done</span>
+              <StatusBadge variant={badgeVariant}>{pct}% done</StatusBadge>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 10, color: 'var(--t3)', marginTop: 4 }}>
               <span>Target: {fmt(l.target_qty)} · FPY: {passRate}%</span>
               {firstScan && <span style={{ color: 'var(--t3)', marginLeft: 'auto' }}>⏱ {firstScan}</span>}
             </div>
-          </div>
+          </Panel>
         );
       })}
     </div>
@@ -116,8 +113,8 @@ function OperatorTable({ ops }) {
   }
 
   const sorted = [...ops].sort((a, b) => (a.operator_name || '').localeCompare(b.operator_name || ''));
-  const thStyle = { padding: '8px 12px', fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
-  const tdStyle = { padding: '9px 12px', fontSize: 12, borderBottom: '1px solid rgba(42,42,42,.6)', whiteSpace: 'nowrap' };
+  const thStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
+  const tdStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 13, borderBottom: '1px solid rgba(64,64,64,.5)', whiteSpace: 'nowrap', color: 'var(--t1)' };
 
   return (
     <div style={{ overflowX: 'auto' }}>
@@ -174,8 +171,8 @@ function TaktTable({ taktRows }) {
   const fmtT = v => v ? Number(v).toFixed(1) + ' min' : '—';
   const fmtR = v => v ? Number(v).toFixed(1) + '/hr' : '—';
 
-  const thStyle = { padding: '8px 12px', fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', fontWeight: 600 };
-  const tdStyle = { padding: '9px 12px', borderBottom: '1px solid rgba(42,42,42,.6)', textAlign: 'center' };
+  const thStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', fontWeight: 600 };
+  const tdStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 13, borderBottom: '1px solid rgba(64,64,64,.5)', color: 'var(--t1)', textAlign: 'center' };
   const stStyle = { ...tdStyle, fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.1em', color: 'var(--t2)', textAlign: 'left' };
 
   return (
@@ -231,9 +228,9 @@ function TaktTable({ taktRows }) {
 function Section({ label, children }) {
   return (
     <div style={{ marginBottom: 28 }}>
-      <div style={{ fontFamily: 'var(--cond)', fontSize: 10, fontWeight: 700, letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 12 }}>
+      <h2 style={{ margin: '0 0 14px 0', fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t2)' }}>
         {label}
-      </div>
+      </h2>
       {children}
     </div>
   );
@@ -320,15 +317,15 @@ export default function LinesPage() {
       </Section>
 
       <Section label="Operator Output">
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+        <Panel padding={0}>
           <OperatorTable ops={operators} />
-        </div>
+        </Panel>
       </Section>
 
       <Section label="Station Pace — Today">
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+        <Panel padding={0}>
           <TaktTable taktRows={takt} />
-        </div>
+        </Panel>
       </Section>
     </div>
   );

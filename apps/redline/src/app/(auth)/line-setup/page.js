@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Badge, EmptyState, Spinner, useToast } from '@throttle/ui';
+import { Badge, EmptyState, Spinner, useToast, Panel, Chip, StatusBadge } from '@throttle/ui';
 
 const LINES = ['L1', 'L2', 'L3'];
 const DEPT_ORDER = ['Prep', 'Assembly', 'QC', 'Packaging'];
@@ -282,16 +282,10 @@ function LineColumn({ line, date, session, data, operators, onAssign, onUnassign
             .map(d => {
               const c = deptCounts[d];
               const full = c.assigned >= c.total && c.total > 0;
-              return (
-                <span key={d} style={{
-                  fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 700,
-                  padding: '3px 8px', borderRadius: 3,
-                  background: full ? 'rgba(34,197,94,0.15)' : 'var(--surface2)',
-                  color: full ? '#22c55e' : 'var(--t2)',
-                  border: `1px solid ${full ? '#22c55e' : 'var(--border)'}`,
-                }}>
-                  {d} {c.assigned}/{c.total}
-                </span>
+              return full ? (
+                <StatusBadge key={d} variant="success">{d} {c.assigned}/{c.total}</StatusBadge>
+              ) : (
+                <StatusBadge key={d} variant="neutral">{d} {c.assigned}/{c.total}</StatusBadge>
               );
             })}
         </div>

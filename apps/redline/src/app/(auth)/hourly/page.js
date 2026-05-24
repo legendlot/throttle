@@ -2,7 +2,7 @@
 import { useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
-import { Spinner } from '@throttle/ui';
+import { Spinner, Panel, Chip } from '@throttle/ui';
 import { todayStr } from '@throttle/domain';
 import { useAutoRefresh } from '../../../hooks/useAutoRefresh.js';
 import { useRefreshState } from '../layout.js';
@@ -125,22 +125,17 @@ function HourlyProductionChart({ hourlyData, countField }) {
 function Section({ label, total, children }) {
   return (
     <div style={{ marginBottom: 16 }}>
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
-        <div style={{
-          padding: '10px 16px', borderBottom: '1px solid var(--border)',
-          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        }}>
-          <span style={{ fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--t2)' }}>
-            {label}
-          </span>
+      <Panel
+        header={label}
+        headerAction={
           <span style={{ fontFamily: 'var(--mono)', fontSize: 14, fontWeight: 700, color: 'var(--t1)' }}>
             {fmt(total)}
           </span>
-        </div>
-        <div style={{ padding: '0 16px' }}>
-          {children}
-        </div>
-      </div>
+        }
+        padding="0 16px"
+      >
+        {children}
+      </Panel>
     </div>
   );
 }
@@ -182,14 +177,8 @@ export default function HourlyPage() {
 
   const dateInputStyle = {
     background: 'var(--surface2)', color: 'var(--t1)',
-    border: '1px solid var(--border)', padding: '4px 8px',
-    borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 12,
-  };
-  const btnStyle = {
-    padding: '4px 10px', background: 'transparent',
-    border: '1px solid var(--border)', borderRadius: 3,
-    color: 'var(--t2)', fontSize: 11, cursor: 'pointer',
-    fontFamily: 'var(--mono)', letterSpacing: '0.04em',
+    border: '1px solid var(--border)', padding: '6px 10px',
+    borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 13, outline: 'none',
   };
 
   if (loading) {
@@ -209,7 +198,7 @@ export default function HourlyPage() {
           value={date}
           onChange={e => setDate(e.target.value)}
         />
-        <button style={btnStyle} onClick={() => setDate(todayStr())}>Today</button>
+        <Chip active={date === todayStr()} onClick={() => setDate(todayStr())}>Today</Chip>
       </div>
 
       {error && (

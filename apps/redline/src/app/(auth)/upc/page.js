@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, EmptyState, useToast, printWindow } from '@throttle/ui';
+import { Spinner, EmptyState, Panel, Chip, StatusBadge, useToast, printWindow } from '@throttle/ui';
 
 // ── Helpers ───────────────────────────────────────────────────
 function fmt(n) { return n != null ? Number(n).toLocaleString('en-IN') : '0'; }
@@ -15,11 +15,11 @@ function formatDateTime(ts) {
   return `${date} ${time}`;
 }
 
-const BATCH_STATUS_COLOR = {
-  generated:     'var(--yellow)',
-  sent_to_print: 'var(--orange)',
-  printed:       'var(--blue)',
-  received:      'var(--green)',
+const BATCH_STATUS_VARIANT = {
+  generated:     'brand',
+  sent_to_print: 'warning',
+  printed:       'info',
+  received:      'success',
 };
 
 const BATCH_STATUS_LABEL = {
@@ -29,24 +29,23 @@ const BATCH_STATUS_LABEL = {
   received:      'Received',
 };
 
-function StatusBadge({ status }) {
-  const color = BATCH_STATUS_COLOR[status] || 'var(--t3)';
+function BatchStatus({ status }) {
   return (
-    <span style={{
-      fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 2,
-      letterSpacing: '0.06em', textTransform: 'uppercase', whiteSpace: 'nowrap',
-      fontFamily: 'var(--mono)', color, border: `1px solid ${color}`,
-    }}>{BATCH_STATUS_LABEL[status] || status || '—'}</span>
+    <StatusBadge variant={BATCH_STATUS_VARIANT[status] || 'neutral'}>
+      {BATCH_STATUS_LABEL[status] || status || '—'}
+    </StatusBadge>
   );
 }
 
 // ── Common styles ────────────────────────────────────────────
-const btnStyle = { padding: '4px 10px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontSize: 11, cursor: 'pointer', fontFamily: 'var(--mono)', letterSpacing: '0.04em' };
-const inputStyle = { background: 'var(--surface)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '6px 10px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 12 };
-const labelStyle = { fontSize: 10, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase', display: 'block', marginBottom: 6 };
-const sectionLabel = { fontFamily: 'var(--cond)', fontSize: 10, fontWeight: 700, letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 12 };
-const thStyle = { padding: '8px 12px', fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
-const tdStyle = { padding: '8px 12px', fontSize: 12, borderBottom: '1px solid rgba(42,42,42,.6)', whiteSpace: 'nowrap' };
+const primaryBtn = { padding: '8px 14px', background: 'var(--yellow)', color: '#0a0a0a', border: '1px solid var(--yellow)', borderRadius: 3, fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer' };
+const secondaryBtn = { padding: '8px 14px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 13, cursor: 'pointer' };
+const smallBtn = { padding: '5px 11px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 12, cursor: 'pointer', letterSpacing: '0.04em' };
+const inputStyle = { background: 'var(--surface)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '8px 12px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 13, outline: 'none' };
+const labelStyle = { fontSize: 11, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase', display: 'block', marginBottom: 6, fontFamily: 'var(--mono)' };
+const sectionLabel = { fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t2)', margin: 0 };
+const thStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
+const tdStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 13, borderBottom: '1px solid rgba(64,64,64,.5)', whiteSpace: 'nowrap', color: 'var(--t1)' };
 
 // ── UPC Generator Page ────────────────────────────────────────
 export default function UpcPage() {
@@ -262,8 +261,8 @@ export default function UpcPage() {
   return (
     <div>
       {/* Generator section */}
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: 18, marginBottom: 20 }}>
-        <div style={sectionLabel}>Generate New Batch</div>
+      <Panel style={{ marginBottom: 20 }}>
+        <h2 style={{ ...sectionLabel, marginBottom: 12 }}>Generate New Batch</h2>
 
         {/* Product picker */}
         <div style={{ marginBottom: 12, position: 'relative' }} ref={dropdownRef}>
@@ -304,18 +303,8 @@ export default function UpcPage() {
           <div style={{ marginBottom: 12 }}>
             <label style={labelStyle}>Component</label>
             <div style={{ display: 'flex', gap: 6 }}>
-              <button
-                onClick={() => setComponent('car')}
-                style={component === 'car'
-                  ? { ...btnStyle, background: 'var(--yellow)', color: '#000', border: '1px solid var(--yellow)' }
-                  : btnStyle}
-              >Car ({selectedCode})</button>
-              <button
-                onClick={() => setComponent('remote')}
-                style={component === 'remote'
-                  ? { ...btnStyle, background: '#a78bfa', color: '#000', border: '1px solid #a78bfa' }
-                  : btnStyle}
-              >Remote ({selectedCode}R)</button>
+              <Chip active={component === 'car'} onClick={() => setComponent('car')}>Car ({selectedCode})</Chip>
+              <Chip active={component === 'remote'} onClick={() => setComponent('remote')}>Remote ({selectedCode}R)</Chip>
             </div>
           </div>
         )}
@@ -355,20 +344,20 @@ export default function UpcPage() {
         <button
           onClick={generateBatch}
           disabled={generating || !selectedCode}
-          style={{ ...btnStyle, background: 'var(--yellow)', color: '#000', border: '1px solid var(--yellow)', padding: '8px 18px', fontSize: 12, fontWeight: 700, opacity: (generating || !selectedCode) ? 0.5 : 1 }}
+          style={{ ...primaryBtn, opacity: (generating || !selectedCode) ? 0.5 : 1 }}
         >
           {generating ? 'Generating…' : '⚡ Generate & Print'}
         </button>
-      </div>
+      </Panel>
 
       {/* Batch history */}
       <div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-          <div style={{ ...sectionLabel, marginBottom: 0 }}>Recent Batches</div>
+          <h2 style={sectionLabel}>Recent Batches</h2>
           <div style={{ flex: 1 }} />
-          <button style={btnStyle} onClick={loadHistory} disabled={loadingHist}>↻ Refresh</button>
+          <button style={secondaryBtn} onClick={loadHistory} disabled={loadingHist}>↻ Refresh</button>
         </div>
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+        <Panel padding={0}>
           {loadingHist && batches.length === 0 ? (
             <div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}><Spinner /></div>
           ) : batches.length === 0 ? (
@@ -389,21 +378,21 @@ export default function UpcPage() {
                     const variant = [b.model, b.color].filter(Boolean).join(' ') || '—';
                     return (
                       <tr key={b.batch_id}>
-                        <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{b.batch_id}</td>
-                        <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--t1)' }}>{b.product_code}</td>
-                        <td style={{ ...tdStyle, color: 'var(--t1)' }}>{b.product || '—'}</td>
+                        <td style={{ ...tdStyle, color: 'var(--yellow)' }}>{b.batch_id}</td>
+                        <td style={tdStyle}>{b.product_code}</td>
+                        <td style={tdStyle}>{b.product || '—'}</td>
                         <td style={{ ...tdStyle, color: 'var(--t2)' }}>{variant}</td>
-                        <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--t1)' }}>{fmt(b.quantity)}</td>
-                        <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{b.upc_from} → {b.upc_to}</td>
-                        <td style={tdStyle}><StatusBadge status={b.status} /></td>
-                        <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{formatDateTime(b.generated_at)}</td>
+                        <td style={tdStyle}>{fmt(b.quantity)}</td>
+                        <td style={{ ...tdStyle, color: 'var(--t3)' }}>{b.upc_from} → {b.upc_to}</td>
+                        <td style={tdStyle}><BatchStatus status={b.status} /></td>
+                        <td style={{ ...tdStyle, color: 'var(--t3)' }}>{formatDateTime(b.generated_at)}</td>
                         <td style={tdStyle}>
-                          <button onClick={() => printBatch(b.batch_id)} style={{ ...btnStyle, color: 'var(--blue)', borderColor: 'var(--blue)', marginRight: 4 }}>🖨 Print</button>
+                          <button onClick={() => printBatch(b.batch_id)} style={{ ...smallBtn, color: 'var(--blue)', borderColor: 'var(--blue)', marginRight: 4 }}>🖨 Print</button>
                           {canMove && b.status === 'generated' && (
-                            <button onClick={() => markSent(b.batch_id)} style={{ ...btnStyle, color: 'var(--orange)', borderColor: 'var(--orange)', marginRight: 4 }}>Sent</button>
+                            <button onClick={() => markSent(b.batch_id)} style={{ ...smallBtn, color: 'var(--orange)', borderColor: 'var(--orange)', marginRight: 4 }}>Sent</button>
                           )}
                           {canMove && (
-                            <button onClick={() => receiveBatch(b.batch_id)} style={{ ...btnStyle, color: 'var(--green)', borderColor: 'var(--green)' }}>Received</button>
+                            <button onClick={() => receiveBatch(b.batch_id)} style={{ ...smallBtn, color: 'var(--green)', borderColor: 'var(--green)' }}>Received</button>
                           )}
                         </td>
                       </tr>
@@ -413,7 +402,7 @@ export default function UpcPage() {
               </table>
             </div>
           )}
-        </div>
+        </Panel>
       </div>
     </div>
   );
