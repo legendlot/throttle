@@ -18,3 +18,6 @@ export { buildUnitCountSheetHtml }   from './buildUnitCountSheetHtml.js';
 export { QuickCreate } from './QuickCreate.js';
 export { Topbar } from './Topbar.js';
 export { Combobox } from './Combobox.js';
+export { Panel } from './Panel.js';
+export { Chip } from './Chip.js';
+export { StatusBadge } from './StatusBadge.js';
