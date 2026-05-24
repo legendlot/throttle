@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import { useAuth, hasPermission } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, EmptyState } from '@throttle/ui';
+import { Spinner, EmptyState, Panel, KpiCard } from '@throttle/ui';
 
 // ── Helpers ───────────────────────────────────────────────────
 function formatAge(ts) {
@@ -15,46 +15,10 @@ function formatAge(ts) {
   return `${hrs}h`;
 }
 
-const cardStyle = {
-  background: 'var(--surface)',
-  border: '1px solid var(--border)',
-  borderRadius: 4,
-  padding: '14px 16px',
-};
-
-const kpiLabelStyle = {
-  fontSize: 10,
-  color: 'var(--t3)',
-  fontFamily: 'var(--mono)',
-  textTransform: 'uppercase',
-  letterSpacing: '0.08em',
-  marginBottom: 4,
-};
-
-const kpiValueStyle = {
-  fontSize: 30,
-  fontWeight: 700,
-  fontFamily: 'var(--cond)',
-  lineHeight: 1,
-};
-
-const panelHeader = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  padding: '10px 14px',
-  borderBottom: '1px solid var(--border)',
-  fontFamily: 'var(--cond)',
-  fontSize: 13,
-  fontWeight: 700,
-  letterSpacing: '0.06em',
-  textTransform: 'uppercase',
-  color: 'var(--t2)',
-};
-
 const thStyle = {
-  padding: '8px 12px',
-  fontSize: 10,
+  padding: '10px 14px',
+  fontFamily: 'var(--mono)',
+  fontSize: 11,
   letterSpacing: '0.08em',
   textTransform: 'uppercase',
   color: 'var(--t3)',
@@ -64,10 +28,12 @@ const thStyle = {
   textAlign: 'left',
 };
 const tdStyle = {
-  padding: '8px 12px',
-  fontSize: 12,
-  borderBottom: '1px solid rgba(42,42,42,.6)',
+  padding: '10px 14px',
+  fontFamily: 'var(--mono)',
+  fontSize: 13,
+  borderBottom: '1px solid rgba(64,64,64,.5)',
   whiteSpace: 'nowrap',
+  color: 'var(--t1)',
 };
 
 // ── Customer Repairs callout (Redline `/returns`) ─────────────
@@ -108,17 +74,15 @@ function CustomerRepairsCallout({ session, perms }) {
   ];
 
   return (
-    <div style={{ ...cardStyle, padding: 0, marginBottom: 18 }}>
-      <div style={panelHeader}>
-        <span>
-          <span style={{ color: '#f2cd1a' }}>● </span>
-          Customer Repairs · Ad-hoc (not on production queue)
-        </span>
-        <Link href="/customer-repairs" style={{ color: 'var(--t2)', fontSize: 11, fontFamily: 'var(--mono)', textDecoration: 'none' }}>
-          View all →
-        </Link>
-      </div>
-      <div style={{ padding: 14 }}>
+    <div style={{ marginBottom: 20 }}>
+      <Panel
+        header={<><span style={{ color: 'var(--yellow)' }}>● </span>Customer Repairs · Ad-hoc</>}
+        headerAction={
+          <Link href="/customer-repairs" style={{ color: 'var(--t2)', textDecoration: 'none' }}>
+            View all →
+          </Link>
+        }
+      >
         {loading && counts.total === 0 ? (
           <div style={{ display: 'flex', justifyContent: 'center', padding: 8 }}><Spinner /></div>
         ) : (
@@ -131,20 +95,30 @@ function CustomerRepairsCallout({ session, perms }) {
                   textDecoration: 'none',
                   background: 'var(--surface2)',
                   border: '1px solid var(--border)',
-                  borderRadius: 4, padding: '10px 12px',
+                  borderRadius: 4,
+                  padding: '12px 14px',
                   display: 'block',
+                  transition: 'border-color 120ms',
                 }}>
-                <div style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--t3)', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 4 }}>
+                <div style={{
+                  fontFamily: 'var(--mono)', fontSize: 11,
+                  color: 'var(--t3)', letterSpacing: '0.08em',
+                  textTransform: 'uppercase', marginBottom: 6,
+                }}>
                   {t.label}
                 </div>
-                <div style={{ fontSize: 26, fontWeight: 700, fontFamily: 'var(--cond)', color: t.count > 0 ? t.color : 'var(--t3)' }}>
+                <div style={{
+                  fontFamily: 'var(--cond)', fontSize: 28, fontWeight: 700,
+                  color: t.count > 0 ? t.color : 'var(--t3)',
+                  lineHeight: 1,
+                }}>
                   {t.count}
                 </div>
               </Link>
             ))}
           </div>
         )}
-      </div>
+      </Panel>
     </div>
   );
 }
@@ -197,105 +171,103 @@ export default function ReturnsPage() {
       <CustomerRepairsCallout session={session} perms={perms} />
 
       {/* KPI strip */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 18 }}>
-        <div style={cardStyle}>
-          <div style={kpiLabelStyle}>UDR Pending</div>
-          <div style={{ ...kpiValueStyle, color: '#4ade80' }}>{udrTotal}</div>
+      <section style={{ marginBottom: 24 }}>
+        <h2 style={{ margin: '0 0 14px 0', fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t2)' }}>
+          Overview
+        </h2>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 12 }}>
+          <KpiCard label="UDR Pending"     value={udrTotal}        color={udrTotal > 0 ? 'green' : undefined} />
+          <KpiCard label="Repair Pending"  value={repairTotal}     color={repairTotal > 0 ? 'orange' : undefined} />
+          <KpiCard label="Oldest UDR"      value={formatAge(oldestUdr)} />
+          <KpiCard label="Oldest Repair"   value={formatAge(oldestRep)} />
         </div>
-        <div style={cardStyle}>
-          <div style={kpiLabelStyle}>Repair Pending</div>
-          <div style={{ ...kpiValueStyle, color: '#ffaa33' }}>{repairTotal}</div>
-        </div>
-        <div style={cardStyle}>
-          <div style={kpiLabelStyle}>Oldest UDR</div>
-          <div style={kpiValueStyle}>{formatAge(oldestUdr)}</div>
-        </div>
-        <div style={cardStyle}>
-          <div style={kpiLabelStyle}>Oldest Repair</div>
-          <div style={kpiValueStyle}>{formatAge(oldestRep)}</div>
-        </div>
-      </div>
+      </section>
 
       {/* Two-column pool view */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-        {/* UDR Pool */}
-        <div style={{ ...cardStyle, padding: 0 }}>
-          <div style={panelHeader}>
-            <span style={{ color: '#4ade80' }}>UDR Pool — Re-dispatch via PKG_OUT</span>
-            <span style={{ color: 'var(--t3)', fontSize: 11, fontFamily: 'var(--mono)' }}>{pools.udr.length} groups</span>
-          </div>
-          {loading ? (
-            <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
-          ) : pools.udr.length === 0 ? (
-            <div style={{ padding: 28, textAlign: 'center', color: 'var(--t3)', fontSize: 12, fontFamily: 'var(--mono)' }}>
-              ✓ Pool empty
-            </div>
-          ) : (
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead><tr>
-                  <th style={thStyle}>Product</th>
-                  <th style={thStyle}>Model</th>
-                  <th style={thStyle}>Colour</th>
-                  <th style={{ ...thStyle, textAlign: 'right' }}>Count</th>
-                  <th style={{ ...thStyle, textAlign: 'right' }}>Oldest</th>
-                </tr></thead>
-                <tbody>
-                  {pools.udr.map((b) => (
-                    <tr key={`udr-${b.product}-${b.model}-${b.color}`}>
-                      <td style={{ ...tdStyle, fontFamily: 'var(--cond)', fontWeight: 700 }}>{b.product || '—'}</td>
-                      <td style={tdStyle}>{b.model || '—'}</td>
-                      <td style={tdStyle}>{b.color || '—'}</td>
-                      <td style={{ ...tdStyle, fontFamily: 'var(--mono)', fontWeight: 700, color: '#4ade80', textAlign: 'right' }}>{b.count}</td>
-                      <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--t3)', textAlign: 'right' }}>{formatAge(b.oldest_at)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+      <section>
+        <h2 style={{ margin: '0 0 14px 0', fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t2)' }}>
+          Pools
+        </h2>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+          {/* UDR Pool */}
+          <Panel
+            padding={0}
+            header={<><span style={{ color: 'var(--green)' }}>● </span>UDR Pool — Re-dispatch via PKG_OUT</>}
+            headerAction={<span>{pools.udr.length} groups</span>}
+          >
+            {loading ? (
+              <div style={{ padding: 32, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+            ) : pools.udr.length === 0 ? (
+              <div style={{ padding: 32, textAlign: 'center', color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 13 }}>
+                ✓ Pool empty
+              </div>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead><tr>
+                    <th style={thStyle}>Product</th>
+                    <th style={thStyle}>Model</th>
+                    <th style={thStyle}>Colour</th>
+                    <th style={{ ...thStyle, textAlign: 'right' }}>Count</th>
+                    <th style={{ ...thStyle, textAlign: 'right' }}>Oldest</th>
+                  </tr></thead>
+                  <tbody>
+                    {pools.udr.map((b) => (
+                      <tr key={`udr-${b.product}-${b.model}-${b.color}`}>
+                        <td style={{ ...tdStyle, fontFamily: 'var(--cond)', fontWeight: 700, color: 'var(--t1)' }}>{b.product || '—'}</td>
+                        <td style={tdStyle}>{b.model || '—'}</td>
+                        <td style={tdStyle}>{b.color || '—'}</td>
+                        <td style={{ ...tdStyle, fontWeight: 700, color: 'var(--green)', textAlign: 'right' }}>{b.count}</td>
+                        <td style={{ ...tdStyle, color: 'var(--t3)', textAlign: 'right' }}>{formatAge(b.oldest_at)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Panel>
 
-        {/* Repair Pool */}
-        <div style={{ ...cardStyle, padding: 0 }}>
-          <div style={panelHeader}>
-            <span style={{ color: '#ffaa33' }}>Repair Pool — Awaiting Run</span>
-            <span style={{ color: 'var(--t3)', fontSize: 11, fontFamily: 'var(--mono)' }}>{pools.repair.length} groups</span>
-          </div>
-          {loading ? (
-            <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
-          ) : pools.repair.length === 0 ? (
-            <div style={{ padding: 28, textAlign: 'center', color: 'var(--t3)', fontSize: 12, fontFamily: 'var(--mono)' }}>
-              ✓ Pool empty
-            </div>
-          ) : (
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead><tr>
-                  <th style={thStyle}>Product</th>
-                  <th style={thStyle}>Model</th>
-                  <th style={thStyle}>Colour</th>
-                  <th style={{ ...thStyle, textAlign: 'right' }}>Count</th>
-                  <th style={{ ...thStyle, textAlign: 'right' }}>Oldest</th>
-                </tr></thead>
-                <tbody>
-                  {pools.repair.map((b) => (
-                    <tr key={`rep-${b.product}-${b.model}-${b.color}`}>
-                      <td style={{ ...tdStyle, fontFamily: 'var(--cond)', fontWeight: 700 }}>{b.product || '—'}</td>
-                      <td style={tdStyle}>{b.model || '—'}</td>
-                      <td style={tdStyle}>{b.color || '—'}</td>
-                      <td style={{ ...tdStyle, fontFamily: 'var(--mono)', fontWeight: 700, color: '#ffaa33', textAlign: 'right' }}>{b.count}</td>
-                      <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--t3)', textAlign: 'right' }}>{formatAge(b.oldest_at)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          {/* Repair Pool */}
+          <Panel
+            padding={0}
+            header={<><span style={{ color: 'var(--orange)' }}>● </span>Repair Pool — Awaiting Run</>}
+            headerAction={<span>{pools.repair.length} groups</span>}
+          >
+            {loading ? (
+              <div style={{ padding: 32, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+            ) : pools.repair.length === 0 ? (
+              <div style={{ padding: 32, textAlign: 'center', color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 13 }}>
+                ✓ Pool empty
+              </div>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead><tr>
+                    <th style={thStyle}>Product</th>
+                    <th style={thStyle}>Model</th>
+                    <th style={thStyle}>Colour</th>
+                    <th style={{ ...thStyle, textAlign: 'right' }}>Count</th>
+                    <th style={{ ...thStyle, textAlign: 'right' }}>Oldest</th>
+                  </tr></thead>
+                  <tbody>
+                    {pools.repair.map((b) => (
+                      <tr key={`rep-${b.product}-${b.model}-${b.color}`}>
+                        <td style={{ ...tdStyle, fontFamily: 'var(--cond)', fontWeight: 700, color: 'var(--t1)' }}>{b.product || '—'}</td>
+                        <td style={tdStyle}>{b.model || '—'}</td>
+                        <td style={tdStyle}>{b.color || '—'}</td>
+                        <td style={{ ...tdStyle, fontWeight: 700, color: 'var(--orange)', textAlign: 'right' }}>{b.count}</td>
+                        <td style={{ ...tdStyle, color: 'var(--t3)', textAlign: 'right' }}>{formatAge(b.oldest_at)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Panel>
         </div>
-      </div>
+      </section>
 
-      <div style={{ marginTop: 16, fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--t3)', textAlign: 'center' }}>
+      <div style={{ marginTop: 20, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', textAlign: 'center', letterSpacing: '0.04em' }}>
         Auto-refreshes every 60s. To take action, use Garage → Returns.
       </div>
     </div>

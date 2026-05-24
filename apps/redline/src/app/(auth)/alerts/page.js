@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { KpiCard, Spinner, EmptyState, useToast } from '@throttle/ui';
+import { KpiCard, Spinner, EmptyState, Panel, Chip, StatusBadge, useToast } from '@throttle/ui';
 import { todayStr } from '@throttle/domain';
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -129,13 +129,11 @@ export default function AlertsPage() {
   }
 
   // ── Style constants ───────────────────────────────────────
-  const btnStyle = { padding: '4px 10px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontSize: 11, cursor: 'pointer', fontFamily: 'var(--mono)', letterSpacing: '0.04em' };
-  const btnActiveStyle = { ...btnStyle, background: 'rgba(242,205,26,.12)', color: 'var(--yellow)', border: '1px solid rgba(242,205,26,.3)' };
-  const dateInputStyle = { background: 'var(--surface2)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '3px 6px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 12 };
-  const dateLabelStyle = { fontSize: 11, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase' };
-  const selectStyle = { background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--t1)', fontSize: 11, fontFamily: 'var(--mono)', padding: '3px 6px', borderRadius: 3 };
-  const thStyle = { padding: '8px 12px', fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
-  const tdStyle = { padding: '8px 12px', fontSize: 12, borderBottom: '1px solid rgba(42,42,42,.6)', whiteSpace: 'nowrap' };
+  const dateInputStyle = { background: 'var(--surface2)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '6px 10px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 13, outline: 'none' };
+  const dateLabelStyle = { fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase' };
+  const selectStyle = { background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--t1)', fontFamily: 'var(--mono)', fontSize: 13, padding: '6px 10px', borderRadius: 3, outline: 'none', cursor: 'pointer' };
+  const thStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
+  const tdStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 13, borderBottom: '1px solid rgba(64,64,64,.5)', whiteSpace: 'nowrap', color: 'var(--t1)' };
 
   // ── KPI colors ───────────────────────────────────────────
   const totalToday = summary?.total_today || 0;
@@ -175,13 +173,41 @@ export default function AlertsPage() {
               <div style={{ color: 'var(--red)', fontSize: 11, marginTop: 8, fontFamily: 'var(--mono)' }}>{ackError}</div>
             )}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
-              <button onClick={() => setAckModal(null)} style={btnStyle} disabled={ackLoading}>Cancel</button>
+              <button
+                onClick={() => setAckModal(null)}
+                disabled={ackLoading}
+                style={{
+                  padding: '8px 14px',
+                  background: 'transparent',
+                  border: '1px solid var(--border)',
+                  borderRadius: 3,
+                  color: 'var(--t2)',
+                  fontFamily: 'var(--mono)',
+                  fontSize: 13,
+                  cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
               <button
                 onClick={submitAck}
                 disabled={ackLoading}
-                style={{ ...btnStyle, background: 'var(--green)', color: '#000', border: '1px solid var(--green)', opacity: ackLoading ? 0.5 : 1 }}
+                style={{
+                  padding: '8px 14px',
+                  background: 'var(--green)',
+                  color: '#0a0a0a',
+                  border: '1px solid var(--green)',
+                  borderRadius: 3,
+                  fontFamily: 'var(--cond)',
+                  fontSize: 13,
+                  fontWeight: 700,
+                  letterSpacing: '0.06em',
+                  textTransform: 'uppercase',
+                  cursor: 'pointer',
+                  opacity: ackLoading ? 0.5 : 1,
+                }}
               >
-                {ackLoading ? 'Acknowledging…' : 'Confirm ACK'}
+                {ackLoading ? 'Acknowledging…' : 'Confirm Ack'}
               </button>
             </div>
           </div>
@@ -191,52 +217,62 @@ export default function AlertsPage() {
       {/* Page content */}
       <div>
         {/* Date bar */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18, flexWrap: 'wrap' }}>
           <span style={dateLabelStyle}>From</span>
           <input type="date" style={dateInputStyle} value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
           <span style={dateLabelStyle}>To</span>
           <input type="date" style={dateInputStyle} value={dateTo}   onChange={e => setDateTo(e.target.value)} />
-          <button style={btnStyle} onClick={() => { const t = todayStr(); setDateFrom(t); setDateTo(t); }}>Today</button>
+          <Chip onClick={() => { const t = todayStr(); setDateFrom(t); setDateTo(t); }}>Today</Chip>
         </div>
 
         {error && (
-          <div style={{ background: 'rgba(222,42,42,.1)', border: '1px solid rgba(222,42,42,.25)', borderRadius: 4, padding: '10px 14px', fontSize: 12, color: 'var(--red)', marginBottom: 14 }}>
-            {error}
+          <div style={{ background: 'rgba(222,42,42,.1)', border: '1px solid rgba(222,42,42,.3)', borderRadius: 4, padding: '12px 14px', fontFamily: 'var(--mono)', fontSize: 13, color: '#ff7070', marginBottom: 16 }}>
+            ⚠ {error}
           </div>
         )}
 
         {/* KPI cards */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 18 }}>
-          <KpiCard label="Total Today"    value={fmt(totalToday)}                color={totalToday > 0 ? 'yellow' : undefined} />
-          <KpiCard label="Unacknowledged" value={fmt(unacked)}                   color={unacked > 0 ? 'red' : 'green'} />
-          <KpiCard label="Worst Line"     value={summary?.worst_line    || '—'} />
-          <KpiCard label="Worst Station"  value={summary?.worst_station || '—'} />
-        </div>
+        <section style={{ marginBottom: 24 }}>
+          <h2 style={{ margin: '0 0 14px 0', fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t2)' }}>
+            Overview
+          </h2>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 12 }}>
+            <KpiCard label="Total Today"    value={fmt(totalToday)}                color={totalToday > 0 ? 'yellow' : undefined} />
+            <KpiCard label="Unacknowledged" value={fmt(unacked)}                   color={unacked > 0 ? 'red' : 'green'} />
+            <KpiCard label="Worst Line"     value={summary?.worst_line    || '—'} />
+            <KpiCard label="Worst Station"  value={summary?.worst_station || '—'} />
+          </div>
+        </section>
 
         {/* Filter row */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
-          <button style={statusFilter === ''         ? btnActiveStyle : btnStyle} onClick={() => setStatusFilter('')}>All</button>
-          <button style={statusFilter === 'unacked'  ? btnActiveStyle : btnStyle} onClick={() => setStatusFilter('unacked')}>Unacknowledged</button>
-          <button style={statusFilter === 'acked'    ? btnActiveStyle : btnStyle} onClick={() => setStatusFilter('acked')}>Acknowledged</button>
-          <div style={{ width: 12 }} />
-          <select style={selectStyle} value={lineFilter} onChange={e => setLineFilter(e.target.value)}>
-            <option value="">All Lines</option>
-            <option value="L1">L1</option>
-            <option value="L2">L2</option>
-            <option value="L3">L3</option>
-          </select>
-          <select style={selectStyle} value={stationFilter} onChange={e => setStationFilter(e.target.value)}>
-            <option value="">All Stations</option>
-            <option value="INW">INW</option>
-            <option value="QC_PASS">QC Pass</option>
-            <option value="QC_FAIL">QC Fail</option>
-            <option value="WKS">WKS</option>
-            <option value="PKG">PKG</option>
-          </select>
-        </div>
+        <section style={{ marginBottom: 16 }}>
+          <h2 style={{ margin: '0 0 14px 0', fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t2)' }}>
+            Violations
+          </h2>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <Chip active={statusFilter === ''}        onClick={() => setStatusFilter('')}>All</Chip>
+            <Chip active={statusFilter === 'unacked'} onClick={() => setStatusFilter('unacked')}>Unacknowledged</Chip>
+            <Chip active={statusFilter === 'acked'}   onClick={() => setStatusFilter('acked')}>Acknowledged</Chip>
+            <div style={{ width: 8 }} />
+            <select style={selectStyle} value={lineFilter} onChange={e => setLineFilter(e.target.value)}>
+              <option value="">All Lines</option>
+              <option value="L1">L1</option>
+              <option value="L2">L2</option>
+              <option value="L3">L3</option>
+            </select>
+            <select style={selectStyle} value={stationFilter} onChange={e => setStationFilter(e.target.value)}>
+              <option value="">All Stations</option>
+              <option value="INW">INW</option>
+              <option value="QC_PASS">QC Pass</option>
+              <option value="QC_FAIL">QC Fail</option>
+              <option value="WKS">WKS</option>
+              <option value="PKG">PKG</option>
+            </select>
+          </div>
+        </section>
 
         {/* Table */}
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+        <Panel padding={0}>
           {loading ? (
             <div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}><Spinner /></div>
           ) : displayRows.length === 0 ? (
@@ -270,18 +306,30 @@ export default function AlertsPage() {
                         <td style={{ ...tdStyle, color: 'var(--t2)' }}>{v.operator_name || '—'}</td>
                         <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{v.upc || '—'}</td>
                         <td style={{ ...tdStyle, color: 'var(--red)', whiteSpace: 'normal' }}>{v.error_message || '—'}</td>
-                        <td style={{ ...tdStyle, fontFamily: 'var(--mono)' }}>
+                        <td style={tdStyle}>
                           {acked
-                            ? <span style={{ color: 'var(--green)', fontSize: 10, fontWeight: 700 }}>✓ ACK</span>
-                            : <span style={{ color: 'var(--red)', fontSize: 10, fontWeight: 700 }}>● OPEN</span>}
+                            ? <StatusBadge variant="success" icon="✓">Ack</StatusBadge>
+                            : <StatusBadge variant="error"   icon="●">Open</StatusBadge>}
                         </td>
                         <td style={tdStyle}>
                           {!acked && !isMahesh && (
                             <button
                               onClick={() => openAck(v)}
-                              style={{ padding: '3px 9px', background: 'transparent', border: '1px solid var(--green)', borderRadius: 2, color: 'var(--green)', fontSize: 10, fontWeight: 700, fontFamily: 'var(--mono)', letterSpacing: '0.05em', cursor: 'pointer' }}
+                              style={{
+                                padding: '5px 11px',
+                                background: 'transparent',
+                                border: '1px solid var(--green)',
+                                borderRadius: 3,
+                                color: 'var(--green)',
+                                fontFamily: 'var(--mono)',
+                                fontSize: 11,
+                                fontWeight: 700,
+                                letterSpacing: '0.08em',
+                                textTransform: 'uppercase',
+                                cursor: 'pointer',
+                              }}
                             >
-                              ACK
+                              Ack
                             </button>
                           )}
                         </td>
@@ -292,7 +340,7 @@ export default function AlertsPage() {
               </table>
             </div>
           )}
-        </div>
+        </Panel>
       </div>
     </>
   );

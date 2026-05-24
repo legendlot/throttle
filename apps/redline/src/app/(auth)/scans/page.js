@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
-import { Spinner, EmptyState } from '@throttle/ui';
+import { Spinner, EmptyState, Panel, Chip, StatusBadge } from '@throttle/ui';
 import { todayStr } from '@throttle/domain';
 import { useScans } from '../../../hooks/useScans.js';
 import { useRefreshState } from '../layout.js';
@@ -79,19 +79,37 @@ const SUMMARY_LABELS = {
 // ── Activity badge ────────────────────────────────────────────
 function ActivityBadge({ activity }) {
   const color = ACT_COLORS[activity] || 'var(--t2)';
+  // Convert color to rgba tint for background — pattern matches StatusBadge family.
+  let bg, border;
+  if (color.startsWith('var(--')) {
+    bg = color.replace('var(--green)', 'rgba(34, 197, 94, 0.12)')
+              .replace('var(--red)',   'rgba(222, 42, 42, 0.15)')
+              .replace('var(--orange)','rgba(249, 115, 22, 0.12)')
+              .replace('var(--t2)',    'rgba(80, 80, 80, 0.2)');
+    border = color.replace('var(--green)', 'rgba(34, 197, 94, 0.25)')
+                  .replace('var(--red)',   'rgba(222, 42, 42, 0.3)')
+                  .replace('var(--orange)','rgba(249, 115, 22, 0.25)')
+                  .replace('var(--t2)',    'rgba(80, 80, 80, 0.3)');
+  } else {
+    // hex — synthesize 18%/30% tints
+    bg     = color + '20';
+    border = color + '4d';
+  }
   return (
     <span style={{
       display: 'inline-block',
       padding: '2px 7px',
-      fontSize: 9,
-      fontWeight: 700,
-      letterSpacing: '0.06em',
-      textTransform: 'uppercase',
       fontFamily: 'var(--mono)',
+      fontSize: 11,
+      fontWeight: 600,
+      letterSpacing: '0.04em',
+      textTransform: 'uppercase',
       color,
-      border: `1px solid ${color}`,
-      borderRadius: 2,
+      background: bg,
+      border: `1px solid ${border}`,
+      borderRadius: 3,
       whiteSpace: 'nowrap',
+      lineHeight: 1.3,
     }}>
       {activity || '—'}
     </span>
@@ -217,14 +235,12 @@ export default function ScansPage() {
   }, [baseRows, upcMode, showVoided, activityFilter, trimmed]);
 
   // ── Style constants ───────────────────────────────────────
-  const btnStyle = { padding: '4px 10px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontSize: 11, cursor: 'pointer', fontFamily: 'var(--mono)', letterSpacing: '0.04em' };
-  const btnActiveStyle = { ...btnStyle, background: 'rgba(242,205,26,.12)', color: 'var(--yellow)', border: '1px solid rgba(242,205,26,.3)' };
-  const dateInputStyle = { background: 'var(--surface2)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '3px 6px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 12 };
-  const dateLabelStyle = { fontSize: 11, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase' };
-  const inputStyle = { background: 'var(--surface2)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '4px 8px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 12, width: 200 };
+  const dateInputStyle = { background: 'var(--surface2)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '6px 10px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 13, outline: 'none' };
+  const dateLabelStyle = { fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase' };
+  const inputStyle = { background: 'var(--surface2)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '6px 10px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 13, width: 220, outline: 'none' };
 
-  const thStyle = { padding: '8px 12px', fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
-  const tdStyle = { padding: '8px 12px', fontSize: 12, borderBottom: '1px solid rgba(42,42,42,.6)', whiteSpace: 'nowrap' };
+  const thStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
+  const tdStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 13, borderBottom: '1px solid rgba(64,64,64,.5)', whiteSpace: 'nowrap', color: 'var(--t1)' };
 
   const isRange = dateFrom !== dateTo;
 
@@ -246,9 +262,9 @@ export default function ScansPage() {
           value={dateTo}
           onChange={e => { setDateTo(e.target.value); if (!isRange) setDateFrom(e.target.value); }}
         />
-        <button style={activePreset === 'today' ? btnActiveStyle : btnStyle} onClick={() => handlePreset('today')}>Today</button>
-        <button style={activePreset === 'week'  ? btnActiveStyle : btnStyle} onClick={() => handlePreset('week')}>This Week</button>
-        <button style={activePreset === 'month' ? btnActiveStyle : btnStyle} onClick={() => handlePreset('month')}>This Month</button>
+        <Chip active={activePreset === 'today'} onClick={() => handlePreset('today')}>Today</Chip>
+        <Chip active={activePreset === 'week'}  onClick={() => handlePreset('week')}>This Week</Chip>
+        <Chip active={activePreset === 'month'} onClick={() => handlePreset('month')}>This Month</Chip>
 
         <div style={{ flex: 1 }} />
 
@@ -259,22 +275,22 @@ export default function ScansPage() {
           value={upcSearch}
           onChange={e => setUpcSearch(e.target.value)}
         />
-        <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--t2)', fontFamily: 'var(--mono)', cursor: 'pointer' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t2)', cursor: 'pointer' }}>
           <input type="checkbox" checked={showVoided} onChange={e => setShowVoided(e.target.checked)} />
           Show Voided
         </label>
       </div>
 
       {/* Activity filter row */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 18 }}>
         {ACTIVITY_FILTERS.map(f => (
-          <button
+          <Chip
             key={f.value || 'all'}
-            style={activityFilter === f.value ? btnActiveStyle : btnStyle}
+            active={activityFilter === f.value}
             onClick={() => setActivityFilter(f.value)}
           >
             {f.label}
-          </button>
+          </Chip>
         ))}
       </div>
 
@@ -318,7 +334,7 @@ export default function ScansPage() {
       )}
 
       {/* Table */}
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+      <Panel padding={0}>
         {(loading || upcLoading) ? (
           <div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}><Spinner /></div>
         ) : displayRows.length === 0 ? (
@@ -348,10 +364,10 @@ export default function ScansPage() {
                       <td style={{ ...tdStyle, color: 'var(--t1)' }}>{s.unit_product || '—'}</td>
                       <td style={{ ...tdStyle, color: 'var(--t2)' }}>{s.operator_name || (s.operator_id ? String(s.operator_id).slice(0, 8) : '—')}</td>
                       <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--t2)' }}>{s.loop_count != null ? s.loop_count : '—'}</td>
-                      <td style={{ ...tdStyle, fontFamily: 'var(--mono)' }}>
+                      <td style={tdStyle}>
                         {voided
-                          ? <span style={{ color: 'var(--red)', fontSize: 10, fontWeight: 700 }}>VOIDED</span>
-                          : <span style={{ color: 'var(--green)', fontSize: 10, fontWeight: 700 }}>OK</span>}
+                          ? <StatusBadge variant="error"   icon="✗">Voided</StatusBadge>
+                          : <StatusBadge variant="success" icon="✓">OK</StatusBadge>}
                       </td>
                     </tr>
                   );
@@ -361,12 +377,12 @@ export default function ScansPage() {
           </div>
         )}
         {hasMore && !upcMode && (
-          <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
+          <div style={{ padding: '14px 16px', borderTop: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>
               Showing {scans.length} scans — more available
             </span>
             <button
-              style={{ padding: '5px 14px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontSize: 11, cursor: loading ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)' }}
+              style={{ padding: '7px 14px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t1)', fontFamily: 'var(--mono)', fontSize: 12, cursor: loading ? 'not-allowed' : 'pointer' }}
               onClick={loadMore}
               disabled={loading}
             >
@@ -375,20 +391,20 @@ export default function ScansPage() {
           </div>
         )}
         {!hasMore && scans.length > 0 && !upcMode && (
-          <div style={{ padding: '8px 16px', borderTop: '1px solid var(--border)', textAlign: 'right' }}>
-            <span style={{ fontSize: 10, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
+          <div style={{ padding: '10px 16px', borderTop: '1px solid var(--border)', textAlign: 'right' }}>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', letterSpacing: '0.04em' }}>
               {scans.length} scans loaded
             </span>
           </div>
         )}
-      </div>
+      </Panel>
     </div>
   );
 }
 
-// ── Summary card ──────────────────────────────────────────────
+// ── Summary card (click-through filter tile) ─────────────────
 function SummaryCard({ label, value, color, stripe, sub, active, onClick }) {
-  const STRIPE_MAP = { yellow: '#F2CD1A', gray: '#555' };
+  const STRIPE_MAP = { yellow: 'var(--yellow)', gray: 'var(--t3)' };
   const stripeColor = stripe || STRIPE_MAP[color] || 'transparent';
   return (
     <div
@@ -397,18 +413,22 @@ function SummaryCard({ label, value, color, stripe, sub, active, onClick }) {
         background: active ? 'var(--surface2)' : 'var(--surface)',
         border: active ? '1px solid var(--yellow)' : '1px solid var(--border)',
         borderRadius: 4,
-        padding: 12,
+        padding: 14,
         cursor: 'pointer',
         position: 'relative',
         overflow: 'hidden',
         fontFamily: 'var(--mono)',
-        transition: 'all 0.15s',
+        transition: 'border-color 150ms, background 150ms',
       }}
     >
       <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 2, background: stripeColor }} />
-      <div style={{ fontSize: 9, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 6 }}>{label}</div>
-      <div style={{ fontSize: 22, color: 'var(--t1)', lineHeight: 1, fontWeight: 600 }}>{value != null ? fmt(value) : '—'}</div>
-      {sub && <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 4 }}>{sub}</div>}
+      <div style={{ fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 8 }}>
+        {label}
+      </div>
+      <div style={{ fontFamily: 'var(--cond)', fontSize: 24, color: 'var(--t1)', lineHeight: 1, fontWeight: 700 }}>
+        {value != null ? fmt(value) : '—'}
+      </div>
+      {sub && <div style={{ fontSize: 11, color: 'var(--t3)', marginTop: 6, letterSpacing: '0.04em' }}>{sub}</div>}
     </div>
   );
 }

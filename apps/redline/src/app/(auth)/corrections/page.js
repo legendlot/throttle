@@ -2,7 +2,7 @@
 import { useState, useMemo } from 'react';
 import { useAuth } from '@throttle/auth';
 import { workerFetch } from '@throttle/db';
-import { Spinner, EmptyState, useToast } from '@throttle/ui';
+import { Spinner, EmptyState, Panel, Chip, StatusBadge, useToast } from '@throttle/ui';
 import { todayStr } from '@throttle/domain';
 import { useScans } from '../../../hooks/useScans.js';
 
@@ -44,19 +44,35 @@ const ACTIVITY_FILTERS = [
 
 function ActivityBadge({ activity }) {
   const color = ACT_COLORS[activity] || 'var(--t2)';
+  let bg, border;
+  if (color.startsWith('var(--')) {
+    bg = color.replace('var(--green)', 'rgba(34, 197, 94, 0.12)')
+              .replace('var(--red)',   'rgba(222, 42, 42, 0.15)')
+              .replace('var(--orange)','rgba(249, 115, 22, 0.12)')
+              .replace('var(--t2)',    'rgba(80, 80, 80, 0.2)');
+    border = color.replace('var(--green)', 'rgba(34, 197, 94, 0.25)')
+                  .replace('var(--red)',   'rgba(222, 42, 42, 0.3)')
+                  .replace('var(--orange)','rgba(249, 115, 22, 0.25)')
+                  .replace('var(--t2)',    'rgba(80, 80, 80, 0.3)');
+  } else {
+    bg     = color + '20';
+    border = color + '4d';
+  }
   return (
     <span style={{
       display: 'inline-block',
       padding: '2px 7px',
-      fontSize: 9,
-      fontWeight: 700,
-      letterSpacing: '0.06em',
-      textTransform: 'uppercase',
       fontFamily: 'var(--mono)',
+      fontSize: 11,
+      fontWeight: 600,
+      letterSpacing: '0.04em',
+      textTransform: 'uppercase',
       color,
-      border: `1px solid ${color}`,
-      borderRadius: 2,
+      background: bg,
+      border: `1px solid ${border}`,
+      borderRadius: 3,
       whiteSpace: 'nowrap',
+      lineHeight: 1.3,
     }}>
       {activity || '—'}
     </span>
@@ -172,26 +188,30 @@ export default function CorrectionsPage() {
   }
 
   // ── Style constants ───────────────────────────────────────
-  const btnStyle = { padding: '4px 10px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontSize: 11, cursor: 'pointer', fontFamily: 'var(--mono)', letterSpacing: '0.04em' };
-  const btnActiveStyle = { ...btnStyle, background: 'rgba(242,205,26,.12)', color: 'var(--yellow)', border: '1px solid rgba(242,205,26,.3)' };
-  const dateInputStyle = { background: 'var(--surface2)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '3px 6px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 12 };
-  const dateLabelStyle = { fontSize: 11, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase' };
-  const inputStyle = { background: 'var(--surface2)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '4px 8px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 12, width: 200 };
-  const thStyle = { padding: '8px 12px', fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
-  const tdStyle = { padding: '8px 12px', fontSize: 12, borderBottom: '1px solid rgba(42,42,42,.6)', whiteSpace: 'nowrap' };
+  // Modal button (Cancel) — used in both Void and Amend modals
+  const modalBtnCancel = {
+    padding: '8px 14px', background: 'transparent', border: '1px solid var(--border)',
+    borderRadius: 3, color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 13, cursor: 'pointer',
+  };
+  const dateInputStyle = { background: 'var(--surface2)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '6px 10px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 13, outline: 'none' };
+  const dateLabelStyle = { fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase' };
+  const inputStyle = { background: 'var(--surface2)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '6px 10px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 13, width: 220, outline: 'none' };
+  const thStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
+  const tdStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 13, borderBottom: '1px solid rgba(64,64,64,.5)', whiteSpace: 'nowrap', color: 'var(--t1)' };
 
   const actionBtn = (color) => ({
-    padding: '3px 9px',
+    padding: '5px 11px',
     background: 'transparent',
     border: `1px solid ${color}`,
-    borderRadius: 2,
+    borderRadius: 3,
     color,
-    fontSize: 10,
-    fontWeight: 700,
     fontFamily: 'var(--mono)',
-    letterSpacing: '0.05em',
+    fontSize: 11,
+    fontWeight: 700,
+    letterSpacing: '0.08em',
+    textTransform: 'uppercase',
     cursor: 'pointer',
-    marginRight: 4,
+    marginRight: 6,
   });
 
   return (
@@ -227,11 +247,17 @@ export default function CorrectionsPage() {
               <div style={{ color: 'var(--red)', fontSize: 11, marginTop: 8, fontFamily: 'var(--mono)' }}>{voidError}</div>
             )}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
-              <button onClick={() => setVoidModal(null)} style={btnStyle} disabled={voidLoading}>Cancel</button>
+              <button onClick={() => setVoidModal(null)} style={modalBtnCancel} disabled={voidLoading}>Cancel</button>
               <button
                 onClick={submitVoid}
                 disabled={voidLoading || !voidReason.trim()}
-                style={{ ...btnStyle, background: 'var(--red)', color: '#fff', border: '1px solid var(--red)', opacity: (voidLoading || !voidReason.trim()) ? 0.5 : 1 }}
+                style={{
+                  padding: '8px 14px', background: 'var(--red)', color: '#fff',
+                  border: '1px solid var(--red)', borderRadius: 3,
+                  fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700,
+                  letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer',
+                  opacity: (voidLoading || !voidReason.trim()) ? 0.5 : 1,
+                }}
               >
                 {voidLoading ? 'Voiding…' : 'Confirm Void'}
               </button>
@@ -291,11 +317,17 @@ export default function CorrectionsPage() {
               <div style={{ color: 'var(--red)', fontSize: 11, marginTop: 8, fontFamily: 'var(--mono)' }}>{amendError}</div>
             )}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
-              <button onClick={() => setAmendModal(null)} style={btnStyle} disabled={amendLoading}>Cancel</button>
+              <button onClick={() => setAmendModal(null)} style={modalBtnCancel} disabled={amendLoading}>Cancel</button>
               <button
                 onClick={submitAmend}
                 disabled={amendLoading || !amendReason.trim()}
-                style={{ ...btnStyle, background: 'var(--yellow)', color: '#000', border: '1px solid var(--yellow)', opacity: (amendLoading || !amendReason.trim()) ? 0.5 : 1 }}
+                style={{
+                  padding: '8px 14px', background: 'var(--yellow)', color: '#0a0a0a',
+                  border: '1px solid var(--yellow)', borderRadius: 3,
+                  fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700,
+                  letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer',
+                  opacity: (amendLoading || !amendReason.trim()) ? 0.5 : 1,
+                }}
               >
                 {amendLoading ? 'Saving…' : 'Confirm Amend'}
               </button>
@@ -307,7 +339,7 @@ export default function CorrectionsPage() {
       {/* Page content */}
       <div>
         {/* Date bar */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18, flexWrap: 'wrap' }}>
           <span style={dateLabelStyle}>Date</span>
           <input
             type="date"
@@ -315,7 +347,7 @@ export default function CorrectionsPage() {
             value={selectedDate}
             onChange={e => setSelectedDate(e.target.value)}
           />
-          <button style={btnStyle} onClick={() => setSelectedDate(todayStr())}>Today</button>
+          <Chip onClick={() => setSelectedDate(todayStr())}>Today</Chip>
           <div style={{ flex: 1 }} />
           <input
             type="text"
@@ -324,33 +356,33 @@ export default function CorrectionsPage() {
             value={upcSearch}
             onChange={e => setUpcSearch(e.target.value)}
           />
-          <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--t2)', fontFamily: 'var(--mono)', cursor: 'pointer' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t2)', cursor: 'pointer' }}>
             <input type="checkbox" checked={showVoided} onChange={e => setShowVoided(e.target.checked)} />
             Show Voided
           </label>
         </div>
 
         {/* Activity filter row */}
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 18 }}>
           {ACTIVITY_FILTERS.map(f => (
-            <button
+            <Chip
               key={f.value || 'all'}
-              style={activityFilter === f.value ? btnActiveStyle : btnStyle}
+              active={activityFilter === f.value}
               onClick={() => setActivityFilter(f.value)}
             >
               {f.label}
-            </button>
+            </Chip>
           ))}
         </div>
 
         {/* Info panel */}
-        <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 4, padding: '10px 14px', marginBottom: 14, fontSize: 10, color: 'var(--t3)', fontFamily: 'var(--mono)', lineHeight: 1.6 }}>
-          <div><b style={{ color: 'var(--red)' }}>Tier 2 Void</b> — Supervisor can void scans from the current shift only. Reason required.</div>
-          <div><b style={{ color: 'var(--yellow)' }}>Tier 3 Amend</b> — Manager can correct line, operator, or notes on any scan. Immutable audit trail created.</div>
+        <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 4, padding: '12px 14px', marginBottom: 18, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t2)', lineHeight: 1.6 }}>
+          <div><StatusBadge variant="error">Tier 2 Void</StatusBadge>{' '}— Supervisor can void scans from the current shift only. Reason required.</div>
+          <div style={{ marginTop: 6 }}><StatusBadge variant="brand">Tier 3 Amend</StatusBadge>{' '}— Manager can correct line, operator, or notes on any scan. Immutable audit trail created.</div>
         </div>
 
         {/* Table */}
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+        <Panel padding={0}>
           {loading ? (
             <div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}><Spinner /></div>
           ) : displayRows.length === 0 ? (
@@ -377,18 +409,18 @@ export default function CorrectionsPage() {
                         <td style={{ ...tdStyle, color: 'var(--t1)' }}>{s.unit_product || '—'}</td>
                         <td style={{ ...tdStyle, color: 'var(--t2)' }}>{s.operator_name || (s.operator_id ? String(s.operator_id).slice(0, 8) : '—')}</td>
                         <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--t2)' }}>{s.loop_count != null ? s.loop_count : '—'}</td>
-                        <td style={{ ...tdStyle, fontFamily: 'var(--mono)' }}>
+                        <td style={tdStyle}>
                           {voided
-                            ? <span style={{ color: 'var(--red)', fontSize: 10, fontWeight: 700 }}>VOIDED</span>
-                            : <span style={{ color: 'var(--green)', fontSize: 10, fontWeight: 700 }}>OK</span>}
+                            ? <StatusBadge variant="error"   icon="✗">Voided</StatusBadge>
+                            : <StatusBadge variant="success" icon="✓">OK</StatusBadge>}
                         </td>
                         <td style={tdStyle}>
                           {voided ? (
-                            <span style={{ color: 'var(--t3)', fontSize: 10, fontFamily: 'var(--mono)' }}>VOIDED</span>
+                            <span style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.04em' }}>—</span>
                           ) : (canVoid || canAmend) ? (
                             <>
-                              {canVoid  && <button onClick={() => openVoid(s)}  style={actionBtn('var(--red)')}>VOID</button>}
-                              {canAmend && <button onClick={() => openAmend(s)} style={actionBtn('var(--yellow)')}>AMEND</button>}
+                              {canVoid  && <button onClick={() => openVoid(s)}  style={actionBtn('var(--red)')}>Void</button>}
+                              {canAmend && <button onClick={() => openAmend(s)} style={actionBtn('var(--yellow)')}>Amend</button>}
                             </>
                           ) : null}
                         </td>
@@ -399,7 +431,7 @@ export default function CorrectionsPage() {
               </table>
             </div>
           )}
-        </div>
+        </Panel>
       </div>
     </>
   );
