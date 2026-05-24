@@ -12,6 +12,7 @@ import {
   Send,
   Bell,
   AlertTriangle,
+  ClipboardCheck, ArrowUpDown, PackageCheck,
 } from 'lucide-react';
 
 // Mirrors legacy 04_stores/index.html nav structure (lines 1018–1080):
@@ -47,10 +48,13 @@ const GROUPS = [
   {
     id: 'store', label: 'STORE', icon: Store,
     items: [
-      { id: 'issue-queue',    label: 'Issue Queue',    route: '/issue-queue',    icon: ListChecks,    gate: (p) => hasPermission(p, 'stock_issue') },
-      { id: 'flush-verify',   label: 'Flush Verify',   route: '/flush-verify',   icon: CheckSquare,   gate: (p) => hasPermission(p, 'line_flush_verify') },
-      { id: 'damage-ledger',  label: 'Damage Ledger',  route: '/damage-ledger',  icon: AlertTriangle, gate: (p) => hasPermission(p, 'stock') || hasPermission(p, 'damage_manage') },
-      { id: 'store-history',  label: 'Store History',  route: '/store-history',  icon: History },
+      { id: 'issue-queue',       label: 'Issue Queue',       route: '/issue-queue',        icon: ListChecks,    gate: (p) => hasPermission(p, 'stock_issue') },
+      { id: 'flush-verify',      label: 'Flush Verify',      route: '/flush-verify',       icon: CheckSquare,   gate: (p) => hasPermission(p, 'line_flush_verify') },
+      { id: 'damage-ledger',     label: 'Damage Ledger',     route: '/damage-ledger',      icon: AlertTriangle, gate: (p) => hasPermission(p, 'stock') || hasPermission(p, 'damage_manage') },
+      { id: 'cycle-counts',      label: 'Cycle Counts',      route: '/cycle-counts',       icon: ClipboardCheck, gate: (p) => hasPermission(p, 'cycle_count_record') || hasPermission(p, 'cycle_count_admin') },
+      { id: 'stock-adjustments', label: 'Stock Adjustments', route: '/stock-adjustments',  icon: ArrowUpDown,    gate: (p) => hasPermission(p, 'cycle_count_record') || hasPermission(p, 'cycle_count_approve_l1') || hasPermission(p, 'cycle_count_approve_l2') },
+      { id: 'unit-counts',       label: 'Dispatch Counts',   route: '/dispatch/unit-counts', icon: PackageCheck, gate: (p) => hasPermission(p, 'cycle_count_record') || hasPermission(p, 'cycle_count_admin') },
+      { id: 'store-history',     label: 'Store History',     route: '/store-history',      icon: History },
       { separator: true },
       { id: 'manpower',      label: 'Manpower',      route: '/manpower',      icon: UserCog,     gate: (p) => hasPermission(p, 'dashboard') },
       { id: 'dispatch',      label: 'Dispatch',      route: '/dispatch',      icon: Send,        gate: (p) => hasPermission(p, 'dashboard') },
