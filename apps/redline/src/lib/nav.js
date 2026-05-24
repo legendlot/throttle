@@ -6,7 +6,7 @@ import {
   BarChart3, Clock,
   QrCode, Users, Printer,
   CalendarClock, LayoutGrid, ClipboardList,
-  ClipboardCheck,
+  ClipboardCheck, AlertTriangle,
 } from 'lucide-react';
 
 export const NAV_GROUPS = [
@@ -22,6 +22,7 @@ export const NAV_GROUPS = [
       { id: 'hourly',   label: 'Hourly',    route: '/hourly',   icon: Clock },
       { id: 'qc',       label: 'QC',        route: '/qc',       icon: ShieldCheck },
       { id: 'audit',    label: 'Audit',     route: '/audit',    icon: ClipboardCheck },
+      { id: 'process-deviations', label: 'Deviations', route: '/process-deviations', icon: AlertTriangle },
     ],
   },
   {
