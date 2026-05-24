@@ -21,28 +21,46 @@ export function Topbar({
 
   return (
     <div style={{
-      height: 44, borderBottom: '1px solid var(--border)',
-      display: 'flex', alignItems: 'center', padding: '0 20px',
-      gap: 10, flexShrink: 0, background: '#0e0e0e',
+      height: 56,
+      borderBottom: '1px solid var(--border)',
+      display: 'flex', alignItems: 'center',
+      padding: '0 24px', gap: 12,
+      flexShrink: 0,
+      background: 'var(--bg, transparent)',
     }}>
+      {/* Breadcrumb — group label */}
       <span style={{
-        fontSize: 10, color: 'var(--t3)', letterSpacing: '.1em',
-        fontFamily: 'var(--mono)', whiteSpace: 'nowrap',
+        fontFamily: 'var(--mono)',
+        fontSize: 12,
+        color: 'var(--t2)',
+        letterSpacing: '0.08em',
+        textTransform: 'uppercase',
+        whiteSpace: 'nowrap',
       }}>
         {activeGroup?.label}
       </span>
-      <span style={{ color: 'var(--border2)', fontSize: 14 }}>/</span>
+
+      <span style={{ color: 'var(--border2)', fontSize: 16 }}>/</span>
+
+      {/* Current page title — Tomorrow, big and confident */}
       <span style={{
-        fontSize: 11, fontWeight: 700, letterSpacing: '.06em',
-        color: 'var(--t1)', fontFamily: 'var(--mono)', whiteSpace: 'nowrap',
+        fontFamily: 'var(--cond)',
+        fontSize: 16,
+        fontWeight: 700,
+        letterSpacing: '0.06em',
+        color: 'var(--t1)',
+        textTransform: 'uppercase',
+        whiteSpace: 'nowrap',
       }}>
-        {activeItem?.label?.toUpperCase() || ''}
+        {activeItem?.label || ''}
       </span>
 
       {showSubTabs && (
         <div style={{
-          display: 'flex', gap: 2,
-          marginLeft: 20, borderLeft: '1px solid var(--border)', paddingLeft: 14,
+          display: 'flex', gap: 4,
+          marginLeft: 20,
+          borderLeft: '1px solid var(--border)',
+          paddingLeft: 16,
         }}>
           {subTabs.map(item => {
             const isActive = pathname === item.route || pathname.startsWith(item.route + '/');
@@ -51,11 +69,24 @@ export function Topbar({
                 key={item.id}
                 onClick={() => onTabSelect && onTabSelect(item)}
                 style={{
-                  background: isActive ? 'rgba(242,205,26,.07)' : 'none',
-                  border: 'none', borderRadius: 4, padding: '4px 10px',
-                  fontSize: 10, color: isActive ? 'var(--yellow)' : 'var(--t3)',
-                  cursor: 'pointer', fontFamily: 'var(--mono)',
-                  display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap',
+                  background: isActive ? 'rgba(242, 205, 26, 0.08)' : 'none',
+                  border: 'none',
+                  borderRadius: 4,
+                  padding: '6px 12px',
+                  fontFamily: 'var(--mono)',
+                  fontSize: 13,
+                  fontWeight: isActive ? 600 : 400,
+                  color: isActive ? 'var(--yellow)' : 'var(--t2)',
+                  cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  whiteSpace: 'nowrap',
+                  transition: 'color 120ms, background 120ms',
+                }}
+                onMouseEnter={(e) => {
+                  if (!isActive) e.currentTarget.style.color = 'var(--t1)';
+                }}
+                onMouseLeave={(e) => {
+                  if (!isActive) e.currentTarget.style.color = 'var(--t2)';
                 }}
               >
                 {item.label}
@@ -66,23 +97,37 @@ export function Topbar({
         </div>
       )}
 
-      <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
+      <div style={{
+        marginLeft: 'auto',
+        display: 'flex', alignItems: 'center', gap: 14,
+      }}>
         {children}
         {refreshing && (
-          <span style={{ fontSize: 9, color: 'var(--t3)', letterSpacing: '.1em' }}>↻ UPDATING</span>
+          <span style={{
+            fontFamily: 'var(--mono)', fontSize: 11,
+            color: 'var(--t2)', letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+          }}>↻ Updating</span>
         )}
         {lastRefreshed && !refreshing && (
-          <span style={{ fontSize: 9, color: 'var(--t3)', letterSpacing: '.04em' }}>{lastRefreshed}</span>
+          <span style={{
+            fontFamily: 'var(--mono)', fontSize: 11,
+            color: 'var(--t3)', letterSpacing: '0.04em',
+          }}>{lastRefreshed}</span>
         )}
         <span style={{
-          fontSize: 9, color: 'var(--t3)', letterSpacing: '.04em',
-          display: 'flex', alignItems: 'center', gap: 5,
+          fontFamily: 'var(--mono)', fontSize: 11,
+          color: 'var(--t2)', letterSpacing: '0.08em',
+          textTransform: 'uppercase',
+          display: 'flex', alignItems: 'center', gap: 6,
         }}>
           <span style={{
-            width: 6, height: 6, background: 'var(--green)',
-            borderRadius: '50%', display: 'inline-block',
+            width: 7, height: 7,
+            background: 'var(--green)',
+            borderRadius: '50%',
+            display: 'inline-block',
           }} />
-          LIVE
+          Live
         </span>
       </div>
     </div>

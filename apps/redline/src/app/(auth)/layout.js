@@ -38,13 +38,15 @@ export default function AuthLayout({ children }) {
 
 function NavBadge({ count, color }) {
   if (!count || count < 1) return null;
-  const bg = color === 'red' ? '#de2a2a' : '#f97316';
-  const fg = color === 'red' ? '#fff'    : '#000';
+  const bg = color === 'red' ? 'var(--brand-red)' : 'var(--brand-orange)';
+  const fg = color === 'red' ? '#fff' : 'var(--accent-fg)';
   return (
     <span style={{
-      display:'inline-block', background:bg, color:fg,
-      fontSize:9, fontWeight:700, padding:'1px 5px',
-      borderRadius:8, marginLeft:5, fontFamily:'var(--mono)', letterSpacing:'0.04em',
+      display: 'inline-block', background: bg, color: fg,
+      fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700,
+      letterSpacing: '0.04em',
+      padding: '2px 7px', borderRadius: 9999, marginLeft: 6,
+      minWidth: 18, textAlign: 'center', lineHeight: 1.2,
     }}>
       {count > 99 ? '99+' : count}
     </span>
