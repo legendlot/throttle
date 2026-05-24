@@ -5,7 +5,7 @@ import {
   Cog, ClipboardList, Workflow,
   ListChecks, CheckSquare, History, UserCog,
   Undo2,
-  BookOpen, Download, Wrench,
+  BookOpen, Download, Wrench, Scale,
   ShoppingCart, FileText, RefreshCw, Building, Truck,
   Users,
   Package, Factory, Store,
@@ -64,6 +64,7 @@ const GROUPS = [
     items: [
       { id: 'library-downloads', label: 'Downloads',      route: '/library/downloads', icon: Download },
       { id: 'library-parts',     label: 'Parts Database', route: '/library/parts',     icon: Wrench },
+      { id: 'library-bag-sizes', label: 'Bag Sizes',      route: '/library/bag-sizes', icon: Scale,   gate: (p) => hasPermission(p, 'users_manage') },
     ],
   },
   {
