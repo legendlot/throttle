@@ -1,7 +1,8 @@
 'use client';
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { useAuth } from '@throttle/auth';
-import { garageFetch } from '@throttle/db';
+import Link from 'next/link';
+import { useAuth, hasPermission } from '@throttle/auth';
+import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, EmptyState } from '@throttle/ui';
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -69,9 +70,88 @@ const tdStyle = {
   whiteSpace: 'nowrap',
 };
 
+// ── Customer Repairs callout (Redline `/returns`) ─────────────
+// Visibility for production team: how many ad-hoc customer repairs are
+// (a) awaiting at store, (b) with production, (c) ready to dispatch.
+function CustomerRepairsCallout({ session, perms }) {
+  const allowed = hasPermission(perms, 'customer_repair_manage') || hasPermission(perms, 'users_manage');
+  const [counts, setCounts] = useState({ reached_stores: 0, handed_to_production: 0, repaired_ready: 0, total: 0 });
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!session || !allowed) return;
+    setLoading(true);
+    try {
+      const r = await workerFetch('getCustomerRepairs', {
+        data: { stage: 'reached_stores,handed_to_production,repaired_ready', limit: 500 },
+      }, session);
+      const rows = (r?.ok && Array.isArray(r.data)) ? r.data : [];
+      const c = { reached_stores: 0, handed_to_production: 0, repaired_ready: 0, total: rows.length };
+      rows.forEach(x => { if (c[x.stage] != null) c[x.stage]++; });
+      setCounts(c);
+    } catch { /* swallow */ } finally { setLoading(false); }
+  }, [session, allowed]);
+
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (!session || !allowed) return;
+    const t = setInterval(load, 60000);
+    return () => clearInterval(t);
+  }, [load, session, allowed]);
+
+  if (!allowed) return null;
+
+  const tiles = [
+    { key: 'reached_stores',       label: 'Awaiting at store',  count: counts.reached_stores,       color: '#fbbf24' },
+    { key: 'handed_to_production', label: 'With production',    count: counts.handed_to_production, color: '#7b93ff' },
+    { key: 'repaired_ready',       label: 'Ready to dispatch',  count: counts.repaired_ready,       color: '#4ade80' },
+  ];
+
+  return (
+    <div style={{ ...cardStyle, padding: 0, marginBottom: 18 }}>
+      <div style={panelHeader}>
+        <span>
+          <span style={{ color: '#f2cd1a' }}>● </span>
+          Customer Repairs · Ad-hoc (not on production queue)
+        </span>
+        <Link href="/customer-repairs" style={{ color: 'var(--t2)', fontSize: 11, fontFamily: 'var(--mono)', textDecoration: 'none' }}>
+          View all →
+        </Link>
+      </div>
+      <div style={{ padding: 14 }}>
+        {loading && counts.total === 0 ? (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: 8 }}><Spinner /></div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+            {tiles.map(t => (
+              <Link
+                key={t.key}
+                href={`/customer-repairs?stage=${t.key}`}
+                style={{
+                  textDecoration: 'none',
+                  background: 'var(--surface2)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 4, padding: '10px 12px',
+                  display: 'block',
+                }}>
+                <div style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--t3)', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 4 }}>
+                  {t.label}
+                </div>
+                <div style={{ fontSize: 26, fontWeight: 700, fontFamily: 'var(--cond)', color: t.count > 0 ? t.color : 'var(--t3)' }}>
+                  {t.count}
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Returns Page (Redline — read-only) ────────────────────────
 export default function ReturnsPage() {
-  const { session } = useAuth();
+  const { session, perms } = useAuth();
 
   const [pools,    setPools]    = useState({ udr: [], repair: [] });
   const [loading,  setLoading]  = useState(false);
@@ -113,6 +193,9 @@ export default function ReturnsPage() {
 
   return (
     <div>
+      {/* Customer Repairs callout — surfaces ad-hoc CS-driven repair work above the regular returns pools */}
+      <CustomerRepairsCallout session={session} perms={perms} />
+
       {/* KPI strip */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 18 }}>
         <div style={cardStyle}>
