@@ -2,8 +2,8 @@
 // Pure: takes an array of bag rows and a header string, returns a full HTML
 // document for printing via printWindow.
 //
-// bags[i] consumed fields: bag_id, part_code, part_name (or name), qty,
-// bag_seq, total_bags, mark_code, bin_code.
+// bags[i] consumed fields: bag_id, part_code, part_name (or name), product,
+// qty, bag_seq, total_bags, mark_code, bin_code.
 // headerRef is shown in the small top-right slot — pass the shipment_id for
 // receiving-flow prints, or the grn_no for direct-GRN prints.
 export function buildBagLabelsHtml(bags, headerRef) {
@@ -20,6 +20,7 @@ export function buildBagLabelsHtml(bags, headerRef) {
         </div>
         <div class="lb">
           <div class="ll">
+            ${b.product ? `<div class="lpn">${b.product}</div>` : ''}
             <div class="ln">${b.part_name || b.name || ''}</div>
             <div class="lqr"><span class="lqn">${b.qty || 0}</span><span class="lqu"> pcs</span></div>
             <div class="lm">
@@ -48,6 +49,7 @@ export function buildBagLabelsHtml(bags, headerRef) {
     .ls{font-family:monospace;font-size:8pt;color:#555}
     .lb{display:flex;gap:2mm;flex:1;align-items:flex-start}
     .ll{display:flex;flex-direction:column;flex:1;min-width:0;gap:1mm}
+    .lpn{font-size:10pt;font-weight:800;line-height:1.2;color:#000;letter-spacing:0.02em}
     .ln{font-size:9pt;font-weight:600;line-height:1.2}
     .lqr{display:flex;align-items:baseline;gap:2px}
     .lqn{font-size:18pt;font-weight:900;font-family:monospace;line-height:1}
