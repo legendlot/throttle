@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, EmptyState, useToast } from '@throttle/ui';
+import { Spinner, EmptyState, Panel, Chip, StatusBadge, useToast } from '@throttle/ui';
 
 // ── Helpers ───────────────────────────────────────────────────
 const CHANNEL_TYPE_STYLE = {
@@ -13,14 +13,8 @@ const CHANNEL_TYPE_STYLE = {
 
 function ChannelTypeBadge({ type }) {
   const t = (type || 'other').toLowerCase();
-  const st = CHANNEL_TYPE_STYLE[t] || CHANNEL_TYPE_STYLE.other;
-  return (
-    <span style={{
-      fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 2,
-      letterSpacing: '0.06em', textTransform: 'uppercase', whiteSpace: 'nowrap',
-      fontFamily: 'var(--mono)', color: st.color, background: st.bg,
-    }}>{type || '—'}</span>
-  );
+  const variant = t === 'ecom' ? 'info' : t === 'retail' ? 'brand' : 'neutral';
+  return <StatusBadge variant={variant}>{type || '—'}</StatusBadge>;
 }
 
 // ── Channel Master Page ───────────────────────────────────────
@@ -98,36 +92,44 @@ export default function DispatchChannelsPage() {
   }
 
   // ── Style constants ───────────────────────────────────────
-  const btnStyle = { padding: '4px 10px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontSize: 11, cursor: 'pointer', fontFamily: 'var(--mono)', letterSpacing: '0.04em' };
-  const inputStyle = { background: 'var(--surface)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '6px 8px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 12 };
-  const selectStyle = { background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--t1)', fontSize: 12, fontFamily: 'var(--mono)', padding: '6px 8px', borderRadius: 3 };
-  const labelStyle = { fontSize: 10, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase', display: 'block', marginBottom: 6 };
-  const sectionLabel = { fontFamily: 'var(--cond)', fontSize: 10, fontWeight: 700, letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--t3)' };
-  const thStyle = { padding: '8px 12px', fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
-  const tdStyle = { padding: '8px 12px', fontSize: 12, borderBottom: '1px solid rgba(42,42,42,.6)', whiteSpace: 'nowrap' };
+  const inputStyle = { background: 'var(--surface)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '8px 12px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 13, outline: 'none' };
+  const selectStyle = { background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--t1)', fontFamily: 'var(--mono)', fontSize: 13, padding: '8px 12px', borderRadius: 3, outline: 'none', cursor: 'pointer' };
+  const labelStyle = { fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase', display: 'block', marginBottom: 8 };
+  const sectionLabel = { margin: 0, fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t2)' };
+  const thStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
+  const tdStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 13, borderBottom: '1px solid rgba(64,64,64,.5)', whiteSpace: 'nowrap', color: 'var(--t1)' };
+
+  const primaryBtnStyle = {
+    padding: '8px 14px', background: 'var(--yellow)', color: '#0a0a0a',
+    border: '1px solid var(--yellow)', borderRadius: 3,
+    fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700,
+    letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer',
+  };
+  const secondaryBtnStyle = {
+    padding: '8px 14px', background: 'transparent', border: '1px solid var(--border)',
+    borderRadius: 3, color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 13, cursor: 'pointer',
+  };
 
   return (
     <div>
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-        <div style={sectionLabel}>Channel Master</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18 }}>
+        <h2 style={sectionLabel}>Channel Master</h2>
         <div style={{ flex: 1 }} />
         {!formMode && (
-          <button style={{ ...btnStyle, background: 'var(--yellow)', color: '#000', border: '1px solid var(--yellow)' }} onClick={openNew}>
-            + Add Channel
-          </button>
+          <button style={primaryBtnStyle} onClick={openNew}>+ Add Channel</button>
         )}
       </div>
 
       {/* Inline form */}
       {formMode && (
-        <div style={{ background: 'var(--surface2)', border: '1px solid var(--yellow)', borderRadius: 4, padding: 16, marginBottom: 14 }}>
-          <div style={{ display: 'flex', alignItems: 'center', marginBottom: 14 }}>
-            <div style={{ ...sectionLabel, color: 'var(--yellow)' }}>
+        <div style={{ background: 'var(--surface2)', border: '1px solid var(--yellow)', borderRadius: 4, padding: 18, marginBottom: 18 }}>
+          <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16 }}>
+            <h3 style={{ ...sectionLabel, color: 'var(--yellow)' }}>
               {formMode === 'new' ? 'New Channel' : `Edit ${formMode.name}`}
-            </div>
+            </h3>
             <div style={{ flex: 1 }} />
-            <button onClick={() => setFormMode(null)} style={btnStyle}>× Cancel</button>
+            <button onClick={() => setFormMode(null)} style={secondaryBtnStyle}>× Cancel</button>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
@@ -168,15 +170,15 @@ export default function DispatchChannelsPage() {
           </div>
 
           {formError && (
-            <div style={{ color: 'var(--red)', fontSize: 11, marginBottom: 10, fontFamily: 'var(--mono)' }}>{formError}</div>
+            <div style={{ color: '#ff7070', fontFamily: 'var(--mono)', fontSize: 12, marginBottom: 12 }}>{formError}</div>
           )}
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-            <button onClick={() => setFormMode(null)} style={btnStyle} disabled={saving}>Cancel</button>
+            <button onClick={() => setFormMode(null)} style={secondaryBtnStyle} disabled={saving}>Cancel</button>
             <button
               onClick={submitForm}
               disabled={saving}
-              style={{ ...btnStyle, background: 'var(--yellow)', color: '#000', border: '1px solid var(--yellow)', opacity: saving ? 0.5 : 1 }}
+              style={{ ...primaryBtnStyle, opacity: saving ? 0.5 : 1 }}
             >
               {saving ? 'Saving…' : (formMode === 'new' ? 'Add Channel' : 'Save Changes')}
             </button>
@@ -185,7 +187,7 @@ export default function DispatchChannelsPage() {
       )}
 
       {/* Channel list */}
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+      <Panel padding={0}>
         {loading && channels.length === 0 ? (
           <div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}><Spinner /></div>
         ) : channels.length === 0 ? (
@@ -205,21 +207,30 @@ export default function DispatchChannelsPage() {
                   const inactive = c.is_active === false;
                   return (
                     <tr key={c.id} style={{ opacity: inactive ? 0.45 : 1 }}>
-                      <td style={{ ...tdStyle, color: 'var(--t1)', fontWeight: 600 }}>{c.name}</td>
+                      <td style={{ ...tdStyle, fontFamily: 'var(--cond)', fontWeight: 700, color: 'var(--t1)', letterSpacing: '0.04em' }}>{c.name}</td>
                       <td style={tdStyle}><ChannelTypeBadge type={c.type} /></td>
-                      <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--t2)' }}>{c.fulfillment_model || '—'}</td>
+                      <td style={{ ...tdStyle, color: 'var(--t2)' }}>{c.fulfillment_model || '—'}</td>
                       <td style={tdStyle}>
                         {c.is_sale
-                          ? <span style={{ color: 'var(--green)', fontSize: 11, fontWeight: 700 }}>● Sale</span>
-                          : <span style={{ color: 'var(--t3)', fontSize: 11 }}>● Cost</span>}
+                          ? <StatusBadge variant="success" icon="●">Sale</StatusBadge>
+                          : <StatusBadge variant="neutral" icon="●">Cost</StatusBadge>}
                       </td>
                       <td style={tdStyle}>
                         {!inactive
-                          ? <span style={{ color: 'var(--green)', fontSize: 11, fontWeight: 700 }}>Active</span>
-                          : <span style={{ color: 'var(--t3)', fontSize: 11 }}>Inactive</span>}
+                          ? <StatusBadge variant="success">Active</StatusBadge>
+                          : <StatusBadge variant="neutral">Inactive</StatusBadge>}
                       </td>
                       <td style={tdStyle}>
-                        <button onClick={() => openEdit(c)} style={{ ...btnStyle, color: 'var(--yellow)', borderColor: 'var(--yellow)' }}>
+                        <button
+                          onClick={() => openEdit(c)}
+                          style={{
+                            padding: '5px 11px', background: 'transparent',
+                            border: '1px solid var(--yellow)', borderRadius: 3,
+                            color: 'var(--yellow)', fontFamily: 'var(--mono)',
+                            fontSize: 11, fontWeight: 700, letterSpacing: '0.08em',
+                            textTransform: 'uppercase', cursor: 'pointer',
+                          }}
+                        >
                           Edit
                         </button>
                       </td>
@@ -230,7 +241,7 @@ export default function DispatchChannelsPage() {
             </table>
           </div>
         )}
-      </div>
+      </Panel>
     </div>
   );
 }

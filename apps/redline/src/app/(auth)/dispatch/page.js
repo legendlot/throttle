@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
-import { KpiCard, Spinner, EmptyState } from '@throttle/ui';
+import { KpiCard, Spinner, EmptyState, Panel, Chip, StatusBadge } from '@throttle/ui';
 import { useAutoRefresh } from '../../../hooks/useAutoRefresh.js';
 import { useRefreshState } from '../layout.js';
 import { useDispatchChannels } from '../../../hooks/useDispatchChannels.js';
@@ -19,40 +19,23 @@ function formatPackedDate(ts) {
   return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', timeZone: 'Asia/Kolkata' }).replace(/ /g, '-');
 }
 
-const UNIT_STATUS = {
-  rtd:         { label: 'RTD',           color: 'var(--t2)',     bg: 'rgba(255,255,255,.06)' },
-  handed_over: { label: 'WITH DISPATCH', color: 'var(--yellow)', bg: 'rgba(242,205,26,.1)'  },
-  allocated:   { label: 'ALLOCATED',     color: 'var(--blue)',   bg: 'rgba(33,60,226,.15)'  },
-  shipped:     { label: 'SHIPPED',       color: 'var(--green)',  bg: 'rgba(0,200,100,.12)'  },
-};
-
-const CHANNEL_TYPE_STYLE = {
-  ecom:   { color: 'var(--blue)',   bg: 'rgba(33,60,226,.15)'  },
-  retail: { color: 'var(--yellow)', bg: 'rgba(242,205,26,.1)'  },
-  other:  { color: 'var(--t2)',     bg: 'rgba(255,255,255,.06)' },
+// Map unit status → StatusBadge variant.
+const UNIT_STATUS_MAP = {
+  rtd:         { variant: 'neutral', label: 'PKG Out' },
+  handed_over: { variant: 'brand',   label: 'With Dispatch' },
+  allocated:   { variant: 'info',    label: 'Allocated' },
+  shipped:     { variant: 'success', label: 'Shipped', icon: '✓' },
 };
 
 function ChannelTypeBadge({ type }) {
   const t = (type || 'other').toLowerCase();
-  const st = CHANNEL_TYPE_STYLE[t] || CHANNEL_TYPE_STYLE.other;
-  return (
-    <span style={{
-      fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 2,
-      letterSpacing: '0.06em', textTransform: 'uppercase', whiteSpace: 'nowrap',
-      fontFamily: 'var(--mono)', color: st.color, background: st.bg,
-    }}>{type || '—'}</span>
-  );
+  const variant = t === 'ecom' ? 'info' : t === 'retail' ? 'brand' : 'neutral';
+  return <StatusBadge variant={variant}>{type || '—'}</StatusBadge>;
 }
 
 function UnitStatusBadge({ status }) {
-  const meta = UNIT_STATUS[status] || { label: status || '—', color: 'var(--t3)', bg: 'rgba(80,80,80,.2)' };
-  return (
-    <span style={{
-      fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 2,
-      letterSpacing: '0.06em', textTransform: 'uppercase', whiteSpace: 'nowrap',
-      fontFamily: 'var(--mono)', color: meta.color, background: meta.bg,
-    }}>{meta.label}</span>
-  );
+  const meta = UNIT_STATUS_MAP[status] || { variant: 'neutral', label: status || '—' };
+  return <StatusBadge variant={meta.variant} icon={meta.icon}>{meta.label}</StatusBadge>;
 }
 
 function ChannelCard({ row, isSale }) {
@@ -62,17 +45,19 @@ function ChannelCard({ row, isSale }) {
       background: 'var(--surface)',
       border: '1px solid var(--border)',
       borderRadius: 4,
-      padding: 12,
+      padding: 14,
       opacity: showSaleColor ? 1 : 0.75,
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-        <div style={{ fontSize: 12, color: 'var(--t1)', fontWeight: 600, fontFamily: 'var(--cond)' }}>{row.channel_name}</div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, gap: 8 }}>
+        <div style={{ fontFamily: 'var(--cond)', fontSize: 14, fontWeight: 700, color: 'var(--t1)', letterSpacing: '0.04em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {row.channel_name}
+        </div>
         <ChannelTypeBadge type={row.channel_type} />
       </div>
-      <div style={{ fontSize: 22, color: showSaleColor ? 'var(--green)' : 'var(--t2)', fontWeight: 600, fontFamily: 'var(--mono)', lineHeight: 1 }}>
+      <div style={{ fontFamily: 'var(--cond)', fontSize: 24, color: showSaleColor ? 'var(--green)' : 'var(--t2)', fontWeight: 700, lineHeight: 1 }}>
         {fmt(row.unit_count)}
       </div>
-      <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 4 }}>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginTop: 6, letterSpacing: '0.04em' }}>
         {showSaleColor ? 'Sale channel' : 'Non-sale'}
       </div>
     </div>
@@ -195,60 +180,59 @@ export default function DispatchPage() {
   const shippedTotal  = saleTotal + nonSaleTotal;
 
   // ── Style constants ───────────────────────────────────────
-  const btnStyle = { padding: '4px 10px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontSize: 11, cursor: 'pointer', fontFamily: 'var(--mono)', letterSpacing: '0.04em' };
-  const btnActiveStyle = { ...btnStyle, background: 'rgba(242,205,26,.12)', color: 'var(--yellow)', border: '1px solid rgba(242,205,26,.3)' };
-  const dateInputStyle = { background: 'var(--surface2)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '3px 6px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 12 };
-  const selectStyle = { background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--t1)', fontSize: 11, fontFamily: 'var(--mono)', padding: '3px 6px', borderRadius: 3 };
-  const sectionLabel = { fontFamily: 'var(--cond)', fontSize: 10, fontWeight: 700, letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 12 };
-  const thStyle = { padding: '8px 12px', fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
-  const tdStyle = { padding: '8px 12px', fontSize: 12, borderBottom: '1px solid rgba(42,42,42,.6)', whiteSpace: 'nowrap' };
+  const dateInputStyle = { background: 'var(--surface2)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '6px 10px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 13, outline: 'none' };
+  const selectStyle = { background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--t1)', fontFamily: 'var(--mono)', fontSize: 13, padding: '6px 10px', borderRadius: 3, outline: 'none', cursor: 'pointer' };
+  const sectionLabel = { margin: '0 0 14px 0', fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t2)' };
+  const thStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
+  const tdStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 13, borderBottom: '1px solid rgba(64,64,64,.5)', whiteSpace: 'nowrap', color: 'var(--t1)' };
+  const refreshBtnStyle = { padding: '7px 12px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t1)', fontFamily: 'var(--mono)', fontSize: 12, cursor: 'pointer' };
 
   return (
     <div>
       {/* Live Dispatch Status */}
-      <div style={{ marginBottom: 28 }}>
-        <div style={sectionLabel}>Live Dispatch Status</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+      <section style={{ marginBottom: 32 }}>
+        <h2 style={sectionLabel}>Live Dispatch Status</h2>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 12 }}>
           <KpiCard label="PKG Out"        value={fmt(c.rtd_count)}          sub="Awaiting handover" />
           <KpiCard label="With Dispatch"  value={fmt(c.handed_over_count)}  sub="To allocate"        color={c.handed_over_count > 0 ? 'yellow' : undefined} />
           <KpiCard label="Allocated"      value={fmt(c.allocated_count)}    sub="Awaiting ship"      color={c.allocated_count > 0 ? 'blue' : undefined} />
           <KpiCard label="Shipped"        value={fmt(c.shipped_count)}      sub="Total shipped"      color="green" />
         </div>
-      </div>
+      </section>
 
       {/* Allocated — Awaiting Dispatch */}
-      <div style={{ marginBottom: 28 }}>
-        <div style={sectionLabel}>Allocated — Awaiting Dispatch</div>
+      <section style={{ marginBottom: 32 }}>
+        <h2 style={sectionLabel}>Allocated — Awaiting Dispatch</h2>
         {allocByChannel.length === 0 ? (
-          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4 }}>
+          <Panel padding={0}>
             <EmptyState icon="📦" message="No allocated units" />
-          </div>
+          </Panel>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12 }}>
             {allocByChannel.map((row, i) => <ChannelCard key={`${row.channel_name}-${i}`} row={row} isSale={row.is_sale} />)}
           </div>
         )}
-      </div>
+      </section>
 
       {/* Sent Out by Channel */}
-      <div style={{ marginBottom: 28 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
-          <div style={{ ...sectionLabel, marginBottom: 0 }}>Sent Out by Channel</div>
+      <section style={{ marginBottom: 32 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+          <h2 style={{ ...sectionLabel, marginBottom: 0 }}>Sent Out by Channel</h2>
           <div style={{ flex: 1 }} />
-          <button style={shippedPreset === '10days'    ? btnActiveStyle : btnStyle} onClick={() => applyPreset('10days')}>10 Days</button>
-          <button style={shippedPreset === 'thisweek'  ? btnActiveStyle : btnStyle} onClick={() => applyPreset('thisweek')}>This Week</button>
-          <button style={shippedPreset === 'thismonth' ? btnActiveStyle : btnStyle} onClick={() => applyPreset('thismonth')}>This Month</button>
-          <button style={shippedPreset === 'custom'    ? btnActiveStyle : btnStyle} onClick={() => applyPreset('custom')}>Custom</button>
+          <Chip active={shippedPreset === '10days'}    onClick={() => applyPreset('10days')}>10 Days</Chip>
+          <Chip active={shippedPreset === 'thisweek'}  onClick={() => applyPreset('thisweek')}>This Week</Chip>
+          <Chip active={shippedPreset === 'thismonth'} onClick={() => applyPreset('thismonth')}>This Month</Chip>
+          <Chip active={shippedPreset === 'custom'}    onClick={() => applyPreset('custom')}>Custom</Chip>
         </div>
         {shippedPreset === 'custom' && (
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
-            <span style={{ fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase' }}>From</span>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>From</span>
             <input type="date" style={dateInputStyle} value={shippedCustomFrom} onChange={e => { setShippedCustomFrom(e.target.value); setShippedFrom(e.target.value); }} />
-            <span style={{ fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase' }}>To</span>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>To</span>
             <input type="date" style={dateInputStyle} value={shippedCustomTo} onChange={e => { setShippedCustomTo(e.target.value); setShippedTo(e.target.value); }} />
           </div>
         )}
-        <div style={{ fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)', marginBottom: 10 }}>
+        <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)', marginBottom: 12, letterSpacing: '0.04em' }}>
           <span style={{ color: 'var(--green)' }}>{fmt(saleTotal)} sold</span>
           {' · '}
           <span>{fmt(nonSaleTotal)} non-sale</span>
@@ -256,19 +240,19 @@ export default function DispatchPage() {
           <span style={{ color: 'var(--t1)' }}>{fmt(shippedTotal)} total</span>
         </div>
         {shippedByChannel.length === 0 ? (
-          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4 }}>
+          <Panel padding={0}>
             <EmptyState icon="📤" message="No units shipped in this range" />
-          </div>
+          </Panel>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12 }}>
             {shippedByChannel.map((row, i) => <ChannelCard key={`${row.channel_name}-${i}`} row={row} isSale={row.is_sale} />)}
           </div>
         )}
-      </div>
+      </section>
 
       {/* Units */}
-      <div>
-        <div style={sectionLabel}>Units</div>
+      <section>
+        <h2 style={sectionLabel}>Units</h2>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
           <select style={selectStyle} value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
             <option value="">All Statuses</option>
@@ -284,13 +268,13 @@ export default function DispatchPage() {
             ))}
           </select>
           <input type="date" style={dateInputStyle} value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
-          <span style={{ fontSize: 10, color: 'var(--t3)' }}>to</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>to</span>
           <input type="date" style={dateInputStyle} value={dateTo}   onChange={e => setDateTo(e.target.value)} />
           <div style={{ flex: 1 }} />
-          <button style={btnActiveStyle} onClick={loadUnits} disabled={unitsLoading}>↻ Refresh</button>
+          <button style={refreshBtnStyle} onClick={loadUnits} disabled={unitsLoading}>↻ Refresh</button>
         </div>
 
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+        <Panel padding={0}>
           {unitsLoading ? (
             <div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}><Spinner /></div>
           ) : units.length === 0 ? (
@@ -308,11 +292,11 @@ export default function DispatchPage() {
                 <tbody>
                   {units.map((u, i) => (
                     <tr key={`${u.batch_label}-${i}`}>
-                      <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{u.batch_label || '—'}</td>
-                      <td style={{ ...tdStyle, color: 'var(--t1)' }}>
+                      <td style={{ ...tdStyle, color: 'var(--yellow)', fontWeight: 600 }}>{u.batch_label || '—'}</td>
+                      <td style={tdStyle}>
                         {u.product || '—'}
                         {(u.model || u.color) && (
-                          <span style={{ color: 'var(--t3)', marginLeft: 6, fontSize: 11 }}>
+                          <span style={{ color: 'var(--t3)', marginLeft: 8, fontSize: 12 }}>
                             {[u.model, u.color].filter(Boolean).join(' ')}
                           </span>
                         )}
@@ -320,14 +304,14 @@ export default function DispatchPage() {
                       <td style={tdStyle}>{u.line || '—'}</td>
                       <td style={{ ...tdStyle, color: 'var(--t2)' }}>
                         {u.channel_name ? (
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
                             {u.channel_name}
                             <ChannelTypeBadge type={u.channel_type} />
                           </span>
                         ) : '—'}
                       </td>
-                      <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--t2)' }}>{u.shipment_no || '—'}</td>
-                      <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{formatPackedDate(u.packed_at)}</td>
+                      <td style={{ ...tdStyle, color: 'var(--t2)' }}>{u.shipment_no || '—'}</td>
+                      <td style={{ ...tdStyle, color: 'var(--t3)' }}>{formatPackedDate(u.packed_at)}</td>
                       <td style={tdStyle}><UnitStatusBadge status={u.current_status} /></td>
                     </tr>
                   ))}
@@ -335,8 +319,8 @@ export default function DispatchPage() {
               </table>
             </div>
           )}
-        </div>
-      </div>
+        </Panel>
+      </section>
     </div>
   );
 }

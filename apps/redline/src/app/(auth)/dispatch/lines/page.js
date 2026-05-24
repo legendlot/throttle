@@ -2,7 +2,7 @@
 import { useCallback, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
-import { Spinner } from '@throttle/ui';
+import { Spinner, Panel } from '@throttle/ui';
 import { todayStr } from '@throttle/domain';
 import { useAutoRefresh } from '../../../../hooks/useAutoRefresh.js';
 import { useRefreshState } from '../../layout.js';
@@ -12,7 +12,7 @@ function fmt(n) { return n != null ? Number(n).toLocaleString('en-IN') : '0'; }
 // ── Dispatch Line Cards ──────────────────────────────────────
 function DispatchLineCards({ lines }) {
   if (!lines || !lines.length) {
-    return <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>🚚 No dispatch activity today</div>;
+    return <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--t3)', fontSize: 13 }}>🚚 No dispatch activity today</div>;
   }
 
   return (
@@ -27,35 +27,35 @@ function DispatchLineCards({ lines }) {
 
         const channels = Array.isArray(l.active_channels) ? l.active_channels : [];
 
-        const statStyle = { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 };
-        const valStyle  = (color) => ({ fontFamily: 'var(--mono)', fontSize: 18, fontWeight: 700, color: color || 'var(--t1)' });
-        const lblStyle  = { fontSize: 9, color: 'var(--t3)', letterSpacing: '0.12em', textTransform: 'uppercase' };
+        const statStyle = { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 };
+        const valStyle  = (color) => ({ fontFamily: 'var(--cond)', fontSize: 22, fontWeight: 700, color: color || 'var(--t1)', lineHeight: 1 });
+        const lblStyle  = { fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase' };
 
         return (
-          <div key={l.line} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, padding: 14 }}>
+          <div key={l.line} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: 16 }}>
             {/* Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
               <div>
-                <div style={{ fontFamily: 'var(--cond)', fontSize: 16, fontWeight: 700, color: 'var(--t1)' }}>{l.line || '—'}</div>
-                <div style={{ fontSize: 11, color: 'var(--t2)', marginTop: 2 }}>
+                <div style={{ fontFamily: 'var(--cond)', fontSize: 18, fontWeight: 700, color: 'var(--t1)', letterSpacing: '0.04em' }}>{l.line || '—'}</div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t2)', marginTop: 4 }}>
                   {channels.length
                     ? channels.join(', ')
                     : <span style={{ color: 'var(--t3)' }}>No channel activity</span>}
                 </div>
               </div>
               <div style={{ textAlign: 'right' }}>
-                <div style={{ fontFamily: 'var(--mono)', fontSize: 13, fontWeight: 700, color: 'var(--yellow)' }}>
+                <div style={{ fontFamily: 'var(--cond)', fontSize: 18, fontWeight: 700, color: 'var(--yellow)' }}>
                   {fmt((l.pack_count || 0) + (l.alloc_count || 0) + (l.dtk_count || 0) + (l.dout_count || 0))}
                 </div>
-                <div style={{ fontSize: 9, color: 'var(--t3)', marginTop: 1, letterSpacing: '0.12em', textTransform: 'uppercase' }}>Total scans</div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginTop: 2, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Total scans</div>
               </div>
             </div>
 
             {/* Stats grid */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4, marginBottom: 10, marginTop: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4, marginBottom: 14, marginTop: 14 }}>
               <div style={statStyle}>
                 <div style={valStyle('var(--t1)')}>{fmt(l.alloc_count)}</div>
-                <div style={lblStyle}>ALLOC</div>
+                <div style={lblStyle}>Alloc</div>
               </div>
               <div style={statStyle}>
                 <div style={valStyle('var(--t1)')}>{fmt(l.dtk_count)}</div>
@@ -63,16 +63,16 @@ function DispatchLineCards({ lines }) {
               </div>
               <div style={statStyle}>
                 <div style={valStyle('var(--yellow)')}>{fmt(l.pack_count)}</div>
-                <div style={lblStyle}>PACK</div>
+                <div style={lblStyle}>Pack</div>
               </div>
               <div style={statStyle}>
                 <div style={valStyle('var(--green)')}>{fmt(l.dout_count)}</div>
-                <div style={lblStyle}>DOUT</div>
+                <div style={lblStyle}>Dout</div>
               </div>
             </div>
 
             {/* Footer */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 10, color: 'var(--t3)', paddingTop: 8, borderTop: '1px solid var(--border)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', paddingTop: 10, borderTop: '1px solid var(--border)', letterSpacing: '0.04em' }}>
               <span>{fmt(l.active_operators)} operators</span>
               <span>
                 {firstScan && <>⏱ {firstScan}</>}
@@ -89,33 +89,33 @@ function DispatchLineCards({ lines }) {
 // ── Operator Output Table ────────────────────────────────────
 function OperatorTable({ ops }) {
   if (!ops || !ops.length) {
-    return <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>No operator data</div>;
+    return <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--t3)', fontSize: 13 }}>No operator data</div>;
   }
 
   const sorted = [...ops].sort((a, b) => (Number(b.total_scans) || 0) - (Number(a.total_scans) || 0));
-  const thStyle = { padding: '8px 12px', fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
-  const tdStyle = { padding: '9px 12px', fontSize: 12, borderBottom: '1px solid rgba(42,42,42,.6)', whiteSpace: 'nowrap' };
+  const thStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
+  const tdStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 13, borderBottom: '1px solid rgba(64,64,64,.5)', whiteSpace: 'nowrap', color: 'var(--t1)' };
 
   return (
     <div style={{ overflowX: 'auto' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead>
           <tr>
-            {['Operator', 'Line', 'ALLOC', 'DTK', 'PACK', 'DOUT', 'Total'].map(h => (
-              <th key={h} style={thStyle}>{h}</th>
+            {['Operator', 'Line', 'Alloc', 'DTK', 'Pack', 'Dout', 'Total'].map(h => (
+              <th key={h} style={h === 'Operator' || h === 'Line' ? thStyle : { ...thStyle, textAlign: 'right' }}>{h}</th>
             ))}
           </tr>
         </thead>
         <tbody>
           {sorted.map((o, idx) => (
             <tr key={idx}>
-              <td style={{ ...tdStyle, color: 'var(--t1)' }}>{o.operator_name || '—'}</td>
-              <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{o.line || '—'}</td>
-              <td style={{ ...tdStyle, fontFamily: 'var(--mono)' }}>{fmt(o.alloc_count)}</td>
-              <td style={{ ...tdStyle, fontFamily: 'var(--mono)' }}>{fmt(o.dtk_count)}</td>
-              <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{fmt(o.pack_count)}</td>
-              <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--green)' }}>{fmt(o.dout_count)}</td>
-              <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--t1)', fontWeight: 700 }}>{fmt(o.total_scans)}</td>
+              <td style={tdStyle}>{o.operator_name || '—'}</td>
+              <td style={{ ...tdStyle, color: 'var(--yellow)', fontWeight: 600 }}>{o.line || '—'}</td>
+              <td style={{ ...tdStyle, textAlign: 'right' }}>{fmt(o.alloc_count)}</td>
+              <td style={{ ...tdStyle, textAlign: 'right' }}>{fmt(o.dtk_count)}</td>
+              <td style={{ ...tdStyle, color: 'var(--yellow)', textAlign: 'right' }}>{fmt(o.pack_count)}</td>
+              <td style={{ ...tdStyle, color: 'var(--green)', textAlign: 'right' }}>{fmt(o.dout_count)}</td>
+              <td style={{ ...tdStyle, color: 'var(--t1)', fontWeight: 700, textAlign: 'right' }}>{fmt(o.total_scans)}</td>
             </tr>
           ))}
         </tbody>
@@ -126,12 +126,12 @@ function OperatorTable({ ops }) {
 
 function Section({ label, children }) {
   return (
-    <div style={{ marginBottom: 28 }}>
-      <div style={{ fontFamily: 'var(--cond)', fontSize: 10, fontWeight: 700, letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 12 }}>
+    <section style={{ marginBottom: 32 }}>
+      <h2 style={{ margin: '0 0 14px 0', fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t2)' }}>
         {label}
-      </div>
+      </h2>
       {children}
-    </div>
+    </section>
   );
 }
 
@@ -181,8 +181,8 @@ export default function DispatchLinesPage() {
   return (
     <div>
       {error && (
-        <div style={{ background: 'rgba(222,42,42,.1)', border: '1px solid rgba(222,42,42,.25)', borderRadius: 4, padding: '10px 14px', fontSize: 12, color: 'var(--red)', marginBottom: 20 }}>
-          {error}
+        <div style={{ background: 'rgba(222,42,42,.1)', border: '1px solid rgba(222,42,42,.3)', borderRadius: 4, padding: '12px 14px', fontFamily: 'var(--mono)', fontSize: 13, color: '#ff7070', marginBottom: 16 }}>
+          ⚠ {error}
         </div>
       )}
 
@@ -191,9 +191,9 @@ export default function DispatchLinesPage() {
       </Section>
 
       <Section label="Operator Output">
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+        <Panel padding={0}>
           <OperatorTable ops={operators} />
-        </div>
+        </Panel>
       </Section>
     </div>
   );

@@ -2,7 +2,7 @@
 import { Fragment, useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { ConfirmModal, Spinner, EmptyState, useToast } from '@throttle/ui';
+import { ConfirmModal, Spinner, EmptyState, useToast, Panel, Chip, StatusBadge } from '@throttle/ui';
 import { useDispatchChannels } from '../../../hooks/useDispatchChannels.js';
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -22,13 +22,37 @@ function formatDateTime(ts) {
   return `${date} ${time}`;
 }
 
-const STATUS_COLORS = {
-  draft:     'var(--t3)',
-  packing:   'var(--orange)',
-  ready:     'var(--yellow)',
-  shipped:   'var(--green)',
-  cancelled: 'var(--red)',
+const STATUS_VARIANT = {
+  draft:     'info',
+  packing:   'brand',
+  ready:     'warning',
+  shipped:   'success',
+  cancelled: 'error',
 };
+const STATUS_ICON = {
+  shipped:   '✓',
+  cancelled: '✗',
+};
+
+function ShipmentStatusBadge({ status }) {
+  if (!status) return <StatusBadge variant="neutral">—</StatusBadge>;
+  const variant = STATUS_VARIANT[status] || 'neutral';
+  const icon = STATUS_ICON[status];
+  return <StatusBadge variant={variant} icon={icon}>{status}</StatusBadge>;
+}
+
+// Box statuses (open / packed / closed) use the same family but mapped distinctly.
+const BOX_STATUS_VARIANT = {
+  open:   'warning',
+  packed: 'success',
+  closed: 'success',
+};
+function BoxStatusBadge({ status }) {
+  if (!status) return <StatusBadge variant="neutral">—</StatusBadge>;
+  const variant = BOX_STATUS_VARIANT[status] || 'neutral';
+  const icon = (status === 'packed' || status === 'closed') ? '✓' : undefined;
+  return <StatusBadge variant={variant} icon={icon}>{status}</StatusBadge>;
+}
 
 const CHANNEL_TYPE_STYLE = {
   ecom:   { color: 'var(--blue)',   bg: 'rgba(33,60,226,.15)'  },
@@ -36,35 +60,26 @@ const CHANNEL_TYPE_STYLE = {
   other:  { color: 'var(--t2)',     bg: 'rgba(255,255,255,.06)' },
 };
 
-function StatusBadge({ status }) {
-  const color = STATUS_COLORS[status] || 'var(--t3)';
-  return (
-    <span style={{
-      fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 2,
-      letterSpacing: '0.06em', textTransform: 'uppercase', whiteSpace: 'nowrap',
-      fontFamily: 'var(--mono)', color, border: `1px solid ${color}`,
-    }}>{status || '—'}</span>
-  );
-}
-
 function ChannelTypeBadge({ type }) {
   const t = (type || 'other').toLowerCase();
   const st = CHANNEL_TYPE_STYLE[t] || CHANNEL_TYPE_STYLE.other;
   return (
     <span style={{
-      fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 2,
-      letterSpacing: '0.06em', textTransform: 'uppercase', whiteSpace: 'nowrap',
+      fontSize: 11, fontWeight: 600, padding: '2px 7px', borderRadius: 3,
+      letterSpacing: '0.04em', textTransform: 'uppercase', whiteSpace: 'nowrap',
       fontFamily: 'var(--mono)', color: st.color, background: st.bg,
     }}>{type || '—'}</span>
   );
 }
 
 // ── Common styles ────────────────────────────────────────────
-const btnStyle = { padding: '4px 10px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontSize: 11, cursor: 'pointer', fontFamily: 'var(--mono)', letterSpacing: '0.04em' };
-const btnActiveStyle = { ...btnStyle, background: 'rgba(242,205,26,.12)', color: 'var(--yellow)', border: '1px solid rgba(242,205,26,.3)' };
-const inputStyle = { background: 'var(--surface)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '6px 8px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 12 };
-const selectStyle = { background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--t1)', fontSize: 11, fontFamily: 'var(--mono)', padding: '5px 8px', borderRadius: 3 };
-const labelStyle = { fontSize: 10, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase', display: 'block', marginBottom: 6 };
+// Secondary / utility button (modal close, +Add row, Cancel) — per design system.
+const btnStyle = { padding: '6px 12px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontSize: 13, cursor: 'pointer', fontFamily: 'var(--mono)', letterSpacing: '0.04em', outline: 'none' };
+// Primary CTA — yellow, uppercase Tomorrow.
+const primaryBtnStyle = { padding: '8px 14px', background: 'var(--yellow)', color: '#0a0a0a', border: '1px solid var(--yellow)', borderRadius: 3, fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer' };
+const inputStyle = { background: 'var(--surface)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '6px 10px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 13, outline: 'none' };
+const selectStyle = { background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--t1)', fontSize: 13, fontFamily: 'var(--mono)', padding: '8px 12px', borderRadius: 3, outline: 'none' };
+const labelStyle = { fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase', display: 'block', marginBottom: 6 };
 
 // ── Shipments Page ────────────────────────────────────────────
 export default function DispatchShipmentsPage() {
@@ -464,19 +479,20 @@ export default function DispatchShipmentsPage() {
   }
 
   // ── Style helpers ─────────────────────────────────────────
-  const sectionLabel = { fontFamily: 'var(--cond)', fontSize: 10, fontWeight: 700, letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 12 };
-  const thStyle = { padding: '8px 12px', fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
-  const tdStyle = { padding: '8px 12px', fontSize: 12, borderBottom: '1px solid rgba(42,42,42,.6)', whiteSpace: 'nowrap' };
+  const sectionLabel = { margin: 0, fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t2)', marginBottom: 12 };
+  const thStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
+  const tdStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 13, borderBottom: '1px solid rgba(64,64,64,.5)', whiteSpace: 'nowrap', color: 'var(--t1)' };
   const actionBtn = (color) => ({
-    padding: '3px 9px',
+    padding: '4px 10px',
     background: 'transparent',
     border: `1px solid ${color}`,
-    borderRadius: 2,
+    borderRadius: 3,
     color,
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: 700,
     fontFamily: 'var(--mono)',
-    letterSpacing: '0.05em',
+    letterSpacing: '0.06em',
+    textTransform: 'uppercase',
     cursor: 'pointer',
     marginRight: 4,
   });
@@ -625,7 +641,7 @@ export default function DispatchShipmentsPage() {
               <button
                 onClick={submitCreate}
                 disabled={createLoading}
-                style={{ ...btnStyle, background: 'var(--yellow)', color: '#000', border: '1px solid var(--yellow)', opacity: createLoading ? 0.5 : 1 }}
+                style={{ ...primaryBtnStyle, opacity: createLoading ? 0.5 : 1 }}
               >
                 {createLoading ? 'Creating…' : 'Create Shipment'}
               </button>
@@ -722,7 +738,7 @@ export default function DispatchShipmentsPage() {
               <button
                 onClick={submitEdit}
                 disabled={editLoading}
-                style={{ ...btnStyle, background: 'var(--yellow)', color: '#000', border: '1px solid var(--yellow)', opacity: editLoading ? 0.5 : 1 }}
+                style={{ ...primaryBtnStyle, opacity: editLoading ? 0.5 : 1 }}
               >
                 {editLoading ? 'Saving…' : 'Save Changes'}
               </button>
@@ -735,20 +751,20 @@ export default function DispatchShipmentsPage() {
       <div>
         {/* Filter bar + Create */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
-          <button style={statusFilter === ''          ? btnActiveStyle : btnStyle} onClick={() => setStatusFilter('')}>All</button>
-          <button style={statusFilter === 'draft'     ? btnActiveStyle : btnStyle} onClick={() => setStatusFilter('draft')}>Draft</button>
-          <button style={statusFilter === 'packing'   ? btnActiveStyle : btnStyle} onClick={() => setStatusFilter('packing')}>Packing</button>
-          <button style={statusFilter === 'ready'     ? btnActiveStyle : btnStyle} onClick={() => setStatusFilter('ready')}>Ready</button>
-          <button style={statusFilter === 'shipped'   ? btnActiveStyle : btnStyle} onClick={() => setStatusFilter('shipped')}>Shipped</button>
-          <button style={statusFilter === 'cancelled' ? btnActiveStyle : btnStyle} onClick={() => setStatusFilter('cancelled')}>Cancelled</button>
+          <Chip active={statusFilter === ''}          onClick={() => setStatusFilter('')}>All</Chip>
+          <Chip active={statusFilter === 'draft'}     onClick={() => setStatusFilter('draft')}>Draft</Chip>
+          <Chip active={statusFilter === 'packing'}   onClick={() => setStatusFilter('packing')}>Packing</Chip>
+          <Chip active={statusFilter === 'ready'}     onClick={() => setStatusFilter('ready')}>Ready</Chip>
+          <Chip active={statusFilter === 'shipped'}   onClick={() => setStatusFilter('shipped')}>Shipped</Chip>
+          <Chip active={statusFilter === 'cancelled'} onClick={() => setStatusFilter('cancelled')}>Cancelled</Chip>
           <div style={{ flex: 1 }} />
-          <button style={{ ...btnStyle, background: 'var(--yellow)', color: '#000', border: '1px solid var(--yellow)' }} onClick={openCreate}>
+          <button style={primaryBtnStyle} onClick={openCreate}>
             + New Shipment
           </button>
         </div>
 
         {/* Shipments table */}
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+        <Panel padding={0}>
           {loading ? (
             <div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}><Spinner /></div>
           ) : shipments.length === 0 ? (
@@ -774,25 +790,27 @@ export default function DispatchShipmentsPage() {
                         onClick={() => isOpen ? setDetailShipment(null) : openDetail(s)}
                         style={{ cursor: 'pointer', background: isOpen ? 'var(--surface2)' : undefined }}
                       >
-                        <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>
-                          {s.shipment_no}
-                          {ready && <span style={{ marginLeft: 6, fontSize: 8, fontWeight: 700, color: 'var(--green)', border: '1px solid var(--green)', padding: '1px 4px', borderRadius: 2, letterSpacing: '0.05em' }}>✓ READY</span>}
+                        <td style={{ ...tdStyle, color: 'var(--yellow)' }}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                            {s.shipment_no}
+                            {ready && <StatusBadge variant="success" icon="✓">Ready</StatusBadge>}
+                          </span>
                         </td>
-                        <td style={{ ...tdStyle, color: 'var(--t1)' }}>{s.title || '—'}</td>
+                        <td style={tdStyle}>{s.title || '—'}</td>
                         <td style={tdStyle}>
                           {ch ? (
                             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                              <span style={{ color: 'var(--t1)' }}>{ch.name}</span>
+                              <span>{ch.name}</span>
                               <ChannelTypeBadge type={ch.type} />
                             </span>
                           ) : '—'}
                         </td>
-                        <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--t2)' }}>
+                        <td style={{ ...tdStyle, color: 'var(--t2)' }}>
                           {fmt(s.pool_count)} / {fmt(s.expected_units)}
                         </td>
-                        <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--green)' }}>{fmt(s.packed_count)}</td>
-                        <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{formatDate(s.scheduled_date)}</td>
-                        <td style={tdStyle}><StatusBadge status={s.status} /></td>
+                        <td style={{ ...tdStyle, color: 'var(--green)' }}>{fmt(s.packed_count)}</td>
+                        <td style={{ ...tdStyle, color: 'var(--t3)' }}>{formatDate(s.scheduled_date)}</td>
+                        <td style={tdStyle}><ShipmentStatusBadge status={s.status} /></td>
                         <td style={tdStyle} onClick={(e) => e.stopPropagation()}>
                           {!['shipped','cancelled'].includes(s.status) && (
                             <button onClick={(e) => { e.stopPropagation(); confirmMarkShipped(s); }} style={actionBtn('var(--green)')}>Shipped</button>
@@ -814,7 +832,7 @@ export default function DispatchShipmentsPage() {
               </table>
             </div>
           )}
-        </div>
+        </Panel>
 
         {/* Detail Panel — modal overlay */}
         {detailShipment && (
@@ -825,7 +843,7 @@ export default function DispatchShipmentsPage() {
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: 16, width: 800, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
               <span style={{ fontFamily: 'var(--mono)', color: 'var(--yellow)', fontSize: 14, fontWeight: 700 }}>{detailShipment.shipment_no}</span>
-              <StatusBadge status={detailShipment.status} />
+              <ShipmentStatusBadge status={detailShipment.status} />
               {detailShipment.title && <span style={{ color: 'var(--t2)', fontSize: 12 }}>· {detailShipment.title}</span>}
               <div style={{ flex: 1 }} />
               {detailLoading && <Spinner size="sm" />}
@@ -909,7 +927,7 @@ export default function DispatchShipmentsPage() {
                         <span style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 11 }}>{expanded ? '▼' : '▶'}</span>
                         <span style={{ fontFamily: 'var(--mono)', color: 'var(--yellow)', fontSize: 12, fontWeight: 700 }}>{box.box_ref || `Box ${box.id}`}</span>
                         <span style={{ fontSize: 11, color: 'var(--t2)' }}>{fmt(box.unit_count)} units</span>
-                        <StatusBadge status={box.status} />
+                        <BoxStatusBadge status={box.status} />
                         <div style={{ flex: 1 }} />
                         {isPacked && (
                           <>
