@@ -88,6 +88,7 @@ export default function ReceivingPage() {
   const [reconExpanded, setReconExpanded] = useState(false);
   const [boxContentsExpanded, setBoxContentsExpanded] = useState(false);
   const [bagCountCache, setBagCountCache] = useState({});         // line_id → total_bags
+  const [bagSizeMap, setBagSizeMap]       = useState({});         // part_code → default_bag_size (central catalogue)
 
   // Mark form
   const [showMarkForm,  setShowMarkForm]  = useState(false);
@@ -140,6 +141,19 @@ export default function ReceivingPage() {
   }, [session]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { if (view === 'list') loadList(); }, [view, session]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Load central bag-size catalogue once per session for inline pre-fill.
+  useEffect(() => {
+    if (!session) return;
+    workerFetch('getPartBagSizes', {}, session)
+      .then(r => {
+        if (!r?.ok) return;
+        const map = {};
+        (r.data || []).forEach(b => { map[b.part_code] = b.default_bag_size || 0; });
+        setBagSizeMap(map);
+      })
+      .catch(() => {});
+  }, [session]);
 
   // Close any open overlay panel on Escape — innermost first
   useEffect(() => {
@@ -1185,7 +1199,7 @@ export default function ReceivingPage() {
                         else                        { statusLabel = 'Matched';    statusTone = 'green'; }
 
                         const bagsTotal = bagCountCache[l.line_id];
-                        const bagsOf    = l.bags_of || 50;
+                        const bagsOf    = l.bags_of || bagSizeMap[l.part_code] || 50;
                         const expBags   = totalCounted > 0 ? Math.ceil(totalCounted / bagsOf) : 0;
 
                         return (

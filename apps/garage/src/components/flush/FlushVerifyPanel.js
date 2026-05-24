@@ -64,8 +64,20 @@ export function FlushVerifyPanel({ flushId, onClose, onVerified }) {
       setLoading(true);
       setError(null);
       try {
-        const data = await garageFetch('getFlush', { flush_id: flushId }, session);
+        const [data, bagSizesRes] = await Promise.all([
+          garageFetch('getFlush', { flush_id: flushId }, session),
+          workerFetch('getPartBagSizes', {}, session).catch(() => ({ ok: false })),
+        ]);
         if (cancelled) return;
+        // Pre-fill bagsOf per part from the central catalogue. Operator can
+        // override per-flush; this just removes the typing toil for parts
+        // that already have a default.
+        const bagSizeMap = {};
+        if (bagSizesRes?.ok) {
+          (bagSizesRes.data || []).forEach((b) => {
+            bagSizeMap[b.part_code] = b.default_bag_size || 0;
+          });
+        }
         setFlush(data.flush);
         const initial = (data.lines || []).map((l) => ({
           line_id: l.line_id,
@@ -73,7 +85,7 @@ export function FlushVerifyPanel({ flushId, onClose, onVerified }) {
           part_name: l.part_name || '',
           return_type: l.return_type || '—',
           qty_raised: parseFloat(l.qty_raised) || 0,
-          splits: [{ disposition: 'Return to Stock', qty: parseFloat(l.qty_raised) || 0, bin: '', notes: '', bagsOf: 0 }],
+          splits: [{ disposition: 'Return to Stock', qty: parseFloat(l.qty_raised) || 0, bin: '', notes: '', bagsOf: bagSizeMap[l.part_code] || 0 }],
         }));
         setParts(initial);
       } catch (e) {
@@ -87,9 +99,17 @@ export function FlushVerifyPanel({ flushId, onClose, onVerified }) {
   }, [flushId, session]);
 
   function addSplit(partIndex) {
-    setParts((prev) => prev.map((p, i) => i === partIndex
-      ? { ...p, splits: [...p.splits, newSplit()] }
-      : p));
+    setParts((prev) => prev.map((p, i) => {
+      if (i !== partIndex) return p;
+      // Inherit the bagsOf default from the part's first Return-to-Stock
+      // split if one is present, otherwise from any split with a non-zero
+      // bagsOf — so the central default carries through to extra splits
+      // without re-fetching.
+      const inheritedBagsOf = (p.splits.find(s => s.disposition === 'Return to Stock' && parseInt(s.bagsOf) > 0)
+                              || p.splits.find(s => parseInt(s.bagsOf) > 0)
+                              || {}).bagsOf || 0;
+      return { ...p, splits: [...p.splits, { ...newSplit(), bagsOf: inheritedBagsOf }] };
+    }));
   }
 
   function removeSplit(partIndex, splitIndex) {

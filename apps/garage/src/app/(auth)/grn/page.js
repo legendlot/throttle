@@ -75,13 +75,22 @@ function GrnDetailModal({ grnNo, onClose, session }) {
   const [bagExisting, setBagExisting] = useState([]);
   const [bagsOf, setBagsOf]           = useState(50);
   const [bagBusy, setBagBusy]         = useState(false);
+  const [bagSizeMap, setBagSizeMap]   = useState({}); // { part_code → default_bag_size }
 
   useEffect(() => {
     if (!grnNo || !session) return;
     setLoading(true);
     setError(null);
-    garageFetch('getGRNDetail', { grn_no: grnNo }, session)
-      .then(d => setData(d))
+    Promise.all([
+      garageFetch('getGRNDetail', { grn_no: grnNo }, session),
+      workerFetch('getPartBagSizes', {}, session).catch(() => ({ ok: false })),
+    ])
+      .then(([d, bs]) => {
+        setData(d);
+        const map = {};
+        if (bs?.ok) (bs.data || []).forEach(b => { map[b.part_code] = b.default_bag_size || 0; });
+        setBagSizeMap(map);
+      })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false));
   }, [grnNo, session]);
@@ -94,6 +103,11 @@ function GrnDetailModal({ grnNo, onClose, session }) {
       setBagPart(null); setBagExisting([]); return;
     }
     setBagPart(line.part_code);
+    // Pre-fill Qty/Bag from the central catalogue. Operator can still
+    // override per-print; fallback to existing 50-default when no central
+    // value exists.
+    const centralDefault = bagSizeMap[line.part_code];
+    if (centralDefault && centralDefault > 0) setBagsOf(centralDefault);
     setBagBusy(true);
     try {
       const res = await workerFetch('getBagsByGrn',
@@ -293,7 +307,20 @@ function BulkGrnPanel({ session, onSuccess }) {
   const [poRef, setPoRef]           = useState('');
   const [bomLines, setBomLines]     = useState([]);
   const [bomLoading, setBomLoading] = useState(false);
+  const [bagSizeMap, setBagSizeMap] = useState({}); // { part_code → default_bag_size }
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!session) return;
+    workerFetch('getPartBagSizes', {}, session)
+      .then(r => {
+        if (!r?.ok) return;
+        const map = {};
+        (r.data || []).forEach(b => { map[b.part_code] = b.default_bag_size || 0; });
+        setBagSizeMap(map);
+      })
+      .catch(() => {});
+  }, [session]);
 
   const loadBom = useCallback(async () => {
     const qty = parseInt(units) || 0;
@@ -301,14 +328,21 @@ function BulkGrnPanel({ session, onSuccess }) {
     setBomLoading(true);
     try {
       const data = await garageFetch('calcKit', { product, variant: variant || '', colour: '', qty }, session);
-      setBomLines((data.kit || []).map(r => ({ ...r, _received: r.total_qty || 0, _rejected: 0, _damaged: 0, _bagsOf: 0, _inspection: 'Pass' })));
+      setBomLines((data.kit || []).map(r => ({
+        ...r,
+        _received: r.total_qty || 0,
+        _rejected: 0,
+        _damaged:  0,
+        _bagsOf:   bagSizeMap[r.part_code] || 0, // pre-fill from central catalogue
+        _inspection: 'Pass',
+      })));
     } catch (e) {
       showToast('Failed to load BOM: ' + e.message, 'error');
       setBomLines([]);
     } finally {
       setBomLoading(false);
     }
-  }, [product, variant, units, session]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [product, variant, units, session, bagSizeMap]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const t = setTimeout(loadBom, 350);
@@ -642,6 +676,7 @@ function PartsGrnPanel({ session, onSuccess }) {
   const [poRef, setPoRef]           = useState('');
   const [lines, setLines]           = useState([{ search: '', partCode: '', partName: '', product: '', qty: '', damaged: '', bagsOf: '' }]);
   const [matCache, setMatCache]     = useState({});
+  const [bagSizeMap, setBagSizeMap] = useState({}); // { part_code → default_bag_size }
   const [submitting, setSubmitting] = useState(false);
   const [partHighlight, setPartHighlight] = useState({});
   const highlightedPartRef = useRef(null);
@@ -659,6 +694,14 @@ function PartsGrnPanel({ session, onSuccess }) {
         const cache = {};
         (data || []).forEach(m => { if (m.part_code) cache[m.part_code] = m; });
         setMatCache(cache);
+      })
+      .catch(() => {});
+    workerFetch('getPartBagSizes', {}, session)
+      .then(r => {
+        if (!r?.ok) return;
+        const map = {};
+        (r.data || []).forEach(b => { map[b.part_code] = b.default_bag_size || 0; });
+        setBagSizeMap(map);
       })
       .catch(() => {});
   }, [session]);
@@ -694,6 +737,7 @@ function PartsGrnPanel({ session, onSuccess }) {
   }
 
   function selectPart(idx, mat) {
+    const centralBagSize = bagSizeMap[mat.part_code];
     setLines(prev => prev.map((l, i) =>
       i !== idx ? l : {
         ...l,
@@ -701,6 +745,9 @@ function PartsGrnPanel({ session, onSuccess }) {
         partCode: mat.part_code || '',
         partName: mat.part_name || '',
         product:  mat.product   || '',
+        // Pre-fill Qty/Bag from the central catalogue when available;
+        // operator can still override per-receipt.
+        bagsOf:   l.bagsOf || (centralBagSize ? String(centralBagSize) : ''),
       }
     ));
   }
