@@ -42,8 +42,9 @@ export function Topbar({
 
       <span style={{ color: 'var(--border2)', fontSize: 16 }}>/</span>
 
-      {/* Current page title — Tomorrow, big and confident */}
-      <span style={{
+      {/* Current page title — semantic h1, Tomorrow, big and confident */}
+      <h1 style={{
+        margin: 0,
         fontFamily: 'var(--cond)',
         fontSize: 16,
         fontWeight: 700,
@@ -53,7 +54,7 @@ export function Topbar({
         whiteSpace: 'nowrap',
       }}>
         {activeItem?.label || ''}
-      </span>
+      </h1>
 
       {showSubTabs && (
         <div style={{
