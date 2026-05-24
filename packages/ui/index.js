@@ -12,6 +12,7 @@ export { KpiCard } from './KpiCard.js';
 export { SectionLabel } from './SectionLabel.js';
 export { printWindow } from './printWindow.js';
 export { buildBagLabelsHtml } from './buildBagLabelsHtml.js';
+export { buildDamageManifestHtml } from './buildDamageManifestHtml.js';
 export { QuickCreate } from './QuickCreate.js';
 export { Topbar } from './Topbar.js';
 export { Combobox } from './Combobox.js';
