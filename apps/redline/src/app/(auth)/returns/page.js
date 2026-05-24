@@ -188,7 +188,7 @@ export default function ReturnsPage() {
   const oldestRep   = useMemo(() => pools.repair.map(b => b.oldest_at).filter(Boolean).sort()[0], [pools.repair]);
 
   if (error) {
-    return <EmptyState title="Failed to load" subtitle={error} />;
+    return <EmptyState message={`Failed to load: ${error}`} />;
   }
 
   return (
