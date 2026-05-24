@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, useToast, buildBagLabelsHtml, printWindow } from '@throttle/ui';
+import { Spinner, useToast, buildBagLabelsHtml, printWindow, Modal } from '@throttle/ui';
 
 // Canonical disposition values (kept stable — worker logic keys on these).
 // LF_DISP_LABELS provides clearer floor-facing display labels.
@@ -56,6 +56,13 @@ export function FlushVerifyPanel({ flushId, onClose, onVerified }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  // Mismatch override dialog state. `pendingPayload` holds the validated submit
+  // payload so the dialog's Confirm button can fire it through with
+  // allow_mismatch=true once the operator acknowledges the difference.
+  const [mismatchOpen,    setMismatchOpen]    = useState(false);
+  const [mismatchDetails, setMismatchDetails] = useState([]);
+  const [overrideReason,  setOverrideReason]  = useState('');
+  const [pendingPayload,  setPendingPayload]  = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -130,28 +137,36 @@ export function FlushVerifyPanel({ flushId, onClose, onVerified }) {
     }));
   }
 
-  async function handleSubmit() {
-    if (!flush) return;
-    const imbalanced = parts.filter((p) => Math.abs(balanceOf(p).diff) > 0.001);
-    if (imbalanced.length) {
-      const detail = imbalanced.map((p) => `${p.part_code} (${balanceOf(p).total} vs ${p.qty_raised})`).join(', ');
-      showToast(`Totals don't match: ${detail}`, 'error');
-      return;
-    }
+  // Build the verification payload from current state. Returns { dispositions,
+  // bagRequests, mismatches } — mismatches list parts where the disposition
+  // total diverges from production's qty_raised. Caller decides whether to
+  // submit straight, or pop the override confirm dialog.
+  function buildPayload() {
     const dispositions = [];
-    const bagRequests = [];
+    const bagRequests  = [];
+    const mismatches   = [];
     parts.forEach((p) => {
+      const bal = balanceOf(p);
+      if (Math.abs(bal.diff) > 0.001) {
+        mismatches.push({
+          part_code:   p.part_code,
+          part_name:   p.part_name,
+          raised:      bal.raised,
+          verified:    bal.total,
+          diff:        bal.diff,
+        });
+      }
       p.splits.forEach((sp) => {
         const qty = parseFloat(sp.qty) || 0;
         if (qty <= 0) return;
         dispositions.push({
-          line_id: p.line_id,
-          part_code: p.part_code,
-          part_name: p.part_name,
+          line_id:     p.line_id,
+          part_code:   p.part_code,
+          part_name:   p.part_name,
           disposition: sp.disposition,
           qty,
           bin_code: sp.disposition === 'Quarantine' ? (sp.bin || null) : null,
-          notes: sp.notes || null,
+          notes:    sp.notes || null,
         });
         const bagsOf = parseInt(sp.bagsOf) || 0;
         if (sp.disposition === 'Return to Stock' && bagsOf > 0) {
@@ -159,20 +174,60 @@ export function FlushVerifyPanel({ flushId, onClose, onVerified }) {
             part_code: p.part_code,
             part_name: p.part_name,
             qty,
-            bags_of: bagsOf,
+            bags_of:   bagsOf,
           });
         }
       });
     });
+    return { dispositions, bagRequests, mismatches };
+  }
+
+  async function handleSubmit() {
+    if (!flush) return;
+    const { dispositions, bagRequests, mismatches } = buildPayload();
     if (!dispositions.length) {
       showToast('Enter at least one verified quantity', 'error');
       return;
     }
+    if (mismatches.length) {
+      // Stage the payload and open the override dialog.
+      setPendingPayload({ dispositions, bagRequests });
+      setMismatchDetails(mismatches);
+      setOverrideReason('');
+      setMismatchOpen(true);
+      return;
+    }
+    await submitVerification({ dispositions, bagRequests, allowMismatch: false, reason: '' });
+  }
+
+  async function confirmMismatchSubmit() {
+    if (!pendingPayload) return;
+    setMismatchOpen(false);
+    await submitVerification({
+      dispositions:   pendingPayload.dispositions,
+      bagRequests:    pendingPayload.bagRequests,
+      allowMismatch:  true,
+      reason:         overrideReason.trim(),
+    });
+    setPendingPayload(null);
+  }
+
+  async function submitVerification({ dispositions, bagRequests, allowMismatch, reason }) {
     setSubmitting(true);
     try {
-      const res = await workerFetch('verifyFlush', { data: { flush_id: flush.flush_id, dispositions } }, session);
+      const res = await workerFetch('verifyFlush', {
+        data: {
+          flush_id:        flush.flush_id,
+          dispositions,
+          allow_mismatch:  allowMismatch || undefined,
+          override_reason: reason || undefined,
+        },
+      }, session);
       const result = res.data || res;
-      showToast(`Flush ${flush.flush_id} verified — ${result.stock_returned || 0} returned to stock`, 'success');
+      const mismatchSuffix = (result.mismatches?.length || 0) > 0
+        ? ` (${result.mismatches.length} qty override${result.mismatches.length === 1 ? '' : 's'})`
+        : '';
+      showToast(`Flush ${flush.flush_id} verified — ${result.stock_returned || 0} returned to stock${mismatchSuffix}`, 'success');
 
       // Bag-label generation against the auto-created Line Flush GRN.
       // Worker returns grn_no when stock was restocked; if absent, skip silently.
@@ -387,6 +442,63 @@ export function FlushVerifyPanel({ flushId, onClose, onVerified }) {
           </button>
         </div>
       </div>
+
+      <Modal
+        open={mismatchOpen}
+        onClose={() => { setMismatchOpen(false); setPendingPayload(null); }}
+        title="Confirm qty override"
+        titleColor="#f2cd1a"
+        size="lg"
+        confirmLabel="OVERRIDE & VERIFY"
+        confirmColor="#f2cd1a"
+        onConfirm={confirmMismatchSubmit}
+        loading={submitting}
+      >
+        <p style={{ margin: '0 0 12px', fontSize: 12, lineHeight: 1.5, color: 'var(--t2)' }}>
+          The store-verified totals do not match what production raised for{' '}
+          <strong>{mismatchDetails.length}</strong> part{mismatchDetails.length === 1 ? '' : 's'}.
+          Store count is the physical count of record — the difference will be persisted to{' '}
+          <code style={{ fontSize: 11, color: 'var(--t1)' }}>flush_lines.qty_verified</code>{' '}
+          and logged to the activity feed.
+        </p>
+        <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 12, fontSize: 11 }}>
+          <thead>
+            <tr style={{ color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: 9, fontFamily: 'var(--mono)' }}>
+              <th style={{ textAlign: 'left',  padding: '6px 8px', borderBottom: '1px solid var(--border)' }}>Part</th>
+              <th style={{ textAlign: 'right', padding: '6px 8px', borderBottom: '1px solid var(--border)' }}>Production</th>
+              <th style={{ textAlign: 'right', padding: '6px 8px', borderBottom: '1px solid var(--border)' }}>Store</th>
+              <th style={{ textAlign: 'right', padding: '6px 8px', borderBottom: '1px solid var(--border)' }}>Diff</th>
+            </tr>
+          </thead>
+          <tbody>
+            {mismatchDetails.map(m => (
+              <tr key={m.part_code}>
+                <td style={{ padding: '6px 8px', borderBottom: '1px solid rgba(42,42,42,.6)' }}>
+                  <span style={{ fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{m.part_code}</span>
+                  <span style={{ marginLeft: 8, color: 'var(--t3)' }}>{m.part_name}</span>
+                </td>
+                <td style={{ padding: '6px 8px', borderBottom: '1px solid rgba(42,42,42,.6)', textAlign: 'right', fontFamily: 'var(--mono)' }}>{m.raised}</td>
+                <td style={{ padding: '6px 8px', borderBottom: '1px solid rgba(42,42,42,.6)', textAlign: 'right', fontFamily: 'var(--mono)', fontWeight: 700 }}>{m.verified}</td>
+                <td style={{ padding: '6px 8px', borderBottom: '1px solid rgba(42,42,42,.6)', textAlign: 'right', fontFamily: 'var(--mono)', color: m.diff > 0 ? '#ff7070' : '#f2cd1a', fontWeight: 700 }}>
+                  {m.diff > 0 ? '+' : ''}{m.diff}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div>
+          <label style={{ display: 'block', fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>
+            Override reason <span style={{ color: 'var(--t3)' }}>(optional but recommended)</span>
+          </label>
+          <input
+            type="text"
+            value={overrideReason}
+            onChange={(e) => setOverrideReason(e.target.value)}
+            placeholder="e.g. physical recount short by 3, batch mis-stamped at line, …"
+            style={{ width: '100%', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: '6px 10px', fontSize: 12, color: 'var(--t1)', outline: 'none', fontFamily: 'inherit' }}
+          />
+        </div>
+      </Modal>
     </div>
   );
 }
