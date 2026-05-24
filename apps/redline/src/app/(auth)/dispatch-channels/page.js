@@ -5,12 +5,6 @@ import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, EmptyState, Panel, Chip, StatusBadge, useToast } from '@throttle/ui';
 
 // ── Helpers ───────────────────────────────────────────────────
-const CHANNEL_TYPE_STYLE = {
-  ecom:   { color: 'var(--blue)',   bg: 'rgba(33,60,226,.15)'  },
-  retail: { color: 'var(--yellow)', bg: 'rgba(242,205,26,.1)'  },
-  other:  { color: 'var(--t2)',     bg: 'rgba(255,255,255,.06)' },
-};
-
 function ChannelTypeBadge({ type }) {
   const t = (type || 'other').toLowerCase();
   const variant = t === 'ecom' ? 'info' : t === 'retail' ? 'brand' : 'neutral';

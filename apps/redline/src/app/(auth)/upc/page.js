@@ -387,7 +387,7 @@ export default function UpcPage() {
                         <td style={tdStyle}><BatchStatus status={b.status} /></td>
                         <td style={{ ...tdStyle, color: 'var(--t3)' }}>{formatDateTime(b.generated_at)}</td>
                         <td style={tdStyle}>
-                          <button onClick={() => printBatch(b.batch_id)} style={{ ...smallBtn, color: 'var(--blue)', borderColor: 'var(--blue)', marginRight: 4 }}>🖨 Print</button>
+                          <button onClick={() => printBatch(b.batch_id)} style={{ ...smallBtn, color: 'var(--state-info, #7b93ff)', borderColor: 'var(--state-info, #7b93ff)', marginRight: 4 }}>🖨 Print</button>
                           {canMove && b.status === 'generated' && (
                             <button onClick={() => markSent(b.batch_id)} style={{ ...smallBtn, color: 'var(--orange)', borderColor: 'var(--orange)', marginRight: 4 }}>Sent</button>
                           )}

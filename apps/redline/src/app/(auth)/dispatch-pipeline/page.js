@@ -115,6 +115,51 @@ export default function DispatchPipelinePage() {
                 </tr>
               </thead>
               <tbody>
+                {/* Column totals — sticky row across all products */}
+                {(() => {
+                  const totals = {
+                    with_production:     products.reduce((s, p) => s + (p.totals?.with_production     || 0), 0),
+                    unallocated_retail:  products.reduce((s, p) => s + (p.totals?.unallocated_retail  || 0), 0),
+                    unallocated_ecom:    products.reduce((s, p) => s + (p.totals?.unallocated_ecom    || 0), 0),
+                    channels: channels.reduce((acc, ch) => {
+                      acc[ch] = products.reduce((s, p) => s + (p.totals?.channels?.[ch] || 0), 0);
+                      return acc;
+                    }, {}),
+                  };
+                  const grandAlloc = Object.values(totals.channels).reduce((s, v) => s + v, 0);
+                  const totalCell = (n, color) => ({
+                    padding: '10px 14px',
+                    textAlign: 'right',
+                    fontFamily: 'var(--mono)',
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: n > 0 ? color : 'var(--t3)',
+                    whiteSpace: 'nowrap',
+                  });
+                  return (
+                    <tr style={{
+                      background: 'var(--bg, #1f1f1f)',
+                      borderBottom: '2px solid var(--border-2, var(--border))',
+                      position: 'sticky', top: 0, zIndex: 1,
+                    }}>
+                      <td style={{
+                        padding: '10px 14px',
+                        fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 700,
+                        color: 'var(--t2)', whiteSpace: 'nowrap',
+                        letterSpacing: '0.08em', textTransform: 'uppercase',
+                      }}>
+                        Total · {products.length} products
+                      </td>
+                      <td style={totalCell(totals.with_production, 'var(--t1)')}>{fmt(totals.with_production)}</td>
+                      <td style={totalCell(totals.unallocated_retail, 'var(--yellow)')}>{fmt(totals.unallocated_retail)}</td>
+                      <td style={totalCell(totals.unallocated_ecom, 'var(--yellow)')}>{fmt(totals.unallocated_ecom)}</td>
+                      <td style={totalCell(grandAlloc, 'var(--green)')}>{fmt(grandAlloc)}</td>
+                      {channels.map(ch => (
+                        <td key={ch} style={totalCell(totals.channels[ch], 'var(--state-info, #7b93ff)')}>{fmt(totals.channels[ch])}</td>
+                      ))}
+                    </tr>
+                  );
+                })()}
                 {products.map(p => {
                   const isOpen = expanded.has(p.product);
                   const totalAlloc = Object.values(p.totals?.channels || {}).reduce((s, v) => s + (v || 0), 0);
@@ -134,7 +179,7 @@ export default function DispatchPipelinePage() {
                         <td style={numCell(p.totals?.unallocated_ecom, 'var(--yellow)')}>{fmt(p.totals?.unallocated_ecom)}</td>
                         <td style={numCell(totalAlloc, 'var(--green)')}>{fmt(totalAlloc)}</td>
                         {channels.map(ch => (
-                          <td key={ch} style={numCell(p.totals?.channels?.[ch], 'var(--blue)')}>{fmt(p.totals?.channels?.[ch])}</td>
+                          <td key={ch} style={numCell(p.totals?.channels?.[ch], 'var(--state-info, #7b93ff)')}>{fmt(p.totals?.channels?.[ch])}</td>
                         ))}
                       </tr>
 
@@ -150,7 +195,7 @@ export default function DispatchPipelinePage() {
                             <td style={numCell(v.unallocated_ecom, 'var(--yellow)')}>{fmt(v.unallocated_ecom)}</td>
                             <td style={numCell(vTotal, 'var(--green)')}>{fmt(vTotal)}</td>
                             {channels.map(ch => (
-                              <td key={ch} style={numCell(v.channels?.[ch], 'var(--blue)')}>{fmt(v.channels?.[ch])}</td>
+                              <td key={ch} style={numCell(v.channels?.[ch], 'var(--state-info, #7b93ff)')}>{fmt(v.channels?.[ch])}</td>
                             ))}
                           </tr>
                         );

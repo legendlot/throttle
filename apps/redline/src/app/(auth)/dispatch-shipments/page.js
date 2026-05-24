@@ -54,22 +54,10 @@ function BoxStatusBadge({ status }) {
   return <StatusBadge variant={variant} icon={icon}>{status}</StatusBadge>;
 }
 
-const CHANNEL_TYPE_STYLE = {
-  ecom:   { color: 'var(--blue)',   bg: 'rgba(33,60,226,.15)'  },
-  retail: { color: 'var(--yellow)', bg: 'rgba(242,205,26,.1)'  },
-  other:  { color: 'var(--t2)',     bg: 'rgba(255,255,255,.06)' },
-};
-
 function ChannelTypeBadge({ type }) {
   const t = (type || 'other').toLowerCase();
-  const st = CHANNEL_TYPE_STYLE[t] || CHANNEL_TYPE_STYLE.other;
-  return (
-    <span style={{
-      fontSize: 11, fontWeight: 600, padding: '2px 7px', borderRadius: 3,
-      letterSpacing: '0.04em', textTransform: 'uppercase', whiteSpace: 'nowrap',
-      fontFamily: 'var(--mono)', color: st.color, background: st.bg,
-    }}>{type || '—'}</span>
-  );
+  const variant = t === 'ecom' ? 'info' : t === 'retail' ? 'brand' : 'neutral';
+  return <StatusBadge variant={variant}>{type || '—'}</StatusBadge>;
 }
 
 // ── Common styles ────────────────────────────────────────────

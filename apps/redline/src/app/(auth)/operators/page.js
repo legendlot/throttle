@@ -335,7 +335,7 @@ export default function OperatorsPage() {
                           : <StatusBadge variant="neutral">{op.status || 'Inactive'}</StatusBadge>}
                       </td>
                       <td style={tdStyle}>
-                        <button onClick={() => printOperatorQr(op)} style={{ ...smallBtn, color: 'var(--blue)', borderColor: 'var(--blue)', marginRight: 4 }}>
+                        <button onClick={() => printOperatorQr(op)} style={{ ...smallBtn, color: 'var(--state-info, #7b93ff)', borderColor: 'var(--state-info, #7b93ff)', marginRight: 4 }}>
                           🖨 QR
                         </button>
                         {canEdit && (
