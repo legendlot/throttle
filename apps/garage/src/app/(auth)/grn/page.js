@@ -223,9 +223,9 @@ function GrnDetailModal({ grnNo, onClose, session }) {
                           <td style={{ ...td, fontSize: 11 }}>{l.part_name || '—'}</td>
                           <td style={{ ...td, fontSize: 11, color: 'var(--t3)' }}>{l.product || '—'}</td>
                           <td style={{ ...td, fontFamily: 'var(--mono)', textAlign: 'right', color: 'var(--t3)' }}>{l.qty_ordered || 0}</td>
-                          <td style={{ ...td, fontFamily: 'var(--mono)', textAlign: 'right', color: 'var(--green)', fontWeight: 700 }}>{l.qty_received || 0}</td>
-                          <td style={{ ...td, fontFamily: 'var(--mono)', textAlign: 'right', color: 'var(--red)' }}>{l.damaged_qty || 0}</td>
-                          <td style={{ ...td, fontFamily: 'var(--mono)', textAlign: 'right', color: 'var(--red)' }}>{l.qty_rejected || 0}</td>
+                          <td style={{ ...td, fontFamily: 'var(--mono)', textAlign: 'right', color: 'var(--state-success-fg)', fontWeight: 700 }}>{l.qty_received || 0}</td>
+                          <td style={{ ...td, fontFamily: 'var(--mono)', textAlign: 'right', color: 'var(--state-error-fg)' }}>{l.damaged_qty || 0}</td>
+                          <td style={{ ...td, fontFamily: 'var(--mono)', textAlign: 'right', color: 'var(--state-error-fg)' }}>{l.qty_rejected || 0}</td>
                           <td style={td}><span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: l.inspection === 'Fail' ? 'var(--red)' : 'var(--green)' }}>{l.inspection || '—'}</span></td>
                           <td style={{ ...td, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>{l.po_reference || '—'}</td>
                           {isDirect && (
@@ -535,14 +535,14 @@ function BulkGrnPanel({ session, onSuccess }) {
                           type="number" min="0" value={l._damaged}
                           onChange={e => updateLine(i, '_damaged', e.target.value)}
                           placeholder="Dmg"
-                          style={{ background: 'rgba(222,42,42,.06)', border: '1px solid rgba(222,42,42,.2)', borderRadius: 2, padding: '3px 6px', color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12, width: 60, textAlign: 'right' }}
+                          style={{ background: 'rgba(222,42,42,.06)', border: '1px solid rgba(222,42,42,.2)', borderRadius: 2, padding: '3px 6px', color: 'var(--state-error-fg)', fontFamily: 'var(--mono)', fontSize: 12, width: 60, textAlign: 'right' }}
                         />
                       </td>
                       <td style={td}>
                         <input
                           type="number" min="0" value={l._rejected}
                           onChange={e => updateLine(i, '_rejected', e.target.value)}
-                          style={{ background: 'var(--surface2)', border: '1px solid rgba(222,42,42,.3)', borderRadius: 2, padding: '3px 6px', color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12, width: 60, textAlign: 'right' }}
+                          style={{ background: 'var(--surface2)', border: '1px solid rgba(222,42,42,.3)', borderRadius: 2, padding: '3px 6px', color: 'var(--state-error-fg)', fontFamily: 'var(--mono)', fontSize: 12, width: 60, textAlign: 'right' }}
                         />
                       </td>
                       <td style={td}>
@@ -853,7 +853,7 @@ function PartsGrnPanel({ session, onSuccess }) {
         <span style={label}>Code · Product</span>
         <span style={{ ...label, textAlign: 'right' }}>Qty</span>
         <span style={{ ...label, textAlign: 'right' }}>Qty/Bag</span>
-        <span style={{ ...label, textAlign: 'right', color: 'var(--red)' }}>Damaged</span>
+        <span style={{ ...label, textAlign: 'right', color: 'var(--state-error-fg)' }}>Damaged</span>
         <span />
       </div>
 
@@ -994,7 +994,7 @@ function PartsGrnPanel({ session, onSuccess }) {
 
               {/* Damaged */}
               <input
-                style={{ ...inp, textAlign: 'right', background: 'rgba(222,42,42,.06)', borderColor: 'rgba(222,42,42,.2)', color: 'var(--red)' }}
+                style={{ ...inp, textAlign: 'right', background: 'rgba(222,42,42,.06)', borderColor: 'rgba(222,42,42,.2)', color: 'var(--state-error-fg)' }}
                 type="number" min="0"
                 value={l.damaged}
                 onChange={e => updateDamaged(i, e.target.value)}

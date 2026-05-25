@@ -60,7 +60,7 @@ function SummaryView({ products, onSelectProduct }) {
             onMouseEnter={e => e.currentTarget.style.opacity = '0.85'}
             onMouseLeave={e => e.currentTarget.style.opacity = '1'}
           >
-            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, color: 'var(--fg-muted)', marginBottom: 6 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, color: 'var(--t2)', marginBottom: 6 }}>
               {p.product.toUpperCase()}
               {p.has_variants && <span style={{ marginLeft: 6, fontWeight: 400 }}>{p.variants.length} variants</span>}
             </div>
@@ -71,7 +71,7 @@ function SummaryView({ products, onSelectProduct }) {
               {statusLabel(p.producible)}
             </div>
             {bn && (
-              <div style={{ fontSize: 11, color: 'var(--fg-muted)', borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+              <div style={{ fontSize: 11, color: 'var(--t2)', borderTop: '1px solid var(--border)', paddingTop: 8 }}>
                 <span style={{ fontFamily: 'monospace' }}>{bn.part_code}</span>
                 <div style={{ marginTop: 2 }}>{bn.part_name}</div>
                 <div style={{ marginTop: 2 }}>Stock: {bn.stock.toLocaleString()} · Need: {bn.qty_per_unit}/unit</div>
@@ -113,14 +113,14 @@ function BreakdownView({ products }) {
           {/* Variant summary table */}
           {product.has_variants && (
             <div style={{ marginBottom: 24 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--fg-muted)', letterSpacing: 1, marginBottom: 8 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--t2)', letterSpacing: 1, marginBottom: 8 }}>
                 VARIANTS
               </div>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border)' }}>
                     {['Variant', 'Producible', 'Status', 'Bottleneck Part', 'Stock', 'Per Unit'].map(h => (
-                      <th key={h} style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, fontSize: 11, color: 'var(--fg-muted)', letterSpacing: 0.5 }}>{h}</th>
+                      <th key={h} style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, fontSize: 11, color: 'var(--t2)', letterSpacing: 0.5 }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -149,14 +149,14 @@ function BreakdownView({ products }) {
 
           {/* Top constraints for first (or only) variant */}
           <div>
-            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--fg-muted)', letterSpacing: 1, marginBottom: 8 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--t2)', letterSpacing: 1, marginBottom: 8 }}>
               TOP CONSTRAINTS {product.has_variants ? `— ${product.variants[0]?.variant_model}` : ''}
             </div>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--border)' }}>
                   {['Part Code', 'Part Name', 'Category', 'Stock', 'Per Unit', 'Max Units'].map(h => (
-                    <th key={h} style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, fontSize: 11, color: 'var(--fg-muted)', letterSpacing: 0.5 }}>{h}</th>
+                    <th key={h} style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, fontSize: 11, color: 'var(--t2)', letterSpacing: 0.5 }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -167,7 +167,7 @@ function BreakdownView({ products }) {
                     <tr key={c.part_code} style={{ borderBottom: '1px solid var(--border)', background: i === 0 ? 'var(--surface)' : 'transparent' }}>
                       <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontSize: 12 }}>{c.part_code}</td>
                       <td style={{ padding: '7px 10px' }}>{c.part_name}</td>
-                      <td style={{ padding: '7px 10px', fontSize: 11, color: 'var(--fg-muted)' }}>{c.part_category || '—'}</td>
+                      <td style={{ padding: '7px 10px', fontSize: 11, color: 'var(--t2)' }}>{c.part_category || '—'}</td>
                       <td style={{ padding: '7px 10px', fontFamily: 'monospace' }}>{c.stock.toLocaleString()}</td>
                       <td style={{ padding: '7px 10px', fontFamily: 'monospace' }}>{c.qty_per_unit}</td>
                       <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontWeight: 700, color: col }}>{c.possible.toLocaleString()}</td>
@@ -184,13 +184,13 @@ function BreakdownView({ products }) {
 }
 
 function BottlenecksView({ parts }) {
-  if (!parts.length) return <div style={{ color: 'var(--fg-muted)', fontSize: 13 }}>No bottleneck data available.</div>;
+  if (!parts.length) return <div style={{ color: 'var(--t2)', fontSize: 13 }}>No bottleneck data available.</div>;
   return (
     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
       <thead>
         <tr style={{ borderBottom: '1px solid var(--border)' }}>
           {['Part Code', 'Part Name', 'Stock', 'Products Blocked', 'Blocked Products'].map(h => (
-            <th key={h} style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, fontSize: 11, color: 'var(--fg-muted)', letterSpacing: 0.5 }}>{h}</th>
+            <th key={h} style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, fontSize: 11, color: 'var(--t2)', letterSpacing: 0.5 }}>{h}</th>
           ))}
         </tr>
       </thead>
@@ -203,7 +203,7 @@ function BottlenecksView({ parts }) {
               {p.stock.toLocaleString()}
             </td>
             <td style={{ padding: '8px 10px', fontFamily: 'monospace', fontWeight: 700 }}>{p.products_affected}</td>
-            <td style={{ padding: '8px 10px', fontSize: 12, color: 'var(--fg-muted)' }}>
+            <td style={{ padding: '8px 10px', fontSize: 12, color: 'var(--t2)' }}>
               {p.limited.map(l => l.product).join(', ')}
             </td>
           </tr>
@@ -263,7 +263,7 @@ export default function ProducibilityPage() {
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 800, margin: 0 }}>Producibility</h1>
           {data && (
-            <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 3 }}>
+            <div style={{ fontSize: 12, color: 'var(--t2)', marginTop: 3 }}>
               As of {fmtIST(data.generated_at)} IST
             </div>
           )}
@@ -290,7 +290,7 @@ export default function ProducibilityPage() {
               { label: 'MOST CRITICAL', value: mostCritical ? `${mostCritical.product} — ${mostCritical.producible} units` : '—', color: mostCritical ? statusColor(mostCritical.producible) : undefined },
             ].map(k => (
               <div key={k.label} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, padding: '14px 18px' }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--fg-muted)', letterSpacing: 1, marginBottom: 6 }}>{k.label}</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--t2)', letterSpacing: 1, marginBottom: 6 }}>{k.label}</div>
                 <div style={{ fontSize: 20, fontWeight: 800, color: k.color || 'var(--fg)' }}>{k.value}</div>
               </div>
             ))}

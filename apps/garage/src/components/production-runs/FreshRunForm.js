@@ -23,7 +23,7 @@ const lbl = {
   fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)',
   textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4, display: 'block',
 };
-const fieldErr = { fontSize: 11, color: 'var(--red)', marginTop: 2 };
+const fieldErr = { fontSize: 11, color: 'var(--state-error-fg)', marginTop: 2 };
 const btnPri = {
   background: 'var(--yellow)', color: '#000', border: 'none', borderRadius: 4,
   padding: '7px 16px', fontFamily: 'var(--mono)', fontSize: 12,

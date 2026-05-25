@@ -425,7 +425,7 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
                         <td style={td}>{l.part_name || '—'}</td>
                         <td style={{ ...td, fontFamily: 'var(--mono)', textAlign: 'right' }}>{l.qty_issued}</td>
                         <td style={{ ...td, fontFamily: 'var(--mono)', textAlign: 'right' }}>{l.qty_received}</td>
-                        <td style={{ ...td, fontFamily: 'var(--mono)', textAlign: 'right', color: 'var(--red)' }}>
+                        <td style={{ ...td, fontFamily: 'var(--mono)', textAlign: 'right', color: 'var(--state-error-fg)' }}>
                           {l.variance}
                         </td>
                       </tr>
@@ -478,13 +478,13 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
                       <td style={{ ...td, fontFamily: 'var(--mono)', textAlign: 'right' }}>{stock}</td>
                       <td style={{ ...td, fontFamily: 'var(--mono)', textAlign: 'right' }}>
                         {isShort
-                          ? <span style={{ color: 'var(--red)' }}>-{shortfall}</span>
-                          : <span style={{ color: 'var(--green)' }}>—</span>}
+                          ? <span style={{ color: 'var(--state-error-fg)' }}>-{shortfall}</span>
+                          : <span style={{ color: 'var(--state-success-fg)' }}>—</span>}
                       </td>
                       <td style={{ ...td, fontFamily: 'var(--mono)', fontSize: 11 }}>
                         {isShort
-                          ? <span style={{ color: 'var(--red)' }}>SHORT</span>
-                          : <span style={{ color: 'var(--green)' }}>OK</span>}
+                          ? <span style={{ color: 'var(--state-error-fg)' }}>SHORT</span>
+                          : <span style={{ color: 'var(--state-success-fg)' }}>OK</span>}
                       </td>
                     </tr>
                   );
@@ -502,7 +502,7 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
               background: 'rgba(222,42,42,.06)', border: '1px solid rgba(222,42,42,.25)',
             }}
           >
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--red)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 4 }}>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--state-error-fg)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 4 }}>
               Rejection Notes
             </div>
             <div style={{ fontSize: 12, color: 'var(--t1)', whiteSpace: 'pre-wrap' }}>{run.notes}</div>

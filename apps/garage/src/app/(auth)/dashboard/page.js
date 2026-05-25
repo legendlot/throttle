@@ -316,7 +316,7 @@ export default function DashboardPage() {
           </header>
           <div style={{ padding: '12px 16px' }}>
             {reorderFlags.length === 0 ? (
-              <div style={{ textAlign: 'center', color: 'var(--green)', fontSize: 12 }}>
+              <div style={{ textAlign: 'center', color: 'var(--state-success-fg)', fontSize: 12 }}>
                 ✅ No reorder flags
               </div>
             ) : (
@@ -335,7 +335,7 @@ export default function DashboardPage() {
                         {r.part_code} · {r.product || '—'}
                       </div>
                     </div>
-                    <div style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--red)' }}>
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--state-error-fg)' }}>
                       {r.closing_stock ?? 0} / {r.reorder_level ?? 0}
                     </div>
                   </div>

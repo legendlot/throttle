@@ -34,8 +34,8 @@ const qtyInputStyle = {
 
 function VarianceCell({ value }) {
   if (value === 0) return <span style={{ color: 'var(--t3)' }}>—</span>;
-  if (value < 0) return <span style={{ color: 'var(--red)', fontFamily: 'var(--mono)' }}>{value}</span>;
-  return <span style={{ color: 'var(--green)', fontFamily: 'var(--mono)' }}>+{value}</span>;
+  if (value < 0) return <span style={{ color: 'var(--state-error-fg)', fontFamily: 'var(--mono)' }}>{value}</span>;
+  return <span style={{ color: 'var(--state-success-fg)', fontFamily: 'var(--mono)' }}>+{value}</span>;
 }
 
 export function ReceiptPanel({ mode, run, pickList, receipt, issueNo, onClose, onSuccess, session }) {
@@ -197,7 +197,7 @@ export function ReceiptPanel({ mode, run, pickList, receipt, issueNo, onClose, o
         )}
 
         {error && (
-          <div style={{ marginTop: 12, fontSize: 12, color: 'var(--red)' }}>{error}</div>
+          <div style={{ marginTop: 12, fontSize: 12, color: 'var(--state-error-fg)' }}>{error}</div>
         )}
 
         <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>

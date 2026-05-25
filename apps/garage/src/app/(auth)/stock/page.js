@@ -293,9 +293,9 @@ export default function StockPage() {
                         <td style={tableTdStyle}>{r.category || '—'}</td>
                         <td style={tableTdStyle}>{r.part_type || '—'}</td>
                         <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.opening_stock ?? 0}</td>
-                        <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--green)' }}>{r.total_received ?? 0}</td>
+                        <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--state-success-fg)' }}>{r.total_received ?? 0}</td>
                         <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: '#f87171' }}>{r.total_issued ?? 0}</td>
-                        <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--blue)' }}>{r.returned ?? 0}</td>
+                        <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--state-info-fg)' }}>{r.returned ?? 0}</td>
                         <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontWeight: 700, color: isLow ? 'var(--red)' : undefined }}>
                           {closing}
                         </td>

@@ -798,7 +798,7 @@ export default function IssueQueuePage() {
           textAlign: 'center',
           gap: 10,
         }}>
-          <div style={{ fontSize: 13, color: 'var(--green)', fontFamily: 'var(--cond)', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+          <div style={{ fontSize: 13, color: 'var(--state-success-fg)', fontFamily: 'var(--cond)', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase' }}>
             ✓ Issued
           </div>
           <div style={{ fontFamily: 'var(--mono)', fontSize: 28, fontWeight: 700, color: 'var(--yellow)', letterSpacing: '0.04em' }}>

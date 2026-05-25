@@ -1072,8 +1072,8 @@ export default function ReceivingPage() {
                           <><span style={lbl}>Code</span><span style={lbl}>Part Name</span></>
                         )}
                         <span style={{ ...lbl, textAlign: 'right' }}>Expected</span>
-                        <span style={{ ...lbl, textAlign: 'center', color: 'var(--green)' }}>✓ OK</span>
-                        <span style={{ ...lbl, textAlign: 'center', color: 'var(--red)'   }}>✕ Dmg</span>
+                        <span style={{ ...lbl, textAlign: 'center', color: 'var(--state-success-fg)' }}>✓ OK</span>
+                        <span style={{ ...lbl, textAlign: 'center', color: 'var(--state-error-fg)'   }}>✕ Dmg</span>
                       </div>
                       {expectedLines.map((l, i) => (
                         <div key={i} style={{ display: 'grid', gridTemplateColumns: cols, gap: 8, alignItems: 'center', padding: '5px 0', borderBottom: '1px solid var(--border)', background: i % 2 === 0 ? 'var(--surface2)' : 'transparent' }}>
@@ -1082,8 +1082,8 @@ export default function ReceivingPage() {
                               <div style={{ fontSize: 12 }}>
                                 {l.product || '—'}
                                 {l.component_type === 'remote' && <span style={{ marginLeft: 5, fontFamily: 'var(--mono)', fontSize: 9, color: '#7b93ff' }}>Remote</span>}
-                                {l.component_type === 'car'    && <span style={{ marginLeft: 5, fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--green)' }}>Car</span>}
-                                {l.component_type === 'drone'  && <span style={{ marginLeft: 5, fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--orange)' }}>Drone</span>}
+                                {l.component_type === 'car'    && <span style={{ marginLeft: 5, fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--state-success-fg)' }}>Car</span>}
+                                {l.component_type === 'drone'  && <span style={{ marginLeft: 5, fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--state-warning-fg)' }}>Drone</span>}
                               </div>
                               <div style={{ fontSize: 11, color: 'var(--t2)' }}>{l.variant || '—'}</div>
                               <div style={{ fontSize: 11, color: 'var(--t2)' }}>{l.color   || '—'}</div>
@@ -1108,7 +1108,7 @@ export default function ReceivingPage() {
                               type="number" min="0"
                               value={boxQtys[`${l.line_id}:Damaged`] || ''}
                               onChange={e => setBoxQty(l.line_id, 'Damaged', e.target.value)}
-                              style={{ background: 'rgba(222,42,42,.06)', border: '1px solid rgba(222,42,42,.2)', borderRadius: 2, padding: '4px 6px', color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 13, width: '100%', textAlign: 'center' }}
+                              style={{ background: 'rgba(222,42,42,.06)', border: '1px solid rgba(222,42,42,.2)', borderRadius: 2, padding: '4px 6px', color: 'var(--state-error-fg)', fontFamily: 'var(--mono)', fontSize: 13, width: '100%', textAlign: 'center' }}
                             />
                           </div>
                         </div>
@@ -1128,7 +1128,7 @@ export default function ReceivingPage() {
                     <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 80px 80px 24px', gap: 8, alignItems: 'center', marginBottom: 6 }}>
                       <input style={{ ...inp, fontSize: 12 }} placeholder="Description" value={u.desc} onChange={e => updateUnexpected(i, 'desc', e.target.value)} />
                       <input type="number" min="0" style={{ ...inp, textAlign: 'center', padding: '5px' }} placeholder="OK" value={u.ok || ''} onChange={e => updateUnexpected(i, 'ok', e.target.value)} />
-                      <input type="number" min="0" style={{ ...inp, textAlign: 'center', padding: '5px', background: 'rgba(222,42,42,.06)', borderColor: 'rgba(222,42,42,.2)', color: 'var(--red)' }} placeholder="Dmg" value={u.damaged || ''} onChange={e => updateUnexpected(i, 'damaged', e.target.value)} />
+                      <input type="number" min="0" style={{ ...inp, textAlign: 'center', padding: '5px', background: 'rgba(222,42,42,.06)', borderColor: 'rgba(222,42,42,.2)', color: 'var(--state-error-fg)' }} placeholder="Dmg" value={u.damaged || ''} onChange={e => updateUnexpected(i, 'damaged', e.target.value)} />
                       <button onClick={() => removeUnexpected(i)} style={{ background: 'transparent', border: 'none', color: 'var(--t3)', cursor: 'pointer', fontSize: 18 }}>×</button>
                     </div>
                   ))}
@@ -1167,8 +1167,8 @@ export default function ReceivingPage() {
                       <tr>
                         <th style={th}>{isFbu ? 'SKU' : 'Part'}</th>
                         <th style={{ ...th, textAlign: 'right' }}>Expected</th>
-                        <th style={{ ...th, textAlign: 'right', color: 'var(--green)' }}>OK</th>
-                        <th style={{ ...th, textAlign: 'right', color: 'var(--red)'   }}>Damaged</th>
+                        <th style={{ ...th, textAlign: 'right', color: 'var(--state-success-fg)' }}>OK</th>
+                        <th style={{ ...th, textAlign: 'right', color: 'var(--state-error-fg)'   }}>Damaged</th>
                         <th style={{ ...th, textAlign: 'right' }}>Total</th>
                         <th style={{ ...th, textAlign: 'right' }}>Variance</th>
                         <th style={th}>GRN</th>
@@ -1209,15 +1209,15 @@ export default function ReceivingPage() {
                               {l.line_type === 'unexpected' && <StatusBadge label="Unexpected" tone="orange" small />}
                             </td>
                             <td style={{ ...td, fontFamily: 'var(--mono)', textAlign: 'right', color: 'var(--t3)' }}>{expected || '—'}</td>
-                            <td style={{ ...td, fontFamily: 'var(--mono)', textAlign: 'right', color: 'var(--green)' }}>{okQty}</td>
+                            <td style={{ ...td, fontFamily: 'var(--mono)', textAlign: 'right', color: 'var(--state-success-fg)' }}>{okQty}</td>
                             <td style={{ ...td, fontFamily: 'var(--mono)', textAlign: 'right', color: dmgQty > 0 ? 'var(--red)' : 'var(--t3)' }}>{dmgQty}</td>
                             <td style={{ ...td, fontFamily: 'var(--mono)', textAlign: 'right', fontWeight: 700 }}>{totalCounted}</td>
                             <td style={{ ...td, fontFamily: 'var(--mono)', textAlign: 'right' }}>
-                              {short > 0 ? <span style={{ color: 'var(--red)' }}>-{short}</span>
+                              {short > 0 ? <span style={{ color: 'var(--state-error-fg)' }}>-{short}</span>
                                 : over > 0 ? <span style={{ color: 'var(--yellow)' }}>+{over}</span>
                                 : <span style={{ color: 'var(--t3)' }}>—</span>}
                             </td>
-                            <td style={{ ...td, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--green)' }}>{l.grn_no || ''}</td>
+                            <td style={{ ...td, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--state-success-fg)' }}>{l.grn_no || ''}</td>
                             <td style={td}><StatusBadge label={statusLabel} tone={statusTone} /></td>
                             {!isFbu && (
                               <td style={td}>
@@ -1306,13 +1306,13 @@ export default function ReceivingPage() {
                             <>
                               <div style={{ display: 'grid', gridTemplateColumns: '1fr 44px 44px', gap: 6, marginBottom: 4 }}>
                                 <span style={{ ...lbl, marginBottom: 0 }}>SKU</span>
-                                <span style={{ ...lbl, marginBottom: 0, textAlign: 'right', color: 'var(--green)' }}>OK</span>
-                                <span style={{ ...lbl, marginBottom: 0, textAlign: 'right', color: 'var(--red)' }}>Dmg</span>
+                                <span style={{ ...lbl, marginBottom: 0, textAlign: 'right', color: 'var(--state-success-fg)' }}>OK</span>
+                                <span style={{ ...lbl, marginBottom: 0, textAlign: 'right', color: 'var(--state-error-fg)' }}>Dmg</span>
                               </div>
                               {itemEntries.map(([sku, v], j) => (
                                 <div key={j} style={{ display: 'grid', gridTemplateColumns: '1fr 44px 44px', gap: 6, padding: '3px 0', borderBottom: j < itemEntries.length - 1 ? '1px solid rgba(42,42,42,.4)' : 'none' }}>
                                   <span style={{ fontSize: 11 }}>{sku}</span>
-                                  <span style={{ fontFamily: 'var(--mono)', textAlign: 'right', fontSize: 11, color: 'var(--green)' }}>{v.ok}</span>
+                                  <span style={{ fontFamily: 'var(--mono)', textAlign: 'right', fontSize: 11, color: 'var(--state-success-fg)' }}>{v.ok}</span>
                                   <span style={{ fontFamily: 'var(--mono)', textAlign: 'right', fontSize: 11, color: v.damaged > 0 ? 'var(--red)' : 'var(--t3)' }}>{v.damaged}</span>
                                 </div>
                               ))}
