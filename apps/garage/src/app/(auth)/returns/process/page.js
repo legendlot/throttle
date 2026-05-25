@@ -5,18 +5,19 @@ import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { useProducts } from '../../../../hooks/useProducts.js';
+import { Package, Wrench, AlertTriangle, Ban } from 'lucide-react';
 
 const RETURN_CATEGORIES = [
-  { value: 'UDR', label: 'UDR — Undamaged Return',    tone: 'green'  },
-  { value: 'CXR', label: 'CXR — Customer Return',      tone: 'yellow' },
-  { value: 'BRV', label: 'BRV — Bulk Return / Vendor', tone: 'blue'   },
+  { value: 'UDR', label: 'UDR · Undamaged Return',    tone: 'green'  },
+  { value: 'CXR', label: 'CXR · Customer Return',      tone: 'yellow' },
+  { value: 'BRV', label: 'BRV · Bulk Return / Vendor', tone: 'blue'   },
 ];
 
 const DISPOSITIONS = [
-  { value: 'udr',     icon: '📦', title: 'UDR (Undamaged Return)', sub: 'Sealed, intact. Re-enters dispatch stock via PKG_OUT.', loss: false },
-  { value: 'wks_repair',     icon: '🔧', title: 'Send to Workshop', sub: 'Product present, needs inspection or repair.',     loss: false },
-  { value: 'loss_damage',    icon: '💥', title: 'Loss — Damage',    sub: 'Beyond repair or destroyed. Raise damage note.',  loss: true  },
-  { value: 'loss_rejection', icon: '🚫', title: 'Loss — Rejection', sub: 'Switcheroo, empty box, wrong product. Raise rejection note.', loss: true },
+  { value: 'udr',            Icon: Package,        title: 'UDR (Undamaged Return)', sub: 'Sealed, intact. Re-enters dispatch stock via PKG_OUT.',       loss: false },
+  { value: 'wks_repair',     Icon: Wrench,         title: 'Send to Workshop',       sub: 'Product present, needs inspection or repair.',                loss: false },
+  { value: 'loss_damage',    Icon: AlertTriangle,  title: 'Loss · Damage',          sub: 'Beyond repair or destroyed. Raise damage note.',              loss: true  },
+  { value: 'loss_rejection', Icon: Ban,            title: 'Loss · Rejection',       sub: 'Switcheroo, empty box, wrong product. Raise rejection note.', loss: true  },
 ];
 
 const BOX_CONDITIONS = ['sealed', 'open', 'damaged', 'destroyed'];
@@ -615,8 +616,10 @@ function InspectionModal(props) {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8, marginBottom: 12 }}>
           {DISPOSITIONS.map((d) => (
             <div key={d.value} style={dispCardStyle(d)} onClick={() => !submitting && setSelectedDisp(d.value)}>
-              <div style={{ fontSize: 24 }}>{d.icon}</div>
-              <div style={{ fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 13, marginTop: 6, color: d.loss && selectedDisp === d.value ? '#ff7070' : selectedDisp === d.value ? 'var(--yellow)' : 'var(--t1)' }}>
+              <div style={{ color: d.loss && selectedDisp === d.value ? 'var(--state-error-fg)' : selectedDisp === d.value ? 'var(--yellow)' : 'var(--t2)' }}>
+                <d.Icon size={24} strokeWidth={1.75} />
+              </div>
+              <div style={{ fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 13, marginTop: 8, letterSpacing: '0.04em', textTransform: 'uppercase', color: d.loss && selectedDisp === d.value ? 'var(--state-error-fg)' : selectedDisp === d.value ? 'var(--yellow)' : 'var(--t1)' }}>
                 {d.title}
               </div>
               <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 4, lineHeight: 1.4 }}>{d.sub}</div>

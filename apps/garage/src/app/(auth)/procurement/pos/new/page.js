@@ -7,6 +7,7 @@ import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { todayStr } from '@throttle/domain';
 import { useProducts } from '../../../../../hooks/useProducts.js';
 import { computeTax } from '@/lib/poTax';
+import { Car, Wrench, Package, Cog, BatteryFull, Bolt, FileText, Tag, Pencil } from 'lucide-react';
 
 const PO_SOURCES = ['China', 'India', 'USA', 'Germany', 'Taiwan', 'Vietnam', 'Bangladesh', 'Japan', 'South Korea', 'UK', 'Italy', 'Turkey', 'Other'];
 const PO_TYPES   = ['Product', 'Packaging', 'Para', 'Consumable', 'Component', 'Tools', 'Machines'];
@@ -21,15 +22,15 @@ const PO_SHIP_MODES = ['Sea', 'Air', 'Land'];
 // others use part_type (Metal/Electronic/Hardware). Components has no pre-filter — it's the
 // umbrella search across all active BOM rows.
 const PO_CATEGORIES = [
-  { key: 'full_products', icon: '🚗', title: 'Full Products',  sub: 'FBU / CKD',          desc: 'Finished units ordered at product level',     order_type: 'Product',    source: 'India', currency: 'INR', incoterms: '',                bom_filter: null },
-  { key: 'components',    icon: '🔧', title: 'Components',     sub: 'All categories',     desc: 'Multi-product BOM line entry (any category)', order_type: 'Component',  source: 'India', currency: 'INR', incoterms: 'Local delivery', bom_filter: null },
-  { key: 'packaging',     icon: '📦', title: 'Packaging',      sub: 'India',              desc: 'Boxes, trays, shrink wrap, inserts',          order_type: 'Packaging',  source: 'India', currency: 'INR', incoterms: 'Local delivery', bom_filter: { type: 'part_category', value: ['Packaging','Primary Packaging'] } },
-  { key: 'metal',         icon: '⚙️', title: 'Metal Parts',    sub: 'India',              desc: 'Springs, axles, metal hardware',              order_type: 'Component',  source: 'India', currency: 'INR', incoterms: 'Local delivery', bom_filter: { type: 'part_type', value: 'Metal' } },
-  { key: 'electronics',   icon: '🔋', title: 'Electronics',    sub: 'India',              desc: 'Batteries, PCBs, chargers',                   order_type: 'Component',  source: 'India', currency: 'INR', incoterms: 'Local delivery', bom_filter: { type: 'part_type', value: 'Electronic' } },
-  { key: 'consumables',   icon: '🔩', title: 'Consumables',    sub: 'India',              desc: 'Screws, fasteners, elastic bands',            order_type: 'Consumable', source: 'India', currency: 'INR', incoterms: 'Local delivery', bom_filter: { type: 'part_type', value: 'Hardware' } },
-  { key: 'para',          icon: '📄', title: 'Para',           sub: 'India',              desc: 'Comics, licences, manuals',                   order_type: 'Para',       source: 'India', currency: 'INR', incoterms: 'Local delivery', bom_filter: { type: 'part_category', value: 'Para' } },
-  { key: 'stickers',      icon: '🏷️', title: 'Stickers',       sub: 'India',              desc: 'Product stickers, decals',                    order_type: 'Para',       source: 'India', currency: 'INR', incoterms: 'Local delivery', bom_filter: { type: 'part_category', value: 'Sticker' } },
-  { key: 'other',         icon: '✏️', title: 'Custom / Other', sub: 'Any',                desc: 'Free-form lines, factory ad-hoc',             order_type: '',           source: 'India', currency: 'INR', incoterms: '',                bom_filter: null },
+  { key: 'full_products', Icon: Car,         title: 'Full Products',  sub: 'FBU / CKD',          desc: 'Finished units ordered at product level',     order_type: 'Product',    source: 'India', currency: 'INR', incoterms: '',                bom_filter: null },
+  { key: 'components',    Icon: Wrench,      title: 'Components',     sub: 'All categories',     desc: 'Multi-product BOM line entry (any category)', order_type: 'Component',  source: 'India', currency: 'INR', incoterms: 'Local delivery', bom_filter: null },
+  { key: 'packaging',     Icon: Package,     title: 'Packaging',      sub: 'India',              desc: 'Boxes, trays, shrink wrap, inserts',          order_type: 'Packaging',  source: 'India', currency: 'INR', incoterms: 'Local delivery', bom_filter: { type: 'part_category', value: ['Packaging','Primary Packaging'] } },
+  { key: 'metal',         Icon: Cog,         title: 'Metal Parts',    sub: 'India',              desc: 'Springs, axles, metal hardware',              order_type: 'Component',  source: 'India', currency: 'INR', incoterms: 'Local delivery', bom_filter: { type: 'part_type', value: 'Metal' } },
+  { key: 'electronics',   Icon: BatteryFull, title: 'Electronics',    sub: 'India',              desc: 'Batteries, PCBs, chargers',                   order_type: 'Component',  source: 'India', currency: 'INR', incoterms: 'Local delivery', bom_filter: { type: 'part_type', value: 'Electronic' } },
+  { key: 'consumables',   Icon: Bolt,        title: 'Consumables',    sub: 'India',              desc: 'Screws, fasteners, elastic bands',            order_type: 'Consumable', source: 'India', currency: 'INR', incoterms: 'Local delivery', bom_filter: { type: 'part_type', value: 'Hardware' } },
+  { key: 'para',          Icon: FileText,    title: 'Para',           sub: 'India',              desc: 'Comics, licences, manuals',                   order_type: 'Para',       source: 'India', currency: 'INR', incoterms: 'Local delivery', bom_filter: { type: 'part_category', value: 'Para' } },
+  { key: 'stickers',      Icon: Tag,         title: 'Stickers',       sub: 'India',              desc: 'Product stickers, decals',                    order_type: 'Para',       source: 'India', currency: 'INR', incoterms: 'Local delivery', bom_filter: { type: 'part_category', value: 'Sticker' } },
+  { key: 'other',         Icon: Pencil,      title: 'Custom / Other', sub: 'Any',                desc: 'Free-form lines, factory ad-hoc',             order_type: '',           source: 'India', currency: 'INR', incoterms: '',                bom_filter: null },
 ];
 
 const BOM_GROUPS = [
@@ -669,12 +670,14 @@ function NewPOPage() {
               onMouseLeave={() => setHoverCard(null)}
               onClick={() => applyCategory(cat, chinaMode)}
             >
-              <div style={{ fontSize: 36 }}>{cat.icon}</div>
-              <div style={{ fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 15, marginTop: 8 }}>{cat.title}</div>
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', marginTop: 2, letterSpacing: '0.04em' }}>
+              <div style={{ color: 'var(--t2)' }}>
+                <cat.Icon size={28} strokeWidth={1.75} />
+              </div>
+              <div style={{ fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 14, marginTop: 10, color: 'var(--t1)', letterSpacing: '0.04em', textTransform: 'uppercase' }}>{cat.title}</div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginTop: 4, letterSpacing: '0.04em' }}>
                 {chinaMode ? 'China · RMB · FOB' : cat.sub}
               </div>
-              <div style={{ fontSize: 11, color: 'var(--t3)', marginTop: 8, lineHeight: 1.4 }}>{cat.desc}</div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginTop: 8, lineHeight: 1.45 }}>{cat.desc}</div>
             </div>
           ))}
         </div>
@@ -730,7 +733,7 @@ function NewPOPage() {
         <span style={{ fontFamily: 'var(--cond)', fontSize: 18, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
           New Purchase Order
         </span>
-        {selectedCategory && <StatusBadge label={`${selectedCategory.icon} ${selectedCategory.title}`} tone="blue" />}
+        {selectedCategory && <StatusBadge label={selectedCategory.title} tone="blue" />}
         {rrParam && <StatusBadge label={`Linking ${rrParam}`} tone="yellow" />}
       </div>
 
