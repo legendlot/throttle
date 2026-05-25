@@ -146,9 +146,10 @@ export default function DirectIssuanceListPage() {
               {PURPOSES.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
             </select>
             <input
+              data-search-primary
               value={search}
               onChange={e => setSearch(e.target.value)}
-              placeholder="Search DI no / destination / contact"
+              placeholder="Search DI no / destination / contact  · /"
               style={{ ...input, flex: 1, minWidth: 240 }}
             />
           </div>

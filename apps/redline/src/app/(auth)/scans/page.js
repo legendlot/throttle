@@ -269,8 +269,9 @@ export default function ScansPage() {
         <div style={{ flex: 1 }} />
 
         <input
+          data-search-primary
           type="text"
-          placeholder="Search UPC…"
+          placeholder="Search UPC…  · /"
           style={inputStyle}
           value={upcSearch}
           onChange={e => setUpcSearch(e.target.value)}

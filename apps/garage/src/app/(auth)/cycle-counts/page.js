@@ -253,7 +253,7 @@ function NewCountModal({ onClose, onCreated, session, toast }) {
           </div>
 
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search — try “Flare A” or “Apex metal”" style={{ ...input, flex: 1 }} />
+            <input data-search-primary value={search} onChange={e => setSearch(e.target.value)} placeholder="Search — try “Flare A” or “Apex metal”  · /" style={{ ...input, flex: 1 }} />
             <select value={classFilter} onChange={e => setClassFilter(e.target.value)} style={{ ...input, minWidth: 100 }}>
               <option value="all">All classes</option>
               <option value="A">A (monthly)</option>

@@ -159,7 +159,7 @@ export default function LibraryPartsPage() {
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
             <div style={{ flex: '1 1 220px' }}>
               <span style={labelStyle}>Search</span>
-              <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search — try “Flare metal” or “Apex electronic”" style={{ ...inputStyle, width: '100%' }} />
+              <input data-search-primary type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search — try “Flare metal” or “Apex electronic”  · /" style={{ ...inputStyle, width: '100%' }} />
             </div>
             <div style={{ flex: '0 0 180px' }}>
               <span style={labelStyle}>Product</span>

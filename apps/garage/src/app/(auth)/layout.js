@@ -2,7 +2,7 @@
 import { createContext, useContext, useMemo, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { RequireAuth, useAuth } from '@throttle/auth';
-import { Sidebar, Spinner, Topbar, QuickCreate } from '@throttle/ui';
+import { Sidebar, Spinner, Topbar, QuickCreate, useSearchShortcut } from '@throttle/ui';
 import { useNavGroups } from '../../lib/nav.js';
 import { GarageIcon } from '../../components/GarageIcon.js';
 import { useGarageAlerts } from '../../hooks/useGarageAlerts.js';
@@ -40,6 +40,9 @@ function AuthLayoutInner({ children }) {
   const rawNavGroups = useNavGroups(perms || {});
   const { alertCount } = useGarageAlerts(session);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  // Global "/" → focus the primary search input on the active page.
+  useSearchShortcut();
 
   function NavBadge({ count, color }) {
     if (!count || count < 1) return null;

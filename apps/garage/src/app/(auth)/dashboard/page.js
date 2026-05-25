@@ -135,7 +135,10 @@ const panelHeaderStyle = {
   fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 13, textTransform: 'uppercase', letterSpacing: '0.06em',
   color: 'var(--t2)',
 };
-const twoColStyle = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 };
+// Auto-stack when content < 560px wide. With the sidebar expanded the
+// previous fixed 1fr 1fr grid was truncating long supplier names + Lines/Qty
+// in the Recent GRNs / Planned Issues panels on standard laptop screens.
+const twoColStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(560px, 1fr))', gap: 16, marginBottom: 16 };
 const tableTdStyle = { padding: '9px 10px', fontSize: 12, borderBottom: '1px solid rgba(42,42,42,.6)', whiteSpace: 'nowrap' };
 const tableThStyle = { padding: '8px 10px', fontSize: 10, textAlign: 'left', color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' };
 

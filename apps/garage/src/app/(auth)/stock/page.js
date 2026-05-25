@@ -224,10 +224,11 @@ export default function StockPage() {
         <>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
             <input
+              data-search-primary
               style={{ ...inputStyle, minWidth: 260 }}
               value={search}
               onChange={e => setSearch(e.target.value)}
-              placeholder="Search — try “Flare metal” or “Shadow packaging”"
+              placeholder="Search — try “Flare metal” or “Shadow packaging”  · /"
             />
             <div style={{ minWidth: 200 }}>
               <Combobox

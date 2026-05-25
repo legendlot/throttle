@@ -185,7 +185,7 @@ export default function POListPage() {
                       }
                     </td>
                     <td style={tableTdStyle}>{formatDate(r.expected_delivery)}</td>
-                    <td style={tableTdStyle}>{r.raised_by || '—'}</td>
+                    <td style={tableTdStyle}>{r.raised_by_name || r.raised_by || '—'}</td>
                     <td style={tableTdStyle}><StatusBadge label={r.status || '—'} tone={PO_STATUS_TONES[r.status] || 'gray'} /></td>
                     <td style={{ ...tableTdStyle, textAlign: 'right' }}>
                       <button

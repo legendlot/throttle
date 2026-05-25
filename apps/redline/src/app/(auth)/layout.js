@@ -2,7 +2,7 @@
 import { createContext, useContext, useMemo, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { RequireAuth, useAuth } from '@throttle/auth';
-import { Sidebar, Spinner, Topbar } from '@throttle/ui';
+import { Sidebar, Spinner, Topbar, useSearchShortcut } from '@throttle/ui';
 import { NAV_GROUPS } from '../../lib/nav.js';
 import { usePendingCounts } from '../../hooks/usePendingCounts.js';
 import { RedlineIcon } from '../../components/RedlineIcon.js';
@@ -60,6 +60,9 @@ function AuthLayoutInner({ children }) {
   const { refreshing, lastRefreshed } = useRefreshState();
   const { alertCount, returnCount }   = usePendingCounts(session);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
+
+  // Global "/" → focus the primary search input on the active page.
+  useSearchShortcut();
 
   const navGroupsWithBadges = useMemo(() => {
     return NAV_GROUPS.map(group => ({

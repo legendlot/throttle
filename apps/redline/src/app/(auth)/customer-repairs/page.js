@@ -116,9 +116,10 @@ export default function CustomerRepairsListPage() {
         {/* Search */}
         <div style={{ marginBottom: 14 }}>
           <input
+            data-search-primary
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder="Search customer / order / AWB / CR-NNN"
+            placeholder="Search customer / order / AWB / CR-NNN  · /"
             style={{ ...input, width: '100%', maxWidth: 380 }}
           />
         </div>

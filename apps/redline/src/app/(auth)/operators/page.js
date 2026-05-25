@@ -282,10 +282,11 @@ export default function OperatorsPage() {
       {/* Filter bar */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
         <input
+          data-search-primary
           style={{ ...inputStyle, width: 220 }}
           value={search}
           onChange={e => setSearch(e.target.value)}
-          placeholder="Search name / employee ID"
+          placeholder="Search name / employee ID  · /"
         />
         <select style={selectStyle} value={deptFilter} onChange={e => setDeptFilter(e.target.value)}>
           <option value="">All Departments</option>

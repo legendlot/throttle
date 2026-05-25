@@ -340,7 +340,8 @@ export default function DamageLedgerPage() {
               <input
                 type="text" value={search}
                 onChange={e => setSearch(e.target.value)}
-                placeholder="Search — try “Flare metal” or “Apex DRB-007”"
+                data-search-primary
+                placeholder="Search — try “Flare metal” or “Apex DRB-007”  · /"
                 style={{ ...inputStyle, width: '100%' }}
               />
             </div>

@@ -115,8 +115,9 @@ export default function DeliveryChallansPage() {
         ))}
         <div style={{ flex: 1 }} />
         <input
+          data-search-primary
           type="search"
-          placeholder="Search by no. or recipient…"
+          placeholder="Search by no. or recipient…  · /"
           value={q}
           onChange={(e) => setQ(e.target.value)}
           style={{

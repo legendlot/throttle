@@ -303,10 +303,11 @@ export default function VendorsPage() {
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <div style={{ position: 'relative' }}>
                 <input
+                  data-search-primary
                   type="text"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search code, name, category, country, contact, GSTIN…"
+                  placeholder="Search code, name, category, country, contact, GSTIN…  · /"
                   style={{ ...inputStyle, width: 360, paddingRight: search ? 26 : 10 }}
                   autoComplete="off"
                 />
