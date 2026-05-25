@@ -6,6 +6,8 @@ import { Spinner, useToast } from '@throttle/ui';
 import {
   Package, AlertCircle, Inbox, Ship, ClipboardList,
   Factory, Send, FileText, Repeat, Ban, Store, RotateCw,
+  BarChart3, Scale, PackageX, Wrench, Undo2, PackageOpen,
+  ShieldAlert, AlertOctagon, ListChecks,
 } from 'lucide-react';
 
 // Lucide-react icons replace decorative emoji per DESIGN.md "mechanical not
@@ -13,29 +15,42 @@ import {
 // read as instrumentation, not stickers.
 const REPORT_DOWNLOADS = {
   inventory: [
-    { type: 'stock',           Icon: Package,       title: 'Stock Position', desc: 'Full inventory — all parts, all products, current qtys' },
-    { type: 'reorder',         Icon: AlertCircle,   title: 'Reorder Flags',  desc: 'Parts at or below reorder level' },
+    { type: 'stock',             Icon: Package,       title: 'Stock Position',    desc: 'Full inventory: all parts, all products, current qtys' },
+    { type: 'reorder',           Icon: AlertCircle,   title: 'Reorder Flags',     desc: 'Parts at or below reorder level' },
+    { type: 'cycle_counts',      Icon: BarChart3,     title: 'Cycle Counts',      desc: 'All count rounds with status and variance, filterable by date' },
+    { type: 'stock_adjustments', Icon: Scale,         title: 'Stock Adjustments', desc: 'Every adjustment with reason, approver and delta. Audit trail' },
   ],
   inward: [
-    { type: 'grn',             Icon: Inbox,         title: 'GRN Register',    desc: 'All goods received notes, filterable by date' },
-    { type: 'shipments',       Icon: Ship,          title: 'Shipments',       desc: 'All inbound shipments with progress status' },
-    { type: 'receiving',       Icon: ClipboardList, title: 'Receiving Lines', desc: 'Part-level count records from all shipments' },
+    { type: 'grn',               Icon: Inbox,         title: 'GRN Register',          desc: 'All goods received notes, filterable by date' },
+    { type: 'shipments',         Icon: Ship,          title: 'Shipments',             desc: 'All inbound shipments with progress status' },
+    { type: 'receiving',         Icon: ClipboardList, title: 'Receiving Lines',       desc: 'Part-level count records from all shipments' },
+    { type: 'damage_ledger',     Icon: PackageX,      title: 'Damage / Scrap Ledger', desc: 'Damaged and scrap entries with disposition lifecycle' },
   ],
   production: [
-    { type: 'production_runs', Icon: Factory,       title: 'Production Runs', desc: 'All runs with status, product and unit counts' },
-    { type: 'issues',          Icon: Send,          title: 'Issue Register',  desc: 'All material issues to production, filterable by date' },
-    { type: 'workorders',      Icon: FileText,      title: 'Work Orders',     desc: 'All WOs: planned, ad hoc, rework, standalone' },
+    { type: 'production_runs',   Icon: Factory,       title: 'Production Runs', desc: 'All runs with status, product and unit counts' },
+    { type: 'issues',            Icon: Send,          title: 'Issue Register',  desc: 'All material issues to production, filterable by date' },
+    { type: 'workorders',        Icon: FileText,      title: 'Work Orders',     desc: 'All WOs: planned, ad hoc, rework, standalone' },
   ],
   lineflush: [
-    { type: 'flushes',         Icon: Repeat,        title: 'Flush Register',      desc: 'All line flushes with verification status' },
-    { type: 'quarantine',      Icon: Ban,           title: 'Quarantine Register', desc: 'All quarantined parts with bin locations' },
+    { type: 'flushes',           Icon: Repeat,        title: 'Flush Register',      desc: 'All line flushes with verification status' },
+    { type: 'quarantine',        Icon: Ban,           title: 'Quarantine Register', desc: 'All quarantined parts with bin locations' },
   ],
   procurement: [
-    { type: 'purchase_orders', Icon: ClipboardList, title: 'Purchase Orders', desc: 'All POs with status, value and vendor' },
-    { type: 'vendors',         Icon: Store,         title: 'Vendor List',     desc: 'All active vendors with contact details' },
+    { type: 'purchase_orders',   Icon: ClipboardList, title: 'Purchase Orders', desc: 'All POs with status, value and vendor' },
+    { type: 'vendors',           Icon: Store,         title: 'Vendor List',     desc: 'All active vendors with contact details' },
   ],
   returns: [
-    { type: 'returns',         Icon: RotateCw,      title: 'Returns Log', desc: 'RTO and RTV returns across all channels, filterable by date' },
+    { type: 'returns',           Icon: RotateCw,      title: 'Returns Log',      desc: 'RTO and RTV returns across all channels, filterable by date' },
+    { type: 'customer_repairs',  Icon: Wrench,        title: 'Customer Repairs', desc: 'CR-NNN intake: stage, channel, captured-by, aging' },
+    { type: 'unit_restocks',     Icon: Undo2,         title: 'Unit Restocks',    desc: 'Units flipped back to stock by reason, channel, operator' },
+  ],
+  issuance: [
+    { type: 'direct_issuances',  Icon: PackageOpen,   title: 'Direct Issuances', desc: 'DI-NNN: samples, office, external test, replacements' },
+  ],
+  compliance: [
+    { type: 'scan_violations',   Icon: ShieldAlert,   title: 'Scan Violations',    desc: 'Every rejected scan with station, operator, reason' },
+    { type: 'process_deviations',Icon: AlertOctagon,  title: 'Process Deviations', desc: 'PD-NNN proposals and approvals across all severity tiers' },
+    { type: 'audit_findings',    Icon: ListChecks,    title: 'QC Audit Findings',  desc: 'Audit round findings: open, resolved, confirmed' },
   ],
 };
 
@@ -109,6 +124,8 @@ const TABS = [
   { id: 'lineflush',   label: 'Line Flush' },
   { id: 'procurement', label: 'Procurement' },
   { id: 'returns',     label: 'Returns' },
+  { id: 'issuance',    label: 'Issuance' },
+  { id: 'compliance',  label: 'Compliance' },
   { id: 'analytics',   label: 'Analytics' },
 ];
 
@@ -465,8 +482,10 @@ export default function ReportsPage() {
       {activeTab === 'inward'      && <InwardSummary    data={grnData}   loading={loading.inward}      load={loadInward} />}
       {activeTab === 'production'  && <ProductionSummary data={prodData} loading={loading.production}  load={loadProduction} />}
       {activeTab === 'lineflush'   && <LineFlushSummary data={flushRpt}  loading={loading.lineflush}   load={loadLineFlush} />}
-      {activeTab === 'procurement' && <ProcurementSummary data={procRpt} loading={loading.procurement} load={loadProcurement} />}
+      {activeTab === 'procurement' && <ProcurementSummary data={procRpt} loading={loading.procurement} load={loadProcurement} canViewFinance={!!perms?.reports_finance} />}
       {activeTab === 'returns'     && <ReturnsSummary    data={retData}  loading={loading.returns}     load={loadReturns} />}
+      {activeTab === 'issuance'    && <IssuanceSummary  loading={false} />}
+      {activeTab === 'compliance'  && <ComplianceSummary loading={false} />}
       {activeTab === 'analytics'   && (
         <>
           <AnalyticsFlowPanel
@@ -486,11 +505,15 @@ export default function ReportsPage() {
             loading={loading.analytics_efficiency}
             load={loadAnalyticsEfficiency}
           />
-          <AnalyticsGapPanel
-            data={analyticsGap}
-            loading={loading.analytics_gap}
-            load={loadAnalyticsGap}
-          />
+          {perms?.reports_finance ? (
+            <AnalyticsGapPanel
+              data={analyticsGap}
+              loading={loading.analytics_gap}
+              load={loadAnalyticsGap}
+            />
+          ) : (
+            <FinanceGatedPanel title="Production vs Dispatch Gap" />
+          )}
         </>
       )}
     </div>
@@ -695,7 +718,7 @@ function LineFlushSummary({ data, loading, load }) {
   );
 }
 
-function ProcurementSummary({ data, loading, load }) {
+function ProcurementSummary({ data, loading, load, canViewFinance }) {
   if (!data) return <SummaryShell title="Procurement" data={data} loading={loading} load={load} />;
 
   const statusCounts = data.status_counts || data.po_status || {};
@@ -738,24 +761,69 @@ function ProcurementSummary({ data, loading, load }) {
         </SummaryShell>
       </div>
 
-      <SummaryShell title="Vendor Spend (top 10)" data={vendorSpend} loading={loading} load={load} empty="No vendor spend data">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {vendorSpend.slice(0, 10).map((v) => {
-            const amount = parseFloat(v.spend || v.amount || 0);
-            const pct = (amount / maxSpend) * 100;
-            return (
-              <div key={v.vendor_name || v.vendor} style={{ display: 'grid', gridTemplateColumns: '180px 1fr 100px', gap: 8, alignItems: 'center', fontSize: 12 }}>
-                <span>{v.vendor_name || v.vendor || '—'}</span>
-                <div style={{ height: 10, background: 'var(--surface2)', borderRadius: 2, overflow: 'hidden' }}>
-                  <div style={{ width: `${pct}%`, height: 10, background: 'var(--yellow)' }} />
+      {canViewFinance ? (
+        <SummaryShell title="Vendor Spend (top 10)" data={vendorSpend} loading={loading} load={load} empty="No vendor spend data">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {vendorSpend.slice(0, 10).map((v) => {
+              const amount = parseFloat(v.spend || v.amount || 0);
+              const pct = (amount / maxSpend) * 100;
+              return (
+                <div key={v.vendor_name || v.vendor} style={{ display: 'grid', gridTemplateColumns: '180px 1fr 100px', gap: 8, alignItems: 'center', fontSize: 12 }}>
+                  <span>{v.vendor_name || v.vendor || '—'}</span>
+                  <div style={{ height: 10, background: 'var(--surface2)', borderRadius: 2, overflow: 'hidden' }}>
+                    <div style={{ width: `${pct}%`, height: 10, background: 'var(--yellow)' }} />
+                  </div>
+                  <span style={{ fontFamily: 'var(--mono)', textAlign: 'right' }}>{amount.toLocaleString('en-IN')}</span>
                 </div>
-                <span style={{ fontFamily: 'var(--mono)', textAlign: 'right' }}>{amount.toLocaleString('en-IN')}</span>
-              </div>
-            );
-          })}
-        </div>
-      </SummaryShell>
+              );
+            })}
+          </div>
+        </SummaryShell>
+      ) : (
+        <FinanceGatedPanel title="Vendor Spend (top 10)" />
+      )}
     </>
+  );
+}
+
+function FinanceGatedPanel({ title }) {
+  return (
+    <div style={panelStyle}>
+      <div style={panelHeaderStyle}><span>{title}</span></div>
+      <div style={{ padding: 18, textAlign: 'center', color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 11 }}>
+        Finance / cost detail hidden — requires <strong>reports_finance</strong> permission.
+      </div>
+    </div>
+  );
+}
+
+function IssuanceSummary() {
+  return (
+    <div style={panelStyle}>
+      <div style={panelHeaderStyle}><span>Direct Store Issuance</span></div>
+      <div style={panelBodyStyle}>
+        <p style={{ margin: 0, color: 'var(--t2)', fontSize: 12, lineHeight: 1.6 }}>
+          Use the cards above to download the DI register as CSV (filter by date range).
+          For per-DI detail and live status, open <strong style={{ color: 'var(--yellow)' }}>Garage → Direct Issuance</strong>.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function ComplianceSummary() {
+  return (
+    <div style={panelStyle}>
+      <div style={panelHeaderStyle}><span>Compliance & Audit</span></div>
+      <div style={panelBodyStyle}>
+        <p style={{ margin: 0, color: 'var(--t2)', fontSize: 12, lineHeight: 1.6 }}>
+          Scan Violations log every rejected scan with station + operator + reason.
+          Process Deviations capture the PD-NNN approval chain across severity tiers.
+          QC Audit Findings are the round-by-round audit log.
+          Download each as CSV from the cards above.
+        </p>
+      </div>
+    </div>
   );
 }
 

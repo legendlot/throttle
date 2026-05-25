@@ -14,14 +14,44 @@ const PERM_DEFS = [
     { key: 'stock_issue',  label: 'Stock Issue',   type: 'level' },
     { key: 'returns',      label: 'Returns',       type: 'level' },
   ] },
+  { group: 'Production Floor', items: [
+    { key: 'production_view', label: 'View Production & Floor Tools', type: 'bool' },
+  ] },
   { group: 'Line Flush', items: [
     { key: 'line_flush_create', label: 'Create Flushes (Production)', type: 'bool' },
     { key: 'line_flush_verify', label: 'Verify Flushes (Store)',      type: 'bool' },
   ] },
   { group: 'Procurement', items: [
-    { key: 'procurement_view',    label: 'View Procurement Tab', type: 'bool' },
-    { key: 'procurement_raise',   label: 'Raise POs',            type: 'bool' },
-    { key: 'procurement_approve', label: 'Approve POs',          type: 'bool' },
+    { key: 'procurement_view',          label: 'View Procurement Tab', type: 'bool' },
+    { key: 'procurement_raise',         label: 'Raise POs',            type: 'bool' },
+    { key: 'procurement_approve',       label: 'Approve POs',          type: 'bool' },
+    { key: 'procurement_china',         label: 'View / Raise China POs', type: 'bool' },
+    { key: 'procurement_china_approve', label: 'Approve China POs',    type: 'bool' },
+  ] },
+  { group: 'Damage / Cycle Counts', items: [
+    { key: 'damage_manage',          label: 'Manage Damage Ledger', type: 'bool' },
+    { key: 'cycle_count_record',     label: 'Record Cycle Counts',  type: 'bool' },
+    { key: 'cycle_count_approve_l1', label: 'Approve Variance — L1', type: 'bool' },
+    { key: 'cycle_count_approve_l2', label: 'Approve Variance — L2', type: 'bool' },
+    { key: 'cycle_count_admin',      label: 'Cycle Count Admin / Thresholds', type: 'bool' },
+  ] },
+  { group: 'Process Deviations', items: [
+    { key: 'deviation_propose',     label: 'Propose Deviations',     type: 'bool' },
+    { key: 'deviation_approve_l1',  label: 'Approve Deviations — L1', type: 'bool' },
+    { key: 'deviation_approve_l2',  label: 'Approve Deviations — L2', type: 'bool' },
+    { key: 'deviation_approve_l3',  label: 'Approve Deviations — L3', type: 'bool' },
+    { key: 'deviation_close',       label: 'Close Active Deviations', type: 'bool' },
+  ] },
+  { group: 'Direct Issuance', items: [
+    { key: 'direct_issuance_request', label: 'Request Direct Issuance', type: 'bool' },
+    { key: 'direct_issuance_approve', label: 'Approve & Issue / Close', type: 'bool' },
+  ] },
+  { group: 'Customer Repairs', items: [
+    { key: 'customer_repair_manage', label: 'Manage Customer Repairs', type: 'bool' },
+  ] },
+  { group: 'Dispatch', items: [
+    { key: 'dispatch_restock', label: 'Unit Restock (Scanner)',  type: 'bool' },
+    { key: 'dispatch_challan', label: 'Issue Delivery Challans', type: 'bool' },
   ] },
   { group: 'Reports', items: [
     { key: 'reports',         label: 'View & Download Reports', type: 'bool' },
