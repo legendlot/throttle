@@ -29,20 +29,23 @@ const iconBtn = {
   borderRadius: 4, padding: '3px 8px', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer',
 };
 
+// Status colors are applied as TEXT (color: ...). Brand red/blue/green
+// fail WCAG AA on dark bg — use state-fg variants (PATTERN-054).
+// Yellow stays as brand accent (10.5:1 contrast on --bg, passes AAA).
 const FRESH_STATUS_COLOR = {
   Draft: 'var(--t3)',
-  Submitted: 'var(--blue)',
+  Submitted: 'var(--state-info-fg)',
   Issued: 'var(--yellow)',
   'In Progress': 'var(--yellow)',
-  Completed: 'var(--green)',
-  Rejected: 'var(--red)',
+  Completed: 'var(--state-success-fg)',
+  Rejected: 'var(--state-error-fg)',
   Cancelled: 'var(--t3)',
 };
 
 const REPAIR_STATUS_COLOR = {
   planned: 'var(--t3)',
   active: 'var(--yellow)',
-  completed: 'var(--green)',
+  completed: 'var(--state-success-fg)',
   cancelled: 'var(--t3)',
 };
 

@@ -803,7 +803,9 @@ export default function ReceivingPage() {
                     const daysUntil = r.expected_delivery
                       ? Math.ceil((new Date(r.expected_delivery) - new Date()) / 86400000)
                       : null;
-                    const dateTone = daysUntil !== null ? (daysUntil <= 3 ? 'var(--red)' : daysUntil <= 7 ? 'var(--yellow)' : 'var(--t3)') : 'var(--t3)';
+                    // Applied as text color. Use state-error-fg for the urgent case (PATTERN-054).
+                    // Yellow keeps as brand accent for the warning case (passes AAA on dark).
+                    const dateTone = daysUntil !== null ? (daysUntil <= 3 ? 'var(--state-error-fg)' : daysUntil <= 7 ? 'var(--yellow)' : 'var(--t3)') : 'var(--t3)';
                     const dateStr  = r.expected_delivery
                       ? `${formatDisplayDate(r.expected_delivery)} (${daysUntil !== null ? (daysUntil >= 0 ? `in ${daysUntil}d` : `${Math.abs(daysUntil)}d overdue`) : '—'})`
                       : '—';

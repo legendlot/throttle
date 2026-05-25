@@ -28,17 +28,18 @@ const btnSec = {
   textTransform: 'uppercase', letterSpacing: 1, cursor: 'pointer',
 };
 
+// Applied as TEXT (PATTERN-054). Yellow keeps as brand accent.
 const REPAIR_STATUS_COLOR = {
   planned: 'var(--t3)',
   active: 'var(--yellow)',
-  completed: 'var(--green)',
+  completed: 'var(--state-success-fg)',
   cancelled: 'var(--t3)',
 };
 
 const UNIT_STATUS_COLOR = {
   in_repair: 'var(--yellow)',
-  repaired: 'var(--green)',
-  scrapped_repair: 'var(--red)',
+  repaired: 'var(--state-success-fg)',
+  scrapped_repair: 'var(--state-error-fg)',
   queued: 'var(--t3)',
 };
 

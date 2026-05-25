@@ -25,12 +25,16 @@ const tableThStyle = {
 };
 
 function Badge({ label, tone }) {
-  const color = tone === 'red' ? 'var(--red)' : 'var(--green)';
+  // Use state-bg + state-fg (PATTERN-054). Previous `${color}22` interpolation
+  // was broken — it produced `var(--red)22`, not a valid color, so the background
+  // never rendered. Now uses pre-defined state-bg / state-fg pairs.
+  const bg = tone === 'red' ? 'var(--state-error-bg)' : 'var(--state-success-bg)';
+  const fg = tone === 'red' ? 'var(--state-error-fg)' : 'var(--state-success-fg)';
   return (
     <span style={{
       padding: '2px 6px', borderRadius: 3, fontFamily: 'var(--mono)',
       fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.5,
-      background: `${color}22`, color,
+      background: bg, color: fg,
     }}>{label}</span>
   );
 }

@@ -364,7 +364,10 @@ export default function DashboardPage() {
               producible.map((row, i) => {
                 const bottleneckUnits = row.bottleneck?.max_units ?? 0;
                 const constrained = bottleneckUnits < row.maxPossible;
-                const color = constrained ? 'var(--red)' : 'var(--green)';
+                // Brand red/green for the progress-bar fill (background usage is fine).
+                // state-fg variants for the units number (text usage — PATTERN-054).
+                const barColor  = constrained ? 'var(--red)' : 'var(--green)';
+                const textColor = constrained ? 'var(--state-error-fg)' : 'var(--state-success-fg)';
                 const pct = row.maxPossible > 0
                   ? Math.round((bottleneckUnits / row.maxPossible) * 100)
                   : 100;
@@ -386,7 +389,7 @@ export default function DashboardPage() {
                         </div>
                       </div>
                       <div style={{ textAlign: 'right' }}>
-                        <div style={{ fontFamily: 'var(--mono)', fontSize: 20, color }}>
+                        <div style={{ fontFamily: 'var(--mono)', fontSize: 20, color: textColor }}>
                           {bottleneckUnits.toLocaleString()}
                         </div>
                         <div style={{ fontSize: 10, color: 'var(--t3)' }}>units producible</div>
@@ -395,7 +398,7 @@ export default function DashboardPage() {
                     {constrained && (
                       <div style={{ marginTop: 5 }}>
                         <div style={{ height: 4, background: 'var(--surface2)', borderRadius: 2, overflow: 'hidden' }}>
-                          <div style={{ width: `${pct}%`, height: 4, background: color, borderRadius: 2 }} />
+                          <div style={{ width: `${pct}%`, height: 4, background: barColor, borderRadius: 2 }} />
                         </div>
                         <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 2, fontFamily: 'var(--mono)' }}>
                           {pct}% of max potential ({row.maxPossible.toLocaleString()} units)

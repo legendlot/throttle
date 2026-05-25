@@ -45,13 +45,15 @@ const RECEIPT_TONES = {
 };
 
 function statusColor(status) {
+  // Applied as TEXT color. Brand red/blue/green fail WCAG AA on dark bg —
+  // use state-fg variants (PATTERN-054). Yellow keeps as brand accent.
   switch (status) {
     case 'Draft': return 'var(--t3)';
-    case 'Submitted': return 'var(--blue)';
+    case 'Submitted': return 'var(--state-info-fg)';
     case 'Issued':
     case 'In Progress': return 'var(--yellow)';
-    case 'Completed': return 'var(--green)';
-    case 'Rejected': return 'var(--red)';
+    case 'Completed': return 'var(--state-success-fg)';
+    case 'Rejected': return 'var(--state-error-fg)';
     case 'Cancelled': return 'var(--t3)';
     default: return 'var(--t2)';
   }
@@ -443,7 +445,7 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
           {chip(`Parts: ${pickList.length}`)}
-          {chip(`Short: ${shortCount}`, shortCount > 0 ? 'var(--red)' : 'var(--green)')}
+          {chip(`Short: ${shortCount}`, shortCount > 0 ? 'var(--state-error-fg)' : 'var(--state-success-fg)')}
           {chip(`Total units: ${totalUnits}`)}
         </div>
         {pickList.length === 0 ? (
