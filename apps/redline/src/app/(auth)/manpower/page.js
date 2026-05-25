@@ -22,10 +22,10 @@ const PERFORMANCE_CATEGORIES = [
 ];
 
 // ── Shared styles ───────────────────────────────────────────────────────────
-const panelStyle       = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, marginBottom: 16 };
-const panelHeaderStyle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid var(--border)', fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--t2)', gap: 8, flexWrap: 'wrap' };
+const panelStyle       = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, marginBottom: 16 };
+const panelHeaderStyle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid var(--border)', fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--t1)', gap: 8, flexWrap: 'wrap' };
 const panelBodyStyle   = { padding: '12px 14px' };
-const inputStyle       = { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: '8px 12px', fontSize: 13, color: 'var(--t1)', outline: 'none', fontFamily: 'var(--mono)' };
+const inputStyle       = { background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 6, padding: '8px 12px', fontSize: 13, color: 'var(--t1)', outline: 'none', fontFamily: 'var(--mono)' };
 const selectStyle      = { ...inputStyle, cursor: 'pointer' };
 const labelStyle       = { fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4, display: 'block' };
 const btnPrimary       = { padding: '8px 14px', background: 'var(--yellow)', color: '#0a0a0a', border: '1px solid var(--yellow)', borderRadius: 3, fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer' };
@@ -65,6 +65,25 @@ function fmtDuration(clockIn, clockOut) {
   const h = Math.floor(totalMin / 60);
   const m = totalMin % 60;
   return `${h}h ${m}m`;
+}
+
+// ── Operator card helpers ────────────────────────────────────────────────────
+function getInitials(name) {
+  const parts = (name || '').trim().split(/\s+/);
+  return parts.length >= 2
+    ? (parts[0][0] + parts[1][0]).toUpperCase()
+    : (parts[0] || '?').slice(0, 2).toUpperCase();
+}
+const DEPT_TINT = {
+  assembly:  { bg: '#213CE233', color: '#7b93ff' },
+  qc:        { bg: '#F2CD1A22', color: '#e5ba00' },
+  packaging: { bg: '#a855f722', color: '#d8b4fe' },
+  dispatch:  { bg: '#DE2A2A22', color: '#fca5a5' },
+  store:     { bg: '#22c55e22', color: '#4ade80' },
+  admin:     { bg: '#22c55e22', color: '#4ade80' },
+};
+function deptTint(dept) {
+  return DEPT_TINT[(dept || '').toLowerCase()] || { bg: 'rgba(80,80,80,0.20)', color: 'var(--t2)' };
 }
 
 // getManpowerLog returns { L1: { Assembly:[], QC:[], Packaging:[], Unassigned:[] }, ...,
@@ -365,15 +384,15 @@ function HeadcountCard({ label, accent, count, sub }) {
     <div style={{
       background: 'var(--surface)',
       border: '1px solid var(--border)',
-      borderLeft: `3px solid ${accent}`,
-      borderRadius: 3,
-      padding: '12px 14px',
+      borderRadius: 8,
+      padding: 16,
       display: 'flex', flexDirection: 'column', gap: 4,
     }}>
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+      <div style={{ height: 3, borderRadius: 2, background: accent, marginBottom: 4 }} />
+      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--t2)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
         {label}
       </span>
-      <span style={{ fontFamily: 'var(--cond)', fontSize: 28, fontWeight: 800, color: accent, lineHeight: 1 }}>
+      <span style={{ fontFamily: 'var(--mono)', fontSize: 20, fontWeight: 700, color: 'var(--t1)', lineHeight: 1 }}>
         {count}
       </span>
       <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>
@@ -385,16 +404,15 @@ function HeadcountCard({ label, accent, count, sub }) {
 
 function LineColumn({ line, rows, accent }) {
   return (
-    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4 }}>
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '10px 14px', borderBottom: '1px solid var(--border)',
-        fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700,
-        letterSpacing: '0.06em', textTransform: 'uppercase',
-        color: accent,
-      }}>
-        <span>{line}</span>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>({rows.length})</span>
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: 'var(--t1)', fontFamily: 'var(--cond)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: accent, display: 'inline-block', flexShrink: 0 }} />
+          {line}
+        </span>
+        <span style={{ fontSize: 11, fontWeight: 600, padding: '1px 8px', borderRadius: 4, background: 'var(--surface-2)', color: 'var(--t2)' }}>
+          {rows.length}
+        </span>
       </div>
       <div style={{ padding: '12px 14px' }}>
         {rows.length === 0 ? (
@@ -413,15 +431,12 @@ function LineColumn({ line, rows, accent }) {
 
 function UnassignedSection({ rows }) {
   return (
-    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4 }}>
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '10px 14px', borderBottom: '1px solid var(--border)',
-        fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700,
-        letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--t2)',
-      }}>
-        <span>Unassigned</span>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>({rows.length})</span>
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--t1)', fontFamily: 'var(--cond)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Unassigned</span>
+        <span style={{ fontSize: 11, fontWeight: 600, padding: '1px 8px', borderRadius: 4, background: 'var(--surface-2)', color: 'var(--t2)' }}>
+          {rows.length}
+        </span>
       </div>
       <div style={{ padding: '12px 14px', display: 'flex', flexWrap: 'wrap', gap: 8 }}>
         {rows.map((row) => (
@@ -436,15 +451,15 @@ function UnassignedSection({ rows }) {
 
 function OthersSection({ rows, accent }) {
   return (
-    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, marginBottom: 16 }}>
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '10px 14px', borderBottom: '1px solid var(--border)',
-        fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700,
-        letterSpacing: '0.06em', textTransform: 'uppercase', color: accent,
-      }}>
-        <span>Others</span>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>({rows.length})</span>
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: 'var(--t1)', fontFamily: 'var(--cond)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: accent, display: 'inline-block', flexShrink: 0 }} />
+          Others
+        </span>
+        <span style={{ fontSize: 11, fontWeight: 600, padding: '1px 8px', borderRadius: 4, background: 'var(--surface-2)', color: 'var(--t2)' }}>
+          {rows.length}
+        </span>
       </div>
       <div style={{ padding: '12px 14px', display: 'flex', flexWrap: 'wrap', gap: 8 }}>
         {rows.map((row) => (
@@ -459,27 +474,39 @@ function OthersSection({ rows, accent }) {
 
 function OperatorCard({ row, accent }) {
   const isOvertime = (row.shift_type || '').toLowerCase() === 'overtime';
+  const initials = getInitials(row.operator_name);
+  const tint = deptTint(row.operator_department);
   return (
     <div style={{
-      background: 'var(--surface2)',
+      background: 'var(--surface)',
       border: '1px solid var(--border)',
-      borderLeft: `3px solid ${accent}`,
-      borderRadius: 3,
+      borderRadius: 6,
       padding: '8px 10px',
       marginBottom: 6,
-      display: 'flex', flexDirection: 'column', gap: 4,
+      display: 'flex', alignItems: 'center', gap: 10,
     }}>
-      <div style={{ fontSize: 12, color: 'var(--t1)', fontWeight: 600 }}>
-        {row.operator_name || '(unknown)'}
+      <div style={{
+        width: 26, height: 26, borderRadius: '50%',
+        background: accent,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: 10, fontWeight: 700, color: '#fff', flexShrink: 0,
+      }}>
+        {initials}
       </div>
-      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-        <StatusBadge variant="neutral">{capitalize(row.operator_department || '—')}</StatusBadge>
-        <StatusBadge variant={isOvertime ? 'brand' : 'neutral'}>
-          {isOvertime ? 'Overtime' : 'Standard'}
-        </StatusBadge>
-      </div>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>
-        Clock In · {fmtIstTime(row.clock_in) || '—'}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--t1)', fontFamily: 'var(--mono)' }}>
+          {row.operator_name || '(unknown)'}
+        </div>
+        <div style={{ display: 'flex', gap: 4, marginTop: 3, flexWrap: 'wrap' }}>
+          {row.operator_department && (
+            <span style={{ fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 3, background: tint.bg, color: tint.color }}>
+              {capitalize(row.operator_department)}
+            </span>
+          )}
+          <StatusBadge variant={isOvertime ? 'brand' : 'neutral'}>
+            {isOvertime ? 'Overtime' : 'Standard'}
+          </StatusBadge>
+        </div>
       </div>
     </div>
   );
@@ -1101,12 +1128,12 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                   onDragStart={(e) => onPoolDragStart(e, op)}
                   title={isSelected ? 'Drag to assign selected operators' : 'Click checkbox to multi-select, or drag this chip'}
                   style={{
-                    display: 'flex', alignItems: 'center', gap: 8,
-                    padding: '4px 10px 4px 6px', borderRadius: 16,
-                    background: isSelected ? 'var(--yellow)' : 'var(--surface2)',
-                    color: isSelected ? '#000' : 'var(--t1)',
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                    padding: '3px 8px 3px 6px', borderRadius: 4,
+                    background: isSelected ? 'var(--yellow)' : 'var(--surface-2)',
+                    color: isSelected ? '#0a0a0a' : 'var(--t1)',
                     border: `1px solid ${isSelected ? 'var(--yellow)' : 'var(--border)'}`,
-                    cursor: 'grab', fontSize: 12, userSelect: 'none',
+                    cursor: 'grab', fontSize: 11, userSelect: 'none', fontFamily: 'var(--mono)',
                   }}
                 >
                   <span
@@ -1144,8 +1171,14 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                             + ((sections.Unassigned || []).length);
             return (
               <div key={line} style={{ ...panelStyle, marginBottom: 0, minHeight: 220 }}>
-                <div style={{ ...panelHeaderStyle, color: accent }}>
-                  <span>{line} ({lineCount})</span>
+                <div style={panelHeaderStyle}>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: accent, display: 'inline-block', flexShrink: 0 }} />
+                    {line}
+                  </span>
+                  <span style={{ fontSize: 11, fontWeight: 600, padding: '1px 8px', borderRadius: 4, background: 'var(--surface-2)', color: 'var(--t2)' }}>
+                    {lineCount}
+                  </span>
                 </div>
                 <div style={{ padding: 6 }}>
                   {ROSTER_SECTIONS.map((station, idx) => {
@@ -1194,8 +1227,8 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                               <div style={{
                                 position: 'absolute', top: '100%', right: 0,
                                 marginTop: 4, zIndex: 20, width: 240,
-                                background: 'var(--surface2)', border: '1px solid var(--border)',
-                                borderRadius: 3, boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+                                background: 'var(--surface-2)', border: '1px solid var(--border)',
+                                borderRadius: 6, boxShadow: '0 4px 16px #00000066',
                               }}>
                                 <input
                                   type="text"
@@ -1250,7 +1283,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                                             setPickerHighlight((s) => ({ ...s, [key]: -1 }));
                                           }}
                                           onMouseEnter={() => setPickerHighlight((s) => ({ ...s, [key]: opIdx }))}
-                                          style={{ padding: '6px 10px', cursor: 'pointer', fontSize: 12, color: 'var(--t1)', background: isHi ? 'var(--surface)' : 'transparent' }}
+                                          style={{ padding: '6px 10px', cursor: 'pointer', fontSize: 12, color: 'var(--t1)', background: isHi ? 'var(--surface-3)' : 'transparent' }}
                                         >
                                           <div>{op.name}</div>
                                           <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', marginTop: 1 }}>
@@ -1269,7 +1302,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                           <div style={{ padding: 12, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
                         ) : rows.length === 0 ? (
                           <div style={{
-                            border: '1px dashed var(--border)', borderRadius: 3,
+                            border: '1.5px dashed var(--border)', borderRadius: 6,
                             padding: '12px 10px', textAlign: 'center',
                             color: 'var(--t3)', fontSize: 10, fontFamily: 'var(--mono)',
                             textTransform: 'uppercase', letterSpacing: '0.08em',
@@ -1277,45 +1310,52 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                             Drop operator here
                           </div>
                         ) : (
-                          rows.map((row) => (
-                            <div
-                              key={row.id}
-                              style={{
-                                background: 'var(--surface2)',
-                                border: '1px solid var(--border)',
-                                borderLeft: `3px solid ${accent}`,
-                                borderRadius: 3,
-                                padding: '5px 8px',
-                                marginBottom: 4,
-                                display: 'flex', alignItems: 'flex-start', gap: 6,
-                              }}
-                            >
-                              <div style={{ flex: 1, minWidth: 0 }}>
-                                <div style={{ fontSize: 12, color: 'var(--t1)' }}>{row.operator_name || '(unknown)'}</div>
-                                <div style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 2 }}>
-                                  {row.operator_department || '—'}
-                                </div>
-                              </div>
-                              <button
-                                onClick={() => handleUnassign(row, line)}
-                                title={`Remove ${row.operator_name || 'operator'} from ${line}`}
+                          rows.map((row) => {
+                            const initials = getInitials(row.operator_name);
+                            return (
+                              <div
+                                key={row.id}
                                 style={{
-                                  background: 'transparent',
+                                  background: 'var(--surface)',
                                   border: '1px solid var(--border)',
-                                  color: '#ff7070',
-                                  cursor: 'pointer',
-                                  borderRadius: 3,
-                                  padding: '0 5px',
-                                  fontSize: 12,
-                                  lineHeight: '18px',
-                                  height: 20,
-                                  flexShrink: 0,
+                                  borderRadius: 6,
+                                  padding: '8px 10px',
+                                  marginBottom: 4,
+                                  display: 'flex', alignItems: 'center', gap: 8,
                                 }}
                               >
-                                ×
-                              </button>
-                            </div>
-                          ))
+                                <div style={{ width: 24, height: 24, borderRadius: '50%', background: accent, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 700, color: '#fff', flexShrink: 0 }}>
+                                  {initials}
+                                </div>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--t1)', fontFamily: 'var(--mono)' }}>{row.operator_name || '(unknown)'}</div>
+                                  {row.operator_department && (
+                                    <div style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 2 }}>
+                                      {row.operator_department}
+                                    </div>
+                                  )}
+                                </div>
+                                <button
+                                  onClick={() => handleUnassign(row, line)}
+                                  title={`Remove ${row.operator_name || 'operator'} from ${line}`}
+                                  style={{
+                                    background: 'transparent',
+                                    border: '1px solid var(--border)',
+                                    color: '#ff7070',
+                                    cursor: 'pointer',
+                                    borderRadius: 3,
+                                    padding: '0 5px',
+                                    fontSize: 12,
+                                    lineHeight: '18px',
+                                    height: 20,
+                                    flexShrink: 0,
+                                  }}
+                                >
+                                  ×
+                                </button>
+                              </div>
+                            );
+                          })
                         )}
                       </div>
                     );
@@ -1333,10 +1373,10 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                           <div
                             key={row.id}
                             style={{
-                              background: 'var(--surface2)',
+                              background: 'var(--surface)',
                               border: '1px dashed #ff9d33',
-                              borderRadius: 3,
-                              padding: '5px 8px',
+                              borderRadius: 6,
+                              padding: '8px 10px',
                               marginBottom: 4,
                               display: 'flex', alignItems: 'flex-start', gap: 6,
                             }}
@@ -1402,8 +1442,14 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
             });
             return (
               <div key={key} style={{ ...panelStyle, marginBottom: 0, minHeight: 220 }}>
-                <div style={{ ...panelHeaderStyle, color: accent }}>
-                  <span>{panel.label} ({rows.length})</span>
+                <div style={panelHeaderStyle}>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: accent, display: 'inline-block', flexShrink: 0 }} />
+                    {panel.label}
+                  </span>
+                  <span style={{ fontSize: 11, fontWeight: 600, padding: '1px 8px', borderRadius: 4, background: 'var(--surface-2)', color: 'var(--t2)' }}>
+                    {rows.length}
+                  </span>
                 </div>
                 <div
                   onDragOver={(e) => e.preventDefault()}
@@ -1439,8 +1485,8 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                         <div style={{
                           position: 'absolute', top: '100%', right: 0,
                           marginTop: 4, zIndex: 20, width: 240,
-                          background: 'var(--surface2)', border: '1px solid var(--border)',
-                          borderRadius: 3, boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+                          background: 'var(--surface-2)', border: '1px solid var(--border)',
+                          borderRadius: 6, boxShadow: '0 4px 16px #00000066',
                         }}>
                           <input
                             type="text"
@@ -1495,7 +1541,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                                       setPickerHighlight((s) => ({ ...s, [key]: -1 }));
                                     }}
                                     onMouseEnter={() => setPickerHighlight((s) => ({ ...s, [key]: opIdx }))}
-                                    style={{ padding: '6px 10px', cursor: 'pointer', fontSize: 12, color: 'var(--t1)', background: isHi ? 'var(--surface)' : 'transparent' }}
+                                    style={{ padding: '6px 10px', cursor: 'pointer', fontSize: 12, color: 'var(--t1)', background: isHi ? 'var(--surface-3)' : 'transparent' }}
                                   >
                                     <div>{op.name}</div>
                                     <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', marginTop: 1 }}>
@@ -1514,7 +1560,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                     <div style={{ padding: 12, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
                   ) : rows.length === 0 ? (
                     <div style={{
-                      border: '1px dashed var(--border)', borderRadius: 3,
+                      border: '1.5px dashed var(--border)', borderRadius: 6,
                       padding: '12px 10px', textAlign: 'center',
                       color: 'var(--t3)', fontSize: 10, fontFamily: 'var(--mono)',
                       textTransform: 'uppercase', letterSpacing: '0.08em',
@@ -1522,45 +1568,52 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                       Drop operator here
                     </div>
                   ) : (
-                    rows.map((row) => (
-                      <div
-                        key={row.id}
-                        style={{
-                          background: 'var(--surface2)',
-                          border: '1px solid var(--border)',
-                          borderLeft: `3px solid ${accent}`,
-                          borderRadius: 3,
-                          padding: '5px 8px',
-                          marginBottom: 4,
-                          display: 'flex', alignItems: 'flex-start', gap: 6,
-                        }}
-                      >
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 12, color: 'var(--t1)' }}>{row.operator_name || '(unknown)'}</div>
-                          <div style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 2 }}>
-                            {row.operator_department || '—'}
-                          </div>
-                        </div>
-                        <button
-                          onClick={() => handleUnassign(row, panel.assignLine)}
-                          title={`Remove ${row.operator_name || 'operator'} from ${panel.label}`}
+                    rows.map((row) => {
+                      const initials = getInitials(row.operator_name);
+                      return (
+                        <div
+                          key={row.id}
                           style={{
-                            background: 'transparent',
+                            background: 'var(--surface)',
                             border: '1px solid var(--border)',
-                            color: '#ff7070',
-                            cursor: 'pointer',
-                            borderRadius: 3,
-                            padding: '0 5px',
-                            fontSize: 12,
-                            lineHeight: '18px',
-                            height: 20,
-                            flexShrink: 0,
+                            borderRadius: 6,
+                            padding: '8px 10px',
+                            marginBottom: 4,
+                            display: 'flex', alignItems: 'center', gap: 8,
                           }}
                         >
-                          ×
-                        </button>
-                      </div>
-                    ))
+                          <div style={{ width: 24, height: 24, borderRadius: '50%', background: accent, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 700, color: '#fff', flexShrink: 0 }}>
+                            {initials}
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--t1)', fontFamily: 'var(--mono)' }}>{row.operator_name || '(unknown)'}</div>
+                            {row.operator_department && (
+                              <div style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 2 }}>
+                                {row.operator_department}
+                              </div>
+                            )}
+                          </div>
+                          <button
+                            onClick={() => handleUnassign(row, panel.assignLine)}
+                            title={`Remove ${row.operator_name || 'operator'} from ${panel.label}`}
+                            style={{
+                              background: 'transparent',
+                              border: '1px solid var(--border)',
+                              color: '#ff7070',
+                              cursor: 'pointer',
+                              borderRadius: 3,
+                              padding: '0 5px',
+                              fontSize: 12,
+                              lineHeight: '18px',
+                              height: 20,
+                              flexShrink: 0,
+                            }}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      );
+                    })
                   )}
                 </div>
               </div>
@@ -1695,14 +1748,19 @@ function PerformanceTab({ session, canManageFloor, operators }) {
       }
       case 'category': {
         const def = PERFORMANCE_CATEGORIES.find((x) => x.value === (row.category || 'other'));
-        return def?.label || capitalize(row.category || 'other');
+        const label = def?.label || capitalize(row.category || 'other');
+        return (
+          <span style={{ display: 'inline-block', padding: '1px 6px', borderRadius: 3, background: 'var(--surface-2)', color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+            {label}
+          </span>
+        );
       }
       case 'reason': {
         const t = row.reason || '';
         return <span title={t.length > 80 ? t : undefined}>{t.length > 80 ? t.slice(0, 80) + '…' : t}</span>;
       }
       case 'recorded_by':
-        return row.recorded_by_name || '—';
+        return <span style={{ fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>{row.recorded_by_name || '—'}</span>;
       default:
         return row[c.key];
     }
@@ -1753,9 +1811,9 @@ function PerformanceTab({ session, canManageFloor, operators }) {
                 style={{
                   position: 'absolute', top: '100%', left: 0, right: 0,
                   marginTop: 2, zIndex: 20,
-                  background: 'var(--surface2)', border: '1px solid var(--border)',
-                  borderRadius: 3, maxHeight: 280, overflowY: 'auto',
-                  boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+                  background: 'var(--surface-2)', border: '1px solid var(--border)',
+                  borderRadius: 6, maxHeight: 280, overflowY: 'auto',
+                  boxShadow: '0 4px 16px #00000066',
                 }}
               >
                 {filteredOps.length === 0 ? (
@@ -1768,7 +1826,7 @@ function PerformanceTab({ session, canManageFloor, operators }) {
                     const isHi = idx === highlightedIdx;
                     let bg = 'transparent';
                     if (isSel) bg = 'rgba(255,200,0,0.05)';
-                    else if (isHi) bg = 'var(--surface)';
+                    else if (isHi) bg = 'var(--surface-3)';
                     return (
                       <div
                         key={op.id}
@@ -1797,8 +1855,8 @@ function PerformanceTab({ session, canManageFloor, operators }) {
           {operatorId && (
             <div style={{
               display: 'flex', gap: 14, alignItems: 'center',
-              padding: '6px 14px', background: 'var(--surface2)',
-              border: '1px solid var(--border)', borderRadius: 3,
+              padding: '8px 14px', background: 'var(--surface-2)',
+              border: '1px solid var(--border)', borderRadius: 6,
             }}>
               <div>
                 <div style={{ fontSize: 9, color: 'var(--t3)', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Total</div>

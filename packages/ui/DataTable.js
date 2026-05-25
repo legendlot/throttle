@@ -12,12 +12,12 @@ export function DataTable({ columns = [], rows = [], loading, emptyMessage = 'No
   return (
     <table style={{
       width: '100%', borderCollapse: 'collapse',
-      fontFamily: 'var(--mono, ui-monospace, Menlo, monospace)', fontSize: 12, color: '#ccc',
+      fontFamily: 'var(--mono, ui-monospace, Menlo, monospace)', fontSize: 12, color: 'var(--t1)',
     }}>
       <thead>
-        <tr>
+        <tr style={{ background: 'var(--surface-2)' }}>
           {columns.map((c) => (
-            <th key={c.key} style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #333', color: '#888', fontWeight: 500, textTransform: 'uppercase', letterSpacing: 0.5, fontSize: 11 }}>
+            <th key={c.key} style={{ textAlign: 'left', padding: '8px 12px', borderBottom: '1px solid var(--border)', color: 'var(--t2)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: 11 }}>
               {c.label}
             </th>
           ))}
@@ -25,9 +25,9 @@ export function DataTable({ columns = [], rows = [], loading, emptyMessage = 'No
       </thead>
       <tbody>
         {rows.map((row, i) => (
-          <tr key={row.id || i} style={{ borderBottom: '1px solid #1a1a1a' }}>
+          <tr key={row.id || i} style={{ background: i % 2 === 0 ? 'var(--surface)' : 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
             {columns.map((c) => (
-              <td key={c.key} style={{ padding: '6px 8px' }}>
+              <td key={c.key} style={{ padding: '8px 12px', fontSize: 12, color: 'var(--t1)' }}>
                 {renderCell ? renderCell(row, c) : row[c.key]}
               </td>
             ))}
