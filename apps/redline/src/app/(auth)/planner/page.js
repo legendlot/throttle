@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, useToast, Panel, Chip } from '@throttle/ui';
+import { Spinner, useToast, Panel, Chip, StatusBadge } from '@throttle/ui';
 
 const LEAD_COLORS = {
   impossible: '#DE2A2A',
@@ -675,7 +675,7 @@ export default function PlannerPage() {
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
         <div>
-          <h1 style={{ fontFamily: 'Tomorrow, sans-serif', fontSize: 22, margin: 0, color: 'var(--text)' }}>
+          <h1 style={{ fontFamily: 'Tomorrow, sans-serif', fontSize: 22, margin: 0, color: 'var(--t1)' }}>
             Production Planner
           </h1>
           {upload ? (
@@ -696,14 +696,14 @@ export default function PlannerPage() {
           <button
             onClick={() => fileRef.current?.click()}
             disabled={uploading}
-            style={{ padding: '8px 16px', background: 'var(--b1)', border: '1px solid var(--b2)',
-              color: 'var(--text)', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>
+            style={{ padding: '8px 16px', background: 'var(--border)', border: '1px solid var(--border)',
+              color: 'var(--t1)', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>
             {uploading ? 'Uploading…' : '↑ Upload Plan CSV'}
           </button>
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 6, marginBottom: 24, paddingBottom: 12, borderBottom: '1px solid var(--b1)' }}>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 24, paddingBottom: 12, borderBottom: '1px solid var(--border)' }}>
         {[
           { key: 'timeline',        label: 'Dispatch Timeline' },
           { key: 'recommendations', label: `Recommended Runs (${recDateCount} date${recDateCount === 1 ? '' : 's'})` },
@@ -745,15 +745,15 @@ export default function PlannerPage() {
               const hasGaps = dateEntry.total_gap > 0;
               return (
                 <div key={dateEntry.date} style={{
-                  border: `1px solid ${hasGaps ? '#DE2A2A44' : 'var(--b1)'}`,
+                  border: `1px solid ${hasGaps ? '#DE2A2A44' : 'var(--border)'}`,
                   borderRadius: 8, overflow: 'hidden',
                 }}>
                   <div style={{
-                    padding: '12px 16px', background: 'var(--s1)',
+                    padding: '12px 16px', background: 'var(--surface)',
                     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                   }}>
                     <div>
-                      <span style={{ fontFamily: 'Tomorrow, sans-serif', fontSize: 15, color: 'var(--text)', fontWeight: 600 }}>
+                      <span style={{ fontFamily: 'Tomorrow, sans-serif', fontSize: 15, color: 'var(--t1)', fontWeight: 600 }}>
                         {new Date(dateEntry.date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}
                       </span>
                       <span style={{ marginLeft: 10, fontSize: 12, color: 'var(--t2)' }}>{dateLabel}</span>
@@ -768,14 +768,14 @@ export default function PlannerPage() {
                       const expandKey = `${prod.product}·${dateEntry.date}`;
                       const isOpen = !!expandedProducts[expandKey];
                       return (
-                        <div key={prod.product} style={{ borderTop: '1px solid var(--b1)' }}>
+                        <div key={prod.product} style={{ borderTop: '1px solid var(--border)' }}>
                           <button
                             onClick={() => setExpandedProducts(prev => ({ ...prev, [expandKey]: !prev[expandKey] }))}
                             style={{
                               width: '100%', textAlign: 'left',
                               padding: '10px 16px', background: 'transparent', border: 'none',
                               cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                              color: 'var(--text)', fontSize: 13,
+                              color: 'var(--t1)', fontSize: 13,
                             }}>
                             <span>
                               <span style={{ display: 'inline-block', width: 14, color: 'var(--t2)' }}>
@@ -783,8 +783,8 @@ export default function PlannerPage() {
                               </span>
                               <strong>{prod.product}</strong>
                               <span style={{ marginLeft: 12, color: 'var(--t2)' }}>
-                                Need <strong style={{ color: 'var(--text)' }}>{prod.total_need}</strong> ·
-                                Gap <strong style={{ color: prod.total_gap > 0 ? '#DE2A2A' : 'var(--text)' }}>{prod.total_gap}</strong> ·
+                                Need <strong style={{ color: 'var(--t1)' }}>{prod.total_need}</strong> ·
+                                Gap <strong style={{ color: prod.total_gap > 0 ? '#DE2A2A' : 'var(--t1)' }}>{prod.total_gap}</strong> ·
                                 {prod.variants.length} variant{prod.variants.length === 1 ? '' : 's'}
                               </span>
                             </span>
@@ -796,7 +796,7 @@ export default function PlannerPage() {
                           {isOpen && (
                             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                               <thead>
-                                <tr style={{ background: 'var(--s2)', color: 'var(--t2)' }}>
+                                <tr style={{ background: 'var(--surface-2)', color: 'var(--t2)' }}>
                                   {[
                                     'Variant', 'Mapping', 'Need', 'RTD', 'Allocated',
                                     viewMode === 'cascaded' ? 'Balance' : 'Available',
@@ -809,10 +809,10 @@ export default function PlannerPage() {
                               <tbody>
                                 {prod.variants.map((v, vi) => (
                                   <tr key={vi} style={{
-                                    borderTop: '1px solid var(--b1)',
+                                    borderTop: '1px solid var(--border)',
                                     background: v.gap > 0 ? '#DE2A2A0A' : 'transparent',
                                   }}>
-                                    <td style={{ padding: '6px 10px', color: 'var(--text)' }}>
+                                    <td style={{ padding: '6px 10px', color: 'var(--t1)' }}>
                                       {v.variant} {v.colour}
                                     </td>
                                     <td style={{ padding: '6px 10px', color: 'var(--t2)' }}>{v.mapping}</td>
@@ -872,15 +872,15 @@ export default function PlannerPage() {
 
                   return (
                     <div key={rec.dispatch_date} style={{
-                      border: '1px solid var(--b1)', borderRadius: 8, overflow: 'hidden',
+                      border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden',
                     }}>
                       <button
                         onClick={() => setExpandedDates(prev => ({ ...prev, [rec.dispatch_date]: !dateExpanded }))}
                         style={{
                           width: '100%', textAlign: 'left',
-                          padding: '12px 16px', background: 'var(--s1)', border: 'none',
+                          padding: '12px 16px', background: 'var(--surface)', border: 'none',
                           cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                          color: 'var(--text)',
+                          color: 'var(--t1)',
                         }}>
                         <span>
                           <span style={{ display: 'inline-block', width: 16, color: 'var(--t2)' }}>
@@ -897,7 +897,7 @@ export default function PlannerPage() {
                           <div style={{ fontSize: 12, color: 'var(--t2)', marginBottom: 10 }}>
                             {rec.too_late
                               ? <span style={{ color: '#DE2A2A', fontWeight: 600 }}>⚠ Too late to produce in time</span>
-                              : <span>Suggested production date: <strong style={{ color: 'var(--text)' }}>{suggestedLabel}</strong></span>}
+                              : <span>Suggested production date: <strong style={{ color: 'var(--t1)' }}>{suggestedLabel}</strong></span>}
                           </div>
 
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -908,13 +908,13 @@ export default function PlannerPage() {
                                 && scheduling.dispatchDate === rec.dispatch_date
                                 && scheduling.product === prod.product;
                               return (
-                                <div key={prod.product} style={{ borderTop: '1px solid var(--b1)' }}>
+                                <div key={prod.product} style={{ borderTop: '1px solid var(--border)' }}>
                                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 4px' }}>
                                     <button
                                       onClick={() => setExpandedDateProducts(prev => ({ ...prev, [prodKey]: !isProdOpen }))}
                                       style={{
                                         background: 'transparent', border: 'none', cursor: 'pointer',
-                                        color: 'var(--text)', fontSize: 13, padding: 0, textAlign: 'left',
+                                        color: 'var(--t1)', fontSize: 13, padding: 0, textAlign: 'left',
                                       }}>
                                       <span style={{ color: 'var(--t2)', marginRight: 4 }}>{isProdOpen ? '▼' : '▶'}</span>
                                       <strong>{prod.product}</strong>
@@ -930,9 +930,9 @@ export default function PlannerPage() {
                                       title={rec.too_late ? 'Too late to produce in time' : ''}
                                       style={{
                                         padding: '4px 10px', fontSize: 11, fontWeight: 600,
-                                        background: rec.too_late ? 'var(--s1)' : (isPanelOpen ? 'var(--s2)' : '#F2CD1A'),
+                                        background: rec.too_late ? 'var(--surface)' : (isPanelOpen ? 'var(--surface-2)' : '#F2CD1A'),
                                         color:      rec.too_late ? 'var(--t3)' : (isPanelOpen ? 'var(--t2)' : '#080808'),
-                                        border: '1px solid ' + (isPanelOpen ? 'var(--b2)' : 'transparent'),
+                                        border: '1px solid ' + (isPanelOpen ? 'var(--border)' : 'transparent'),
                                         borderRadius: 4,
                                         cursor: rec.too_late ? 'not-allowed' : 'pointer',
                                       }}>
@@ -958,7 +958,7 @@ export default function PlannerPage() {
                                     <div style={{ fontSize: 12, color: 'var(--t2)', paddingLeft: 22, paddingBottom: 6 }}>
                                       {prod.variants.map((v, vi) => (
                                         <div key={vi} style={{ display: 'flex', gap: 12, padding: '2px 0' }}>
-                                          <span style={{ minWidth: 140, color: 'var(--text)' }}>
+                                          <span style={{ minWidth: 140, color: 'var(--t1)' }}>
                                             {v.variant} {v.colour && <span style={{ color: 'var(--t2)' }}>{v.colour}</span>}
                                           </span>
                                           {v.gap_ecomm  > 0 && <span>{v.gap_ecomm} ecomm</span>}
@@ -972,17 +972,17 @@ export default function PlannerPage() {
                                     <div style={{
                                       margin: '6px 4px 10px',
                                       padding: 14,
-                                      background: 'var(--s1)',
-                                      border: '1px solid var(--b2)',
+                                      background: 'var(--surface)',
+                                      border: '1px solid var(--border)',
                                       borderRadius: 6,
                                     }}>
                                       <div style={{ fontSize: 12, color: 'var(--t2)', marginBottom: 10 }}>
-                                        Schedule <strong style={{ color: 'var(--text)' }}>{scheduling.product}</strong>
+                                        Schedule <strong style={{ color: 'var(--t1)' }}>{scheduling.product}</strong>
                                         &nbsp;→&nbsp;{dateLabel} dispatch
                                       </div>
                                       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, marginBottom: 10 }}>
                                         <thead>
-                                          <tr style={{ background: 'var(--s2)', color: 'var(--t2)' }}>
+                                          <tr style={{ background: 'var(--surface-2)', color: 'var(--t2)' }}>
                                             {['Variant', 'Colour', 'Qty Ecomm', 'Qty Retail'].map(h => (
                                               <th key={h} style={{ padding: '5px 8px', textAlign: 'left', fontWeight: 500 }}>{h}</th>
                                             ))}
@@ -990,14 +990,14 @@ export default function PlannerPage() {
                                         </thead>
                                         <tbody>
                                           {scheduling.variants.map((v, vi) => (
-                                            <tr key={vi} style={{ borderTop: '1px solid var(--b1)' }}>
-                                              <td style={{ padding: '5px 8px', color: 'var(--text)' }}>{v.variant}</td>
+                                            <tr key={vi} style={{ borderTop: '1px solid var(--border)' }}>
+                                              <td style={{ padding: '5px 8px', color: 'var(--t1)' }}>{v.variant}</td>
                                               <td style={{ padding: '5px 8px', color: 'var(--t2)' }}>{v.colour}</td>
                                               <td style={{ padding: '5px 8px' }}>
                                                 <input type="number" min={0} value={v.qty_ecomm}
                                                   onChange={e => setSchedulingVariantQty(vi, 'qty_ecomm', e.target.value)}
-                                                  style={{ width: 70, padding: '3px 6px', background: 'var(--s2)',
-                                                    border: '1px solid var(--b2)', color: 'var(--text)', borderRadius: 3, fontSize: 12 }} />
+                                                  style={{ width: 70, padding: '3px 6px', background: 'var(--surface-2)',
+                                                    border: '1px solid var(--border)', color: 'var(--t1)', borderRadius: 3, fontSize: 12 }} />
                                                 <span style={{ marginLeft: 6, color: 'var(--t3)', fontSize: 11 }}>
                                                   /{v.gap_ecomm}
                                                 </span>
@@ -1005,8 +1005,8 @@ export default function PlannerPage() {
                                               <td style={{ padding: '5px 8px' }}>
                                                 <input type="number" min={0} value={v.qty_retail}
                                                   onChange={e => setSchedulingVariantQty(vi, 'qty_retail', e.target.value)}
-                                                  style={{ width: 70, padding: '3px 6px', background: 'var(--s2)',
-                                                    border: '1px solid var(--b2)', color: 'var(--text)', borderRadius: 3, fontSize: 12 }} />
+                                                  style={{ width: 70, padding: '3px 6px', background: 'var(--surface-2)',
+                                                    border: '1px solid var(--border)', color: 'var(--t1)', borderRadius: 3, fontSize: 12 }} />
                                                 <span style={{ marginLeft: 6, color: 'var(--t3)', fontSize: 11 }}>
                                                   /{v.gap_retail}
                                                 </span>
@@ -1019,7 +1019,7 @@ export default function PlannerPage() {
                                       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 }}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                                           <span style={{ color: 'var(--t2)' }}>Add to:</span>
-                                          <label style={{ cursor: 'pointer', color: 'var(--text)' }}>
+                                          <label style={{ cursor: 'pointer', color: 'var(--t1)' }}>
                                             <input type="radio" name="cartTarget"
                                               checked={scheduleTarget.cartId === 'new'}
                                               onChange={() => {
@@ -1032,7 +1032,7 @@ export default function PlannerPage() {
                                             &nbsp;New day
                                           </label>
                                           {sortedCarts.map(c => (
-                                            <label key={c.id} style={{ cursor: 'pointer', color: 'var(--text)' }}>
+                                            <label key={c.id} style={{ cursor: 'pointer', color: 'var(--t1)' }}>
                                               <input type="radio" name="cartTarget"
                                                 checked={scheduleTarget.cartId === c.id}
                                                 onChange={() => {
@@ -1058,8 +1058,8 @@ export default function PlannerPage() {
                                               value={scheduleTarget.production_date}
                                               min={todayLocalISO}
                                               onChange={e => { setScheduleTarget(prev => ({ ...prev, production_date: e.target.value })); setSchedulingError(''); }}
-                                              style={{ padding: '4px 8px', background: 'var(--s2)', border: '1px solid var(--b2)',
-                                                color: 'var(--text)', borderRadius: 3, fontSize: 12 }} />
+                                              style={{ padding: '4px 8px', background: 'var(--surface-2)', border: '1px solid var(--border)',
+                                                color: 'var(--t1)', borderRadius: 3, fontSize: 12 }} />
                                           </div>
                                         )}
 
@@ -1070,9 +1070,9 @@ export default function PlannerPage() {
                                               onClick={() => { setScheduleTarget(prev => ({ ...prev, line_no: L })); setSchedulingError(''); }}
                                               style={{
                                                 padding: '5px 12px', fontSize: 11, fontWeight: 600,
-                                                background: scheduleTarget.line_no === L ? '#F2CD1A' : 'var(--s2)',
+                                                background: scheduleTarget.line_no === L ? '#F2CD1A' : 'var(--surface-2)',
                                                 color:      scheduleTarget.line_no === L ? '#080808' : 'var(--t2)',
-                                                border: '1px solid ' + (scheduleTarget.line_no === L ? '#F2CD1A' : 'var(--b2)'),
+                                                border: '1px solid ' + (scheduleTarget.line_no === L ? '#F2CD1A' : 'var(--border)'),
                                                 borderRadius: 3, cursor: 'pointer',
                                               }}>{L}</button>
                                           ))}
@@ -1091,7 +1091,7 @@ export default function PlannerPage() {
                                       <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
                                         <button onClick={() => { setScheduling(null); setSchedulingError(''); }}
                                           style={{ padding: '6px 12px', fontSize: 12, background: 'transparent',
-                                            color: 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, cursor: 'pointer' }}>
+                                            color: 'var(--t2)', border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer' }}>
                                           Cancel
                                         </button>
                                         <button onClick={addToSchedule}
@@ -1151,8 +1151,8 @@ export default function PlannerPage() {
 
                 return (
                   <div key={cart.id} style={{
-                    border: '1px solid var(--b2)', borderRadius: 8, padding: 14,
-                    background: 'var(--s1)',
+                    border: '1px solid var(--border)', borderRadius: 8, padding: 14,
+                    background: 'var(--surface)',
                   }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
                       <span style={{ fontSize: 13, color: '#F2CD1A' }}>📅</span>
@@ -1162,8 +1162,8 @@ export default function PlannerPage() {
                         onChange={e => setCartDate(cart.id, e.target.value)}
                         style={{
                           padding: '3px 0', background: 'transparent',
-                          border: 'none', borderBottom: '1px solid var(--b2)',
-                          color: 'var(--text)', fontSize: 13, width: 138,
+                          border: 'none', borderBottom: '1px solid var(--border)',
+                          color: 'var(--t1)', fontSize: 13, width: 138,
                           outline: 'none',
                         }} />
                       <button onClick={() => deleteCart(cart.id)}
@@ -1180,7 +1180,7 @@ export default function PlannerPage() {
                         return (
                           <div key={L} style={{
                             padding: '8px 4px', fontSize: 11, color: 'var(--t3)',
-                            borderTop: '1px dashed var(--b1)',
+                            borderTop: '1px dashed var(--border)',
                             display: 'flex', alignItems: 'center', gap: 8,
                           }}>
                             <span style={{ fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{L}</span>
@@ -1193,11 +1193,11 @@ export default function PlannerPage() {
                       const isRepeatOpen = repeatPanel?.lineId === line.id && repeatPanel?.cartId === cart.id;
                       return (
                         <div key={line.id} style={{
-                          padding: '8px 4px', borderTop: '1px solid var(--b1)',
+                          padding: '8px 4px', borderTop: '1px solid var(--border)',
                         }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                             <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)' }}>{L}</span>
-                            <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text)' }}>{line.product}</span>
+                            <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--t1)' }}>{line.product}</span>
                             {status === 'creating' && <span style={{ fontSize: 11, color: 'var(--t3)' }}>…</span>}
                             {status === 'done' && <span style={{ fontSize: 11, color: '#22c55e' }}>✓ {runNo || ''}</span>}
                             {status === 'error' && <span style={{ fontSize: 11, color: '#DE2A2A' }}>✗</span>}
@@ -1227,7 +1227,7 @@ export default function PlannerPage() {
                                 <div key={vi} style={{
                                   display: 'flex', alignItems: 'center', gap: 6, fontSize: 11,
                                 }}>
-                                  <span style={{ flex: 1, color: 'var(--text)', minWidth: 0 }}>
+                                  <span style={{ flex: 1, color: 'var(--t1)', minWidth: 0 }}>
                                     {v.variant} <span style={{ color: 'var(--t2)' }}>{v.colour}</span>
                                   </span>
                                   {v.gap_ecomm > 0 && (
@@ -1236,8 +1236,8 @@ export default function PlannerPage() {
                                         onChange={e => updateVariantQty(cart.id, line.id, v.variant, v.colour, 'qty_ecomm', e.target.value)}
                                         style={{
                                           width: 56, padding: '2px 6px',
-                                          background: 'var(--s2)', border: '1px solid var(--b2)',
-                                          color: 'var(--text)', borderRadius: 3,
+                                          background: 'var(--surface-2)', border: '1px solid var(--border)',
+                                          color: 'var(--t1)', borderRadius: 3,
                                           fontSize: 11, textAlign: 'right',
                                         }} />
                                       <span style={{ color: 'var(--t3)' }}>e</span>
@@ -1249,8 +1249,8 @@ export default function PlannerPage() {
                                         onChange={e => updateVariantQty(cart.id, line.id, v.variant, v.colour, 'qty_retail', e.target.value)}
                                         style={{
                                           width: 56, padding: '2px 6px',
-                                          background: 'var(--s2)', border: '1px solid var(--b2)',
-                                          color: 'var(--text)', borderRadius: 3,
+                                          background: 'var(--surface-2)', border: '1px solid var(--border)',
+                                          color: 'var(--t1)', borderRadius: 3,
                                           fontSize: 11, textAlign: 'right',
                                         }} />
                                       <span style={{ color: 'var(--t3)' }}>r</span>
@@ -1288,10 +1288,10 @@ export default function PlannerPage() {
                           {isRepeatOpen && (
                             <div style={{
                               marginTop: 8, padding: 10,
-                              background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4,
+                              background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 4,
                             }}>
                               <div style={{ fontSize: 11, color: 'var(--t2)', marginBottom: 8 }}>
-                                ↻ Repeat <strong style={{ color: 'var(--text)' }}>{line.product}</strong> on another day
+                                ↻ Repeat <strong style={{ color: 'var(--t1)' }}>{line.product}</strong> on another day
                               </div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 11 }}>
                                 <span style={{ color: 'var(--t2)' }}>Date:</span>
@@ -1299,17 +1299,17 @@ export default function PlannerPage() {
                                   value={repeatTarget.date}
                                   min={todayLocalISO}
                                   onChange={e => { setRepeatTarget(prev => ({ ...prev, date: e.target.value })); setRepeatError(''); }}
-                                  style={{ padding: '3px 6px', background: 'var(--s1)', border: '1px solid var(--b2)',
-                                    color: 'var(--text)', borderRadius: 3, fontSize: 11 }} />
+                                  style={{ padding: '3px 6px', background: 'var(--surface)', border: '1px solid var(--border)',
+                                    color: 'var(--t1)', borderRadius: 3, fontSize: 11 }} />
                                 <span style={{ color: 'var(--t2)', marginLeft: 4 }}>Line:</span>
                                 {['L1','L2','L3'].map(LL => (
                                   <button key={LL}
                                     onClick={() => { setRepeatTarget(prev => ({ ...prev, line_no: LL })); setRepeatError(''); }}
                                     style={{
                                       padding: '3px 10px', fontSize: 10, fontWeight: 600,
-                                      background: repeatTarget.line_no === LL ? '#F2CD1A' : 'var(--s1)',
+                                      background: repeatTarget.line_no === LL ? '#F2CD1A' : 'var(--surface)',
                                       color:      repeatTarget.line_no === LL ? '#080808' : 'var(--t2)',
-                                      border: '1px solid ' + (repeatTarget.line_no === LL ? '#F2CD1A' : 'var(--b2)'),
+                                      border: '1px solid ' + (repeatTarget.line_no === LL ? '#F2CD1A' : 'var(--border)'),
                                       borderRadius: 3, cursor: 'pointer',
                                     }}>{LL}</button>
                                 ))}
@@ -1325,7 +1325,7 @@ export default function PlannerPage() {
                               <div style={{ marginTop: 8, display: 'flex', gap: 6 }}>
                                 <button onClick={() => { setRepeatPanel(null); setRepeatError(''); }}
                                   style={{ padding: '4px 10px', fontSize: 10, background: 'transparent',
-                                    color: 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 3, cursor: 'pointer' }}>
+                                    color: 'var(--t2)', border: '1px solid var(--border)', borderRadius: 3, cursor: 'pointer' }}>
                                   Cancel
                                 </button>
                                 <button onClick={() => handleRepeatLine(line)}
@@ -1344,7 +1344,7 @@ export default function PlannerPage() {
                       {allDone ? (
                         <button disabled
                           style={{ width: '100%', padding: '8px 10px', fontSize: 12, fontWeight: 600,
-                            background: 'var(--s2)', color: '#22c55e',
+                            background: 'var(--surface-2)', color: '#22c55e',
                             border: '1px solid #22c55e44', borderRadius: 4, cursor: 'default' }}>
                           ✓ All Created
                         </button>
@@ -1355,7 +1355,7 @@ export default function PlannerPage() {
                           style={{
                             width: '100%', padding: '8px 10px', fontSize: 12, fontWeight: 600,
                             background: (!cart.production_date || cart.lines.length === 0 || cartCreating)
-                              ? 'var(--s2)' : '#F2CD1A',
+                              ? 'var(--surface-2)' : '#F2CD1A',
                             color: (!cart.production_date || cart.lines.length === 0 || cartCreating)
                               ? 'var(--t3)' : '#080808',
                             border: 'none', borderRadius: 4,
@@ -1387,7 +1387,7 @@ export default function PlannerPage() {
           </p>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
-              <tr style={{ background: 'var(--s2)', color: 'var(--t2)' }}>
+              <tr style={{ background: 'var(--surface-2)', color: 'var(--t2)' }}>
                 {['Product', 'Default Batch Size', 'From History', ''].map(h => (
                   <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontWeight: 500 }}>{h}</th>
                 ))}
@@ -1395,15 +1395,15 @@ export default function PlannerPage() {
             </thead>
             <tbody>
               {batchConfig.map(row => (
-                <tr key={row.product} style={{ borderTop: '1px solid var(--b1)' }}>
-                  <td style={{ padding: '10px 14px', color: 'var(--text)' }}>{row.product}</td>
+                <tr key={row.product} style={{ borderTop: '1px solid var(--border)' }}>
+                  <td style={{ padding: '10px 14px', color: 'var(--t1)' }}>{row.product}</td>
                   <td style={{ padding: '10px 14px' }}>
                     {editingBatch[row.product] !== undefined ? (
                       <input type="number" min={1} max={10000}
                         value={editingBatch[row.product]}
                         onChange={e => setEditingBatch(prev => ({ ...prev, [row.product]: e.target.value }))}
-                        style={{ width: 80, padding: '4px 8px', background: 'var(--s1)',
-                          border: '1px solid var(--b2)', color: 'var(--text)', borderRadius: 4 }} />
+                        style={{ width: 80, padding: '4px 8px', background: 'var(--surface)',
+                          border: '1px solid var(--border)', color: 'var(--t1)', borderRadius: 4 }} />
                     ) : (
                       <strong>{row.default_batch_size}</strong>
                     )}
@@ -1421,7 +1421,7 @@ export default function PlannerPage() {
                         </button>
                         <button onClick={() => setEditingBatch(prev => { const n = { ...prev }; delete n[row.product]; return n; })}
                           style={{ padding: '4px 12px', background: 'transparent', color: 'var(--t2)',
-                            border: '1px solid var(--b2)', borderRadius: 4, cursor: 'pointer', fontSize: 12 }}>
+                            border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer', fontSize: 12 }}>
                           Cancel
                         </button>
                       </div>
@@ -1429,7 +1429,7 @@ export default function PlannerPage() {
                       <button
                         onClick={() => setEditingBatch(prev => ({ ...prev, [row.product]: row.default_batch_size }))}
                         style={{ padding: '4px 12px', background: 'transparent', color: 'var(--t2)',
-                          border: '1px solid var(--b2)', borderRadius: 4, cursor: 'pointer', fontSize: 12 }}>
+                          border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer', fontSize: 12 }}>
                         Edit
                       </button>
                     )}
