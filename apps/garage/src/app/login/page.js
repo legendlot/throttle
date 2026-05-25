@@ -24,7 +24,7 @@ export default function LoginPage() {
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      background: '#0e0e0e',
+      background: 'var(--bg)',
       fontFamily: MONO,
       margin: 0,
       padding: 0,
@@ -77,7 +77,7 @@ export default function LoginPage() {
         </div>
 
         {/* Divider */}
-        <div style={{ width: '100%', height: 1, background: '#1e1e1e', marginBottom: 28 }} />
+        <div style={{ width: '100%', height: 1, background: 'var(--border)', marginBottom: 28 }} />
 
         {/* Sign-in button — explicit hex values */}
         <button

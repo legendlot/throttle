@@ -364,7 +364,7 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
                     key={wo.wo_no}
                     style={{
                       display: 'inline-block', padding: '4px 8px', marginRight: 6, marginBottom: 6,
-                      background: '#1a1a1a', border: '1px solid var(--border)', borderRadius: 3,
+                      background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 3,
                       fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--yellow)',
                     }}
                   >
