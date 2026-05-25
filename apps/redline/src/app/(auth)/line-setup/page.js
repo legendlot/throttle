@@ -346,12 +346,20 @@ function LineColumn({ line, date, session, data, operators, onAssign, onUnassign
             }}
             disabled={totalAssigned === 0}
             style={{
-              background: totalAssigned === 0 ? 'var(--surface2)' : 'var(--yellow)',
-              color: totalAssigned === 0 ? 'var(--t3)' : '#000',
-              border: '1px solid var(--border)', borderRadius: 3,
-              padding: '6px 12px', cursor: totalAssigned === 0 ? 'not-allowed' : 'pointer',
-              fontFamily: 'var(--cond)', fontSize: 11, fontWeight: 800,
+              // Primary button spec from DESIGN.md: yellow bg, near-black fg,
+              // Tomorrow 700 13px, padding 9×16px, no border. Disabled state:
+              // 50% opacity on the active treatment (per DESIGN.md "Disabled"
+              // rule) — never swap to a gray fill that loses the affordance.
+              background: 'var(--yellow)',
+              color: '#0a0a0a',
+              border: 'none',
+              borderRadius: 4,
+              padding: '9px 16px',
+              cursor: totalAssigned === 0 ? 'not-allowed' : 'pointer',
+              opacity: totalAssigned === 0 ? 0.5 : 1,
+              fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700,
               textTransform: 'uppercase', letterSpacing: '0.06em',
+              transition: 'background 150ms ease-out, opacity 150ms ease-out',
             }}
           >Print Roster</button>
         </div>

@@ -3,32 +3,39 @@ import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
+import {
+  Package, AlertCircle, Inbox, Ship, ClipboardList,
+  Factory, Send, FileText, Repeat, Ban, Store, RotateCw,
+} from 'lucide-react';
 
+// Lucide-react icons replace decorative emoji per DESIGN.md "mechanical not
+// decorative" rule. Rendered as outline icons at size 28 in --t2 so they
+// read as instrumentation, not stickers.
 const REPORT_DOWNLOADS = {
   inventory: [
-    { type: 'stock',           icon: '📦', title: 'Stock Position', desc: 'Full inventory — all parts, all products, current qtys' },
-    { type: 'reorder',         icon: '🔴', title: 'Reorder Flags',  desc: 'Parts at or below reorder level' },
+    { type: 'stock',           Icon: Package,       title: 'Stock Position', desc: 'Full inventory — all parts, all products, current qtys' },
+    { type: 'reorder',         Icon: AlertCircle,   title: 'Reorder Flags',  desc: 'Parts at or below reorder level' },
   ],
   inward: [
-    { type: 'grn',             icon: '📥', title: 'GRN Register',    desc: 'All goods received notes — filterable by date' },
-    { type: 'shipments',       icon: '🚢', title: 'Shipments',       desc: 'All inbound shipments with progress status' },
-    { type: 'receiving',       icon: '📋', title: 'Receiving Lines', desc: 'Part-level count records from all shipments' },
+    { type: 'grn',             Icon: Inbox,         title: 'GRN Register',    desc: 'All goods received notes, filterable by date' },
+    { type: 'shipments',       Icon: Ship,          title: 'Shipments',       desc: 'All inbound shipments with progress status' },
+    { type: 'receiving',       Icon: ClipboardList, title: 'Receiving Lines', desc: 'Part-level count records from all shipments' },
   ],
   production: [
-    { type: 'production_runs', icon: '🏭', title: 'Production Runs', desc: 'All runs with status, product and unit counts' },
-    { type: 'issues',          icon: '📤', title: 'Issue Register',  desc: 'All material issues to production — filterable by date' },
-    { type: 'workorders',      icon: '📝', title: 'Work Orders',     desc: 'All WOs — planned, ad hoc, rework, standalone' },
+    { type: 'production_runs', Icon: Factory,       title: 'Production Runs', desc: 'All runs with status, product and unit counts' },
+    { type: 'issues',          Icon: Send,          title: 'Issue Register',  desc: 'All material issues to production, filterable by date' },
+    { type: 'workorders',      Icon: FileText,      title: 'Work Orders',     desc: 'All WOs: planned, ad hoc, rework, standalone' },
   ],
   lineflush: [
-    { type: 'flushes',         icon: '🔁', title: 'Flush Register',      desc: 'All line flushes with verification status' },
-    { type: 'quarantine',      icon: '🚫', title: 'Quarantine Register', desc: 'All quarantined parts with bin locations' },
+    { type: 'flushes',         Icon: Repeat,        title: 'Flush Register',      desc: 'All line flushes with verification status' },
+    { type: 'quarantine',      Icon: Ban,           title: 'Quarantine Register', desc: 'All quarantined parts with bin locations' },
   ],
   procurement: [
-    { type: 'purchase_orders', icon: '📋', title: 'Purchase Orders', desc: 'All POs with status, value and vendor' },
-    { type: 'vendors',         icon: '🏪', title: 'Vendor List',     desc: 'All active vendors with contact details' },
+    { type: 'purchase_orders', Icon: ClipboardList, title: 'Purchase Orders', desc: 'All POs with status, value and vendor' },
+    { type: 'vendors',         Icon: Store,         title: 'Vendor List',     desc: 'All active vendors with contact details' },
   ],
   returns: [
-    { type: 'returns',         icon: '🔄', title: 'Returns Log', desc: 'RTO and RTV returns across all channels — filterable by date' },
+    { type: 'returns',         Icon: RotateCw,      title: 'Returns Log', desc: 'RTO and RTV returns across all channels, filterable by date' },
   ],
 };
 
@@ -444,9 +451,11 @@ export default function ReportsPage() {
             onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--yellow)'; }}
             onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; }}
           >
-            <div style={{ fontSize: 32 }}>{c.icon}</div>
-            <div style={{ fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 14, marginTop: 6 }}>{c.title}</div>
-            <div style={{ fontSize: 11, color: 'var(--t3)', marginTop: 4, lineHeight: 1.4 }}>{c.desc}</div>
+            <div style={{ color: 'var(--t2)' }}>
+              <c.Icon size={28} strokeWidth={1.75} />
+            </div>
+            <div style={{ fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 14, marginTop: 10, color: 'var(--t1)', letterSpacing: '0.04em', textTransform: 'uppercase' }}>{c.title}</div>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginTop: 6, lineHeight: 1.45 }}>{c.desc}</div>
           </div>
         ))}
       </div>

@@ -410,13 +410,18 @@ function LineDesignLanding({ productList, loading, onSelect, onNew }) {
     return <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}><Spinner /></div>;
   }
 
+  // Per DESIGN.md Table spec:
+  //   - Header row: JetBrains Mono 12px, 600, uppercase, 0.08em, --t3
+  //   - Data row:   JetBrains Mono 14px, --t1, 10×12px padding
+  // The Tomorrow-on-data treatment violated the "Tomorrow vs Mono Rule"
+  // (Tomorrow speaks for headings/brand; Mono shows for data/tables).
   const thStyle = (align = 'center') => ({
     textAlign: align,
-    padding: '8px 12px',
-    fontFamily: 'var(--cond)',
-    fontSize: 10,
-    fontWeight: 800,
-    color: 'var(--t2)',
+    padding: '10px 12px',
+    fontFamily: 'var(--mono)',
+    fontSize: 12,
+    fontWeight: 600,
+    color: 'var(--t3)',
     textTransform: 'uppercase',
     letterSpacing: '0.08em',
     borderBottom: '1px solid var(--border)',
@@ -426,19 +431,22 @@ function LineDesignLanding({ productList, loading, onSelect, onNew }) {
   });
   const tdStyle = (align = 'center') => ({
     textAlign: align,
-    padding: '12px',
+    padding: '10px 12px',
     borderBottom: '1px solid var(--border)',
     fontFamily: 'var(--mono)',
-    fontSize: 12,
+    fontSize: 14,
+    color: 'var(--t1)',
   });
+  // Chips kept Tomorrow because they're brand/state badges, not data.
+  // 11px is the floor for any text — bumped from the previous 9px.
   const chip = (bg, fg) => ({
-    fontSize: 9,
-    fontWeight: 800,
+    fontSize: 11,
+    fontWeight: 700,
     fontFamily: 'var(--cond)',
     background: bg,
     color: fg,
     borderRadius: 3,
-    padding: '1px 5px',
+    padding: '2px 6px',
     letterSpacing: '0.05em',
   });
 
@@ -487,15 +495,15 @@ function LineDesignLanding({ productList, loading, onSelect, onNew }) {
                     onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
                     style={{ cursor: 'pointer', transition: 'background 0.1s' }}
                   >
-                    <td style={{ ...tdStyle('left'), fontFamily: 'var(--cond)', fontWeight: 800, fontSize: 14, color: 'var(--t1)', letterSpacing: '0.03em' }}>
+                    <td style={{ ...tdStyle('left'), fontWeight: 600 }}>
                       {product}
                     </td>
                     <td style={tdStyle()}>
                       {active ? (
                         <span style={{
-                          fontFamily: 'var(--mono)', fontSize: 10,
-                          background: 'var(--surface2)', border: '1px solid var(--border)',
-                          padding: '1px 6px', borderRadius: 3, color: 'var(--t2)',
+                          fontFamily: 'var(--mono)', fontSize: 11,
+                          background: 'var(--surface-2)', border: '1px solid var(--border)',
+                          padding: '2px 7px', borderRadius: 3, color: 'var(--t2)',
                         }}>v{active.version_number}</span>
                       ) : <span style={{ color: 'var(--t3)' }}>—</span>}
                     </td>
@@ -508,7 +516,7 @@ function LineDesignLanding({ productList, loading, onSelect, onNew }) {
                       return (
                         <td key={dept} style={tdStyle()}>
                           <div style={{
-                            fontFamily: 'var(--cond)', fontSize: 16, fontWeight: 800,
+                            fontFamily: 'var(--mono)', fontSize: 14, fontWeight: 700,
                             color: info.workers > 0 ? 'var(--t1)' : 'var(--t3)',
                           }}>
                             {info.workers}
@@ -528,7 +536,7 @@ function LineDesignLanding({ productList, loading, onSelect, onNew }) {
                     })}
                     <td style={tdStyle()}>
                       <span style={{
-                        fontFamily: 'var(--cond)', fontSize: 16, fontWeight: 800,
+                        fontFamily: 'var(--mono)', fontSize: 14, fontWeight: 700,
                         color: 'var(--yellow)',
                       }}>
                         {active?.total_workers || 0}
