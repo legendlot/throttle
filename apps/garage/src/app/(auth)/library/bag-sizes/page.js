@@ -213,7 +213,7 @@ export default function BagSizesPage() {
               type="text"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              placeholder="part code / name / category…"
+              placeholder="Search — try “AP-PP packaging” or “Metal screws”"
               style={{ ...inputStyle, width: '100%', maxWidth: 480 }}
             />
           </div>

@@ -177,14 +177,20 @@ function NewCountModal({ onClose, onCreated, session, toast }) {
     })();
   }, [session]);
 
+  // Multi-token AND-of-OR across product / part_code / part_name / abc_class.
+  // Matches Stock Ledger pattern — "Flare A" picks Flare parts in A class.
   const filtered = useMemo(() => {
     if (!schedule?.due) return [];
-    const q = search.trim().toLowerCase();
+    const tokens = (search || '').toLowerCase().trim().split(/\s+/).filter(Boolean);
     return schedule.due.filter(d => {
       if (classFilter !== 'all' && d.abc_class !== classFilter) return false;
-      if (!q) return true;
-      return (d.part_code || '').toLowerCase().includes(q) ||
-             (d.part_name || '').toLowerCase().includes(q);
+      if (!tokens.length) return true;
+      const fields = [d.part_code, d.part_name, d.product, d.abc_class]
+        .map((v) => (v || '').toLowerCase());
+      for (const t of tokens) {
+        if (!fields.some((f) => f.includes(t))) return false;
+      }
+      return true;
     });
   }, [schedule, search, classFilter]);
 
@@ -247,7 +253,7 @@ function NewCountModal({ onClose, onCreated, session, toast }) {
           </div>
 
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="search part code / name…" style={{ ...input, flex: 1 }} />
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search — try “Flare A” or “Apex metal”" style={{ ...input, flex: 1 }} />
             <select value={classFilter} onChange={e => setClassFilter(e.target.value)} style={{ ...input, minWidth: 100 }}>
               <option value="all">All classes</option>
               <option value="A">A (monthly)</option>

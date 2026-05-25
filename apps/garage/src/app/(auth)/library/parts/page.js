@@ -106,12 +106,24 @@ export default function LibraryPartsPage() {
     return [...set].sort();
   }, [partsDB]);
 
+  // Multi-token AND-of-OR search across product / part_code / part_name /
+  // category / part_type / tier. Mirrors the Stock Ledger pattern so users
+  // can type "Flare metal" or "Apex electronic" and get intuitive results.
   const filtered = useMemo(() => {
-    const s = search.trim().toLowerCase();
+    const tokens = (search || '').toLowerCase().trim().split(/\s+/).filter(Boolean);
     return partsDB.filter((r) => {
-      if (s) {
-        const hay = `${r.part_code} ${r.part_name || ''} ${r.category || ''} ${r.part_type || ''}`.toLowerCase();
-        if (!hay.includes(s)) return false;
+      if (tokens.length) {
+        const fields = [
+          r.part_code,
+          r.part_name,
+          r.category,
+          r.part_type,
+          r.tier,
+          (r.products || []).join(' '),
+        ].map((v) => (v || '').toLowerCase());
+        for (const t of tokens) {
+          if (!fields.some((f) => f.includes(t))) return false;
+        }
       }
       if (filterProduct && !r.products.includes(filterProduct)) return false;
       if (filterTier && (r.tier || '').toLowerCase() !== filterTier.toLowerCase()) return false;
@@ -147,7 +159,7 @@ export default function LibraryPartsPage() {
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
             <div style={{ flex: '1 1 220px' }}>
               <span style={labelStyle}>Search</span>
-              <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Part code, name, category…" style={{ ...inputStyle, width: '100%' }} />
+              <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search — try “Flare metal” or “Apex electronic”" style={{ ...inputStyle, width: '100%' }} />
             </div>
             <div style={{ flex: '0 0 180px' }}>
               <span style={labelStyle}>Product</span>

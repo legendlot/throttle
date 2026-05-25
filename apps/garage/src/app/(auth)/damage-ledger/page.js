@@ -106,6 +106,8 @@ export default function DamageLedgerPage() {
   }
   useEffect(() => { loadLedger(); /* eslint-disable-next-line */ }, [tab, source, session]);
 
+  // Multi-token AND-of-OR across the standard Stock-Ledger field set plus
+  // damage-specific identifiers (ledger_no, batch numbers, reason).
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return rows;
@@ -114,6 +116,8 @@ export default function DamageLedgerPage() {
       (r.ledger_no  || '').toLowerCase().includes(t) ||
       (r.part_code  || '').toLowerCase().includes(t) ||
       (r.part_name  || '').toLowerCase().includes(t) ||
+      (r.product    || '').toLowerCase().includes(t) ||
+      (r.category   || '').toLowerCase().includes(t) ||
       (r.reason     || '').toLowerCase().includes(t) ||
       (r.source_ref || '').toLowerCase().includes(t) ||
       (r.repair_batch_no   || '').toLowerCase().includes(t) ||
@@ -336,7 +340,7 @@ export default function DamageLedgerPage() {
               <input
                 type="text" value={search}
                 onChange={e => setSearch(e.target.value)}
-                placeholder="ledger / part / reason / batch…"
+                placeholder="Search — try “Flare metal” or “Apex DRB-007”"
                 style={{ ...inputStyle, width: '100%' }}
               />
             </div>
