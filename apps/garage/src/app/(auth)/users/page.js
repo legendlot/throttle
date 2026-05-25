@@ -53,6 +53,10 @@ const PERM_DEFS = [
     { key: 'dispatch_restock', label: 'Unit Restock (Scanner)',  type: 'bool' },
     { key: 'dispatch_challan', label: 'Issue Delivery Challans', type: 'bool' },
   ] },
+  { group: 'Scan Corrections', items: [
+    { key: 'scan_void_supervisor', label: 'Void Scans (Supervisor)', type: 'bool' },
+    { key: 'scan_amend_manager',   label: 'Amend Scans (Manager)',   type: 'bool' },
+  ] },
   { group: 'Reports', items: [
     { key: 'reports',         label: 'View & Download Reports', type: 'bool' },
     { key: 'reports_finance', label: 'Finance / Cost Reports',  type: 'bool' },

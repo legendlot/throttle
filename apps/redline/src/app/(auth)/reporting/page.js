@@ -69,8 +69,13 @@ function downloadCsv(filename, rows, headers) {
 
 // ── Reporting Page ───────────────────────────────────────────
 export default function ReportingPage() {
-  const { session } = useAuth();
+  const { session, perms } = useAuth();
   const { showToast } = useToast();
+
+  // Page gate — mirror canDownload/canViewProd on the server side.
+  // Anyone with reports, production_view, or users_manage can view.
+  const canViewReporting = !!(perms?.reports || perms?.production_view || perms?.users_manage);
+  const canViewFinance   = !!perms?.reports_finance;
 
   const [preset,     setPreset]     = useState('10days');
   const [dateFrom,   setDateFrom]   = useState('');
@@ -303,6 +308,27 @@ export default function ReportingPage() {
     if (!ok) showToast('No defect data to download', 'error');
   }
 
+  // Module CSV exports — call worker downloadReport with date range, infer headers from rows.
+  async function downloadModule(type, label) {
+    showToast(`Preparing ${label}…`, 'info');
+    try {
+      const params = { report: type };
+      if (dateFrom) params.from = dateFrom;
+      if (dateTo)   params.to   = dateTo;
+      const data = await garageFetch('downloadReport', params, session);
+      const rows = data?.rows || [];
+      if (!rows.length) {
+        showToast(`No ${label} rows in selected range`, 'info');
+        return;
+      }
+      const headers = Object.keys(rows[0]);
+      const ok = downloadCsv(`${type}-${dateFrom}-${dateTo}.csv`, rows, headers);
+      if (ok) showToast(`Downloaded ${label} (${rows.length} rows)`, 'success');
+    } catch (e) {
+      showToast(e.message || `${label} download failed`, 'error');
+    }
+  }
+
   // ── Render ────────────────────────────────────────────────
   const SECTIONS = [
     { id: 'production',  label: 'Production' },
@@ -311,6 +337,14 @@ export default function ReportingPage() {
     { id: 'throughput',  label: 'Throughput' },
     { id: 'downloads',   label: 'Downloads' },
   ];
+
+  if (perms && !canViewReporting) {
+    return (
+      <div style={{ padding: 32, textAlign: 'center', color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12 }}>
+        🔒 Access restricted — reporting view requires <strong>reports</strong>, <strong>production_view</strong>, or <strong>users_manage</strong>.
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -362,6 +396,8 @@ export default function ReportingPage() {
           downloadQc={downloadQc}
           downloadPva={downloadPva}
           downloadDefects={downloadDefects}
+          downloadModule={downloadModule}
+          canViewFinance={canViewFinance}
           periodLabel={periodLabel}
         />
       )}
@@ -727,42 +763,113 @@ function ThroughputSection({ taktAggs, taktLoading }) {
 }
 
 // ── Downloads section ────────────────────────────────────────
-function DownloadsSection({ downloadQc, downloadPva, downloadDefects, periodLabel }) {
+function DownloadsSection({ downloadQc, downloadPva, downloadDefects, downloadModule, canViewFinance, periodLabel }) {
   return (
-    <Panel padding={18}>
-      <h2 style={{ ...sectionLabel, marginBottom: 14 }}>Data Exports{periodLabel && ` — ${periodLabel}`}</h2>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 10 }}>
-        <DownloadCard
-          title="QC View"
-          sub="All defect rows for the selected period"
-          onClick={downloadQc}
-        />
-        <DownloadCard
-          title="Plan vs Actual"
-          sub="Run-level production vs target"
-          onClick={downloadPva}
-        />
-        <DownloadCard
-          title="Defects"
-          sub="Aggregated defect counts by code"
-          onClick={downloadDefects}
-        />
-      </div>
-      <div style={{ fontSize: 11, color: 'var(--t3)', marginTop: 14, fontFamily: 'var(--mono)' }}>
-        CSV files are UTF-8 with BOM — Excel opens them correctly.
-      </div>
-    </Panel>
+    <>
+      <Panel padding={18}>
+        <h2 style={{ ...sectionLabel, marginBottom: 14 }}>Production Exports{periodLabel && ` — ${periodLabel}`}</h2>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 10 }}>
+          <DownloadCard
+            title="QC View"
+            sub="All defect rows for the selected period"
+            onClick={downloadQc}
+          />
+          <DownloadCard
+            title="Plan vs Actual"
+            sub="Run-level production vs target"
+            onClick={downloadPva}
+          />
+          <DownloadCard
+            title="Defects"
+            sub="Aggregated defect counts by code"
+            onClick={downloadDefects}
+          />
+        </div>
+      </Panel>
+
+      <Panel padding={18} style={{ marginTop: 14 }}>
+        <h2 style={{ ...sectionLabel, marginBottom: 14 }}>Audit & Compliance Exports{periodLabel && ` — ${periodLabel}`}</h2>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 10 }}>
+          <DownloadCard
+            title="Customer Repairs"
+            sub="CR-NNN intake: stage, channel, captured-by, aging"
+            onClick={() => downloadModule('customer_repairs', 'Customer Repairs')}
+          />
+          <DownloadCard
+            title="Process Deviations"
+            sub="PD-NNN proposals and approvals across severity tiers"
+            onClick={() => downloadModule('process_deviations', 'Process Deviations')}
+          />
+          <DownloadCard
+            title="QC Audit Findings"
+            sub="Audit round findings: open, resolved, confirmed"
+            onClick={() => downloadModule('audit_findings', 'QC Audit Findings')}
+          />
+          <DownloadCard
+            title="Scan Violations"
+            sub="Every rejected scan with station, operator, reason"
+            onClick={() => downloadModule('scan_violations', 'Scan Violations')}
+          />
+          <DownloadCard
+            title="Unit Restocks"
+            sub="Units flipped back to stock by reason, channel, operator"
+            onClick={() => downloadModule('unit_restocks', 'Unit Restocks')}
+          />
+          <DownloadCard
+            title="Damage / Scrap Ledger"
+            sub="Damaged and scrap entries with disposition lifecycle"
+            onClick={() => downloadModule('damage_ledger', 'Damage Ledger')}
+          />
+        </div>
+      </Panel>
+
+      <Panel padding={18} style={{ marginTop: 14 }}>
+        <h2 style={{ ...sectionLabel, marginBottom: 14 }}>Movement & Issuance Exports{periodLabel && ` — ${periodLabel}`}</h2>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 10 }}>
+          <DownloadCard
+            title="Direct Issuances"
+            sub="DI-NNN: samples, office, external test, replacements"
+            onClick={() => downloadModule('direct_issuances', 'Direct Issuances')}
+          />
+          <DownloadCard
+            title="Cycle Counts"
+            sub="All count rounds with status and variance"
+            onClick={() => downloadModule('cycle_counts', 'Cycle Counts')}
+          />
+          {canViewFinance ? (
+            <DownloadCard
+              title="Stock Adjustments"
+              sub="Adjustment audit trail with reason and approver"
+              onClick={() => downloadModule('stock_adjustments', 'Stock Adjustments')}
+            />
+          ) : (
+            <DownloadCard
+              title="Stock Adjustments"
+              sub="🔒 Requires reports_finance permission"
+              onClick={() => {}}
+              disabled
+            />
+          )}
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--t3)', marginTop: 14, fontFamily: 'var(--mono)' }}>
+          CSV files are UTF-8 with BOM — Excel opens them correctly.
+          For richer per-module views see <strong>Garage → Reports</strong>.
+        </div>
+      </Panel>
+    </>
   );
 }
 
-function DownloadCard({ title, sub, onClick }) {
+function DownloadCard({ title, sub, onClick, disabled }) {
   return (
     <button
       onClick={onClick}
+      disabled={disabled}
       style={{
         background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 4,
-        padding: 14, textAlign: 'left', cursor: 'pointer', fontFamily: 'var(--mono)',
-        color: 'var(--t1)',
+        padding: 14, textAlign: 'left', cursor: disabled ? 'not-allowed' : 'pointer',
+        fontFamily: 'var(--mono)', color: 'var(--t1)',
+        opacity: disabled ? 0.55 : 1,
       }}
     >
       <div style={{ fontSize: 10, color: 'var(--t3)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 6 }}>CSV Download</div>
