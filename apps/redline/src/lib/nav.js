@@ -6,7 +6,7 @@ import {
   BarChart3, Clock,
   QrCode, Users, Printer,
   CalendarClock, LayoutGrid, ClipboardList,
-  ClipboardCheck, AlertTriangle,
+  ClipboardCheck, AlertTriangle, FileText,
 } from 'lucide-react';
 
 export const NAV_GROUPS = [
@@ -41,6 +41,7 @@ export const NAV_GROUPS = [
       { id: 'dispatch-lines',     label: 'Lines',           route: '/dispatch/lines',     icon: GitBranch },
       { id: 'dispatch-pipeline',  label: 'Pipeline',        route: '/dispatch-pipeline',  icon: Network },
       { id: 'dispatch-shipments', label: 'Shipments',       route: '/dispatch-shipments', icon: Send },
+      { id: 'dispatch-challans',  label: 'Delivery Challans', route: '/dispatch-challans', icon: FileText },
       { id: 'dispatch-channels',  label: 'Channel Master',  route: '/dispatch-channels',  icon: Tag },
     ],
   },
