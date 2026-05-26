@@ -393,7 +393,7 @@ export default function QueuePage() {
             <tbody>
               {tickets.map(t => (
                 <tr key={t.id} style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}
-                    onClick={() => router.push(`/queue/${t.ticket_no}/`)}>
+                    onClick={() => router.push(`/queue/detail/?ticket_no=${t.ticket_no}`)}>
                   <Td mono><span style={{ color: 'var(--t1)', fontWeight: 600 }}>{t.ticket_no}</span></Td>
                   <Td>
                     <div style={{ color: 'var(--t1)' }}>{t.customer_name}</div>
