@@ -518,6 +518,17 @@ export default function DispatchShipmentsPage() {
 
   const productOptions = Object.keys(productCodes).sort();
 
+  // Hide a product from the Add Product dropdown ONLY when every variant
+  // it offers is already on the shipment. If a typo'd line covers Burnout
+  // Blue but the operator still needs Race Blue, "Nitro" must remain
+  // selectable — addCreateLine / addEditLine already dedupe per-variant.
+  function hasMissingVariant(product, groups) {
+    const all = productCodes[product] || [];
+    if (all.length === 0) return false;
+    const existing = new Set((groups[product] || []).map(l => `${l.model || ''}|${l.color || ''}`));
+    return all.some(v => !existing.has(`${v.model || ''}|${v.color || ''}`));
+  }
+
   // For create — compute selected channel
   const selectedChannel = channels.find(c => c.id === createChannelId);
   const isBulk = selectedChannel?.fulfillment_model === 'bulk';
@@ -590,7 +601,7 @@ export default function DispatchShipmentsPage() {
                 <div style={{ flex: 1 }} />
                 <select style={selectStyle} value={createProduct} onChange={e => setCreateProduct(e.target.value)}>
                   <option value="">{productOptions.length ? 'Select product…' : 'Loading products…'}</option>
-                  {productOptions.filter(p => !createGroups[p]).map(p => <option key={p} value={p}>{p}</option>)}
+                  {productOptions.filter(p => hasMissingVariant(p, createGroups)).map(p => <option key={p} value={p}>{p}</option>)}
                 </select>
                 <button style={btnStyle} onClick={() => addCreateLine(createProduct)} disabled={!createProduct}>+ Add</button>
               </div>
@@ -681,7 +692,7 @@ export default function DispatchShipmentsPage() {
                 <div style={{ flex: 1 }} />
                 <select style={selectStyle} value={editProduct} onChange={e => setEditProduct(e.target.value)}>
                   <option value="">{productOptions.length ? 'Add product…' : 'Loading…'}</option>
-                  {productOptions.filter(p => !editGroups[p]).map(p => <option key={p} value={p}>{p}</option>)}
+                  {productOptions.filter(p => hasMissingVariant(p, editGroups)).map(p => <option key={p} value={p}>{p}</option>)}
                 </select>
                 <button style={btnStyle} onClick={() => addEditLine(editProduct)} disabled={!editProduct}>+ Add</button>
               </div>
