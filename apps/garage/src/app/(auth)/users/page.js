@@ -67,6 +67,13 @@ const PERM_DEFS = [
     { key: 'users_view',   label: 'View Users Tab',       type: 'bool' },
     { key: 'users_manage', label: 'Manage Users & Roles', type: 'bool' },
   ] },
+  { group: 'Pitstop (CS)', items: [
+    { key: 'cs_ticket_view',    label: 'View Tickets',                  type: 'bool' },
+    { key: 'cs_ticket_manage',  label: 'Manage Own Tickets',            type: 'bool' },
+    { key: 'cs_ticket_approve', label: 'Approve Refunds / Replacements', type: 'bool' },
+    { key: 'cs_ticket_admin',   label: 'CS Admin (force-close, reassign)', type: 'bool' },
+    { key: 'cs_reports_view',   label: 'View CS Reports & Costs',       type: 'bool' },
+  ] },
 ];
 
 const LEVEL_OPTIONS = ['none', 'view', 'write'];
@@ -76,6 +83,7 @@ const ROLE_LABELS = {
   super_admin: 'Super Admin', admin: 'Admin',
   production_manager: 'Production Manager', production_team: 'Production Team',
   store_head: 'Store Head', store_staff: 'Store Staff',
+  cs_agent: 'CS Agent', cs_lead: 'CS Lead',
   store: 'Store', store_manager: 'Store Manager', ops: 'Ops',
   vinay: 'Vinay', brand: 'Brand', founders: "Founder's Office", production: 'Production',
 };
