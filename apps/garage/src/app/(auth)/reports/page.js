@@ -435,13 +435,15 @@ export default function ReportsPage() {
         </p>
       </div>
 
-      {/* Sub-tabs */}
+      {/* Sub-tabs — Compliance gated by reports_compliance permission */}
       <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', marginBottom: 16, flexWrap: 'wrap' }}>
-        {TABS.map((t) => (
-          <button key={t.id} type="button" style={tabBtnStyle(activeTab === t.id)} onClick={() => setActiveTab(t.id)}>
-            {t.label}
-          </button>
-        ))}
+        {TABS
+          .filter((t) => t.id !== 'compliance' || !!perms?.reports_compliance)
+          .map((t) => (
+            <button key={t.id} type="button" style={tabBtnStyle(activeTab === t.id)} onClick={() => setActiveTab(t.id)}>
+              {t.label}
+            </button>
+          ))}
       </div>
 
       {/* Date filter bar */}
@@ -485,7 +487,7 @@ export default function ReportsPage() {
       {activeTab === 'procurement' && <ProcurementSummary data={procRpt} loading={loading.procurement} load={loadProcurement} canViewFinance={!!perms?.reports_finance} />}
       {activeTab === 'returns'     && <ReturnsSummary    data={retData}  loading={loading.returns}     load={loadReturns} />}
       {activeTab === 'issuance'    && <IssuanceSummary  loading={false} />}
-      {activeTab === 'compliance'  && <ComplianceSummary loading={false} />}
+      {activeTab === 'compliance'  && !!perms?.reports_compliance && <ComplianceSummary loading={false} />}
       {activeTab === 'analytics'   && (
         <>
           <AnalyticsFlowPanel
