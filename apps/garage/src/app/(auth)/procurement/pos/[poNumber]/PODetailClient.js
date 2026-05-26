@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, useToast, Combobox } from '@throttle/ui';
+import { Spinner, useToast, Combobox, useEscapeClose } from '@throttle/ui';
 import { computeTax } from '@/lib/poTax';
 
 const PO_STATUS_TONES = {
@@ -493,6 +493,7 @@ function KvGrid({ cols, items }) {
 function AmendModal({ po, session, data, setData, onClose, onSubmit, submitting }) {
   function set(field, value) { setData((d) => ({ ...d, [field]: value })); }
   const [vendorCache, setVendorCache] = useState([]);
+  useEscapeClose(true, () => { if (!submitting) onClose(); });
   useEffect(() => {
     if (!session) return;
     garageFetch('getVendors', {}, session)
@@ -581,6 +582,7 @@ function AmendModal({ po, session, data, setData, onClose, onSubmit, submitting 
 }
 
 function CancelModal({ poNumber, reason, setReason, onClose, onSubmit, submitting }) {
+  useEscapeClose(true, () => { if (!submitting) onClose(); });
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9000, padding: 16 }}>
       <div onClick={(e) => e.stopPropagation()} style={{ background: '#111', border: '1px solid #333', borderRadius: 6, padding: 20, color: '#eee', minWidth: 380, maxWidth: 480 }}>

@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '@throttle/auth'
 import { workerFetch } from '@throttle/db'
-import { Panel, Chip, StatusBadge } from '@throttle/ui'
+import { Panel, Chip, StatusBadge, useEscapeClose } from '@throttle/ui'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -118,6 +118,8 @@ function AddFindingModal({ roundId, roundNumber, session, onClose, onSaved }) {
   })
   const [saving, setSaving] = useState(false)
   const [formErr, setFormErr] = useState('')
+
+  useEscapeClose(true, onClose)
 
   function set(k, v) { setForm(f => ({ ...f, [k]: v })) }
 

@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
-import { Spinner, useToast, Combobox } from '@throttle/ui';
+import { Spinner, useToast, Combobox, useEscapeClose } from '@throttle/ui';
 import { useProducts } from '../../../hooks/useProducts.js';
 
 const LF_STATUS_TONES = { 'Pending Verification': 'yellow', Verified: 'green', Disputed: 'red' };
@@ -326,6 +326,7 @@ export default function StoreHistoryPage() {
 }
 
 function IssueDetailModal({ issueNo, rows, onClose }) {
+  useEscapeClose(true, onClose);
   if (!rows.length) {
     return (
       <div

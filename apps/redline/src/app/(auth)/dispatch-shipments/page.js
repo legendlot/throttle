@@ -2,7 +2,7 @@
 import { Fragment, useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { ConfirmModal, Spinner, EmptyState, useToast, Panel, Chip, StatusBadge } from '@throttle/ui';
+import { ConfirmModal, Spinner, EmptyState, useToast, Panel, Chip, StatusBadge, useEscapeClose } from '@throttle/ui';
 import { useDispatchChannels } from '../../../hooks/useDispatchChannels.js';
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -117,6 +117,10 @@ export default function DispatchShipmentsPage() {
   const [editLoading,  setEditLoading]  = useState(false);
   const [editError,    setEditError]    = useState('');
   const [editProduct,  setEditProduct]  = useState('');
+
+  useEscapeClose(createOpen,        () => setCreateOpen(false));
+  useEscapeClose(editOpen,          () => setEditOpen(false));
+  useEscapeClose(!!detailShipment,  () => setDetailShipment(null));
 
   // ── Loaders ───────────────────────────────────────────────
   const loadShipments = useCallback(async () => {

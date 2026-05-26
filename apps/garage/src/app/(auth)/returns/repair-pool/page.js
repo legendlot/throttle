@@ -2,7 +2,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, useToast } from '@throttle/ui';
+import { Spinner, useToast, useEscapeClose } from '@throttle/ui';
 
 const panelStyle       = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, marginBottom: 16 };
 const panelHeaderStyle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid var(--border)', fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--t2)', gap: 8, flexWrap: 'wrap' };
@@ -32,6 +32,8 @@ export default function RepairPoolPage() {
   const [modalLine, setModalLine] = useState('L1');
   const [modalNotes, setModalNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  useEscapeClose(!!modalBucket && !submitting, () => setModalBucket(null));
 
   const load = useCallback(async () => {
     if (!session) return;

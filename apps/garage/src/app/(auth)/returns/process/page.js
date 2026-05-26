@@ -3,7 +3,7 @@ import { Suspense, useEffect, useMemo, useState, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, useToast, Combobox } from '@throttle/ui';
+import { Spinner, useToast, Combobox, useEscapeClose } from '@throttle/ui';
 import { useProducts } from '../../../../hooks/useProducts.js';
 import { Package, Wrench, AlertTriangle, Ban } from 'lucide-react';
 
@@ -524,6 +524,8 @@ function InspectionModal(props) {
     selectedDisp, setSelectedDisp, lossDesc, setLossDesc, inspNotes, setInspNotes,
     err, onClose, onSubmit, submitting,
   } = props;
+
+  useEscapeClose(true, () => { if (!submitting) onClose(); });
 
   function pickPresent(v) {
     setProductPresent(v);

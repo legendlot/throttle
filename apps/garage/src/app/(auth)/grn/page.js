@@ -2,7 +2,7 @@
 import { Fragment, useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { EmptyState, Modal, Spinner, useToast, buildBagLabelsHtml, printWindow, Combobox } from '@throttle/ui';
+import { EmptyState, Modal, Spinner, useToast, buildBagLabelsHtml, printWindow, Combobox, useEscapeClose } from '@throttle/ui';
 import { useProducts } from '../../../hooks/useProducts.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -68,6 +68,7 @@ function VariantSelects({ product, variant, setVariant }) {
 // ── GRN Detail Modal ───────────────────────────────────────────────────────────
 function GrnDetailModal({ grnNo, onClose, session }) {
   const { showToast }         = useToast();
+  useEscapeClose(true, onClose);
   const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState(null);

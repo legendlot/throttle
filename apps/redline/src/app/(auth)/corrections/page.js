@@ -2,7 +2,7 @@
 import { useState, useMemo } from 'react';
 import { useAuth } from '@throttle/auth';
 import { workerFetch } from '@throttle/db';
-import { Spinner, EmptyState, Panel, Chip, StatusBadge, useToast } from '@throttle/ui';
+import { Spinner, EmptyState, Panel, Chip, StatusBadge, useToast, useEscapeClose } from '@throttle/ui';
 import { todayStr } from '@throttle/domain';
 import { useScans } from '../../../hooks/useScans.js';
 
@@ -105,6 +105,9 @@ export default function CorrectionsPage() {
   const [amendReason,  setAmendReason]  = useState('');
   const [amendError,   setAmendError]   = useState('');
   const [amendLoading, setAmendLoading] = useState(false);
+
+  useEscapeClose(!!voidModal,  () => setVoidModal(null));
+  useEscapeClose(!!amendModal, () => setAmendModal(null));
 
   const { scans, loading, reload } = useScans(
     { dateFrom: selectedDate, dateTo: selectedDate, showVoided },

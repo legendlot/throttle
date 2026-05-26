@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, useToast, Combobox } from '@throttle/ui';
+import { Spinner, useToast, Combobox, useEscapeClose } from '@throttle/ui';
 import { useProducts } from '../../../../hooks/useProducts.js';
 
 const TONE_STYLES = {
@@ -90,6 +90,8 @@ export default function ReordersPage() {
   const [rejectingId, setRejectingId] = useState(null);
   const [rejectNote, setRejectNote] = useState('');
   const [rejectSubmitting, setRejectSubmitting] = useState(false);
+
+  useEscapeClose(rejectingId !== null && !rejectSubmitting, () => setRejectingId(null));
 
   const searchTimer = useRef(null);
 

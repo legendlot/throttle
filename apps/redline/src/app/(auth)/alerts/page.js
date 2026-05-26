@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { KpiCard, Spinner, EmptyState, Panel, Chip, StatusBadge, useToast } from '@throttle/ui';
+import { KpiCard, Spinner, EmptyState, Panel, Chip, StatusBadge, useToast, useEscapeClose } from '@throttle/ui';
 import { todayStr } from '@throttle/domain';
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -50,6 +50,8 @@ export default function AlertsPage() {
   const [ackNote,    setAckNote]    = useState('');
   const [ackError,   setAckError]   = useState('');
   const [ackLoading, setAckLoading] = useState(false);
+
+  useEscapeClose(!!ackModal, () => setAckModal(null));
 
   const isMahesh = (role || '').toLowerCase().includes('mahesh')
                 || (user?.full_name || '').toLowerCase().includes('mahesh');

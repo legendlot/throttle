@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, useToast } from '@throttle/ui';
+import { Spinner, useToast, useEscapeClose } from '@throttle/ui';
 
 const PERM_DEFS = [
   { group: 'Core Tabs', items: [
@@ -768,6 +768,7 @@ function PermMatrix({ permValues, togglePermBool, setPermLevel, disabled }) {
 }
 
 function ResetPasswordModal({ value, onChange, submitting, onClose, onSubmit }) {
+  useEscapeClose(true, () => { if (!submitting) onClose(); });
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9000, padding: 16 }}>
       <div onClick={(e) => e.stopPropagation()} style={{ background: '#111', border: '1px solid #333', borderRadius: 6, padding: 20, color: '#eee', minWidth: 380, maxWidth: 480 }}>
@@ -801,6 +802,7 @@ function ResetPasswordModal({ value, onChange, submitting, onClose, onSubmit }) 
 }
 
 function DeleteRoleConfirm({ roleName, submitting, onClose, onConfirm }) {
+  useEscapeClose(true, () => { if (!submitting) onClose(); });
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9000, padding: 16 }}>
       <div onClick={(e) => e.stopPropagation()} style={{ background: '#111', border: '1px solid #333', borderRadius: 6, padding: 20, color: '#eee', minWidth: 380, maxWidth: 460 }}>

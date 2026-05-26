@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, useToast } from '@throttle/ui';
+import { Spinner, useToast, useEscapeClose } from '@throttle/ui';
 import { todayStr } from '@throttle/domain';
 
 const TONE_STYLES = {
@@ -86,6 +86,8 @@ export default function LossesPage() {
   const [approvalNotes, setApprovalNotes] = useState('');
   const [lnErr, setLnErr] = useState('');
   const [lnSubmitting, setLnSubmitting] = useState(false);
+
+  useEscapeClose(!!reviewingNote && !lnSubmitting, () => setReviewingNote(null));
 
   const load = useCallback(async () => {
     if (!session) return;

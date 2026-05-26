@@ -51,6 +51,7 @@ const panelHeaderStyle = { display: 'flex', alignItems: 'center', justifyContent
 const tableThStyle     = { padding: '8px 10px', fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', textAlign: 'left' };
 const tableTdStyle     = { padding: '9px 10px', borderBottom: '1px solid rgba(42,42,42,.6)', fontSize: 12, whiteSpace: 'nowrap' };
 const selectStyle      = { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: '6px 10px', fontSize: 12, color: 'var(--t1)', outline: 'none', fontFamily: 'inherit', cursor: 'pointer' };
+const searchInputStyle = { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: '6px 10px', fontSize: 12, color: 'var(--t1)', outline: 'none', fontFamily: 'var(--mono)', minWidth: 200 };
 const btnPrimary       = { background: 'var(--yellow)', border: '1px solid var(--yellow)', borderRadius: 3, padding: '7px 16px', fontSize: 12, fontWeight: 700, color: '#000', cursor: 'pointer', fontFamily: 'var(--cond)', letterSpacing: '0.04em' };
 const btnSecondary     = { background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, padding: '6px 12px', fontSize: 11, color: 'var(--t2)', cursor: 'pointer', fontFamily: 'var(--cond)' };
 
@@ -68,6 +69,7 @@ export default function POListPage() {
   const [rows, setRows] = useState([]);
   const [pendingInward, setPendingInward] = useState(0);
   const [filters, setFilters] = useState({ status: '', source: '', order_type: '' });
+  const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -96,6 +98,22 @@ export default function POListPage() {
   if (perms && !perms.procurement_view) {
     return <div style={{ padding: 24, color: 'var(--t3)' }}>Access restricted.</div>;
   }
+
+  // Multi-token AND-of-OR substring search across po_number / vendor_name /
+  // vendor_code / order_type / source / raised_by name. Mirrors the
+  // Stock-Ledger pattern from Session 75 unified search.
+  const filteredRows = !search.trim()
+    ? rows
+    : (() => {
+        const tokens = search.toLowerCase().split(/\s+/).filter(Boolean);
+        return rows.filter((r) => {
+          const fields = [
+            r.po_number, r.vendor_name, r.vendor_code, r.order_type,
+            r.source, r.raised_by_name, r.raised_by, r.status,
+          ].map((v) => (v || '').toString().toLowerCase());
+          return tokens.every((t) => fields.some((f) => f.includes(t)));
+        });
+      })();
 
   return (
     <div style={{ color: 'var(--t1)' }}>
@@ -126,8 +144,16 @@ export default function POListPage() {
 
       <div style={panelStyle}>
         <div style={panelHeaderStyle}>
-          <span>Filters</span>
+          <span>Filters {search.trim() && <span style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontWeight: 400, fontSize: 11 }}>· {filteredRows.length} of {rows.length}</span>}</span>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+            <input
+              type="text"
+              data-search-primary
+              placeholder="Search PO / vendor / code · /"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              style={searchInputStyle}
+            />
             <select value={filters.status} onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value }))} style={selectStyle}>
               <option value="">All Statuses</option>
               {Object.keys(PO_STATUS_TONES).map((s) => <option key={s} value={s}>{s}</option>)}
@@ -146,7 +172,7 @@ export default function POListPage() {
         <div style={{ overflowX: 'auto' }}>
           {loading ? (
             <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
-          ) : rows.length === 0 ? (
+          ) : filteredRows.length === 0 ? (
             <div style={{ padding: 24, textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>
               No purchase orders match the filter
             </div>
@@ -166,7 +192,7 @@ export default function POListPage() {
                 <th style={{ ...tableThStyle, textAlign: 'right' }}></th>
               </tr></thead>
               <tbody>
-                {rows.map((r) => (
+                {filteredRows.map((r) => (
                   <tr
                     key={r.po_number}
                     style={{ cursor: 'pointer' }}

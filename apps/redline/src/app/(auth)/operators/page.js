@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from '@throttle/auth';
 import { workerFetch } from '@throttle/db';
-import { Spinner, EmptyState, Panel, Chip, StatusBadge, useToast, printWindow } from '@throttle/ui';
+import { Spinner, EmptyState, Panel, Chip, StatusBadge, useToast, printWindow, useEscapeClose } from '@throttle/ui';
 
 // ── Constants ────────────────────────────────────────────────
 // Department values must match the CHECK constraint on public.operators.
@@ -62,6 +62,8 @@ export default function OperatorsPage() {
   const [mPhone,  setMPhone]  = useState('');
   const [mError,  setMError]  = useState('');
   const [mSaving, setMSaving] = useState(false);
+
+  useEscapeClose(!!modal && !mSaving, () => setModal(null));
 
   // ── Load operators ────────────────────────────────────────
   const loadData = useCallback(async () => {

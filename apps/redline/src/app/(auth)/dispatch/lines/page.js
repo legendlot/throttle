@@ -38,9 +38,11 @@ function DispatchLineCards({ lines }) {
               <div>
                 <div style={{ fontFamily: 'var(--cond)', fontSize: 18, fontWeight: 700, color: 'var(--t1)', letterSpacing: '0.04em' }}>{l.line || '—'}</div>
                 <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t2)', marginTop: 4 }}>
-                  {channels.length
-                    ? channels.join(', ')
-                    : <span style={{ color: 'var(--t3)' }}>No channel activity</span>}
+                  {channels.length === 0
+                    ? <span style={{ color: 'var(--t3)' }}>No channel activity</span>
+                    : channels.length <= 5
+                      ? channels.join(', ')
+                      : <span title={channels.join(', ')}>{channels.slice(0, 5).join(', ')} +{channels.length - 5} more</span>}
                 </div>
               </div>
               <div style={{ textAlign: 'right' }}>
@@ -152,7 +154,12 @@ export default function DispatchLinesPage() {
       const today = todayStr();
       const data = await garageFetch('getDispatchLineView', { date: today }, session);
       setLines(data?.dispatch_lines || []);
-      setOperators(data?.operator_stats || []);
+      // Filter Test Operator from operator output table (S64 LOW backlog item).
+      // 2880 scans on D1 in one day inflated rankings; the account is non-prod.
+      const ops = (data?.operator_stats || []).filter(
+        o => (o.operator_name || '').trim() !== 'Test Operator'
+      );
+      setOperators(ops);
       setError(null);
     } catch (e) {
       setError(e.message || 'Failed to load data');

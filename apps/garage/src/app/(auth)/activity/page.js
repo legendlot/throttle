@@ -129,7 +129,7 @@ export default function ActivityPage() {
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
             <div style={{ flex: '1 1 220px' }}>
               <span style={labelStyle}>Search summary…</span>
-              <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search…" style={{ ...inputStyle, width: '100%' }} />
+              <input type="text" data-search-primary value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search…" style={{ ...inputStyle, width: '100%' }} />
             </div>
             <div style={{ flex: '0 0 160px' }}>
               <span style={labelStyle}>Type</span>

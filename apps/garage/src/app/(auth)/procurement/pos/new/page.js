@@ -185,12 +185,6 @@ function NewPOPage() {
   const [fbuProduct, setFbuProduct] = useState('');
   const [unitsRows, setUnitsRows] = useState([]); // for FBU unit-grid: {variant, color, qty, withRemote}
 
-  // CKD mode
-  const [ckdProductSel, setCkdProductSel] = useState('');
-  const [ckdQueue, setCkdQueue] = useState([]); // [{ product, lines: [{variant, color, qty}] }]
-  const [ckdExplosion, setCkdExplosion] = useState([]); // exploded part lines
-  const [ckdExploding, setCkdExploding] = useState(false);
-
   // Caches
   const [vendorCache, setVendorCache] = useState([]);
   const [forwarderCache, setForwarderCache] = useState([]);
@@ -360,6 +354,15 @@ function NewPOPage() {
         }[bomGroup] || [];
         filtered = rows.filter((r) => groupCats.some((c) => (r.category || '').toLowerCase().includes(c.toLowerCase())));
       }
+      // A-6: apply selected category's bom_filter on top (cards like Metal/Electronics/
+      // Packaging/Para/Stickers narrow the BOM list to their bucket).
+      const cardFilter = selectedCategory?.bom_filter;
+      if (cardFilter) {
+        const want = Array.isArray(cardFilter.value) ? cardFilter.value : [cardFilter.value];
+        const wantLc = want.map((v) => String(v).toLowerCase());
+        const key = cardFilter.type === 'part_type' ? 'type' : 'category';
+        filtered = filtered.filter((r) => wantLc.includes(String(r[key] || '').toLowerCase()));
+      }
       setBomChecklist(filtered);
     } catch (e) {
       showToast(e.message || 'BOM load failed', 'error');
@@ -443,83 +446,6 @@ function NewPOPage() {
   }
   function removeUnitRow(i) {
     setUnitsRows((prev) => prev.filter((_, j) => j !== i));
-  }
-
-  // CKD mode
-  function addCkdProduct() {
-    if (!ckdProductSel) return;
-    if (ckdQueue.find((q) => q.product === ckdProductSel)) {
-      showToast('Already in queue', 'error'); return;
-    }
-    const colorMap = PRODUCT_COLORS[ckdProductSel] || {};
-    const variants = (PRODUCT_VARIANTS[ckdProductSel] || []).map((v) => {
-      const cs = colorMap[v] || [];
-      return { variant: v, color: cs.length === 1 ? cs[0] : '', qty: '' };
-    });
-    setCkdQueue((prev) => [...prev, { product: ckdProductSel, variants: variants.length ? variants : [{ variant: 'Common', color: '', qty: '' }] }]);
-    setCkdProductSel('');
-  }
-  function updateCkdField(productIdx, varIdx, field, value) {
-    setCkdQueue((prev) => prev.map((p, i) => {
-      if (i !== productIdx) return p;
-      return { ...p, variants: p.variants.map((v, j) => (j === varIdx ? { ...v, [field]: value } : v)) };
-    }));
-  }
-  function removeCkdProduct(idx) {
-    setCkdQueue((prev) => prev.filter((_, i) => i !== idx));
-  }
-
-  async function explodeCKD() {
-    if (!ckdQueue.length) { showToast('Add a product first', 'error'); return; }
-    setCkdExploding(true);
-    try {
-      const allParts = {};
-      for (const p of ckdQueue) {
-        for (const v of p.variants) {
-          const qty = parseInt(v.qty, 10) || 0;
-          if (qty <= 0) continue;
-          const data = await garageFetch('calcKit', {
-            product: p.product, variant: v.variant || '', colour: v.color || '', qty,
-          }, session);
-          const kit = data?.kit || [];
-          kit.forEach((row) => {
-            const code = row.part_code;
-            if (!allParts[code]) {
-              allParts[code] = {
-                part_code: code, part_name: row.part_name, category: row.part_category || '',
-                bom_qty:   parseFloat(row.bom_qty) || 0,
-                qty:       0,
-              };
-            }
-            allParts[code].qty += parseFloat(row.required) || ((parseFloat(row.bom_qty) || 1) * qty);
-          });
-        }
-      }
-      setCkdExplosion(Object.values(allParts).map((r) => ({ ...r, qty: String(Math.ceil(r.qty)), checked: true })));
-    } catch (e) {
-      showToast(e.message || 'BOM explosion failed', 'error');
-    } finally {
-      setCkdExploding(false);
-    }
-  }
-
-  function addCkdToLines() {
-    const picked = ckdExplosion.filter((r) => r.checked && parseFloat(r.qty) > 0);
-    if (!picked.length) { showToast('No parts selected', 'error'); return; }
-    setLineItems((prev) => [
-      ...prev,
-      ...picked.map((r) => ({
-        part_code:   r.part_code,
-        description: r.part_name,
-        item_type:   'Part',
-        qty_ordered: r.qty,
-        unit:        'pcs',
-        unit_price:  '',
-      })),
-    ]);
-    setCkdExplosion([]);
-    setCkdQueue([]);
-    showToast(`Added ${picked.length} parts`, 'success');
   }
 
   // Tax-aware totals: subtotal + (CGST+SGST | IGST) + grand total. Live updates
@@ -759,75 +685,6 @@ function NewPOPage() {
         </div>
       )}
 
-      {/* Legacy CKD queue UI — retained for backward compat but never reached by
-          the new card layout. CkdMode itself is unreferenced as of Session C. */}
-      {selectedCategory?.key === '__legacy_ckd_unused' && (
-        <div style={panelStyle}>
-          <div style={panelHeaderStyle}><span>Products to Order (CKD Queue)</span></div>
-          <div style={panelBodyStyle}>
-            <div style={{ display: 'flex', gap: 6, alignItems: 'end', marginBottom: 12 }}>
-              <div style={{ flex: 1 }}>
-                <span style={labelStyle}>Add Product</span>
-                <select value={ckdProductSel} onChange={(e) => setCkdProductSel(e.target.value)} style={{ ...selectStyle, width: '100%' }} disabled={productsLoading}>
-                  <option value="">{productsLoading ? 'Loading…' : 'Select…'}</option>
-                  {PRODUCTS.filter((p) => !ckdQueue.find((q) => q.product === p)).map((p) => <option key={p} value={p}>{p}</option>)}
-                </select>
-              </div>
-              <button style={btnSecondary} onClick={addCkdProduct}>+ Add</button>
-            </div>
-
-            {ckdQueue.length === 0 ? (
-              <div style={{ color: 'var(--t3)', fontSize: 11, fontStyle: 'italic' }}>No products queued yet.</div>
-            ) : (
-              ckdQueue.map((p, pi) => (
-                <div key={p.product} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: 10, marginBottom: 8 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                    <strong style={{ fontFamily: 'var(--cond)', fontSize: 14 }}>{p.product}</strong>
-                    <button onClick={() => removeCkdProduct(pi)} style={{ background: 'transparent', border: '1px solid var(--border)', color: '#ff7070', cursor: 'pointer', fontSize: 11, borderRadius: 3, padding: '2px 8px' }}>✕</button>
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6 }}>
-                    {p.variants.map((v, vi) => {
-                      const variantColors = (PRODUCT_COLORS[p.product]?.[v.variant]) || [];
-                      return (
-                        <div key={`${v.variant}-${vi}`} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 80px', gap: 4, alignItems: 'center' }}>
-                          <span style={{ fontSize: 11, color: 'var(--t2)' }}>{v.variant || 'Common'}</span>
-                          {variantColors.length > 0 ? (
-                            <select
-                              value={v.color || ''}
-                              onChange={(e) => updateCkdField(pi, vi, 'color', e.target.value)}
-                              style={{ ...selectStyle, fontFamily: 'var(--mono)', fontSize: 11 }}
-                            >
-                              <option value="">Colour…</option>
-                              {variantColors.map((c) => <option key={c} value={c}>{c}</option>)}
-                            </select>
-                          ) : (
-                            <span style={{ fontSize: 11, color: 'var(--t3)' }}>—</span>
-                          )}
-                          <input
-                            type="number"
-                            min="0"
-                            placeholder="0"
-                            value={v.qty}
-                            onChange={(e) => updateCkdField(pi, vi, 'qty', e.target.value)}
-                            style={{ ...inputStyle, fontFamily: 'var(--mono)' }}
-                          />
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))
-            )}
-
-            {ckdQueue.length > 0 && (
-              <button style={btnPrimary} onClick={explodeCKD} disabled={ckdExploding}>
-                {ckdExploding ? 'Exploding…' : 'Explode BOM →'}
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-
       {/* Order details */}
       <div style={panelStyle}>
         <div style={panelHeaderStyle}>
@@ -909,7 +766,6 @@ function NewPOPage() {
             {allowedModes.includes('bom') && <button style={modeBtn(lineMode === 'bom')} onClick={() => setLineMode('bom')}>📋 From BOM</button>}
             {allowedModes.includes('manual') && <button style={modeBtn(lineMode === 'manual')} onClick={() => setLineMode('manual')}>✏ Manual</button>}
             {allowedModes.includes('units') && <button style={modeBtn(lineMode === 'units')} onClick={() => setLineMode('units')}>🚗 By Units</button>}
-            {allowedModes.includes('ckd') && <button style={modeBtn(lineMode === 'ckd')} onClick={() => setLineMode('ckd')}>🔧 CKD</button>}
           </div>
         </div>
         <div style={panelBodyStyle}>
@@ -959,15 +815,6 @@ function NewPOPage() {
               updateUnitRow={updateUnitRow}
               handleVariantChange={handleVariantChange}
               removeUnitRow={removeUnitRow}
-            />
-          )}
-
-          {lineMode === 'ckd' && (
-            <CkdMode
-              ckdQueue={ckdQueue}
-              explosion={ckdExplosion}
-              setExplosion={setCkdExplosion}
-              addCkdToLines={addCkdToLines}
             />
           )}
 
@@ -1518,54 +1365,6 @@ function UnitsMode({ fbuProduct, fbuVariants, fbuColors = {}, productHasRemote =
           </tbody>
         </table>
       )}
-    </>
-  );
-}
-
-function CkdMode({ ckdQueue, explosion, setExplosion, addCkdToLines }) {
-  if (!ckdQueue.length) {
-    return <div style={{ color: 'var(--t3)', fontSize: 11, fontStyle: 'italic' }}>Add products in the queue above and click Explode BOM.</div>;
-  }
-  if (!explosion.length) {
-    return <div style={{ color: 'var(--t3)', fontSize: 11, fontStyle: 'italic' }}>Click "Explode BOM →" above to compute the part list.</div>;
-  }
-  function updateRow(i, field, value) {
-    setExplosion((rows) => rows.map((r, j) => (j === i ? { ...r, [field]: value } : r)));
-  }
-  return (
-    <>
-      <div style={{ marginBottom: 8, fontSize: 11, color: 'var(--t3)' }}>
-        Exploded {explosion.length} unique parts.
-      </div>
-      <div style={{ maxHeight: 320, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 3 }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead><tr>
-            <th style={{ ...tableThStyle, width: 30 }}></th>
-            <th style={tableThStyle}>Part Code</th>
-            <th style={tableThStyle}>Name</th>
-            <th style={tableThStyle}>Category</th>
-            <th style={tableThStyle}>Order Qty</th>
-          </tr></thead>
-          <tbody>
-            {explosion.map((r, i) => (
-              <tr key={r.part_code}>
-                <td style={tableTdStyle}>
-                  <input type="checkbox" checked={!!r.checked} onChange={(e) => updateRow(i, 'checked', e.target.checked)} />
-                </td>
-                <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{r.part_code}</td>
-                <td style={{ ...tableTdStyle, whiteSpace: 'normal' }}>{r.part_name}</td>
-                <td style={tableTdStyle}>{r.category || '—'}</td>
-                <td style={tableTdStyle}>
-                  <input type="number" min="0" step="0.01" value={r.qty} onChange={(e) => updateRow(i, 'qty', e.target.value)} style={{ ...inputStyle, width: 100, fontFamily: 'var(--mono)' }} />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <div style={{ marginTop: 8, textAlign: 'right' }}>
-        <button style={btnPrimary} onClick={addCkdToLines}>Add Selected →</button>
-      </div>
     </>
   );
 }
