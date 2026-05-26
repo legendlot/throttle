@@ -342,12 +342,18 @@ export default function DispatchShipmentsPage() {
 
   function addCreateLine(product) {
     if (!product || !productCodes[product]) return;
-    if (createLines.find(l => l.product === product)) return;
-    const variants = productCodes[product];
-    setCreateLines(prev => [
-      ...prev,
-      ...variants.map(v => ({ product, model: v.model, color: v.color, label: v.label, qty: 0 })),
-    ]);
+    // Append only the variants not already present — supports topping up a
+    // product whose lineup has expanded (new colour added to product_master
+    // after the line was first added) and idempotent re-click.
+    setCreateLines(prev => {
+      const key = (p, m, c) => `${p}|${m || ''}|${c || ''}`;
+      const existing = new Set(prev.map(l => key(l.product, l.model, l.color)));
+      const additions = productCodes[product]
+        .filter(v => !existing.has(key(product, v.model, v.color)))
+        .map(v => ({ product, model: v.model, color: v.color, label: v.label, qty: 0 }));
+      if (additions.length === 0) return prev;
+      return [...prev, ...additions];
+    });
     setCreateProduct('');
   }
 
@@ -416,13 +422,19 @@ export default function DispatchShipmentsPage() {
 
   function addEditLine(product) {
     if (!product || !productCodes[product]) return;
-    const existingProducts = new Set(editLines.map(l => l.product));
-    if (existingProducts.has(product)) return;
-    const variants = productCodes[product];
-    setEditLines(prev => [
-      ...prev,
-      ...variants.map(v => ({ product, model: v.model, color: v.color, label: v.label, target_qty: 0, packed_qty: 0 })),
-    ]);
+    // Append only the variants not already on this shipment. The old guard
+    // bailed entirely if ANY variant of the product was present, blocking
+    // the operator from adding a newly-launched colour (e.g. Nitro Race
+    // Blue) to a shipment that already had other Nitro variants.
+    setEditLines(prev => {
+      const key = (p, m, c) => `${p}|${m || ''}|${c || ''}`;
+      const existing = new Set(prev.map(l => key(l.product, l.model, l.color)));
+      const additions = productCodes[product]
+        .filter(v => !existing.has(key(product, v.model, v.color)))
+        .map(v => ({ product, model: v.model, color: v.color, label: v.label, target_qty: 0, packed_qty: 0 }));
+      if (additions.length === 0) return prev;
+      return [...prev, ...additions];
+    });
     setEditProduct('');
   }
 
