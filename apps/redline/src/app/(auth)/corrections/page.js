@@ -2,7 +2,7 @@
 import { useState, useMemo } from 'react';
 import { useAuth } from '@throttle/auth';
 import { workerFetch } from '@throttle/db';
-import { Spinner, EmptyState, Panel, Chip, StatusBadge, useToast, useEscapeClose } from '@throttle/ui';
+import { Spinner, EmptyState, Panel, Chip, StatusBadge, Modal, useToast } from '@throttle/ui';
 import { todayStr } from '@throttle/domain';
 import { useScans } from '../../../hooks/useScans.js';
 
@@ -106,8 +106,7 @@ export default function CorrectionsPage() {
   const [amendError,   setAmendError]   = useState('');
   const [amendLoading, setAmendLoading] = useState(false);
 
-  useEscapeClose(!!voidModal,  () => setVoidModal(null));
-  useEscapeClose(!!amendModal, () => setAmendModal(null));
+  // ESC + backdrop-click close are handled internally by <Modal/>.
 
   const { scans, loading, reload } = useScans(
     { dateFrom: selectedDate, dateTo: selectedDate, showVoided },
@@ -191,11 +190,6 @@ export default function CorrectionsPage() {
   }
 
   // ── Style constants ───────────────────────────────────────
-  // Modal button (Cancel) — used in both Void and Amend modals
-  const modalBtnCancel = {
-    padding: '8px 14px', background: 'transparent', border: '1px solid var(--border)',
-    borderRadius: 3, color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 13, cursor: 'pointer',
-  };
   const dateInputStyle = { background: 'var(--surface2)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '6px 10px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 13, outline: 'none' };
   const dateLabelStyle = { fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase' };
   const inputStyle = { background: 'var(--surface2)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '6px 10px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 13, width: 220, outline: 'none' };
@@ -220,15 +214,19 @@ export default function CorrectionsPage() {
   return (
     <>
       {/* Void modal */}
-      {voidModal && (
-        <div
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-          onClick={(e) => { if (e.target === e.currentTarget) setVoidModal(null); }}
-        >
-          <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '28px 32px', width: 460, maxWidth: '90vw' }}>
-            <div style={{ fontFamily: 'var(--cond)', fontSize: 14, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--red)', marginBottom: 16 }}>
-              Void Scan — Tier 2
-            </div>
+      <Modal
+        open={!!voidModal}
+        onClose={() => setVoidModal(null)}
+        title="Void Scan — Tier 2"
+        titleColor="var(--red)"
+        confirmLabel={voidLoading ? 'Voiding…' : 'Confirm Void'}
+        confirmColor="var(--red)"
+        onConfirm={submitVoid}
+        loading={voidLoading}
+        error={voidError}
+      >
+        {voidModal && (
+          <>
             <div style={{ background: 'var(--surface3)', border: '1px solid var(--border)', borderRadius: 4, padding: 12, marginBottom: 16, fontSize: 12, fontFamily: 'var(--mono)' }}>
               <div style={{ color: 'var(--t3)', fontSize: 10, marginBottom: 4 }}>SCAN</div>
               <div style={{ color: 'var(--yellow)' }}>{voidModal.upc}</div>
@@ -246,39 +244,20 @@ export default function CorrectionsPage() {
               placeholder="Why is this scan being voided?"
               style={{ width: '100%', background: 'var(--surface)', color: 'var(--t1)', border: '1px solid var(--border)', borderRadius: 3, padding: 8, fontSize: 12, fontFamily: 'var(--mono)', resize: 'vertical' }}
             />
-            {voidError && (
-              <div style={{ color: 'var(--red)', fontSize: 11, marginTop: 8, fontFamily: 'var(--mono)' }}>{voidError}</div>
-            )}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
-              <button onClick={() => setVoidModal(null)} style={modalBtnCancel} disabled={voidLoading}>Cancel</button>
-              <button
-                onClick={submitVoid}
-                disabled={voidLoading || !voidReason.trim()}
-                style={{
-                  padding: '8px 14px', background: 'var(--red)', color: '#fff',
-                  border: '1px solid var(--red)', borderRadius: 3,
-                  fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700,
-                  letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer',
-                  opacity: (voidLoading || !voidReason.trim()) ? 0.5 : 1,
-                }}
-              >
-                {voidLoading ? 'Voiding…' : 'Confirm Void'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+            {/* TODO: B-4 follow-up: shared <Modal> doesn't support disabling confirm based on body-state — empty-reason check now happens inside submitVoid which surfaces the error via Modal's error prop. */}
+          </>
+        )}
+      </Modal>
 
       {/* Amend modal */}
-      {amendModal && (
-        <div
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-          onClick={(e) => { if (e.target === e.currentTarget) setAmendModal(null); }}
-        >
-          <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '28px 32px', width: 480, maxWidth: '90vw' }}>
-            <div style={{ fontFamily: 'var(--cond)', fontSize: 14, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--yellow)', marginBottom: 16 }}>
-              Amend Scan — Tier 3
-            </div>
+      <Modal
+        open={!!amendModal}
+        onClose={() => setAmendModal(null)}
+        title="Amend Scan — Tier 3"
+        titleColor="var(--yellow)"
+      >
+        {amendModal && (
+          <>
             <div style={{ background: 'var(--surface3)', border: '1px solid var(--border)', borderRadius: 4, padding: 12, marginBottom: 16, fontSize: 12, fontFamily: 'var(--mono)' }}>
               <div style={{ color: 'var(--t3)', fontSize: 10, marginBottom: 4 }}>SCAN</div>
               <div style={{ color: 'var(--yellow)' }}>{amendModal.upc}</div>
@@ -319,8 +298,18 @@ export default function CorrectionsPage() {
             {amendError && (
               <div style={{ color: 'var(--red)', fontSize: 11, marginTop: 8, fontFamily: 'var(--mono)' }}>{amendError}</div>
             )}
+            {/* TODO: B-4 follow-up: Modal lacks a `footer` slot — keeping inline buttons here to preserve the yellow-on-black brand style (Modal's built-in confirm renders white text). */}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
-              <button onClick={() => setAmendModal(null)} style={modalBtnCancel} disabled={amendLoading}>Cancel</button>
+              <button
+                onClick={() => setAmendModal(null)}
+                style={{
+                  padding: '8px 14px', background: 'transparent', border: '1px solid var(--border)',
+                  borderRadius: 3, color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 13, cursor: 'pointer',
+                }}
+                disabled={amendLoading}
+              >
+                Cancel
+              </button>
               <button
                 onClick={submitAmend}
                 disabled={amendLoading || !amendReason.trim()}
@@ -335,9 +324,9 @@ export default function CorrectionsPage() {
                 {amendLoading ? 'Saving…' : 'Confirm Amend'}
               </button>
             </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </Modal>
 
       {/* Page content */}
       <div>

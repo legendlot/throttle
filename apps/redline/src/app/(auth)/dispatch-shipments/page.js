@@ -2,7 +2,7 @@
 import { Fragment, useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { ConfirmModal, Spinner, EmptyState, useToast, Panel, Chip, StatusBadge, useEscapeClose } from '@throttle/ui';
+import { ConfirmModal, Modal, Spinner, EmptyState, useToast, Panel, Chip, StatusBadge, useEscapeClose } from '@throttle/ui';
 import { useDispatchChannels } from '../../../hooks/useDispatchChannels.js';
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -118,8 +118,7 @@ export default function DispatchShipmentsPage() {
   const [editError,    setEditError]    = useState('');
   const [editProduct,  setEditProduct]  = useState('');
 
-  useEscapeClose(createOpen,        () => setCreateOpen(false));
-  useEscapeClose(editOpen,          () => setEditOpen(false));
+  // Create + Edit modals use shared <Modal/> (handles ESC internally). Detail panel is still a raw overlay.
   useEscapeClose(!!detailShipment,  () => setDetailShipment(null));
 
   // ── Loaders ───────────────────────────────────────────────
@@ -529,20 +528,15 @@ export default function DispatchShipmentsPage() {
       />
 
       {/* Create panel */}
-      {createOpen && (
-        <div
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
-          onClick={(e) => { if (e.target === e.currentTarget) setCreateOpen(false); }}
-        >
-          <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: 24, width: 640, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto' }}>
-            <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16 }}>
-              <div style={{ fontFamily: 'var(--cond)', fontSize: 14, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--yellow)' }}>
-                New Shipment
-              </div>
-              <div style={{ flex: 1 }} />
-              <button onClick={() => setCreateOpen(false)} style={btnStyle}>× Close</button>
-            </div>
-
+      <Modal
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        title="New Shipment"
+        titleColor="var(--yellow)"
+        size="lg"
+      >
+        {createOpen && (
+          <>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
               <div>
                 <label style={labelStyle}>Title (optional)</label>
@@ -628,6 +622,7 @@ export default function DispatchShipmentsPage() {
               <div style={{ color: 'var(--red)', fontSize: 11, marginTop: 12, fontFamily: 'var(--mono)' }}>{createError}</div>
             )}
 
+            {/* TODO: B-4 follow-up: Modal lacks a `footer` slot — keeping inline buttons to preserve yellow-on-black primary style. */}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
               <button onClick={() => setCreateOpen(false)} style={btnStyle} disabled={createLoading}>Cancel</button>
               <button
@@ -638,25 +633,20 @@ export default function DispatchShipmentsPage() {
                 {createLoading ? 'Creating…' : 'Create Shipment'}
               </button>
             </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </Modal>
 
       {/* Edit panel */}
-      {editOpen && editShipment && (
-        <div
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
-          onClick={(e) => { if (e.target === e.currentTarget) setEditOpen(false); }}
-        >
-          <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: 24, width: 640, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto' }}>
-            <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16 }}>
-              <div style={{ fontFamily: 'var(--cond)', fontSize: 14, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--yellow)' }}>
-                Edit {editShipment.shipment_no}
-              </div>
-              <div style={{ flex: 1 }} />
-              <button onClick={() => setEditOpen(false)} style={btnStyle}>× Close</button>
-            </div>
-
+      <Modal
+        open={editOpen && !!editShipment}
+        onClose={() => setEditOpen(false)}
+        title={editShipment ? `Edit ${editShipment.shipment_no}` : 'Edit Shipment'}
+        titleColor="var(--yellow)"
+        size="lg"
+      >
+        {editOpen && editShipment && (
+          <>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
               <div>
                 <label style={labelStyle}>Title</label>
@@ -725,6 +715,7 @@ export default function DispatchShipmentsPage() {
               <div style={{ color: 'var(--red)', fontSize: 11, marginTop: 12, fontFamily: 'var(--mono)' }}>{editError}</div>
             )}
 
+            {/* TODO: B-4 follow-up: Modal lacks a `footer` slot — keeping inline buttons to preserve yellow-on-black primary style. */}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
               <button onClick={() => setEditOpen(false)} style={btnStyle} disabled={editLoading}>Cancel</button>
               <button
@@ -735,9 +726,9 @@ export default function DispatchShipmentsPage() {
                 {editLoading ? 'Saving…' : 'Save Changes'}
               </button>
             </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </Modal>
 
       {/* Page content */}
       <div>
