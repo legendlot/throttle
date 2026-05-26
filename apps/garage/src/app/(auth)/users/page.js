@@ -50,6 +50,7 @@ const PERM_DEFS = [
     { key: 'customer_repair_manage', label: 'Manage Customer Repairs', type: 'bool' },
   ] },
   { group: 'Dispatch', items: [
+    { key: 'dispatch_pack',    label: 'Pack Shipments (Add / Delete Boxes)', type: 'bool' },
     { key: 'dispatch_restock', label: 'Unit Restock (Scanner)',  type: 'bool' },
     { key: 'dispatch_challan', label: 'Issue Delivery Challans', type: 'bool' },
   ] },
