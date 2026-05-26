@@ -411,7 +411,7 @@ export default function DashboardPage() {
                     {isOpen && constrained && row.shorts.length > 0 && (
                       <div style={{ marginTop: 6, padding: '8px 10px', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, fontSize: 11 }}>
                         <div style={{ fontSize: 10, color: 'var(--t3)', marginBottom: 6, fontFamily: 'var(--mono)' }}>
-                          WHAT'S NEEDED TO REACH {row.maxPossible.toLocaleString()} UNITS
+                          WHAT&apos;S NEEDED TO REACH {row.maxPossible.toLocaleString()} UNITS
                         </div>
                         {row.shorts.slice(0, 3).map((s, j) => {
                           const needed = (row.maxPossible - s.max_units) * s.bom_qty;

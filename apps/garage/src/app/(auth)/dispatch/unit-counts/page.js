@@ -258,7 +258,7 @@ function UnitCountDetail({ header, lines, session, toast, onBack, onReload, canR
 
           {isInProgress && (
             <div style={{ marginBottom: 10, padding: '8px 10px', background: 'rgba(33,60,226,.08)', border: '1px solid rgba(33,60,226,.2)', borderRadius: 3, fontSize: 11, color: 'var(--t2)' }}>
-              Mark each row Present / Missing / Extra below. Found a UPC not on the sheet? Paste it in the "Extra" box at the bottom and click Add.
+              Mark each row Present / Missing / Extra below. Found a UPC not on the sheet? Paste it in the &quot;Extra&quot; box at the bottom and click Add.
             </div>
           )}
 

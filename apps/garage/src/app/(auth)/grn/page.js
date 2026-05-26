@@ -829,7 +829,7 @@ function PartsGrnPanel({ session, onSuccess }) {
   return (
     <div>
       <p style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 12 }}>
-        Use for ad-hoc part receipts not tied to a full BOM. Search by product and part name together (e.g. "flare pcb") — select to fill automatically.
+        Use for ad-hoc part receipts not tied to a full BOM. Search by product and part name together (e.g. &quot;flare pcb&quot;) — select to fill automatically.
       </p>
 
       {/* Header fields — product removed, now auto-filled per line */}

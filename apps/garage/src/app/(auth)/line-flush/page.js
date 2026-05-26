@@ -641,7 +641,7 @@ function NewFlushForm(props) {
         <div style={panelBodyStyle}>
           {partCards.length === 0 && (
             <div style={{ padding: 16, textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>
-              No parts added yet — click "+ Add Part" or load from a selected run.
+              No parts added yet — click &quot;+ Add Part&quot; or load from a selected run.
             </div>
           )}
           {partCards.map((card) => {

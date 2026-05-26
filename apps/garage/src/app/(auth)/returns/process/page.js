@@ -163,6 +163,22 @@ function ProcessPage() {
     return m;
   }, [channels]);
 
+  // Handover summary — group inspected non-loss units by product+disposition.
+  // Must run unconditionally on every render (Rules of Hooks), so it sits
+  // alongside the other hooks. Self-contained on shipmentData.
+  const handoverGroups = useMemo(() => {
+    const u = shipmentData?.units || [];
+    const groups = {};
+    u.forEach((row) => {
+      if (row.status !== 'inspected') return;
+      if (!['udr', 'wks_repair'].includes(row.disposition)) return;
+      const key = `${row.product || '—'}|${row.disposition}`;
+      if (!groups[key]) groups[key] = { product: row.product || '—', disposition: row.disposition, count: 0 };
+      groups[key].count += 1;
+    });
+    return Object.values(groups);
+  }, [shipmentData]);
+
   function openInspection(unit) {
     setInspecting(unit);
     setInspErr('');
@@ -304,19 +320,6 @@ function ProcessPage() {
   const statusColor = SHIPMENT_STATUS_COLORS[status] || 'var(--t3)';
   const handedOver = ['handed_over', 'closed'].includes(status);
   const canHandover = status === 'fully_processed' && !handedOver;
-
-  // Handover summary — group inspected non-loss units by product+disposition
-  const handoverGroups = useMemo(() => {
-    const groups = {};
-    units.forEach((u) => {
-      if (u.status !== 'inspected') return;
-      if (!['udr', 'wks_repair'].includes(u.disposition)) return;
-      const key = `${u.product || '—'}|${u.disposition}`;
-      if (!groups[key]) groups[key] = { product: u.product || '—', disposition: u.disposition, count: 0 };
-      groups[key].count += 1;
-    });
-    return Object.values(groups);
-  }, [units]);
 
   return (
     <div style={{ color: 'var(--t1)' }}>

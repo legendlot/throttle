@@ -11,7 +11,7 @@
   },
   "rules": {
     "no-undef": "error",
-    "react/no-unescaped-entities": "warn",
-    "react-hooks/rules-of-hooks": "warn"
+    "react/no-unescaped-entities": "error",
+    "react-hooks/rules-of-hooks": "error"
   }
 }

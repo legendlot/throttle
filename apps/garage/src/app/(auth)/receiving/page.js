@@ -111,15 +111,6 @@ export default function ReceivingPage() {
   const [boxSubmitting, setBoxSubmitting] = useState(false);
   const [isAmendMode,  setIsAmendMode]   = useState(false); // true when reopening a box that already has entries
 
-  // ── Permission check ─────────────────────────────────────────────────────────
-  if (perms && (!perms.receiving || perms.receiving === 'none')) {
-    return (
-      <div style={{ padding: '16px 24px', color: 'var(--t1)' }}>
-        <EmptyState message="You do not have permission to access Receiving." />
-      </div>
-    );
-  }
-
   // ── List loaders ─────────────────────────────────────────────────────────────
   const loadList = useCallback(async () => {
     if (!session) return;
@@ -631,7 +622,15 @@ export default function ReceivingPage() {
   const showBagButtons = !isFbu && lines.some(l => l.status === 'Counted' || l.status === 'GRN Raised');
 
   // ── RENDER: permission guard ──────────────────────────────────────────────────
-  // (Early return for no-perms already at top)
+  // Must run AFTER all hooks (Rules of Hooks). Moved here from above the
+  // hook block to fix the conditional-hook violation surfaced by ESLint S77.
+  if (perms && (!perms.receiving || perms.receiving === 'none')) {
+    return (
+      <div style={{ padding: '16px 24px', color: 'var(--t1)' }}>
+        <EmptyState message="You do not have permission to access Receiving." />
+      </div>
+    );
+  }
 
   // ── RENDER: list view ─────────────────────────────────────────────────────────
   if (view === 'list') {

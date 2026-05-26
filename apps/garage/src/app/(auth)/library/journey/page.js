@@ -228,7 +228,7 @@ export default function PartJourneyPage() {
                 <div style={{ marginBottom: 10, padding: '8px 10px', background: 'rgba(245,158,11,.1)', border: '1px solid rgba(245,158,11,.3)', borderRadius: 3, fontSize: 11, color: '#fbbf24' }}>
                   ⚠ Computed running balance ({fmtQty(reconGap.computed)}) differs from stored closing_stock ({fmtQty(reconGap.stored)}) by{' '}
                   <strong>{reconGap.diff > 0 ? '+' : ''}{fmtQty(reconGap.diff)}</strong>.{' '}
-                  This usually means some flush dispositions or damage events are showing as 'neutral' but were already reflected in the ledger via the underlying issue/receipt.
+                  This usually means some flush dispositions or damage events are showing as &apos;neutral&apos; but were already reflected in the ledger via the underlying issue/receipt.
                 </div>
               )}
 

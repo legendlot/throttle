@@ -504,7 +504,7 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
                confirmLabel="FLAG FOR RECOUNT" onConfirm={flagRecount}>
           <p style={{ margin: '0 0 10px', fontSize: 12, color: 'var(--t2)' }}>
             Flagged lines stay on this count but get marked as <code>recount_required</code>. Create a fresh count
-            with <code>count_type='recount'</code> assigning a <strong>different counter</strong> to satisfy
+            with <code>count_type=&apos;recount&apos;</code> assigning a <strong>different counter</strong> to satisfy
             segregation of duties.
           </p>
           <div>
