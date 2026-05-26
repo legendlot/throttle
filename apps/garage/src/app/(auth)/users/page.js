@@ -58,8 +58,9 @@ const PERM_DEFS = [
     { key: 'scan_amend_manager',   label: 'Amend Scans (Manager)',   type: 'bool' },
   ] },
   { group: 'Reports', items: [
-    { key: 'reports',         label: 'View & Download Reports', type: 'bool' },
-    { key: 'reports_finance', label: 'Finance / Cost Reports',  type: 'bool' },
+    { key: 'reports',            label: 'View & Download Reports',         type: 'bool' },
+    { key: 'reports_finance',    label: 'Finance / Cost Reports',          type: 'bool' },
+    { key: 'reports_compliance', label: 'Compliance Reports (sensitive)',  type: 'bool' },
   ] },
   { group: 'Users', items: [
     { key: 'users_view',   label: 'View Users Tab',       type: 'bool' },
