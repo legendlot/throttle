@@ -8,10 +8,12 @@ export function Modal({
   titleColor,
   confirmLabel,
   confirmColor,
+  confirmStyle,
   onConfirm,
   loading,
   error,
   size = 'md',
+  footer,
   children,
 }) {
   // Close on Escape — only listens while this modal is actually open.
@@ -66,12 +68,14 @@ export function Modal({
           </h3>
         )}
 
-        <div style={{ marginBottom: onConfirm ? 16 : 0 }}>{children}</div>
+        <div style={{ marginBottom: (onConfirm || footer) ? 16 : 0 }}>{children}</div>
 
         {error && (
           <div style={{ color: '#ef4444', marginBottom: 12, fontSize: 12 }}>{error}</div>
         )}
-        {onConfirm && (
+        {footer ? (
+          <div style={{ marginTop: 16 }}>{footer}</div>
+        ) : onConfirm && (
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
             <button
               onClick={onClose}
@@ -92,6 +96,7 @@ export function Modal({
                 border: 'none', color: '#fff', padding: '6px 14px', borderRadius: 4,
                 cursor: loading ? 'wait' : 'pointer', opacity: loading ? 0.6 : 1,
                 fontFamily: 'var(--mono)', fontSize: 12,
+                ...(confirmStyle || {}),
               }}
             >
               {loading ? '…' : (confirmLabel || 'Confirm')}

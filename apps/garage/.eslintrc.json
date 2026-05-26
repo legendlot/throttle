@@ -1,0 +1,17 @@
+{
+  "extends": "next/core-web-vitals",
+  "env": {
+    "browser": true,
+    "node": true,
+    "es2022": true
+  },
+  "parserOptions": {
+    "ecmaVersion": "latest",
+    "sourceType": "module"
+  },
+  "rules": {
+    "no-undef": "error",
+    "react/no-unescaped-entities": "warn",
+    "react-hooks/rules-of-hooks": "warn"
+  }
+}
