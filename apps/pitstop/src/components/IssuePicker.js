@@ -24,9 +24,6 @@ const selectStyle = {
   outline: 'none',
 };
 
-const inputStyle = {
-  ...selectStyle,
-};
 
 const labelStyle = {
   color: 'var(--t3)',
@@ -68,12 +65,16 @@ export function IssuePicker({ session, value, onChange }) {
     return () => { cancelled = true; };
   }, [session]);
 
-  if (loading) return null; // show nothing until catalog arrives
+  if (loading) return (
+    <div style={{ color: 'var(--t3)', fontSize: 12, fontFamily: 'var(--font-mono)', padding: '4px 0' }}>
+      Loading issue catalog…
+    </div>
+  );
 
   const selectedCat = catalog.find(c => c.category === value.issue_category);
   const subcategories = selectedCat?.subcategories || [];
 
-  // When category is "Other" or no catalog entry found, subcategory dropdown shows only "Other"
+  // When category is "Other", no catalog subcategories apply — only the static "Other" option below renders.
   const subcatOptions = value.issue_category === 'Other' ? [] : subcategories;
 
   const showFreeText =
@@ -157,7 +158,7 @@ export function IssuePicker({ session, value, onChange }) {
             value={value.issue_subcategory_custom || ''}
             onChange={handleCustom}
             placeholder="Briefly describe the issue…"
-            style={inputStyle}
+            style={selectStyle}
           />
         </Field>
       )}
