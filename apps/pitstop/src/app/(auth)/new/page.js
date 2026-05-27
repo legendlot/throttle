@@ -6,13 +6,10 @@ import { Spinner } from '@throttle/ui';
 import { Scan, AlertCircle, Phone as PhoneIcon } from 'lucide-react';
 import { csopsGet, csopsPost } from '../../../lib/csopsFetch.js';
 import { ShopifyPanel } from '../../../components/ShopifyPanel.js';
+import { IssuePicker } from '../../../components/IssuePicker.js';
 
 const PLATFORMS = [
   '', 'website','amazon','cred','blinkit','instamart','marketplace','offline','zepto','swiggy','investor','other'
-];
-const ISSUE_TYPES = ['replacement', 'refund', 'repair', 'other'];
-const ISSUE_CATEGORIES = [
-  '', 'movement','remote_pairing','charging','physical_damage','missing_parts','dead_on_arrival','battery','build_quality','other'
 ];
 const INTAKE_CHANNELS = ['phone','whatsapp','email','marketplace','walkin','other'];
 
@@ -55,8 +52,10 @@ export default function NewTicketPage() {
     product_sku:     '',
     product_model:   '',
     product_color:   '',
-    issue_type:      'replacement',
     issue_category:  '',
+    issue_subcategory: '',
+    issue_subcategory_custom: '',
+    disposition:     'pending',
     issue_description: '',
   });
 
@@ -248,17 +247,12 @@ export default function NewTicketPage() {
 
         {/* ── Issue ─────────────────────────────────────────────────────── */}
         <Section title="Issue">
+          <IssuePicker
+            session={session}
+            value={form}
+            onChange={p => setForm(f => ({ ...f, ...p }))}
+          />
           <Row>
-            <Field label="Type *">
-              <select value={form.issue_type} onChange={set('issue_type')} style={inputStyle}>
-                {ISSUE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-              </select>
-            </Field>
-            <Field label="Category">
-              <select value={form.issue_category} onChange={set('issue_category')} style={inputStyle}>
-                {ISSUE_CATEGORIES.map(c => <option key={c} value={c}>{c || '— select —'}</option>)}
-              </select>
-            </Field>
             <Field label="Intake channel">
               <select value={form.intake_channel} onChange={set('intake_channel')} style={inputStyle}>
                 {INTAKE_CHANNELS.map(c => <option key={c} value={c}>{c}</option>)}
