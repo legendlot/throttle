@@ -1,16 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { fetchIssueCatalog } from '../lib/issueCatalog.js';
-
-const DISPOSITIONS = [
-  { value: 'pending',       label: 'Pending' },
-  { value: 'query',         label: 'Query' },
-  { value: 'no_action',     label: 'No action' },
-  { value: 'awaiting_info', label: 'Awaiting info' },
-  { value: 'replacement',   label: 'Replacement' },
-  { value: 'refund',        label: 'Refund' },
-  { value: 'repair',        label: 'Repair' },
-];
+import { DISPOSITION_VALUES, DISPOSITION_LABELS } from '../lib/dispositions.js';
 
 const selectStyle = {
   background: 'var(--surface)',
@@ -143,8 +134,8 @@ export function IssuePicker({ session, value, onChange }) {
 
         <Field label="Disposition">
           <select value={value.disposition || 'pending'} onChange={handleDisposition} style={selectStyle}>
-            {DISPOSITIONS.map(d => (
-              <option key={d.value} value={d.value}>{d.label}</option>
+            {DISPOSITION_VALUES.map(d => (
+              <option key={d} value={d}>{DISPOSITION_LABELS[d]}</option>
             ))}
           </select>
         </Field>

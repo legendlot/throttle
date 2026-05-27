@@ -7,6 +7,8 @@ import { Chip, KpiCard, EmptyState, Spinner } from '@throttle/ui';
 import { Plus, Download, Search, ListChecks } from 'lucide-react';
 import { csopsGet } from '../../../lib/csopsFetch.js';
 import { fetchIssueCatalog } from '../../../lib/issueCatalog.js';
+import { DISPOSITION_VALUES, DISPOSITION_LABELS } from '../../../lib/dispositions.js';
+import { DispositionBadge } from '../../../components/DispositionBadge.js';
 
 // ── Sub-tabs ─────────────────────────────────────────────────────────────────
 const TABS = [
@@ -19,49 +21,7 @@ const TABS = [
   { id: 'closed',     label: 'Closed' },
 ];
 
-const DISPOSITIONS = ['pending','query','no_action','awaiting_info','replacement','refund','repair'];
-const DISPOSITION_LABELS = {
-  pending:       'Pending',
-  query:         'Query',
-  no_action:     'No Action',
-  awaiting_info: 'Awaiting Info',
-  replacement:   'Replacement',
-  refund:        'Refund',
-  repair:        'Repair',
-};
 const PLATFORMS = ['website','amazon','cred','blinkit','instamart','marketplace','offline','zepto','swiggy'];
-
-// ── Visual helpers ───────────────────────────────────────────────────────────
-
-const DISPOSITION_PALETTE = {
-  replacement:   { bg: 'rgba(123, 147, 255, 0.12)', fg: '#7b93ff', border: 'rgba(123, 147, 255, 0.35)' },
-  refund:        { bg: 'rgba(251, 191, 36, 0.12)',  fg: '#fbbf24', border: 'rgba(251, 191, 36, 0.35)' },
-  repair:        { bg: 'rgba(74, 222, 128, 0.12)',  fg: '#4ade80', border: 'rgba(74, 222, 128, 0.35)' },
-  query:         { bg: 'rgba(99, 179, 237, 0.12)',  fg: '#63b3ed', border: 'rgba(99, 179, 237, 0.35)' },
-  no_action:     { bg: 'var(--surface-2)',          fg: 'var(--t3)', border: 'var(--border)' },
-  awaiting_info: { bg: 'rgba(251, 191, 36, 0.08)', fg: '#fbbf24', border: 'rgba(251, 191, 36, 0.25)' },
-  pending:       { bg: 'var(--surface-2)',          fg: 'var(--t2)', border: 'var(--border)' },
-};
-
-function DispositionBadge({ disposition }) {
-  const p = DISPOSITION_PALETTE[disposition] || DISPOSITION_PALETTE.pending;
-  const label = DISPOSITION_LABELS[disposition] || (disposition || 'pending');
-  return (
-    <span style={{
-      display: 'inline-block',
-      padding: '2px 8px',
-      background: p.bg,
-      color: p.fg,
-      border: `1px solid ${p.border}`,
-      borderRadius: 'var(--radius-sm)',
-      fontFamily: 'var(--font-mono)',
-      fontSize: 10,
-      fontWeight: 700,
-      letterSpacing: '0.08em',
-      textTransform: 'uppercase',
-    }}>{label}</span>
-  );
-}
 
 function StagePill({ stage }) {
   return (
@@ -350,17 +310,17 @@ export default function QueuePage() {
           )}
         </form>
 
-        <span style={{ color: 'var(--border)', padding: '0 4px' }}>|</span>
+        <span style={{ color: 'var(--t4)', padding: '0 4px' }}>|</span>
 
         {/* Disposition chips */}
         <Chip active={dispositionFilter === ''} onClick={() => setParam('disposition', '')}>All</Chip>
-        {DISPOSITIONS.map(d => (
+        {DISPOSITION_VALUES.map(d => (
           <Chip key={d} active={dispositionFilter === d} onClick={() => setParam('disposition', d)}>
             {DISPOSITION_LABELS[d]}
           </Chip>
         ))}
 
-        <span style={{ color: 'var(--border)', padding: '0 4px' }}>|</span>
+        <span style={{ color: 'var(--t4)', padding: '0 4px' }}>|</span>
 
         {/* Category select */}
         <select
@@ -379,7 +339,7 @@ export default function QueuePage() {
           {catalogCategories.map(c => <option key={c.category} value={c.category}>{c.category}</option>)}
         </select>
 
-        <span style={{ color: 'var(--border)', padding: '0 4px' }}>|</span>
+        <span style={{ color: 'var(--t4)', padding: '0 4px' }}>|</span>
 
         {/* Platform select */}
         <select
@@ -453,7 +413,7 @@ export default function QueuePage() {
                   </Td>
                   <Td>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                      <DispositionBadge disposition={t.disposition} />
+                      <DispositionBadge disposition={t.disposition} compact />
                       {t.auto_created && (
                         <span style={{
                           display: 'inline-block', padding: '1px 6px',

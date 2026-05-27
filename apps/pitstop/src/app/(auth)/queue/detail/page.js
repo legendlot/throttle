@@ -7,6 +7,8 @@ import { Modal, Spinner, useToast } from '@throttle/ui';
 import { ChevronLeft, AlertCircle, Plus, Link2, MessageSquare, ChevronRight } from 'lucide-react';
 import { csopsGet, csopsPost } from '../../../../lib/csopsFetch.js';
 import { ShopifyPanel } from '../../../../components/ShopifyPanel.js';
+import { DISPOSITION_VALUES, DISPOSITION_LABELS } from '../../../../lib/dispositions.js';
+import { DispositionBadge } from '../../../../components/DispositionBadge.js';
 
 // ── Domain constants (mirror csops worker) ───────────────────────────────────
 
@@ -15,18 +17,6 @@ const BRANCH = {
   replacement: ['replacement_dispatched'],
   refund:      ['refund_initiated','refund_completed'],
   repair:      ['handed_to_production','repaired_ready','repair_dispatched'],
-};
-
-const DISPOSITION_VALUES = ['pending','query','no_action','awaiting_info','replacement','refund','repair'];
-
-const DISPOSITION_LABELS = {
-  pending:       'Pending',
-  query:         'Query',
-  no_action:     'No action',
-  awaiting_info: 'Awaiting info',
-  replacement:   'Replacement',
-  refund:        'Refund',
-  repair:        'Repair',
 };
 
 // Stages that allow disposition changes without admin
@@ -41,30 +31,6 @@ function lifecycleStages(disposition) {
   }
   // replacement | refund | repair | pending → full logistics path
   return [...SHARED, ...(BRANCH[disposition] || []), 'closed'];
-}
-
-const DISPOSITION_PALETTE = {
-  replacement: { bg: 'rgba(123, 147, 255, 0.12)', fg: '#7b93ff', border: 'rgba(123, 147, 255, 0.35)' },
-  refund:      { bg: 'rgba(251, 191, 36, 0.12)',  fg: '#fbbf24', border: 'rgba(251, 191, 36, 0.35)' },
-  repair:      { bg: 'rgba(74, 222, 128, 0.12)',  fg: '#4ade80', border: 'rgba(74, 222, 128, 0.35)' },
-  query:       { bg: 'rgba(99, 179, 237, 0.12)',  fg: '#63b3ed', border: 'rgba(99, 179, 237, 0.35)' },
-  no_action:   { bg: 'var(--surface-2)',          fg: 'var(--t3)', border: 'var(--border)' },
-  awaiting_info: { bg: 'rgba(251, 191, 36, 0.08)', fg: '#fbbf24', border: 'rgba(251, 191, 36, 0.25)' },
-  pending:     { bg: 'var(--surface-2)',          fg: 'var(--t2)', border: 'var(--border)' },
-};
-
-function DispositionBadge({ disposition }) {
-  const p = DISPOSITION_PALETTE[disposition] || DISPOSITION_PALETTE.pending;
-  const label = DISPOSITION_LABELS[disposition] || (disposition || 'pending');
-  return (
-    <span style={{
-      display: 'inline-block', padding: '3px 10px',
-      background: p.bg, color: p.fg, border: `1px solid ${p.border}`,
-      borderRadius: 'var(--radius-sm)',
-      fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700,
-      letterSpacing: '0.08em', textTransform: 'uppercase',
-    }}>{label}</span>
-  );
 }
 
 function maskPhone(phone) {
@@ -280,7 +246,7 @@ function DetailHeader({ ticket: t, onRefresh, session, stages, perms }) {
             ))}
           </select>
           {triageLocked && (
-            <span style={{ fontSize: 9.5, color: 'var(--t4)', fontFamily: 'var(--font-mono)', letterSpacing: '0.04em' }}>
+            <span style={{ fontSize: 10, color: 'var(--t3)', fontFamily: 'var(--font-mono)', letterSpacing: '0.04em' }}>
               admin only past triage
             </span>
           )}
