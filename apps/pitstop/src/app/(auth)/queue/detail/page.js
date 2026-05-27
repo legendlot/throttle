@@ -6,6 +6,7 @@ import { useAuth } from '@throttle/auth';
 import { Modal, Spinner, useToast } from '@throttle/ui';
 import { ChevronLeft, AlertCircle, Plus, Link2, MessageSquare, ChevronRight } from 'lucide-react';
 import { csopsGet, csopsPost } from '../../../../lib/csopsFetch.js';
+import { ShopifyPanel } from '../../../../components/ShopifyPanel.js';
 
 // ── Domain constants (mirror csops worker) ───────────────────────────────────
 
@@ -122,7 +123,7 @@ export default function TicketDetailPage() {
         gap: 'var(--space-3)',
         marginTop: 'var(--space-4)',
       }}>
-        <IdentityRail ticket={t} dispatch={data.dispatch_info} pastCases={data.past_cases} />
+        <IdentityRail ticket={t} dispatch={data.dispatch_info} pastCases={data.past_cases} session={session} />
         <WorkArea ticket={t} dispatch={data.dispatch_info} repairRun={data.repair_run} session={session} onRefresh={refresh} stages={stages} />
         <ActivityFeed
           ticket={t}
@@ -420,7 +421,7 @@ function Stepper({ stages, currentIndex, closed }) {
   );
 }
 
-function IdentityRail({ ticket: t, dispatch, pastCases }) {
+function IdentityRail({ ticket: t, dispatch, pastCases, session }) {
   const [revealPhone, setRevealPhone] = useState(false);
   return (
     <aside style={{
@@ -443,6 +444,10 @@ function IdentityRail({ ticket: t, dispatch, pastCases }) {
       />
       <Field label="Email" value={t.customer_email || '—'} />
       <Field label="Address" value={t.customer_address || '—'} small />
+
+      <div style={{ marginBottom: 10 }}>
+        <ShopifyPanel session={session} phone={t.customer_phone} email={t.customer_email} />
+      </div>
 
       <SectionLabel style={{ marginTop: 18 }}>Order</SectionLabel>
       <Field label="Platform" value={t.platform || '—'} />

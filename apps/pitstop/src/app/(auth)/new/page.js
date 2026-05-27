@@ -5,6 +5,7 @@ import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
 import { Scan, AlertCircle, Phone as PhoneIcon } from 'lucide-react';
 import { csopsGet, csopsPost } from '../../../lib/csopsFetch.js';
+import { ShopifyPanel } from '../../../components/ShopifyPanel.js';
 
 const PLATFORMS = [
   '', 'website','amazon','cred','blinkit','instamart','marketplace','offline','zepto','swiggy','investor','other'
@@ -231,6 +232,18 @@ export default function NewTicketPage() {
               ))}
             </Hint>
           )}
+
+          <ShopifyPanel
+            session={session}
+            phone={form.customer_phone}
+            email={form.customer_email}
+            onPick={(s) => setForm(f => ({
+              ...f,
+              customer_name:  f.customer_name  || s.customer.name,
+              customer_email: f.customer_email || s.customer.email,
+              customer_phone: f.customer_phone || s.customer.phone || '',
+            }))}
+          />
         </Section>
 
         {/* ── Issue ─────────────────────────────────────────────────────── */}
