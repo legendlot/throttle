@@ -1053,9 +1053,35 @@ async function handleMyOperatorWebhook(request, env) {
   let body = {};
   try { body = await request.json(); } catch { return err('Bad JSON', 400); }
   const type = body.event_type;
-  if (type === 'call.answered') return webhookCallAnswered(body, env);
-  if (type === 'call.end')      return webhookCallEnd(body, env);
+  console.log('[myop] ' + type + ' session=' + (body.session_id || '?') + ' dir=' + (body.direction || '?')); // lean, non-PII observability
+  if (type === 'call.answered' || type === 'call.responded') return webhookCallAnswered(body, env);
+  if (type === 'call.end' || type === 'call.ended')          return webhookCallEnd(body, env);
+  if (type === 'call.summary')                                return webhookCallSummary(body, env);
   return json({ ok: true, ignored: type });  // ack other events so MyOperator doesn't retry
+}
+
+// MyOperator wraps the call details in a nested `payload` object; the envelope
+// carries session_id / customer_identifier / system_identifier / direction /
+// timestamp / event_type at the top level. Normalise both into one flat shape.
+function parseMyOp(body) {
+  const p = (body && body.payload) || {};
+  return {
+    session_id: body.session_id || null,
+    direction:  body.direction || p.direction || null,   // 'incoming' | 'outgoing'
+    did:        body.system_identifier || p.did || null,
+    phone:      body.customer_identifier || p.customer_number || null,
+    timestamp:  body.timestamp || null,
+    duration:   p.duration != null ? Number(p.duration) : null,
+    recording_filename: p.recording_filename || null,
+    client_ref_id: p.client_ref_id || null,
+    status:     p.status || null,
+    legs:       Array.isArray(p.legs) ? p.legs : [],
+  };
+}
+
+function agentEmailFromLegs(legs) {
+  for (const l of (legs || [])) { const e = l && l.agent && l.agent.email; if (e) return e; }
+  return null;
 }
 
 // Best-effort agent resolution by email via the GoTrue admin API. Never throws.
@@ -1087,13 +1113,13 @@ async function insertHistorySystem(ticket_id, field_name, old_value, new_value, 
 }
 
 async function webhookCallAnswered(body, env) {
-  const session_id = body.session_id;
-  if (!session_id) return err('missing session_id', 400);
-  const existing = await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(session_id)}&select=id,ticket_no&limit=1`, env);
+  const c = parseMyOp(body);
+  if (!c.session_id) return err('missing session_id', 400);
+  const existing = await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(c.session_id)}&select=id,ticket_no&limit=1`, env);
   if (existing.data?.[0]) return json({ ok: true, deduped: true, ticket_no: existing.data[0].ticket_no });
 
-  const phone = toE164(body.customer_identifier);
-  const agentEmail = body?.legs?.find(l => l.agent?.email)?.agent?.email || body?.agent?.email || null;
+  const phone = toE164(c.phone);
+  const agentEmail = agentEmailFromLegs(c.legs);   // usually null on answered; backfilled by call.summary
   const [agent, shop] = await Promise.all([ resolveAgentByEmail(agentEmail, env), shopifyLookup({ phone }, env) ]);
 
   const year = String(new Date().getFullYear());
@@ -1104,47 +1130,64 @@ async function webhookCallAnswered(body, env) {
   const ticket_no = `CS-${year}-${String(seq).padStart(5, '0')}`;
 
   const ins = await sb(`/rest/v1/cs_tickets`, env, { method: 'POST', body: JSON.stringify({
-    ticket_no, call_session_id: session_id, auto_created: true,
+    ticket_no, call_session_id: c.session_id, auto_created: true,
     created_by_user_id: null, created_by_name: 'MyOperator (auto)',
-    intake_channel: 'phone', call_direction: body.direction || null, call_did: body.system_identifier || null,
-    call_answered_at: body.timestamp || new Date().toISOString(),
+    intake_channel: 'phone', call_direction: c.direction, call_did: c.did,
+    call_answered_at: c.timestamp || new Date().toISOString(),
     customer_name: shop.found ? shop.customer.name : (phone ? `Caller ${phone}` : 'Unknown caller'),
     customer_phone: phone, customer_email: shop.found ? shop.customer.email : null,
-    issue_type: 'other', issue_description: '[Pending — auto-created from inbound call]',
+    issue_type: 'other', issue_description: '[Pending — auto-created from call]',
     due_at: new Date(Date.now() + (SLA_DAYS['other'] ?? 7) * 24 * 60 * 60 * 1000).toISOString(),
     assigned_agent_id: agent.id, assigned_agent_name: agent.name,
     stage: 'intake',
   }) });
   if (!ins.ok) return err(`insert failed: ${JSON.stringify(ins.data)}`, ins.status);
-  await insertHistorySystem(ins.data[0].id, 'ticket_created', null, ticket_no, 'auto-created from call.answered', env);
+  await insertHistorySystem(ins.data[0].id, 'ticket_created', null, ticket_no, 'auto-created from call', env);
   return json({ ok: true, ticket_no });
 }
 
 async function webhookCallEnd(body, env) {
-  const session_id = body.session_id;
-  if (!session_id) return err('missing session_id', 400);
+  const c = parseMyOp(body);
+  if (!c.session_id) return err('missing session_id', 400);
   const patch = {
-    call_ended_at: body.timestamp || new Date().toISOString(),
-    call_duration_seconds: body.duration != null ? Number(body.duration) : null,
-    call_recording_filename: body.recording_filename || null,
-    myop_client_ref_id: body.client_ref_id || null,
+    call_ended_at: c.timestamp || new Date().toISOString(),
+    call_duration_seconds: c.duration,
+    call_recording_filename: c.recording_filename,
+    myop_client_ref_id: c.client_ref_id,
   };
-  const existing = await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(session_id)}&select=id&limit=1`, env);
+  const existing = await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(c.session_id)}&select=id&limit=1`, env);
   if (existing.data?.[0]) {
-    await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(session_id)}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+    await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(c.session_id)}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
     return json({ ok: true, patched: true });
   }
   // No ticket exists for this session. Two cases:
   //  - genuinely answered call whose call.answered we missed (out-of-order) → create
   //  - unanswered / missed call (only call.end fired) → MUST NOT create a ticket
   // Answered calls have talk time; missed calls report 0/null duration.
-  if (!(Number(body.duration) > 0)) {
+  if (!(Number(c.duration) > 0)) {
     return json({ ok: true, skipped: 'unanswered call — no ticket created' });
   }
   // out-of-order: call.end before call.answered for an answered call — create then patch
-  const created = await webhookCallAnswered({ ...body, event_type: 'call.answered' }, env);
+  const created = await webhookCallAnswered(body, env);
   const createdData = await created.clone().json().catch(() => null);
   if (!createdData?.ok) return created;  // create failed — don't patch a nonexistent row
-  await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(session_id)}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+  await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(c.session_id)}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
   return created;
+}
+
+// call.summary carries agent identity (legs[].agent.email) that call.answered
+// lacks. Backfill the ticket's assignee when the summary arrives.
+async function webhookCallSummary(body, env) {
+  const c = parseMyOp(body);
+  if (!c.session_id) return json({ ok: true, skipped: 'no session_id' });
+  const agentEmail = agentEmailFromLegs(c.legs);
+  if (!agentEmail) return json({ ok: true, skipped: 'no agent email in summary' });
+  const existing = await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(c.session_id)}&select=id&limit=1`, env);
+  const t = existing.data?.[0];
+  if (!t) return json({ ok: true, skipped: 'no ticket for session' });
+  const agent = await resolveAgentByEmail(agentEmail, env);
+  if (!agent.id) return json({ ok: true, skipped: 'agent email not matched: ' + agentEmail });
+  await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(c.session_id)}`, env, { method: 'PATCH', body: JSON.stringify({ assigned_agent_id: agent.id, assigned_agent_name: agent.name }) });
+  await insertHistorySystem(t.id, 'assigned_agent_name', null, agent.name, 'auto-assigned from call.summary', env);
+  return json({ ok: true, assigned: agent.name });
 }
