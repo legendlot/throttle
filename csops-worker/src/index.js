@@ -216,7 +216,8 @@ const BRANCH_STAGES = {
   replacement: ['replacement_dispatched'],
   refund:      ['refund_initiated', 'refund_completed'],
   repair:      ['handed_to_production', 'repaired_ready', 'repair_dispatched'],
-  other:       [],
+  // pending / query / no_action / awaiting_info intentionally have no branch stages;
+  // they resolve out of the shared flow. allowedTransitions already does BRANCH_STAGES[d] || [].
 };
 const SIDE_EXITS = ['cancelled', 'rejected', 'escalated'];
 
@@ -777,10 +778,12 @@ async function createTicket(body, auth, env) {
   const seq = Number(seqRes.data);
   const ticket_no = `CS-${year}-${String(seq).padStart(5, '0')}`;
 
-  // SLA computation — key on disposition; fallback to 7 days
+  // SLA computation — key on disposition; fallback to 7 days.
+  // query / no_action are immediately resolved — SLA clock is meaningless, so null due_at.
   const finalDisposition = disposition || 'pending';
-  const slaDays = SLA_DAYS[finalDisposition] ?? 7;
-  const due_at = new Date(Date.now() + slaDays * 24 * 60 * 60 * 1000).toISOString();
+  const due_at = (finalDisposition === 'query' || finalDisposition === 'no_action')
+    ? null
+    : new Date(Date.now() + (SLA_DAYS[finalDisposition] ?? 7) * 24 * 60 * 60 * 1000).toISOString();
 
   // Normalise phone (strip non-digits, prefix +91 if 10 digits)
   let normPhone = customer_phone || null;
@@ -866,27 +869,49 @@ async function updateTicket(body, auth, env) {
   }
   if (Object.keys(cleanPatch).length === 0) return err('Nothing to update');
 
-  // Triage routing side-effects when disposition is being changed
+  // Triage routing side-effects when disposition is being changed.
+  // Track keys injected here so history logging can exclude them (Fix 2).
+  // 'stage' is injected but IS logged (meaningful); the rest are suppressed.
   const newDisposition = cleanPatch.disposition;
   const now = new Date().toISOString();
+  const injectedSystemKeys = new Set(); // populated below; excludes 'stage' (that stays logged)
   if (newDisposition && newDisposition !== current.disposition) {
     if (newDisposition === 'query') {
       cleanPatch.stage = 'closed';
-      cleanPatch.stage_changed_at = now;
-      cleanPatch.closed_reason = 'resolved';
-      cleanPatch.closed_at = now;
-      cleanPatch.closed_by_user_id = auth.userId;
+      cleanPatch.stage_changed_at = now;   injectedSystemKeys.add('stage_changed_at');
+      cleanPatch.closed_reason = 'resolved';  injectedSystemKeys.add('closed_reason');
+      cleanPatch.closed_at = now;          injectedSystemKeys.add('closed_at');
+      cleanPatch.closed_by_user_id = auth.userId; injectedSystemKeys.add('closed_by_user_id');
     } else if (newDisposition === 'no_action') {
       cleanPatch.stage = 'closed';
-      cleanPatch.stage_changed_at = now;
-      cleanPatch.closed_reason = 'no_action';
-      cleanPatch.closed_at = now;
-      cleanPatch.closed_by_user_id = auth.userId;
+      cleanPatch.stage_changed_at = now;   injectedSystemKeys.add('stage_changed_at');
+      cleanPatch.closed_reason = 'no_action'; injectedSystemKeys.add('closed_reason');
+      cleanPatch.closed_at = now;          injectedSystemKeys.add('closed_at');
+      cleanPatch.closed_by_user_id = auth.userId; injectedSystemKeys.add('closed_by_user_id');
     } else if (newDisposition === 'awaiting_info') {
-      cleanPatch.stage = 'awaiting_evidence';
-      cleanPatch.stage_changed_at = now;
+      // Fix 3: reopen a ticket that was fast-closed by a prior query/no_action triage
+      if (current.stage === 'closed') {
+        cleanPatch.closed_at = null;         injectedSystemKeys.add('closed_at');
+        cleanPatch.closed_reason = null;     injectedSystemKeys.add('closed_reason');
+        cleanPatch.closed_by_user_id = null; injectedSystemKeys.add('closed_by_user_id');
+        cleanPatch.stage = 'awaiting_evidence';
+        cleanPatch.stage_changed_at = now;   injectedSystemKeys.add('stage_changed_at');
+      } else {
+        cleanPatch.stage = 'awaiting_evidence';
+        cleanPatch.stage_changed_at = now;   injectedSystemKeys.add('stage_changed_at');
+      }
+    } else {
+      // replacement | refund | repair | pending
+      // Fix 3: reopen if ticket is currently closed (stranded after query/no_action fast-close)
+      if (current.stage === 'closed') {
+        cleanPatch.closed_at = null;         injectedSystemKeys.add('closed_at');
+        cleanPatch.closed_reason = null;     injectedSystemKeys.add('closed_reason');
+        cleanPatch.closed_by_user_id = null; injectedSystemKeys.add('closed_by_user_id');
+        cleanPatch.stage = 'intake';
+        cleanPatch.stage_changed_at = now;   injectedSystemKeys.add('stage_changed_at');
+      }
+      // non-closed tickets → leave stage as-is
     }
-    // replacement | refund | repair | pending → leave stage as-is
   }
 
   const upd = await sb(`/rest/v1/cs_tickets?id=eq.${ticket_id}`, env, {
@@ -895,10 +920,14 @@ async function updateTicket(body, auth, env) {
   });
   if (!upd.ok) return err(`Update failed: ${JSON.stringify(upd.data)}`, upd.status);
 
-  // History per changed field
-  await Promise.all(Object.entries(cleanPatch).map(([k, v]) =>
-    insertHistory(ticket_id, k, current[k], v, null, auth, env)
-  ));
+  // History per changed field — log user-supplied fields + 'stage' + 'disposition',
+  // but suppress injected system fields (stage_changed_at / closed_at / closed_reason /
+  // closed_by_user_id) which are noise and expose raw UUIDs as human-facing values.
+  await Promise.all(
+    Object.entries(cleanPatch)
+      .filter(([k]) => !injectedSystemKeys.has(k))
+      .map(([k, v]) => insertHistory(ticket_id, k, current[k], v, null, auth, env))
+  );
 
   return ok({ updated: cleanPatch });
 }
