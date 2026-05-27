@@ -1,5 +1,6 @@
 # Throttle — Technical Build Document
-**Version:** 16 | **Last Updated:** 2026-05-15 (Session 50 — Social Media Management Suite Phase 1, submitter name on approval cards, requester_id schema fact)
+**Version:** 17 | **Last Updated:** 2026-05-27 (Session 81 — **Social linked-task fix + UI alignment sweep.** Schema fact: `brand.tasks` has NO `status` column — only `stage` (enum). `getSocialFeed` + `getSocialPost` had selected `id,title,stage,status`, which PostgREST 400s — silently nulling `linked_task` on post detail and breaking the whole calendar feed once any post had a linked task; fixed by dropping `,status` (throttle commit `344eff6`, throttleops deployed). Escape-to-close added to social PostDetailPanel + CreateEditPanel + TaskDrillModal. UI alignment sweep complete across all Throttle pages: Inter body + Tomorrow headings, lifted surface `--bg #1f1f1f`, WCAG-AA `--t3 #888`, 11px font floor, side-stripe borders → top borders, `#080808` → `var(--fg-accent)` — commit `86e7cda`.)
+_Previous: Version 16 — 2026-05-15 (Session 50 — Social Media Management Suite Phase 1, submitter name on approval cards, requester_id schema fact)_
 **Purpose:** Technical reference for the Throttle brand team work OS.
 Feed this file when continuing development in a new session.
 
