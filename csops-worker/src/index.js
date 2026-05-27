@@ -79,7 +79,7 @@ function toE164(raw) {
   const d = String(raw).replace(/\D/g, '');
   if (d.length === 10) return `+91${d}`;
   if (d.length === 12 && d.startsWith('91')) return `+${d}`;
-  return String(raw).startsWith('+') ? `+${d}` : `+${d}`;
+  return `+${d}`;
 }
 
 // Lazy on-demand Shopify lookup. Returns graceful states, never throws.
@@ -92,7 +92,7 @@ async function shopifyLookup({ phone, email }, env) {
   if (!term) return { configured: true, found: false, customer: null, recent_orders: [] };
 
   const query = `query($q:String!){ customers(first:1, query:$q){ edges{ node{
-    id displayName firstName lastName email phone numberOfOrders
+    id displayName email phone numberOfOrders
     amountSpent{ amount currencyCode }
     orders(first:5, sortKey: CREATED_AT, reverse:true){ edges{ node{
       name createdAt displayFulfillmentStatus displayFinancialStatus
@@ -106,6 +106,9 @@ async function shopifyLookup({ phone, email }, env) {
   });
   if (!res.ok) return { configured: true, found: false, error: `shopify ${res.status}`, customer: null, recent_orders: [] };
   const data = await res.json();
+  if (data?.errors?.length) {
+    return { configured: true, found: false, error: data.errors[0]?.message, customer: null, recent_orders: [] };
+  }
   const node = data?.data?.customers?.edges?.[0]?.node || null;
   if (!node) return { configured: true, found: false, customer: null, recent_orders: [] };
   const customer = {
