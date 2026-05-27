@@ -85,7 +85,7 @@ export default function TicketDetailPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const ticket_no = searchParams.get('ticket_no');
-  const { toast } = useToast?.() || { toast: (m) => console.log(m) };
+  const { showToast } = useToast();
 
   const [data, setData] = useState(null);  // { ticket, history, attachments, notes, links, dispatch_info, past_cases, repair_run }
   const [loading, setLoading] = useState(true);
@@ -183,7 +183,8 @@ function DetailHeader({ ticket: t, onRefresh, session, stages, perms }) {
   const overdue = t.due_at && !t.closed_at && Date.now() > new Date(t.due_at).getTime();
   const daysOver = overdue ? Math.floor((Date.now() - new Date(t.due_at).getTime()) / (1000 * 60 * 60 * 24)) : 0;
   const stageIdx = stages.indexOf(t.stage);
-  const nextStage = stageIdx >= 0 && stageIdx < stages.length - 1 ? stages[stageIdx + 1] : null;
+  const inFlow = stageIdx >= 0;
+  const nextStage = inFlow && stageIdx < stages.length - 1 ? stages[stageIdx + 1] : null;
 
   const [advancing, setAdvancing] = useState(false);
   const [dispositionBusy, setDispositionBusy] = useState(false);
@@ -197,11 +198,11 @@ function DetailHeader({ ticket: t, onRefresh, session, stages, perms }) {
     if (!newDisp || newDisp === t.disposition) return;
     setDispositionBusy(true);
     try {
-      await csopsPost('updateTicket', { ticket_id: t.id, disposition: newDisp }, session);
+      await csopsPost('updateTicket', { ticket_id: t.id, patch: { disposition: newDisp } }, session);
       onRefresh();
     } catch (err) {
-      // surface error briefly — worker already enforces the lock
       console.error('disposition update failed:', err.message);
+      showToast('Failed to update disposition: ' + (err.message || 'unknown error'), 'error');
     } finally { setDispositionBusy(false); }
   }
 
@@ -649,14 +650,15 @@ function CallBlock({ ticket: t }) {
 function WorkArea({ ticket: t, dispatch, repairRun, session, perms, onRefresh, stages }) {
   const [editing, setEditing] = useState(null);   // 'issue' | 'return' | 'resolution' | null
   const stageIdx = stages.indexOf(t.stage);
-  const sharedDone = stageIdx >= SHARED.length;       // past `inspected`
-  const inspectedReached = stageIdx >= SHARED.indexOf('inspected');
+  const inFlow = stageIdx >= 0;
+  const sharedDone = inFlow && stageIdx >= SHARED.length;       // past `inspected`
+  const inspectedReached = inFlow && stageIdx >= SHARED.indexOf('inspected');
   const isClosed = !!t.closed_at;
 
-  // Editability gates
-  const canEditIssue   = stageIdx <= SHARED.indexOf('verified') && !isClosed;
-  const canEditReturn  = stageIdx >= SHARED.indexOf('verified') && stageIdx <= SHARED.indexOf('inspected') && !isClosed;
-  const canEditResolve = stageIdx >= SHARED.indexOf('inspected') && !isClosed;
+  // Editability gates — treat out-of-flow tickets as fully locked
+  const canEditIssue   = inFlow && stageIdx <= SHARED.indexOf('verified') && !isClosed;
+  const canEditReturn  = inFlow && stageIdx >= SHARED.indexOf('verified') && stageIdx <= SHARED.indexOf('inspected') && !isClosed;
+  const canEditResolve = inFlow && stageIdx >= SHARED.indexOf('inspected') && !isClosed;
 
   // Build a readable reason string from issue category/subcategory
   function issueReason() {
@@ -707,7 +709,7 @@ function WorkArea({ ticket: t, dispatch, repairRun, session, perms, onRefresh, s
       </Panel>
 
       <Panel
-        title={`Resolution — ${t.disposition === 'replacement' ? 'Replacement' : t.disposition === 'refund' ? 'Refund' : t.disposition === 'repair' ? 'Repair' : 'Other'}`}
+        title={`Resolution — ${DISPOSITION_LABELS[t.disposition] || 'Other'}`}
         subtitle={isClosed ? `closed · ${t.closed_reason || 'resolved'}` : (canEditResolve ? 'ready' : 'awaiting inspection')}
         editable={canEditResolve}
         onEdit={() => setEditing('resolution')}
