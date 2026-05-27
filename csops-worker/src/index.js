@@ -381,8 +381,10 @@ async function getTickets(params, auth, env) {
   else if (tab === 'escalated')    filters.push(`stage=eq.escalated`);
 
   // Optional explicit filters (override tab presets if both present)
-  const type = params.get('type');
-  if (type) filters.push(`disposition=eq.${encodeURIComponent(type)}`);
+  const disposition = params.get('disposition');
+  if (disposition) filters.push(`disposition=eq.${encodeURIComponent(disposition)}`);
+  const category = params.get('category');
+  if (category) filters.push(`issue_category=eq.${encodeURIComponent(category)}`);
   const platform = params.get('platform');
   if (platform) filters.push(`platform=eq.${encodeURIComponent(platform)}`);
   const stage = params.get('stage');

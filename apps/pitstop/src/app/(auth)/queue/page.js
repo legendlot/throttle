@@ -6,6 +6,7 @@ import { useAuth } from '@throttle/auth';
 import { Chip, KpiCard, EmptyState, Spinner } from '@throttle/ui';
 import { Plus, Download, Search, ListChecks } from 'lucide-react';
 import { csopsGet } from '../../../lib/csopsFetch.js';
+import { fetchIssueCatalog } from '../../../lib/issueCatalog.js';
 
 // ── Sub-tabs ─────────────────────────────────────────────────────────────────
 const TABS = [
@@ -18,20 +19,33 @@ const TABS = [
   { id: 'closed',     label: 'Closed' },
 ];
 
-const TYPES     = ['replacement', 'refund', 'repair'];
+const DISPOSITIONS = ['pending','query','no_action','awaiting_info','replacement','refund','repair'];
+const DISPOSITION_LABELS = {
+  pending:       'Pending',
+  query:         'Query',
+  no_action:     'No Action',
+  awaiting_info: 'Awaiting Info',
+  replacement:   'Replacement',
+  refund:        'Refund',
+  repair:        'Repair',
+};
 const PLATFORMS = ['website','amazon','cred','blinkit','instamart','marketplace','offline','zepto','swiggy'];
 
 // ── Visual helpers ───────────────────────────────────────────────────────────
 
-const TYPE_PALETTE = {
-  replacement: { bg: 'rgba(123, 147, 255, 0.12)', fg: '#7b93ff', border: 'rgba(123, 147, 255, 0.35)' },
-  refund:      { bg: 'rgba(251, 191, 36, 0.12)',  fg: '#fbbf24', border: 'rgba(251, 191, 36, 0.35)' },
-  repair:      { bg: 'rgba(74, 222, 128, 0.12)',  fg: '#4ade80', border: 'rgba(74, 222, 128, 0.35)' },
-  other:       { bg: 'var(--surface-2)',          fg: 'var(--t2)', border: 'var(--border)' },
+const DISPOSITION_PALETTE = {
+  replacement:   { bg: 'rgba(123, 147, 255, 0.12)', fg: '#7b93ff', border: 'rgba(123, 147, 255, 0.35)' },
+  refund:        { bg: 'rgba(251, 191, 36, 0.12)',  fg: '#fbbf24', border: 'rgba(251, 191, 36, 0.35)' },
+  repair:        { bg: 'rgba(74, 222, 128, 0.12)',  fg: '#4ade80', border: 'rgba(74, 222, 128, 0.35)' },
+  query:         { bg: 'rgba(99, 179, 237, 0.12)',  fg: '#63b3ed', border: 'rgba(99, 179, 237, 0.35)' },
+  no_action:     { bg: 'var(--surface-2)',          fg: 'var(--t3)', border: 'var(--border)' },
+  awaiting_info: { bg: 'rgba(251, 191, 36, 0.08)', fg: '#fbbf24', border: 'rgba(251, 191, 36, 0.25)' },
+  pending:       { bg: 'var(--surface-2)',          fg: 'var(--t2)', border: 'var(--border)' },
 };
 
-function TypeBadge({ type }) {
-  const p = TYPE_PALETTE[type] || TYPE_PALETTE.other;
+function DispositionBadge({ disposition }) {
+  const p = DISPOSITION_PALETTE[disposition] || DISPOSITION_PALETTE.pending;
+  const label = DISPOSITION_LABELS[disposition] || (disposition || 'pending');
   return (
     <span style={{
       display: 'inline-block',
@@ -45,7 +59,7 @@ function TypeBadge({ type }) {
       fontWeight: 700,
       letterSpacing: '0.08em',
       textTransform: 'uppercase',
-    }}>{type}</span>
+    }}>{label}</span>
   );
 }
 
@@ -109,7 +123,8 @@ export default function QueuePage() {
   const searchParams = useSearchParams();
 
   const activeTab = searchParams.get('tab') || 'my';
-  const typeFilter = searchParams.get('type') || '';
+  const dispositionFilter = searchParams.get('disposition') || '';
+  const categoryFilter = searchParams.get('category') || '';
   const platformFilter = searchParams.get('platform') || '';
   const searchQ = searchParams.get('q') || '';
 
@@ -119,6 +134,7 @@ export default function QueuePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [searchInput, setSearchInput] = useState(searchQ);
+  const [catalogCategories, setCatalogCategories] = useState([]);
 
   // Update URL with a partial param patch
   function setParam(key, value) {
@@ -146,22 +162,33 @@ export default function QueuePage() {
     return () => { alive = false; clearInterval(t); };
   }, [session]);
 
+  // Issue catalog (once per session)
+  useEffect(() => {
+    if (!session) return;
+    let alive = true;
+    fetchIssueCatalog(session)
+      .then(cats => { if (alive) setCatalogCategories(cats); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [session]);
+
   // Tickets — refetch on tab/filter/search change
   useEffect(() => {
     if (!session) return;
     let alive = true;
     setLoading(true);
     const params = { tab: activeTab };
-    if (typeFilter)     params.type     = typeFilter;
-    if (platformFilter) params.platform = platformFilter;
-    if (searchQ)        params.search   = searchQ;
+    if (dispositionFilter) params.disposition = dispositionFilter;
+    if (categoryFilter)    params.category    = categoryFilter;
+    if (platformFilter)    params.platform    = platformFilter;
+    if (searchQ)           params.search      = searchQ;
 
     csopsGet('getTickets', params, session)
       .then(d => { if (alive) { setTickets(d?.tickets || []); setError(null); } })
       .catch(e => { if (alive) setError(e.message); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [session, activeTab, typeFilter, platformFilter, searchQ]);
+  }, [session, activeTab, dispositionFilter, categoryFilter, platformFilter, searchQ]);
 
   // Submit search on Enter
   function submitSearch(e) {
@@ -171,11 +198,11 @@ export default function QueuePage() {
 
   function exportCsv() {
     const rows = [
-      ['ticket_no','customer','phone','product','model','type','stage','platform','agent','created_at','due_at','closed_at'],
+      ['ticket_no','customer','phone','product','model','disposition','stage','platform','agent','created_at','due_at','closed_at'],
       ...tickets.map(t => [
         t.ticket_no, t.customer_name || '', maskPhone(t.customer_phone),
         t.product || '', t.product_model || '',
-        t.issue_type, t.stage, t.platform || '',
+        t.disposition || '', t.stage, t.platform || '',
         t.assigned_agent_name || '', t.created_at || '', t.due_at || '', t.closed_at || '',
       ]),
     ];
@@ -325,11 +352,32 @@ export default function QueuePage() {
 
         <span style={{ color: 'var(--border)', padding: '0 4px' }}>|</span>
 
-        {/* Type chips */}
-        <Chip active={typeFilter === ''} onClick={() => setParam('type', '')}>All types</Chip>
-        {TYPES.map(t => (
-          <Chip key={t} active={typeFilter === t} onClick={() => setParam('type', t)}>{t}</Chip>
+        {/* Disposition chips */}
+        <Chip active={dispositionFilter === ''} onClick={() => setParam('disposition', '')}>All</Chip>
+        {DISPOSITIONS.map(d => (
+          <Chip key={d} active={dispositionFilter === d} onClick={() => setParam('disposition', d)}>
+            {DISPOSITION_LABELS[d]}
+          </Chip>
         ))}
+
+        <span style={{ color: 'var(--border)', padding: '0 4px' }}>|</span>
+
+        {/* Category select */}
+        <select
+          value={categoryFilter}
+          onChange={e => setParam('category', e.target.value)}
+          style={{
+            background: 'var(--surface)',
+            color: 'var(--t1)',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius-md)',
+            padding: '5px 8px',
+            fontFamily: 'var(--font-mono)', fontSize: 'var(--text-sm)',
+          }}
+        >
+          <option value="">All categories</option>
+          {catalogCategories.map(c => <option key={c.category} value={c.category}>{c.category}</option>)}
+        </select>
 
         <span style={{ color: 'var(--border)', padding: '0 4px' }}>|</span>
 
@@ -383,7 +431,7 @@ export default function QueuePage() {
                 <Th>Ticket</Th>
                 <Th>Customer</Th>
                 <Th>Product</Th>
-                <Th>Type</Th>
+                <Th>Disposition</Th>
                 <Th>Stage</Th>
                 <Th>Platform</Th>
                 <Th>Agent</Th>
@@ -405,7 +453,7 @@ export default function QueuePage() {
                   </Td>
                   <Td>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                      <TypeBadge type={t.issue_type} />
+                      <DispositionBadge disposition={t.disposition} />
                       {t.auto_created && (
                         <span style={{
                           display: 'inline-block', padding: '1px 6px',
