@@ -71,6 +71,55 @@ async function sbPublic(path, env, opts = {}) {
   return { ok: res.ok, status: res.status, data };
 }
 
+// ── Shopify helpers ──────────────────────────────────────────────────────────
+
+// Normalise an India phone to E.164 (mirrors createTicket's logic).
+function toE164(raw) {
+  if (!raw) return null;
+  const d = String(raw).replace(/\D/g, '');
+  if (d.length === 10) return `+91${d}`;
+  if (d.length === 12 && d.startsWith('91')) return `+${d}`;
+  return String(raw).startsWith('+') ? `+${d}` : `+${d}`;
+}
+
+// Lazy on-demand Shopify lookup. Returns graceful states, never throws.
+async function shopifyLookup({ phone, email }, env) {
+  if (!env.SHOPIFY_ADMIN_API_TOKEN || !env.SHOPIFY_STORE_DOMAIN) {
+    return { configured: false, found: false, customer: null, recent_orders: [] };
+  }
+  const e164 = toE164(phone);
+  const term = e164 ? `phone:${e164}` : (email ? `email:${email}` : null);
+  if (!term) return { configured: true, found: false, customer: null, recent_orders: [] };
+
+  const query = `query($q:String!){ customers(first:1, query:$q){ edges{ node{
+    id displayName firstName lastName email phone numberOfOrders
+    amountSpent{ amount currencyCode }
+    orders(first:5, sortKey: CREATED_AT, reverse:true){ edges{ node{
+      name createdAt displayFulfillmentStatus displayFinancialStatus
+      currentTotalPriceSet{ shopMoney{ amount currencyCode } }
+    }}}
+  }}}}`;
+  const res = await fetch(`https://${env.SHOPIFY_STORE_DOMAIN}/admin/api/2024-10/graphql.json`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': env.SHOPIFY_ADMIN_API_TOKEN },
+    body: JSON.stringify({ query, variables: { q: term } }),
+  });
+  if (!res.ok) return { configured: true, found: false, error: `shopify ${res.status}`, customer: null, recent_orders: [] };
+  const data = await res.json();
+  const node = data?.data?.customers?.edges?.[0]?.node || null;
+  if (!node) return { configured: true, found: false, customer: null, recent_orders: [] };
+  const customer = {
+    id: node.id, name: node.displayName, email: node.email, phone: node.phone,
+    orders_count: node.numberOfOrders, total_spent: node.amountSpent?.amount, currency: node.amountSpent?.currencyCode,
+  };
+  const recent_orders = (node.orders?.edges || []).map(e => ({
+    order_no: e.node.name, created_at: e.node.createdAt,
+    fulfillment: e.node.displayFulfillmentStatus, financial: e.node.displayFinancialStatus,
+    total: e.node.currentTotalPriceSet?.shopMoney?.amount, currency: e.node.currentTotalPriceSet?.shopMoney?.currencyCode,
+  }));
+  return { configured: true, found: true, customer, recent_orders };
+}
+
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
 async function verifyJWT(authHeader, env) {
@@ -239,6 +288,8 @@ async function handleGet(action, params, auth, env) {
       return getReports(params, auth, env);
     }
     case 'getAgents':        return getAgents(params, auth, env);
+    case 'searchShopifyCustomer':
+      return ok(await shopifyLookup({ phone: params.get('phone'), email: params.get('email') }, env));
     default:
       return err(`Unknown action: ${action}`, 404);
   }
