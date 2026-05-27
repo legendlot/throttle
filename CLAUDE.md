@@ -28,9 +28,9 @@ Deploy: push to `main` → GitHub Actions builds → pushes to gh-pages of targe
 │   ├── auth/          AuthProvider, RequireAuth, useAuth, hasPermission
 │   ├── db/            garageFetch (GET), workerFetch (POST)
 │   └── domain/        Shared domain constants
-├── worker/            lotopsproxy source (NOT throttleops — see below)
-└── THROTTLE_BUILD.md  Throttle system state — read before Throttle work
+└── worker/            lotopsproxy source (NOT throttleops — see below)
 ```
+> Throttle system state: `systems/throttle.md` at workspace root (relocated from `05_Throttle/THROTTLE_BUILD.md` Session 83)
 
 ## Two workers — do not confuse them
 
