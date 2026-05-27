@@ -226,7 +226,7 @@ export default function NewTicketPage() {
                   <a href={`/queue/detail/?ticket_no=${p.ticket_no}`} target="_blank" rel="noreferrer" style={{ color: '#7b93ff', textDecoration: 'underline' }}>
                     {p.ticket_no}
                   </a>
-                  {' '}({p.issue_type}, {p.closed_reason || p.stage})
+                  {' '}({p.disposition}, {p.closed_reason || p.stage})
                 </span>
               ))}
             </Hint>
