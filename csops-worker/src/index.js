@@ -82,9 +82,37 @@ function toE164(raw) {
   return `+${d}`;
 }
 
+const SHOPIFY_API_VERSION = '2026-04';
+
+// Shopify access tokens for Dev Dashboard apps are minted via the client-
+// credentials grant and expire in ~24h. Cache one per isolate and refresh
+// on demand. client_id/client_secret are static (set as worker secrets).
+let _shopifyToken = null;   // cached access token
+let _shopifyTokenExp = 0;   // epoch ms when the cached token expires
+
+async function getShopifyToken(env, forceRefresh = false) {
+  const now = Date.now();
+  if (!forceRefresh && _shopifyToken && now < _shopifyTokenExp - 60_000) return _shopifyToken;
+  const res = await fetch(`https://${env.SHOPIFY_STORE_DOMAIN}/admin/oauth/access_token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'client_credentials',
+      client_id: env.SHOPIFY_CLIENT_ID,
+      client_secret: env.SHOPIFY_CLIENT_SECRET,
+    }),
+  }).catch(() => null);
+  if (!res || !res.ok) { _shopifyToken = null; _shopifyTokenExp = 0; return null; }
+  const data = await res.json().catch(() => null);
+  if (!data?.access_token) { _shopifyToken = null; _shopifyTokenExp = 0; return null; }
+  _shopifyToken = data.access_token;
+  _shopifyTokenExp = now + (Number(data.expires_in) || 86399) * 1000;
+  return _shopifyToken;
+}
+
 // Lazy on-demand Shopify lookup. Returns graceful states, never throws.
 async function shopifyLookup({ phone, email }, env) {
-  if (!env.SHOPIFY_ADMIN_API_TOKEN || !env.SHOPIFY_STORE_DOMAIN) {
+  if (!env.SHOPIFY_STORE_DOMAIN || !env.SHOPIFY_CLIENT_ID || !env.SHOPIFY_CLIENT_SECRET) {
     return { configured: false, found: false, customer: null, recent_orders: [] };
   }
   const e164 = toE164(phone);
@@ -99,13 +127,23 @@ async function shopifyLookup({ phone, email }, env) {
       currentTotalPriceSet{ shopMoney{ amount currencyCode } }
     }}}
   }}}}`;
-  const res = await fetch(`https://${env.SHOPIFY_STORE_DOMAIN}/admin/api/2024-10/graphql.json`, {
+  const runQuery = (token) => fetch(`https://${env.SHOPIFY_STORE_DOMAIN}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': env.SHOPIFY_ADMIN_API_TOKEN },
+    headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': token },
     body: JSON.stringify({ query, variables: { q: term } }),
   });
-  if (!res.ok) return { configured: true, found: false, error: `shopify ${res.status}`, customer: null, recent_orders: [] };
-  const data = await res.json();
+
+  let token = await getShopifyToken(env);
+  if (!token) return { configured: true, found: false, error: 'shopify auth failed (client credentials)', customer: null, recent_orders: [] };
+  let res = await runQuery(token).catch(() => null);
+  // Token rejected mid-flight (expired/rotated) — force one refresh and retry.
+  if (res && res.status === 401) {
+    token = await getShopifyToken(env, true);
+    if (!token) return { configured: true, found: false, error: 'shopify auth failed (client credentials)', customer: null, recent_orders: [] };
+    res = await runQuery(token).catch(() => null);
+  }
+  if (!res || !res.ok) return { configured: true, found: false, error: `shopify ${res ? res.status : 'network'}`, customer: null, recent_orders: [] };
+  const data = await res.json().catch(() => null);
   if (data?.errors?.length) {
     return { configured: true, found: false, error: data.errors[0]?.message, customer: null, recent_orders: [] };
   }
