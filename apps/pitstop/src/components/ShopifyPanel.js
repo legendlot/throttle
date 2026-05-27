@@ -1,17 +1,24 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { csopsGet } from '../lib/csopsFetch.js';
 import { Search } from 'lucide-react';
 
-export function ShopifyPanel({ session, phone, email, onPick }) {
+export function ShopifyPanel({ session, phone, email, onPick, autoLoad }) {
   const [state, setState] = useState(null);
   const [loading, setLoading] = useState(false);
-  async function run() {
+  const run = useCallback(async () => {
     setLoading(true);
     try { setState(await csopsGet('searchShopifyCustomer', { phone: phone || '', email: email || '' }, session)); }
     catch (e) { setState({ error: e.message }); }
     finally { setLoading(false); }
-  }
+  }, [session, phone, email]);
+
+  // On the ticket Detail page (autoLoad), fetch the customer + orders on open
+  // so the agent sees order history without a manual click. New Ticket stays manual.
+  useEffect(() => {
+    if (autoLoad && session && (phone || email)) run();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoLoad, session, phone, email]);
   return (
     <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 'var(--space-3)' }}>
       <button type="button" onClick={run} disabled={loading} style={{ display:'inline-flex', alignItems:'center', gap:6, background:'transparent', color:'var(--t2)', border:'1px solid var(--border)', borderRadius:'var(--radius-md)', padding:'6px 12px', fontFamily:'var(--font-mono)', fontSize:12, cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.6 : 1 }}>

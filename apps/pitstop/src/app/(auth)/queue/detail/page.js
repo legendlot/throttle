@@ -446,7 +446,7 @@ function IdentityRail({ ticket: t, dispatch, pastCases, session }) {
       <Field label="Address" value={t.customer_address || '—'} small />
 
       <div style={{ marginBottom: 'var(--space-2)' }}>
-        <ShopifyPanel session={session} phone={t.customer_phone} email={t.customer_email} />
+        <ShopifyPanel session={session} phone={t.customer_phone} email={t.customer_email} autoLoad />
       </div>
 
       {t.call_session_id && <CallBlock ticket={t} />}
