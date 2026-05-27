@@ -277,6 +277,11 @@ function nextStatusFor(status, role) {
 }
 
 export function PostDetailPanel({ post, role, onClose, onEdit, onStatusChange, onPublishVariant, onDelete }) {
+  useEffect(() => {
+    function onKey(e) { if (e.key === 'Escape') onClose(); }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
   if (!post) return null;
   const canEdit = role !== 'requester';
   const canDelete = ['lead', 'admin'].includes(role);
@@ -499,6 +504,17 @@ export function CreateEditPanel({ channels, campaigns, prefillDate, editPost, ro
       })
       .catch(() => {});
   }, [editPost?.task_id, session]);
+
+  // Escape closes the open task dropdown first, otherwise the whole panel
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key !== 'Escape') return;
+      if (showTaskDropdown) { setShowTaskDropdown(false); return; }
+      onClose();
+    }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose, showTaskDropdown]);
 
   function handleTaskSearchChange(val) {
     setTaskSearch(val);

@@ -2568,7 +2568,7 @@ async function handleGetSocialFeed(body, ctx, env) {
     ),
     sbFetch('social_channels?is_active=eq.true', { method: 'GET' }, env),
     taskIds.length > 0
-      ? sbFetch(`tasks?id=in.(${taskIds.join(',')})&select=id,title,stage,status`, { method: 'GET' }, env)
+      ? sbFetch(`tasks?id=in.(${taskIds.join(',')})&select=id,title,stage`, { method: 'GET' }, env)
       : Promise.resolve({ ok: true, json: async () => [] }),
   ]);
 
@@ -2620,7 +2620,7 @@ async function handleGetSocialPost(body, ctx, env) {
   let linked_task = null;
   if (post.task_id) {
     const taskRes = await sbFetch(
-      `tasks?id=eq.${post.task_id}&select=id,title,stage,status&limit=1`,
+      `tasks?id=eq.${post.task_id}&select=id,title,stage&limit=1`,
       { method: 'GET' }, env,
     );
     if (taskRes.ok) {

@@ -21,6 +21,12 @@ export default function TaskDrillModal({ bucket, sprintId, personId, onClose }) 
     loadTasks();
   }, [bucket, sprintId, personId]);
 
+  useEffect(() => {
+    function onKey(e) { if (e.key === 'Escape') onClose(); }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
   async function loadTasks() {
     setLoading(true);
     try {
