@@ -15,22 +15,47 @@ const BRANCH = {
   replacement: ['replacement_dispatched'],
   refund:      ['refund_initiated','refund_completed'],
   repair:      ['handed_to_production','repaired_ready','repair_dispatched'],
-  other:       [],
 };
 
-function lifecycleStages(issue_type) {
-  return [...SHARED, ...(BRANCH[issue_type] || []), 'closed'];
+const DISPOSITION_VALUES = ['pending','query','no_action','awaiting_info','replacement','refund','repair'];
+
+const DISPOSITION_LABELS = {
+  pending:       'Pending',
+  query:         'Query',
+  no_action:     'No action',
+  awaiting_info: 'Awaiting info',
+  replacement:   'Replacement',
+  refund:        'Refund',
+  repair:        'Repair',
+};
+
+// Stages that allow disposition changes without admin
+const TRIAGE_STAGES = new Set(['intake', 'awaiting_evidence']);
+
+function lifecycleStages(disposition) {
+  if (disposition === 'query' || disposition === 'no_action') {
+    return ['intake', 'closed'];
+  }
+  if (disposition === 'awaiting_info') {
+    return ['intake', 'awaiting_evidence'];
+  }
+  // replacement | refund | repair | pending → full logistics path
+  return [...SHARED, ...(BRANCH[disposition] || []), 'closed'];
 }
 
-const TYPE_PALETTE = {
+const DISPOSITION_PALETTE = {
   replacement: { bg: 'rgba(123, 147, 255, 0.12)', fg: '#7b93ff', border: 'rgba(123, 147, 255, 0.35)' },
   refund:      { bg: 'rgba(251, 191, 36, 0.12)',  fg: '#fbbf24', border: 'rgba(251, 191, 36, 0.35)' },
   repair:      { bg: 'rgba(74, 222, 128, 0.12)',  fg: '#4ade80', border: 'rgba(74, 222, 128, 0.35)' },
-  other:       { bg: 'var(--surface-2)',          fg: 'var(--t2)', border: 'var(--border)' },
+  query:       { bg: 'rgba(99, 179, 237, 0.12)',  fg: '#63b3ed', border: 'rgba(99, 179, 237, 0.35)' },
+  no_action:   { bg: 'var(--surface-2)',          fg: 'var(--t3)', border: 'var(--border)' },
+  awaiting_info: { bg: 'rgba(251, 191, 36, 0.08)', fg: '#fbbf24', border: 'rgba(251, 191, 36, 0.25)' },
+  pending:     { bg: 'var(--surface-2)',          fg: 'var(--t2)', border: 'var(--border)' },
 };
 
-function TypeBadge({ type }) {
-  const p = TYPE_PALETTE[type] || TYPE_PALETTE.other;
+function DispositionBadge({ disposition }) {
+  const p = DISPOSITION_PALETTE[disposition] || DISPOSITION_PALETTE.pending;
+  const label = DISPOSITION_LABELS[disposition] || (disposition || 'pending');
   return (
     <span style={{
       display: 'inline-block', padding: '3px 10px',
@@ -38,7 +63,7 @@ function TypeBadge({ type }) {
       borderRadius: 'var(--radius-sm)',
       fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700,
       letterSpacing: '0.08em', textTransform: 'uppercase',
-    }}>{type}</span>
+    }}>{label}</span>
   );
 }
 
@@ -56,7 +81,7 @@ function ageDays(createdAt) {
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export default function TicketDetailPage() {
-  const { user, session } = useAuth();
+  const { user, session, perms } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
   const ticket_no = searchParams.get('ticket_no');
@@ -102,7 +127,7 @@ export default function TicketDetailPage() {
   if (!data) return null;
 
   const t = data.ticket;
-  const stages = lifecycleStages(t.issue_type);
+  const stages = lifecycleStages(t.disposition);
   const stageIndex = stages.indexOf(t.stage);
   const isClosed = !!t.closed_at;
 
@@ -111,10 +136,10 @@ export default function TicketDetailPage() {
       <BackLink />
 
       {/* Header */}
-      <DetailHeader ticket={t} onRefresh={refresh} session={session} stages={stages} />
+      <DetailHeader ticket={t} onRefresh={refresh} session={session} stages={stages} perms={perms} />
 
       {/* Stepper */}
-      <Stepper stages={stages} currentIndex={stageIndex} closed={isClosed} />
+      <Stepper stages={stages} currentIndex={stageIndex} closed={isClosed} disposition={t.disposition} />
 
       {/* Three-column body */}
       <div style={{
@@ -124,7 +149,7 @@ export default function TicketDetailPage() {
         marginTop: 'var(--space-4)',
       }}>
         <IdentityRail ticket={t} dispatch={data.dispatch_info} pastCases={data.past_cases} session={session} />
-        <WorkArea ticket={t} dispatch={data.dispatch_info} repairRun={data.repair_run} session={session} onRefresh={refresh} stages={stages} />
+        <WorkArea ticket={t} dispatch={data.dispatch_info} repairRun={data.repair_run} session={session} perms={perms} onRefresh={refresh} stages={stages} />
         <ActivityFeed
           ticket={t}
           history={data.history}
@@ -153,7 +178,7 @@ function BackLink() {
   );
 }
 
-function DetailHeader({ ticket: t, onRefresh, session, stages }) {
+function DetailHeader({ ticket: t, onRefresh, session, stages, perms }) {
   const age = ageDays(t.created_at);
   const overdue = t.due_at && !t.closed_at && Date.now() > new Date(t.due_at).getTime();
   const daysOver = overdue ? Math.floor((Date.now() - new Date(t.due_at).getTime()) / (1000 * 60 * 60 * 24)) : 0;
@@ -161,6 +186,24 @@ function DetailHeader({ ticket: t, onRefresh, session, stages }) {
   const nextStage = stageIdx >= 0 && stageIdx < stages.length - 1 ? stages[stageIdx + 1] : null;
 
   const [advancing, setAdvancing] = useState(false);
+  const [dispositionBusy, setDispositionBusy] = useState(false);
+
+  // Disposition triage lock: only admin can change once past intake/awaiting_evidence
+  const isAdmin = !!(perms?.cs_ticket_admin);
+  const triageLocked = !TRIAGE_STAGES.has(t.stage) && !isAdmin;
+
+  async function handleDispositionChange(e) {
+    const newDisp = e.target.value;
+    if (!newDisp || newDisp === t.disposition) return;
+    setDispositionBusy(true);
+    try {
+      await csopsPost('updateTicket', { ticket_id: t.id, disposition: newDisp }, session);
+      onRefresh();
+    } catch (err) {
+      // surface error briefly — worker already enforces the lock
+      console.error('disposition update failed:', err.message);
+    } finally { setDispositionBusy(false); }
+  }
 
   const advanceLabel = useMemo(() => {
     if (!nextStage) return null;
@@ -209,8 +252,41 @@ function DetailHeader({ ticket: t, onRefresh, session, stages }) {
         </div>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <TypeBadge type={t.issue_type} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        {/* Disposition triage control */}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
+          <select
+            value={t.disposition || 'pending'}
+            onChange={handleDispositionChange}
+            disabled={triageLocked || dispositionBusy || !!t.closed_at}
+            style={{
+              background: 'var(--surface-2)',
+              color: 'var(--t1)',
+              border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-md)',
+              padding: '5px 8px',
+              fontFamily: 'var(--font-mono)',
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: '0.06em',
+              textTransform: 'uppercase',
+              cursor: triageLocked || !!t.closed_at ? 'not-allowed' : 'pointer',
+              opacity: triageLocked ? 0.6 : 1,
+            }}
+          >
+            {DISPOSITION_VALUES.map(d => (
+              <option key={d} value={d}>{DISPOSITION_LABELS[d]}</option>
+            ))}
+          </select>
+          {triageLocked && (
+            <span style={{ fontSize: 9.5, color: 'var(--t4)', fontFamily: 'var(--font-mono)', letterSpacing: '0.04em' }}>
+              admin only past triage
+            </span>
+          )}
+        </div>
+
+        <DispositionBadge disposition={t.disposition} />
+
         {overdue && (
           <span style={{
             padding: '3px 10px',
@@ -384,7 +460,13 @@ const inputStyle = {
   outline: 'none',
 };
 
-function Stepper({ stages, currentIndex, closed }) {
+function Stepper({ stages, currentIndex, closed, disposition }) {
+  // For the awaiting_info disposition, relabel awaiting_evidence as "awaiting info"
+  function stageLabel(s) {
+    if (disposition === 'awaiting_info' && s === 'awaiting_evidence') return 'awaiting info';
+    return s;
+  }
+
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 0,
@@ -409,7 +491,7 @@ function Stepper({ stages, currentIndex, closed }) {
                 fontWeight: current ? 700 : 500,
                 whiteSpace: 'nowrap',
                 letterSpacing: '0.02em',
-              }}>{s}</div>
+              }}>{stageLabel(s)}</div>
             </div>
             {i < stages.length - 1 && (
               <div style={{ width: 28, height: 1, background: done ? 'var(--state-success)' : 'var(--border)' }} />
@@ -481,7 +563,7 @@ function IdentityRail({ ticket: t, dispatch, pastCases, session }) {
               <Link href={`/queue/detail/?ticket_no=${p.ticket_no}`} style={{ color: '#7b93ff', textDecoration: 'none' }}>
                 {p.ticket_no}
               </Link>
-              {' '}— {p.issue_type}, {p.stage}{p.closed_reason ? ` (${p.closed_reason})` : ''}
+              {' '}— {DISPOSITION_LABELS[p.disposition] || p.disposition || 'pending'}, {p.stage}{p.closed_reason ? ` (${p.closed_reason})` : ''}
             </div>
           ))}
         </LinkedCard>
@@ -564,7 +646,7 @@ function CallBlock({ ticket: t }) {
   );
 }
 
-function WorkArea({ ticket: t, dispatch, repairRun, session, onRefresh, stages }) {
+function WorkArea({ ticket: t, dispatch, repairRun, session, perms, onRefresh, stages }) {
   const [editing, setEditing] = useState(null);   // 'issue' | 'return' | 'resolution' | null
   const stageIdx = stages.indexOf(t.stage);
   const sharedDone = stageIdx >= SHARED.length;       // past `inspected`
@@ -576,16 +658,29 @@ function WorkArea({ ticket: t, dispatch, repairRun, session, onRefresh, stages }
   const canEditReturn  = stageIdx >= SHARED.indexOf('verified') && stageIdx <= SHARED.indexOf('inspected') && !isClosed;
   const canEditResolve = stageIdx >= SHARED.indexOf('inspected') && !isClosed;
 
+  // Build a readable reason string from issue category/subcategory
+  function issueReason() {
+    const cat = t.issue_category;
+    const sub = t.issue_subcategory;
+    const custom = t.issue_subcategory_custom;
+    if (!cat && !sub) return '—';
+    if (sub === 'Other' && custom) return `${cat || ''} › ${custom}`.trim().replace(/^›\s*/, '');
+    if (cat && sub) return `${cat} › ${sub}`;
+    return cat || sub || '—';
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', minWidth: 0 }}>
       <Panel
         title="Issue"
-        subtitle={t.stage === 'verified' || stageIdx > SHARED.indexOf('verified') ? `verified · ${t.issue_type}` : 'unverified'}
+        subtitle={t.stage === 'verified' || stageIdx > SHARED.indexOf('verified')
+          ? `verified · ${DISPOSITION_LABELS[t.disposition] || t.disposition || 'pending'}`
+          : 'unverified'}
         editable={canEditIssue}
         onEdit={() => setEditing('issue')}
       >
-        <PanelRow label="Category" value={t.issue_category || '—'} />
-        <PanelRow label="Type"     value={<TypeBadge type={t.issue_type} />} />
+        <PanelRow label="Disposition" value={<DispositionBadge disposition={t.disposition} />} />
+        <PanelRow label="Reason"      value={issueReason()} />
         <PanelRow label="Description" value={t.issue_description} multiline />
       </Panel>
 
@@ -612,14 +707,14 @@ function WorkArea({ ticket: t, dispatch, repairRun, session, onRefresh, stages }
       </Panel>
 
       <Panel
-        title={`Resolution — ${t.issue_type === 'replacement' ? 'Replacement' : t.issue_type === 'refund' ? 'Refund' : t.issue_type === 'repair' ? 'Repair' : 'Other'}`}
+        title={`Resolution — ${t.disposition === 'replacement' ? 'Replacement' : t.disposition === 'refund' ? 'Refund' : t.disposition === 'repair' ? 'Repair' : 'Other'}`}
         subtitle={isClosed ? `closed · ${t.closed_reason || 'resolved'}` : (canEditResolve ? 'ready' : 'awaiting inspection')}
         editable={canEditResolve}
         onEdit={() => setEditing('resolution')}
         locked={!canEditResolve}
         lockedMessage="Unlocks after warehouse inspection passes."
       >
-        {t.issue_type === 'replacement' && (
+        {t.disposition === 'replacement' && (
           <PanelGrid>
             <PanelField label="New unit UPC" value={t.replacement_unit_upc || '—'} mono />
             <PanelField label="Replacement AWB" value={t.replacement_awb || '—'} mono />
@@ -627,7 +722,7 @@ function WorkArea({ ticket: t, dispatch, repairRun, session, onRefresh, stages }
             <PanelField label="Dispatched" value={t.stage === 'replacement_dispatched' || t.stage === 'closed' ? new Date(t.stage_changed_at).toLocaleDateString() : '—'} />
           </PanelGrid>
         )}
-        {t.issue_type === 'refund' && (
+        {t.disposition === 'refund' && (
           <PanelGrid>
             <PanelField label="Refund amount" value={t.refund_amount_inr ? `₹${t.refund_amount_inr}` : '—'} mono />
             <PanelField label="UTR / reference" value={t.refund_reference || '—'} mono />
@@ -635,7 +730,7 @@ function WorkArea({ ticket: t, dispatch, repairRun, session, onRefresh, stages }
             <PanelField label="Completed"      value={t.stage === 'refund_completed' || t.stage === 'closed' ? new Date(t.stage_changed_at).toLocaleDateString() : '—'} />
           </PanelGrid>
         )}
-        {t.issue_type === 'repair' && (
+        {t.disposition === 'repair' && (
           <>
             <PanelGrid>
               <PanelField label="Repair run" value={t.repair_run_id ? `#${t.repair_run_id}` : '—'} mono />
@@ -745,11 +840,11 @@ function EditPanelModal({ ticket, field, session, onClose, onSaved }) {
   // Minimal V1: a free-form panel for editing fields in the current section.
   // Locked-field rules already enforced by the backend.
   const sectionFields = {
-    issue:      ['issue_category','issue_description','issue_type'],
+    issue:      ['issue_category','issue_subcategory','issue_subcategory_custom','issue_description'],
     return:     ['return_awb','return_courier','return_tracking_url','return_cost_inr','inspection_note'],
-    resolution: ticket.issue_type === 'replacement'
+    resolution: ticket.disposition === 'replacement'
                   ? ['replacement_unit_upc','replacement_awb','replacement_cost_inr']
-                  : ticket.issue_type === 'refund'
+                  : ticket.disposition === 'refund'
                   ? ['refund_amount_inr','refund_reference']
                   : ['repair_run_id'],
   };
