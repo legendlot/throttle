@@ -1040,7 +1040,10 @@ async function resolveAgentByEmail(email, env) {
 
 async function insertHistorySystem(ticket_id, field_name, old_value, new_value, note, env) {
   await sb(`/rest/v1/cs_ticket_history`, env, { method: 'POST', body: JSON.stringify({
-    ticket_id, field_name, old_value, new_value, note,
+    ticket_id, field_name,
+    old_value: old_value == null ? null : String(old_value),
+    new_value: new_value == null ? null : String(new_value),
+    note,
     changed_by_user_id: null, changed_by_name: 'MyOperator (auto)',
   }) }).catch(() => {});
 }
@@ -1058,7 +1061,9 @@ async function webhookCallAnswered(body, env) {
   const year = String(new Date().getFullYear());
   const seqRes = await sb(`/rest/v1/rpc/next_cs_ticket_seq`, env, { method: 'POST', body: JSON.stringify({ p_year: year }) });
   if (!seqRes.ok) return err('seq failed', 500);
-  const ticket_no = `CS-${year}-${String(Number(seqRes.data)).padStart(5, '0')}`;
+  const seq = Number(seqRes.data);
+  if (!Number.isFinite(seq) || seq <= 0) return err('seq invalid', 500);
+  const ticket_no = `CS-${year}-${String(seq).padStart(5, '0')}`;
 
   const ins = await sb(`/rest/v1/cs_tickets`, env, { method: 'POST', body: JSON.stringify({
     ticket_no, call_session_id: session_id, auto_created: true,
@@ -1068,6 +1073,7 @@ async function webhookCallAnswered(body, env) {
     customer_name: shop.found ? shop.customer.name : (phone ? `Caller ${phone}` : 'Unknown caller'),
     customer_phone: phone, customer_email: shop.found ? shop.customer.email : null,
     issue_type: 'other', issue_description: '[Pending — auto-created from inbound call]',
+    due_at: new Date(Date.now() + (SLA_DAYS['other'] ?? 7) * 24 * 60 * 60 * 1000).toISOString(),
     assigned_agent_id: agent.id, assigned_agent_name: agent.name,
     stage: 'intake',
   }) });
@@ -1092,6 +1098,8 @@ async function webhookCallEnd(body, env) {
   }
   // out-of-order: call.end before call.answered — create a minimal draft then patch
   const created = await webhookCallAnswered({ ...body, event_type: 'call.answered' }, env);
+  const createdData = await created.clone().json().catch(() => null);
+  if (!createdData?.ok) return created;  // create failed — don't patch a nonexistent row
   await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(session_id)}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
   return created;
 }
