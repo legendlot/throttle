@@ -1134,7 +1134,14 @@ async function webhookCallEnd(body, env) {
     await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(session_id)}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
     return json({ ok: true, patched: true });
   }
-  // out-of-order: call.end before call.answered — create a minimal draft then patch
+  // No ticket exists for this session. Two cases:
+  //  - genuinely answered call whose call.answered we missed (out-of-order) → create
+  //  - unanswered / missed call (only call.end fired) → MUST NOT create a ticket
+  // Answered calls have talk time; missed calls report 0/null duration.
+  if (!(Number(body.duration) > 0)) {
+    return json({ ok: true, skipped: 'unanswered call — no ticket created' });
+  }
+  // out-of-order: call.end before call.answered for an answered call — create then patch
   const created = await webhookCallAnswered({ ...body, event_type: 'call.answered' }, env);
   const createdData = await created.clone().json().catch(() => null);
   if (!createdData?.ok) return created;  // create failed — don't patch a nonexistent row
