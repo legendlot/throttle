@@ -206,7 +206,7 @@ function require(perm, auth) {
 
 // ── Domain constants ─────────────────────────────────────────────────────────
 
-const SLA_DAYS = { replacement: 5, refund: 7, repair: 14, other: 7 };
+const SLA_DAYS = { pending: 7, query: 1, no_action: 1, awaiting_info: 7, replacement: 5, refund: 7, repair: 14 };
 
 const SHARED_STAGES = [
   'intake', 'awaiting_evidence', 'verified', 'pickup_scheduled',
@@ -220,9 +220,9 @@ const BRANCH_STAGES = {
 };
 const SIDE_EXITS = ['cancelled', 'rejected', 'escalated'];
 
-// Returns the next allowed stages for a given (current, issue_type)
-function allowedTransitions(current, issue_type) {
-  const branch = BRANCH_STAGES[issue_type] || [];
+// Returns the next allowed stages for a given (current, disposition)
+function allowedTransitions(current, disposition) {
+  const branch = BRANCH_STAGES[disposition] || [];
   const flow = [...SHARED_STAGES, ...branch, 'closed'];
   const i = flow.indexOf(current);
   const next = i === -1 || i === flow.length - 1 ? [] : [flow[i + 1]];
@@ -234,7 +234,7 @@ function allowedTransitions(current, issue_type) {
 }
 
 // Per-stage gate fields required to advance into `target`
-function gateRequirements(current, target, issue_type, ticket, attachments_count = 0) {
+function gateRequirements(current, target, disposition, ticket, attachments_count = 0) {
   switch (target) {
     case 'verified':
       if (attachments_count < 1) {
@@ -381,7 +381,7 @@ async function getTickets(params, auth, env) {
 
   // Optional explicit filters (override tab presets if both present)
   const type = params.get('type');
-  if (type) filters.push(`issue_type=eq.${encodeURIComponent(type)}`);
+  if (type) filters.push(`disposition=eq.${encodeURIComponent(type)}`);
   const platform = params.get('platform');
   if (platform) filters.push(`platform=eq.${encodeURIComponent(platform)}`);
   const stage = params.get('stage');
@@ -401,7 +401,7 @@ async function getTickets(params, auth, env) {
   }
 
   const orderClause = 'order=created_at.desc';
-  const path = `/rest/v1/cs_tickets?select=id,ticket_no,created_at,customer_name,customer_phone,product,product_model,product_color,platform,external_order_id,issue_type,issue_category,stage,stage_changed_at,assigned_agent_id,assigned_agent_name,due_at,closed_at,auto_created&${filters.join('&')}&${orderClause}&limit=${limit}&offset=${offset}`;
+  const path = `/rest/v1/cs_tickets?select=id,ticket_no,created_at,customer_name,customer_phone,product,product_model,product_color,platform,external_order_id,disposition,issue_category,issue_subcategory,issue_subcategory_custom,stage,stage_changed_at,assigned_agent_id,assigned_agent_name,due_at,closed_at,auto_created&${filters.join('&')}&${orderClause}&limit=${limit}&offset=${offset}`;
 
   const res = await sb(path, env, {
     headers: { Prefer: 'count=exact' },
@@ -427,7 +427,7 @@ async function getTicket(params, auth, env) {
     sb(`/rest/v1/cs_ticket_history?ticket_id=eq.${ticket.id}&select=*&order=changed_at.desc`, env),
     sb(`/rest/v1/cs_ticket_attachments?ticket_id=eq.${ticket.id}&select=*&order=added_at.desc`, env),
     sb(`/rest/v1/cs_ticket_notes?ticket_id=eq.${ticket.id}&select=*&order=created_at.desc`, env),
-    sb(`/rest/v1/cs_ticket_links?ticket_id=eq.${ticket.id}&select=*,related:related_ticket_id(id,ticket_no,issue_type,stage,customer_name)`, env),
+    sb(`/rest/v1/cs_ticket_links?ticket_id=eq.${ticket.id}&select=*,related:related_ticket_id(id,ticket_no,disposition,stage,customer_name)`, env),
     ticket.lot_unit_upc ? fetchDispatchInfo(ticket.lot_unit_upc, env) : Promise.resolve(null),
     ticket.customer_phone ? fetchPastCases(ticket.customer_phone, ticket.id, env) : Promise.resolve([]),
     ticket.repair_run_id ? sb(`/rest/v1/production_runs?id=eq.${ticket.repair_run_id}&select=run_no,status,completed_at`, env) : Promise.resolve({ data: null }),
@@ -437,7 +437,7 @@ async function getTicket(params, auth, env) {
 
   // Lazy repair auto-advance
   if (
-    ticket.issue_type === 'repair' &&
+    ticket.disposition === 'repair' &&
     ticket.repair_run_id &&
     ['handed_to_production', 'repaired_ready'].includes(ticket.stage) &&
     repairRun?.data?.[0]?.status === 'Completed' &&
@@ -501,7 +501,7 @@ async function fetchDispatchInfo(upc, env) {
 async function fetchPastCases(phone, excludeTicketId, env) {
   const filters = [`customer_phone=eq.${encodeURIComponent(phone)}`];
   if (excludeTicketId) filters.push(`id=neq.${excludeTicketId}`);
-  const path = `/rest/v1/cs_tickets?${filters.join('&')}&select=ticket_no,issue_type,stage,created_at,closed_at,closed_reason&order=created_at.desc&limit=5`;
+  const path = `/rest/v1/cs_tickets?${filters.join('&')}&select=ticket_no,disposition,issue_category,issue_subcategory,stage,created_at,closed_at,closed_reason&order=created_at.desc&limit=5`;
   const res = await sb(path, env);
   return res.data || [];
 }
@@ -593,7 +593,7 @@ async function lookupPastCases(params, auth, env) {
   const filters = [`or=(${orFilters.join(',')})`];
   if (exclude) filters.push(`id=neq.${exclude}`);
   filters.push(`order=created_at.desc`, `limit=5`,
-    `select=ticket_no,issue_type,stage,created_at,closed_at,closed_reason,product,product_model`);
+    `select=ticket_no,disposition,issue_category,issue_subcategory,stage,created_at,closed_at,closed_reason,product,product_model`);
 
   const res = await sb(`/rest/v1/cs_tickets?${filters.join('&')}`, env);
   return ok(res.data || []);
@@ -602,13 +602,13 @@ async function lookupPastCases(params, auth, env) {
 async function getStageRules(params, auth, env) {
   const ticket_no = params.get('ticket_no');
   if (!ticket_no) return err('ticket_no required');
-  const tRes = await sb(`/rest/v1/cs_tickets?ticket_no=eq.${encodeURIComponent(ticket_no)}&select=stage,issue_type&limit=1`, env);
+  const tRes = await sb(`/rest/v1/cs_tickets?ticket_no=eq.${encodeURIComponent(ticket_no)}&select=stage,disposition&limit=1`, env);
   const t = tRes.data?.[0];
   if (!t) return err('Ticket not found', 404);
   return ok({
     current: t.stage,
-    issue_type: t.issue_type,
-    allowed: allowedTransitions(t.stage, t.issue_type),
+    disposition: t.disposition,
+    allowed: allowedTransitions(t.stage, t.disposition),
   });
 }
 
@@ -618,7 +618,7 @@ async function getReports(params, auth, env) {
 
   // Fetch all tickets in range — single query, light columns
   const res = await sb(
-    `/rest/v1/cs_tickets?created_at=gte.${encodeURIComponent(from)}&created_at=lte.${encodeURIComponent(to)}&select=created_at,closed_at,issue_type,product,platform,assigned_agent_id,assigned_agent_name,return_cost_inr,replacement_cost_inr,refund_amount_inr&limit=20000`,
+    `/rest/v1/cs_tickets?created_at=gte.${encodeURIComponent(from)}&created_at=lte.${encodeURIComponent(to)}&select=created_at,closed_at,disposition,issue_category,product,platform,assigned_agent_id,assigned_agent_name,return_cost_inr,replacement_cost_inr,refund_amount_inr&limit=20000`,
     env,
   );
   if (!res.ok) return err('Failed to load reports data', 500);
@@ -626,6 +626,8 @@ async function getReports(params, auth, env) {
 
   // Aggregate
   const monthly = {};
+  const byDisposition = {};
+  const byIssueCategory = {};
   const byProduct = {};
   const byPlatform = {};
   const byAgent = {};
@@ -633,26 +635,34 @@ async function getReports(params, auth, env) {
 
   for (const r of rows) {
     const month = (r.created_at || '').slice(0, 7);
-    const type = r.issue_type || 'other';
+    const disp = r.disposition || 'pending';
 
-    // monthly trend
+    // monthly trend (keyed by disposition)
     if (month) {
-      monthly[month] = monthly[month] || { month, replacement: 0, refund: 0, repair: 0, other: 0, total: 0 };
-      monthly[month][type] = (monthly[month][type] || 0) + 1;
+      monthly[month] = monthly[month] || { month, pending: 0, query: 0, no_action: 0, awaiting_info: 0, replacement: 0, refund: 0, repair: 0, total: 0 };
+      monthly[month][disp] = (monthly[month][disp] || 0) + 1;
       monthly[month].total++;
+    }
+
+    // by disposition
+    byDisposition[disp] = (byDisposition[disp] || 0) + 1;
+
+    // by issue_category (skip null)
+    if (r.issue_category) {
+      byIssueCategory[r.issue_category] = (byIssueCategory[r.issue_category] || 0) + 1;
     }
 
     // by product
     const product = r.product || '—';
-    byProduct[product] = byProduct[product] || { name: product, total: 0, replacement: 0, refund: 0, repair: 0 };
+    byProduct[product] = byProduct[product] || { name: product, total: 0 };
     byProduct[product].total++;
-    byProduct[product][type] = (byProduct[product][type] || 0) + 1;
+    byProduct[product][disp] = (byProduct[product][disp] || 0) + 1;
 
     // by platform
     const platform = r.platform || '—';
-    byPlatform[platform] = byPlatform[platform] || { name: platform, total: 0, replacement: 0, refund: 0, repair: 0 };
+    byPlatform[platform] = byPlatform[platform] || { name: platform, total: 0 };
     byPlatform[platform].total++;
-    byPlatform[platform][type] = (byPlatform[platform][type] || 0) + 1;
+    byPlatform[platform][disp] = (byPlatform[platform][disp] || 0) + 1;
 
     // by agent
     const agentName = r.assigned_agent_name || '— unassigned —';
@@ -678,6 +688,8 @@ async function getReports(params, auth, env) {
   return ok({
     range: { from, to, total_rows: rows.length },
     monthly_trend: Object.values(monthly).sort((a, b) => a.month.localeCompare(b.month)),
+    by_disposition: Object.entries(byDisposition).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
+    by_issue_category: Object.entries(byIssueCategory).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
     by_product:  Object.values(byProduct).sort((a, b) => b.total - a.total),
     by_platform: Object.values(byPlatform).sort((a, b) => b.total - a.total),
     by_agent:    Object.values(byAgent).sort((a, b) => b.total - a.total),
@@ -743,13 +755,17 @@ async function createTicket(body, auth, env) {
     intake_channel, customer_name, customer_phone, customer_email, customer_address,
     platform, external_order_id, lot_unit_upc,
     product, product_sku, product_model, product_color,
-    issue_type, issue_category, issue_description,
+    issue_category, issue_subcategory, issue_subcategory_custom, issue_description,
+    disposition,
     assigned_agent_id,
   } = body;
 
-  if (!customer_name)     return err('customer_name required');
-  if (!issue_type)        return err('issue_type required');
-  if (!issue_description) return err('issue_description required');
+  if (!customer_name) return err('customer_name required');
+
+  // If category or subcategory is 'Other', custom text is required
+  if ((issue_category === 'Other' || issue_subcategory === 'Other') && !issue_subcategory_custom) {
+    return err('issue_subcategory_custom required when category or subcategory is Other');
+  }
 
   // Atomic sequence increment
   const year = String(new Date().getFullYear());
@@ -761,8 +777,9 @@ async function createTicket(body, auth, env) {
   const seq = Number(seqRes.data);
   const ticket_no = `CS-${year}-${String(seq).padStart(5, '0')}`;
 
-  // SLA computation
-  const slaDays = SLA_DAYS[issue_type] ?? 7;
+  // SLA computation — key on disposition; fallback to 7 days
+  const finalDisposition = disposition || 'pending';
+  const slaDays = SLA_DAYS[finalDisposition] ?? 7;
   const due_at = new Date(Date.now() + slaDays * 24 * 60 * 60 * 1000).toISOString();
 
   // Normalise phone (strip non-digits, prefix +91 if 10 digits)
@@ -798,9 +815,11 @@ async function createTicket(body, auth, env) {
       product_sku: product_sku || null,
       product_model: product_model || null,
       product_color: product_color || null,
-      issue_type,
       issue_category: issue_category || null,
-      issue_description,
+      issue_subcategory: issue_subcategory || null,
+      issue_subcategory_custom: issue_subcategory_custom || null,
+      issue_description: issue_description || '',
+      disposition: finalDisposition,
       assigned_agent_id: finalAssigneeId,
       assigned_agent_name: assigneeName,
       stage: 'intake',
@@ -832,11 +851,13 @@ async function updateTicket(body, auth, env) {
     'updated_at',
   ]);
 
-  // Issue_type lock once past `inspected`
-  const SHARED = new Set(SHARED_STAGES);
-  if (patch.issue_type && !SHARED.has(current.stage)) {
-    const g2 = require('cs_ticket_admin', auth);
-    if (g2) return err('issue_type can only be changed by an admin after verification', 403);
+  // Disposition re-triage lock: once past awaiting_evidence, only cs_ticket_admin may change disposition
+  const TRIAGE_STAGES = new Set(['intake', 'awaiting_evidence']);
+  if (patch.disposition !== undefined && patch.disposition !== current.disposition) {
+    if (!TRIAGE_STAGES.has(current.stage)) {
+      const g2 = require('cs_ticket_admin', auth);
+      if (g2) return err('disposition can only be changed by an admin after awaiting_evidence', 403);
+    }
   }
 
   const cleanPatch = {};
@@ -844,6 +865,29 @@ async function updateTicket(body, auth, env) {
     if (!PROTECTED.has(k)) cleanPatch[k] = v;
   }
   if (Object.keys(cleanPatch).length === 0) return err('Nothing to update');
+
+  // Triage routing side-effects when disposition is being changed
+  const newDisposition = cleanPatch.disposition;
+  const now = new Date().toISOString();
+  if (newDisposition && newDisposition !== current.disposition) {
+    if (newDisposition === 'query') {
+      cleanPatch.stage = 'closed';
+      cleanPatch.stage_changed_at = now;
+      cleanPatch.closed_reason = 'resolved';
+      cleanPatch.closed_at = now;
+      cleanPatch.closed_by_user_id = auth.userId;
+    } else if (newDisposition === 'no_action') {
+      cleanPatch.stage = 'closed';
+      cleanPatch.stage_changed_at = now;
+      cleanPatch.closed_reason = 'no_action';
+      cleanPatch.closed_at = now;
+      cleanPatch.closed_by_user_id = auth.userId;
+    } else if (newDisposition === 'awaiting_info') {
+      cleanPatch.stage = 'awaiting_evidence';
+      cleanPatch.stage_changed_at = now;
+    }
+    // replacement | refund | repair | pending → leave stage as-is
+  }
 
   const upd = await sb(`/rest/v1/cs_tickets?id=eq.${ticket_id}`, env, {
     method: 'PATCH',
@@ -875,9 +919,9 @@ async function advanceStage(body, auth, env, request) {
   }
 
   // Check legal transition
-  const allowed = allowedTransitions(t.stage, t.issue_type);
+  const allowed = allowedTransitions(t.stage, t.disposition);
   if (!allowed.includes(target_stage)) {
-    return err(`Cannot advance ${t.stage} → ${target_stage} for ${t.issue_type} ticket`, 422);
+    return err(`Cannot advance ${t.stage} → ${target_stage} for ${t.disposition} ticket`, 422);
   }
 
   // Apply pre-advance patches (so gate check sees them)
@@ -896,7 +940,7 @@ async function advanceStage(body, auth, env, request) {
   }
 
   // Gate check
-  const gateErr = gateRequirements(t.stage, target_stage, t.issue_type, merged, attachCount);
+  const gateErr = gateRequirements(t.stage, target_stage, t.disposition, merged, attachCount);
   if (gateErr) return err(gateErr, 422);
 
   // Build the update payload
@@ -1034,7 +1078,7 @@ async function closeTicket(body, auth, env) {
   const { ticket_id, reason } = body;
   if (!ticket_id) return err('ticket_id required');
 
-  const tRes = await sb(`/rest/v1/cs_tickets?id=eq.${ticket_id}&select=stage,issue_type&limit=1`, env);
+  const tRes = await sb(`/rest/v1/cs_tickets?id=eq.${ticket_id}&select=stage,disposition&limit=1`, env);
   const t = tRes.data?.[0];
   if (!t) return err('Ticket not found', 404);
 
@@ -1149,8 +1193,8 @@ async function webhookCallAnswered(body, env) {
     call_answered_at: c.timestamp || new Date().toISOString(),
     customer_name: shop.found ? shop.customer.name : (phone ? `Caller ${phone}` : 'Unknown caller'),
     customer_phone: phone, customer_email: shop.found ? shop.customer.email : null,
-    issue_type: 'other', issue_description: '[Pending — auto-created from call]',
-    due_at: new Date(Date.now() + (SLA_DAYS['other'] ?? 7) * 24 * 60 * 60 * 1000).toISOString(),
+    disposition: 'pending', issue_description: '[Pending — auto-created from call]',
+    due_at: new Date(Date.now() + (SLA_DAYS['pending'] ?? 7) * 24 * 60 * 60 * 1000).toISOString(),
     assigned_agent_id: agent.id, assigned_agent_name: agent.name,
     stage: 'intake',
   }) });
