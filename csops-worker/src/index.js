@@ -332,6 +332,7 @@ async function handleGet(action, params, auth, env) {
       return getReports(params, auth, env);
     }
     case 'getAgents':        return getAgents(params, auth, env);
+    case 'getIssueCatalog':  return getIssueCatalog(env);
     case 'searchShopifyCustomer':
       return ok(await shopifyLookup({ phone: params.get('phone'), email: params.get('email') }, env));
     default:
@@ -686,6 +687,18 @@ async function getReports(params, auth, env) {
       refund_amount_inr:    +totalRefundAmount.toFixed(2),
     },
   });
+}
+
+async function getIssueCatalog(env) {
+  const r = await sb(`/rest/v1/cs_issue_catalog?is_active=eq.true&select=category,subcategory,sort_order&order=sort_order.asc`, env);
+  if (!r.ok) return err('failed to load catalog', 500);
+  const byCat = [];
+  const idx = {};
+  for (const row of (r.data || [])) {
+    if (idx[row.category] === undefined) { idx[row.category] = byCat.length; byCat.push({ category: row.category, subcategories: [] }); }
+    byCat[idx[row.category]].subcategories.push(row.subcategory);
+  }
+  return ok({ categories: byCat });
 }
 
 async function getAgents(params, auth, env) {
