@@ -449,6 +449,8 @@ function IdentityRail({ ticket: t, dispatch, pastCases, session }) {
         <ShopifyPanel session={session} phone={t.customer_phone} email={t.customer_email} />
       </div>
 
+      {t.call_session_id && <CallBlock ticket={t} />}
+
       <SectionLabel style={{ marginTop: 18 }}>Order</SectionLabel>
       <Field label="Platform" value={t.platform || '—'} />
       <Field label="Order ID"  value={t.external_order_id || '—'} mono />
@@ -485,6 +487,80 @@ function IdentityRail({ ticket: t, dispatch, pastCases, session }) {
         </LinkedCard>
       )}
     </aside>
+  );
+}
+
+function CallBlock({ ticket: t }) {
+  function fmtDuration(secs) {
+    if (secs == null) return '—';
+    const s = Number(secs);
+    const m = Math.floor(s / 60);
+    const rem = String(s % 60).padStart(2, '0');
+    return `${m}:${rem}`;
+  }
+  function fmtAnswered(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  }
+
+  return (
+    <div style={{
+      marginTop: 18,
+      marginBottom: 'var(--space-2)',
+      padding: 10,
+      background: 'var(--surface-2)',
+      border: '1px solid var(--border)',
+      borderRadius: 'var(--radius-md)',
+    }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        marginBottom: 8,
+      }}>
+        <div style={{
+          fontFamily: 'var(--font-mono)', fontSize: 10,
+          letterSpacing: 'var(--tracking-wide)', textTransform: 'uppercase',
+          color: 'var(--t3)', fontWeight: 600,
+        }}>Call</div>
+        {t.call_direction && (
+          <span style={{
+            display: 'inline-block', padding: '2px 7px',
+            background: 'var(--surface-3)', color: 'var(--t2)',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius-sm)',
+            fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 700,
+            letterSpacing: '0.08em', textTransform: 'uppercase',
+          }}>{t.call_direction}</span>
+        )}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <span style={{ fontSize: 10, color: 'var(--t3)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Duration</span>
+          <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: 'var(--t1)' }}>{fmtDuration(t.call_duration_seconds)}</span>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <span style={{ fontSize: 10, color: 'var(--t3)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Answered</span>
+          <span style={{ fontSize: 11, color: 'var(--t2)' }}>{fmtAnswered(t.call_answered_at)}</span>
+        </div>
+        {(t.call_recording_url || t.call_recording_filename) && (
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 2 }}>
+            <span style={{ fontSize: 10, color: 'var(--t3)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Recording</span>
+            {t.call_recording_url ? (
+              <a
+                href={t.call_recording_url}
+                target="_blank"
+                rel="noreferrer"
+                style={{ color: '#7b93ff', textDecoration: 'underline', fontFamily: 'var(--font-mono)', fontSize: 11 }}
+              >Recording</a>
+            ) : (
+              <span style={{ color: 'var(--t3)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+                {t.call_recording_filename} <span style={{ color: 'var(--t4)' }}>(resolving)</span>
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 

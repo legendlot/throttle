@@ -362,7 +362,7 @@ async function getTickets(params, auth, env) {
   }
 
   const orderClause = 'order=created_at.desc';
-  const path = `/rest/v1/cs_tickets?select=id,ticket_no,created_at,customer_name,customer_phone,product,product_model,product_color,platform,external_order_id,issue_type,issue_category,stage,stage_changed_at,assigned_agent_id,assigned_agent_name,due_at,closed_at&${filters.join('&')}&${orderClause}&limit=${limit}&offset=${offset}`;
+  const path = `/rest/v1/cs_tickets?select=id,ticket_no,created_at,customer_name,customer_phone,product,product_model,product_color,platform,external_order_id,issue_type,issue_category,stage,stage_changed_at,assigned_agent_id,assigned_agent_name,due_at,closed_at,auto_created&${filters.join('&')}&${orderClause}&limit=${limit}&offset=${offset}`;
 
   const res = await sb(path, env, {
     headers: { Prefer: 'count=exact' },

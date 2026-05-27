@@ -403,7 +403,22 @@ export default function QueuePage() {
                     {t.product ? `${t.product}${t.product_model ? ` · ${t.product_model}` : ''}` : <span style={{ color: 'var(--t4)' }}>—</span>}
                     {t.product_color && <span style={{ color: 'var(--t3)', marginLeft: 4 }}>· {t.product_color}</span>}
                   </Td>
-                  <Td><TypeBadge type={t.issue_type} /></Td>
+                  <Td>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                      <TypeBadge type={t.issue_type} />
+                      {t.auto_created && (
+                        <span style={{
+                          display: 'inline-block', padding: '1px 6px',
+                          background: 'var(--surface-3)', color: 'var(--t3)',
+                          border: '1px solid var(--border)',
+                          borderRadius: 'var(--radius-sm)',
+                          fontFamily: 'var(--font-mono)', fontSize: 9,
+                          fontWeight: 700, letterSpacing: '0.08em',
+                          textTransform: 'uppercase',
+                        }}>AUTO</span>
+                      )}
+                    </div>
+                  </Td>
                   <Td><StagePill stage={t.stage} /></Td>
                   <Td>
                     <span style={{ color: 'var(--t2)' }}>{t.platform || '—'}</span>
