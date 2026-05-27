@@ -251,6 +251,9 @@ export default {
     if (url.pathname === '/health' || action === 'health') {
       return json({ ok: true, service: 'csops', ts: new Date().toISOString() });
     }
+    if (url.pathname === '/webhooks/myoperator' && request.method === 'POST') {
+      return handleMyOperatorWebhook(request, env);
+    }
     if (!action && request.method === 'GET') return err('Missing action parameter', 400);
 
     // Authenticate every request (besides /health)
@@ -995,4 +998,100 @@ async function closeTicket(body, auth, env) {
   }
 
   return advanceStage({ ticket_id, target_stage: 'closed', patch: { closed_reason: reason || 'resolved' } }, auth, env, new Request('https://x'));
+}
+
+// ── MyOperator webhook ───────────────────────────────────────────────────────
+
+// Scaffold mode: static shared token via ?token= or X-Webhook-Token header.
+// Swap to HMAC once MyOperator's signature scheme is confirmed (go-live).
+function verifyWebhook(request, url, env) {
+  const provided = url.searchParams.get('token') || request.headers.get('X-Webhook-Token');
+  return !!env.MYOP_WEBHOOK_SECRET && provided === env.MYOP_WEBHOOK_SECRET;
+}
+
+async function handleMyOperatorWebhook(request, env) {
+  const url = new URL(request.url);
+  if (!verifyWebhook(request, url, env)) return err('Invalid webhook signature', 401);
+  let body = {};
+  try { body = await request.json(); } catch { return err('Bad JSON', 400); }
+  const type = body.event_type;
+  if (type === 'call.answered') return webhookCallAnswered(body, env);
+  if (type === 'call.end')      return webhookCallEnd(body, env);
+  return json({ ok: true, ignored: type });  // ack other events so MyOperator doesn't retry
+}
+
+// Best-effort agent resolution by email via the GoTrue admin API. Never throws.
+async function resolveAgentByEmail(email, env) {
+  if (!email) return { id: null, name: null };
+  try {
+    const u = await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users?email=${encodeURIComponent(email)}`, {
+      headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` },
+    });
+    if (!u.ok) return { id: null, name: null };
+    const uj = await u.json().catch(() => null);
+    const list = Array.isArray(uj?.users) ? uj.users : (Array.isArray(uj) ? uj : []);
+    const match = list.find(x => (x.email || '').toLowerCase() === email.toLowerCase());
+    const uid = match?.id || null;
+    if (!uid) return { id: null, name: null };
+    const p = await sb(`/rest/v1/users_profile?id=eq.${uid}&select=full_name&limit=1`, env);
+    return { id: uid, name: p.data?.[0]?.full_name || null };
+  } catch { return { id: null, name: null }; }
+}
+
+async function insertHistorySystem(ticket_id, field_name, old_value, new_value, note, env) {
+  await sb(`/rest/v1/cs_ticket_history`, env, { method: 'POST', body: JSON.stringify({
+    ticket_id, field_name, old_value, new_value, note,
+    changed_by_user_id: null, changed_by_name: 'MyOperator (auto)',
+  }) }).catch(() => {});
+}
+
+async function webhookCallAnswered(body, env) {
+  const session_id = body.session_id;
+  if (!session_id) return err('missing session_id', 400);
+  const existing = await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(session_id)}&select=id,ticket_no&limit=1`, env);
+  if (existing.data?.[0]) return json({ ok: true, deduped: true, ticket_no: existing.data[0].ticket_no });
+
+  const phone = toE164(body.customer_identifier);
+  const agentEmail = body?.legs?.find(l => l.agent?.email)?.agent?.email || body?.agent?.email || null;
+  const [agent, shop] = await Promise.all([ resolveAgentByEmail(agentEmail, env), shopifyLookup({ phone }, env) ]);
+
+  const year = String(new Date().getFullYear());
+  const seqRes = await sb(`/rest/v1/rpc/next_cs_ticket_seq`, env, { method: 'POST', body: JSON.stringify({ p_year: year }) });
+  if (!seqRes.ok) return err('seq failed', 500);
+  const ticket_no = `CS-${year}-${String(Number(seqRes.data)).padStart(5, '0')}`;
+
+  const ins = await sb(`/rest/v1/cs_tickets`, env, { method: 'POST', body: JSON.stringify({
+    ticket_no, call_session_id: session_id, auto_created: true,
+    created_by_user_id: null, created_by_name: 'MyOperator (auto)',
+    intake_channel: 'phone', call_direction: body.direction || null, call_did: body.system_identifier || null,
+    call_answered_at: body.timestamp || new Date().toISOString(),
+    customer_name: shop.found ? shop.customer.name : (phone ? `Caller ${phone}` : 'Unknown caller'),
+    customer_phone: phone, customer_email: shop.found ? shop.customer.email : null,
+    issue_type: 'other', issue_description: '[Pending — auto-created from inbound call]',
+    assigned_agent_id: agent.id, assigned_agent_name: agent.name,
+    stage: 'intake',
+  }) });
+  if (!ins.ok) return err(`insert failed: ${JSON.stringify(ins.data)}`, ins.status);
+  await insertHistorySystem(ins.data[0].id, 'ticket_created', null, ticket_no, 'auto-created from call.answered', env);
+  return json({ ok: true, ticket_no });
+}
+
+async function webhookCallEnd(body, env) {
+  const session_id = body.session_id;
+  if (!session_id) return err('missing session_id', 400);
+  const patch = {
+    call_ended_at: body.timestamp || new Date().toISOString(),
+    call_duration_seconds: body.duration != null ? Number(body.duration) : null,
+    call_recording_filename: body.recording_filename || null,
+    myop_client_ref_id: body.client_ref_id || null,
+  };
+  const existing = await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(session_id)}&select=id&limit=1`, env);
+  if (existing.data?.[0]) {
+    await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(session_id)}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+    return json({ ok: true, patched: true });
+  }
+  // out-of-order: call.end before call.answered — create a minimal draft then patch
+  const created = await webhookCallAnswered({ ...body, event_type: 'call.answered' }, env);
+  await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(session_id)}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+  return created;
 }
