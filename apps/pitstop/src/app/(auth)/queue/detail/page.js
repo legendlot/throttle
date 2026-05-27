@@ -445,7 +445,7 @@ function IdentityRail({ ticket: t, dispatch, pastCases, session }) {
       <Field label="Email" value={t.customer_email || '—'} />
       <Field label="Address" value={t.customer_address || '—'} small />
 
-      <div style={{ marginBottom: 10 }}>
+      <div style={{ marginBottom: 'var(--space-2)' }}>
         <ShopifyPanel session={session} phone={t.customer_phone} email={t.customer_email} />
       </div>
 

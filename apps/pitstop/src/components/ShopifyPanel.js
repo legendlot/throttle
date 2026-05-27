@@ -13,8 +13,8 @@ export function ShopifyPanel({ session, phone, email, onPick }) {
     finally { setLoading(false); }
   }
   return (
-    <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 12 }}>
-      <button onClick={run} disabled={loading} style={{ display:'inline-flex', alignItems:'center', gap:6, background:'transparent', color:'var(--t2)', border:'1px solid var(--border)', borderRadius:'var(--radius-md)', padding:'6px 12px', fontFamily:'var(--font-mono)', fontSize:12, cursor:'pointer' }}>
+    <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 'var(--space-3)' }}>
+      <button type="button" onClick={run} disabled={loading} style={{ display:'inline-flex', alignItems:'center', gap:6, background:'transparent', color:'var(--t2)', border:'1px solid var(--border)', borderRadius:'var(--radius-md)', padding:'6px 12px', fontFamily:'var(--font-mono)', fontSize:12, cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.6 : 1 }}>
         <Search size={13} strokeWidth={1.75} /> {loading ? 'Searching…' : 'Search Shopify'}
       </button>
       {state && state.configured === false && <div style={{ color:'var(--t3)', fontSize:12, marginTop:8 }}>Shopify not configured yet.</div>}
