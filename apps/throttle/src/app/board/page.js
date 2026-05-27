@@ -68,52 +68,44 @@ function TaskCard({ task, onClick, isDragging, ageingConfig, teamMembers, allTas
       style={{
         background: 'var(--s1)',
         border: '1px solid var(--b1)',
-        borderLeft: `3px solid ${priority.color}`,
+        borderTop: `2px solid ${priority.color}`,
         borderRadius: 6,
         padding: '10px 12px',
         cursor: 'pointer',
         opacity: isDragging ? 0.5 : 1,
-        transition: 'border-color .15s',
+        transition: 'border-color .15s, background .15s',
         userSelect: 'none',
       }}
-      onMouseEnter={e => {
-        e.currentTarget.style.borderTopColor = 'var(--b3)';
-        e.currentTarget.style.borderRightColor = 'var(--b3)';
-        e.currentTarget.style.borderBottomColor = 'var(--b3)';
-      }}
-      onMouseLeave={e => {
-        e.currentTarget.style.borderTopColor = 'var(--b1)';
-        e.currentTarget.style.borderRightColor = 'var(--b1)';
-        e.currentTarget.style.borderBottomColor = 'var(--b1)';
-      }}
+      onMouseEnter={e => { e.currentTarget.style.background = 'var(--s2)'; }}
+      onMouseLeave={e => { e.currentTarget.style.background = 'var(--s1)'; }}
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
           {(() => {
             const taskId = getTaskId(task, allTasks);
             return taskId ? (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', letterSpacing: '.06em' }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', letterSpacing: '.04em' }}>
                 {taskId}
               </span>
             ) : null;
           })()}
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', letterSpacing: '.08em' }}>
+          <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', letterSpacing: '.04em' }}>
             {task.type}
           </span>
         </div>
         <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-          {task.is_spillover && <span style={{ fontSize: 10, color: 'var(--amber)' }}>↩</span>}
-          {task.stage === 'ext_blocked' && <span style={{ fontSize: 10, color: 'var(--amber)' }}>⚠</span>}
-          {task.is_revision && <span style={{ fontFamily: 'var(--mono)', fontSize: 8, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--t3)', background: 'var(--s3)', padding: '1px 5px', borderRadius: 3 }}>REV</span>}
+          {task.is_spillover && <span style={{ fontSize: 12, color: 'var(--amber)' }}>↩</span>}
+          {task.stage === 'ext_blocked' && <span style={{ fontSize: 12, color: 'var(--amber)' }}>⚠</span>}
+          {task.is_revision && <span style={{ fontFamily: 'var(--sans)', fontSize: 11, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--t3)', background: 'var(--s3)', padding: '2px 6px', borderRadius: 3, fontWeight: 500 }}>REV</span>}
           {ageingDot}
         </div>
       </div>
 
       <p style={{
-        fontFamily: 'var(--mono)',
-        fontSize: 12,
+        fontFamily: 'var(--sans)',
+        fontSize: 13,
         color: 'var(--text)',
-        lineHeight: 1.4,
+        lineHeight: 1.45,
         marginBottom: 8,
         display: '-webkit-box',
         WebkitLineClamp: 2,
@@ -126,7 +118,7 @@ function TaskCard({ task, onClick, isDragging, ageingConfig, teamMembers, allTas
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {task.product_code && (
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)' }}>
+            <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)' }}>
               {task.product_code}
             </span>
           )}
@@ -137,11 +129,11 @@ function TaskCard({ task, onClick, isDragging, ageingConfig, teamMembers, allTas
             const owner = { ...cardOwner, name: teamMembers?.find(m => m.id === cardOwner.user_id)?.name };
             return (
               <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-                <div style={{ width: 16, height: 16, borderRadius: '50%', background: '#F2CD1A', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--head)', fontSize: 8, fontWeight: 700, color: '#080808' }}>
+                <div style={{ width: 20, height: 20, borderRadius: '50%', background: '#F2CD1A', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--head)', fontSize: 11, fontWeight: 700, color: 'var(--fg-accent)' }}>
                   {owner.name?.[0]?.toUpperCase() || '?'}
                 </div>
                 {collabCount > 0 && (
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)' }}>+{collabCount}</span>
+                  <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)' }}>+{collabCount}</span>
                 )}
               </div>
             );
@@ -150,7 +142,7 @@ function TaskCard({ task, onClick, isDragging, ageingConfig, teamMembers, allTas
         {task.due_date && (() => {
           const duStyle = getDueDateStyle(task.due_date, task.stage);
           return (
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', marginLeft: 'auto', ...duStyle }}>
+            <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', marginLeft: 'auto', ...duStyle }}>
               {new Date(task.due_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
               {duStyle?.color === '#DE2A2A' ? ' !' : ''}
             </span>
@@ -196,8 +188,8 @@ function KanbanColumn({ stage, tasks, onTaskClick, onDrop, canDrop, ageingConfig
       }}>
         <span style={{
           fontFamily: 'var(--head)',
-          fontSize: 10,
-          letterSpacing: '.25em',
+          fontSize: 12,
+          letterSpacing: '.08em',
           textTransform: 'uppercase',
           color: config.color || 'var(--t3)',
           fontWeight: 700,
@@ -205,12 +197,12 @@ function KanbanColumn({ stage, tasks, onTaskClick, onDrop, canDrop, ageingConfig
           {config.label}
         </span>
         <span style={{
-          fontFamily: 'var(--mono)',
-          fontSize: 10,
+          fontFamily: 'var(--sans)',
+          fontSize: 12,
           color: 'var(--text)',
           background: 'var(--s3)',
           border: '1px solid var(--b2)',
-          padding: '2px 6px',
+          padding: '2px 7px',
           borderRadius: 3,
           fontWeight: 600,
         }}>
@@ -244,7 +236,7 @@ function KanbanColumn({ stage, tasks, onTaskClick, onDrop, canDrop, ageingConfig
         ))}
         {tasks.length === 0 && isDragOver && (
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <p style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 11 }}>Drop here</p>
+            <p style={{ color: 'var(--t3)', fontFamily: 'var(--sans)', fontSize: 11 }}>Drop here</p>
           </div>
         )}
       </div>
@@ -287,19 +279,19 @@ function TableView({ tasks, onTaskClick }) {
     padding: '6px 10px',
     fontSize: 11,
     color: 'var(--t2)',
-    fontFamily: 'var(--mono)',
+    fontFamily: 'var(--sans)',
     outline: 'none',
   };
 
   const thStyle = {
     padding: '8px 12px',
     textAlign: 'left',
-    fontFamily: 'var(--head)',
-    fontSize: 9,
-    letterSpacing: '.2em',
+    fontFamily: 'var(--sans)',
+    fontSize: 11,
+    letterSpacing: '.08em',
     textTransform: 'uppercase',
     color: 'var(--t3)',
-    fontWeight: 700,
+    fontWeight: 600,
     cursor: 'pointer',
     whiteSpace: 'nowrap',
   };
@@ -320,14 +312,14 @@ function TableView({ tasks, onTaskClick }) {
             <option key={p.value} value={p.value}>{p.label}</option>
           ))}
         </select>
-        <span style={{ marginLeft: 'auto', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>
+        <span style={{ marginLeft: 'auto', fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)' }}>
           {filtered.length} task{filtered.length !== 1 ? 's' : ''}
         </span>
       </div>
 
       {/* Table */}
       <div style={{ overflowX: 'auto', borderRadius: 8, border: '1px solid var(--b1)' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--mono)', fontSize: 12 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--sans)', fontSize: 12 }}>
           <thead>
             <tr style={{ background: 'var(--s1)', borderBottom: '1px solid var(--b1)' }}>
               <th style={thStyle} onClick={() => handleSort('title')}>
@@ -421,10 +413,10 @@ function TableView({ tasks, onTaskClick }) {
 function PersonFilter({ members, selected, onChange }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', letterSpacing: '.1em', textTransform: 'uppercase' }}>Person</span>
-      <button onClick={() => onChange(null)} style={{ background: selected === null ? '#F2CD1A' : 'var(--s2)', color: selected === null ? '#080808' : 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 10px', fontFamily: 'var(--mono)', fontSize: 10, cursor: 'pointer' }}>All</button>
+      <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', letterSpacing: '.06em', textTransform: 'uppercase', fontWeight: 500 }}>Person</span>
+      <button onClick={() => onChange(null)} style={{ background: selected === null ? '#F2CD1A' : 'var(--s2)', color: selected === null ? 'var(--fg-accent)' : 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 10px', fontFamily: 'var(--sans)', fontSize: 12, cursor: 'pointer' }}>All</button>
       {members.map(m => (
-        <button key={m.id} onClick={() => onChange(m.id)} style={{ background: selected === m.id ? '#F2CD1A' : 'var(--s2)', color: selected === m.id ? '#080808' : 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 10px', fontFamily: 'var(--mono)', fontSize: 10, cursor: 'pointer' }}>{m.name.split(' ')[0]}</button>
+        <button key={m.id} onClick={() => onChange(m.id)} style={{ background: selected === m.id ? '#F2CD1A' : 'var(--s2)', color: selected === m.id ? 'var(--fg-accent)' : 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 10px', fontFamily: 'var(--sans)', fontSize: 12, cursor: 'pointer' }}>{m.name.split(' ')[0]}</button>
       ))}
     </div>
   );
@@ -568,12 +560,12 @@ export default function BoardPage() {
             <h1 style={{ fontFamily: 'var(--head)', fontWeight: 900, fontSize: 18, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--text)', lineHeight: 1 }}>
               Board
             </h1>
-            <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginTop: 4, display: 'flex', alignItems: 'center', gap: 10 }}>
+            <p style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', marginTop: 4, display: 'flex', alignItems: 'center', gap: 10 }}>
               <span>
                 {selectedPerson ? `${visibleTasks.length} of ${tasks.length}` : tasks.length} active task{(selectedPerson ? visibleTasks.length : tasks.length) !== 1 ? 's' : ''}
               </span>
               <span style={{ color: 'var(--t3)' }}>
-                <kbd style={{ background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 3, padding: '1px 5px', fontSize: 9 }}>/</kbd> search
+                <kbd style={{ background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 3, padding: '2px 6px', fontSize: 11 }}>/</kbd> search
               </span>
             </p>
           </div>
@@ -587,7 +579,7 @@ export default function BoardPage() {
                 borderRadius: 6, padding: '6px 12px',
               }}>
                 <span style={{ fontSize: 11, color: '#22d3ee' }}>👀</span>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: '#22d3ee', fontWeight: 500 }}>
+                <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: '#22d3ee', fontWeight: 500 }}>
                   {reviewCount} awaiting review
                 </span>
               </div>
@@ -609,7 +601,7 @@ export default function BoardPage() {
                   onClick={() => setView(v.value)}
                   style={{
                     padding: '6px 14px',
-                    fontFamily: 'var(--mono)',
+                    fontFamily: 'var(--sans)',
                     fontSize: 10,
                     fontWeight: view === v.value ? 700 : 400,
                     borderRadius: 4,
@@ -631,7 +623,7 @@ export default function BoardPage() {
 
         {loading ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '80px 0' }}>
-            <p style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12 }}>Loading tasks...</p>
+            <p style={{ color: 'var(--t3)', fontFamily: 'var(--sans)', fontSize: 12 }}>Loading tasks...</p>
           </div>
         ) : view === 'kanban' ? (
           <div style={{ flex: 1, overflowX: 'auto', overflowY: 'hidden' }}>
@@ -687,9 +679,9 @@ export default function BoardPage() {
                   onKeyDown={e => {
                     if (e.key === 'Escape') { setSearchOpen(false); }
                   }}
-                  style={{ flex: 1, background: 'none', border: 'none', outline: 'none', fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--text)', caretColor: '#F2CD1A' }}
+                  style={{ flex: 1, background: 'none', border: 'none', outline: 'none', fontFamily: 'var(--sans)', fontSize: 13, color: 'var(--text)', caretColor: '#F2CD1A' }}
                 />
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)' }}>/ or ESC to close</span>
+                <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)' }}>/ or ESC to close</span>
               </div>
               <div style={{ maxHeight: 360, overflowY: 'auto' }}>
                 {(() => {
@@ -698,7 +690,7 @@ export default function BoardPage() {
 
                   if (usingSearch && searchLoading && items.length === 0) {
                     return (
-                      <div style={{ padding: '24px 16px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>
+                      <div style={{ padding: '24px 16px', textAlign: 'center', fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--t3)' }}>
                         Searching...
                       </div>
                     );
@@ -706,7 +698,7 @@ export default function BoardPage() {
 
                   if (items.length === 0) {
                     return (
-                      <div style={{ padding: '24px 16px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>
+                      <div style={{ padding: '24px 16px', textAlign: 'center', fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--t3)' }}>
                         No tasks found
                       </div>
                     );
@@ -724,11 +716,11 @@ export default function BoardPage() {
                       >
                         <span style={{ width: 8, height: 8, borderRadius: '50%', background: stage?.color || 'var(--t3)', flexShrink: 0 }} />
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.title}</p>
-                          <p style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', margin: '2px 0 0' }}>{stage?.label || t.stage}</p>
+                          <p style={{ fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--text)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.title}</p>
+                          <p style={{ fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--t3)', margin: '2px 0 0' }}>{stage?.label || t.stage}</p>
                         </div>
                         {t.due_date && (
-                          <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', flexShrink: 0 }}>
+                          <span style={{ fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--t3)', flexShrink: 0 }}>
                             {new Date(t.due_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
                           </span>
                         )}
@@ -738,7 +730,7 @@ export default function BoardPage() {
                 })()}
               </div>
               <div style={{ padding: '8px 16px', borderTop: '1px solid var(--b1)' }}>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>
+                <span style={{ fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--t3)' }}>
                   {searchQuery === ''
                     ? `${(tasks || []).length} active tasks — type to filter`
                     : searchLoading

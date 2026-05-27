@@ -132,7 +132,7 @@ export default function ApprovalQueuePage() {
             <button
               onClick={() => router.push('/requests/')}
               style={{
-                fontFamily: 'var(--mono)',
+                fontFamily: 'var(--sans)',
                 fontSize: 11,
                 color: 'var(--t3)',
                 background: 'none',
@@ -159,7 +159,7 @@ export default function ApprovalQueuePage() {
               Approval Queue
             </h1>
             <p style={{
-              fontFamily: 'var(--mono)',
+              fontFamily: 'var(--sans)',
               fontSize: 12,
               color: 'var(--t3)',
               marginTop: 4,
@@ -171,7 +171,7 @@ export default function ApprovalQueuePage() {
 
         {loading ? (
           <div style={{
-            fontFamily: 'var(--mono)',
+            fontFamily: 'var(--sans)',
             fontSize: 12,
             color: 'var(--t3)',
             paddingTop: 48,
@@ -183,7 +183,7 @@ export default function ApprovalQueuePage() {
         ) : requests.length === 0 ? (
           <div style={{ textAlign: 'center', paddingTop: 80, paddingBottom: 80 }}>
             <p style={{
-              fontFamily: 'var(--mono)',
+              fontFamily: 'var(--sans)',
               fontSize: 12,
               color: 'var(--t3)',
             }}>
@@ -223,7 +223,7 @@ export default function ApprovalQueuePage() {
                     }}
                   >
                     <div style={{
-                      fontFamily: 'var(--mono)',
+                      fontFamily: 'var(--sans)',
                       fontSize: 10,
                       color: 'var(--t3)',
                       marginBottom: 4,
@@ -236,7 +236,7 @@ export default function ApprovalQueuePage() {
                         <span style={{
                           background: 'rgba(242,205,26,0.12)',
                           color: '#F2CD1A',
-                          fontFamily: 'var(--mono)',
+                          fontFamily: 'var(--sans)',
                           fontSize: 9,
                           padding: '1px 6px',
                           borderRadius: 3,
@@ -247,7 +247,7 @@ export default function ApprovalQueuePage() {
                       )}
                     </div>
                     <div style={{
-                      fontFamily: 'var(--mono)',
+                      fontFamily: 'var(--sans)',
                       fontSize: 12,
                       color: 'var(--text)',
                       fontWeight: 500,
@@ -258,7 +258,7 @@ export default function ApprovalQueuePage() {
                       {req.title}
                     </div>
                     <div style={{
-                      fontFamily: 'var(--mono)',
+                      fontFamily: 'var(--sans)',
                       fontSize: 10,
                       color: 'var(--t3)',
                       marginTop: 2,
@@ -266,7 +266,7 @@ export default function ApprovalQueuePage() {
                       Submitted by {req.submitter_name}
                     </div>
                     <div style={{
-                      fontFamily: 'var(--mono)',
+                      fontFamily: 'var(--sans)',
                       fontSize: 10,
                       color: 'var(--t3)',
                       marginTop: 4,
@@ -300,7 +300,7 @@ export default function ApprovalQueuePage() {
                   justifyContent: 'center',
                 }}>
                   <p style={{
-                    fontFamily: 'var(--mono)',
+                    fontFamily: 'var(--sans)',
                     fontSize: 12,
                     color: 'var(--t3)',
                   }}>
@@ -322,7 +322,7 @@ export default function ApprovalQueuePage() {
                   }}>
                     <div>
                       <span style={{
-                        fontFamily: 'var(--mono)',
+                        fontFamily: 'var(--sans)',
                         fontSize: 11,
                         color: 'var(--t2)',
                         background: 'var(--s3)',
@@ -337,7 +337,7 @@ export default function ApprovalQueuePage() {
                           <span style={{
                             background: 'rgba(242,205,26,0.12)',
                             color: '#F2CD1A',
-                            fontFamily: 'var(--mono)',
+                            fontFamily: 'var(--sans)',
                             fontSize: 9,
                             padding: '1px 6px',
                             borderRadius: 3,
@@ -348,7 +348,7 @@ export default function ApprovalQueuePage() {
                         )}
                       </span>
                       <h2 style={{
-                        fontFamily: 'var(--mono)',
+                        fontFamily: 'var(--sans)',
                         color: 'var(--text)',
                         fontWeight: 600,
                         fontSize: 14,
@@ -357,7 +357,7 @@ export default function ApprovalQueuePage() {
                         {selected.title}
                       </h2>
                       <div style={{
-                        fontFamily: 'var(--mono)',
+                        fontFamily: 'var(--sans)',
                         fontSize: 11,
                         color: 'var(--t3)',
                         marginTop: 4,
@@ -368,7 +368,7 @@ export default function ApprovalQueuePage() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <RequestStatusBadge status={selected.status} />
                       <span style={{
-                        fontFamily: 'var(--mono)',
+                        fontFamily: 'var(--sans)',
                         fontSize: 10,
                         color: stageColor(selected),
                         letterSpacing: '.04em',
@@ -399,7 +399,7 @@ export default function ApprovalQueuePage() {
                             padding: '4px 8px',
                           }}>
                             <span style={{
-                              fontFamily: 'var(--mono)',
+                              fontFamily: 'var(--sans)',
                               fontSize: 11,
                               color: 'var(--t2)',
                             }}>
@@ -407,7 +407,7 @@ export default function ApprovalQueuePage() {
                             </span>
                             {rp.product_notes && (
                               <span style={{
-                                fontFamily: 'var(--mono)',
+                                fontFamily: 'var(--sans)',
                                 fontSize: 11,
                                 color: 'var(--t3)',
                                 marginLeft: 8,
@@ -438,7 +438,7 @@ export default function ApprovalQueuePage() {
                         value ? (
                           <div key={key} style={{ display: 'flex', gap: 8 }}>
                             <span style={{
-                              fontFamily: 'var(--mono)',
+                              fontFamily: 'var(--sans)',
                               fontSize: 11,
                               color: 'var(--t3)',
                               width: 128,
@@ -448,7 +448,7 @@ export default function ApprovalQueuePage() {
                               {key.replace(/_/g, ' ')}
                             </span>
                             <span style={{
-                              fontFamily: 'var(--mono)',
+                              fontFamily: 'var(--sans)',
                               fontSize: 11,
                               color: 'var(--t2)',
                               flex: 1,
@@ -506,7 +506,7 @@ export default function ApprovalQueuePage() {
                           style={{
                             flex: 1,
                             padding: '8px 0',
-                            fontFamily: 'var(--mono)',
+                            fontFamily: 'var(--sans)',
                             fontSize: 11,
                             fontWeight: 500,
                             borderRadius: 6,
@@ -549,7 +549,7 @@ export default function ApprovalQueuePage() {
                               : '1px solid var(--b2)',
                             borderRadius: 6,
                             padding: '8px 12px',
-                            fontFamily: 'var(--mono)',
+                            fontFamily: 'var(--sans)',
                             fontSize: 12,
                             color: 'var(--text)',
                             outline: 'none',
@@ -561,7 +561,7 @@ export default function ApprovalQueuePage() {
 
                         {error && (
                           <p style={{
-                            fontFamily: 'var(--mono)',
+                            fontFamily: 'var(--sans)',
                             fontSize: 11,
                             color: 'var(--red)',
                             margin: 0,

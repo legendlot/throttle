@@ -184,7 +184,7 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
     borderRadius: 6,
     padding: '8px 12px',
     color: 'var(--text)',
-    fontFamily: 'var(--mono)',
+    fontFamily: 'var(--sans)',
     fontSize: 12,
     outline: 'none',
     resize: 'none',
@@ -192,7 +192,7 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
   };
 
   const pillStyle = (active) => ({
-    fontFamily: 'var(--mono)',
+    fontFamily: 'var(--sans)',
     fontSize: 11,
     padding: '5px 12px',
     borderRadius: 20,
@@ -224,21 +224,21 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
           <div style={{ flex: 1, minWidth: 0, paddingRight: 16 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
               <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: stageConfig.color, flexShrink: 0 }} />
-              <span style={{ fontFamily: 'var(--head)', fontSize: 9, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--t3)' }}>{stageConfig.label}</span>
+              <span style={{ fontFamily: 'var(--sans)', fontSize: 11, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--t3)' }}>{stageConfig.label}</span>
               {task.displayId && (
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', letterSpacing: '.08em', background: 'var(--s3)', padding: '2px 6px', borderRadius: 3 }}>
+                <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', letterSpacing: '.08em', background: 'var(--s3)', padding: '2px 6px', borderRadius: 3 }}>
                   {task.displayId}
                 </span>
               )}
               {task.is_spillover && (
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 9, background: 'rgba(245,158,11,0.12)', color: 'var(--amber)', border: '1px solid rgba(245,158,11,0.3)', padding: '2px 6px', borderRadius: 3 }}>
+                <span style={{ fontFamily: 'var(--sans)', fontSize: 11, background: 'rgba(245,158,11,0.12)', color: 'var(--amber)', border: '1px solid rgba(245,158,11,0.3)', padding: '2px 6px', borderRadius: 3 }}>
                   Spillover
                 </span>
               )}
             </div>
             <EditableTitle task={task} brandUser={brandUser} session={session} onUpdate={onUpdate} />
             {task.product_code && (
-              <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginTop: 4 }}>Product: {task.product_code}</p>
+              <p style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', marginTop: 4 }}>Product: {task.product_code}</p>
             )}
           </div>
           <button
@@ -256,7 +256,7 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
           {/* Error */}
           {error && (
             <div style={{ background: 'rgba(222,42,42,0.08)', border: '1px solid rgba(222,42,42,0.3)', borderRadius: 6, padding: '10px 14px' }}>
-              <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--red)' }}>{error}</p>
+              <p style={{ fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--red)' }}>{error}</p>
             </div>
           )}
 
@@ -266,10 +266,10 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: stageConfig.color }} />
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--text)' }}>{stageConfig.label}</span>
+                  <span style={{ fontFamily: 'var(--sans)', fontSize: 13, color: 'var(--text)' }}>{stageConfig.label}</span>
                 </div>
                 {validTransitions.length > 0 && (
-                  <button onClick={() => setMovingStage(true)} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer' }}>
+                  <button onClick={() => setMovingStage(true)} style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer' }}>
                     Move →
                   </button>
                 )}
@@ -300,11 +300,11 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
                   <button
                     onClick={moveStage}
                     disabled={!targetStage || loading}
-                    style={{ background: '#F2CD1A', color: '#080808', border: 'none', borderRadius: 6, padding: '8px 16px', fontFamily: 'var(--head)', fontWeight: 700, fontSize: 10, letterSpacing: '.15em', textTransform: 'uppercase', cursor: 'pointer', opacity: (!targetStage || loading) ? 0.4 : 1 }}
+                    style={{ background: '#F2CD1A', color: 'var(--fg-accent)', border: 'none', borderRadius: 6, padding: '8px 16px', fontFamily: 'var(--head)', fontWeight: 700, fontSize: 11, letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', opacity: (!targetStage || loading) ? 0.4 : 1 }}
                   >
                     {loading ? 'Moving...' : 'Confirm Move'}
                   </button>
-                  <button onClick={() => { setMovingStage(false); setTargetStage(null); setBlockedReason(''); }} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer' }}>
+                  <button onClick={() => { setMovingStage(false); setTargetStage(null); setBlockedReason(''); }} style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer' }}>
                     Cancel
                   </button>
                 </div>
@@ -318,10 +318,10 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: priorityConfig.color }} />
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--text)' }}>{priorityConfig.label}</span>
+                  <span style={{ fontFamily: 'var(--sans)', fontSize: 13, color: 'var(--text)' }}>{priorityConfig.label}</span>
                 </div>
                 {isAdminLead && (
-                  <button onClick={() => setEditingPriority(true)} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer' }}>
+                  <button onClick={() => setEditingPriority(true)} style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer' }}>
                     Edit
                   </button>
                 )}
@@ -333,7 +333,7 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
                     {p.label}
                   </button>
                 ))}
-                <button onClick={() => setEditingPriority(false)} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer' }}>
+                <button onClick={() => setEditingPriority(false)} style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer' }}>
                   Cancel
                 </button>
               </div>
@@ -349,15 +349,15 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
               <DetailRow label="Type" value={task.type?.replace(/_/g, ' ')} />
               <DetailRow label="Deliverable" value={DELIVERABLE_TYPES.find(d => d.value === task.deliverable_type)?.label || task.deliverable_type} />
               <div style={{ display: 'flex', gap: 12 }}>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', width: 80, flexShrink: 0 }}>Due</span>
+                <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', width: 80, flexShrink: 0 }}>Due</span>
                 <EditableDueDate task={task} brandUser={brandUser} session={session} onUpdate={onUpdate} />
               </div>
               {task.sprint_id && <DetailRow label="Sprint" value={sprintName} />}
               {task.spillover_count > 0 && <DetailRow label="Spillovers" value={String(task.spillover_count)} />}
               {task.is_revision && (
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--b1)' }}>
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>Work Type</span>
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--amber)', background: 'rgba(245,158,11,0.1)', padding: '1px 8px', borderRadius: 3 }}>Revision</span>
+                  <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)' }}>Work Type</span>
+                  <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--amber)', background: 'rgba(245,158,11,0.1)', padding: '1px 8px', borderRadius: 3 }}>Revision</span>
                 </div>
               )}
             </div>
@@ -366,7 +366,7 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
           {/* Notes */}
           {task.notes && (
             <Section title="Notes">
-              <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t2)', whiteSpace: 'pre-wrap' }}>{task.notes}</p>
+              <p style={{ fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--t2)', whiteSpace: 'pre-wrap' }}>{task.notes}</p>
             </Section>
           )}
 
@@ -376,7 +376,7 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
           {/* Blocked reason */}
           {task.blocked_reason && task.stage === 'ext_blocked' && (
             <Section title="External Blocker">
-              <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--amber)' }}>{task.blocked_reason}</p>
+              <p style={{ fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--amber)' }}>{task.blocked_reason}</p>
             </Section>
           )}
 
@@ -420,13 +420,13 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
               {!showAbandon ? (
                 <button
                   onClick={() => setShowAbandon(true)}
-                  style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)', background: 'none', border: 'none', cursor: 'pointer' }}
+                  style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--red)', background: 'none', border: 'none', cursor: 'pointer' }}
                 >
                   Abandon task
                 </button>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: '#DE2A2A', margin: 0 }}>
+                  <p style={{ fontFamily: 'var(--sans)', fontSize: 11, color: '#DE2A2A', margin: 0 }}>
                     This removes the task from all active views. Are you sure?
                   </p>
                   <textarea
@@ -441,11 +441,11 @@ export default function TaskSidePanel({ task, onClose, onUpdate }) {
                     <button
                       onClick={abandonTask}
                       disabled={loading}
-                      style={{ background: 'rgba(222,42,42,0.15)', color: 'var(--red)', border: '1px solid rgba(222,42,42,0.3)', borderRadius: 6, padding: '8px 16px', fontFamily: 'var(--head)', fontWeight: 700, fontSize: 10, letterSpacing: '.15em', textTransform: 'uppercase', cursor: 'pointer', opacity: loading ? 0.4 : 1 }}
+                      style={{ background: 'rgba(222,42,42,0.15)', color: 'var(--red)', border: '1px solid rgba(222,42,42,0.3)', borderRadius: 6, padding: '8px 16px', fontFamily: 'var(--head)', fontWeight: 700, fontSize: 11, letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', opacity: loading ? 0.4 : 1 }}
                     >
                       {loading ? 'Abandoning...' : 'Confirm Abandon'}
                     </button>
-                    <button onClick={() => { setShowAbandon(false); setAbandonReason(''); }} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer' }}>
+                    <button onClick={() => { setShowAbandon(false); setAbandonReason(''); }} style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer' }}>
                       Cancel
                     </button>
                   </div>
@@ -482,39 +482,39 @@ function AssigneesSection({ task, teamMembers, brandUser, session, onUpdate }) {
 
   return (
     <div style={{ borderBottom: '1px solid var(--b1)', paddingBottom: 14 }}>
-      <div style={{ fontFamily: 'var(--head)', fontSize: 10, letterSpacing: '.25em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 12, fontWeight: 700 }}>Assignees</div>
+      <div style={{ fontFamily: 'var(--sans)', fontSize: 12, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 12, fontWeight: 600 }}>Assignees</div>
 
       {/* Owner */}
       <div style={{ marginBottom: 14 }}>
-        <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', letterSpacing: '.12em', textTransform: 'uppercase', marginBottom: 8 }}>Owner</div>
+        <div style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', letterSpacing: '.04em', textTransform: 'uppercase', marginBottom: 8 }}>Owner</div>
         {owner ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <div style={{ width: 26, height: 26, borderRadius: '50%', background: '#F2CD1A', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--head)', fontSize: 11, fontWeight: 700, color: '#080808', flexShrink: 0 }}>
+              <div style={{ width: 26, height: 26, borderRadius: '50%', background: '#F2CD1A', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--head)', fontSize: 11, fontWeight: 700, color: 'var(--fg-accent)', flexShrink: 0 }}>
                 {owner.name?.[0]?.toUpperCase() || '?'}
               </div>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)' }}>{owner.name}</span>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', background: 'var(--s3)', padding: '1px 6px', borderRadius: 3, letterSpacing: '.08em', textTransform: 'uppercase' }}>owner</span>
+              <span style={{ fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--text)' }}>{owner.name}</span>
+              <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', background: 'var(--s3)', padding: '2px 7px', borderRadius: 3, letterSpacing: '.04em', textTransform: 'uppercase' }}>owner</span>
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
               {owner.user_id === brandUser?.id && (
-                <button onClick={() => call('remove_self')} style={{ background: 'none', border: 'none', color: 'var(--t3)', cursor: 'pointer', fontSize: 11, fontFamily: 'var(--mono)' }}>Leave</button>
+                <button onClick={() => call('remove_self')} style={{ background: 'none', border: 'none', color: 'var(--t3)', cursor: 'pointer', fontSize: 11, fontFamily: 'var(--sans)' }}>Leave</button>
               )}
               {isAdminLead && owner.user_id !== brandUser?.id && (
-                <button onClick={() => call('remove_assignee', owner.user_id)} style={{ background: 'none', border: 'none', color: 'var(--t3)', cursor: 'pointer', fontSize: 11, fontFamily: 'var(--mono)' }}>Remove</button>
+                <button onClick={() => call('remove_assignee', owner.user_id)} style={{ background: 'none', border: 'none', color: 'var(--t3)', cursor: 'pointer', fontSize: 11, fontFamily: 'var(--sans)' }}>Remove</button>
               )}
             </div>
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>Unassigned</span>
+            <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)' }}>Unassigned</span>
             {!isAlreadyAssigned && (
-              <button onClick={() => call('self_assign_owner')} style={{ background: 'rgba(242,205,26,0.1)', color: '#F2CD1A', border: '1px solid rgba(242,205,26,0.25)', borderRadius: 4, padding: '5px 12px', fontFamily: 'var(--head)', fontSize: 10, fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', cursor: 'pointer', alignSelf: 'flex-start' }}>
+              <button onClick={() => call('self_assign_owner')} style={{ background: 'rgba(242,205,26,0.1)', color: '#F2CD1A', border: '1px solid rgba(242,205,26,0.25)', borderRadius: 4, padding: '5px 12px', fontFamily: 'var(--head)', fontSize: 11, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', cursor: 'pointer', alignSelf: 'flex-start' }}>
                 Assign to me
               </button>
             )}
             {isAdminLead && (
-              <select defaultValue="" onChange={e => { if (e.target.value) call('set_owner', e.target.value); }} style={{ background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '5px 10px', color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 11, outline: 'none' }}>
+              <select defaultValue="" onChange={e => { if (e.target.value) call('set_owner', e.target.value); }} style={{ background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '5px 10px', color: 'var(--text)', fontFamily: 'var(--sans)', fontSize: 11, outline: 'none' }}>
                 <option value="">Assign owner...</option>
                 {teamMembers.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
               </select>
@@ -522,7 +522,7 @@ function AssigneesSection({ task, teamMembers, brandUser, session, onUpdate }) {
           </div>
         )}
         {isAdminLead && owner && (
-          <select defaultValue="" onChange={e => { if (e.target.value) call('set_owner', e.target.value); }} style={{ marginTop: 8, background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '5px 10px', color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 11, outline: 'none', width: '100%' }}>
+          <select defaultValue="" onChange={e => { if (e.target.value) call('set_owner', e.target.value); }} style={{ marginTop: 8, background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '5px 10px', color: 'var(--t2)', fontFamily: 'var(--sans)', fontSize: 11, outline: 'none', width: '100%' }}>
             <option value="">Change owner...</option>
             {teamMembers.filter(m => m.id !== owner.user_id).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
           </select>
@@ -531,18 +531,18 @@ function AssigneesSection({ task, teamMembers, brandUser, session, onUpdate }) {
 
       {/* Collaborators */}
       <div>
-        <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', letterSpacing: '.12em', textTransform: 'uppercase', marginBottom: 8 }}>Collaborators</div>
-        {collaborators.length === 0 && <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>None</span>}
+        <div style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', letterSpacing: '.04em', textTransform: 'uppercase', marginBottom: 8 }}>Collaborators</div>
+        {collaborators.length === 0 && <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)' }}>None</span>}
         {collaborators.map(c => (
           <div key={c.user_id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <div style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--s3)', border: '1px solid var(--b2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--head)', fontSize: 9, color: 'var(--t2)', flexShrink: 0 }}>
+              <div style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--s3)', border: '1px solid var(--b2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t2)', flexShrink: 0 }}>
                 {c.name?.[0]?.toUpperCase() || '?'}
               </div>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t2)' }}>{c.name}</span>
+              <span style={{ fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--t2)' }}>{c.name}</span>
             </div>
             {(c.user_id === brandUser?.id || isAdminLead) && (
-              <button onClick={() => c.user_id === brandUser?.id ? call('remove_self') : call('remove_assignee', c.user_id)} style={{ background: 'none', border: 'none', color: 'var(--t3)', cursor: 'pointer', fontSize: 11, fontFamily: 'var(--mono)' }}>
+              <button onClick={() => c.user_id === brandUser?.id ? call('remove_self') : call('remove_assignee', c.user_id)} style={{ background: 'none', border: 'none', color: 'var(--t3)', cursor: 'pointer', fontSize: 11, fontFamily: 'var(--sans)' }}>
                 {c.user_id === brandUser?.id ? 'Leave' : 'Remove'}
               </button>
             )}
@@ -550,12 +550,12 @@ function AssigneesSection({ task, teamMembers, brandUser, session, onUpdate }) {
         ))}
         <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
           {owner && !isAlreadyAssigned && (
-            <button onClick={() => call('self_add_collaborator')} style={{ background: 'var(--s2)', color: 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '5px 12px', fontFamily: 'var(--mono)', fontSize: 10, cursor: 'pointer', alignSelf: 'flex-start' }}>
+            <button onClick={() => call('self_add_collaborator')} style={{ background: 'var(--s2)', color: 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '5px 12px', fontFamily: 'var(--sans)', fontSize: 10, cursor: 'pointer', alignSelf: 'flex-start' }}>
               + Add me as collaborator
             </button>
           )}
           {teamMembers.filter(m => !task.assignees?.some(a => a.user_id === m.id)).length > 0 && (
-            <select defaultValue="" onChange={e => { if (e.target.value) call('add_collaborator', e.target.value); }} style={{ background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '5px 10px', color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 11, outline: 'none' }}>
+            <select defaultValue="" onChange={e => { if (e.target.value) call('add_collaborator', e.target.value); }} style={{ background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '5px 10px', color: 'var(--t2)', fontFamily: 'var(--sans)', fontSize: 11, outline: 'none' }}>
               <option value="">Add collaborator...</option>
               {teamMembers.filter(m => !task.assignees?.some(a => a.user_id === m.id)).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
             </select>
@@ -590,11 +590,11 @@ function EditableTitle({ task, brandUser, session, onUpdate }) {
           value={value}
           onChange={e => setValue(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') { setValue(task.title); setEditing(false); } }}
-          style={{ background: 'var(--s2)', border: '1px solid #F2CD1A', borderRadius: 4, padding: '6px 10px', color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 14, fontWeight: 600, outline: 'none', width: '100%' }}
+          style={{ background: 'var(--s2)', border: '1px solid #F2CD1A', borderRadius: 4, padding: '6px 10px', color: 'var(--text)', fontFamily: 'var(--sans)', fontSize: 14, fontWeight: 600, outline: 'none', width: '100%' }}
         />
         <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={handleSave} style={{ background: '#F2CD1A', color: '#080808', border: 'none', borderRadius: 4, padding: '4px 12px', fontFamily: 'var(--head)', fontSize: 10, fontWeight: 700, letterSpacing: '.15em', textTransform: 'uppercase', cursor: 'pointer' }}>Save</button>
-          <button onClick={() => { setValue(task.title); setEditing(false); }} style={{ background: 'var(--s3)', color: 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 12px', fontFamily: 'var(--mono)', fontSize: 10, cursor: 'pointer' }}>Cancel</button>
+          <button onClick={handleSave} style={{ background: '#F2CD1A', color: 'var(--fg-accent)', border: 'none', borderRadius: 4, padding: '4px 12px', fontFamily: 'var(--head)', fontSize: 11, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer' }}>Save</button>
+          <button onClick={() => { setValue(task.title); setEditing(false); }} style={{ background: 'var(--s3)', color: 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 12px', fontFamily: 'var(--sans)', fontSize: 10, cursor: 'pointer' }}>Cancel</button>
         </div>
       </div>
     );
@@ -603,7 +603,7 @@ function EditableTitle({ task, brandUser, session, onUpdate }) {
   return (
     <div
       onClick={canEdit ? () => setEditing(true) : undefined}
-      style={{ fontFamily: 'var(--mono)', fontSize: 14, fontWeight: 600, color: 'var(--text)', lineHeight: 1.4, cursor: canEdit ? 'text' : 'default', borderBottom: canEdit ? '1px dashed var(--b2)' : 'none', paddingBottom: canEdit ? 2 : 0 }}
+      style={{ fontFamily: 'var(--sans)', fontSize: 14, fontWeight: 600, color: 'var(--text)', lineHeight: 1.4, cursor: canEdit ? 'text' : 'default', borderBottom: canEdit ? '1px dashed var(--b2)' : 'none', paddingBottom: canEdit ? 2 : 0 }}
       title={canEdit ? 'Click to edit' : undefined}
     >
       {task.title}
@@ -627,7 +627,7 @@ function EditableDueDate({ task, brandUser, session, onUpdate }) {
   if (editing) {
     return (
       <input type="date" defaultValue={task.due_date || ''} onChange={handleChange} onBlur={() => setEditing(false)} autoFocus
-        style={{ background: 'var(--s2)', border: '1px solid #F2CD1A', borderRadius: 4, padding: '3px 8px', color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 12, outline: 'none' }}
+        style={{ background: 'var(--s2)', border: '1px solid #F2CD1A', borderRadius: 4, padding: '3px 8px', color: 'var(--text)', fontFamily: 'var(--sans)', fontSize: 12, outline: 'none' }}
       />
     );
   }
@@ -638,7 +638,7 @@ function EditableDueDate({ task, brandUser, session, onUpdate }) {
 
   return (
     <span onClick={canEdit ? () => setEditing(true) : undefined}
-      style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)', cursor: canEdit ? 'pointer' : 'default', borderBottom: canEdit ? '1px dashed var(--b2)' : 'none' }}
+      style={{ fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--text)', cursor: canEdit ? 'pointer' : 'default', borderBottom: canEdit ? '1px dashed var(--b2)' : 'none' }}
       title={canEdit ? 'Click to edit' : undefined}
     >
       {display}
@@ -649,7 +649,7 @@ function EditableDueDate({ task, brandUser, session, onUpdate }) {
 function Section({ title, children }) {
   return (
     <div>
-      <p style={{ fontFamily: 'var(--head)', fontSize: 9, letterSpacing: '.25em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 10, fontWeight: 700 }}>{title}</p>
+      <p style={{ fontFamily: 'var(--sans)', fontSize: 11, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 10, fontWeight: 600 }}>{title}</p>
       {children}
     </div>
   );
@@ -658,8 +658,8 @@ function Section({ title, children }) {
 function DetailRow({ label, value }) {
   return (
     <div style={{ display: 'flex', gap: 12 }}>
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', width: 80, flexShrink: 0 }}>{label}</span>
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)', textTransform: 'capitalize' }}>{value}</span>
+      <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', width: 80, flexShrink: 0 }}>{label}</span>
+      <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t2)', textTransform: 'capitalize' }}>{value}</span>
     </div>
   );
 }
@@ -672,7 +672,7 @@ function SubmitForReviewSection({ task, session, onUpdate, onError }) {
 
   const inputStyle = {
     width: '100%', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 6,
-    padding: '8px 12px', color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 12, outline: 'none',
+    padding: '8px 12px', color: 'var(--text)', fontFamily: 'var(--sans)', fontSize: 12, outline: 'none',
   };
 
   async function submit() {
@@ -690,24 +690,24 @@ function SubmitForReviewSection({ task, session, onUpdate, onError }) {
   return (
     <Section title="Submit for Review">
       {!open ? (
-        <button onClick={() => setOpen(true)} style={{ background: '#F2CD1A', color: '#080808', border: 'none', borderRadius: 6, padding: '9px 20px', fontFamily: 'var(--head)', fontWeight: 700, fontSize: 10, letterSpacing: '.15em', textTransform: 'uppercase', cursor: 'pointer' }}>
+        <button onClick={() => setOpen(true)} style={{ background: '#F2CD1A', color: 'var(--fg-accent)', border: 'none', borderRadius: 6, padding: '9px 20px', fontFamily: 'var(--head)', fontWeight: 700, fontSize: 11, letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer' }}>
           Submit Work for Review →
         </button>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div>
-            <label style={{ display: 'block', fontFamily: 'var(--head)', fontSize: 9, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 6 }}>Deliverable URL *</label>
+            <label style={{ display: 'block', fontFamily: 'var(--sans)', fontSize: 11, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 6 }}>Deliverable URL *</label>
             <input type="url" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://drive.google.com/..." style={inputStyle} onFocus={e => e.target.style.borderColor = '#F2CD1A'} onBlur={e => e.target.style.borderColor = 'var(--b2)'} />
           </div>
           <div>
-            <label style={{ display: 'block', fontFamily: 'var(--head)', fontSize: 9, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 6 }}>Label (optional)</label>
+            <label style={{ display: 'block', fontFamily: 'var(--sans)', fontSize: 11, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 6 }}>Label (optional)</label>
             <input type="text" value={label} onChange={e => setLabel(e.target.value)} placeholder="e.g. Final designs, Video edit v2" style={inputStyle} onFocus={e => e.target.style.borderColor = '#F2CD1A'} onBlur={e => e.target.style.borderColor = 'var(--b2)'} />
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={submit} disabled={submitting} style={{ background: '#F2CD1A', color: '#080808', border: 'none', borderRadius: 6, padding: '8px 16px', fontFamily: 'var(--head)', fontWeight: 700, fontSize: 10, letterSpacing: '.15em', textTransform: 'uppercase', cursor: 'pointer', opacity: submitting ? 0.4 : 1 }}>
+            <button onClick={submit} disabled={submitting} style={{ background: '#F2CD1A', color: 'var(--fg-accent)', border: 'none', borderRadius: 6, padding: '8px 16px', fontFamily: 'var(--head)', fontWeight: 700, fontSize: 11, letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', opacity: submitting ? 0.4 : 1 }}>
               {submitting ? 'Submitting...' : 'Submit for Review'}
             </button>
-            <button onClick={() => setOpen(false)} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer' }}>Cancel</button>
+            <button onClick={() => setOpen(false)} style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer' }}>Cancel</button>
           </div>
         </div>
       )}
@@ -734,14 +734,14 @@ function WorkApprovalSection({ task, session, onUpdate, onClose, onError }) {
   return (
     <Section title="Review Submitted Work">
       <div style={{ background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.25)', borderRadius: 6, padding: 12, marginBottom: 12 }}>
-        <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: '#22d3ee' }}>⏳ Work has been submitted for your review</p>
+        <p style={{ fontFamily: 'var(--sans)', fontSize: 11, color: '#22d3ee' }}>⏳ Work has been submitted for your review</p>
       </div>
       {!decision ? (
         <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={() => setDecision('approve')} style={{ flex: 1, padding: '8px 0', fontFamily: 'var(--head)', fontSize: 10, fontWeight: 700, letterSpacing: '.15em', textTransform: 'uppercase', borderRadius: 6, border: '1px solid rgba(34,197,94,0.4)', color: 'var(--green)', background: 'transparent', cursor: 'pointer' }}>
+          <button onClick={() => setDecision('approve')} style={{ flex: 1, padding: '8px 0', fontFamily: 'var(--head)', fontSize: 11, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', borderRadius: 6, border: '1px solid rgba(34,197,94,0.4)', color: 'var(--green)', background: 'transparent', cursor: 'pointer' }}>
             Approve
           </button>
-          <button onClick={() => setDecision('reject')} style={{ flex: 1, padding: '8px 0', fontFamily: 'var(--head)', fontSize: 10, fontWeight: 700, letterSpacing: '.15em', textTransform: 'uppercase', borderRadius: 6, border: '1px solid rgba(222,42,42,0.4)', color: 'var(--red)', background: 'transparent', cursor: 'pointer' }}>
+          <button onClick={() => setDecision('reject')} style={{ flex: 1, padding: '8px 0', fontFamily: 'var(--head)', fontSize: 11, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', borderRadius: 6, border: '1px solid rgba(222,42,42,0.4)', color: 'var(--red)', background: 'transparent', cursor: 'pointer' }}>
             Request Revision
           </button>
         </div>
@@ -751,19 +751,19 @@ function WorkApprovalSection({ task, session, onUpdate, onClose, onError }) {
             value={feedback}
             onChange={e => setFeedback(e.target.value)}
             placeholder={decision === 'approve' ? 'Optional note for the team member...' : 'What needs to be revised? (required)'}
-            style={{ width: '100%', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 6, padding: '8px 12px', color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 12, outline: 'none', resize: 'none', height: 80 }}
+            style={{ width: '100%', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 6, padding: '8px 12px', color: 'var(--text)', fontFamily: 'var(--sans)', fontSize: 12, outline: 'none', resize: 'none', height: 80 }}
             onFocus={e => e.target.style.borderColor = '#F2CD1A'}
             onBlur={e => e.target.style.borderColor = 'var(--b2)'}
           />
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={submit} disabled={submitting} style={{
-              flex: 1, padding: '8px 0', fontFamily: 'var(--head)', fontSize: 10, fontWeight: 700, letterSpacing: '.15em', textTransform: 'uppercase', borderRadius: 6, cursor: 'pointer', opacity: submitting ? 0.4 : 1, border: 'none',
+              flex: 1, padding: '8px 0', fontFamily: 'var(--head)', fontSize: 11, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', borderRadius: 6, cursor: 'pointer', opacity: submitting ? 0.4 : 1, border: 'none',
               background: decision === 'approve' ? 'rgba(34,197,94,0.15)' : 'rgba(222,42,42,0.15)',
               color: decision === 'approve' ? 'var(--green)' : 'var(--red)',
             }}>
               {submitting ? 'Submitting...' : decision === 'approve' ? 'Confirm Approval' : 'Send for Revision'}
             </button>
-            <button onClick={() => { setDecision(null); setFeedback(''); }} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer', padding: '0 12px' }}>
+            <button onClick={() => { setDecision(null); setFeedback(''); }} style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer', padding: '0 12px' }}>
               Back
             </button>
           </div>
@@ -800,7 +800,7 @@ function AttachmentsSection({ taskId }) {
             href={a.url}
             target="_blank"
             rel="noopener noreferrer"
-            style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)', textDecoration: 'none', transition: 'color .15s' }}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t2)', textDecoration: 'none', transition: 'color .15s' }}
             onMouseEnter={e => e.currentTarget.style.color = 'var(--text)'}
             onMouseLeave={e => e.currentTarget.style.color = 'var(--t2)'}
           >
@@ -834,13 +834,13 @@ function ActivityFeed({ activity, taskId, session, onAddComment }) {
 
   return (
     <div style={{ marginTop: 24, borderTop: '1px solid var(--b1)', paddingTop: 20 }}>
-      <div style={{ fontFamily: 'var(--head)', fontSize: 10, letterSpacing: '.25em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 16, fontWeight: 700 }}>
+      <div style={{ fontFamily: 'var(--sans)', fontSize: 11, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 16, fontWeight: 600 }}>
         Activity
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column' }}>
         {activity.length === 0 && (
-          <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginBottom: 16 }}>No activity yet.</p>
+          <p style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', marginBottom: 16 }}>No activity yet.</p>
         )}
         {activity.map((entry, i) => (
           <ActivityEntry key={entry.id} entry={entry} isLast={i === activity.length - 1} />
@@ -856,14 +856,14 @@ function ActivityFeed({ activity, taskId, session, onAddComment }) {
           rows={2}
           style={{
             background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 6,
-            padding: '8px 12px', color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 12,
+            padding: '8px 12px', color: 'var(--text)', fontFamily: 'var(--sans)', fontSize: 12,
             resize: 'vertical', outline: 'none', width: '100%',
           }}
           onFocus={e => e.target.style.borderColor = '#F2CD1A'}
           onBlur={e => e.target.style.borderColor = 'var(--b2)'}
         />
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>Cmd+Enter to submit</span>
+          <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)' }}>Cmd+Enter to submit</span>
           <button
             onClick={handleSubmit}
             disabled={submitting || !comment.trim()}
@@ -871,7 +871,7 @@ function ActivityFeed({ activity, taskId, session, onAddComment }) {
               background: comment.trim() ? '#F2CD1A' : 'var(--s3)',
               color: comment.trim() ? '#080808' : 'var(--t3)',
               border: 'none', borderRadius: 4, padding: '6px 14px',
-              fontFamily: 'var(--head)', fontWeight: 700, fontSize: 10, letterSpacing: '.15em', textTransform: 'uppercase',
+              fontFamily: 'var(--head)', fontWeight: 700, fontSize: 11, letterSpacing: '.1em', textTransform: 'uppercase',
               cursor: comment.trim() ? 'pointer' : 'not-allowed',
             }}
           >
@@ -901,17 +901,17 @@ function ActivityEntry({ entry, isLast }) {
         background: isComment ? 'var(--s3)' : 'var(--s1)',
         border: `1px solid ${isComment ? 'var(--b2)' : 'var(--b1)'}`,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: 9, color: 'var(--t2)',
+        fontSize: 11, color: 'var(--t2)',
       }}>
         {getActivityIcon(entry.event_type)}
       </div>
       <div style={{ flex: 1, paddingTop: 2 }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 3 }}>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', fontWeight: 600 }}>{name}</span>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>{time}</span>
+          <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--text)', fontWeight: 600 }}>{name}</span>
+          <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)' }}>{time}</span>
         </div>
         <div style={{
-          fontFamily: 'var(--mono)', fontSize: 11, lineHeight: 1.5,
+          fontFamily: 'var(--sans)', fontSize: 11, lineHeight: 1.5,
           color: isComment ? 'var(--text)' : 'var(--t2)',
           background: isComment ? 'var(--s2)' : 'transparent',
           borderRadius: isComment ? 4 : 0,
@@ -977,50 +977,50 @@ function DeliverTaskSection({ task, session, onUpdate, onError }) {
       {!open ? (
         <button
           onClick={() => setOpen(true)}
-          style={{ background: '#F2CD1A', color: '#080808', border: 'none', borderRadius: 4, padding: '7px 14px', fontFamily: 'var(--head)', fontSize: 10, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer' }}
+          style={{ background: '#F2CD1A', color: 'var(--fg-accent)', border: 'none', borderRadius: 4, padding: '7px 14px', fontFamily: 'var(--head)', fontSize: 11, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', cursor: 'pointer' }}
         >
           Deliver →
         </button>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div>
-            <label style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', display: 'block', marginBottom: 4 }}>Message to requester (optional)</label>
+            <label style={{ fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--t3)', display: 'block', marginBottom: 4 }}>Message to requester (optional)</label>
             <textarea
               value={message}
               onChange={e => setMessage(e.target.value)}
               placeholder="e.g. Here's the v1. We went with a white background as discussed."
-              style={{ width: '100%', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '8px 10px', color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 11, outline: 'none', resize: 'none', height: 72, boxSizing: 'border-box' }}
+              style={{ width: '100%', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '8px 10px', color: 'var(--text)', fontFamily: 'var(--sans)', fontSize: 11, outline: 'none', resize: 'none', height: 72, boxSizing: 'border-box' }}
             />
           </div>
           <div>
-            <label style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', display: 'block', marginBottom: 4 }}>Deliverable URL (optional)</label>
+            <label style={{ fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--t3)', display: 'block', marginBottom: 4 }}>Deliverable URL (optional)</label>
             <input
               type="url"
               value={url}
               onChange={e => setUrl(e.target.value)}
               placeholder="https://drive.google.com/... or Figma link"
-              style={{ width: '100%', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '7px 10px', color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 11, outline: 'none', boxSizing: 'border-box' }}
+              style={{ width: '100%', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '7px 10px', color: 'var(--text)', fontFamily: 'var(--sans)', fontSize: 11, outline: 'none', boxSizing: 'border-box' }}
             />
           </div>
           <div>
-            <label style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', display: 'block', marginBottom: 4 }}>Label (optional)</label>
+            <label style={{ fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--t3)', display: 'block', marginBottom: 4 }}>Label (optional)</label>
             <input
               type="text"
               value={label}
               onChange={e => setLabel(e.target.value)}
               placeholder="e.g. Final assets v1"
-              style={{ width: '100%', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '7px 10px', color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 11, outline: 'none', boxSizing: 'border-box' }}
+              style={{ width: '100%', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '7px 10px', color: 'var(--text)', fontFamily: 'var(--sans)', fontSize: 11, outline: 'none', boxSizing: 'border-box' }}
             />
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button
               onClick={deliver}
               disabled={delivering}
-              style={{ background: '#F2CD1A', color: '#080808', border: 'none', borderRadius: 4, padding: '7px 14px', fontFamily: 'var(--head)', fontSize: 10, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', opacity: delivering ? 0.5 : 1 }}
+              style={{ background: '#F2CD1A', color: 'var(--fg-accent)', border: 'none', borderRadius: 4, padding: '7px 14px', fontFamily: 'var(--head)', fontSize: 11, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', cursor: 'pointer', opacity: delivering ? 0.5 : 1 }}
             >
               {delivering ? 'Delivering...' : 'Confirm Delivery'}
             </button>
-            <button onClick={() => setOpen(false)} style={{ background: 'none', border: 'none', color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer' }}>Cancel</button>
+            <button onClick={() => setOpen(false)} style={{ background: 'none', border: 'none', color: 'var(--t3)', fontFamily: 'var(--sans)', fontSize: 11, cursor: 'pointer' }}>Cancel</button>
           </div>
         </div>
       )}
@@ -1052,13 +1052,13 @@ function MarkDoneSection({ task, session, onUpdate, onClose, onError }) {
       {!open ? (
         <button
           onClick={() => setOpen(true)}
-          style={{ background: 'none', border: '1px solid var(--b2)', borderRadius: 4, padding: '6px 12px', color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer' }}
+          style={{ background: 'none', border: '1px solid var(--b2)', borderRadius: 4, padding: '6px 12px', color: 'var(--t2)', fontFamily: 'var(--sans)', fontSize: 11, cursor: 'pointer' }}
         >
           Mark as Done
         </button>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', margin: 0 }}>
+          <p style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', margin: 0 }}>
             This closes the task regardless of requester feedback.
           </p>
           <input
@@ -1066,17 +1066,17 @@ function MarkDoneSection({ task, session, onUpdate, onClose, onError }) {
             value={reason}
             onChange={e => setReason(e.target.value)}
             placeholder="Reason (optional)"
-            style={{ width: '100%', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '7px 10px', color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 11, outline: 'none', boxSizing: 'border-box' }}
+            style={{ width: '100%', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '7px 10px', color: 'var(--text)', fontFamily: 'var(--sans)', fontSize: 11, outline: 'none', boxSizing: 'border-box' }}
           />
           <div style={{ display: 'flex', gap: 8 }}>
             <button
               onClick={markDone}
               disabled={saving}
-              style={{ background: 'var(--s3)', border: '1px solid var(--b2)', borderRadius: 4, padding: '6px 12px', color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer', opacity: saving ? 0.5 : 1 }}
+              style={{ background: 'var(--s3)', border: '1px solid var(--b2)', borderRadius: 4, padding: '6px 12px', color: 'var(--text)', fontFamily: 'var(--sans)', fontSize: 11, cursor: 'pointer', opacity: saving ? 0.5 : 1 }}
             >
               {saving ? 'Saving...' : 'Confirm'}
             </button>
-            <button onClick={() => setOpen(false)} style={{ background: 'none', border: 'none', color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer' }}>Cancel</button>
+            <button onClick={() => setOpen(false)} style={{ background: 'none', border: 'none', color: 'var(--t3)', fontFamily: 'var(--sans)', fontSize: 11, cursor: 'pointer' }}>Cancel</button>
           </div>
         </div>
       )}

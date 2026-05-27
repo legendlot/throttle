@@ -114,7 +114,7 @@ export default function RequestsPage() {
               {isApprover ? 'All Requests' : 'My Requests'}
             </h1>
             <p style={{
-              fontFamily: 'var(--mono)',
+              fontFamily: 'var(--sans)',
               fontSize: 11,
               color: 'var(--t3)',
               marginTop: 4,
@@ -134,7 +134,7 @@ export default function RequestsPage() {
                   color: 'var(--t2)',
                   border: '1px solid var(--b2)',
                   borderRadius: 6,
-                  fontFamily: 'var(--mono)',
+                  fontFamily: 'var(--sans)',
                   fontSize: 11,
                   letterSpacing: '.08em',
                   padding: '8px 16px',
@@ -172,7 +172,7 @@ export default function RequestsPage() {
               key={f.value}
               onClick={() => setFilter(f.value)}
               style={{
-                fontFamily: 'var(--mono)',
+                fontFamily: 'var(--sans)',
                 fontSize: 11,
                 padding: '6px 12px',
                 borderRadius: 20,
@@ -192,7 +192,7 @@ export default function RequestsPage() {
         {loading ? (
           <div style={{
             color: 'var(--t3)',
-            fontFamily: 'var(--mono)',
+            fontFamily: 'var(--sans)',
             fontSize: 12,
             padding: '48px 0',
             textAlign: 'center'
@@ -201,7 +201,7 @@ export default function RequestsPage() {
           <div style={{ textAlign: 'center', padding: '80px 0' }}>
             <p style={{
               color: 'var(--t3)',
-              fontFamily: 'var(--mono)',
+              fontFamily: 'var(--sans)',
               fontSize: 12,
               marginBottom: 16
             }}>No requests yet</p>
@@ -211,7 +211,7 @@ export default function RequestsPage() {
                 background: 'none',
                 border: 'none',
                 color: 'var(--t2)',
-                fontFamily: 'var(--mono)',
+                fontFamily: 'var(--sans)',
                 fontSize: 12,
                 cursor: 'pointer'
               }}
@@ -235,18 +235,20 @@ export default function RequestsPage() {
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                       <span style={{
-                        fontFamily: 'var(--mono)',
-                        fontSize: 9,
+                        fontFamily: 'var(--sans)',
+                        fontSize: 11,
                         background: 'var(--s3)',
                         color: 'var(--t3)',
-                        padding: '2px 7px',
-                        borderRadius: 3
+                        padding: '2px 8px',
+                        borderRadius: 3,
+                        fontWeight: 500,
+                        letterSpacing: '.04em',
                       }}>
                         {getTypeLabel(req.type)}
                       </span>
                       {req.is_product_scoped && (
                         <span style={{
-                          fontFamily: 'var(--mono)',
+                          fontFamily: 'var(--sans)',
                           fontSize: 11,
                           color: 'var(--t3)'
                         }}>
@@ -255,7 +257,7 @@ export default function RequestsPage() {
                       )}
                     </div>
                     <p style={{
-                      fontFamily: 'var(--mono)',
+                      fontFamily: 'var(--sans)',
                       color: 'var(--text)',
                       fontWeight: 500,
                       fontSize: 13,
@@ -266,7 +268,7 @@ export default function RequestsPage() {
                     }}>{req.title}</p>
                     {req.review_note && (
                       <p style={{
-                        fontFamily: 'var(--mono)',
+                        fontFamily: 'var(--sans)',
                         color: 'var(--t3)',
                         fontSize: 11,
                         marginTop: 4,
@@ -284,7 +286,7 @@ export default function RequestsPage() {
                     {deliveredRequestIds.has(req.id) && (
                       <a
                         href={`/requests/feedback/?id=${req.id}`}
-                        style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(242,205,26,0.12)', border: '1px solid rgba(242,205,26,0.35)', borderRadius: 4, padding: '3px 10px', fontFamily: 'var(--mono)', fontSize: 10, color: '#F2CD1A', textDecoration: 'none', letterSpacing: '.06em', textTransform: 'uppercase' }}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(242,205,26,0.12)', border: '1px solid rgba(242,205,26,0.35)', borderRadius: 4, padding: '3px 10px', fontFamily: 'var(--sans)', fontSize: 10, color: '#F2CD1A', textDecoration: 'none', letterSpacing: '.06em', textTransform: 'uppercase' }}
                       >
                         📦 Delivered — Give Feedback
                       </a>
@@ -298,7 +300,7 @@ export default function RequestsPage() {
                           border: '1px solid rgba(242,205,26,0.3)',
                           borderRadius: 4,
                           padding: '3px 10px',
-                          fontFamily: 'var(--mono)',
+                          fontFamily: 'var(--sans)',
                           fontSize: 10,
                           cursor: 'pointer',
                         }}
@@ -315,7 +317,7 @@ export default function RequestsPage() {
                           border: '1px solid var(--b2)',
                           borderRadius: 4,
                           padding: '3px 10px',
-                          fontFamily: 'var(--mono)',
+                          fontFamily: 'var(--sans)',
                           fontSize: 10,
                           cursor: 'pointer',
                         }}
@@ -324,7 +326,7 @@ export default function RequestsPage() {
                       </button>
                     )}
                     <span style={{
-                      fontFamily: 'var(--mono)',
+                      fontFamily: 'var(--sans)',
                       fontSize: 10,
                       color: stageColor(req),
                       letterSpacing: '.04em',
@@ -333,7 +335,7 @@ export default function RequestsPage() {
                       {timeInStage(req)}
                     </span>
                     <span style={{
-                      fontFamily: 'var(--mono)',
+                      fontFamily: 'var(--sans)',
                       color: 'var(--t3)',
                       fontSize: 11
                     }}>

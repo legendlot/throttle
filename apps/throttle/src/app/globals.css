@@ -1,33 +1,36 @@
-@import url('https://fonts.googleapis.com/css2?family=Tomorrow:wght@400;600;700;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Tomorrow:wght@400;600;700;900&family=Inter:wght@400;500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --yellow:  #F2CD1A;
-  --blue:    #213CE2;
-  --red:     #DE2A2A;
-  --green:   #22c55e;
-  --orange:  #f59e0b;
-  --amber:   #f59e0b;
+  --yellow:     #F2CD1A;
+  --blue:       #213CE2;
+  --red:        #DE2A2A;
+  --green:      #22c55e;
+  --orange:     #f97316;
+  --amber:      #f59e0b;
 
-  --bg:      #080808;   /* page background */
-  --s1:      #0f0f0f;   /* surface 1 — nav, cards, panels */
-  --s2:      #151515;   /* surface 2 — input backgrounds */
-  --s3:      #1e1e1e;   /* surface 3 — hover states */
-  --s4:      #252525;   /* surface 4 — selected/active backgrounds */
+  --bg:         #1f1f1f;   /* page background — lifted dark */
+  --s1:         #2a2a2a;   /* surface 1 — nav, cards, panels */
+  --s2:         #333333;   /* surface 2 — input backgrounds */
+  --s3:         #3c3c3c;   /* surface 3 — hover states */
+  --s4:         #444444;   /* surface 4 — selected/active backgrounds */
 
-  --b1:      #2a2a2a;   /* border 1 — default borders */
-  --b2:      #333;      /* border 2 — slightly stronger */
-  --b3:      #444;      /* border 3 — hover borders */
+  --b1:         #404040;   /* border 1 — default borders */
+  --b2:         #4a4a4a;   /* border 2 — slightly stronger */
+  --b3:         #555555;   /* border 3 — hover borders */
 
-  --text:    #f0f0f0;   /* primary text */
-  --t2:      #999;      /* secondary text */
-  --t3:      #555;      /* muted/placeholder text */
+  --text:       #f5f5f5;   /* primary text */
+  --t2:         #b0b0b0;   /* secondary text — 7.9:1 on --bg */
+  --t3:         #888888;   /* tertiary text — 4.65:1 on --bg, WCAG AA */
 
-  --mono:    'JetBrains Mono', monospace;
-  --head:    'Tomorrow', sans-serif;
+  --fg-accent:  #0a0a0a;   /* foreground on brand-yellow surfaces */
+
+  --sans:  'Inter', system-ui, sans-serif;
+  --mono:  'JetBrains Mono', ui-monospace, monospace;
+  --head:  'Tomorrow', sans-serif;
 }
 
 * { box-sizing: border-box; }
@@ -35,8 +38,8 @@
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: var(--mono);
-  font-size: 13px;
+  font-family: var(--sans);
+  font-size: 14px;
 }
 
 /* Scrollbar */

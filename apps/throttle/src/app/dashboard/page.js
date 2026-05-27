@@ -38,8 +38,8 @@ function StatCard({ label, value, bucket, color, onClick }) {
       style={{
         background: 'var(--s1)',
         border: '1px solid var(--b1)',
+        borderTop: `2px solid ${accent}`,
         borderRadius: 6,
-        borderLeft: `3px solid ${accent}`,
         padding: 16,
         display: 'flex',
         flexDirection: 'column',
@@ -49,8 +49,8 @@ function StatCard({ label, value, bucket, color, onClick }) {
       }}
       onClick={bucket ? onClick : undefined}
     >
-      <div style={{ fontFamily: 'var(--head)', fontWeight: 900, fontSize: 24, color: 'var(--text)' }}>{value}</div>
-      <div style={{ fontFamily: 'var(--head)', fontSize: 9, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--t3)', marginTop: 4 }}>{label}</div>
+      <div style={{ fontFamily: 'var(--head)', fontWeight: 700, fontSize: 28, color: 'var(--text)', lineHeight: 1 }}>{value}</div>
+      <div style={{ fontFamily: 'var(--sans)', fontSize: 11, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--t3)', marginTop: 8, fontWeight: 500 }}>{label}</div>
     </div>
   );
 }
@@ -69,7 +69,7 @@ function SprintSelector({ sprints, value, onChange }) {
         background: 'var(--s2)',
         border: '1px solid var(--b2)',
         borderRadius: 6,
-        fontFamily: 'var(--mono)',
+        fontFamily: 'var(--sans)',
         fontSize: 11,
         color: 'var(--t2)',
         padding: '6px 12px',
@@ -111,7 +111,7 @@ function DateRangePicker({ start, end, onChange }) {
     background: 'var(--s2)',
     border: '1px solid var(--b2)',
     borderRadius: 6,
-    fontFamily: 'var(--mono)',
+    fontFamily: 'var(--sans)',
     fontSize: 11,
     color: 'var(--t2)',
     padding: '6px 8px',
@@ -126,7 +126,7 @@ function DateRangePicker({ start, end, onChange }) {
         onChange={e => setLocalStart(e.target.value)}
         style={dateInputStyle}
       />
-      <span style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 11 }}>to</span>
+      <span style={{ color: 'var(--t3)', fontFamily: 'var(--sans)', fontSize: 11 }}>to</span>
       <input
         type="date"
         value={localEnd}
@@ -140,7 +140,7 @@ function DateRangePicker({ start, end, onChange }) {
           color: 'var(--t2)',
           border: '1px solid var(--b2)',
           borderRadius: 6,
-          fontFamily: 'var(--mono)',
+          fontFamily: 'var(--sans)',
           fontSize: 11,
           padding: '6px 12px',
           cursor: 'pointer',
@@ -148,7 +148,7 @@ function DateRangePicker({ start, end, onChange }) {
       >
         Apply
       </button>
-      {error && <span style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 11 }}>{error}</span>}
+      {error && <span style={{ color: 'var(--red)', fontFamily: 'var(--sans)', fontSize: 11 }}>{error}</span>}
     </div>
   );
 }
@@ -167,7 +167,7 @@ function ViewToggle({ value, onChange }) {
           onClick={() => onChange(v.value)}
           style={{
             padding: '6px 12px',
-            fontFamily: 'var(--mono)',
+            fontFamily: 'var(--sans)',
             fontSize: 11,
             fontWeight: 500,
             borderRadius: 4,
@@ -188,12 +188,12 @@ function ViewToggle({ value, onChange }) {
 // ── Table shared styles ─────────────────────────────────────────────────────
 
 const thStyle = {
-  fontFamily: 'var(--head)',
-  fontSize: 9,
-  letterSpacing: '.2em',
+  fontFamily: 'var(--sans)',
+  fontSize: 11,
+  letterSpacing: '.08em',
   textTransform: 'uppercase',
   color: 'var(--t3)',
-  fontWeight: 700,
+  fontWeight: 600,
   padding: '8px 8px',
   whiteSpace: 'nowrap',
 };
@@ -203,7 +203,7 @@ const thStyleCenter = { ...thStyle, textAlign: 'center' };
 const thStyleTotal = { ...thStyle, textAlign: 'center', color: 'var(--t2)', padding: '8px 12px' };
 
 const cellStyle = {
-  fontFamily: 'var(--mono)',
+  fontFamily: 'var(--sans)',
   fontSize: 12,
   color: 'var(--t2)',
   textAlign: 'center',
@@ -233,7 +233,7 @@ const totalCellStyle = {
 
 function ByDateTable({ rows }) {
   if (!rows || rows.length === 0) {
-    return <p style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12, padding: '40px 0', textAlign: 'center' }}>No deliverables completed in this date range.</p>;
+    return <p style={{ color: 'var(--t3)', fontFamily: 'var(--sans)', fontSize: 12, padding: '40px 0', textAlign: 'center' }}>No deliverables completed in this date range.</p>;
   }
 
   // Pivot: group by completed_date, count per deliverable_type
@@ -316,7 +316,7 @@ function ByPersonTable({ rows }) {
   const [collapsed, setCollapsed] = useState({});
 
   if (!rows || rows.length === 0) {
-    return <p style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12, padding: '40px 0', textAlign: 'center' }}>No deliverables completed in this date range.</p>;
+    return <p style={{ color: 'var(--t3)', fontFamily: 'var(--sans)', fontSize: 12, padding: '40px 0', textAlign: 'center' }}>No deliverables completed in this date range.</p>;
   }
 
   // Group by assignee_id
@@ -368,12 +368,12 @@ function ByPersonTable({ rows }) {
               >
                 <td style={{ padding: '10px 12px' }} colSpan={DEL_COLS.length + 2}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 11 }}>{isCollapsed ? '\u25B6' : '\u25BC'}</span>
-                    <span style={{ fontFamily: 'var(--mono)', fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>{person.name}</span>
+                    <span style={{ color: 'var(--t3)', fontFamily: 'var(--sans)', fontSize: 11 }}>{isCollapsed ? '\u25B6' : '\u25BC'}</span>
+                    <span style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>{person.name}</span>
                     {person.discipline && (
-                      <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', textTransform: 'capitalize' }}>({person.discipline.replace(/_/g, ' ')})</span>
+                      <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', textTransform: 'capitalize' }}>({person.discipline.replace(/_/g, ' ')})</span>
                     )}
-                    <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginLeft: 'auto' }}>{personTotal} deliverable{personTotal !== 1 ? 's' : ''}</span>
+                    <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', marginLeft: 'auto' }}>{personTotal} deliverable{personTotal !== 1 ? 's' : ''}</span>
                   </div>
                 </td>
               </tr>,
@@ -419,7 +419,7 @@ const WORKLOAD_STAGES = [
 
 function WorkloadGrid({ rows, highlightId }) {
   if (!rows || rows.length === 0) {
-    return <p style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12, padding: '40px 0', textAlign: 'center' }}>No workload data for this sprint.</p>;
+    return <p style={{ color: 'var(--t3)', fontFamily: 'var(--sans)', fontSize: 12, padding: '40px 0', textAlign: 'center' }}>No workload data for this sprint.</p>;
   }
 
   // Group by person, sum task_count per stage
@@ -449,9 +449,9 @@ function WorkloadGrid({ rows, highlightId }) {
             <tr key={person.id} style={{ borderTop: '1px solid var(--b1)', opacity: highlightId && person.id !== highlightId ? 0.4 : 1, background: highlightId && person.id === highlightId ? 'var(--s3)' : (i % 2 !== 0 ? 'var(--s1)' : 'transparent') }}>
               <td style={{ padding: '10px 12px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 12, fontWeight: 500, color: 'var(--text)' }}>{person.name}</span>
+                  <span style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 500, color: 'var(--text)' }}>{person.name}</span>
                   {person.discipline && (
-                    <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', textTransform: 'capitalize' }}>({person.discipline.replace(/_/g, ' ')})</span>
+                    <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', textTransform: 'capitalize' }}>({person.discipline.replace(/_/g, ' ')})</span>
                   )}
                 </div>
               </td>
@@ -549,7 +549,7 @@ function ExportButton({ deliverables, dateRange, viewMode }) {
         color: 'var(--t2)',
         border: '1px solid var(--b2)',
         borderRadius: 6,
-        fontFamily: 'var(--mono)',
+        fontFamily: 'var(--sans)',
         fontSize: 11,
         padding: '6px 12px',
         cursor: 'pointer',
@@ -565,10 +565,10 @@ function ExportButton({ deliverables, dateRange, viewMode }) {
 function PersonFilter({ members, selected, onChange }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', letterSpacing: '.1em', textTransform: 'uppercase' }}>Person</span>
-      <button onClick={() => onChange(null)} style={{ background: selected === null ? '#F2CD1A' : 'var(--s2)', color: selected === null ? '#080808' : 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 10px', fontFamily: 'var(--mono)', fontSize: 10, cursor: 'pointer' }}>All</button>
+      <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', letterSpacing: '.06em', textTransform: 'uppercase', fontWeight: 500 }}>Person</span>
+      <button onClick={() => onChange(null)} style={{ background: selected === null ? '#F2CD1A' : 'var(--s2)', color: selected === null ? 'var(--fg-accent)' : 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 10px', fontFamily: 'var(--sans)', fontSize: 12, cursor: 'pointer' }}>All</button>
       {members.map(m => (
-        <button key={m.id} onClick={() => onChange(m.id)} style={{ background: selected === m.id ? '#F2CD1A' : 'var(--s2)', color: selected === m.id ? '#080808' : 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 10px', fontFamily: 'var(--mono)', fontSize: 10, cursor: 'pointer' }}>{m.name.split(' ')[0]}</button>
+        <button key={m.id} onClick={() => onChange(m.id)} style={{ background: selected === m.id ? '#F2CD1A' : 'var(--s2)', color: selected === m.id ? 'var(--fg-accent)' : 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 10px', fontFamily: 'var(--sans)', fontSize: 12, cursor: 'pointer' }}>{m.name.split(' ')[0]}</button>
       ))}
     </div>
   );
@@ -690,7 +690,7 @@ export default function DashboardPage() {
       <Layout>
         <div style={{ maxWidth: 640, margin: '0 auto', padding: '80px 0', textAlign: 'center' }}>
           <h1 style={{ fontFamily: 'var(--head)', fontWeight: 900, fontSize: 18, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--text)', marginBottom: 8 }}>Access Restricted</h1>
-          <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>This view is for brand team managers only.</p>
+          <p style={{ fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--t3)' }}>This view is for brand team managers only.</p>
         </div>
       </Layout>
     );
@@ -702,7 +702,7 @@ export default function DashboardPage() {
       <Layout>
         <div style={{ maxWidth: 640, margin: '0 auto', padding: '80px 0', textAlign: 'center' }}>
           <h1 style={{ fontFamily: 'var(--head)', fontWeight: 900, fontSize: 18, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--text)', marginBottom: 8 }}>No Sprints Found</h1>
-          <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>Create your first sprint to see dashboard data.</p>
+          <p style={{ fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--t3)' }}>Create your first sprint to see dashboard data.</p>
         </div>
       </Layout>
     );
@@ -730,7 +730,7 @@ export default function DashboardPage() {
 
         {loading ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '80px 0' }}>
-            <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', letterSpacing: '.2em', textTransform: 'uppercase' }}>Loading dashboard...</p>
+            <p style={{ fontFamily: 'var(--sans)', fontSize: 13, color: 'var(--t3)' }}>Loading dashboard…</p>
           </div>
         ) : (
           <>
@@ -809,20 +809,20 @@ export default function DashboardPage() {
                         onClick={() => setCollabOpen(o => !o)}
                         style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: collabOpen ? 10 : 0 }}
                       >
-                        <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', letterSpacing: '.1em', textTransform: 'uppercase' }}>
+                        <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', letterSpacing: '.06em', textTransform: 'uppercase', fontWeight: 500 }}>
                           Collaborator contributions ({collaborations.length})
                         </span>
-                        <span style={{ color: 'var(--t3)', fontSize: 10 }}>{collabOpen ? '▲' : '▼'}</span>
+                        <span style={{ color: 'var(--t3)', fontSize: 11 }}>{collabOpen ? '▲' : '▼'}</span>
                       </div>
                       {collabOpen && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                           {collaborations.map(c => (
                             <div key={`collab-${c.id}`} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid var(--b1)' }}>
-                              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)', flex: 1 }}>{c.title}</span>
-                              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginLeft: 12 }}>
+                              <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t2)', flex: 1 }}>{c.title}</span>
+                              <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', marginLeft: 12 }}>
                                 {c.collaborators?.map(col => col.name).join(', ')}
                               </span>
-                              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginLeft: 12, flexShrink: 0 }}>{c.completed_date}</span>
+                              <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', marginLeft: 12, flexShrink: 0 }}>{c.completed_date}</span>
                             </div>
                           ))}
                         </div>

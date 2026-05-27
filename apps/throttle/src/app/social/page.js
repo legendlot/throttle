@@ -301,8 +301,8 @@ export default function SocialPage() {
               {tab.key === 'monitor' && atRiskCount > 0 && (
                 <span style={{
                   marginLeft: 6, background: '#e04040', color: '#fff',
-                  fontSize: 9, padding: '1px 5px', borderRadius: 8,
-                  verticalAlign: 'middle', letterSpacing: 0,
+                  fontSize: 11, padding: '1px 6px', borderRadius: 8,
+                  verticalAlign: 'middle', letterSpacing: 0, fontWeight: 600,
                 }}>
                   {atRiskCount}
                 </span>
@@ -322,7 +322,7 @@ export default function SocialPage() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <button onClick={prevMonth} style={{
                 background: 'transparent', border: '1px solid var(--b1)',
-                color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 13,
+                color: 'var(--t2)', fontFamily: 'var(--sans)', fontSize: 13,
                 padding: '4px 10px', borderRadius: 4, cursor: 'pointer',
               }}>←</button>
               <h1 style={{
@@ -333,11 +333,11 @@ export default function SocialPage() {
               </h1>
               <button onClick={nextMonth} style={{
                 background: 'transparent', border: '1px solid var(--b1)',
-                color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 13,
+                color: 'var(--t2)', fontFamily: 'var(--sans)', fontSize: 13,
                 padding: '4px 10px', borderRadius: 4, cursor: 'pointer',
               }}>→</button>
               {loading && (
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>
+                <span style={{ fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--t3)' }}>
                   loading…
                 </span>
               )}
@@ -364,7 +364,7 @@ export default function SocialPage() {
             {DOW_NAMES.map(d => (
               <div key={d} style={{
                 background: 'var(--s2)',
-                fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '.15em',
+                fontFamily: 'var(--sans)', fontSize: 10, letterSpacing: '.15em',
                 textTransform: 'uppercase', color: 'var(--t3)',
                 padding: '6px 10px', textAlign: 'center',
               }}>
@@ -390,7 +390,7 @@ export default function SocialPage() {
                   }}
                 >
                   <div style={{
-                    fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t2)',
+                    fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--t2)',
                     letterSpacing: '.08em', marginBottom: 2,
                   }}>
                     {dayNum}
@@ -414,7 +414,7 @@ export default function SocialPage() {
                         }} />
                       ))}
                       <span style={{
-                        color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 11,
+                        color: 'var(--text)', fontFamily: 'var(--sans)', fontSize: 11,
                         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                         flex: 1, minWidth: 0,
                       }}>
@@ -427,7 +427,7 @@ export default function SocialPage() {
                     <button
                       onClick={(e) => { e.stopPropagation(); openCreate(isoForDay); }}
                       style={{
-                        fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)',
+                        fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--t3)',
                         background: 'transparent', border: 'none', cursor: 'pointer',
                         padding: '2px 0', textAlign: 'left', letterSpacing: '.05em',
                       }}
@@ -505,13 +505,13 @@ function CampaignsTab({
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         marginBottom: 16,
       }}>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>
+        <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)' }}>
           {campaigns.length} campaign{campaigns.length === 1 ? '' : 's'}
         </span>
         <div style={{ display: 'flex', gap: 8 }}>
           <button onClick={onReload} style={{
             background: 'transparent', border: '1px solid var(--b1)',
-            color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 11,
+            color: 'var(--t2)', fontFamily: 'var(--sans)', fontSize: 11,
             padding: '4px 10px', borderRadius: 4, cursor: 'pointer',
           }}>
             ↻ Refresh
@@ -556,7 +556,7 @@ function CampaignsTab({
                 onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
                 rows={2}
                 placeholder="Optional description"
-                style={{ ...CAMPAIGN_INPUT_STYLE, resize: 'vertical', fontFamily: 'var(--mono)' }}
+                style={{ ...CAMPAIGN_INPUT_STYLE, resize: 'vertical', fontFamily: 'var(--sans)' }}
               />
             </CampaignField>
             <CampaignField label="Start date">
@@ -592,7 +592,7 @@ function CampaignsTab({
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
             <button onClick={onCancel} style={{
               background: 'transparent', border: '1px solid var(--b1)',
-              color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 12,
+              color: 'var(--t2)', fontFamily: 'var(--sans)', fontSize: 12,
               padding: '6px 14px', borderRadius: 4, cursor: 'pointer',
             }}>
               Cancel
@@ -616,13 +616,13 @@ function CampaignsTab({
       )}
 
       {loading && (
-        <div style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12, padding: '20px 0' }}>
+        <div style={{ color: 'var(--t3)', fontFamily: 'var(--sans)', fontSize: 12, padding: '20px 0' }}>
           loading…
         </div>
       )}
       {!loading && campaigns.length === 0 && (
         <div style={{
-          color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12,
+          color: 'var(--t3)', fontFamily: 'var(--sans)', fontSize: 12,
           padding: '40px 0', textAlign: 'center',
         }}>
           No campaigns yet
@@ -648,7 +648,7 @@ function CampaignsTab({
             )}
             {(c.start_date || c.end_date) && (
               <div style={{
-                fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)',
+                fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--t3)',
                 marginTop: 4, letterSpacing: '.05em',
               }}>
                 {c.start_date || '—'} → {c.end_date || 'ongoing'}
@@ -656,7 +656,7 @@ function CampaignsTab({
             )}
           </div>
           <span style={{
-            fontFamily: 'var(--mono)', fontSize: 10,
+            fontFamily: 'var(--sans)', fontSize: 10,
             padding: '2px 8px', borderRadius: 3,
             background: CAMPAIGN_STATUS_COLOR[c.status] ?? 'var(--b1)',
             color: '#fff', textTransform: 'uppercase', letterSpacing: '.1em',
@@ -669,7 +669,7 @@ function CampaignsTab({
               onClick={() => onEdit(c)}
               style={{
                 background: 'transparent', border: '1px solid var(--b1)',
-                color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 11,
+                color: 'var(--t2)', fontFamily: 'var(--sans)', fontSize: 11,
                 padding: '4px 10px', borderRadius: 4, cursor: 'pointer',
               }}
             >
@@ -686,7 +686,7 @@ const CAMPAIGN_INPUT_STYLE = {
   width: '100%', boxSizing: 'border-box',
   padding: '7px 10px', background: 'var(--s2)',
   border: '1px solid var(--b1)', borderRadius: 4,
-  color: 'var(--text)', fontSize: 12, fontFamily: 'var(--mono)',
+  color: 'var(--text)', fontSize: 12, fontFamily: 'var(--sans)',
   outline: 'none',
 };
 
@@ -694,7 +694,7 @@ function CampaignField({ label, children, full }) {
   return (
     <div style={{ gridColumn: full ? '1 / -1' : 'auto' }}>
       <label style={{
-        display: 'block', fontFamily: 'var(--mono)', fontSize: 10,
+        display: 'block', fontFamily: 'var(--sans)', fontSize: 10,
         color: 'var(--t3)', letterSpacing: '.1em', textTransform: 'uppercase',
         marginBottom: 4,
       }}>
@@ -710,7 +710,7 @@ function CampaignField({ label, children, full }) {
 function MonitorTab({ data, loading, onReload }) {
   if (loading && !data) {
     return (
-      <div style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12, padding: '20px 0' }}>
+      <div style={{ color: 'var(--t3)', fontFamily: 'var(--sans)', fontSize: 12, padding: '20px 0' }}>
         loading…
       </div>
     );
@@ -752,18 +752,18 @@ function MonitorTab({ data, loading, onReload }) {
           {data.at_risk.length > 0
             ? <span style={{
                 background: '#e04040', color: '#fff',
-                fontFamily: 'var(--mono)', fontSize: 10,
+                fontFamily: 'var(--sans)', fontSize: 10,
                 padding: '2px 7px', borderRadius: 8, letterSpacing: '.05em',
               }}>{data.at_risk.length}</span>
             : <span style={{
                 background: '#2eb86a22', color: '#2eb86a',
-                fontFamily: 'var(--mono)', fontSize: 10,
+                fontFamily: 'var(--sans)', fontSize: 10,
                 padding: '2px 7px', borderRadius: 8, letterSpacing: '.05em',
               }}>All clear</span>
           }
           <button onClick={onReload} style={{
             marginLeft: 'auto', background: 'transparent', border: '1px solid var(--b1)',
-            color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 11,
+            color: 'var(--t2)', fontFamily: 'var(--sans)', fontSize: 11,
             padding: '4px 10px', borderRadius: 4, cursor: 'pointer',
           }}>
             ↻ Refresh
@@ -772,7 +772,7 @@ function MonitorTab({ data, loading, onReload }) {
 
         {data.at_risk.length === 0 && (
           <div style={{
-            color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12,
+            color: 'var(--t3)', fontFamily: 'var(--sans)', fontSize: 12,
             padding: '16px 0',
           }}>
             No at-risk posts — you&apos;re on track ✓
@@ -782,7 +782,7 @@ function MonitorTab({ data, loading, onReload }) {
         {overdue.length > 0 && (
           <>
             <div style={{
-              fontFamily: 'var(--mono)', fontSize: 10, color: '#e04040',
+              fontFamily: 'var(--sans)', fontSize: 10, color: '#e04040',
               letterSpacing: '.1em', textTransform: 'uppercase',
               marginBottom: 6,
             }}>
@@ -795,7 +795,7 @@ function MonitorTab({ data, loading, onReload }) {
         {missingAsset.length > 0 && (
           <div style={{ marginTop: overdue.length ? 16 : 0 }}>
             <div style={{
-              fontFamily: 'var(--mono)', fontSize: 10, color: '#F2CD1A',
+              fontFamily: 'var(--sans)', fontSize: 10, color: '#F2CD1A',
               letterSpacing: '.1em', textTransform: 'uppercase',
               marginBottom: 6,
             }}>
@@ -817,7 +817,7 @@ function MonitorTab({ data, loading, onReload }) {
         </div>
 
         {data.cadence.length === 0 && (
-          <div style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12 }}>
+          <div style={{ color: 'var(--t3)', fontFamily: 'var(--sans)', fontSize: 12 }}>
             No published posts yet
           </div>
         )}
@@ -879,23 +879,23 @@ function MonitorTab({ data, loading, onReload }) {
 
 const CADENCE_TH_STYLE_LEFT = {
   textAlign: 'left', padding: '6px 12px 6px 0',
-  fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)',
+  fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--t3)',
   letterSpacing: '.1em', textTransform: 'uppercase', fontWeight: 400,
   borderBottom: '1px solid var(--b1)', whiteSpace: 'nowrap',
 };
 const CADENCE_TH_STYLE = {
   textAlign: 'center', padding: '6px 8px',
-  fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)',
+  fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--t3)',
   letterSpacing: '.1em', textTransform: 'uppercase', fontWeight: 400,
   borderBottom: '1px solid var(--b1)', whiteSpace: 'nowrap', minWidth: 52,
 };
 const CADENCE_TD_STYLE_LEFT = {
   padding: '8px 12px 8px 0', borderBottom: '1px solid var(--b1)',
-  whiteSpace: 'nowrap', fontFamily: 'var(--mono)',
+  whiteSpace: 'nowrap', fontFamily: 'var(--sans)',
 };
 const CADENCE_TD_STYLE = {
   textAlign: 'center', padding: '8px',
-  borderBottom: '1px solid var(--b1)', fontFamily: 'var(--mono)',
+  borderBottom: '1px solid var(--b1)', fontFamily: 'var(--sans)',
 };
 
 function PostRow({ post, accentColor }) {
@@ -903,7 +903,7 @@ function PostRow({ post, accentColor }) {
     <div style={{
       display: 'flex', alignItems: 'flex-start', gap: 12,
       padding: '10px 14px', background: 'var(--s1)',
-      border: '1px solid var(--b1)', borderLeft: `3px solid ${accentColor}`,
+      border: '1px solid var(--b1)', borderTop: `2px solid ${accentColor}`,
       borderRadius: 4, marginBottom: 6,
     }}>
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -911,7 +911,7 @@ function PostRow({ post, accentColor }) {
           {post.title}
         </div>
         <div style={{
-          fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)',
+          fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)',
           marginTop: 3, letterSpacing: '.05em',
         }}>
           {post.scheduled_date}
@@ -939,7 +939,7 @@ function PostRow({ post, accentColor }) {
           </span>
         ))}
         {(!post.variants || post.variants.length === 0) && (
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>
+          <span style={{ fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--t3)' }}>
             no variants
           </span>
         )}

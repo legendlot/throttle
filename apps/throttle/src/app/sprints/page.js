@@ -22,7 +22,7 @@ function SprintTimeline({ sprint, sprintTasks }) {
 
   return (
     <div style={{ background: 'var(--s1)', border: '1px solid var(--b1)', borderRadius: 6, padding: 16, marginBottom: 24 }}>
-      <p style={{ fontFamily: 'var(--head)', fontSize: 9, letterSpacing: '.25em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 12 }}>Sprint Timeline</p>
+      <p style={{ fontFamily: 'var(--head)', fontSize: 11, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 12 }}>Sprint Timeline</p>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 4 }}>
         {days.map((day, i) => {
           const dayDate = new Date(day);
@@ -44,7 +44,7 @@ function SprintTimeline({ sprint, sprintTasks }) {
                 <span style={{ fontFamily: 'var(--head)', fontSize: 10, letterSpacing: '.1em', textTransform: 'uppercase', fontWeight: 500, color: isToday ? 'var(--text)' : 'var(--t3)' }}>
                   {DAY_LABELS[i]}
                 </span>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: isToday ? 'var(--t2)' : 'var(--b2)' }}>
+                <span style={{ fontFamily: 'var(--sans)', fontSize: 10, color: isToday ? 'var(--t2)' : 'var(--b2)' }}>
                   {dayDate.getDate()}
                 </span>
               </div>
@@ -56,9 +56,9 @@ function SprintTimeline({ sprint, sprintTasks }) {
                   return (
                     <div
                       key={task.id}
-                      style={{ borderRadius: 3, paddingLeft: 4, paddingRight: 4, paddingTop: 2, paddingBottom: 2, backgroundColor: priority.color + '22', borderLeft: `2px solid ${priority.color}` }}
+                      style={{ borderRadius: 3, padding: '2px 4px', backgroundColor: priority.color + '22', borderTop: `2px solid ${priority.color}` }}
                     >
-                      <p style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.2 }} title={task.title}>
+                      <p style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.3 }} title={task.title}>
                         {task.title}
                       </p>
                     </div>
@@ -75,7 +75,7 @@ function SprintTimeline({ sprint, sprintTasks }) {
 
       {/* No due dates note */}
       {sprintTasks.filter(t => t.due_date).length === 0 && (
-        <p style={{ fontFamily: 'var(--mono)', color: 'var(--b2)', fontSize: 10, marginTop: 8, textAlign: 'center' }}>
+        <p style={{ fontFamily: 'var(--sans)', color: 'var(--t3)', fontSize: 12, marginTop: 8, textAlign: 'center' }}>
           No due dates set — assign due dates to tasks to see them here
         </p>
       )}
@@ -111,19 +111,19 @@ function TaskRow({ task, actions, highlighted }) {
         style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', flexShrink: 0, backgroundColor: priority.color }}
       />
       <div style={{ flex: 1, minWidth: 0 }}>
-        <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{task.title}</p>
+        <p style={{ fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--text)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{task.title}</p>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2 }}>
           {task.product_code && (
-            <span style={{ fontFamily: 'var(--mono)', color: 'var(--b2)', fontSize: 10 }}>{task.product_code}</span>
+            <span style={{ fontFamily: 'var(--sans)', color: 'var(--b2)', fontSize: 10 }}>{task.product_code}</span>
           )}
-          <span style={{ fontFamily: 'var(--mono)', color: 'var(--b2)', fontSize: 10 }}>{stage.label}</span>
+          <span style={{ fontFamily: 'var(--sans)', color: 'var(--b2)', fontSize: 10 }}>{stage.label}</span>
           {task.is_spillover && (
-            <span style={{ fontFamily: 'var(--mono)', color: 'var(--amber)', fontSize: 10 }}>↩ spillover</span>
+            <span style={{ fontFamily: 'var(--sans)', color: 'var(--amber)', fontSize: 10 }}>↩ spillover</span>
           )}
         </div>
       </div>
       {task.due_date && (
-        <span style={{ fontFamily: 'var(--mono)', color: 'var(--t3)', fontSize: 10, flexShrink: 0 }}>
+        <span style={{ fontFamily: 'var(--sans)', color: 'var(--t3)', fontSize: 10, flexShrink: 0 }}>
           {new Date(task.due_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
         </span>
       )}
@@ -143,7 +143,7 @@ function RemoveButton({ onClick }) {
       onClick={onClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      style={{ fontFamily: 'var(--mono)', fontSize: 11, color: hovered ? 'var(--red)' : 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer', transition: 'color 0.15s' }}
+      style={{ fontFamily: 'var(--sans)', fontSize: 11, color: hovered ? 'var(--red)' : 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer', transition: 'color 0.15s' }}
       title="Remove from sprint"
     >
       ✕
@@ -158,7 +158,7 @@ function AddButton({ onClick }) {
       onClick={onClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      style={{ fontFamily: 'var(--mono)', fontSize: 11, color: hovered ? 'var(--green)' : 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer', transition: 'color 0.15s' }}
+      style={{ fontFamily: 'var(--sans)', fontSize: 11, color: hovered ? 'var(--green)' : 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer', transition: 'color 0.15s' }}
       title="Add to sprint"
     >
       + Add
@@ -171,10 +171,10 @@ function AddButton({ onClick }) {
 function PersonFilter({ members, selected, onChange, taskCounts }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', letterSpacing: '.1em', textTransform: 'uppercase' }}>Person</span>
-      <button onClick={() => onChange(null)} style={{ background: selected === null ? '#F2CD1A' : 'var(--s2)', color: selected === null ? '#080808' : 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 10px', fontFamily: 'var(--mono)', fontSize: 10, cursor: 'pointer' }}>All</button>
+      <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', letterSpacing: '.06em', textTransform: 'uppercase', fontWeight: 500 }}>Person</span>
+      <button onClick={() => onChange(null)} style={{ background: selected === null ? '#F2CD1A' : 'var(--s2)', color: selected === null ? 'var(--fg-accent)' : 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 10px', fontFamily: 'var(--sans)', fontSize: 12, cursor: 'pointer' }}>All</button>
       {members.map(m => (
-        <button key={m.id} onClick={() => onChange(m.id)} style={{ background: selected === m.id ? '#F2CD1A' : 'var(--s2)', color: selected === m.id ? '#080808' : 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 10px', fontFamily: 'var(--mono)', fontSize: 10, cursor: 'pointer' }}>
+        <button key={m.id} onClick={() => onChange(m.id)} style={{ background: selected === m.id ? '#F2CD1A' : 'var(--s2)', color: selected === m.id ? 'var(--fg-accent)' : 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 10px', fontFamily: 'var(--sans)', fontSize: 12, cursor: 'pointer' }}>
           {m.name.split(' ')[0]}{taskCounts && taskCounts[m.id] ? ` (${taskCounts[m.id]})` : ''}
         </button>
       ))}
@@ -433,10 +433,10 @@ export default function SprintsPage() {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
           <div>
             <h1 style={{ fontFamily: 'var(--head)', fontWeight: 900, fontSize: 18, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--text)', margin: 0 }}>Sprints</h1>
-            <p style={{ fontFamily: 'var(--mono)', color: 'var(--t3)', fontSize: 11, marginTop: 4 }}>
+            <p style={{ fontFamily: 'var(--sans)', color: 'var(--t3)', fontSize: 11, marginTop: 4 }}>
               {activeSprint ? activeSprint.name : 'No active sprint'}
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginLeft: 12 }}>
-                <kbd style={{ background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 3, padding: '1px 5px', fontSize: 9 }}>/</kbd> search
+              <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', marginLeft: 12 }}>
+                <kbd style={{ background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 3, padding: '2px 6px', fontSize: 11 }}>/</kbd> search
               </span>
             </p>
             {activeSprint && (() => {
@@ -454,10 +454,10 @@ export default function SprintsPage() {
               return (
                 <div style={{ marginTop: 8, maxWidth: 320 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                    <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+                    <span style={{ fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--t3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
                       {activeStages.map(s => `${stageCounts[s]} ${getStageConfig(s).label.toLowerCase()}`).join(' · ')}
                     </span>
-                    <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: barColor, fontWeight: 600, flexShrink: 0 }}>
+                    <span style={{ fontFamily: 'var(--sans)', fontSize: 10, color: barColor, fontWeight: 600, flexShrink: 0 }}>
                       {pct}%
                     </span>
                   </div>
@@ -508,7 +508,7 @@ export default function SprintsPage() {
                               <div style={{
                                 position: 'absolute', bottom: 10, left: '50%', transform: 'translateX(-50%)',
                                 background: '#1a1a1a', border: '1px solid var(--b2)', borderRadius: 4,
-                                padding: '4px 8px', fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text)',
+                                padding: '4px 8px', fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--text)',
                                 whiteSpace: 'nowrap', zIndex: 10, pointerEvents: 'none',
                               }}>
                                 {cfg.label} — {count} task{count === 1 ? '' : 's'} ({segPct}%)
@@ -532,7 +532,7 @@ export default function SprintsPage() {
                   disabled={closing}
                   style={{
                     background: 'transparent', color: 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 6,
-                    fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 500,
+                    fontFamily: 'var(--sans)', fontSize: 11, fontWeight: 500,
                     padding: '8px 16px', cursor: 'pointer', opacity: closing ? 0.4 : 1, transition: 'opacity 0.15s'
                   }}
                 >
@@ -543,7 +543,7 @@ export default function SprintsPage() {
                 <button
                   onClick={() => setShowCreate(true)}
                   style={{
-                    background: '#F2CD1A', color: '#080808', fontFamily: 'var(--head)', fontWeight: 700,
+                    background: '#F2CD1A', color: 'var(--fg-accent)', fontFamily: 'var(--head)', fontWeight: 700,
                     fontSize: 11, letterSpacing: '.15em', textTransform: 'uppercase',
                     borderRadius: 6, border: 'none', padding: '8px 16px', cursor: 'pointer'
                   }}
@@ -564,7 +564,7 @@ export default function SprintsPage() {
         {/* Error */}
         {error && (
           <div style={{ background: 'rgba(222,42,42,0.08)', border: '1px solid rgba(222,42,42,0.3)', borderRadius: 6, padding: '12px 16px', marginBottom: 20 }}>
-            <p style={{ fontFamily: 'var(--mono)', color: 'var(--red)', fontSize: 11, margin: 0 }}>{error}</p>
+            <p style={{ fontFamily: 'var(--sans)', color: 'var(--red)', fontSize: 11, margin: 0 }}>{error}</p>
           </div>
         )}
 
@@ -574,7 +574,7 @@ export default function SprintsPage() {
             <h2 style={{ fontFamily: 'var(--head)', fontSize: 13, fontWeight: 700, letterSpacing: '.15em', textTransform: 'uppercase', color: 'var(--text)', margin: 0, marginBottom: 16 }}>Create Sprint</h2>
             <div style={{ display: 'flex', gap: 16, alignItems: 'flex-end' }}>
               <div style={{ flex: 1 }}>
-                <label style={{ display: 'block', fontFamily: 'var(--head)', fontSize: 9, letterSpacing: '.25em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 6 }}>
+                <label style={{ display: 'block', fontFamily: 'var(--sans)', fontSize: 11, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 6, fontWeight: 500 }}>
                   Start Date (must be a Thursday)
                 </label>
                 <input
@@ -583,7 +583,7 @@ export default function SprintsPage() {
                   onChange={e => setNewSprintDate(e.target.value)}
                   style={{
                     width: '100%', boxSizing: 'border-box', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 6,
-                    padding: '8px 12px', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', outline: 'none'
+                    padding: '8px 12px', fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--text)', outline: 'none'
                   }}
                 />
               </div>
@@ -592,7 +592,7 @@ export default function SprintsPage() {
                   onClick={createSprint}
                   disabled={creating}
                   style={{
-                    background: '#F2CD1A', color: '#080808', fontFamily: 'var(--head)', fontWeight: 700,
+                    background: '#F2CD1A', color: 'var(--fg-accent)', fontFamily: 'var(--head)', fontWeight: 700,
                     fontSize: 11, letterSpacing: '.15em', textTransform: 'uppercase',
                     borderRadius: 6, border: 'none', padding: '8px 20px', cursor: 'pointer',
                     opacity: creating ? 0.4 : 1
@@ -602,7 +602,7 @@ export default function SprintsPage() {
                 </button>
                 <button
                   onClick={() => setShowCreate(false)}
-                  style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer', padding: '8px 12px' }}
+                  style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer', padding: '8px 12px' }}
                 >
                   Cancel
                 </button>
@@ -613,7 +613,7 @@ export default function SprintsPage() {
 
         {loading ? (
           <div style={{ padding: '80px 0', textAlign: 'center' }}>
-            <p style={{ fontFamily: 'var(--mono)', color: 'var(--t3)', fontSize: 11 }}>Loading...</p>
+            <p style={{ fontFamily: 'var(--sans)', color: 'var(--t3)', fontSize: 11 }}>Loading...</p>
           </div>
         ) : (
           <>
@@ -633,10 +633,10 @@ export default function SprintsPage() {
                       {activeSprint ? 'Current Sprint' : 'No Active Sprint'}
                     </h2>
                     {activeSprint && (
-                      <p style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', marginTop: 2 }}>{statusLabel}</p>
+                      <p style={{ fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--t3)', marginTop: 2 }}>{statusLabel}</p>
                     )}
                   </div>
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 10, background: 'var(--s2)', color: 'var(--t3)', padding: '2px 6px', borderRadius: 3 }}>
+                  <span style={{ fontFamily: 'var(--sans)', fontSize: 10, background: 'var(--s2)', color: 'var(--t3)', padding: '2px 6px', borderRadius: 3 }}>
                     {filteredSprintTasks.length}
                   </span>
                 </div>
@@ -655,13 +655,13 @@ export default function SprintsPage() {
                 >
                   {!activeSprint ? (
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '40px 0' }}>
-                      <p style={{ fontFamily: 'var(--mono)', color: 'var(--b2)', fontSize: 10, textAlign: 'center' }}>
+                      <p style={{ fontFamily: 'var(--sans)', color: 'var(--b2)', fontSize: 10, textAlign: 'center' }}>
                         {isAdminLead ? 'Create a sprint to get started' : 'No active sprint'}
                       </p>
                     </div>
                   ) : filteredSprintTasks.length === 0 ? (
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '40px 0' }}>
-                      <p style={{ fontFamily: 'var(--mono)', color: 'var(--b2)', fontSize: 10 }}>
+                      <p style={{ fontFamily: 'var(--sans)', color: 'var(--b2)', fontSize: 10 }}>
                         {isAdminLead ? 'Drag tasks here from the backlog' : 'No tasks in sprint'}
                       </p>
                     </div>
@@ -689,7 +689,7 @@ export default function SprintsPage() {
               <div style={{ minWidth: 0, overflow: 'hidden' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
                   <h2 style={{ fontFamily: 'var(--head)', fontSize: 13, fontWeight: 700, letterSpacing: '.15em', textTransform: 'uppercase', color: 'var(--text)', margin: 0 }}>Backlog</h2>
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 10, background: 'var(--s2)', color: 'var(--t3)', padding: '2px 6px', borderRadius: 3 }}>
+                  <span style={{ fontFamily: 'var(--sans)', fontSize: 10, background: 'var(--s2)', color: 'var(--t3)', padding: '2px 6px', borderRadius: 3 }}>
                     {filteredBacklog.length}
                   </span>
                 </div>
@@ -705,7 +705,7 @@ export default function SprintsPage() {
                   style={{
                     width: '100%', boxSizing: 'border-box', background: 'var(--s2)',
                     border: searchFocused ? '1px solid var(--yellow)' : '1px solid var(--b2)',
-                    borderRadius: 6, padding: '8px 12px', fontFamily: 'var(--mono)', fontSize: 11,
+                    borderRadius: 6, padding: '8px 12px', fontFamily: 'var(--sans)', fontSize: 11,
                     color: 'var(--text)', outline: 'none', marginBottom: 12
                   }}
                 />
@@ -725,7 +725,7 @@ export default function SprintsPage() {
                 >
                   {filteredBacklog.length === 0 ? (
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '40px 0' }}>
-                      <p style={{ fontFamily: 'var(--mono)', color: 'var(--b2)', fontSize: 10 }}>
+                      <p style={{ fontFamily: 'var(--sans)', color: 'var(--b2)', fontSize: 10 }}>
                         {search ? 'No matching tasks' : 'Backlog is empty'}
                       </p>
                     </div>
@@ -766,9 +766,9 @@ export default function SprintsPage() {
               padding: 24, zIndex: 50, width: 320
             }}>
               <h3 style={{ fontFamily: 'var(--head)', fontSize: 13, fontWeight: 700, letterSpacing: '.15em', textTransform: 'uppercase', color: 'var(--text)', margin: 0, marginBottom: 4 }}>Add to Sprint</h3>
-              <p style={{ fontFamily: 'var(--mono)', color: 'var(--t3)', fontSize: 10, marginBottom: 16, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{pendingAdd.task.title}</p>
+              <p style={{ fontFamily: 'var(--sans)', color: 'var(--t3)', fontSize: 10, marginBottom: 16, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{pendingAdd.task.title}</p>
               <div style={{ marginBottom: 16 }}>
-                <label style={{ display: 'block', fontFamily: 'var(--head)', fontSize: 9, letterSpacing: '.25em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 6 }}>Due Date (optional)</label>
+                <label style={{ display: 'block', fontFamily: 'var(--sans)', fontSize: 11, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 6, fontWeight: 500 }}>Due Date (optional)</label>
                 <input
                   type="date"
                   value={dueDate}
@@ -777,7 +777,7 @@ export default function SprintsPage() {
                   max={activeSprint?.end_date}
                   style={{
                     width: '100%', boxSizing: 'border-box', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 6,
-                    padding: '8px 12px', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', outline: 'none'
+                    padding: '8px 12px', fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--text)', outline: 'none'
                   }}
                 />
               </div>
@@ -785,7 +785,7 @@ export default function SprintsPage() {
                 <button
                   onClick={() => addToSprint(pendingAdd.task, pendingAdd.sprint_id, dueDate)}
                   style={{
-                    flex: 1, background: '#F2CD1A', color: '#080808', fontFamily: 'var(--head)', fontWeight: 700,
+                    flex: 1, background: '#F2CD1A', color: 'var(--fg-accent)', fontFamily: 'var(--head)', fontWeight: 700,
                     fontSize: 11, letterSpacing: '.15em', textTransform: 'uppercase',
                     padding: '8px 0', borderRadius: 6, border: 'none', cursor: 'pointer'
                   }}
@@ -794,7 +794,7 @@ export default function SprintsPage() {
                 </button>
                 <button
                   onClick={() => { setPendingAdd(null); setDueDate(''); }}
-                  style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer', padding: '8px 16px' }}
+                  style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer', padding: '8px 16px' }}
                 >
                   Cancel
                 </button>
@@ -827,23 +827,24 @@ export default function SprintsPage() {
               >
                 <span style={{ width: 8, height: 8, borderRadius: '50%', background: stage?.color || 'var(--t3)', flexShrink: 0 }} />
                 {taskId && (
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', letterSpacing: '.06em', flexShrink: 0 }}>
+                  <span style={{ fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--t3)', letterSpacing: '.06em', flexShrink: 0 }}>
                     {taskId}
                   </span>
                 )}
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.title}</p>
+                  <p style={{ fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--text)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.title}</p>
                 </div>
                 {t.due_date && (
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', flexShrink: 0 }}>
+                  <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', flexShrink: 0 }}>
                     {new Date(t.due_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
                   </span>
                 )}
                 <span style={{
-                  fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '.08em',
-                  padding: '2px 6px', borderRadius: 3, flexShrink: 0,
+                  fontFamily: 'var(--sans)', fontSize: 11, letterSpacing: '.04em',
+                  padding: '2px 8px', borderRadius: 3, flexShrink: 0,
                   background: isSprint ? '#F2CD1A' : 'var(--s3)',
-                  color: isSprint ? '#080808' : 'var(--t2)',
+                  color: isSprint ? 'var(--fg-accent)' : 'var(--t2)',
+                  fontWeight: isSprint ? 600 : 400,
                 }}>
                   {isSprint ? 'Sprint' : 'Backlog'}
                 </span>
@@ -871,20 +872,20 @@ export default function SprintsPage() {
                     value={sprintSearchQuery}
                     onChange={e => setSprintSearchQuery(e.target.value)}
                     onKeyDown={e => { if (e.key === 'Escape') setSprintSearchOpen(false); }}
-                    style={{ flex: 1, background: 'none', border: 'none', outline: 'none', fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--text)', caretColor: '#F2CD1A' }}
+                    style={{ flex: 1, background: 'none', border: 'none', outline: 'none', fontFamily: 'var(--sans)', fontSize: 13, color: 'var(--text)', caretColor: '#F2CD1A' }}
                   />
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)' }}>/ or ESC to close</span>
+                  <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)' }}>/ or ESC to close</span>
                 </div>
                 <div style={{ maxHeight: 360, overflowY: 'auto' }}>
                   {!q ? null : totalResults === 0 ? (
-                    <div style={{ padding: '24px 16px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>
+                    <div style={{ padding: '24px 16px', textAlign: 'center', fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--t3)' }}>
                       No tasks found
                     </div>
                   ) : (
                     <>
                       {sprintMatches.length > 0 && (
                         <>
-                          <div style={{ padding: '8px 16px', fontFamily: 'var(--head)', fontSize: 9, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--t3)', background: 'var(--s2)' }}>
+                          <div style={{ padding: '8px 16px', fontFamily: 'var(--sans)', fontSize: 11, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--t3)', background: 'var(--s2)', fontWeight: 500 }}>
                             In Sprint
                           </div>
                           {sprintMatches.map(t => renderRow(t, 'sprint'))}
@@ -892,7 +893,7 @@ export default function SprintsPage() {
                       )}
                       {backlogMatches.length > 0 && (
                         <>
-                          <div style={{ padding: '8px 16px', fontFamily: 'var(--head)', fontSize: 9, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--t3)', background: 'var(--s2)' }}>
+                          <div style={{ padding: '8px 16px', fontFamily: 'var(--sans)', fontSize: 11, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--t3)', background: 'var(--s2)', fontWeight: 500 }}>
                             Backlog
                           </div>
                           {backlogMatches.map(t => renderRow(t, 'backlog'))}
@@ -902,7 +903,7 @@ export default function SprintsPage() {
                   )}
                 </div>
                 <div style={{ padding: '8px 16px', borderTop: '1px solid var(--b1)' }}>
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>
+                  <span style={{ fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--t3)' }}>
                     {q
                       ? `${totalResults} result${totalResults === 1 ? '' : 's'}`
                       : `${sprintTasks.length} sprint · ${backlogTasks.length} backlog — type to filter`}

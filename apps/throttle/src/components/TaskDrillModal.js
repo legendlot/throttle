@@ -48,7 +48,7 @@ export default function TaskDrillModal({ bucket, sprintId, personId, onClose }) 
               {BUCKET_LABELS[bucket] || bucket}
             </h2>
             {!loading && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 9, background: 'var(--s3)', color: 'var(--t2)', padding: '2px 7px', borderRadius: 3, letterSpacing: '.1em' }}>
+              <span style={{ fontFamily: 'var(--sans)', fontSize: 11, background: 'var(--s3)', color: 'var(--t2)', padding: '2px 7px', borderRadius: 3, letterSpacing: '.04em' }}>
                 {tasks.length}
               </span>
             )}
@@ -67,11 +67,11 @@ export default function TaskDrillModal({ bucket, sprintId, personId, onClose }) 
         <div style={{ flex: 1, overflowY: 'auto', padding: '12px 20px' }}>
           {loading ? (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '48px 0' }}>
-              <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', letterSpacing: '.2em', textTransform: 'uppercase' }}>Loading...</p>
+              <p style={{ fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--t3)' }}>Loading...</p>
             </div>
           ) : tasks.length === 0 ? (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '48px 0' }}>
-              <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>No tasks in this bucket.</p>
+              <p style={{ fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--t3)' }}>No tasks in this bucket.</p>
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -83,35 +83,35 @@ export default function TaskDrillModal({ bucket, sprintId, personId, onClose }) 
                 return (
                   <div
                     key={task.id}
-                    style={{ background: 'var(--s2)', border: '1px solid var(--b1)', borderLeft: `3px solid ${priority.color}`, borderRadius: 6, padding: 12 }}
+                    style={{ background: 'var(--s2)', border: '1px solid var(--b1)', borderTop: `2px solid ${priority.color}`, borderRadius: 6, padding: 12 }}
                   >
                     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)', fontWeight: 500, lineHeight: 1.3 }}>
+                        <p style={{ fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--text)', fontWeight: 500, lineHeight: 1.3 }}>
                           {task.title}
                         </p>
                         {task.blocked_reason && (
-                          <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginTop: 4, fontStyle: 'italic' }}>
+                          <p style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', marginTop: 4, fontStyle: 'italic' }}>
                             {task.blocked_reason}
                           </p>
                         )}
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
                         <span style={{
-                          fontFamily: 'var(--mono)', fontSize: 9, padding: '2px 7px', borderRadius: 3, letterSpacing: '.08em', textTransform: 'uppercase',
+                          fontFamily: 'var(--sans)', fontSize: 11, padding: '2px 7px', borderRadius: 3, letterSpacing: '.04em', textTransform: 'uppercase',
                           color: priority.color, background: priority.color + '15',
                         }}>
                           {priority.label}
                         </span>
                         <span style={{
-                          fontFamily: 'var(--mono)', fontSize: 9, padding: '2px 7px', borderRadius: 3, letterSpacing: '.08em', textTransform: 'uppercase',
+                          fontFamily: 'var(--sans)', fontSize: 11, padding: '2px 7px', borderRadius: 3, letterSpacing: '.04em', textTransform: 'uppercase',
                           color: stage.color, background: stage.color + '15',
                         }}>
                           {stage.label}
                         </span>
                       </div>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8, fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)' }}>
                       <span>{assigneeNames}</span>
                       {task.due_date && (
                         <span style={{ marginLeft: 'auto' }}>

@@ -67,9 +67,9 @@ function FeedbackPageInner() {
     }
   }
 
-  if (!requestId) return <div style={{ padding: 40, fontFamily: 'var(--mono)', color: '#DE2A2A' }}>Missing request id.</div>;
-  if (loading) return <div style={{ padding: 40, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>Loading...</div>;
-  if (error)   return <div style={{ padding: 40, fontFamily: 'var(--mono)', color: '#DE2A2A' }}>{error}</div>;
+  if (!requestId) return <div style={{ padding: 40, fontFamily: 'var(--sans)', color: '#DE2A2A' }}>Missing request id.</div>;
+  if (loading) return <div style={{ padding: 40, fontFamily: 'var(--sans)', color: 'var(--t3)' }}>Loading...</div>;
+  if (error)   return <div style={{ padding: 40, fontFamily: 'var(--sans)', color: '#DE2A2A' }}>{error}</div>;
   if (!data)   return null;
 
   const deliveredTasks = (data.tasks || []).filter(t => t.stage === 'delivered');
@@ -79,8 +79,8 @@ function FeedbackPageInner() {
     return (
       <div style={{ padding: 40, maxWidth: 680, margin: '0 auto' }}>
         <p style={{ fontFamily: 'var(--head)', fontSize: 24, color: 'var(--text)', margin: '0 0 8px' }}>FEEDBACK SUBMITTED</p>
-        <p style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--t2)', marginBottom: 24 }}>The brand team has been notified.</p>
-        <button onClick={() => router.push('/requests/')} style={{ background: '#F2CD1A', color: '#080808', border: 'none', borderRadius: 4, padding: '8px 16px', fontFamily: 'var(--head)', fontSize: 11, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer' }}>
+        <p style={{ fontFamily: 'var(--sans)', fontSize: 13, color: 'var(--t2)', marginBottom: 24 }}>The brand team has been notified.</p>
+        <button onClick={() => router.push('/requests/')} style={{ background: '#F2CD1A', color: 'var(--fg-accent)', border: 'none', borderRadius: 4, padding: '8px 16px', fontFamily: 'var(--head)', fontSize: 11, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer' }}>
           Back to My Requests
         </button>
       </div>
@@ -89,13 +89,13 @@ function FeedbackPageInner() {
 
   return (
     <div style={{ padding: 40, maxWidth: 720, margin: '0 auto' }}>
-      <button onClick={() => router.push('/requests/')} style={{ background: 'none', border: 'none', color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer', marginBottom: 24, padding: 0 }}>← Back</button>
+      <button onClick={() => router.push('/requests/')} style={{ background: 'none', border: 'none', color: 'var(--t3)', fontFamily: 'var(--sans)', fontSize: 11, cursor: 'pointer', marginBottom: 24, padding: 0 }}>← Back</button>
 
       <p style={{ fontFamily: 'var(--head)', fontSize: 22, color: 'var(--text)', margin: '0 0 4px', letterSpacing: '.05em', textTransform: 'uppercase' }}>{data.request.title}</p>
-      <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginBottom: 32 }}>Review the deliverables below and let us know what&apos;s good and what needs revision.</p>
+      <p style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', marginBottom: 32 }}>Review the deliverables below and let us know what&apos;s good and what needs revision.</p>
 
       {deliveredTasks.length === 0 && (
-        <p style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--t3)' }}>No deliverables are awaiting your feedback right now.</p>
+        <p style={{ fontFamily: 'var(--sans)', fontSize: 13, color: 'var(--t3)' }}>No deliverables are awaiting your feedback right now.</p>
       )}
 
       {deliveredTasks.map(task => {
@@ -106,14 +106,14 @@ function FeedbackPageInner() {
         return (
           <div key={task.id} style={{ background: 'var(--s1)', border: `1px solid ${isIteration ? '#f59e0b' : 'var(--b1)'}`, borderRadius: 6, padding: 20, marginBottom: 16 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-              <p style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--text)', margin: 0, fontWeight: 600 }}>{task.title}</p>
+              <p style={{ fontFamily: 'var(--sans)', fontSize: 13, color: 'var(--text)', margin: 0, fontWeight: 600 }}>{task.title}</p>
               {autoCloseDate && (
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', whiteSpace: 'nowrap', marginLeft: 12 }}>Auto-accepts {autoCloseDate}</span>
+                <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', whiteSpace: 'nowrap', marginLeft: 12 }}>Auto-accepts {autoCloseDate}</span>
               )}
             </div>
 
             {task.delivery_message && (
-              <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t2)', background: 'var(--s2)', padding: '8px 12px', borderRadius: 4, marginBottom: 12 }}>
+              <p style={{ fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--t2)', background: 'var(--s2)', padding: '8px 12px', borderRadius: 4, marginBottom: 12 }}>
                 💬 {task.delivery_message}
               </p>
             )}
@@ -122,7 +122,7 @@ function FeedbackPageInner() {
               <div style={{ marginBottom: 12 }}>
                 {task.attachments.map((a, i) => (
                   <a key={i} href={a.url} target="_blank" rel="noopener noreferrer"
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: 'var(--mono)', fontSize: 11, color: '#F2CD1A', textDecoration: 'none', marginRight: 12 }}>
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: 'var(--sans)', fontSize: 11, color: '#F2CD1A', textDecoration: 'none', marginRight: 12 }}>
                     🔗 {a.label || 'View Deliverable'}
                   </a>
                 ))}
@@ -130,7 +130,7 @@ function FeedbackPageInner() {
             )}
 
             {task.latest_feedback?.verdict === 'iteration_requested' && (
-              <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginBottom: 12 }}>
+              <p style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', marginBottom: 12 }}>
                 ↩ Previous feedback: {task.latest_feedback.comment || '(no comment)'}
               </p>
             )}
@@ -138,13 +138,13 @@ function FeedbackPageInner() {
             <div style={{ display: 'flex', gap: 8, marginBottom: isIteration ? 12 : 0 }}>
               <button
                 onClick={() => setVerdict(task.id, 'accepted')}
-                style={{ flex: 1, padding: '8px 0', borderRadius: 4, border: `1px solid ${fb.verdict === 'accepted' ? '#30D158' : 'var(--b2)'}`, background: fb.verdict === 'accepted' ? 'rgba(48,209,88,0.12)' : 'var(--s2)', color: fb.verdict === 'accepted' ? '#30D158' : 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer' }}
+                style={{ flex: 1, padding: '8px 0', borderRadius: 4, border: `1px solid ${fb.verdict === 'accepted' ? '#30D158' : 'var(--b2)'}`, background: fb.verdict === 'accepted' ? 'rgba(48,209,88,0.12)' : 'var(--s2)', color: fb.verdict === 'accepted' ? '#30D158' : 'var(--t2)', fontFamily: 'var(--sans)', fontSize: 11, cursor: 'pointer' }}
               >
                 ✓ Looks good
               </button>
               <button
                 onClick={() => setVerdict(task.id, 'iteration_requested')}
-                style={{ flex: 1, padding: '8px 0', borderRadius: 4, border: `1px solid ${isIteration ? '#f59e0b' : 'var(--b2)'}`, background: isIteration ? 'rgba(245,158,11,0.12)' : 'var(--s2)', color: isIteration ? '#f59e0b' : 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer' }}
+                style={{ flex: 1, padding: '8px 0', borderRadius: 4, border: `1px solid ${isIteration ? '#f59e0b' : 'var(--b2)'}`, background: isIteration ? 'rgba(245,158,11,0.12)' : 'var(--s2)', color: isIteration ? '#f59e0b' : 'var(--t2)', fontFamily: 'var(--sans)', fontSize: 11, cursor: 'pointer' }}
               >
                 ↩ Needs revision
               </button>
@@ -156,14 +156,14 @@ function FeedbackPageInner() {
                   value={fb.comment}
                   onChange={e => setComment(task.id, e.target.value)}
                   placeholder="What needs to change? Be specific."
-                  style={{ width: '100%', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '8px 10px', color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 11, resize: 'none', height: 72, outline: 'none', boxSizing: 'border-box' }}
+                  style={{ width: '100%', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '8px 10px', color: 'var(--text)', fontFamily: 'var(--sans)', fontSize: 11, resize: 'none', height: 72, outline: 'none', boxSizing: 'border-box' }}
                 />
                 <input
                   type="url"
                   value={fb.reference_links?.[0] || ''}
                   onChange={e => setRefLink(task.id, e.target.value)}
                   placeholder="Reference link or screenshot URL (optional)"
-                  style={{ width: '100%', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '7px 10px', color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 11, outline: 'none', boxSizing: 'border-box' }}
+                  style={{ width: '100%', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '7px 10px', color: 'var(--text)', fontFamily: 'var(--sans)', fontSize: 11, outline: 'none', boxSizing: 'border-box' }}
                 />
               </div>
             )}
@@ -173,11 +173,11 @@ function FeedbackPageInner() {
 
       {otherTasks.length > 0 && (
         <div style={{ marginTop: 24 }}>
-          <p style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', letterSpacing: '.1em', textTransform: 'uppercase', marginBottom: 10 }}>Other tasks in this request</p>
+          <p style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', letterSpacing: '.06em', textTransform: 'uppercase', marginBottom: 10, fontWeight: 500 }}>Other tasks in this request</p>
           {otherTasks.map(t => (
             <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--s1)', borderRadius: 4, marginBottom: 6 }}>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t2)' }}>{t.title}</span>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '.06em' }}>{t.stage.replace(/_/g, ' ')}</span>
+              <span style={{ fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--t2)' }}>{t.title}</span>
+              <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '.06em' }}>{t.stage.replace(/_/g, ' ')}</span>
             </div>
           ))}
         </div>
@@ -185,11 +185,11 @@ function FeedbackPageInner() {
 
       {deliveredTasks.length > 0 && (
         <div style={{ marginTop: 24, paddingTop: 20, borderTop: '1px solid var(--b1)' }}>
-          {error && <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: '#DE2A2A', marginBottom: 12 }}>{error}</p>}
+          {error && <p style={{ fontFamily: 'var(--sans)', fontSize: 12, color: '#DE2A2A', marginBottom: 12 }}>{error}</p>}
           <button
             onClick={handleSubmit}
             disabled={submitting}
-            style={{ background: '#F2CD1A', color: '#080808', border: 'none', borderRadius: 4, padding: '10px 24px', fontFamily: 'var(--head)', fontSize: 11, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', opacity: submitting ? 0.6 : 1 }}
+            style={{ background: '#F2CD1A', color: 'var(--fg-accent)', border: 'none', borderRadius: 4, padding: '10px 24px', fontFamily: 'var(--head)', fontSize: 11, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', opacity: submitting ? 0.6 : 1 }}
           >
             {submitting ? 'Submitting...' : 'Submit Feedback'}
           </button>

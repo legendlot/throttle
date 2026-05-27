@@ -25,7 +25,7 @@ const STATUS_COLORS = {
 function StatusPill({ status }) {
   return (
     <span style={{
-      fontFamily: 'var(--mono)',
+      fontFamily: 'var(--sans)',
       fontSize: 9,
       letterSpacing: '.12em',
       textTransform: 'uppercase',
@@ -86,7 +86,7 @@ const LABEL_STYLE = {
 };
 
 const VALUE_STYLE = {
-  fontFamily: 'var(--mono)',
+  fontFamily: 'var(--sans)',
   fontSize: 12,
   color: 'var(--text)',
 };
@@ -97,7 +97,7 @@ const INPUT_STYLE = {
   border: '1px solid var(--b1)',
   borderRadius: 4,
   padding: '6px 10px',
-  fontFamily: 'var(--mono)',
+  fontFamily: 'var(--sans)',
   fontSize: 12,
   color: 'var(--text)',
   outline: 'none',
@@ -121,7 +121,7 @@ const PRIMARY_BUTTON = {
 const GHOST_BUTTON = {
   background: 'transparent',
   color: 'var(--t2)',
-  fontFamily: 'var(--mono)',
+  fontFamily: 'var(--sans)',
   fontSize: 11,
   letterSpacing: '.08em',
   border: '1px solid var(--b1)',
@@ -294,7 +294,7 @@ export function PostDetailPanel({ post, role, onClose, onEdit, onStatusChange, o
           }}>×</button>
           <h2 style={{
             flex: 1, margin: 0,
-            fontFamily: 'var(--mono)', fontSize: 15, fontWeight: 600,
+            fontFamily: 'var(--sans)', fontSize: 15, fontWeight: 600,
             color: 'var(--text)', lineHeight: 1.3,
           }}>
             {post.title}
@@ -367,7 +367,7 @@ export function PostDetailPanel({ post, role, onClose, onEdit, onStatusChange, o
               <ChannelDot color={v.channel?.color} />
               <span style={{ ...VALUE_STYLE, fontWeight: 600 }}>{v.channel?.name ?? '—'}</span>
               <span style={{
-                fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t2)',
+                fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--t2)',
                 background: 'var(--s3)', padding: '2px 6px', borderRadius: 3,
                 letterSpacing: '.08em',
               }}>
@@ -385,7 +385,7 @@ export function PostDetailPanel({ post, role, onClose, onEdit, onStatusChange, o
             </div>
             {v.caption_draft && (
               <div style={{
-                fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)',
+                fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t2)',
                 whiteSpace: 'pre-wrap', lineHeight: 1.5,
               }}>
                 {v.caption_draft}
@@ -393,7 +393,7 @@ export function PostDetailPanel({ post, role, onClose, onEdit, onStatusChange, o
             )}
             {v.asset_url && (
               <a href={v.asset_url} target="_blank" rel="noreferrer" style={{
-                fontFamily: 'var(--mono)', fontSize: 11, color: '#F2CD1A',
+                fontFamily: 'var(--sans)', fontSize: 11, color: '#F2CD1A',
                 wordBreak: 'break-all',
               }}>
                 {v.asset_url}
@@ -656,7 +656,7 @@ export function CreateEditPanel({ channels, campaigns, prefillDate, editPost, ro
                 border: '1px solid var(--b1)', borderRadius: 4,
               }}>
                 <span style={{
-                  fontFamily: 'var(--mono)', fontSize: 10,
+                  fontFamily: 'var(--sans)', fontSize: 10,
                   background: 'var(--bg)', color: 'var(--t2)',
                   padding: '2px 6px', borderRadius: 3, whiteSpace: 'nowrap',
                 }}>
@@ -670,7 +670,7 @@ export function CreateEditPanel({ channels, campaigns, prefillDate, editPost, ro
                 </span>
                 {linkedTask.product_code && (
                   <span style={{
-                    fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)',
+                    fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--t3)',
                   }}>
                     {linkedTask.product_code}
                   </span>
@@ -730,7 +730,7 @@ export function CreateEditPanel({ channels, campaigns, prefillDate, editPost, ro
                         onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                       >
                         <span style={{
-                          fontFamily: 'var(--mono)', fontSize: 10,
+                          fontFamily: 'var(--sans)', fontSize: 10,
                           background: 'var(--bg)', color: 'var(--t2)',
                           padding: '2px 6px', borderRadius: 3, whiteSpace: 'nowrap',
                         }}>
@@ -768,7 +768,7 @@ export function CreateEditPanel({ channels, campaigns, prefillDate, editPost, ro
             value={form.notes}
             onChange={e => update('notes', e.target.value)}
             rows={3}
-            style={{ ...INPUT_STYLE, resize: 'vertical', fontFamily: 'var(--mono)' }}
+            style={{ ...INPUT_STYLE, resize: 'vertical', fontFamily: 'var(--sans)' }}
           />
         </Field>
 
@@ -830,7 +830,7 @@ export function CreateEditPanel({ channels, campaigns, prefillDate, editPost, ro
                   value={v.caption_draft}
                   onChange={e => updateVariant(idx, 'caption_draft', e.target.value)}
                   rows={3}
-                  style={{ ...INPUT_STYLE, resize: 'vertical', fontFamily: 'var(--mono)' }}
+                  style={{ ...INPUT_STYLE, resize: 'vertical', fontFamily: 'var(--sans)' }}
                 />
               </Field>
 
@@ -865,7 +865,7 @@ export function CreateEditPanel({ channels, campaigns, prefillDate, editPost, ro
 
         {error && (
           <div style={{
-            fontFamily: 'var(--mono)', fontSize: 11, color: '#e04040',
+            fontFamily: 'var(--sans)', fontSize: 11, color: '#e04040',
             background: 'rgba(222,42,42,0.08)', padding: '8px 10px',
             border: '1px solid rgba(222,42,42,0.3)', borderRadius: 4,
           }}>

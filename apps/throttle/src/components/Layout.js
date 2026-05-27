@@ -145,20 +145,20 @@ function NotificationBell({ brandUser }) {
         {unread > 0 && (
           <span style={{
             position: 'absolute',
-            top: -4,
-            right: -4,
+            top: -5,
+            right: -5,
             background: '#DE2A2A',
             color: '#fff',
-            fontFamily: 'var(--mono)',
-            fontSize: 8,
+            fontFamily: 'var(--sans)',
+            fontSize: 11,
             fontWeight: 700,
-            borderRadius: 8,
-            minWidth: 14,
-            height: 14,
+            borderRadius: 10,
+            minWidth: 18,
+            height: 18,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            padding: '0 3px',
+            padding: '0 4px',
           }}>
             {unread > 9 ? '9+' : unread}
           </span>
@@ -172,7 +172,7 @@ function NotificationBell({ brandUser }) {
           right: 0,
           width: 320,
           maxHeight: 400,
-          background: '#1a1a1a',
+          background: 'var(--s1)',
           border: '1px solid var(--b2)',
           borderRadius: 8,
           overflow: 'hidden',
@@ -182,23 +182,23 @@ function NotificationBell({ brandUser }) {
           flexDirection: 'column',
         }}>
           <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--b1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontFamily: 'var(--head)', fontSize: 10, letterSpacing: '.15em', textTransform: 'uppercase', color: 'var(--text)' }}>Activity on my tasks</span>
-            {loading && <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)' }}>updating...</span>}
+            <span style={{ fontFamily: 'var(--head)', fontSize: 11, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--text)' }}>Activity on my tasks</span>
+            {loading && <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)' }}>updating…</span>}
           </div>
           <div style={{ overflowY: 'auto', flex: 1 }}>
             {items.length === 0 ? (
-              <div style={{ padding: '24px 14px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>
+              <div style={{ padding: '24px 14px', textAlign: 'center', fontFamily: 'var(--sans)', fontSize: 13, color: 'var(--t3)' }}>
                 No activity in the last 7 days
               </div>
             ) : items.map(item => (
-              <div key={item.id} style={{ padding: '10px 14px', borderBottom: '1px solid var(--b1)', display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <div key={item.id} style={{ padding: '10px 14px', borderBottom: '1px solid var(--b1)', display: 'flex', flexDirection: 'column', gap: 3 }}>
+                <p style={{ fontFamily: 'var(--sans)', fontSize: 13, color: 'var(--text)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {item.task_title}
                 </p>
-                <p style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t2)', margin: 0 }}>
+                <p style={{ fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--t2)', margin: 0 }}>
                   {describeActivity(item)}
                 </p>
-                <p style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', margin: 0 }}>
+                <p style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', margin: 0 }}>
                   {timeAgo(item.created_at)}
                 </p>
               </div>
@@ -216,15 +216,12 @@ function ThrottleLogo() {
     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 5px)', gap: 0, flexShrink: 0 }}>
         {cells.map((v, i) => (
-          <div key={i} style={{ width: 5, height: 5, background: v ? '#F2CD1A' : '#1e1e1e' }} />
+          <div key={i} style={{ width: 5, height: 5, background: v ? '#F2CD1A' : '#111111' }} />
         ))}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
         <span style={{ fontFamily: 'var(--head)', fontWeight: 900, fontSize: 12, letterSpacing: '.25em', color: '#F2CD1A', textTransform: 'uppercase', lineHeight: 1 }}>
           Throttle
-        </span>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 8, letterSpacing: '.3em', color: 'var(--t3)', textTransform: 'uppercase' }}>
-          Brand OS
         </span>
       </div>
     </div>
@@ -242,8 +239,8 @@ export default function Layout({ children }) {
 
   if (loading) return (
     <div style={{ minHeight: '100vh', background: 'var(--bg)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <span style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '.2em', textTransform: 'uppercase' }}>
-        Loading...
+      <span style={{ color: 'var(--t3)', fontFamily: 'var(--sans)', fontSize: 13 }}>
+        Loading…
       </span>
     </div>
   );
@@ -257,12 +254,12 @@ export default function Layout({ children }) {
     <div style={{ minHeight: '100vh', background: 'var(--bg)', color: 'var(--text)' }}>
       {/* Top nav */}
       <header style={{
-        borderBottom: '1px solid #333',
+        borderBottom: '1px solid var(--b1)',
         padding: '0 20px',
         display: 'flex',
         alignItems: 'center',
-        height: 48,
-        background: '#181818',
+        height: 52,
+        background: 'var(--s1)',
         position: 'sticky',
         top: 0,
         zIndex: 50,
@@ -281,20 +278,19 @@ export default function Layout({ children }) {
                 key={item.href}
                 href={item.href}
                 style={{
-                  fontFamily: 'var(--mono)',
-                  fontSize: 10,
-                  letterSpacing: '.1em',
-                  textTransform: 'uppercase',
+                  fontFamily: 'var(--sans)',
+                  fontSize: 13,
+                  letterSpacing: '.02em',
                   textDecoration: 'none',
-                  padding: '4px 10px',
+                  padding: '5px 12px',
                   borderRadius: 4,
-                  height: 28,
+                  height: 30,
                   display: 'flex',
                   alignItems: 'center',
                   transition: 'all .15s',
                   background: isActive ? '#F2CD1A' : 'transparent',
-                  color: isActive ? '#080808' : '#888',
-                  fontWeight: isActive ? 700 : 400,
+                  color: isActive ? 'var(--fg-accent)' : 'var(--t2)',
+                  fontWeight: isActive ? 600 : 400,
                 }}
               >
                 {item.label}
@@ -306,34 +302,33 @@ export default function Layout({ children }) {
         {/* Right side */}
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
           <NotificationBell brandUser={brandUser} />
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', letterSpacing: '.08em' }}>
+          <span style={{ fontFamily: 'var(--sans)', fontSize: 13, color: 'var(--t2)' }}>
             {brandUser.name}
           </span>
           <span style={{
-            fontSize: 9,
+            fontSize: 11,
             background: 'var(--s3)',
             color: 'var(--t2)',
-            padding: '2px 7px',
+            padding: '2px 8px',
             borderRadius: 3,
-            letterSpacing: '.1em',
+            letterSpacing: '.06em',
             textTransform: 'uppercase',
-            fontFamily: 'var(--mono)',
+            fontFamily: 'var(--sans)',
+            fontWeight: 500,
           }}>
             {brandUser.role}
           </span>
           <button
             onClick={signOut}
             style={{
-              fontFamily: 'var(--mono)',
-              fontSize: 10,
+              fontFamily: 'var(--sans)',
+              fontSize: 12,
               color: 'var(--t3)',
               background: 'none',
               border: '1px solid var(--b1)',
               borderRadius: 4,
-              padding: '3px 8px',
+              padding: '4px 10px',
               cursor: 'pointer',
-              letterSpacing: '.08em',
-              textTransform: 'uppercase',
               transition: 'all .15s',
             }}
           >

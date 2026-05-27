@@ -9,7 +9,7 @@ import { useAuth } from '@throttle/auth';
 
 export default function NewRequestPage() {
   return (
-    <Suspense fallback={<Layout><div style={{ padding: '80px 0', textAlign: 'center' }}><p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>Loading...</p></div></Layout>}>
+    <Suspense fallback={<Layout><div style={{ padding: '80px 0', textAlign: 'center' }}><p style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)' }}>Loading...</p></div></Layout>}>
       <NewRequestContent />
     </Suspense>
   );
@@ -316,7 +316,7 @@ function NewRequestContent() {
               <div style={{ fontFamily: 'var(--head)', fontSize: 12, letterSpacing: '.15em', textTransform: 'uppercase', color: 'var(--text)', marginBottom: 4 }}>
                 {type.label}
               </div>
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)', lineHeight: 1.5 }}>
+              <div style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t2)', lineHeight: 1.5 }}>
                 {type.description}
               </div>
             </button>
@@ -365,10 +365,10 @@ function NewRequestContent() {
               marginBottom: isProductScoped ? 16 : 0,
             }}>
               <div>
-                <p style={{ fontFamily: 'var(--mono)', fontSize: 13, fontWeight: 500, color: 'var(--text)', margin: 0 }}>
+                <p style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 500, color: 'var(--text)', margin: 0 }}>
                   Product Specific?
                 </p>
-                <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginTop: 2, marginBottom: 0 }}>
+                <p style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', marginTop: 2, marginBottom: 0 }}>
                   Is this request for specific products in our range?
                 </p>
               </div>
@@ -472,16 +472,16 @@ function NewRequestContent() {
                 style={{ accentColor: '#F2CD1A', width: 16, height: 16 }}
               />
               <div style={{ flex: 1 }}>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--text)' }}>{item.label}</span>
+                <span style={{ fontFamily: 'var(--sans)', fontSize: 13, color: 'var(--text)' }}>{item.label}</span>
               </div>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+              <span style={{ fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '.1em' }}>
                 {item.discipline}
               </span>
             </label>
           ))}
         </div>
 
-        <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginTop: 12 }}>
+        <div style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', marginTop: 12 }}>
           {checkedItems.length} item{checkedItems.length !== 1 ? 's' : ''} selected — {checkedItems.length} task{checkedItems.length !== 1 ? 's' : ''} will be created on approval
         </div>
 
@@ -543,7 +543,7 @@ function NewRequestContent() {
                 {isEdit ? 'Updating Request' : 'Resubmitting as New Request'}
               </div>
               {prefillRequest.review_note && (
-                <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)', lineHeight: 1.5 }}>
+                <div style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t2)', lineHeight: 1.5 }}>
                   Approver noted: &ldquo;{prefillRequest.review_note}&rdquo;
                 </div>
               )}
@@ -629,7 +629,7 @@ function NewRequestContent() {
           {/* Title */}
           <div>
             <p style={sectionLabelStyle}>Title</p>
-            <p style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--text)', margin: 0 }}>{title}</p>
+            <p style={{ fontFamily: 'var(--sans)', fontSize: 13, color: 'var(--text)', margin: 0 }}>{title}</p>
           </div>
 
           {/* Products */}
@@ -642,7 +642,7 @@ function NewRequestContent() {
                     background: 'var(--s3)',
                     borderRadius: 4,
                     padding: '3px 8px',
-                    fontFamily: 'var(--mono)',
+                    fontFamily: 'var(--sans)',
                     fontSize: 11,
                     color: 'var(--t2)',
                   }}>{p.is_custom ? `✦ ${p.product_name}` : p.product_name}</span>
@@ -660,13 +660,13 @@ function NewRequestContent() {
                   const item = LAUNCH_PACK_ITEMS.find(i => i.id === itemId);
                   return item ? (
                     <div key={itemId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)' }}>{item.label}</span>
-                      <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase' }}>{item.discipline}</span>
+                      <span style={{ fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--text)' }}>{item.label}</span>
+                      <span style={{ fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase' }}>{item.discipline}</span>
                     </div>
                   ) : null;
                 })}
               </div>
-              <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: '#F2CD1A', marginTop: 8, marginBottom: 0 }}>
+              <p style={{ fontFamily: 'var(--sans)', fontSize: 11, color: '#F2CD1A', marginTop: 8, marginBottom: 0 }}>
                 {checkedItems.length} task{checkedItems.length !== 1 ? 's' : ''} will be auto-generated on approval
               </p>
             </div>
@@ -681,13 +681,13 @@ function NewRequestContent() {
                   const item = SALE_EVENT_ITEMS.find(i => i.id === itemId);
                   return item ? (
                     <div key={itemId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)' }}>{item.label}</span>
-                      <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase' }}>{item.discipline}</span>
+                      <span style={{ fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--text)' }}>{item.label}</span>
+                      <span style={{ fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase' }}>{item.discipline}</span>
                     </div>
                   ) : null;
                 })}
               </div>
-              <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: '#F2CD1A', marginTop: 8, marginBottom: 0 }}>
+              <p style={{ fontFamily: 'var(--sans)', fontSize: 11, color: '#F2CD1A', marginTop: 8, marginBottom: 0 }}>
                 {checkedItems.length} task{checkedItems.length !== 1 ? 's' : ''} will be auto-generated on approval
               </p>
             </div>
@@ -696,7 +696,7 @@ function NewRequestContent() {
           {/* Photo & video note */}
           {selectedType.id === 'photo_video_new' && (
             <div>
-              <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: '#F2CD1A', margin: 0 }}>
+              <p style={{ fontFamily: 'var(--sans)', fontSize: 11, color: '#F2CD1A', margin: 0 }}>
                 This will create {formData.edit_required === 'Yes' ? '2 tasks: Shoot + Edit' : '1 task: Shoot'}{isProductScoped && (selectedProducts || []).length > 1 ? ` per product (${selectedProducts.length} products)` : ''}
               </p>
             </div>
@@ -713,10 +713,10 @@ function NewRequestContent() {
                   if (!val || (Array.isArray(val) && val.length === 0)) return null;
                   return (
                     <div key={field.id} style={{ display: 'flex', gap: 8 }}>
-                      <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', width: 140, flexShrink: 0 }}>
+                      <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', width: 140, flexShrink: 0 }}>
                         {field.label}
                       </span>
-                      <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)', flex: 1 }}>
+                      <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t2)', flex: 1 }}>
                         {Array.isArray(val) ? val.join(', ') : String(val)}
                       </span>
                     </div>
@@ -754,7 +754,7 @@ function NewRequestContent() {
           Request Submitted
         </h2>
         <p style={{
-          fontFamily: 'var(--mono)',
+          fontFamily: 'var(--sans)',
           fontSize: 12,
           color: 'var(--t3)',
           marginBottom: 32,
@@ -771,7 +771,7 @@ function NewRequestContent() {
               color: 'var(--t2)',
               border: '1px solid var(--b2)',
               borderRadius: 6,
-              fontFamily: 'var(--mono)',
+              fontFamily: 'var(--sans)',
               fontSize: 11,
               padding: '10px 24px',
               cursor: 'pointer',
@@ -798,7 +798,7 @@ function NewRequestContent() {
               color: 'var(--t2)',
               border: '1px solid var(--b2)',
               borderRadius: 6,
-              fontFamily: 'var(--mono)',
+              fontFamily: 'var(--sans)',
               fontSize: 11,
               padding: '10px 24px',
               cursor: 'pointer',
@@ -819,7 +819,7 @@ function NewRequestContent() {
 // ── Shared styles ────────────────────────────────────────────────────────────
 
 const backBtnStyle = {
-  fontFamily: 'var(--mono)',
+  fontFamily: 'var(--sans)',
   fontSize: 11,
   color: 'var(--t3)',
   background: 'none',
@@ -843,7 +843,7 @@ const pageHeadingStyle = {
 };
 
 const pageSubStyle = {
-  fontFamily: 'var(--mono)',
+  fontFamily: 'var(--sans)',
   fontSize: 12,
   color: 'var(--t3)',
   marginTop: 4,
@@ -877,7 +877,7 @@ const inputStyle = {
   borderRadius: 6,
   padding: '10px 14px',
   color: 'var(--text)',
-  fontFamily: 'var(--mono)',
+  fontFamily: 'var(--sans)',
   fontSize: 13,
   outline: 'none',
 };
@@ -980,7 +980,7 @@ function GhostButton({ onClick, label }) {
     <button
       onClick={onClick}
       style={{
-        fontFamily: 'var(--mono)',
+        fontFamily: 'var(--sans)',
         fontSize: 11,
         color: 'var(--t3)',
         background: 'none',
@@ -1005,7 +1005,7 @@ function ErrorBanner({ message }) {
       padding: '12px 16px',
       marginTop: 12,
     }}>
-      <p style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12, margin: 0 }}>{message}</p>
+      <p style={{ color: 'var(--red)', fontFamily: 'var(--sans)', fontSize: 12, margin: 0 }}>{message}</p>
     </div>
   );
 }
@@ -1077,7 +1077,7 @@ function FieldInput({ field, value, onChange, onToggleMulti }) {
                   border: '1px solid var(--b2)',
                   borderRadius: 4,
                   padding: '5px 12px',
-                  fontFamily: 'var(--mono)',
+                  fontFamily: 'var(--sans)',
                   fontSize: 11,
                   cursor: 'pointer',
                 }}
@@ -1100,7 +1100,7 @@ function FieldInput({ field, value, onChange, onToggleMulti }) {
               style={{
                 padding: '8px 24px',
                 borderRadius: 6,
-                fontFamily: 'var(--mono)',
+                fontFamily: 'var(--sans)',
                 fontSize: 13,
                 fontWeight: 500,
                 cursor: 'pointer',
@@ -1166,7 +1166,7 @@ function MultiLinkInput({ value, onChange }) {
           onClick={addLink}
           style={{
             background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 6,
-            padding: '0 16px', fontFamily: 'var(--mono)', fontSize: 11,
+            padding: '0 16px', fontFamily: 'var(--sans)', fontSize: 11,
             color: 'var(--t2)', cursor: 'pointer', flexShrink: 0,
           }}
           onMouseEnter={e => e.currentTarget.style.borderColor = '#F2CD1A'}
@@ -1184,7 +1184,7 @@ function MultiLinkInput({ value, onChange }) {
               borderRadius: 4, padding: '6px 10px',
             }}>
               <span style={{
-                flex: 1, fontFamily: 'var(--mono)', fontSize: 11,
+                flex: 1, fontFamily: 'var(--sans)', fontSize: 11,
                 color: 'var(--t2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
               }} title={link}>{link}</span>
               <button

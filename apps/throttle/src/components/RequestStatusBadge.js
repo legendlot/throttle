@@ -9,9 +9,9 @@ export default function RequestStatusBadge({ status }) {
   const s = STATUS_STYLES[status] || STATUS_STYLES.pending;
   return (
     <span style={{
-      fontFamily: 'var(--mono)',
-      fontSize: 9,
-      letterSpacing: '.1em',
+      fontFamily: 'var(--sans)',
+      fontSize: 11,
+      letterSpacing: '.06em',
       textTransform: 'uppercase',
       padding: '2px 7px',
       borderRadius: 3,
