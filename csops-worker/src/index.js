@@ -175,7 +175,7 @@ async function verifyJWT(authHeader, env) {
 
   // users_profile lives in 'store' schema
   const profileRes = await sb(
-    `/rest/v1/users_profile?id=eq.${user.id}&select=role,full_name,active&limit=1`,
+    `/rest/v1/users_profile?id=eq.${user.id}&select=role,full_name,active,cs_department_id&limit=1`,
     env,
   );
   if (!profileRes.ok || !profileRes.data?.[0]) return null;
@@ -188,12 +188,27 @@ async function verifyJWT(authHeader, env) {
   );
   const permissions = rolesRes.ok && rolesRes.data?.[0]?.permissions || {};
 
+  // Resolve dept slug for the topbar switcher + default-filter logic
+  let cs_department_slug = null;
+  let cs_department_name = null;
+  if (profile.cs_department_id) {
+    const d = await sb(
+      `/rest/v1/cs_departments?id=eq.${profile.cs_department_id}&select=slug,name&limit=1`,
+      env,
+    );
+    cs_department_slug = d.data?.[0]?.slug || null;
+    cs_department_name = d.data?.[0]?.name || null;
+  }
+
   return {
     userId: user.id,
     email: user.email,
     role: profile.role,
     fullName: profile.full_name,
     permissions,
+    cs_department_id:   profile.cs_department_id || null,
+    cs_department_slug,
+    cs_department_name,
   };
 }
 
@@ -202,6 +217,26 @@ function require(perm, auth) {
     return err(`Forbidden — missing permission: ${perm}`, 403);
   }
   return null;
+}
+
+// Resolve the effective department id to filter by. Non-admins are always
+// locked to their own department; admins may override via ?department=<slug>
+// (or pass ?department=all to disable the filter).
+// Returns { mode: 'none' | 'id', id?: uuid } or null if requested slug not found.
+async function resolveDeptFilter(slugParam, auth, env) {
+  const isAdmin = !!auth?.permissions?.cs_ticket_admin;
+  if (isAdmin) {
+    if (!slugParam || slugParam === 'all') return { mode: 'none' };
+    const r = await sb(
+      `/rest/v1/cs_departments?slug=eq.${encodeURIComponent(slugParam)}&select=id&limit=1`,
+      env,
+    );
+    const id = r.data?.[0]?.id;
+    return id ? { mode: 'id', id } : null;
+  }
+  // Non-admin: lock to own dept. If user has no dept assigned, fall through to no-filter.
+  if (auth?.cs_department_id) return { mode: 'id', id: auth.cs_department_id };
+  return { mode: 'none' };
 }
 
 // ── Domain constants ─────────────────────────────────────────────────────────
@@ -334,6 +369,8 @@ async function handleGet(action, params, auth, env) {
     }
     case 'getAgents':        return getAgents(params, auth, env);
     case 'getIssueCatalog':  return getIssueCatalog(env);
+    case 'getDepartments':   return getDepartments(params, auth, env);
+    case 'getDeptAgents':    return getDeptAgents(params, auth, env);
     case 'getMyopAccounts':  return getMyopAccounts(params, auth, env);
     case 'searchShopifyCustomer':
       return ok(await shopifyLookup({ phone: params.get('phone'), email: params.get('email') }, env));
@@ -358,6 +395,10 @@ async function handlePost(action, body, auth, env, request) {
     case 'closeTicket':      return closeTicket(body, auth, env);
     case 'createMyopAccount': return createMyopAccount(body, auth, env);
     case 'updateMyopAccount': return updateMyopAccount(body, auth, env);
+    case 'createDepartment':     return createDepartment(body, auth, env);
+    case 'updateDepartment':     return updateDepartment(body, auth, env);
+    case 'assignUserDepartment': return assignUserDepartment(body, auth, env);
+    case 'setMyopDefaultDepartment': return setMyopDefaultDepartment(body, auth, env);
     default:
       return err(`Unknown action: ${action}`, 404);
   }
@@ -372,6 +413,11 @@ async function getTickets(params, auth, env) {
   const offset = parseInt(params.get('offset') || '0');
 
   const filters = [];
+
+  // Dept default-filter (admins can override via ?department=<slug>|all)
+  const deptFilter = await resolveDeptFilter(params.get('department'), auth, env);
+  if (!deptFilter) return err(`Unknown department slug`, 404);
+  if (deptFilter.mode === 'id') filters.push(`cs_department_id=eq.${deptFilter.id}`);
 
   // tab → preset filter
   if (tab === 'my')                filters.push(`assigned_agent_id=eq.${auth.userId}`, `closed_at=is.null`);
@@ -764,6 +810,7 @@ async function createTicket(body, auth, env) {
     issue_category, issue_subcategory, issue_subcategory_custom, issue_description,
     disposition,
     assigned_agent_id,
+    cs_department_id: bodyDeptId,
   } = body;
 
   if (!customer_name) return err('customer_name required');
@@ -805,10 +852,14 @@ async function createTicket(body, auth, env) {
     assigneeName = aRes.data?.[0]?.full_name || null;
   }
 
+  // Default dept: explicit > creator's own dept > NULL
+  const finalDeptId = bodyDeptId || auth.cs_department_id || null;
+
   const insertRes = await sb(`/rest/v1/cs_tickets`, env, {
     method: 'POST',
     body: JSON.stringify({
       ticket_no,
+      cs_department_id: finalDeptId,
       created_by_user_id: auth.userId,
       created_by_name: auth.fullName,
       intake_channel: intake_channel || 'phone',
@@ -1241,6 +1292,7 @@ async function webhookCallAnswered(body, env, account) {
   const ins = await sb(`/rest/v1/cs_tickets`, env, { method: 'POST', body: JSON.stringify({
     ticket_no, call_session_id: c.session_id, auto_created: true,
     myop_account_id: account?.id || null,
+    cs_department_id: account?.default_department_id || null,
     created_by_user_id: null, created_by_name: 'MyOperator (auto)',
     intake_channel: 'phone', call_direction: c.direction, call_did: c.did,
     call_answered_at: c.timestamp || new Date().toISOString(),
@@ -1340,7 +1392,7 @@ async function updateMyopAccount(body, auth, env) {
   const g = require('cs_ticket_admin', auth); if (g) return g;
   const { id, patch } = body;
   if (!id || !patch || typeof patch !== 'object') return err('id and patch required');
-  const ALLOWED = ['name', 'did', 'owner_email', 'notes', 'is_active'];
+  const ALLOWED = ['name', 'did', 'owner_email', 'notes', 'is_active', 'default_department_id'];
   const clean = {};
   for (const k of ALLOWED) if (k in patch) clean[k] = patch[k];
   if (Object.keys(clean).length === 0) return err('nothing to update');
@@ -1350,4 +1402,87 @@ async function updateMyopAccount(body, auth, env) {
   });
   if (!r.ok) return err(`update failed: ${JSON.stringify(r.data)}`, r.status);
   return ok({ account: r.data?.[0] });
+}
+
+async function setMyopDefaultDepartment(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const { id, department_id } = body;
+  if (!id) return err('id required');
+  const r = await sb(`/rest/v1/myop_accounts?id=eq.${encodeURIComponent(id)}`, env, {
+    method: 'PATCH',
+    body: JSON.stringify({ default_department_id: department_id || null }),
+  });
+  if (!r.ok) return err(`update failed: ${JSON.stringify(r.data)}`, r.status);
+  return ok({ account: r.data?.[0] });
+}
+
+// ── Departments ──────────────────────────────────────────────────────────────
+
+async function getDepartments(_params, _auth, env) {
+  const r = await sb(`/rest/v1/cs_departments?select=*&order=sort_order.asc,name.asc`, env);
+  if (!r.ok) return err('failed to load departments', 500);
+  return ok(r.data || []);
+}
+
+// Lists agents with their dept assignment — used by /admin/departments to
+// reassign users. Filters out inactive users.
+async function getDeptAgents(_params, _auth, env) {
+  const u = await sb(
+    `/rest/v1/users_profile?active=eq.true&select=id,full_name,role,cs_department_id&order=full_name.asc&limit=500`,
+    env,
+  );
+  if (!u.ok) return err('failed to load users', 500);
+
+  // Only show users with cs_ticket_manage (these are the assignable agents).
+  // We still return everyone for admin reassignment UX though — let the UI filter if needed.
+  const rolesRes = await sb(`/rest/v1/roles?select=role_id,permissions`, env);
+  const rolesMap = {};
+  for (const r of (rolesRes.data || [])) rolesMap[r.role_id] = r.permissions || {};
+
+  const result = (u.data || []).map(p => ({
+    ...p,
+    has_cs_manage: !!rolesMap[p.role]?.cs_ticket_manage,
+    has_cs_admin:  !!rolesMap[p.role]?.cs_ticket_admin,
+  }));
+  return ok(result);
+}
+
+async function createDepartment(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const { slug, name, sort_order } = body;
+  if (!slug || !SLUG_RE.test(slug)) return err('slug required (lowercase, 2-31 chars)');
+  if (!name) return err('name required');
+  const r = await sb(`/rest/v1/cs_departments`, env, {
+    method: 'POST',
+    body: JSON.stringify({ slug, name, sort_order: sort_order ?? 100, is_active: true }),
+  });
+  if (!r.ok) return err(`create failed: ${JSON.stringify(r.data)}`, r.status);
+  return ok({ department: r.data?.[0] });
+}
+
+async function updateDepartment(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const { id, patch } = body;
+  if (!id || !patch || typeof patch !== 'object') return err('id and patch required');
+  const ALLOWED = ['name', 'sort_order', 'is_active'];
+  const clean = {};
+  for (const k of ALLOWED) if (k in patch) clean[k] = patch[k];
+  if (Object.keys(clean).length === 0) return err('nothing to update');
+  const r = await sb(`/rest/v1/cs_departments?id=eq.${encodeURIComponent(id)}`, env, {
+    method: 'PATCH', body: JSON.stringify(clean),
+  });
+  if (!r.ok) return err(`update failed: ${JSON.stringify(r.data)}`, r.status);
+  return ok({ department: r.data?.[0] });
+}
+
+async function assignUserDepartment(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const { user_id, department_id } = body;
+  if (!user_id) return err('user_id required');
+  const r = await sb(`/rest/v1/users_profile?id=eq.${encodeURIComponent(user_id)}`, env, {
+    method: 'PATCH',
+    body: JSON.stringify({ cs_department_id: department_id || null }),
+  });
+  if (!r.ok) return err(`assign failed: ${JSON.stringify(r.data)}`, r.status);
+  return ok({ user: r.data?.[0] });
 }

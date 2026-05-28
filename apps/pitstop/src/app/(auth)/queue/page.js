@@ -9,6 +9,7 @@ import { csopsGet } from '../../../lib/csopsFetch.js';
 import { fetchIssueCatalog } from '../../../lib/issueCatalog.js';
 import { DISPOSITION_VALUES, DISPOSITION_LABELS } from '../../../lib/dispositions.js';
 import { DispositionBadge } from '../../../components/DispositionBadge.js';
+import { getActiveDept } from '../../../components/DeptSwitcher.js';
 
 // ── Sub-tabs ─────────────────────────────────────────────────────────────────
 const TABS = [
@@ -78,7 +79,7 @@ function maskPhone(phone) {
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export default function QueuePage() {
-  const { user, session } = useAuth();
+  const { user, session, perms, brandUser } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -87,6 +88,16 @@ export default function QueuePage() {
   const categoryFilter = searchParams.get('category') || '';
   const platformFilter = searchParams.get('platform') || '';
   const searchQ = searchParams.get('q') || '';
+
+  // Effective department filter — admins can switch via topbar; others are
+  // locked to their own. Worker also enforces this; sending it explicitly
+  // keeps client + server aligned.
+  const [deptSlug, setDeptSlug] = useState(() => getActiveDept(perms, brandUser?.cs_department_slug));
+  useEffect(() => {
+    function onChange() { setDeptSlug(getActiveDept(perms, brandUser?.cs_department_slug)); }
+    window.addEventListener('pitstop:dept-changed', onChange);
+    return () => window.removeEventListener('pitstop:dept-changed', onChange);
+  }, [perms, brandUser?.cs_department_slug]);
 
   const [counts, setCounts] = useState({});
   const [kpis, setKpis] = useState(null);
@@ -142,13 +153,14 @@ export default function QueuePage() {
     if (categoryFilter)    params.category    = categoryFilter;
     if (platformFilter)    params.platform    = platformFilter;
     if (searchQ)           params.search      = searchQ;
+    if (perms?.cs_ticket_admin) params.department = deptSlug || 'all';
 
     csopsGet('getTickets', params, session)
       .then(d => { if (alive) { setTickets(d?.tickets || []); setError(null); } })
       .catch(e => { if (alive) setError(e.message); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [session, activeTab, dispositionFilter, categoryFilter, platformFilter, searchQ]);
+  }, [session, activeTab, dispositionFilter, categoryFilter, platformFilter, searchQ, deptSlug, perms?.cs_ticket_admin]);
 
   // Submit search on Enter
   function submitSearch(e) {

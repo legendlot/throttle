@@ -16,7 +16,7 @@ function envVarFor(slug) {
 }
 
 export default function MyopAccountsPage() {
-  const { user, session } = useAuth();
+  const { user, session, perms } = useAuth();
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -38,7 +38,7 @@ export default function MyopAccountsPage() {
 
   useEffect(() => { if (session) load(); /* eslint-disable-line */ }, [session]);
 
-  if (!user?.permissions?.cs_ticket_admin) {
+  if (!perms?.cs_ticket_admin) {
     return <EmptyState icon="🔒" message="Admin permission required to manage MyOp accounts." />;
   }
   if (loading) return <Spinner />;

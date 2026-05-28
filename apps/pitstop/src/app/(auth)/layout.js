@@ -5,6 +5,7 @@ import { RequireAuth, useAuth } from '@throttle/auth';
 import { Sidebar, Spinner, Topbar, useSearchShortcut } from '@throttle/ui';
 import { NAV_GROUPS, filterNavByPerms } from '../../lib/nav.js';
 import { PitstopIcon } from '../../components/PitstopIcon.js';
+import DeptSwitcher from '../../components/DeptSwitcher.js';
 
 const RefreshContext = createContext({
   refreshing: false,    setRefreshing:    () => {},
@@ -36,7 +37,7 @@ export default function AuthLayout({ children }) {
 }
 
 function AuthLayoutInner({ children }) {
-  const { user, role, signOut, loading } = useAuth();
+  const { user, role, perms, signOut, loading } = useAuth();
   const pathname  = usePathname();
   const router    = useRouter();
   const { refreshing, lastRefreshed } = useRefreshState();
@@ -45,10 +46,12 @@ function AuthLayoutInner({ children }) {
   // Global "/" → focus the primary search input on the active page.
   useSearchShortcut();
 
-  // Permission-aware nav
+  // Permission-aware nav — perms lives separately on the auth context
+  // (the legacy user?.permissions path was always undefined and silently
+  // hid every `requires`-gated nav item).
   const navGroups = useMemo(
-    () => filterNavByPerms(NAV_GROUPS, user?.permissions || {}),
-    [user?.permissions]
+    () => filterNavByPerms(NAV_GROUPS, perms || {}),
+    [perms]
   );
 
   if (loading && !user) return <Spinner />;
@@ -79,7 +82,9 @@ function AuthLayoutInner({ children }) {
           onTabSelect={(item) => router.push(item.route)}
           refreshing={refreshing}
           lastRefreshed={lastRefreshed}
-        />
+        >
+          <DeptSwitcher />
+        </Topbar>
         <main style={{ flex:1, overflowY:'auto', padding:'16px 24px' }}>
           {children}
         </main>

@@ -25,8 +25,8 @@ const TYPE_COLORS = {
 };
 
 export default function ReportsPage() {
-  const { user, session } = useAuth();
-  const canViewCosts = !!user?.permissions?.cs_reports_view;
+  const { user, session, perms } = useAuth();
+  const canViewCosts = !!perms?.cs_reports_view;
 
   const today = new Date();
   const ytdStart = new Date(today.getFullYear(), 0, 1);
