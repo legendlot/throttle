@@ -2206,6 +2206,10 @@ async function biteSpeedFindOrCreateThread(payload, env) {
   const conv = payload?.conversation || (payload?.event === 'conversation_created' ? payload : null) || payload;
   const convId = conv?.id ?? payload?.id ?? null;
   const phoneRaw = extractPhoneFromChatwoot(payload);
+  // Capture Chatwoot account_id so deep-links from Pitstop UI can target the
+  // exact conversation: chat.bitespeed.co/app/accounts/<id>/conversations/<conv>
+  const accountId = (payload?.account?.id ?? payload?.conversation?.account_id ?? payload?.inbox?.account_id ?? null);
+  const accountIdStr = accountId != null ? String(accountId) : null;
   if (!phoneRaw && !convId) return { thread: null, reason: 'no_phone_or_conv_id' };
 
   const phone = phoneRaw ? toE164(phoneRaw) : null;
@@ -2218,7 +2222,16 @@ async function biteSpeedFindOrCreateThread(payload, env) {
       `/rest/v1/cs_wa_threads?provider_thread_ref=eq.${encodeURIComponent(String(convId))}&select=*&limit=1`,
       env,
     );
-    if (byRef.data?.[0]) return { thread: byRef.data[0] };
+    if (byRef.data?.[0]) {
+      // Backfill provider_account_id if we now know it and the thread didn't
+      if (accountIdStr && byRef.data[0].provider_account_id !== accountIdStr) {
+        await sb(`/rest/v1/cs_wa_threads?id=eq.${byRef.data[0].id}`, env, {
+          method: 'PATCH', body: JSON.stringify({ provider_account_id: accountIdStr }),
+        }).catch(() => {});
+        byRef.data[0].provider_account_id = accountIdStr;
+      }
+      return { thread: byRef.data[0] };
+    }
   }
 
   // Second try: match by phone (collapses to the Phase C placeholder thread
@@ -2247,6 +2260,7 @@ async function biteSpeedFindOrCreateThread(payload, env) {
     body: JSON.stringify({
       customer_phone: phone,
       provider_thread_ref: convId != null ? String(convId) : null,
+      provider_account_id: accountIdStr,
     }),
   });
   if (!ins.ok) {

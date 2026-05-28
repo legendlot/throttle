@@ -1,8 +1,16 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
-import { MessageCircle, Send, Image as ImageIcon, FileText, Clock, AlertTriangle, ChevronDown } from 'lucide-react';
-import { useEscapeClose } from '@throttle/ui';
-import { csopsGet, csopsPost } from '../lib/csopsFetch.js';
+import { useEffect, useState } from 'react';
+import { MessageCircle, Image as ImageIcon, FileText, Clock, ExternalLink } from 'lucide-react';
+import { csopsGet } from '../lib/csopsFetch.js';
+
+const BITESPEED_BASE = 'https://chat.bitespeed.co';
+function buildBiteSpeedDeepLink(thread) {
+  if (!thread) return BITESPEED_BASE;
+  const accountId = thread.provider_account_id;
+  const convId    = thread.provider_thread_ref;
+  if (accountId && convId) return `${BITESPEED_BASE}/app/accounts/${accountId}/conversations/${convId}`;
+  return BITESPEED_BASE;
+}
 
 // Embedded WhatsApp panel for /queue/detail. Phase C: scaffolds the thread UI
 // against the data model in store.cs_wa_threads / cs_wa_messages /
@@ -11,23 +19,15 @@ import { csopsGet, csopsPost } from '../lib/csopsFetch.js';
 
 export default function WhatsAppPanel({ ticket, session }) {
   const [data, setData] = useState(null);
-  const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [showTemplateModal, setShowTemplateModal] = useState(false);
-  const [replyText, setReplyText] = useState('');
-  const [sending, setSending] = useState(false);
 
   async function load() {
     if (!ticket?.id || !session) return;
     setLoading(true);
     try {
-      const [t, tpls] = await Promise.all([
-        csopsGet('getWaThread', { ticket_id: ticket.id }, session),
-        csopsGet('getWaTemplates', {}, session),
-      ]);
+      const t = await csopsGet('getWaThread', { ticket_id: ticket.id }, session);
       setData(t);
-      setTemplates(tpls || []);
       setError(null);
     } catch (e) {
       setError(e.message);
@@ -36,21 +36,6 @@ export default function WhatsAppPanel({ ticket, session }) {
     }
   }
   useEffect(() => { load(); /* eslint-disable-line */ }, [ticket?.id, session]);
-
-  async function sendReply(e) {
-    e?.preventDefault();
-    if (!replyText.trim()) return;
-    setSending(true);
-    try {
-      await csopsPost('sendWaMessage', { ticket_id: ticket.id, kind: 'text', body: replyText.trim() }, session);
-      setReplyText('');
-      await load();
-    } catch (e) {
-      alert(e.message);
-    } finally {
-      setSending(false);
-    }
-  }
 
   if (!ticket?.customer_phone) {
     return (
@@ -71,17 +56,17 @@ export default function WhatsAppPanel({ ticket, session }) {
     <Card>
       <Header inWindow={inWindow} windowUntil={data?.thread?.customer_window_until} />
 
-      {/* Provider-not-wired banner */}
+      {/* Read-only mirror banner — replaces the deceptive "scaffold" banner */}
       <div style={{
         padding: '8px 14px',
-        background: 'rgba(245,158,11,0.10)',
+        background: 'rgba(59,130,246,0.10)',
         borderBottom: '1px solid var(--border-1)',
         display: 'flex', alignItems: 'center', gap: 8,
-        fontSize: 11, color: '#92400e',
+        fontSize: 11, color: 'var(--t2)',
       }}>
-        <AlertTriangle size={13} />
+        <MessageCircle size={13} style={{ color: '#2563eb' }} />
         <span>
-          Phase C scaffold — outbound messages are recorded but not yet delivered. Provider integration ships in Phase C2.
+          Read-only mirror of the BiteSpeed conversation — reply in BiteSpeed to deliver to the customer. Two-way sync ships in Phase C2-B.
         </span>
       </div>
 
@@ -89,51 +74,31 @@ export default function WhatsAppPanel({ ticket, session }) {
       <div style={{ padding: 12, maxHeight: 400, overflowY: 'auto', background: 'var(--surface-2)' }}>
         {msgs.length === 0 ? (
           <div style={{ color: 'var(--t3)', fontSize: 12, textAlign: 'center', padding: 24 }}>
-            No messages yet. Use "Send Template" to open a conversation.
+            No WhatsApp messages on this thread yet.
           </div>
         ) : msgs.map(m => <MessageRow key={m.id} m={m} />)}
       </div>
 
-      {/* Composer */}
-      <div style={{ borderTop: '1px solid var(--border-1)', padding: 12 }}>
-        {inWindow ? (
-          <form onSubmit={sendReply} style={{ display: 'flex', gap: 8 }}>
-            <input
-              type="text"
-              value={replyText}
-              onChange={e => setReplyText(e.target.value)}
-              placeholder="Free-text reply (within 24h customer window)…"
-              style={input}
-              disabled={sending}
-            />
-            <button type="submit" disabled={sending || !replyText.trim()} style={btnPrimary}>
-              <Send size={13} /> {sending ? 'Queueing…' : 'Queue'}
-            </button>
-            <button type="button" onClick={() => setShowTemplateModal(true)} style={btnSecondary}>
-              Template
-            </button>
-          </form>
-        ) : (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-            <span style={{ fontSize: 12, color: 'var(--t3)' }}>
-              Outside the 24h customer-initiated window — only utility templates can be sent.
-            </span>
-            <button onClick={() => setShowTemplateModal(true)} style={btnPrimary}>
-              <Send size={13} /> Send Template
-            </button>
-          </div>
-        )}
+      {/* Footer: deep-link to BiteSpeed for replies */}
+      <div style={{
+        borderTop: '1px solid var(--border-1)', padding: 12,
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+      }}>
+        <span style={{ fontSize: 11, color: 'var(--t3)' }}>
+          {data?.thread?.provider_thread_ref
+            ? <>Conversation #{data.thread.provider_thread_ref}</>
+            : <>No BiteSpeed conversation linked yet</>}
+        </span>
+        <a
+          href={buildBiteSpeedDeepLink(data?.thread)}
+          target="_blank"
+          rel="noreferrer"
+          style={btnPrimary}
+        >
+          <ExternalLink size={13} />
+          {data?.thread?.provider_thread_ref ? 'Reply in BiteSpeed' : 'Open BiteSpeed'}
+        </a>
       </div>
-
-      {showTemplateModal && (
-        <TemplateModal
-          templates={templates}
-          ticket={ticket}
-          session={session}
-          onClose={() => setShowTemplateModal(false)}
-          onSent={() => { setShowTemplateModal(false); load(); }}
-        />
-      )}
     </Card>
   );
 }
@@ -241,94 +206,9 @@ function MessageRow({ m }) {
   );
 }
 
-function TemplateModal({ templates, ticket, session, onClose, onSent }) {
-  const [picked, setPicked] = useState(templates[0] || null);
-  const [params, setParams] = useState({});
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState(null);
-  useEscapeClose(true, onClose);
-
-  const preview = useMemo(() => {
-    if (!picked) return '';
-    let body = picked.body;
-    for (let i = 1; i <= (picked.placeholder_count || 0); i++) {
-      body = body.split(`{{${i}}}`).join(params[i] || `{{${i}}}`);
-    }
-    return body;
-  }, [picked, params]);
-
-  async function send(e) {
-    e.preventDefault();
-    if (!picked) return;
-    setBusy(true); setErr(null);
-    try {
-      const template_params = [];
-      for (let i = 1; i <= (picked.placeholder_count || 0); i++) {
-        template_params.push({ index: i, value: params[i] || '' });
-      }
-      await csopsPost('sendWaMessage', {
-        ticket_id: ticket.id,
-        kind: 'template',
-        template_name: picked.name,
-        template_params,
-      }, session);
-      onSent();
-    } catch (e) {
-      setErr(e.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div onClick={onClose} style={{
-      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
-    }}>
-      <form onClick={e => e.stopPropagation()} onSubmit={send} style={{
-        background: 'var(--surface-1)', border: '1px solid var(--border-1)',
-        borderRadius: 10, padding: 24, width: 540, maxWidth: '94vw',
-      }}>
-        <h2 style={{ margin: '0 0 12px', fontSize: 16, fontWeight: 700 }}>Send WhatsApp Template</h2>
-        <label style={{ display: 'block', marginBottom: 12 }}>
-          <span style={{ display: 'block', fontSize: 11, color: 'var(--t3)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Template</span>
-          <select value={picked?.name || ''} onChange={e => { setPicked(templates.find(t => t.name === e.target.value)); setParams({}); }} style={input}>
-            {templates.map(t => (
-              <option key={t.name} value={t.name}>{t.display_label} ({t.category})</option>
-            ))}
-          </select>
-        </label>
-
-        {picked?.placeholder_count > 0 && (
-          <div style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Placeholders ({picked.placeholder_count})
-            </div>
-            {Array.from({ length: picked.placeholder_count }, (_, i) => i + 1).map(n => (
-              <input key={n} placeholder={`{{${n}}}`} value={params[n] || ''}
-                onChange={e => setParams({ ...params, [n]: e.target.value })}
-                style={{ ...input, marginBottom: 6 }} />
-            ))}
-          </div>
-        )}
-
-        <div style={{ padding: 10, background: 'var(--surface-2)', borderRadius: 6, fontSize: 13, color: 'var(--t1)', whiteSpace: 'pre-wrap', marginBottom: 12, border: '1px solid var(--border-1)' }}>
-          {preview}
-        </div>
-
-        {err && <div style={{ padding: 8, background: 'rgba(239,68,68,0.10)', color: '#dc2626', borderRadius: 6, fontSize: 12, marginBottom: 8 }}>{err}</div>}
-
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <button type="button" onClick={onClose} style={btnSecondary}>Cancel</button>
-          <button type="submit" disabled={busy} style={btnPrimary}>
-            <Send size={13} /> {busy ? 'Queueing…' : 'Queue Send'}
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
-const input = { width: '100%', padding: '7px 10px', background: 'var(--surface-2)', border: '1px solid var(--border-1)', borderRadius: 5, fontSize: 13, color: 'var(--t1)', boxSizing: 'border-box' };
-const btnPrimary = { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 14px', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 6, fontWeight: 600, cursor: 'pointer', fontSize: 13 };
-const btnSecondary = { padding: '7px 14px', background: 'transparent', border: '1px solid var(--border-1)', borderRadius: 6, color: 'var(--t2)', cursor: 'pointer', fontSize: 13 };
+const btnPrimary = {
+  display: 'inline-flex', alignItems: 'center', gap: 6,
+  padding: '7px 14px', background: 'var(--accent)', color: '#fff',
+  border: 'none', borderRadius: 6, fontWeight: 600, cursor: 'pointer',
+  fontSize: 13, textDecoration: 'none',
+};
