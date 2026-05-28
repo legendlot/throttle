@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useAuth } from '@throttle/auth';
-import { EmptyState, Spinner } from '@throttle/ui';
+import { EmptyState, Spinner, useEscapeClose } from '@throttle/ui';
 import { Plus, MessageSquare, AlertTriangle } from 'lucide-react';
 import { csopsGet, csopsPost } from '../../../../lib/csopsFetch.js';
 
@@ -124,6 +124,7 @@ function TemplateModal({ initial, session, onClose, onSaved }) {
   const [notes, setNotes] = useState(initial?.notes || '');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
+  useEscapeClose(true, onClose);
 
   const placeholders = [...new Set((body.match(/\{\{\d+\}\}/g) || []))].length;
 

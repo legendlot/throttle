@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@throttle/auth';
-import { KpiCard, EmptyState, Spinner } from '@throttle/ui';
+import { KpiCard, EmptyState, Spinner, useListNav } from '@throttle/ui';
 import { Search, PhoneIncoming, PhoneOutgoing, Phone, MoreHorizontal, ExternalLink, FilePlus2, CheckCheck, Filter } from 'lucide-react';
 import { csopsGet, csopsPost } from '../../../lib/csopsFetch.js';
 import { CallStatusBadge } from '../../../components/CallStatusBadge.js';
@@ -65,6 +65,18 @@ export default function CallsPage() {
   const [error, setError] = useState(null);
   const [searchInput, setSearchInput] = useState(searchQ);
   const [openCalldetailId, setOpenCalldetailId] = useState(null);
+
+  // ↑/↓ navigates the visible row; Enter opens its ticket detail when linked,
+  // else the call detail. Skipped while typing.
+  const { focusedIdx, setFocusedIdx } = useListNav(
+    calls.length,
+    (i) => {
+      const c = calls[i];
+      if (!c) return;
+      if (c.ticket?.ticket_no) router.push(`/queue/detail?ticket_no=${c.ticket.ticket_no}`);
+      else router.push(`/calls/detail?id=${c.id}`);
+    }
+  );
 
   function setParam(key, value) {
     const params = new URLSearchParams(searchParams);
@@ -175,7 +187,7 @@ export default function CallsPage() {
       {/* Table */}
       <div style={{ background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 8, overflow: 'hidden' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-          <thead style={{ background: 'var(--surface-2)' }}>
+          <thead style={{ background: 'var(--surface-2)', position: 'sticky', top: 0, zIndex: 1 }}>
             <tr>
               <Th>Time</Th><Th></Th><Th>Phone</Th><Th>Customer</Th><Th>Agent</Th><Th>Duration</Th><Th>Status</Th><Th>Ticket</Th><Th></Th>
             </tr>
@@ -185,17 +197,44 @@ export default function CallsPage() {
               <tr><td colSpan={9} style={{ padding: 40, textAlign: 'center' }}><Spinner /></td></tr>
             ) : calls.length === 0 ? (
               <tr><td colSpan={9} style={{ padding: 30, textAlign: 'center', color: 'var(--t3)' }}>No calls match these filters.</td></tr>
-            ) : calls.map(c => (
-              <CallRow key={c.id} call={c} session={session} onAction={refresh} />
+            ) : calls.map((c, i) => (
+              <CallRow key={c.id} call={c} session={session} onAction={refresh}
+                focused={focusedIdx === i}
+                onMouseEnter={() => setFocusedIdx(i)} />
             ))}
           </tbody>
         </table>
+        {!loading && calls.length > 0 && (
+          <div style={{
+            padding: '8px 14px',
+            background: 'var(--surface-2)',
+            borderTop: '1px solid var(--border-1)',
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--t3)',
+          }}>
+            <span>{calls.length} call{calls.length === 1 ? '' : 's'}</span>
+            <span style={{ color: 'var(--t4)' }}>
+              <Kbd>↑</Kbd><Kbd>↓</Kbd> navigate · <Kbd>↵</Kbd> open · <Kbd>/</Kbd> search
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-function CallRow({ call, session, onAction }) {
+function Kbd({ children }) {
+  return (
+    <kbd style={{
+      display: 'inline-block', padding: '0 5px', margin: '0 2px',
+      background: 'var(--surface-1, var(--surface))', border: '1px solid var(--border-1, var(--border))',
+      borderRadius: 3, fontFamily: 'var(--font-mono)', fontSize: 10,
+      color: 'var(--t2)', minWidth: 14, textAlign: 'center', lineHeight: '14px',
+    }}>{children}</kbd>
+  );
+}
+
+function CallRow({ call, session, onAction, focused, onMouseEnter }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const router = useRouter();
   const ticketNo = call.ticket?.ticket_no;
@@ -218,7 +257,11 @@ function CallRow({ call, session, onAction }) {
   }
 
   return (
-    <tr style={{ borderTop: '1px solid var(--border-1)' }}>
+    <tr onMouseEnter={onMouseEnter} style={{
+      borderTop: '1px solid var(--border-1)',
+      background: focused ? 'var(--surface-2)' : 'transparent',
+      boxShadow: focused ? 'inset 0 0 0 2px var(--accent)' : 'none',
+    }}>
       <Td>{fmtTime(call.started_at || call.created_at)}</Td>
       <Td><DirectionIcon direction={call.direction} /></Td>
       <Td><code style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{call.customer_phone || '—'}</code></Td>

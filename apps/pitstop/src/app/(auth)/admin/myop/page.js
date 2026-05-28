@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useAuth } from '@throttle/auth';
-import { EmptyState, Spinner } from '@throttle/ui';
+import { EmptyState, Spinner, useEscapeClose } from '@throttle/ui';
 import { Plus, CopyCheck, Copy } from 'lucide-react';
 import { csopsGet, csopsPost } from '../../../../lib/csopsFetch.js';
 
@@ -140,6 +140,7 @@ function CreateModal({ onClose, onCreated, session }) {
   const [owner, setOwner] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
+  useEscapeClose(true, onClose);
 
   async function submit(e) {
     e.preventDefault();

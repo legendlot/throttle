@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { Chip, KpiCard, EmptyState, Spinner } from '@throttle/ui';
+import { Chip, KpiCard, EmptyState, Spinner, useListNav } from '@throttle/ui';
 import { Plus, Download, Search, ListChecks } from 'lucide-react';
 import { csopsGet } from '../../../lib/csopsFetch.js';
 import { fetchIssueCatalog } from '../../../lib/issueCatalog.js';
@@ -106,6 +106,12 @@ export default function QueuePage() {
   const [error, setError] = useState(null);
   const [searchInput, setSearchInput] = useState(searchQ);
   const [catalogCategories, setCatalogCategories] = useState([]);
+
+  // ↑/↓ navigates the visible row; Enter opens it. Skipped while typing.
+  const { focusedIdx, setFocusedIdx } = useListNav(
+    tickets.length,
+    (i) => { const t = tickets[i]; if (t) router.push(`/queue/detail/?ticket_no=${t.ticket_no}`); }
+  );
 
   // Update URL with a partial param patch
   function setParam(key, value) {
@@ -398,7 +404,7 @@ export default function QueuePage() {
           overflow: 'hidden',
         }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--text-sm)' }}>
-            <thead style={{ background: 'var(--surface-2)', borderBottom: '1px solid var(--border)' }}>
+            <thead style={{ background: 'var(--surface-2)', borderBottom: '1px solid var(--border)', position: 'sticky', top: 0, zIndex: 1 }}>
               <tr>
                 <Th>Ticket</Th>
                 <Th>Customer</Th>
@@ -411,8 +417,14 @@ export default function QueuePage() {
               </tr>
             </thead>
             <tbody>
-              {tickets.map(t => (
-                <tr key={t.id} style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}
+              {tickets.map((t, i) => (
+                <tr key={t.id} style={{
+                      borderBottom: '1px solid var(--border)',
+                      cursor: 'pointer',
+                      background: focusedIdx === i ? 'var(--surface-2)' : 'transparent',
+                      boxShadow: focusedIdx === i ? 'inset 0 0 0 2px var(--yellow)' : 'none',
+                    }}
+                    onMouseEnter={() => setFocusedIdx(i)}
                     onClick={() => router.push(`/queue/detail/?ticket_no=${t.ticket_no}`)}>
                   <Td mono><span style={{ color: 'var(--t1)', fontWeight: 600 }}>{t.ticket_no}</span></Td>
                   <Td>
@@ -458,8 +470,12 @@ export default function QueuePage() {
             color: 'var(--t3)',
             fontFamily: 'var(--font-mono)', fontSize: 11,
             borderTop: '1px solid var(--border)',
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
           }}>
-            {tickets.length} ticket{tickets.length === 1 ? '' : 's'}
+            <span>{tickets.length} ticket{tickets.length === 1 ? '' : 's'}</span>
+            <span style={{ color: 'var(--t4)' }}>
+              <Kbd>↑</Kbd><Kbd>↓</Kbd> navigate · <Kbd>↵</Kbd> open · <Kbd>/</Kbd> search
+            </span>
           </div>
         </div>
       )}
@@ -491,5 +507,16 @@ function Td({ children, mono, align = 'left' }) {
       textAlign: align,
       fontFamily: mono ? 'var(--font-mono)' : 'inherit',
     }}>{children}</td>
+  );
+}
+
+function Kbd({ children }) {
+  return (
+    <kbd style={{
+      display: 'inline-block', padding: '0 5px', margin: '0 2px',
+      background: 'var(--surface)', border: '1px solid var(--border)',
+      borderRadius: 3, fontFamily: 'var(--font-mono)', fontSize: 10,
+      color: 'var(--t2)', minWidth: 14, textAlign: 'center', lineHeight: '14px',
+    }}>{children}</kbd>
   );
 }

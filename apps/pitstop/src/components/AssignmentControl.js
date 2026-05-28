@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { UserCheck, UserPlus, Users } from 'lucide-react';
 import { useAuth } from '@throttle/auth';
+import { useEscapeClose } from '@throttle/ui';
 import { csopsGet, csopsPost } from '../lib/csopsFetch.js';
 
 // Surfaces ticket assignment on the detail page with role-aware controls.
@@ -109,6 +110,7 @@ export default function AssignmentControl({ ticket, session, onChanged }) {
 }
 
 function AgentPicker({ agents, onPick, onClose, busy, currentId }) {
+  useEscapeClose(true, onClose);
   return (
     <div onClick={onClose} style={{
       position:'fixed', inset:0, background:'rgba(0,0,0,0.5)',

@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
 import { MessageCircle, Send, Image as ImageIcon, FileText, Clock, AlertTriangle, ChevronDown } from 'lucide-react';
+import { useEscapeClose } from '@throttle/ui';
 import { csopsGet, csopsPost } from '../lib/csopsFetch.js';
 
 // Embedded WhatsApp panel for /queue/detail. Phase C: scaffolds the thread UI
@@ -245,6 +246,7 @@ function TemplateModal({ templates, ticket, session, onClose, onSent }) {
   const [params, setParams] = useState({});
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
+  useEscapeClose(true, onClose);
 
   const preview = useMemo(() => {
     if (!picked) return '';
