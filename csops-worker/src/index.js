@@ -2135,7 +2135,12 @@ function verifyBiteSpeedAuth(url, env) {
 }
 
 // Pull a customer phone from any of the places Chatwoot tucks it (varies by
-// payload type + Chatwoot version + inbox channel).
+// payload type + Chatwoot version + inbox channel). Patterns observed in
+// BiteSpeed/Chatwoot WhatsApp payloads:
+//   - conversation_updated:           body.meta.sender.phone_number
+//   - message_created (incoming):     body.sender.phone_number
+//   - message_created (outgoing):     body.conversation.meta.sender.phone_number
+//   - both:                           body.conversation.contact_inbox.source_id (WA-formatted ID fallback)
 function extractPhoneFromChatwoot(body) {
   const candidates = [
     body?.contact?.phone_number,
@@ -2146,6 +2151,10 @@ function extractPhoneFromChatwoot(body) {
     body?.meta?.sender?.identifier,
     body?.sender?.phone_number,
     body?.sender?.identifier,
+    // Chatwoot's contact_inbox.source_id is the channel-specific identifier
+    // (WA phone-formatted ID for WhatsApp inboxes — often "+91..." or "91...@s.whatsapp.net")
+    body?.conversation?.contact_inbox?.source_id,
+    body?.contact_inbox?.source_id,
   ];
   for (const c of candidates) {
     if (c && typeof c === 'string' && c.trim()) return c.trim();
@@ -2173,7 +2182,9 @@ async function handleBiteSpeedWebhook(request, env) {
   let body = {};
   try { body = await request.json(); } catch { return err('Bad JSON', 400); }
   const event = body?.event;
-  console.log(`[bitespeed] ${event} conv=${body?.conversation?.id || body?.id || '?'}`);
+  const convId = body?.conversation?.id || body?.id || '?';
+  const phone = extractPhoneFromChatwoot(body);
+  console.log(`[bitespeed] ${event} conv=${convId}${phone ? ' phone=' + phone : ''}`);
 
   // Always 200 quickly per Chatwoot best practice — process inline since
   // payloads are small + we're already on a Cloudflare Worker (cold start fine).
@@ -2229,6 +2240,7 @@ async function biteSpeedFindOrCreateThread(payload, env) {
     }
   }
 
+
   // No existing thread — create one
   const ins = await sb(`/rest/v1/cs_wa_threads`, env, {
     method: 'POST',
@@ -2237,18 +2249,56 @@ async function biteSpeedFindOrCreateThread(payload, env) {
       provider_thread_ref: convId != null ? String(convId) : null,
     }),
   });
+  if (!ins.ok) {
+    console.error(`[bitespeed] cs_wa_threads INSERT failed status=${ins.status} body=${JSON.stringify(ins.data)?.slice(0, 300)}`);
+  }
   return { thread: ins.data?.[0] || null };
 }
 
+// If `thread` exists but has no customer_phone, and the current payload
+// surfaces one (e.g. a later conversation_updated carries phone where an
+// earlier message_created didn't), patch the thread + retroactively link
+// any orphan messages on it to whatever ticket is currently open for that phone.
+async function maybeBackfillPhoneAndLinkTickets(thread, payload, env) {
+  if (!thread || thread.customer_phone) return thread;
+  const phoneRaw = extractPhoneFromChatwoot(payload);
+  if (!phoneRaw) return thread;
+  const phone = toE164(phoneRaw);
+  if (!phone) return thread;
+
+  // Patch the thread
+  const upd = await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, {
+    method: 'PATCH',
+    body: JSON.stringify({ customer_phone: phone }),
+  });
+  if (upd.ok) thread.customer_phone = phone;
+
+  // Phone-match: find the latest open cs_tickets row for this phone
+  const tRes = await sb(
+    `/rest/v1/cs_tickets?customer_phone=eq.${encodeURIComponent(phone)}&closed_at=is.null&select=id&order=created_at.desc&limit=1`,
+    env,
+  );
+  const ticketId = tRes.data?.[0]?.id || null;
+  if (ticketId) {
+    // Retroactively link all messages on this thread that have no ticket_id yet
+    await sb(`/rest/v1/cs_wa_messages?thread_id=eq.${thread.id}&ticket_id=is.null`, env, {
+      method: 'PATCH',
+      body: JSON.stringify({ ticket_id: ticketId }),
+    }).catch(() => {});
+  }
+  return thread;
+}
+
 async function biteSpeedConversationUpserted(body, env) {
-  const { thread } = await biteSpeedFindOrCreateThread(body, env);
+  let { thread } = await biteSpeedFindOrCreateThread(body, env);
   if (!thread) return json({ ok: true, skipped: 'no_phone_or_conv_id' });
+  thread = await maybeBackfillPhoneAndLinkTickets(thread, body, env);
   // Bump last_message_at on any conv update so the thread sorts to the top of lists
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, {
     method: 'PATCH',
     body: JSON.stringify({ last_message_at: new Date().toISOString() }),
   });
-  return json({ ok: true, thread_id: thread.id });
+  return json({ ok: true, thread_id: thread.id, phone_backfilled: !!thread.customer_phone });
 }
 
 async function biteSpeedMessageCreated(body, env) {
@@ -2263,8 +2313,9 @@ async function biteSpeedMessageCreated(body, env) {
 
   // Resolve thread (creates one if needed). Chatwoot puts the conversation
   // nested under `conversation` on message_created.
-  const { thread } = await biteSpeedFindOrCreateThread(body, env);
+  let { thread } = await biteSpeedFindOrCreateThread(body, env);
   if (!thread) return json({ ok: true, skipped: 'no_thread' });
+  thread = await maybeBackfillPhoneAndLinkTickets(thread, body, env);
 
   const providerMessageId = body?.id != null ? String(body.id) : null;
 
@@ -2345,7 +2396,10 @@ async function biteSpeedMessageCreated(body, env) {
       sent_at:     direction === 'outbound' ? ts : null,
     }),
   });
-  if (!ins.ok) return err(`insert failed: ${JSON.stringify(ins.data)}`, ins.status);
+  if (!ins.ok) {
+    console.error(`[bitespeed] cs_wa_messages INSERT failed status=${ins.status} body=${JSON.stringify(ins.data)?.slice(0, 300)}`);
+    return err(`insert failed: ${JSON.stringify(ins.data)}`, ins.status);
+  }
 
   // Inbound message resets the 24h Meta customer window + bumps last_message_at
   const threadPatch = { last_message_at: ts };
