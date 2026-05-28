@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
 import { Scan, AlertCircle, Phone as PhoneIcon } from 'lucide-react';
@@ -37,12 +37,18 @@ const labelStyle = {
 export default function NewTicketPage() {
   const { session } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const upcRef = useRef(null);
+
+  // Prefill from URL query string (Calls view → "Create Ticket from Call")
+  const fromCall = searchParams.get('from_call');
+  const prefilledPhone = searchParams.get('phone') || '';
+  const prefilledName  = searchParams.get('name')  || '';
 
   const [form, setForm] = useState({
     intake_channel:  'phone',
-    customer_name:   '',
-    customer_phone:  '',
+    customer_name:   prefilledName,
+    customer_phone:  prefilledPhone,
     customer_email:  '',
     customer_address:'',
     platform:        '',
@@ -56,7 +62,7 @@ export default function NewTicketPage() {
     issue_subcategory: '',
     issue_subcategory_custom: '',
     disposition:     'pending',
-    issue_description: '',
+    issue_description: fromCall ? '[Created from missed call]' : '',
   });
 
   const [upcLookup, setUpcLookup] = useState({ loading: false, data: null, error: null });
@@ -120,7 +126,13 @@ export default function NewTicketPage() {
     setError(null);
     setSubmitting(true);
     try {
-      const data = await csopsPost('createTicket', form, session);
+      let data;
+      if (fromCall) {
+        // Convert path — links the cs_calls row to the new ticket
+        data = await csopsPost('createTicketFromCall', { call_id: fromCall, ...form }, session);
+      } else {
+        data = await csopsPost('createTicket', form, session);
+      }
       router.push(`/queue/detail/?ticket_no=${data.ticket_no}`);
     } catch (e) {
       setError(e.message);
