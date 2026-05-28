@@ -66,7 +66,7 @@ Per approved plan (`/Users/afshaansiddiqui/.claude/plans/elegant-splashing-bonbo
 - Sheet importer for all 6 Omnipresent sheets (~7,000 rows)
 - Permissions: 5 keys on `store.roles`, 2 new role rows
 - Reports placeholder (recharts wiring — fuller buildout in Phase B)
-- Private GH-Pages target repo at `legendlot/ignition`; domain `ignition.legendoftoys.com`
+- GH-Pages target repo at `legendlot/ignition` (public, same as sibling systems — auth lives in Supabase + worker JWT, not in repo visibility); domain `ignition.legendoftoys.com`
 
 ## Phase B (next)
 

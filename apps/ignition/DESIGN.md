@@ -56,7 +56,7 @@ typography:
 - **Worker**: `ignitionops` Cloudflare Worker — `ignitionops.afshaan.workers.dev`
 - **Source**: `05_Throttle/ignitionops-worker/src/index.js`
 - **Frontend**: `apps/ignition/` (Next.js 14 static-export) → `ignition.legendoftoys.com`
-- **Deploy target**: `legendlot/ignition` (private GH-Pages repo)
+- **Deploy target**: `legendlot/ignition` (public GH-Pages repo — same as Pitstop / Stores / dashboard; GH Pages requires public on the current plan)
 - **DB**: Supabase `lot-production` — `ignition` schema (sibling to `store`, `brand`, `public`)
 - **Auth**: Supabase Auth + Google OAuth, `@legendoftoys.com` domain-restricted (RULE-010)
 - **Shared packages**: `@throttle/{auth,db,ui,domain}` — same as Pitstop
