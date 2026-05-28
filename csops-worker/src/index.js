@@ -372,6 +372,9 @@ async function handleGet(action, params, auth, env) {
     case 'getDepartments':   return getDepartments(params, auth, env);
     case 'getDeptAgents':    return getDeptAgents(params, auth, env);
     case 'getMyopAccounts':  return getMyopAccounts(params, auth, env);
+    case 'getCalls':         return getCalls(params, auth, env);
+    case 'getCall':          return getCall(params, auth, env);
+    case 'getCallsKpis':     return getCallsKpis(params, auth, env);
     case 'searchShopifyCustomer':
       return ok(await shopifyLookup({ phone: params.get('phone'), email: params.get('email') }, env));
     default:
@@ -399,6 +402,8 @@ async function handlePost(action, body, auth, env, request) {
     case 'updateDepartment':     return updateDepartment(body, auth, env);
     case 'assignUserDepartment': return assignUserDepartment(body, auth, env);
     case 'setMyopDefaultDepartment': return setMyopDefaultDepartment(body, auth, env);
+    case 'markCalledBack':           return markCalledBack(body, auth, env);
+    case 'createTicketFromCall':     return createTicketFromCall(body, auth, env);
     default:
       return err(`Unknown action: ${action}`, 404);
   }
@@ -1272,11 +1277,55 @@ async function insertHistorySystem(ticket_id, field_name, old_value, new_value, 
   }) }).catch(() => {});
 }
 
+// Upsert a cs_calls row keyed on (account, session). Idempotent and additive —
+// the call.answered / call.end / call.summary legs each patch in their own fields.
+async function upsertCsCall(account, c, patch, env) {
+  const existing = await sb(
+    `/rest/v1/cs_calls?myop_account_id=eq.${account.id}&call_session_id=eq.${encodeURIComponent(c.session_id)}&select=id,ticket_id,status&limit=1`,
+    env,
+  );
+  if (existing.data?.[0]) {
+    await sb(`/rest/v1/cs_calls?id=eq.${existing.data[0].id}`, env, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    });
+    return existing.data[0];
+  }
+  const ins = await sb(`/rest/v1/cs_calls`, env, {
+    method: 'POST',
+    body: JSON.stringify({
+      myop_account_id:  account.id,
+      cs_department_id: account.default_department_id || null,
+      call_session_id:  c.session_id,
+      direction:        c.direction,
+      did:              c.did,
+      customer_phone:   toE164(c.phone),
+      ...patch,
+    }),
+  });
+  return ins.data?.[0] || null;
+}
+
 async function webhookCallAnswered(body, env, account) {
   const c = parseMyOp(body);
   if (!c.session_id) return err('missing session_id', 400);
+
+  // 1) cs_calls — record the answered state (idempotent)
+  await upsertCsCall(account, c, {
+    status: 'answered',
+    started_at: c.timestamp || new Date().toISOString(),
+    raw_meta: { last_event: 'answered' },
+  }, env);
+
+  // 2) cs_tickets — auto-create if not present
   const existing = await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(c.session_id)}&select=id,ticket_no&limit=1`, env);
-  if (existing.data?.[0]) return json({ ok: true, deduped: true, ticket_no: existing.data[0].ticket_no });
+  if (existing.data?.[0]) {
+    // Already created — make sure cs_calls.ticket_id is linked
+    await sb(`/rest/v1/cs_calls?myop_account_id=eq.${account.id}&call_session_id=eq.${encodeURIComponent(c.session_id)}`, env, {
+      method: 'PATCH', body: JSON.stringify({ ticket_id: existing.data[0].id }),
+    });
+    return json({ ok: true, deduped: true, ticket_no: existing.data[0].ticket_no });
+  }
 
   const phone = toE164(c.phone);
   const agentEmail = agentEmailFromLegs(c.legs);   // usually null on answered; backfilled by call.summary
@@ -1304,6 +1353,18 @@ async function webhookCallAnswered(body, env, account) {
     stage: 'intake',
   }) });
   if (!ins.ok) return err(`insert failed: ${JSON.stringify(ins.data)}`, ins.status);
+
+  // 3) link cs_calls.ticket_id + customer/agent enrichment
+  await sb(`/rest/v1/cs_calls?myop_account_id=eq.${account.id}&call_session_id=eq.${encodeURIComponent(c.session_id)}`, env, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      ticket_id: ins.data[0].id,
+      agent_user_id: agent.id,
+      agent_name: agent.name,
+      customer_name: shop.found ? shop.customer.name : null,
+    }),
+  });
+
   await insertHistorySystem(ins.data[0].id, 'ticket_created', null, ticket_no, 'auto-created from call', env);
   return json({ ok: true, ticket_no });
 }
@@ -1311,46 +1372,70 @@ async function webhookCallAnswered(body, env, account) {
 async function webhookCallEnd(body, env, account) {
   const c = parseMyOp(body);
   if (!c.session_id) return err('missing session_id', 400);
-  const patch = {
-    call_ended_at: c.timestamp || new Date().toISOString(),
+
+  const answered = Number(c.duration) > 0;
+  const endedAt  = c.timestamp || new Date().toISOString();
+
+  // 1) cs_calls — always patch/insert; status is 'answered' if duration>0, else 'missed'
+  await upsertCsCall(account, c, {
+    status: answered ? 'answered' : 'missed',
+    ended_at: endedAt,
+    duration_seconds: c.duration,
+    recording_filename: c.recording_filename,
+    myop_client_ref_id: c.client_ref_id,
+    raw_meta: { last_event: 'end' },
+  }, env);
+
+  // 2) cs_tickets — patch if exists; create only if answered (out-of-order delivery)
+  const ticketPatch = {
+    call_ended_at: endedAt,
     call_duration_seconds: c.duration,
     call_recording_filename: c.recording_filename,
     myop_client_ref_id: c.client_ref_id,
   };
   const existing = await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(c.session_id)}&select=id&limit=1`, env);
   if (existing.data?.[0]) {
-    await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(c.session_id)}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+    await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(c.session_id)}`, env, { method: 'PATCH', body: JSON.stringify(ticketPatch) });
     return json({ ok: true, patched: true });
   }
-  // No ticket exists for this session. Two cases:
-  //  - genuinely answered call whose call.answered we missed (out-of-order) → create
-  //  - unanswered / missed call (only call.end fired) → MUST NOT create a ticket
-  // Answered calls have talk time; missed calls report 0/null duration.
-  if (!(Number(c.duration) > 0)) {
-    return json({ ok: true, skipped: 'unanswered call — no ticket created' });
+  // Missed call with no prior call.answered → cs_calls row stands alone, no ticket
+  if (!answered) {
+    return json({ ok: true, skipped: 'unanswered call — cs_calls row written, no ticket' });
   }
-  // out-of-order: call.end before call.answered for an answered call — create then patch
+  // out-of-order: answered call where call.end arrived before call.answered
   const created = await webhookCallAnswered(body, env, account);
   const createdData = await created.clone().json().catch(() => null);
-  if (!createdData?.ok) return created;  // create failed — don't patch a nonexistent row
-  await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(c.session_id)}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+  if (!createdData?.ok) return created;
+  await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(c.session_id)}`, env, { method: 'PATCH', body: JSON.stringify(ticketPatch) });
   return created;
 }
 
 // call.summary carries agent identity (legs[].agent.email) that call.answered
 // lacks. Backfill the ticket's assignee when the summary arrives.
-async function webhookCallSummary(body, env, account) {  // eslint-disable-line no-unused-vars
+async function webhookCallSummary(body, env, account) {
   const c = parseMyOp(body);
   if (!c.session_id) return json({ ok: true, skipped: 'no session_id' });
   const agentEmail = agentEmailFromLegs(c.legs);
   if (!agentEmail) return json({ ok: true, skipped: 'no agent email in summary' });
-  const existing = await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(c.session_id)}&select=id&limit=1`, env);
-  const t = existing.data?.[0];
-  if (!t) return json({ ok: true, skipped: 'no ticket for session' });
   const agent = await resolveAgentByEmail(agentEmail, env);
   if (!agent.id) return json({ ok: true, skipped: 'agent email not matched: ' + agentEmail });
-  await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(c.session_id)}`, env, { method: 'PATCH', body: JSON.stringify({ assigned_agent_id: agent.id, assigned_agent_name: agent.name }) });
-  await insertHistorySystem(t.id, 'assigned_agent_name', null, agent.name, 'auto-assigned from call.summary', env);
+
+  // cs_calls — always backfill (works for both answered and missed calls)
+  await sb(`/rest/v1/cs_calls?myop_account_id=eq.${account.id}&call_session_id=eq.${encodeURIComponent(c.session_id)}`, env, {
+    method: 'PATCH',
+    body: JSON.stringify({ agent_user_id: agent.id, agent_name: agent.name }),
+  });
+
+  // cs_tickets — only if a ticket exists (answered calls only)
+  const existing = await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(c.session_id)}&select=id&limit=1`, env);
+  const t = existing.data?.[0];
+  if (t) {
+    await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(c.session_id)}`, env, {
+      method: 'PATCH',
+      body: JSON.stringify({ assigned_agent_id: agent.id, assigned_agent_name: agent.name }),
+    });
+    await insertHistorySystem(t.id, 'assigned_agent_name', null, agent.name, 'auto-assigned from call.summary', env);
+  }
   return json({ ok: true, assigned: agent.name });
 }
 
@@ -1485,4 +1570,150 @@ async function assignUserDepartment(body, auth, env) {
   });
   if (!r.ok) return err(`assign failed: ${JSON.stringify(r.data)}`, r.status);
   return ok({ user: r.data?.[0] });
+}
+
+// ── Calls (list / detail / callback / convert-to-ticket) ─────────────────────
+
+async function getCalls(params, auth, env) {
+  const tab = params.get('tab') || 'all';
+  const limit = Math.min(parseInt(params.get('limit') || '50'), 200);
+  const offset = parseInt(params.get('offset') || '0');
+  const direction = params.get('direction');
+  const status = params.get('status');
+  const account = params.get('account');   // slug
+  const fromDate = params.get('from');
+  const toDate = params.get('to');
+  const search = (params.get('search') || '').trim();
+
+  const filters = [];
+
+  // Dept default-filter (admins can override via ?department=<slug>|all)
+  const deptFilter = await resolveDeptFilter(params.get('department'), auth, env);
+  if (!deptFilter) return err('Unknown department slug', 404);
+  if (deptFilter.mode === 'id') filters.push(`cs_department_id=eq.${deptFilter.id}`);
+
+  // tab presets
+  if (tab === 'my')          filters.push(`agent_user_id=eq.${auth.userId}`);
+  else if (tab === 'unassigned') filters.push(`agent_user_id=is.null`, `ticket_id=is.null`);
+  else if (tab === 'missed') filters.push(`status=eq.missed`, `called_back_at=is.null`);
+
+  if (direction) filters.push(`direction=eq.${encodeURIComponent(direction)}`);
+  if (status)    filters.push(`status=eq.${encodeURIComponent(status)}`);
+
+  if (account) {
+    // Resolve slug → id
+    const a = await sb(`/rest/v1/myop_accounts?slug=eq.${encodeURIComponent(account)}&select=id&limit=1`, env);
+    if (a.data?.[0]) filters.push(`myop_account_id=eq.${a.data[0].id}`);
+  }
+  if (fromDate) filters.push(`created_at=gte.${encodeURIComponent(fromDate)}`);
+  if (toDate)   filters.push(`created_at=lte.${encodeURIComponent(toDate)}`);
+
+  if (search) {
+    const enc = encodeURIComponent(`*${search}*`);
+    filters.push(`or=(customer_phone.ilike.${enc},customer_name.ilike.${enc},did.ilike.${enc})`);
+  }
+
+  const select = 'id,myop_account_id,cs_department_id,call_session_id,direction,did,customer_phone,customer_name,agent_user_id,agent_name,status,duration_seconds,recording_filename,recording_url,started_at,ended_at,ticket_id,called_back_at,created_at';
+  const path = `/rest/v1/cs_calls?select=${select},ticket:ticket_id(ticket_no)&${filters.join('&')}&order=created_at.desc&limit=${limit}&offset=${offset}`;
+  const r = await sb(path, env);
+  if (!r.ok) return err(`Failed to fetch calls: ${JSON.stringify(r.data)}`, r.status);
+  return ok({ calls: r.data || [], offset, limit });
+}
+
+async function getCall(params, auth, env) {
+  const id = params.get('id');
+  if (!id) return err('id required');
+  const r = await sb(
+    `/rest/v1/cs_calls?id=eq.${encodeURIComponent(id)}&select=*,ticket:ticket_id(ticket_no,customer_name,disposition,stage),myop_account:myop_account_id(slug,name),cs_department:cs_department_id(slug,name)&limit=1`,
+    env,
+  );
+  if (!r.ok || !r.data?.[0]) return err('Call not found', 404);
+  return ok({ call: r.data[0] });
+}
+
+async function getCallsKpis(_params, auth, env) {
+  const startOfTodayIso = new Date(new Date().setHours(0, 0, 0, 0)).toISOString();
+
+  // Dept filter for non-admins
+  const deptFilter = await resolveDeptFilter(null, auth, env);
+  const deptClause = (deptFilter?.mode === 'id') ? `&cs_department_id=eq.${deptFilter.id}` : '';
+
+  const [today, answered, missed, myOpen, unansweredAwaitingCallback] = await Promise.all([
+    sb(`/rest/v1/cs_calls?created_at=gte.${encodeURIComponent(startOfTodayIso)}${deptClause}&select=id&limit=5000`, env),
+    sb(`/rest/v1/cs_calls?created_at=gte.${encodeURIComponent(startOfTodayIso)}&status=eq.answered${deptClause}&select=id&limit=5000`, env),
+    sb(`/rest/v1/cs_calls?created_at=gte.${encodeURIComponent(startOfTodayIso)}&status=eq.missed${deptClause}&select=id&limit=5000`, env),
+    sb(`/rest/v1/cs_calls?agent_user_id=eq.${auth.userId}&created_at=gte.${encodeURIComponent(startOfTodayIso)}${deptClause}&select=id&limit=5000`, env),
+    sb(`/rest/v1/cs_calls?status=eq.missed&called_back_at=is.null${deptClause}&select=id&limit=5000`, env),
+  ]);
+
+  const total_today = (today.data || []).length;
+  const answered_today = (answered.data || []).length;
+  const missed_today = (missed.data || []).length;
+  const answer_rate_pct = total_today > 0 ? Math.round((answered_today / total_today) * 100) : null;
+
+  return ok({
+    total_today, answered_today, missed_today, answer_rate_pct,
+    my_calls_today: (myOpen.data || []).length,
+    unanswered_awaiting_callback: (unansweredAwaitingCallback.data || []).length,
+  });
+}
+
+async function markCalledBack(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { call_id, note } = body;
+  if (!call_id) return err('call_id required');
+  const r = await sb(`/rest/v1/cs_calls?id=eq.${encodeURIComponent(call_id)}`, env, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      called_back_at: new Date().toISOString(),
+      called_back_by_user_id: auth.userId,
+      called_back_note: note || null,
+    }),
+  });
+  if (!r.ok) return err(`mark called-back failed: ${JSON.stringify(r.data)}`, r.status);
+  return ok({ call: r.data?.[0] });
+}
+
+// Build a ticket from a missed-call row. Reuses createTicket() so all the
+// validation + history + SLA + phone normalisation logic stays in one place.
+async function createTicketFromCall(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { call_id, ...rest } = body;
+  if (!call_id) return err('call_id required');
+
+  const callRes = await sb(`/rest/v1/cs_calls?id=eq.${encodeURIComponent(call_id)}&select=*&limit=1`, env);
+  const call = callRes.data?.[0];
+  if (!call) return err('Call not found', 404);
+
+  // Compose payload — agent-supplied fields override call-derived defaults
+  const payload = {
+    intake_channel: 'phone',
+    customer_name:  rest.customer_name  || call.customer_name || (call.customer_phone ? `Caller ${call.customer_phone}` : 'Unknown caller'),
+    customer_phone: rest.customer_phone || call.customer_phone,
+    disposition:    rest.disposition    || 'pending',
+    issue_description: rest.issue_description || '[Created from missed call]',
+    cs_department_id: rest.cs_department_id || call.cs_department_id || null,
+    ...rest,
+  };
+
+  const created = await createTicket(payload, auth, env);
+  const createdData = await created.clone().json().catch(() => null);
+  if (!createdData?.ok) return created;
+
+  // Link cs_calls.ticket_id + call_session_id on the new ticket
+  const ticketId = createdData?.data?.id;
+  if (ticketId) {
+    await sb(`/rest/v1/cs_calls?id=eq.${encodeURIComponent(call_id)}`, env, {
+      method: 'PATCH', body: JSON.stringify({ ticket_id: ticketId, called_back_at: new Date().toISOString(), called_back_by_user_id: auth.userId }),
+    });
+    await sb(`/rest/v1/cs_tickets?id=eq.${ticketId}`, env, {
+      method: 'PATCH', body: JSON.stringify({
+        call_session_id: call.call_session_id,
+        call_direction:  call.direction,
+        call_did:        call.did,
+        myop_account_id: call.myop_account_id,
+      }),
+    });
+  }
+  return created;
 }
