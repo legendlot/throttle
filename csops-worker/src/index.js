@@ -328,6 +328,9 @@ export default {
     if (url.pathname === '/webhooks/myoperator' && request.method === 'POST') {
       return handleMyOperatorWebhook(request, env);
     }
+    if (url.pathname === '/webhooks/bitespeed' && request.method === 'POST') {
+      return handleBiteSpeedWebhook(request, env);
+    }
     if (!action && request.method === 'GET') return err('Missing action parameter', 400);
 
     // Authenticate every request (besides /health)
@@ -2103,4 +2106,273 @@ async function updateWaTemplate(body, auth, env) {
   });
   if (!r.ok) return err(`update failed: ${JSON.stringify(r.data)}`, r.status);
   return ok({ template: r.data?.[0] });
+}
+
+// ── BiteSpeed (Chatwoot) inbound webhook receiver ────────────────────────────
+//
+// BiteSpeed runs a white-labeled Chatwoot deployment at chat.bitespeed.co.
+// We add Pitstop as a webhook subscriber on their Integrations page; they POST
+// us standard Chatwoot events. Routing + payload spec:
+//
+//   URL:    POST /webhooks/bitespeed?token=<env.BITESPEED_WEBHOOK_SECRET>
+//   Events: message_created, conversation_created, conversation_updated,
+//           conversation_status_changed
+//
+// Chatwoot message_type integer mapping:
+//   0 = incoming  (customer → agent)
+//   1 = outgoing  (agent → customer)
+//   2 = activity  (system note — assignment changes, status flips; ignored)
+//   3 = template  (outbound template message)
+//
+// Phase C2-A is read-only: we mirror BiteSpeed conversations into Pitstop's
+// cs_wa_threads + cs_wa_messages so agents can see the thread on the ticket.
+// BiteSpeed agents still send replies from chat.bitespeed.co. Phase C2-B will
+// flip sendWaMessage to call BiteSpeed's Application API for outbound.
+
+function verifyBiteSpeedAuth(url, env) {
+  const provided = url.searchParams.get('token');
+  return !!env.BITESPEED_WEBHOOK_SECRET && provided === env.BITESPEED_WEBHOOK_SECRET;
+}
+
+// Pull a customer phone from any of the places Chatwoot tucks it (varies by
+// payload type + Chatwoot version + inbox channel).
+function extractPhoneFromChatwoot(body) {
+  const candidates = [
+    body?.contact?.phone_number,
+    body?.contact?.identifier,
+    body?.conversation?.meta?.sender?.phone_number,
+    body?.conversation?.meta?.sender?.identifier,
+    body?.meta?.sender?.phone_number,
+    body?.meta?.sender?.identifier,
+    body?.sender?.phone_number,
+    body?.sender?.identifier,
+  ];
+  for (const c of candidates) {
+    if (c && typeof c === 'string' && c.trim()) return c.trim();
+  }
+  return null;
+}
+
+// Chatwoot attachment.file_type → our kind enum
+function attachmentKindFromChatwoot(fileType) {
+  switch ((fileType || '').toLowerCase()) {
+    case 'image':    return 'image';
+    case 'video':    return 'video';
+    case 'audio':    return 'audio';
+    case 'voice':    return 'audio';
+    case 'file':     return 'document';
+    case 'document': return 'document';
+    default:         return 'document';
+  }
+}
+
+async function handleBiteSpeedWebhook(request, env) {
+  const url = new URL(request.url);
+  if (!verifyBiteSpeedAuth(url, env)) return err('Invalid webhook token', 401);
+
+  let body = {};
+  try { body = await request.json(); } catch { return err('Bad JSON', 400); }
+  const event = body?.event;
+  console.log(`[bitespeed] ${event} conv=${body?.conversation?.id || body?.id || '?'}`);
+
+  // Always 200 quickly per Chatwoot best practice — process inline since
+  // payloads are small + we're already on a Cloudflare Worker (cold start fine).
+  try {
+    if (event === 'message_created')             return await biteSpeedMessageCreated(body, env);
+    if (event === 'conversation_created')        return await biteSpeedConversationUpserted(body, env);
+    if (event === 'conversation_updated')        return await biteSpeedConversationUpserted(body, env);
+    if (event === 'conversation_status_changed') return await biteSpeedConversationUpserted(body, env);
+    // Other events (contact_created, contact_updated, webwidget_triggered, etc.) — ack + skip
+    return json({ ok: true, ignored: event || 'unknown' });
+  } catch (e) {
+    console.error('[bitespeed] handler error', e);
+    return json({ ok: true, error: String(e?.message || e) });  // ack to avoid retry storm
+  }
+}
+
+// Find-or-create the WA thread for a Chatwoot-sourced conversation. Idempotent.
+async function biteSpeedFindOrCreateThread(payload, env) {
+  const conv = payload?.conversation || (payload?.event === 'conversation_created' ? payload : null) || payload;
+  const convId = conv?.id ?? payload?.id ?? null;
+  const phoneRaw = extractPhoneFromChatwoot(payload);
+  if (!phoneRaw && !convId) return { thread: null, reason: 'no_phone_or_conv_id' };
+
+  const phone = phoneRaw ? toE164(phoneRaw) : null;
+
+  // First try: match an existing thread by provider_thread_ref (Chatwoot conv id) —
+  // covers the case where the same phone has multiple Chatwoot conversations
+  // (closed + reopened, or test conversations).
+  if (convId != null) {
+    const byRef = await sb(
+      `/rest/v1/cs_wa_threads?provider_thread_ref=eq.${encodeURIComponent(String(convId))}&select=*&limit=1`,
+      env,
+    );
+    if (byRef.data?.[0]) return { thread: byRef.data[0] };
+  }
+
+  // Second try: match by phone (collapses to the Phase C placeholder thread
+  // we may have already created with waba_phone_number_id=NULL).
+  if (phone) {
+    const byPhone = await sb(
+      `/rest/v1/cs_wa_threads?customer_phone=eq.${encodeURIComponent(phone)}&waba_phone_number_id=is.null&select=*&limit=1`,
+      env,
+    );
+    if (byPhone.data?.[0]) {
+      // Backfill provider_thread_ref so future events route via the fast path
+      if (convId != null && byPhone.data[0].provider_thread_ref !== String(convId)) {
+        await sb(`/rest/v1/cs_wa_threads?id=eq.${byPhone.data[0].id}`, env, {
+          method: 'PATCH',
+          body: JSON.stringify({ provider_thread_ref: String(convId) }),
+        });
+      }
+      return { thread: byPhone.data[0] };
+    }
+  }
+
+  // No existing thread — create one
+  const ins = await sb(`/rest/v1/cs_wa_threads`, env, {
+    method: 'POST',
+    body: JSON.stringify({
+      customer_phone: phone,
+      provider_thread_ref: convId != null ? String(convId) : null,
+    }),
+  });
+  return { thread: ins.data?.[0] || null };
+}
+
+async function biteSpeedConversationUpserted(body, env) {
+  const { thread } = await biteSpeedFindOrCreateThread(body, env);
+  if (!thread) return json({ ok: true, skipped: 'no_phone_or_conv_id' });
+  // Bump last_message_at on any conv update so the thread sorts to the top of lists
+  await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, {
+    method: 'PATCH',
+    body: JSON.stringify({ last_message_at: new Date().toISOString() }),
+  });
+  return json({ ok: true, thread_id: thread.id });
+}
+
+async function biteSpeedMessageCreated(body, env) {
+  // Chatwoot wraps the message at the top level for message_created.
+  const messageType = body?.message_type;   // 0=in 1=out 2=activity 3=template
+  if (messageType === 2 || messageType === 'activity') {
+    return json({ ok: true, skipped: 'activity_message' });
+  }
+  if (body?.private === true) {
+    return json({ ok: true, skipped: 'private_internal_note' });
+  }
+
+  // Resolve thread (creates one if needed). Chatwoot puts the conversation
+  // nested under `conversation` on message_created.
+  const { thread } = await biteSpeedFindOrCreateThread(body, env);
+  if (!thread) return json({ ok: true, skipped: 'no_thread' });
+
+  const providerMessageId = body?.id != null ? String(body.id) : null;
+
+  // Idempotency: skip if we've already recorded this message_id
+  if (providerMessageId) {
+    const existing = await sb(
+      `/rest/v1/cs_wa_messages?provider_message_id=eq.${encodeURIComponent(providerMessageId)}&select=id&limit=1`,
+      env,
+    );
+    if (existing.data?.[0]) return json({ ok: true, deduped: true });
+  }
+
+  // Resolve direction
+  const directionNum = Number(messageType);
+  const direction = directionNum === 0 ? 'inbound' : 'outbound';
+
+  // Map kind from content + attachments
+  const attachments = Array.isArray(body?.attachments) ? body.attachments : [];
+  let kind = 'text';
+  let mediaUrl = null, mediaFilename = null, mediaMime = null, mediaSize = null;
+  if (attachments.length > 0) {
+    const a = attachments[0];
+    kind = attachmentKindFromChatwoot(a?.file_type);
+    mediaUrl      = a?.data_url || a?.file_url || null;
+    mediaFilename = a?.file_name || a?.file_type || null;
+    mediaMime     = a?.file_content_type || null;
+    mediaSize     = a?.file_size || null;
+  } else if (directionNum === 3) {
+    kind = 'template';
+  }
+
+  // Phone-match to the latest open cs_tickets row so the message attaches.
+  // The user pattern: WA continues the conversation started on a call — we
+  // join the WA thread to whichever ticket is currently active for the phone.
+  let linkedTicketId = null;
+  if (thread.customer_phone) {
+    const tRes = await sb(
+      `/rest/v1/cs_tickets?customer_phone=eq.${encodeURIComponent(thread.customer_phone)}&closed_at=is.null&select=id&order=created_at.desc&limit=1`,
+      env,
+    );
+    linkedTicketId = tRes.data?.[0]?.id || null;
+  }
+
+  // Resolve content + timestamp
+  const content = body?.content || null;
+  const ts = body?.created_at
+    ? (typeof body.created_at === 'number'
+        ? new Date(body.created_at * 1000).toISOString()  // Chatwoot unix-secs
+        : new Date(body.created_at).toISOString())
+    : new Date().toISOString();
+
+  // Template name extraction (Chatwoot stores it in content_attributes for template msgs)
+  let templateName = null;
+  if (directionNum === 3) {
+    templateName = body?.content_attributes?.template_name
+      || body?.content_attributes?.template?.name
+      || null;
+  }
+
+  const ins = await sb(`/rest/v1/cs_wa_messages`, env, {
+    method: 'POST',
+    body: JSON.stringify({
+      thread_id: thread.id,
+      ticket_id: linkedTicketId,
+      direction,
+      kind,
+      body: content,
+      template_name: templateName,
+      media_url: mediaUrl,
+      media_filename: mediaFilename,
+      media_mime_type: mediaMime,
+      media_size_bytes: mediaSize,
+      provider_message_id: providerMessageId,
+      status: direction === 'outbound' ? 'sent' : null,
+      sent_by_user_id: null,                              // Chatwoot agent id ≠ our auth.users id (Phase C2-B will reconcile)
+      sent_by_name: body?.sender?.name || null,
+      received_at: direction === 'inbound'  ? ts : null,
+      sent_at:     direction === 'outbound' ? ts : null,
+    }),
+  });
+  if (!ins.ok) return err(`insert failed: ${JSON.stringify(ins.data)}`, ins.status);
+
+  // Inbound message resets the 24h Meta customer window + bumps last_message_at
+  const threadPatch = { last_message_at: ts };
+  if (direction === 'inbound') {
+    threadPatch.customer_window_until = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  }
+  await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, {
+    method: 'PATCH',
+    body: JSON.stringify(threadPatch),
+  });
+
+  // Activity row on the linked ticket so the message surfaces in the ticket's
+  // history feed (without exposing message content to history rows — privacy).
+  if (linkedTicketId) {
+    await sb(`/rest/v1/cs_ticket_history`, env, {
+      method: 'POST',
+      body: JSON.stringify({
+        ticket_id: linkedTicketId,
+        field_name: direction === 'inbound' ? 'wa_message_received' : 'wa_message_sent',
+        old_value: null,
+        new_value: kind === 'template' ? `template:${templateName}` : kind,
+        note: (content || '').slice(0, 140),
+        changed_by_user_id: null,
+        changed_by_name: body?.sender?.name || 'BiteSpeed (auto)',
+      }),
+    }).catch(() => {});
+  }
+
+  return json({ ok: true, thread_id: thread.id, ticket_id: linkedTicketId, direction, kind });
 }
