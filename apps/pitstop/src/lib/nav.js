@@ -1,5 +1,5 @@
 import {
-  ListChecks, Inbox, BarChart3, Plus, Settings, LifeBuoy, Phone, Users, Building2, Headphones,
+  ListChecks, Inbox, BarChart3, Plus, Settings, LifeBuoy, Phone, Users, Building2, Headphones, MessageSquare,
 } from 'lucide-react';
 
 export const NAV_GROUPS = [
@@ -20,8 +20,9 @@ export const NAV_GROUPS = [
   {
     id: 'admin', label: 'ADMIN', icon: Settings,
     items: [
-      { id: 'departments', label: 'Departments', route: '/admin/departments', icon: Building2,   requires: 'cs_ticket_admin' },
-      { id: 'myop',        label: 'MyOp Accounts', route: '/admin/myop',      icon: Headphones,  requires: 'cs_ticket_admin' },
+      { id: 'departments',  label: 'Departments',   route: '/admin/departments',  icon: Building2,    requires: 'cs_ticket_admin' },
+      { id: 'myop',         label: 'MyOp Accounts', route: '/admin/myop',         icon: Headphones,   requires: 'cs_ticket_admin' },
+      { id: 'wa-templates', label: 'WA Templates',  route: '/admin/wa-templates', icon: MessageSquare,requires: 'cs_ticket_admin' },
     ],
   },
 ];

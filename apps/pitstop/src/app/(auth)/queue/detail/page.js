@@ -7,6 +7,7 @@ import { Modal, Spinner, useToast } from '@throttle/ui';
 import { ChevronLeft, AlertCircle, Plus, Link2, MessageSquare, ChevronRight } from 'lucide-react';
 import { csopsGet, csopsPost } from '../../../../lib/csopsFetch.js';
 import { ShopifyPanel } from '../../../../components/ShopifyPanel.js';
+import WhatsAppPanel from '../../../../components/WhatsAppPanel.js';
 import { DISPOSITION_VALUES, DISPOSITION_LABELS } from '../../../../lib/dispositions.js';
 import { DispositionBadge } from '../../../../components/DispositionBadge.js';
 
@@ -732,6 +733,8 @@ function WorkArea({ ticket: t, dispatch, repairRun, session, perms, onRefresh, s
           onSaved={() => { setEditing(null); onRefresh(); }}
         />
       )}
+
+      <WhatsAppPanel ticket={t} session={session} />
     </div>
   );
 }

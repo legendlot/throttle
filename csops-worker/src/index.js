@@ -379,6 +379,8 @@ async function handleGet(action, params, auth, env) {
     case 'getCalls':         return getCalls(params, auth, env);
     case 'getCall':          return getCall(params, auth, env);
     case 'getCallsKpis':     return getCallsKpis(params, auth, env);
+    case 'getWaThread':      return getWaThread(params, auth, env);
+    case 'getWaTemplates':   return getWaTemplates(params, auth, env);
     case 'searchShopifyCustomer':
       return ok(await shopifyLookup({ phone: params.get('phone'), email: params.get('email') }, env));
     default:
@@ -408,6 +410,10 @@ async function handlePost(action, body, auth, env, request) {
     case 'setMyopDefaultDepartment': return setMyopDefaultDepartment(body, auth, env);
     case 'markCalledBack':           return markCalledBack(body, auth, env);
     case 'createTicketFromCall':     return createTicketFromCall(body, auth, env);
+    case 'sendWaMessage':            return sendWaMessage(body, auth, env);
+    case 'recordInboundWaStub':      return recordInboundWaStub(body, auth, env);
+    case 'createWaTemplate':         return createWaTemplate(body, auth, env);
+    case 'updateWaTemplate':         return updateWaTemplate(body, auth, env);
     default:
       return err(`Unknown action: ${action}`, 404);
   }
@@ -1826,4 +1832,256 @@ async function createTicketFromCall(body, auth, env) {
     });
   }
   return created;
+}
+
+// ── WhatsApp (Phase C scaffold — data model + ticket UI; provider deferred) ──
+//
+// Phase C ships the data foundation (cs_wa_threads / cs_wa_messages /
+// cs_wa_templates) and the ticket-detail panel so agents can see threads and
+// queue outbound messages. Actual Meta/BSP send happens in Phase C2 once we
+// pick a provider. Outbound rows here land with status='queued' and an
+// explicit `provider_not_wired` status_error so they're easy to find later.
+
+const WA_PROVIDER_NOT_WIRED_ERROR = 'provider_not_wired_phase_c2';
+
+// 24h customer-initiated window — outside it, only utility templates may be sent.
+function withinCustomerWindow(thread) {
+  if (!thread?.customer_window_until) return false;
+  return new Date(thread.customer_window_until).getTime() > Date.now();
+}
+
+// Find-or-create the thread for a given customer_phone. Phase C uses
+// waba_phone_number_id=NULL (placeholder); Phase C2 will pass the real one and
+// the unique constraint will split threads per WABA number.
+async function findOrCreateWaThread(customer_phone, env) {
+  if (!customer_phone) return { thread: null, created: false };
+  const norm = toE164(customer_phone);
+  const r = await sb(
+    `/rest/v1/cs_wa_threads?customer_phone=eq.${encodeURIComponent(norm)}&waba_phone_number_id=is.null&select=*&limit=1`,
+    env,
+  );
+  if (r.data?.[0]) return { thread: r.data[0], created: false };
+  const ins = await sb(`/rest/v1/cs_wa_threads`, env, {
+    method: 'POST',
+    body: JSON.stringify({ customer_phone: norm }),
+  });
+  return { thread: ins.data?.[0] || null, created: true };
+}
+
+async function getWaThread(params, auth, env) {
+  const ticket_id = params.get('ticket_id');
+  const ticket_no = params.get('ticket_no');
+  if (!ticket_id && !ticket_no) return err('ticket_id or ticket_no required');
+
+  // Resolve the ticket (we only need customer_phone)
+  let tRes;
+  if (ticket_id) {
+    tRes = await sb(`/rest/v1/cs_tickets?id=eq.${ticket_id}&select=id,ticket_no,customer_phone&limit=1`, env);
+  } else {
+    tRes = await sb(`/rest/v1/cs_tickets?ticket_no=eq.${encodeURIComponent(ticket_no)}&select=id,ticket_no,customer_phone&limit=1`, env);
+  }
+  const t = tRes.data?.[0];
+  if (!t) return err('Ticket not found', 404);
+  if (!t.customer_phone) return ok({ thread: null, messages: [], reason: 'no_phone_on_ticket' });
+
+  const { thread } = await findOrCreateWaThread(t.customer_phone, env);
+  if (!thread) return ok({ thread: null, messages: [] });
+
+  const msgsRes = await sb(
+    `/rest/v1/cs_wa_messages?thread_id=eq.${thread.id}&select=*&order=created_at.asc&limit=500`,
+    env,
+  );
+
+  return ok({
+    thread,
+    messages: msgsRes.data || [],
+    within_customer_window: withinCustomerWindow(thread),
+    provider_wired: false,   // flip to true in Phase C2
+  });
+}
+
+async function getWaTemplates(_params, _auth, env) {
+  const r = await sb(
+    `/rest/v1/cs_wa_templates?is_active=eq.true&select=*&order=category.asc,name.asc`,
+    env,
+  );
+  if (!r.ok) return err('failed to load WA templates', 500);
+  return ok(r.data || []);
+}
+
+async function sendWaMessage(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const {
+    ticket_id,
+    kind,                              // 'text' | 'template' | 'image' | 'video' | 'audio' | 'document'
+    body: msgBody,
+    template_name,
+    template_params,                   // [{ index: 1, value: 'https://...' }, ...] for templates
+    media_url, media_filename, media_mime_type, media_size_bytes,
+  } = body;
+  if (!ticket_id) return err('ticket_id required');
+  if (!kind)      return err('kind required');
+  if (!['text','template','image','video','audio','document'].includes(kind)) return err('invalid kind');
+  if (kind === 'template' && !template_name) return err('template_name required for template kind');
+  if (['image','video','audio','document'].includes(kind) && !media_url) return err('media_url required for media kinds');
+
+  const tRes = await sb(`/rest/v1/cs_tickets?id=eq.${ticket_id}&select=id,customer_phone&limit=1`, env);
+  const t = tRes.data?.[0];
+  if (!t) return err('Ticket not found', 404);
+  if (!t.customer_phone) return err('Ticket has no customer_phone — cannot send WhatsApp', 422);
+
+  const { thread } = await findOrCreateWaThread(t.customer_phone, env);
+  if (!thread) return err('Failed to resolve thread', 500);
+
+  // Meta utility-message-first rule: outside the 24h customer window, only
+  // utility templates may be sent. Free-text replies are rejected here.
+  if (kind !== 'template' && !withinCustomerWindow(thread)) {
+    return err('Outside the 24h customer-initiated window — only utility templates may be sent until customer replies', 422);
+  }
+
+  // Resolve template body for the record (Phase C2 will pass params through to Meta)
+  let resolvedBody = msgBody;
+  if (kind === 'template') {
+    const tplRes = await sb(`/rest/v1/cs_wa_templates?name=eq.${encodeURIComponent(template_name)}&is_active=eq.true&select=*&limit=1`, env);
+    const tpl = tplRes.data?.[0];
+    if (!tpl) return err(`Unknown or inactive template: ${template_name}`, 404);
+    resolvedBody = tpl.body;
+    // Substitute {{N}} placeholders with provided values
+    const params = Array.isArray(template_params) ? template_params : [];
+    for (const p of params) {
+      const idx = Number(p?.index);
+      if (Number.isFinite(idx) && p?.value != null) {
+        resolvedBody = resolvedBody.split(`{{${idx}}}`).join(String(p.value));
+      }
+    }
+  }
+
+  const ins = await sb(`/rest/v1/cs_wa_messages`, env, {
+    method: 'POST',
+    body: JSON.stringify({
+      thread_id: thread.id,
+      ticket_id,
+      direction: 'outbound',
+      kind,
+      body: resolvedBody || null,
+      template_name: kind === 'template' ? template_name : null,
+      media_url:        media_url || null,
+      media_filename:   media_filename || null,
+      media_mime_type:  media_mime_type || null,
+      media_size_bytes: media_size_bytes || null,
+      status: 'queued',
+      status_error: WA_PROVIDER_NOT_WIRED_ERROR,   // Phase C2 will clear this and call Meta
+      sent_by_user_id: auth.userId,
+      sent_by_name: auth.fullName,
+    }),
+  });
+  if (!ins.ok) return err(`Failed to record WA message: ${JSON.stringify(ins.data)}`, ins.status);
+
+  // Bump thread.last_message_at for ordering in lists
+  await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, {
+    method: 'PATCH',
+    body: JSON.stringify({ last_message_at: new Date().toISOString() }),
+  });
+
+  // History row on the linked ticket so agents see the activity in the timeline
+  await insertHistory(ticket_id, 'wa_message_queued',
+    null, (kind === 'template' ? `template:${template_name}` : kind),
+    (resolvedBody || '').slice(0, 140), auth, env);
+
+  return ok({
+    message: ins.data?.[0],
+    provider_wired: false,
+    note: 'Recorded in Pitstop. Outbound delivery wires up in Phase C2 (Meta/BSP integration).',
+  });
+}
+
+// Phase C admin-only: simulate an inbound message for testing the UI before
+// the Meta webhook is wired. Useful for the team to validate the panel works
+// against realistic data. NOT a public webhook — must be JWT-authed cs_ticket_admin.
+async function recordInboundWaStub(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const { customer_phone, ticket_id, kind = 'text', body: msgBody, media_url, media_filename, media_mime_type } = body;
+  if (!customer_phone) return err('customer_phone required');
+  if (!['text','image','video','audio','document'].includes(kind)) return err('invalid kind');
+
+  const { thread } = await findOrCreateWaThread(customer_phone, env);
+  if (!thread) return err('Failed to resolve thread', 500);
+
+  const now = new Date().toISOString();
+  const ins = await sb(`/rest/v1/cs_wa_messages`, env, {
+    method: 'POST',
+    body: JSON.stringify({
+      thread_id: thread.id,
+      ticket_id: ticket_id || null,
+      direction: 'inbound',
+      kind,
+      body: msgBody || null,
+      media_url: media_url || null,
+      media_filename: media_filename || null,
+      media_mime_type: media_mime_type || null,
+      received_at: now,
+    }),
+  });
+  if (!ins.ok) return err(`insert failed: ${JSON.stringify(ins.data)}`, ins.status);
+
+  // Open / refresh the 24h customer-initiated window
+  const windowClose = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, {
+    method: 'PATCH',
+    body: JSON.stringify({ last_message_at: now, customer_window_until: windowClose }),
+  });
+
+  return ok({ message: ins.data?.[0], thread_id: thread.id, customer_window_until: windowClose });
+}
+
+async function createWaTemplate(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const { name, display_label, category, language, body: tplBody, placeholder_count, notes } = body;
+  if (!name || !display_label || !category || !tplBody) {
+    return err('name, display_label, category, body required');
+  }
+  if (!['utility','marketing','authentication'].includes(category)) return err('invalid category');
+
+  // Validate placeholder count matches body
+  const matches = String(tplBody).match(/\{\{\d+\}\}/g) || [];
+  const detectedCount = new Set(matches).size;
+  if (placeholder_count != null && Number(placeholder_count) !== detectedCount) {
+    return err(`placeholder_count (${placeholder_count}) doesn't match {{N}} occurrences in body (${detectedCount})`);
+  }
+
+  const r = await sb(`/rest/v1/cs_wa_templates`, env, {
+    method: 'POST',
+    body: JSON.stringify({
+      name, display_label, category,
+      language: language || 'en',
+      body: tplBody,
+      placeholder_count: detectedCount,
+      notes: notes || null,
+      is_active: true,
+    }),
+  });
+  if (!r.ok) return err(`create failed: ${JSON.stringify(r.data)}`, r.status);
+  return ok({ template: r.data?.[0] });
+}
+
+async function updateWaTemplate(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const { id, patch } = body;
+  if (!id || !patch || typeof patch !== 'object') return err('id and patch required');
+  const ALLOWED = ['display_label','category','language','body','is_active','notes'];
+  const clean = {};
+  for (const k of ALLOWED) if (k in patch) clean[k] = patch[k];
+  if (Object.keys(clean).length === 0) return err('nothing to update');
+
+  // If body changed, recompute placeholder_count
+  if ('body' in clean) {
+    const matches = String(clean.body).match(/\{\{\d+\}\}/g) || [];
+    clean.placeholder_count = new Set(matches).size;
+  }
+
+  const r = await sb(`/rest/v1/cs_wa_templates?id=eq.${encodeURIComponent(id)}`, env, {
+    method: 'PATCH', body: JSON.stringify(clean),
+  });
+  if (!r.ok) return err(`update failed: ${JSON.stringify(r.data)}`, r.status);
+  return ok({ template: r.data?.[0] });
 }
