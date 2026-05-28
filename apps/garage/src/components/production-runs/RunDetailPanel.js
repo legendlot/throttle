@@ -1,9 +1,20 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { ConfirmModal, EmptyState, Modal, Spinner, useToast } from '@throttle/ui';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { ReceiptPanel } from './ReceiptPanel.js';
 import { RejectRunModal } from './RejectRunModal.js';
+
+// Picklist category/type ordering — must match issue-queue/page.js (PICK_CAT_ORDER / PICK_TYPE_ORDER)
+const PICK_CAT_ORDER  = ['Car', 'Remote', 'Accessories', 'Packaging', 'Para', 'Batteries', 'License'];
+const PICK_TYPE_ORDER = ['Electronic', 'Metal', 'Plastic', 'Cardboard', 'Paper', 'Fabric', 'Chemical', 'Rubber'];
+function pickSortKey(p) {
+  const cat  = (p.category || '').trim();
+  const type = (p.part_type || '').trim();
+  const catI  = PICK_CAT_ORDER.findIndex((c) => cat.toLowerCase().includes(c.toLowerCase()));
+  const typeI = PICK_TYPE_ORDER.findIndex((t) => t.toLowerCase() === type.toLowerCase());
+  return (catI < 0 ? 90 : catI) * 1000 + (typeI < 0 ? 90 : typeI);
+}
 
 const panel = { backgroundColor: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4 };
 const panelHdr = {
@@ -159,6 +170,30 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
 
   const totalUnits = pickList.reduce((s, p) => s + (Number(p.total_qty) || 0), 0);
   const shortCount = pickList.filter((p) => (Number(p.shortfall) || 0) > 0).length;
+
+  // Group pick list rows by category (and sub-group by part_type) — restores
+  // the legacy Garage picklist layout (S84, regression from G-W4 migration)
+  const pickGroups = useMemo(() => {
+    const sorted = (pickList || []).slice().sort((a, b) => pickSortKey(a) - pickSortKey(b));
+    const out = [];
+    let lastCat = null, lastType = null, current = null;
+    sorted.forEach((p) => {
+      const cat  = (p.category || 'Other').trim();
+      const type = (p.part_type || '—').trim();
+      if (cat !== lastCat) {
+        current = { cat, types: [] };
+        out.push(current);
+        lastCat = cat;
+        lastType = null;
+      }
+      if (type !== lastType) {
+        current.types.push({ type, parts: [] });
+        lastType = type;
+      }
+      current.types[current.types.length - 1].parts.push(p);
+    });
+    return out;
+  }, [pickList]);
 
   async function handleCancel() {
     setCancelling(true);
@@ -465,32 +500,49 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
                 </tr>
               </thead>
               <tbody>
-                {pickList.map((p, i) => {
-                  const required = Number(p.total_qty) || 0;
-                  const stock = Number(p.in_stock) || 0;
-                  const shortfall = Number(p.shortfall) || 0;
-                  const isShort = shortfall > 0;
-                  return (
-                    <tr key={i}>
-                      <td style={{ ...td, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{p.part_code}</td>
-                      <td style={td}>{p.part_name || '—'}</td>
-                      {/* TD-019-A: part_type not returned by getProductionRun; show '—' */}
-                      <td style={{ ...td, color: 'var(--t3)' }}>—</td>
-                      <td style={{ ...td, fontFamily: 'var(--mono)', textAlign: 'right' }}>{required}</td>
-                      <td style={{ ...td, fontFamily: 'var(--mono)', textAlign: 'right' }}>{stock}</td>
-                      <td style={{ ...td, fontFamily: 'var(--mono)', textAlign: 'right' }}>
-                        {isShort
-                          ? <span style={{ color: 'var(--state-error-fg)' }}>-{shortfall}</span>
-                          : <span style={{ color: 'var(--state-success-fg)' }}>—</span>}
-                      </td>
-                      <td style={{ ...td, fontFamily: 'var(--mono)', fontSize: 11 }}>
-                        {isShort
-                          ? <span style={{ color: 'var(--state-error-fg)' }}>SHORT</span>
-                          : <span style={{ color: 'var(--state-success-fg)' }}>OK</span>}
+                {pickGroups.map((g) => (
+                  <Fragment key={g.cat}>
+                    <tr style={{ background: 'rgba(242,205,26,.07)' }}>
+                      <td colSpan={7} style={{ padding: '6px 10px', fontFamily: 'var(--cond)', fontSize: 11, fontWeight: 700, letterSpacing: '.15em', textTransform: 'uppercase', color: 'var(--yellow)' }}>
+                        ▶ {g.cat}
                       </td>
                     </tr>
-                  );
-                })}
+                    {g.types.map((t) => (
+                      <Fragment key={t.type}>
+                        <tr style={{ background: 'rgba(255,255,255,.018)' }}>
+                          <td colSpan={7} style={{ padding: '3px 10px 3px 22px', fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '.18em', color: 'var(--t3)' }}>
+                            {(t.type || '—').toUpperCase()}
+                          </td>
+                        </tr>
+                        {t.parts.map((p, i) => {
+                          const required = Number(p.total_qty) || 0;
+                          const stock = Number(p.in_stock) || 0;
+                          const shortfall = Number(p.shortfall) || 0;
+                          const isShort = shortfall > 0;
+                          return (
+                            <tr key={`${g.cat}-${t.type}-${p.part_code}-${i}`}>
+                              <td style={{ ...td, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{p.part_code}</td>
+                              <td style={td}>{p.part_name || '—'}</td>
+                              <td style={{ ...td, color: 'var(--t3)' }}>{p.part_type || '—'}</td>
+                              <td style={{ ...td, fontFamily: 'var(--mono)', textAlign: 'right' }}>{required}</td>
+                              <td style={{ ...td, fontFamily: 'var(--mono)', textAlign: 'right' }}>{stock}</td>
+                              <td style={{ ...td, fontFamily: 'var(--mono)', textAlign: 'right' }}>
+                                {isShort
+                                  ? <span style={{ color: 'var(--state-error-fg)' }}>-{shortfall}</span>
+                                  : <span style={{ color: 'var(--state-success-fg)' }}>—</span>}
+                              </td>
+                              <td style={{ ...td, fontFamily: 'var(--mono)', fontSize: 11 }}>
+                                {isShort
+                                  ? <span style={{ color: 'var(--state-error-fg)' }}>SHORT</span>
+                                  : <span style={{ color: 'var(--state-success-fg)' }}>OK</span>}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </Fragment>
+                    ))}
+                  </Fragment>
+                ))}
               </tbody>
             </table>
           </div>

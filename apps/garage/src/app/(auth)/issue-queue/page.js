@@ -567,16 +567,31 @@ export default function IssueQueuePage() {
 </body></html>`;
     }
 
-    // ── Run path (unchanged) ───────────────────────────────────────────────────
+    // ── Run path — grouped by category + type (legacy parity, restored S84) ───
     const run = item.run;
     const rows = (item.lines || [])
       .slice()
       .sort((a, b) => pickSortKey(a, materials) - pickSortKey(b, materials));
-    const partRows = rows.map((p) => {
+    const COLSPAN = 9; // ✓ + Part Code + Part Name + Product + Qty Req + In Stock + Bag Size + Bags + Status
+    let partRows = '';
+    let lastCat = null;
+    let lastType = null;
+    rows.forEach((p) => {
+      const cat  = (p.category || 'Other').trim();
+      const type = ((materials[p.part_code] || {}).part_type || '—').trim();
+      if (cat !== lastCat) {
+        partRows += `<tr class="cat-row"><td colspan="${COLSPAN}">▶ ${escapeHtml(cat)}</td></tr>`;
+        lastCat = cat;
+        lastType = null;
+      }
+      if (type !== lastType) {
+        partRows += `<tr class="type-row"><td colspan="${COLSPAN}">${escapeHtml(type.toUpperCase())}</td></tr>`;
+        lastType = type;
+      }
       const bagSize = (materials[p.part_code]?.bag_size) || 25;
       const bags = Math.ceil((p.total_qty || 0) / bagSize);
       const status = (p.available || 0) >= (p.total_qty || 0) ? 'OK' : 'SHORT';
-      return `
+      partRows += `
         <tr>
           <td class="check"></td>
           <td class="mono">${escapeHtml(p.part_code)}</td>
@@ -588,7 +603,7 @@ export default function IssueQueuePage() {
           <td class="num mono">${bags}</td>
           <td class="${status === 'SHORT' ? 'short' : 'ok'}">${status}</td>
         </tr>`;
-    }).join('');
+    });
     const variants = (item.wos || []).map((w) => {
       const v = w.variant || 'Common';
       return w.colour ? `${v} ${w.colour} ×${w.qty}` : `${v} ×${w.qty}`;
@@ -611,6 +626,8 @@ export default function IssueQueuePage() {
   .mono { font-family: ui-monospace, Menlo, monospace; }
   .short { color: #c00; font-weight: 700; }
   .ok { color: #060; font-weight: 700; }
+  .cat-row td { background: #fff8d6; font-weight: 700; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; padding: 6px 8px; border-top: 2px solid #888; }
+  .type-row td { background: #f5f5f5; font-family: ui-monospace, Menlo, monospace; font-size: 9px; letter-spacing: 0.16em; color: #555; padding: 3px 8px 3px 22px; text-transform: uppercase; }
   .sig { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-top: 28px; font-size: 11px; }
   .sig div { border-top: 1px solid #000; padding-top: 4px; text-align: center; }
 </style></head><body>
