@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner, EmptyState, KpiCard } from '@throttle/ui';
-import { BarChart3, Download } from 'lucide-react';
+import { BarChart3, Download, Phone } from 'lucide-react';
 import { csopsGet } from '../../../lib/csopsFetch.js';
 
 function toIsoStart(date) {
@@ -31,9 +31,11 @@ export default function ReportsPage() {
   const today = new Date();
   const ytdStart = new Date(today.getFullYear(), 0, 1);
 
+  const [view, setView] = useState('tickets');   // 'tickets' | 'calls'
   const [from, setFrom] = useState(ytdStart.toISOString().slice(0, 10));
   const [to,   setTo]   = useState(today.toISOString().slice(0, 10));
   const [data, setData] = useState(null);
+  const [callData, setCallData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -41,12 +43,17 @@ export default function ReportsPage() {
     if (!session) return;
     let alive = true;
     setLoading(true);
-    csopsGet('getReports', { from: toIsoStart(from), to: toIsoEnd(to) }, session)
-      .then(d => { if (alive) { setData(d); setError(null); } })
+    const action = view === 'calls' ? 'getCallReports' : 'getReports';
+    csopsGet(action, { from: toIsoStart(from), to: toIsoEnd(to) }, session)
+      .then(d => {
+        if (!alive) return;
+        if (view === 'calls') setCallData(d); else setData(d);
+        setError(null);
+      })
       .catch(e => { if (alive) setError(e.message); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [session, from, to]);
+  }, [session, from, to, view]);
 
   function exportCsv() {
     if (!data) return;
@@ -127,6 +134,12 @@ export default function ReportsPage() {
         </div>
       </div>
 
+      {/* Section toggle: Tickets | Calls */}
+      <div style={{ display: 'flex', gap: 4, marginBottom: 14, borderBottom: '1px solid var(--border)' }}>
+        <SectionTab active={view==='tickets'} onClick={() => setView('tickets')} icon={<BarChart3 size={13} />} label="Tickets" />
+        <SectionTab active={view==='calls'}   onClick={() => setView('calls')}   icon={<Phone size={13} />}    label="Calls" />
+      </div>
+
       {error && (
         <div style={{
           padding: 12, marginBottom: 12,
@@ -137,44 +150,183 @@ export default function ReportsPage() {
         }}>{error}</div>
       )}
 
-      {loading || !data ? (
-        <Spinner />
-      ) : data.range.total_rows === 0 ? (
-        <EmptyState icon={BarChart3} title="No tickets in range" message="Adjust the date range or create some tickets first." />
-      ) : (
-        <>
-          {/* Cost summary KPIs */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
-            <KpiCard label="Total cases"        value={data.range.total_rows.toLocaleString()} sub={`${from} → ${to}`} />
-            <KpiCard label="Return cost"        value={inr(data.cost_summary.return_cost_inr)}      sub="logistics in" color="orange" />
-            <KpiCard label="Replacement cost"   value={inr(data.cost_summary.replacement_cost_inr)} sub="new units out" color="blue" />
-            <KpiCard label="Refund payouts"     value={inr(data.cost_summary.refund_amount_inr)}    sub="money returned" color="red" />
-          </div>
+      {view === 'tickets' && (
+        loading || !data ? (
+          <Spinner />
+        ) : data.range.total_rows === 0 ? (
+          <EmptyState icon={BarChart3} title="No tickets in range" message="Adjust the date range or create some tickets first." />
+        ) : (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
+              <KpiCard label="Total cases"        value={data.range.total_rows.toLocaleString()} sub={`${from} → ${to}`} />
+              <KpiCard label="Return cost"        value={inr(data.cost_summary.return_cost_inr)}      sub="logistics in" color="orange" />
+              <KpiCard label="Replacement cost"   value={inr(data.cost_summary.replacement_cost_inr)} sub="new units out" color="blue" />
+              <KpiCard label="Refund payouts"     value={inr(data.cost_summary.refund_amount_inr)}    sub="money returned" color="red" />
+            </div>
 
-          {/* Monthly trend */}
-          <Panel title="Monthly trend">
-            <MonthlyTrendChart monthly={data.monthly_trend} />
-          </Panel>
-
-          {/* By product + By platform — side by side */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)' }}>
-            <Panel title="By product">
-              <BreakdownTable rows={data.by_product} />
+            <Panel title="Monthly trend">
+              <MonthlyTrendChart monthly={data.monthly_trend} />
             </Panel>
-            <Panel title="By platform">
-              <BreakdownTable rows={data.by_platform} />
-            </Panel>
-          </div>
 
-          {/* By agent */}
-          <Panel title="By agent">
-            <BreakdownTable rows={data.by_agent} variant="agent" />
-          </Panel>
-        </>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)' }}>
+              <Panel title="By product">
+                <BreakdownTable rows={data.by_product} />
+              </Panel>
+              <Panel title="By platform">
+                <BreakdownTable rows={data.by_platform} />
+              </Panel>
+            </div>
+
+            <Panel title="By agent">
+              <BreakdownTable rows={data.by_agent} variant="agent" />
+            </Panel>
+          </>
+        )
+      )}
+
+      {view === 'calls' && (
+        loading || !callData ? <Spinner /> : <CallsPanel data={callData} />
       )}
     </div>
   );
 }
+
+function SectionTab({ active, onClick, icon, label }) {
+  return (
+    <button onClick={onClick} style={{
+      display:'inline-flex', alignItems:'center', gap: 6,
+      padding: '8px 14px', background: 'none', border: 'none',
+      borderBottom: active ? '2px solid var(--yellow)' : '2px solid transparent',
+      marginBottom: -1,
+      color: active ? 'var(--yellow)' : 'var(--t2)',
+      fontWeight: active ? 600 : 500, fontSize: 13, cursor: 'pointer',
+    }}>
+      {icon} {label}
+    </button>
+  );
+}
+
+function CallsPanel({ data }) {
+  if (!data || !data.totals || data.totals.total === 0) {
+    return <EmptyState icon={Phone} title="No calls in range" message="Adjust the date range." />;
+  }
+  const fmtMMSS = (s) => s == null ? '—' : `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
+  return (
+    <>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
+        <KpiCard label="Total calls"     value={data.totals.total.toLocaleString()} sub={`${data.range.from.slice(0,10)} → ${data.range.to.slice(0,10)}`} />
+        <KpiCard label="Answered"        value={data.totals.answered.toLocaleString()} color="green" />
+        <KpiCard label="Missed"          value={data.totals.missed.toLocaleString()}   color={data.totals.missed > 0 ? 'red' : null} />
+        <KpiCard label="Answer rate"     value={data.totals.answer_rate_pct != null ? `${data.totals.answer_rate_pct}%` : '—'} />
+        <KpiCard label="Avg duration"    value={fmtMMSS(data.totals.avg_duration_seconds)} />
+      </div>
+
+      <Panel title="By department">
+        <CallsBreakdown rows={data.by_department || []} variant="dept" />
+      </Panel>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)' }}>
+        <Panel title="By MyOp account">
+          <CallsBreakdown rows={data.by_account || []} variant="account" />
+        </Panel>
+        <Panel title="By direction">
+          <DirectionTable d={data.by_direction} />
+        </Panel>
+      </div>
+
+      <Panel title="By agent">
+        <CallsBreakdown rows={data.by_agent || []} variant="agent" />
+      </Panel>
+
+      <Panel title="Hourly distribution">
+        <HourlyBars hourly={data.hourly || []} />
+      </Panel>
+    </>
+  );
+}
+
+function CallsBreakdown({ rows, variant }) {
+  if (!rows?.length) return <div style={{ color:'var(--t4)', fontSize: 12, padding: 12, textAlign:'center' }}>No data</div>;
+  if (variant === 'agent') {
+    return (
+      <table style={{ width:'100%', borderCollapse: 'collapse', fontSize: 12 }}>
+        <thead><tr style={{ color:'var(--t3)', textAlign:'left' }}>
+          <CTh>Agent</CTh><CTh>Answered</CTh><CTh>Missed → returned</CTh><CTh>Avg handle</CTh><CTh>Tickets opened</CTh>
+        </tr></thead>
+        <tbody>
+          {rows.map(r => (
+            <tr key={r.name} style={{ borderTop: '1px solid var(--border)' }}>
+              <CTd>{r.name}</CTd>
+              <CTd><code style={callMono}>{r.answered_calls}</code></CTd>
+              <CTd><code style={callMono}>{r.missed_returned}</code></CTd>
+              <CTd><code style={callMono}>{r.avg_handle_seconds == null ? '—' : `${Math.floor(r.avg_handle_seconds/60)}:${String(r.avg_handle_seconds%60).padStart(2,'0')}`}</code></CTd>
+              <CTd><code style={callMono}>{r.tickets_opened}</code></CTd>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    );
+  }
+  return (
+    <table style={{ width:'100%', borderCollapse: 'collapse', fontSize: 12 }}>
+      <thead><tr style={{ color:'var(--t3)', textAlign:'left' }}>
+        <CTh>{variant === 'dept' ? 'Department' : 'Account'}</CTh><CTh>Total</CTh><CTh>Answered</CTh><CTh>Missed</CTh><CTh>Answer rate</CTh>
+      </tr></thead>
+      <tbody>
+        {rows.map(r => (
+          <tr key={r.slug} style={{ borderTop: '1px solid var(--border)' }}>
+            <CTd>{r.name}</CTd>
+            <CTd><code style={callMono}>{r.total}</code></CTd>
+            <CTd><code style={callMono}>{r.answered}</code></CTd>
+            <CTd><code style={callMono}>{r.missed}</code></CTd>
+            <CTd><code style={callMono}>{r.answer_rate_pct != null ? `${r.answer_rate_pct}%` : '—'}</code></CTd>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function DirectionTable({ d }) {
+  if (!d) return null;
+  return (
+    <table style={{ width:'100%', borderCollapse:'collapse', fontSize: 12 }}>
+      <thead><tr style={{ color:'var(--t3)', textAlign:'left' }}>
+        <CTh>Direction</CTh><CTh>Total</CTh><CTh>Answered</CTh><CTh>Answer rate</CTh>
+      </tr></thead>
+      <tbody>
+        <tr style={{ borderTop: '1px solid var(--border)' }}>
+          <CTd>Incoming</CTd><CTd><code style={callMono}>{d.incoming?.total ?? 0}</code></CTd>
+          <CTd><code style={callMono}>{d.incoming?.answered ?? 0}</code></CTd>
+          <CTd><code style={callMono}>{d.incoming?.answer_rate_pct != null ? `${d.incoming.answer_rate_pct}%` : '—'}</code></CTd>
+        </tr>
+        <tr style={{ borderTop: '1px solid var(--border)' }}>
+          <CTd>Outgoing</CTd><CTd><code style={callMono}>{d.outgoing?.total ?? 0}</code></CTd>
+          <CTd><code style={callMono}>{d.outgoing?.answered ?? 0}</code></CTd>
+          <CTd><code style={callMono}>{d.outgoing?.answer_rate_pct != null ? `${d.outgoing.answer_rate_pct}%` : '—'}</code></CTd>
+        </tr>
+      </tbody>
+    </table>
+  );
+}
+
+function HourlyBars({ hourly }) {
+  const max = Math.max(1, ...hourly.map(h => h.count));
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 120, padding: '12px 4px 0' }}>
+      {hourly.map(h => (
+        <div key={h.hour} style={{ flex: 1, display:'flex', flexDirection:'column', alignItems:'center' }}>
+          <div style={{ width: '70%', background: 'var(--yellow)', height: `${(h.count / max) * 100}%`, minHeight: h.count ? 2 : 0, borderRadius: '2px 2px 0 0' }} title={`${h.hour}:00 — ${h.count} calls`} />
+          <div style={{ marginTop: 4, fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--t3)' }}>{String(h.hour).padStart(2,'0')}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CTh({ children }) { return <th style={{ padding:'6px 10px', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--t3)', textAlign: 'left' }}>{children}</th>; }
+function CTd({ children }) { return <td style={{ padding:'6px 10px', verticalAlign:'middle', color: 'var(--t1)' }}>{children}</td>; }
+const callMono = { fontFamily:'var(--font-mono)', fontSize: 12, color: 'var(--t1)' };
 
 const dateInput = {
   background: 'var(--surface)',

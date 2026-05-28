@@ -367,6 +367,10 @@ async function handleGet(action, params, auth, env) {
       const g2 = require('cs_reports_view', auth); if (g2) return g2;
       return getReports(params, auth, env);
     }
+    case 'getCallReports': {
+      const g2 = require('cs_reports_view', auth); if (g2) return g2;
+      return getCallReports(params, auth, env);
+    }
     case 'getAgents':        return getAgents(params, auth, env);
     case 'getIssueCatalog':  return getIssueCatalog(env);
     case 'getDepartments':   return getDepartments(params, auth, env);
@@ -755,6 +759,112 @@ async function getReports(params, auth, env) {
       replacement_cost_inr: +totalReplacementCost.toFixed(2),
       refund_amount_inr:    +totalRefundAmount.toFixed(2),
     },
+  });
+}
+
+async function getCallReports(params, auth, env) {
+  const from = params.get('from') || (() => { const d = new Date(); d.setMonth(0, 1); d.setHours(0,0,0,0); return d.toISOString(); })();
+  const to   = params.get('to')   || new Date().toISOString();
+
+  // Dept filter (non-admins locked to own)
+  const deptFilter = await resolveDeptFilter(params.get('department'), auth, env);
+  const deptClause = (deptFilter?.mode === 'id') ? `&cs_department_id=eq.${deptFilter.id}` : '';
+
+  const select = 'created_at,direction,status,duration_seconds,agent_user_id,agent_name,myop_account_id,cs_department_id,ticket_id,called_back_at';
+  const r = await sb(
+    `/rest/v1/cs_calls?created_at=gte.${encodeURIComponent(from)}&created_at=lte.${encodeURIComponent(to)}${deptClause}&select=${select}&limit=20000`,
+    env,
+  );
+  if (!r.ok) return err('Failed to load call reports', 500);
+  const rows = r.data || [];
+
+  // Resolve account + dept lookups in parallel for label-friendly grouping
+  const [acctR, deptR] = await Promise.all([
+    sb(`/rest/v1/myop_accounts?select=id,slug,name`, env),
+    sb(`/rest/v1/cs_departments?select=id,slug,name`, env),
+  ]);
+  const acctById = Object.fromEntries((acctR.data || []).map(a => [a.id, a]));
+  const deptById = Object.fromEntries((deptR.data || []).map(d => [d.id, d]));
+
+  let total = 0, answered = 0, missed = 0, abandoned = 0, totalDur = 0, durCount = 0;
+  const daily = {}, byAccount = {}, byDepartment = {}, byAgent = {}, byHour = Array(24).fill(0);
+  let incoming_total = 0, incoming_answered = 0, outgoing_total = 0, outgoing_answered = 0;
+
+  for (const c of rows) {
+    total++;
+    if (c.status === 'answered')  answered++;
+    if (c.status === 'missed')    missed++;
+    if (c.status === 'abandoned') abandoned++;
+    if (c.duration_seconds && c.duration_seconds > 0) { totalDur += c.duration_seconds; durCount++; }
+
+    const day = (c.created_at || '').slice(0, 10);
+    if (day) {
+      daily[day] = daily[day] || { date: day, in_total: 0, in_answered: 0, out_total: 0, out_answered: 0 };
+      if (c.direction === 'incoming') { daily[day].in_total++; if (c.status === 'answered') daily[day].in_answered++; }
+      else if (c.direction === 'outgoing') { daily[day].out_total++; if (c.status === 'answered') daily[day].out_answered++; }
+    }
+
+    if (c.direction === 'incoming') { incoming_total++; if (c.status === 'answered') incoming_answered++; }
+    else if (c.direction === 'outgoing') { outgoing_total++; if (c.status === 'answered') outgoing_answered++; }
+
+    const acct = c.myop_account_id ? acctById[c.myop_account_id] : null;
+    const ak = acct?.slug || '—';
+    byAccount[ak] = byAccount[ak] || { slug: ak, name: acct?.name || '—', total: 0, answered: 0, missed: 0 };
+    byAccount[ak].total++;
+    if (c.status === 'answered') byAccount[ak].answered++;
+    if (c.status === 'missed')   byAccount[ak].missed++;
+
+    const dept = c.cs_department_id ? deptById[c.cs_department_id] : null;
+    const dk = dept?.slug || '—';
+    byDepartment[dk] = byDepartment[dk] || { slug: dk, name: dept?.name || '—', total: 0, answered: 0, missed: 0, total_dur: 0, dur_count: 0 };
+    byDepartment[dk].total++;
+    if (c.status === 'answered') byDepartment[dk].answered++;
+    if (c.status === 'missed')   byDepartment[dk].missed++;
+    if (c.duration_seconds && c.duration_seconds > 0) { byDepartment[dk].total_dur += c.duration_seconds; byDepartment[dk].dur_count++; }
+
+    const agentName = c.agent_name || '— unassigned —';
+    byAgent[agentName] = byAgent[agentName] || { name: agentName, answered_calls: 0, missed_returned: 0, total_dur: 0, dur_count: 0, tickets_opened: 0 };
+    if (c.status === 'answered') byAgent[agentName].answered_calls++;
+    if (c.status === 'missed' && c.called_back_at) byAgent[agentName].missed_returned++;
+    if (c.duration_seconds && c.duration_seconds > 0) { byAgent[agentName].total_dur += c.duration_seconds; byAgent[agentName].dur_count++; }
+    if (c.ticket_id) byAgent[agentName].tickets_opened++;
+
+    const h = new Date(c.created_at).getHours();
+    if (Number.isFinite(h)) byHour[h]++;
+  }
+
+  function finishAgent(a) {
+    a.avg_handle_seconds = a.dur_count > 0 ? Math.round(a.total_dur / a.dur_count) : null;
+    delete a.total_dur; delete a.dur_count;
+    return a;
+  }
+  function finishDept(d) {
+    d.answer_rate_pct = d.total > 0 ? Math.round((d.answered / d.total) * 100) : null;
+    d.avg_handle_seconds = d.dur_count > 0 ? Math.round(d.total_dur / d.dur_count) : null;
+    delete d.total_dur; delete d.dur_count;
+    return d;
+  }
+  function finishAccount(a) {
+    a.answer_rate_pct = a.total > 0 ? Math.round((a.answered / a.total) * 100) : null;
+    return a;
+  }
+
+  return ok({
+    range: { from, to },
+    totals: {
+      total, answered, missed, abandoned,
+      answer_rate_pct: total > 0 ? Math.round((answered / total) * 100) : null,
+      avg_duration_seconds: durCount > 0 ? Math.round(totalDur / durCount) : null,
+    },
+    daily: Object.values(daily).sort((a, b) => a.date.localeCompare(b.date)),
+    by_direction: {
+      incoming: { total: incoming_total, answered: incoming_answered, answer_rate_pct: incoming_total > 0 ? Math.round((incoming_answered / incoming_total) * 100) : null },
+      outgoing: { total: outgoing_total, answered: outgoing_answered, answer_rate_pct: outgoing_total > 0 ? Math.round((outgoing_answered / outgoing_total) * 100) : null },
+    },
+    by_account:    Object.values(byAccount).map(finishAccount).sort((a, b) => b.total - a.total),
+    by_department: Object.values(byDepartment).map(finishDept).sort((a, b) => b.total - a.total),
+    by_agent:      Object.values(byAgent).map(finishAgent).sort((a, b) => b.answered_calls - a.answered_calls),
+    hourly:        byHour.map((count, hour) => ({ hour, count })),
   });
 }
 
