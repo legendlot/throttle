@@ -1024,11 +1024,14 @@ async function updateTicket(body, auth, env) {
   const current = tRes.data?.[0];
   if (!current) return err('Ticket not found', 404);
 
-  // Fields the user is NEVER allowed to patch directly (must go through advanceStage/etc)
+  // Fields the user is NEVER allowed to patch directly (must go through
+  // advanceStage / assignAgent / etc). assigned_agent_id is protected so the
+  // cs_ticket_reassign gate in assignAgent can't be bypassed via updateTicket.
   const PROTECTED = new Set([
     'id', 'ticket_no', 'created_at', 'created_by_user_id', 'created_by_name',
     'stage', 'stage_changed_at', 'closed_at', 'closed_reason', 'closed_by_user_id',
     'updated_at',
+    'assigned_agent_id', 'assigned_agent_name',
   ]);
 
   // Disposition re-triage lock: once past awaiting_evidence, only cs_ticket_admin may change disposition
@@ -1179,9 +1182,20 @@ async function advanceStage(body, auth, env, request) {
 }
 
 async function assignAgent(body, auth, env) {
+  // Base gate: must at least be able to manage tickets
   const g = require('cs_ticket_manage', auth); if (g) return g;
   const { ticket_id, agent_id } = body;
   if (!ticket_id || !agent_id) return err('ticket_id and agent_id required');
+
+  // Self-assign (claim from Unassigned) is open to any cs_ticket_manage holder.
+  // Cross-user reassignment requires cs_ticket_reassign or cs_ticket_admin.
+  const isSelfAssign = agent_id === auth.userId;
+  if (!isSelfAssign) {
+    const canReassign = !!auth?.permissions?.cs_ticket_reassign || !!auth?.permissions?.cs_ticket_admin;
+    if (!canReassign) {
+      return err('Forbidden — only Team Lead+ can reassign tickets to other agents (missing cs_ticket_reassign)', 403);
+    }
+  }
 
   const aRes = await sb(`/rest/v1/users_profile?id=eq.${agent_id}&select=id,full_name&limit=1`, env);
   const agent = aRes.data?.[0];
@@ -1197,9 +1211,14 @@ async function assignAgent(body, auth, env) {
   });
   if (!upd.ok) return err('Assign failed', 500);
 
-  await insertHistory(ticket_id, 'assigned_agent_id', t.assigned_agent_id, agent.id, `→ ${agent.full_name}`, auth, env);
+  await insertHistory(
+    ticket_id, 'assigned_agent_id',
+    t.assigned_agent_id, agent.id,
+    isSelfAssign ? 'self-claimed' : `→ ${agent.full_name}`,
+    auth, env,
+  );
 
-  return ok({ assigned_to: agent.full_name });
+  return ok({ assigned_to: agent.full_name, self_assigned: isSelfAssign });
 }
 
 async function addNote(body, auth, env) {

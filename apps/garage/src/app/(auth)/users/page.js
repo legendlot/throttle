@@ -68,11 +68,12 @@ const PERM_DEFS = [
     { key: 'users_manage', label: 'Manage Users & Roles', type: 'bool' },
   ] },
   { group: 'Pitstop (CS)', items: [
-    { key: 'cs_ticket_view',    label: 'View Tickets',                  type: 'bool' },
-    { key: 'cs_ticket_manage',  label: 'Manage Own Tickets',            type: 'bool' },
-    { key: 'cs_ticket_approve', label: 'Approve Refunds / Replacements', type: 'bool' },
-    { key: 'cs_ticket_admin',   label: 'CS Admin (force-close, reassign)', type: 'bool' },
-    { key: 'cs_reports_view',   label: 'View CS Reports & Costs',       type: 'bool' },
+    { key: 'cs_ticket_view',     label: 'View Tickets',                      type: 'bool' },
+    { key: 'cs_ticket_manage',   label: 'Manage Own Tickets (self-assign)',  type: 'bool' },
+    { key: 'cs_ticket_reassign', label: 'Reassign Tickets to Others (TL+)',  type: 'bool' },
+    { key: 'cs_ticket_approve',  label: 'Approve Refunds / Replacements',    type: 'bool' },
+    { key: 'cs_ticket_admin',    label: 'CS Admin (force-close, depts, WA templates)', type: 'bool' },
+    { key: 'cs_reports_view',    label: 'View CS Reports & Costs',           type: 'bool' },
   ] },
 ];
 

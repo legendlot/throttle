@@ -8,6 +8,7 @@ import { ChevronLeft, AlertCircle, Plus, Link2, MessageSquare, ChevronRight } fr
 import { csopsGet, csopsPost } from '../../../../lib/csopsFetch.js';
 import { ShopifyPanel } from '../../../../components/ShopifyPanel.js';
 import WhatsAppPanel from '../../../../components/WhatsAppPanel.js';
+import AssignmentControl from '../../../../components/AssignmentControl.js';
 import { DISPOSITION_VALUES, DISPOSITION_LABELS } from '../../../../lib/dispositions.js';
 import { DispositionBadge } from '../../../../components/DispositionBadge.js';
 
@@ -115,7 +116,7 @@ export default function TicketDetailPage() {
         gap: 'var(--space-3)',
         marginTop: 'var(--space-4)',
       }}>
-        <IdentityRail ticket={t} dispatch={data.dispatch_info} pastCases={data.past_cases} session={session} />
+        <IdentityRail ticket={t} dispatch={data.dispatch_info} pastCases={data.past_cases} session={session} onRefresh={refresh} />
         <WorkArea ticket={t} dispatch={data.dispatch_info} repairRun={data.repair_run} session={session} perms={perms} onRefresh={refresh} stages={stages} />
         <ActivityFeed
           ticket={t}
@@ -471,7 +472,7 @@ function Stepper({ stages, currentIndex, closed, disposition }) {
   );
 }
 
-function IdentityRail({ ticket: t, dispatch, pastCases, session }) {
+function IdentityRail({ ticket: t, dispatch, pastCases, session, onRefresh }) {
   const [revealPhone, setRevealPhone] = useState(false);
   return (
     <aside style={{
@@ -480,7 +481,10 @@ function IdentityRail({ ticket: t, dispatch, pastCases, session }) {
       borderRadius: 'var(--radius-lg)',
       padding: 'var(--space-4)',
     }}>
-      <SectionLabel>Customer</SectionLabel>
+      <SectionLabel>Assignment</SectionLabel>
+      <AssignmentControl ticket={t} session={session} onChanged={onRefresh} />
+
+      <SectionLabel style={{ marginTop: 18 }}>Customer</SectionLabel>
       <Field label="Name" value={t.customer_name} />
       <Field
         label="Phone"
