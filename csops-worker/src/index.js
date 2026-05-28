@@ -334,6 +334,7 @@ async function handleGet(action, params, auth, env) {
     }
     case 'getAgents':        return getAgents(params, auth, env);
     case 'getIssueCatalog':  return getIssueCatalog(env);
+    case 'getMyopAccounts':  return getMyopAccounts(params, auth, env);
     case 'searchShopifyCustomer':
       return ok(await shopifyLookup({ phone: params.get('phone'), email: params.get('email') }, env));
     default:
@@ -355,6 +356,8 @@ async function handlePost(action, body, auth, env, request) {
     case 'cancelTicket':     return cancelTicket(body, auth, env);
     case 'escalateTicket':   return escalateTicket(body, auth, env);
     case 'closeTicket':      return closeTicket(body, auth, env);
+    case 'createMyopAccount': return createMyopAccount(body, auth, env);
+    case 'updateMyopAccount': return updateMyopAccount(body, auth, env);
     default:
       return err(`Unknown action: ${action}`, 404);
   }
@@ -1128,24 +1131,42 @@ async function closeTicket(body, auth, env) {
 
 // ── MyOperator webhook ───────────────────────────────────────────────────────
 
-// Scaffold mode: static shared token via ?token= or X-Webhook-Token header.
-// Swap to HMAC once MyOperator's signature scheme is confirmed (go-live).
-function verifyWebhook(request, url, env) {
-  const provided = url.searchParams.get('token') || request.headers.get('X-Webhook-Token');
-  return !!env.MYOP_WEBHOOK_SECRET && provided === env.MYOP_WEBHOOK_SECRET;
+// Resolve a MyOp account by slug. Returns null if not found or inactive.
+async function resolveMyopAccount(slug, env) {
+  const r = await sb(
+    `/rest/v1/myop_accounts?slug=eq.${encodeURIComponent(slug)}&is_active=eq.true&select=*&limit=1`,
+    env,
+  );
+  return r.data?.[0] || null;
+}
+
+// Per-slug webhook secret. Reads MYOP_WEBHOOK_SECRET_<UPPER_SLUG> first; falls
+// back to legacy MYOP_WEBHOOK_SECRET only for slug='main' (back-compat with the
+// existing live MyOperator configuration that posts to /webhooks/myoperator
+// without an ?account= parameter).
+function expectedSecretForSlug(slug, env) {
+  const key = `MYOP_WEBHOOK_SECRET_${slug.toUpperCase().replace(/-/g, '_')}`;
+  return env[key] || (slug === 'main' ? env.MYOP_WEBHOOK_SECRET : null);
 }
 
 async function handleMyOperatorWebhook(request, env) {
   const url = new URL(request.url);
-  if (!verifyWebhook(request, url, env)) return err('Invalid webhook signature', 401);
+  const slug = (url.searchParams.get('account') || 'main').toLowerCase();
+  const account = await resolveMyopAccount(slug, env);
+  if (!account) return err(`Unknown MyOp account slug: ${slug}`, 404);
+
+  const expected = expectedSecretForSlug(slug, env);
+  const provided = url.searchParams.get('token') || request.headers.get('X-Webhook-Token');
+  if (!expected || provided !== expected) return err('Invalid webhook signature', 401);
+
   let body = {};
   try { body = await request.json(); } catch { return err('Bad JSON', 400); }
   const type = body.event_type;
-  console.log('[myop] ' + type + ' session=' + (body.session_id || '?') + ' dir=' + (body.direction || '?')); // lean, non-PII observability
-  if (type === 'call.answered' || type === 'call.responded') return webhookCallAnswered(body, env);
-  if (type === 'call.end' || type === 'call.ended')          return webhookCallEnd(body, env);
-  if (type === 'call.summary')                                return webhookCallSummary(body, env);
-  return json({ ok: true, ignored: type });  // ack other events so MyOperator doesn't retry
+  console.log(`[myop:${slug}] ${type} session=${body.session_id || '?'} dir=${body.direction || '?'}`);
+  if (type === 'call.answered' || type === 'call.responded') return webhookCallAnswered(body, env, account);
+  if (type === 'call.end' || type === 'call.ended')          return webhookCallEnd(body, env, account);
+  if (type === 'call.summary')                                return webhookCallSummary(body, env, account);
+  return json({ ok: true, ignored: type });
 }
 
 // MyOperator wraps the call details in a nested `payload` object; the envelope
@@ -1200,7 +1221,7 @@ async function insertHistorySystem(ticket_id, field_name, old_value, new_value, 
   }) }).catch(() => {});
 }
 
-async function webhookCallAnswered(body, env) {
+async function webhookCallAnswered(body, env, account) {
   const c = parseMyOp(body);
   if (!c.session_id) return err('missing session_id', 400);
   const existing = await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(c.session_id)}&select=id,ticket_no&limit=1`, env);
@@ -1219,6 +1240,7 @@ async function webhookCallAnswered(body, env) {
 
   const ins = await sb(`/rest/v1/cs_tickets`, env, { method: 'POST', body: JSON.stringify({
     ticket_no, call_session_id: c.session_id, auto_created: true,
+    myop_account_id: account?.id || null,
     created_by_user_id: null, created_by_name: 'MyOperator (auto)',
     intake_channel: 'phone', call_direction: c.direction, call_did: c.did,
     call_answered_at: c.timestamp || new Date().toISOString(),
@@ -1234,7 +1256,7 @@ async function webhookCallAnswered(body, env) {
   return json({ ok: true, ticket_no });
 }
 
-async function webhookCallEnd(body, env) {
+async function webhookCallEnd(body, env, account) {
   const c = parseMyOp(body);
   if (!c.session_id) return err('missing session_id', 400);
   const patch = {
@@ -1256,7 +1278,7 @@ async function webhookCallEnd(body, env) {
     return json({ ok: true, skipped: 'unanswered call — no ticket created' });
   }
   // out-of-order: call.end before call.answered for an answered call — create then patch
-  const created = await webhookCallAnswered(body, env);
+  const created = await webhookCallAnswered(body, env, account);
   const createdData = await created.clone().json().catch(() => null);
   if (!createdData?.ok) return created;  // create failed — don't patch a nonexistent row
   await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(c.session_id)}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
@@ -1265,7 +1287,7 @@ async function webhookCallEnd(body, env) {
 
 // call.summary carries agent identity (legs[].agent.email) that call.answered
 // lacks. Backfill the ticket's assignee when the summary arrives.
-async function webhookCallSummary(body, env) {
+async function webhookCallSummary(body, env, account) {  // eslint-disable-line no-unused-vars
   const c = parseMyOp(body);
   if (!c.session_id) return json({ ok: true, skipped: 'no session_id' });
   const agentEmail = agentEmailFromLegs(c.legs);
@@ -1278,4 +1300,54 @@ async function webhookCallSummary(body, env) {
   await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(c.session_id)}`, env, { method: 'PATCH', body: JSON.stringify({ assigned_agent_id: agent.id, assigned_agent_name: agent.name }) });
   await insertHistorySystem(t.id, 'assigned_agent_name', null, agent.name, 'auto-assigned from call.summary', env);
   return json({ ok: true, assigned: agent.name });
+}
+
+// ── MyOp account registry ────────────────────────────────────────────────────
+
+const SLUG_RE = /^[a-z][a-z0-9_-]{1,30}$/;
+
+async function getMyopAccounts(_params, _auth, env) {
+  const r = await sb(
+    `/rest/v1/myop_accounts?select=*&order=created_at.asc`,
+    env,
+  );
+  if (!r.ok) return err('Failed to load MyOp accounts', 500);
+  return ok(r.data || []);
+}
+
+async function createMyopAccount(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const { slug, name, did, owner_email, notes } = body;
+  if (!slug || !SLUG_RE.test(slug)) {
+    return err('slug required — lowercase letters, digits, dash/underscore; starts with a letter; 2-31 chars');
+  }
+  if (!name) return err('name required');
+  const r = await sb(`/rest/v1/myop_accounts`, env, {
+    method: 'POST',
+    body: JSON.stringify({
+      slug, name,
+      did: did || null,
+      owner_email: owner_email || null,
+      notes: notes || null,
+      is_active: true,
+    }),
+  });
+  if (!r.ok) return err(`create failed: ${JSON.stringify(r.data)}`, r.status);
+  return ok({ account: r.data?.[0] });
+}
+
+async function updateMyopAccount(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const { id, patch } = body;
+  if (!id || !patch || typeof patch !== 'object') return err('id and patch required');
+  const ALLOWED = ['name', 'did', 'owner_email', 'notes', 'is_active'];
+  const clean = {};
+  for (const k of ALLOWED) if (k in patch) clean[k] = patch[k];
+  if (Object.keys(clean).length === 0) return err('nothing to update');
+  const r = await sb(`/rest/v1/myop_accounts?id=eq.${encodeURIComponent(id)}`, env, {
+    method: 'PATCH',
+    body: JSON.stringify(clean),
+  });
+  if (!r.ok) return err(`update failed: ${JSON.stringify(r.data)}`, r.status);
+  return ok({ account: r.data?.[0] });
 }
