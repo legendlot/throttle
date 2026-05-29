@@ -45,7 +45,10 @@ export default function CycleCountsPage() {
   const canRecord  = hasPermission(perms, 'cycle_count_record');
   const canAdmin   = hasPermission(perms, 'cycle_count_admin');
 
-  const [tab,      setTab]      = useState('in_progress');
+  // Default to "All" so a count stays visible after it's created, completed, or
+  // cancelled. Defaulting to "In Progress" made counts look like they vanished
+  // once they moved status (floor reported "can't see my count even after refresh").
+  const [tab,      setTab]      = useState('all');
   const [counts,   setCounts]   = useState([]);
   const [loading,  setLoading]  = useState(false);
   const [activeCount, setActiveCount] = useState(null);  // count_no for detail
