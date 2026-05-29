@@ -1,0 +1,52 @@
+{
+  "title": "Pitstop",
+  "title_accent": "Operations Manual",
+  "subtitle": "The self-serve guide to customer support tickets, calls and admin at Legend of Toys.",
+  "version": "1.0.0",
+  "date": "2026-05-29",
+  "app_url": "pitstop.legendoftoys.com",
+  "owner": "Legend of Toys",
+  "roles": {
+    "agt":  { "label": "Agent", "name": "CS Agent", "desc": "Works the queue and calls: opens, verifies and resolves customer tickets." },
+    "lead": { "label": "Lead",  "name": "CS Lead",  "desc": "Reassigns tickets across the team and reads the reports." },
+    "adm":  { "label": "Admin", "name": "Admin",    "desc": "Full access: re-triage past triage, departments, MyOperator accounts and WhatsApp templates." }
+  },
+  "parts": [
+    {
+      "part": "Getting Started",
+      "subtitle": "What Pitstop is, how to sign in and get around, and what your role can see.",
+      "chapters": [
+        { "id": "intro",      "title": "Welcome to Pitstop",          "file": "00-introduction.html", "roles": ["agt","lead","adm"] },
+        { "id": "navigation", "title": "Signing In & Getting Around", "file": "01-navigation.html",   "roles": ["agt","lead","adm"] },
+        { "id": "roles",      "title": "Roles & What You Can See",     "file": "02-roles.html",        "roles": ["agt","lead","adm"] }
+      ]
+    },
+    {
+      "part": "Work",
+      "subtitle": "The queue, the ticket workspace, creating tickets, and the call log.",
+      "chapters": [
+        { "id": "queue",       "title": "The Queue",      "route": "/queue",        "file": "work-queue.html",      "roles": ["agt","lead","adm"] },
+        { "id": "ticket",      "title": "Working a Ticket","route": "/queue/detail", "file": "work-ticket.html",     "roles": ["agt","lead","adm"] },
+        { "id": "new",         "title": "New Ticket",     "route": "/new",          "file": "work-new.html",        "roles": ["agt","lead","adm"] },
+        { "id": "calls",       "title": "Calls",          "route": "/calls",        "file": "work-calls.html",      "roles": ["agt","lead","adm"] },
+        { "id": "call-detail", "title": "Call Detail",    "route": "/calls/detail", "file": "work-calldetail.html", "roles": ["agt","lead","adm"] }
+      ]
+    },
+    {
+      "part": "Analyze",
+      "subtitle": "Cross-cutting reports on tickets and calls.",
+      "chapters": [
+        { "id": "reports", "title": "Reports", "route": "/reports", "file": "analyze-reports.html", "roles": ["lead","adm"] }
+      ]
+    },
+    {
+      "part": "Admin",
+      "subtitle": "Departments, MyOperator call accounts, and WhatsApp templates.",
+      "chapters": [
+        { "id": "departments",  "title": "Departments",        "route": "/admin/departments",  "file": "admin-departments.html", "roles": ["adm"] },
+        { "id": "myop",         "title": "MyOperator Accounts","route": "/admin/myop",         "file": "admin-myop.html",        "roles": ["adm"] },
+        { "id": "wa-templates", "title": "WhatsApp Templates", "route": "/admin/wa-templates", "file": "admin-watemplates.html", "roles": ["adm"] }
+      ]
+    }
+  ]
+}

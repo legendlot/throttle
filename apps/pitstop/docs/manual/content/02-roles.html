@@ -1,0 +1,25 @@
+<p class="lead">Pitstop gives each person the access that matches their job. This chapter explains the three roles used throughout this manual and what each unlocks.</p>
+
+<h2 class="sec">The three roles</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key"><span class="role agt">Agent</span></div><div class="a-val"><p><strong>CS Agent.</strong> Works the queue and calls: opens tickets, verifies issues, advances them through their stages, logs notes and evidence, and claims tickets to themselves.</p></div></div>
+  <div class="a-row"><div class="a-key"><span class="role lead">Lead</span></div><div class="a-val"><p><strong>CS Lead.</strong> Everything an agent does, plus reassigning tickets to other agents and reading the Reports.</p></div></div>
+  <div class="a-row"><div class="a-key"><span class="role adm">Admin</span></div><div class="a-val"><p><strong>Admin.</strong> Full access: changing a ticket&rsquo;s disposition after triage, the department switcher, and the admin screens (Departments, MyOperator accounts, WhatsApp templates).</p></div></div>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; How access actually works</div>
+  <p>Your access comes from the permissions on your account (for example <code>cs_ticket_manage</code> to work tickets, <code>cs_ticket_reassign</code> to assign to others, <code>cs_reports_view</code> for reports, <code>cs_ticket_admin</code> for the admin screens). The three tags above are plain-language groupings of those permissions. If you cannot do something you should be able to, an admin needs to adjust your role.</p>
+</div>
+
+<h2 class="sec">Who sees what</h2>
+<table class="tbl">
+  <thead><tr><th>Area</th><th style="text-align:center">Agent</th><th style="text-align:center">Lead</th><th style="text-align:center">Admin</th></tr></thead>
+  <tbody>
+    <tr><td>Queue, Calls, New Ticket, working a ticket</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>Reassign tickets to other agents</td><td style="text-align:center"></td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>Reports</td><td style="text-align:center"></td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>Change disposition past triage</td><td style="text-align:center"></td><td style="text-align:center"></td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>Departments, MyOp, WA Templates, dept switcher</td><td style="text-align:center"></td><td style="text-align:center"></td><td style="text-align:center">&bull;</td></tr>
+  </tbody>
+</table>

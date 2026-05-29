@@ -1,0 +1,16 @@
+<p class="lead">MyOperator Accounts registers each calling account that feeds phone calls into Pitstop. Each account gets its own webhook URL and secret; you set it up here, then point MyOperator at the generated URL so its call events flow in.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Connecting calling lines to Pitstop.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: create + activate.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">When</div><div class="g-val">Onboarding a new number.</div></div>
+</div>
+
+<h2 class="sec">Adding an account</h2>
+<p><strong>Add Account</strong> captures a slug, a name, and optionally the DID (caller number) and owner email. Each account row shows its generated <strong>webhook URL</strong> and <strong>env-var name</strong>, each with a copy button, and an Active toggle. There is no edit or delete: an account can only be created and then activated or deactivated.</p>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; Creating the account is only half the setup</div>
+  <p>Calls will not authenticate until an engineer sets the matching secret in Cloudflare (the <code>MYOP_WEBHOOK_SECRET_&lt;SLUG&gt;</code> shown on the row), using <code>wrangler secret put</code>. That is a one-time technical step outside Pitstop. Because there is no edit, a typo in the slug, DID or owner can only be fixed by creating a new account.</p>
+</div>

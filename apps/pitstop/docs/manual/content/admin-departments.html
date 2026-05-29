@@ -1,0 +1,16 @@
+<p class="lead">Departments define the CS teams (Inbound, Outbound, Confirmation, Messaging and so on) and which agent belongs to each. Departments control visibility: a non-admin only sees the tickets and calls in their own team.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Teams and who is in them.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: create, toggle, assign.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Effect</div><div class="g-val">Scopes everyone&rsquo;s view.</div></div>
+</div>
+
+<h2 class="sec">Using it</h2>
+<p>The <strong>Departments</strong> table lists each team with its slug, name, sort order, agent count and an Active toggle. <strong>Add Department</strong> creates one (a URL-safe slug, a name, a sort order). The <strong>Agents</strong> table lists everyone with a per-row department dropdown: pick a team to move an agent into it (or &ldquo;None&rdquo; to remove them).</p>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Changes apply instantly, no confirm</div>
+  <p>Toggling a department active and reassigning an agent both take effect the moment you click, with no confirmation, so a misclick is live immediately. Setting an agent to &ldquo;None&rdquo; drops their tickets and calls out of every department view. A slug is fixed once the department is created.</p>
+</div>

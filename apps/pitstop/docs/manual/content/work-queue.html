@@ -1,0 +1,20 @@
+<p class="lead">The Queue is the CS home screen: the worklist of tickets. Agents live here to see what is assigned to them, what is overdue, and to open or create tickets. It is where a shift starts.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Your ticket worklist.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read; open or create tickets.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role agt">Agent</span> <span class="role lead">Lead</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Updates</div><div class="g-val">Counts every 60s.</div></div>
+</div>
+
+<h2 class="sec">Reading it</h2>
+<p>Five cards head the screen: <strong>My Open</strong>, <strong>Overdue</strong> (red), <strong>Awaiting Evidence 3+ days</strong> (nudge candidates), <strong>Closed Today</strong>, and <strong>Avg Close</strong> month-to-date. Below them, tabs with live counts: <strong>My Queue</strong> (the default), All Open, Awaiting Evidence, In Logistics, Inspection, Resolution, Closed.</p>
+<p>Each row shows the ticket number, customer (with masked phone), product, the <strong>disposition</strong> badge (an <span class="mono">AUTO</span> tag if it was auto-created), the current stage, platform, assigned agent, and an <strong>Age / SLA</strong> figure: green up to 3 days, orange beyond, and <strong>red and bold when overdue</strong> with a &ldquo;+Nd over&rdquo; note.</p>
+
+<h2 class="sec">Finding and opening tickets</h2>
+<p>Search by name, phone, order, UPC or ticket number (press <span class="kbd">/</span> to jump in). Narrow with the disposition chips and the Category and Platform dropdowns; the filters live in the URL so a view can be bookmarked. Click a row, or use the arrow keys and Enter, to open it. <strong>New Ticket</strong> (red) creates one; <strong>Export CSV</strong> downloads the rows you can currently see.</p>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Export is the visible list, with masked phones</div>
+  <p>Export CSV downloads only the tickets currently loaded for the tab and filters you are on, not the whole queue, and phone numbers are masked in the file. The <span class="mono">AUTO</span> badge means the ticket was created automatically (for example from a call), not opened by an agent.</p>
+</div>
