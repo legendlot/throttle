@@ -10,6 +10,7 @@ import { fetchIssueCatalog } from '../../../lib/issueCatalog.js';
 import { DISPOSITION_VALUES, DISPOSITION_LABELS } from '../../../lib/dispositions.js';
 import { DispositionBadge } from '../../../components/DispositionBadge.js';
 import { getActiveDept } from '../../../components/DeptSwitcher.js';
+import { fmtIstDateTime } from '../../../lib/datetime.js';
 
 // ── Sub-tabs ─────────────────────────────────────────────────────────────────
 const TABS = [
@@ -45,10 +46,26 @@ function ageDays(createdAt) {
   return ms / (1000 * 60 * 60 * 24);
 }
 
+function CreatedLine({ createdAt }) {
+  if (!createdAt) return null;
+  return (
+    <div title={`Created ${fmtIstDateTime(createdAt)} IST`}
+         style={{ color: 'var(--t4)', fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 400, marginTop: 2 }}>
+      {fmtIstDateTime(createdAt)}
+    </div>
+  );
+}
+
 function AgeCell({ createdAt, dueAt, closedAt }) {
+  if (!createdAt) return null;
   if (closedAt) {
     const days = (new Date(closedAt) - new Date(createdAt)) / (1000 * 60 * 60 * 24);
-    return <span style={{ color: 'var(--t3)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>{days.toFixed(0)} d (closed)</span>;
+    return (
+      <div>
+        <span style={{ color: 'var(--t3)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>{days.toFixed(0)} d (closed)</span>
+        <CreatedLine createdAt={createdAt} />
+      </div>
+    );
   }
   const d = ageDays(createdAt);
   if (d == null) return null;
@@ -60,12 +77,15 @@ function AgeCell({ createdAt, dueAt, closedAt }) {
   const daysOver = overdue ? Math.floor((Date.now() - new Date(dueAt).getTime()) / (1000 * 60 * 60 * 24)) : null;
 
   return (
-    <span style={{ color, fontFamily: 'var(--font-mono)', fontWeight, fontSize: 12 }}>
-      {d.toFixed(0)} d
-      {daysOver > 0 && (
-        <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 500 }}>+{daysOver}d over</span>
-      )}
-    </span>
+    <div>
+      <span style={{ color, fontFamily: 'var(--font-mono)', fontWeight, fontSize: 12 }}>
+        {d.toFixed(0)} d
+        {daysOver > 0 && (
+          <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 500 }}>+{daysOver}d over</span>
+        )}
+      </span>
+      <CreatedLine createdAt={createdAt} />
+    </div>
   );
 }
 

@@ -11,6 +11,7 @@ import WhatsAppPanel from '../../../../components/WhatsAppPanel.js';
 import AssignmentControl from '../../../../components/AssignmentControl.js';
 import { DISPOSITION_VALUES, DISPOSITION_LABELS } from '../../../../lib/dispositions.js';
 import { DispositionBadge } from '../../../../components/DispositionBadge.js';
+import { fmtIstDateTime } from '../../../../lib/datetime.js';
 
 // ── Domain constants (mirror csops worker) ───────────────────────────────────
 
@@ -215,7 +216,7 @@ function DetailHeader({ ticket: t, onRefresh, session, stages, perms }) {
         <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--t3)', fontSize: 12 }}>{t.ticket_no}</span>
           <span style={{ color: 'var(--t4)' }}>·</span>
-          <span style={{ color: 'var(--t3)', fontSize: 12 }}>created {new Date(t.created_at).toLocaleDateString()}</span>
+          <span style={{ color: 'var(--t3)', fontSize: 12 }}>created {fmtIstDateTime(t.created_at)} IST</span>
           <span style={{ color: 'var(--t4)' }}>·</span>
           <span style={{ color: 'var(--t3)', fontSize: 12 }}>{age.toFixed(0)}d old</span>
         </div>
