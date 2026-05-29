@@ -1,0 +1,38 @@
+<p class="lead">QC Audit is where supervisors run walk-the-floor quality rounds, record what they find, and chase every finding through to fixed. It has two tabs: <strong>Log</strong> for running rounds today, and <strong>Tracker</strong> for managing open findings over time.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Running QC rounds and resolving findings.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action &mdash; rounds and findings.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sup">Supervisor</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Severity</div><div class="g-val">Critical · High · Medium · Low.</div></div>
+</div>
+
+<h2 class="sec">Log — running a round</h2>
+<p>A day summary strip (rounds today, critical/high open, total findings, confirmed) sits above the round cards. To run a round:</p>
+<ol class="steps">
+  <li><span class="s-title">+ Start New Round.</span> A round opens, marked Active (green).</li>
+  <li><span class="s-title">+ Add Finding</span> for each issue. Pick a <strong>Line</strong>, a <strong>Category</strong> (e.g. QC Pass — Damage, Assembly — Wrong/Missing Part, SOP Deviation), a <strong>Severity</strong>, a description, and the action required.</li>
+  <li><span class="s-title">Close Round</span> when the walk is done. Closed rounds still expand, and their findings can still be resolved and confirmed.</li>
+</ol>
+
+<h2 class="sec">Tracker — closing the loop</h2>
+<p>Filter all findings by line, status, severity, category and date. Per-line scorecards show open counts and the oldest open item; a card border turns red when its oldest open finding is <strong>overdue</strong>. The findings table carries the action buttons.</p>
+<table class="tbl">
+  <thead><tr><th>Status</th><th>Meaning &amp; next step</th></tr></thead>
+  <tbody>
+    <tr><td><strong style="color:#2138c0">Open</strong></td><td>Raised, not yet fixed. A supervisor marks it <strong>Resolved</strong> with a required note describing the fix.</td></tr>
+    <tr><td><strong style="color:#1a8f43">Resolved</strong></td><td>Fixed, awaiting sign-off. The round&rsquo;s auditor (or a super admin) clicks <strong>✓ Confirm Fixed</strong>, or anyone can <strong>Reopen</strong> it.</td></tr>
+    <tr><td><strong style="color:#767c86">Closed</strong></td><td>Confirmed fixed &mdash; shown dimmed. Done, not gone.</td></tr>
+  </tbody>
+</table>
+<p>A <strong>Repeat Offenders</strong> panel flags findings that have recurred in the last 30 days &mdash; the patterns worth fixing at the root.</p>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; Separation of duties</div>
+  <p>The supervisor who <em>ran</em> a round cannot mark its own findings resolved &mdash; a different supervisor must. The round&rsquo;s auditor (or a super admin) then confirms the fix. Resolving always requires a written note of what was done; blank notes are rejected.</p>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Overdue rules</div>
+  <p>An open Critical or High finding is overdue after 24 hours; Medium or Low after 48. Overdue ages show red and turn the scorecard border red &mdash; your prompt to escalate.</p>
+</div>

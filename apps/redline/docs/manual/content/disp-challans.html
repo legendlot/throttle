@@ -1,0 +1,33 @@
+<p class="lead">Delivery Challans are the transport documents for outbound goods movements &mdash; GST-style goods-movement notes numbered <span class="mono">LOT-DC-YYYY-NNNN</span>. This screen is the register where you find, create, issue and print them.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Creating &amp; managing delivery challans.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action &mdash; create / issue / cancel / print.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role dis">Dispatch</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Lifecycle</div><div class="g-val">Draft → Issued (or Cancelled).</div></div>
+</div>
+
+<h2 class="sec">The register</h2>
+<p>The list shows Challan No., Date, Dispatched To, Purpose, Qty, Total (₹), <strong>EWB</strong> and Status. Filter by status (with live counts), search by number or recipient, and set a date range. Status badges: Draft (neutral), Issued (green ✓), Cancelled (red ✗). The EWB column reads <span class="mono">—</span> if no e-way bill is needed, a blue <span class="mono">✓ {number}</span> when recorded, or an amber <span class="mono">⚠ REQUIRED</span> when needed but missing.</p>
+
+<h2 class="sec">Creating a challan</h2>
+<ol class="steps">
+  <li><span class="s-title">+ New Challan.</span> Set the date, purpose (Material transfer, Job work, Sample, Return for repair&hellip;) and GST rate.</li>
+  <li><span class="s-title">From &amp; To.</span> Pick the dispatching company address (prefilled, editable) and enter the recipient&rsquo;s name, address and GSTIN.</li>
+  <li><span class="s-title">Goods supplied.</span> Add a line per item &mdash; search a product to auto-fill its description and HSN, or type freehand &mdash; with quantity, unit and rate. Amounts total automatically.</li>
+  <li><span class="s-title">Transport &amp; e-way bill (optional).</span> Add mode, vehicle and transporter, and EWB number/date if you have one.</li>
+  <li><span class="s-title">Save as Draft or Issue Challan.</span> Saving as draft lets you review later; issuing locks it from edits. The number is assigned on save.</li>
+</ol>
+
+<h2 class="sec">On a challan</h2>
+<p>From a challan&rsquo;s detail page you can <strong>Print</strong> it (an A4 document that opens and prints in a new tab), <strong>Issue</strong> a draft (locks it), or <strong>Cancel</strong> it with a reason.</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; The ₹50,000 e-way bill line</div>
+  <p>When a challan&rsquo;s total reaches <strong>₹50,000</strong>, an amber banner reminds you an e-way bill is required (a quieter note appears from ₹40,000). The EWB is generated separately at the government portal &mdash; the banner is a reminder; you can still save and issue without entering one, but the register will keep flagging it <span class="mono">⚠ REQUIRED</span> until you do.</p>
+</div>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Issuing locks it</div>
+  <p>Once issued, a challan can&rsquo;t be edited &mdash; only printed or cancelled. Get the details right while it&rsquo;s still a draft.</p>
+</div>

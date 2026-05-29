@@ -1,0 +1,29 @@
+<p class="lead">Reporting is the analytics hub. Where the Dashboard and Lines show <em>today</em>, Reporting lets you look across a date range &mdash; production versus target, cycle times, defect and quality trends, line throughput &mdash; and export the data as CSV for audits and deeper analysis.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Period reports &amp; data exports.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read; downloads CSVs.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role adm">Admin</span> / managers.</div></div>
+  <div class="g-cell"><div class="g-lbl">Range</div><div class="g-val">10 Days · Week · Month · Custom.</div></div>
+</div>
+
+<h2 class="sec">The five sections</h2>
+<table class="tbl">
+  <thead><tr><th>Section</th><th>What it shows</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Production</strong></td><td>QC pass, first-pass yield, dispatched, vs-target and run counts &mdash; with a daily bar chart and a By&nbsp;Product / By&nbsp;Line table.</td></tr>
+    <tr><td><strong>Cycle Time</strong></td><td>Average QC, PKG and RTD cycle times, with median, fastest/slowest and outlier counts. Green up to 30&nbsp;min, yellow to 60, red beyond.</td></tr>
+    <tr><td><strong>Defects</strong></td><td>Total occurrences, FPY, top defect codes (coloured by severity) and a severity split, By&nbsp;Code or By&nbsp;Product.</td></tr>
+    <tr><td><strong>Throughput</strong></td><td>Per-station takt times and a per-line bottleneck view that flags the slowest station on each line.</td></tr>
+    <tr><td><strong>Downloads</strong></td><td>CSV exports (see below).</td></tr>
+  </tbody>
+</table>
+<p>Set the range once at the top (10 Days, This Week, This Month, or Custom) and it applies across the sections.</p>
+
+<h2 class="sec">Downloads</h2>
+<p>Grouped CSV exports: <strong>Production</strong> (QC View, Plan vs Actual, Defects), <strong>Audit &amp; Compliance</strong> (Customer Repairs, Process Deviations, QC Audit Findings, Scan Violations, Unit Restocks, Damage/Scrap Ledger), and <strong>Movement &amp; Issuance</strong> (Direct Issuances, Cycle Counts, Stock Adjustments). Each downloads for the selected range; an empty range tells you there were no rows.</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Opening the CSVs</div>
+  <p>Files are UTF-8 with a BOM, so Excel opens them cleanly. For richer per-module views, the footer points you to <strong>Garage → Reports</strong>. One export &mdash; <strong>Stock Adjustments</strong> &mdash; needs the finance reporting permission and is otherwise disabled.</p>
+</div>

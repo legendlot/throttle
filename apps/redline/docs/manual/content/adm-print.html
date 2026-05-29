@@ -1,0 +1,21 @@
+<p class="lead">The Print Center is for reprinting a unit&rsquo;s shipping/packing label when the original is lost, damaged or jammed. Look up an already-packed unit by its batch label or car UPC, pick which printer should produce it, and re-queue the label.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Reprinting packing/shipping labels.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action &mdash; looks up &amp; re-queues prints.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Printers</div><div class="g-val">L1, L2, L3, D1, D2.</div></div>
+</div>
+
+<h2 class="sec">Reprinting a label</h2>
+<ol class="steps">
+  <li><span class="s-title">Choose Single or Bulk.</span> Single looks up one unit; Bulk takes a list (one label/UPC per line).</li>
+  <li><span class="s-title">Search.</span> Enter a batch label or car UPC &mdash; a bare number is auto-padded to a full <span class="mono">LOT-&hellip;</span>; a value ending in <span class="mono">-E</span> or <span class="mono">-R</span> is treated as a batch label.</li>
+  <li><span class="s-title">Pick the printer.</span> Select a destination (L1&ndash;L3, D1, D2) under &ldquo;Print To&rdquo;. You must choose one before printing.</li>
+  <li><span class="s-title">🖨 PRINT</span> on a found row (or <strong>PRINT ALL</strong>) re-queues the label to that printer.</li>
+</ol>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; &ldquo;Queued&rdquo; means sent, not printed</div>
+  <p>A green <span class="mono">Queued</span> badge confirms the job was sent to the printer&rsquo;s queue &mdash; it doesn&rsquo;t guarantee paper came out. Check the physical printer. Entries that can&rsquo;t be matched collect in a red &ldquo;Not found&rdquo; box; PRINT ALL skips rows already queued so you can&rsquo;t double-print by re-clicking.</p>
+</div>

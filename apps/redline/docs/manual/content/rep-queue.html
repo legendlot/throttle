@@ -1,0 +1,24 @@
+<p class="lead">The Repair Queue is the pool of physical units on the floor waiting for a repair run &mdash; units that failed QC or came back as returns and need rework. Open it to see how many units of each product are waiting so a repair run can be planned.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Seeing units awaiting repair.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read-only.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sup">Supervisor</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Runs created in</div><div class="g-val">The Store (Garage) system.</div></div>
+</div>
+
+<h2 class="sec">Reading it</h2>
+<p>A table grouped by product (each product shows a subtotal), then variant rows with Model, Colour, Status and Count, plus a running total at the top. The status tells you why a unit is in the pool:</p>
+<table class="tbl">
+  <thead><tr><th>Status</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><strong style="color:#c01f1f">QC Fail</strong></td><td>Failed the quality check and was pulled for rework.</td></tr>
+    <tr><td><strong style="color:#c2570a">RTO In</strong></td><td>A return that came back in and needs repair.</td></tr>
+    <tr><td><strong style="color:#767c86">Scrapped</strong></td><td>Marked scrapped during repair.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout note">
+  <div class="c-title">&#9432; This is a view, not a workbench</div>
+  <p>The Repair Queue shows what&rsquo;s waiting; the actual repair runs that consume the pool are created in the Store (Garage) system. Don&rsquo;t confuse this with <strong>Customer Repairs</strong> &mdash; that tracks customer warranty <em>cases</em>, while this is the floor&rsquo;s pool of physical units to rework.</p>
+</div>

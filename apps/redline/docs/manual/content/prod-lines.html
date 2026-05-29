@@ -1,0 +1,33 @@
+<p class="lead">Lines is the live floor monitor &mdash; each production line&rsquo;s real-time output today, the people on it, and how fast each station is moving. Like the Dashboard, it&rsquo;s built to run on the wall and refreshes every 30 seconds.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Watching each line&rsquo;s live throughput.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read-only.</div></div>
+  <div class="g-cell"><div class="g-lbl">Covers</div><div class="g-val">Today only, lines L1&ndash;L3.</div></div>
+  <div class="g-cell"><div class="g-lbl">Updates</div><div class="g-val">Every 30s.</div></div>
+</div>
+
+<h2 class="sec">Line Performance</h2>
+<p>One card per line, each showing the product on it, a big colour-coded <strong>% complete</strong> against the run target, and a five-stat grid:</p>
+<table class="tbl">
+  <thead><tr><th>Stat</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><strong>INW</strong></td><td>Units inwarded (sub-line shows remotes).</td></tr>
+    <tr><td><strong>QC Pass</strong> (green)</td><td>Passed QC; car/remote split below.</td></tr>
+    <tr><td><strong>QC Fail</strong> (red)</td><td>Failed QC; car/remote split below.</td></tr>
+    <tr><td><strong>PKG</strong> (yellow)</td><td>Units packaged.</td></tr>
+    <tr><td><strong>Dispatched</strong> (green)</td><td>Retail + ecom shipped (sub-line splits R · E).</td></tr>
+  </tbody>
+</table>
+<p>The footer adds operator count, downtime minutes, percent done, target, first-pass yield (<strong>FPY</strong>) and the first-scan time. The big % is green at 90%+, yellow at 60%+, orange at 30%+, red below.</p>
+
+<h2 class="sec">Operator Output</h2>
+<p>A per-operator table &mdash; INW cars/remotes, QC pass cars/remotes, QC fails, and pass rate (green 95%+, yellow 85%+, red below). This is how you see who is moving and who may be struggling.</p>
+
+<h2 class="sec">Station Pace (Takt)</h2>
+<p>Average time per unit at each station (INW, QC, PKG, and the shared PKG_OUT) across the lines. <strong>Faster is greener</strong>: green up to 5&nbsp;min, yellow up to 10, red beyond. A slow, red station is your bottleneck.</p>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Takt refreshes once</div>
+  <p>The line stats and operator output refresh every 30 seconds, but Station Pace is measured only when the page <em>opens</em> &mdash; so it can look stale next to the live numbers. Reload the page to refresh the pace figures.</p>
+</div>

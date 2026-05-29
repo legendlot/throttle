@@ -1,0 +1,43 @@
+<p class="lead">The Dashboard is Redline&rsquo;s home screen and the factory&rsquo;s headline view for the day: how much has been inwarded, passed QC, packed and dispatched &mdash; per line, against target. It refreshes itself every 30 seconds, so it&rsquo;s built to live on the production-floor monitor all shift.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">The day&rsquo;s production at a glance.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read-only.</div></div>
+  <div class="g-cell"><div class="g-lbl">Covers</div><div class="g-val">The selected date.</div></div>
+  <div class="g-cell"><div class="g-lbl">Updates</div><div class="g-val">Every 30s.</div></div>
+</div>
+
+<h2 class="sec">Today at a Glance</h2>
+<p>The top row of cards is the pulse of the day. The ones to watch:</p>
+<table class="tbl">
+  <thead><tr><th>Card</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><strong>QC Pass / Inwarded — Today</strong></td><td>Units checked-and-passed, and units brought off the line, today.</td></tr>
+    <tr><td><strong>QC Fail</strong></td><td>Failed QC today (turns red when above zero). Sub-line splits cars vs remotes (e.g. <span class="mono">4C · 1R</span>).</td></tr>
+    <tr><td><strong>Pass Rate</strong></td><td>First-pass yield. <strong>Green</strong> 95%+, <strong>yellow</strong> 85%+, <strong>red</strong> below.</td></tr>
+    <tr><td><strong>Dispatched — Today</strong></td><td>Units shipped (green); sub-line splits retail vs ecom.</td></tr>
+    <tr><td><strong>PKG Out</strong></td><td>Units packed and sitting ready-to-dispatch (at RTD).</td></tr>
+    <tr><td><strong>Repair Queue</strong></td><td>Units in the workshop (turns yellow above 50).</td></tr>
+    <tr><td><strong>Open Findings</strong></td><td>Outstanding audit findings (only shows when above zero) &mdash; a prompt to visit Audit.</td></tr>
+  </tbody>
+</table>
+<p>WTD / MTD Pass and Open Runs round out the row with week- and month-to-date passes and the count of live runs.</p>
+
+<h2 class="sec">Plan vs Actual — Today</h2>
+<p>One card per production run, showing how far it has progressed against its target: a big <strong>% complete</strong> (green 90%+, yellow 60%+, orange above 0, red at 0), a progress bar, and a stats row &mdash; <strong>Target</strong>, <strong>QC</strong> (units passed), <strong>RTR</strong> (ready-to-retail) and <strong>RTE</strong> (ready-to-ecom). The footer reads either <span class="mono">−N short</span> in red or <span class="mono">✓ On track</span> in green.</p>
+
+<h2 class="sec">Hourly Output</h2>
+<p>A per-line, hour-by-hour grid of dispatch achievement against target. Each line (L1 yellow, L2 blue, L3 green) shows its hourly target, today&rsquo;s total, and a pace label: <span class="mono">▲ ahead</span> (green), <span class="mono">▼ behind</span> (red), or &ldquo;on pace&rdquo;. Each hour cell is colour-filled against its target &mdash; green met it, amber was close, red missed, and a corner dot marks an hour that beat target. Hours past 6&nbsp;PM are marked <span class="mono">OT</span> (overtime).</p>
+
+<h2 class="sec">Production Runs</h2>
+<p>A table of runs split into <strong>Active Today</strong> (green dot &mdash; today&rsquo;s Issued / In&nbsp;Progress runs) and <strong>Upcoming</strong> (blue dot &mdash; Submitted runs). Columns: Run, Product, Line, Date, Target, Retail, Ecom, Status.</p>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; About the date presets</div>
+  <p>The <strong>Today / This Week / This Month</strong> chips change the date, but the cards, Plan-vs-Actual and runs all read the single selected <em>end</em> date &mdash; they don&rsquo;t add a whole week into one total. Use the presets to jump <em>to</em> a date, not to sum a range. For range totals, use <strong>Reporting</strong>.</p>
+</div>
+
+<div class="callout floor">
+  <div class="c-title">&#9874; On the floor</div>
+  <p>This is the screen to leave running on the wall. &ldquo;Pace&rdquo; and &ldquo;behind/ahead&rdquo; only appear once the shift is underway and a target is set, so an empty pace early in the morning is normal.</p>
+</div>

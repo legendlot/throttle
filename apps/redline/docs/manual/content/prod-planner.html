@@ -1,0 +1,47 @@
+<p class="lead">The Planner turns the month&rsquo;s dispatch demand into scheduled production runs. You upload the demand plan, the Planner shows what&rsquo;s needed by which date and how much current stock covers it, and you build and create the runs to fill the gaps &mdash; without leaving the page.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Scheduling production to meet dispatch demand.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action &mdash; creates real runs.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sup">Supervisor</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Starts with</div><div class="g-val">A demand-plan CSV upload.</div></div>
+</div>
+
+<h2 class="sec">Step 1 — Upload the demand plan</h2>
+<p>Use <strong>↑ Upload Plan CSV</strong> at the top right. The file must be the <strong>Projection&nbsp;V2 tab</strong> of the Dispatch Plan Google Sheet, exported via <em>File → Download → CSV</em>.</p>
+<div class="callout danger">
+  <div class="c-title">&#9940; Use the right tab</div>
+  <p>Exporting the wrong sheet tab is the most common error &mdash; the upload will reject it with a message about a missing SKU, Channel or Mapping column. Rows with a dispatch date in the past are silently dropped, and an all-zero or unrecognised-mapping file shows &ldquo;No demand rows found&rdquo;. Always export the <strong>Projection&nbsp;V2</strong> tab.</p>
+</div>
+
+<h2 class="sec">The three tabs</h2>
+<h3 class="sub">Dispatch Timeline</h3>
+<p>What&rsquo;s needed, by date. Each dispatch date is an expandable card showing total units, product count, and <span class="mono">⚠ N gap</span> in red where stock falls short. A toggle switches between <strong>Cascaded Waterfall</strong> (stock carries forward across dates per product) and <strong>Normal</strong> (each date against current stock). Expanding a product shows its variants with columns Need, RTD, Allocated, Balance/Available, Gap and a status pill.</p>
+
+<h3 class="sub">Recommended Runs</h3>
+<p>The working tab. On the <strong>left</strong>, dispatch needs by date, each with a suggested production date (or <span class="mono">⚠ Too late to produce in time</span>) and a <strong>+ Schedule</strong> button per product. On the <strong>right</strong>, your <strong>Production Schedule</strong> &mdash; the &ldquo;carts&rdquo; you&rsquo;re building.</p>
+<ol class="steps">
+  <li><span class="s-title">Click + Schedule on a product.</span> A panel opens with editable Qty Ecomm / Qty Retail per variant (each showing how much gap remains), a production date, and an L1/L2/L3 line.</li>
+  <li><span class="s-title">Add to Schedule.</span> The line drops into a cart on the right. Build up as many lines and days as you need (<strong>+ New Day</strong> starts a fresh cart).</li>
+  <li><span class="s-title">Adjust in the cart.</span> Edit quantities inline; <span class="mono">↻</span> repeats a line to another day, <span class="mono">✕</span> removes it. A yellow <span class="mono">⚠ Stock short</span> warning flags any line whose parts are insufficient.</li>
+  <li><span class="s-title">Create All for the date.</span> One button creates a real production run for every line in that cart with a quantity above zero. Each line reports <span class="mono">✓</span> + run number, or an error.</li>
+</ol>
+
+<h3 class="sub">Batch Sizes</h3>
+<p>Set the default run size per product (with the most common past size shown alongside). This drives how many runs the Planner suggests to cover a gap. Edit inline and Save.</p>
+
+<h2 class="sec">Reading the status pills</h2>
+<table class="tbl">
+  <thead><tr><th>Pill</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><strong style="color:#1a8f43">Covered</strong></td><td>No gap &mdash; stock meets the need.</td></tr>
+    <tr><td><strong style="color:#8a6d00">Plan Run</strong></td><td>A gap exists; schedule a run with comfortable lead time.</td></tr>
+    <tr><td><strong style="color:#c2570a">Urgent</strong></td><td>Tight on time &mdash; schedule today.</td></tr>
+    <tr><td><strong style="color:#c01f1f">Critical / Too Late</strong></td><td>Today-only, or already past the point of producing in time.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Watch out</div>
+  <p>A product can&rsquo;t be scheduled on the same line and date twice &mdash; the Planner blocks it. Creating runs sends one request per line, so a large cart takes a few seconds; if a duplicate/open-run already exists you&rsquo;ll be asked whether to create another anyway or skip it.</p>
+</div>

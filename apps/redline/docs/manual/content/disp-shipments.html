@@ -1,0 +1,46 @@
+<p class="lead">Shipments is the main dispatch workspace &mdash; where outbound orders are built and closed out. You create a shipment for a channel, set what it should contain (the manifest), open boxes and pack units into them, then mark it shipped. This is the one Dispatch screen where you do real work, not just watch.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Building &amp; shipping outbound orders.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Full action screen.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role dis">Dispatch</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Lifecycle</div><div class="g-val">Draft → Packing → Shipped.</div></div>
+</div>
+
+<h2 class="sec">The shipment lifecycle</h2>
+<table class="tbl">
+  <thead><tr><th>Status</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><strong style="color:#2138c0">Draft</strong></td><td>Created, manifest being set. Can be edited or deleted.</td></tr>
+    <tr><td><strong>Packing</strong></td><td>Boxes open, units being packed. Can be edited or cancelled.</td></tr>
+    <tr><td><strong style="color:#8a6d00">Ready</strong></td><td>Fully packed against the manifest, not yet shipped (a green <span class="mono">✓ Ready</span> badge).</td></tr>
+    <tr><td><strong style="color:#1a8f43">Shipped ✓</strong></td><td>Sent out &mdash; all its units marked shipped.</td></tr>
+    <tr><td><strong style="color:#c01f1f">Cancelled ✗</strong></td><td>Called off &mdash; its units return to the dispatch pool.</td></tr>
+  </tbody>
+</table>
+
+<h2 class="sec">Building a shipment, step by step</h2>
+<ol class="steps">
+  <li><span class="s-title">+ New Shipment.</span> Give it an optional title, pick a <strong>channel</strong> (required), set a scheduled date, and build the <strong>manifest</strong> &mdash; add each product and enter the quantity per model/colour variant. A live total shows at the bottom. Create it.</li>
+  <li><span class="s-title">Open the shipment</span> (click its row). You&rsquo;ll see meta cards (Channel, Pool/Target, Packed, Scheduled), the manifest with progress bars, and the boxes list.</li>
+  <li><span class="s-title">+ Add Boxes.</span> Open one or more packing boxes. Units get scanned into boxes on the floor; each box shows its unit count and status.</li>
+  <li><span class="s-title">Manage boxes as needed.</span> Expand a box to see its units; <strong>× Remove</strong> a unit (it returns to the pool), <strong>Reprint</strong> a label, <strong>Reopen</strong> a packed box, or <strong>× Remove</strong> an empty box.</li>
+  <li><span class="s-title">Shipped.</span> When everything&rsquo;s packed, mark the shipment shipped &mdash; this updates every unit in it to Shipped.</li>
+</ol>
+
+<h2 class="sec">Reading the numbers</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Pool / Target</div><div class="a-val"><p>Units allocated to this shipment so far <strong>versus the manifest goal</strong> (e.g. <span class="mono">8 / 20</span>). This is allocation progress &mdash; not the same as packed.</p></div></div>
+  <div class="a-row"><div class="a-key">Packed</div><div class="a-val"><p>Units actually packed into boxes &mdash; green when 100% of a manifest line is packed, yellow while in progress.</p></div></div>
+  <div class="a-row"><div class="a-key">Box status</div><div class="a-val"><p><strong>Open</strong> (amber) → being packed; <strong>Packed / Closed</strong> (green ✓) → done.</p></div></div>
+</div>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Editing limits</div>
+  <p>You can only edit a shipment while it&rsquo;s Draft or Packing, and you can&rsquo;t set a manifest line below what&rsquo;s already packed, nor remove a product that has packed units. Deleting is for drafts only.</p>
+</div>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; Shipping is the commitment</div>
+  <p><strong>Mark Shipped</strong> flips every unit in the shipment to Shipped &mdash; do it only when the consignment has genuinely left. Cancelling returns units to the dispatch pool (not lost), but &ldquo;this cannot be undone&rdquo;, so cancel deliberately.</p>
+</div>
