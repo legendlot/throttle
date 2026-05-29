@@ -96,4 +96,4 @@ SELECT table_schema, table_name, count(*) AS cols
  WHERE (table_schema='store'  AND table_name='repack_runs')
     OR (table_schema='public' AND table_name='channel_swap_history')
  GROUP BY 1,2 ORDER BY 1,2;
--- expect public.channel_swap_history | 17  and  store.repack_runs | 13
+-- expect public.channel_swap_history | 18  and  store.repack_runs | 13
