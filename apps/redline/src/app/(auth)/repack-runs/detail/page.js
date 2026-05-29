@@ -63,10 +63,9 @@ function RepackRunDetailInner() {
   if (loading)  return <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>;
   if (!run)     return <div style={{ padding: 16 }}><EmptyState icon="🔍" message="Repack run not found." /></div>;
 
-  const variant   = [run.variant_model, run.colour].filter(Boolean).join(' ');
   const repacked  = run.repacked || 0;
   const pct       = run.target_qty > 0 ? Math.round((repacked / run.target_qty) * 100) : 0;
-  const active     = run.status === 'Open' || run.status === 'In Progress';
+  const active    = run.status === 'Open' || run.status === 'In Progress';
   const swaps     = Array.isArray(run.swaps) ? run.swaps : [];
 
   return (
@@ -84,10 +83,10 @@ function RepackRunDetailInner() {
       >
         {/* Header facts */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 14, marginBottom: 18 }}>
-          <div><div style={meta}>Product</div><div style={{ fontFamily: 'var(--cond)', fontSize: 16, fontWeight: 700, color: 'var(--t1)' }}>{run.product}{variant ? ` · ${variant}` : ''}</div></div>
-          <div><div style={meta}>Swap</div><div style={{ fontFamily: 'var(--cond)', fontSize: 16, fontWeight: 700, color: 'var(--yellow)' }}>{run.from_channel} → {run.to_channel}</div></div>
+          <div><div style={meta}>Target</div><div style={{ fontFamily: 'var(--cond)', fontSize: 16, fontWeight: 700, color: 'var(--yellow)' }}>{run.target_qty} units</div></div>
           <div><div style={meta}>Status</div><div style={{ marginTop: 2 }}><RpkStatusBadge status={run.status} /></div></div>
           <div><div style={meta}>Created</div><div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t2)' }}>{fmtDate(run.created_at)}</div></div>
+          {run.completed_at && <div><div style={meta}>Completed</div><div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t2)' }}>{fmtDate(run.completed_at)}</div></div>}
         </div>
 
         {/* Progress */}
@@ -119,22 +118,29 @@ function RepackRunDetailInner() {
               <thead><tr>
                 <th style={th}>Car UPC</th>
                 <th style={th}>Remote</th>
+                <th style={th}>Swap</th>
                 <th style={th}>Old label</th>
                 <th style={th}>New label</th>
                 <th style={th}>In</th>
                 <th style={th}>Out</th>
               </tr></thead>
               <tbody>
-                {swaps.map(s => (
-                  <tr key={s.id}>
-                    <td style={{ ...td, color: 'var(--t1)', fontWeight: 600 }}>{s.car_upc}</td>
-                    <td style={{ ...td, color: 'var(--t3)' }}>{s.paired_remote_upc || '—'}</td>
-                    <td style={{ ...td, color: 'var(--t3)' }}>{s.old_batch_label || '—'}</td>
-                    <td style={{ ...td, color: s.new_batch_label ? 'var(--t1)' : 'var(--state-warning, #fbbf24)' }}>{s.new_batch_label || 'in-flight'}</td>
-                    <td style={{ ...td, fontSize: 11, color: 'var(--t3)' }}>{fmtDate(s.repacked_in_at)}</td>
-                    <td style={{ ...td, fontSize: 11, color: s.repacked_out_at ? 'var(--t3)' : 'var(--state-warning, #fbbf24)' }}>{s.repacked_out_at ? fmtDate(s.repacked_out_at) : '—'}</td>
-                  </tr>
-                ))}
+                {swaps.map(s => {
+                  const swap = (s.from_channel || s.to_channel)
+                    ? `${s.from_channel || '?'} → ${s.to_channel || '?'}`
+                    : '—';
+                  return (
+                    <tr key={s.id}>
+                      <td style={{ ...td, color: 'var(--t1)', fontWeight: 600 }}>{s.car_upc}</td>
+                      <td style={{ ...td, color: 'var(--t3)' }}>{s.paired_remote_upc || '—'}</td>
+                      <td style={{ ...td, color: 'var(--t2)' }}>{swap}</td>
+                      <td style={{ ...td, color: 'var(--t3)' }}>{s.old_batch_label || '—'}</td>
+                      <td style={{ ...td, color: s.new_batch_label ? 'var(--t1)' : 'var(--state-warning, #fbbf24)' }}>{s.new_batch_label || 'in-flight'}</td>
+                      <td style={{ ...td, fontSize: 11, color: 'var(--t3)' }}>{fmtDate(s.repacked_in_at)}</td>
+                      <td style={{ ...td, fontSize: 11, color: s.repacked_out_at ? 'var(--t3)' : 'var(--state-warning, #fbbf24)' }}>{s.repacked_out_at ? fmtDate(s.repacked_out_at) : '—'}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

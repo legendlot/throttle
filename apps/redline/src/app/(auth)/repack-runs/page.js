@@ -99,31 +99,25 @@ export default function RepackRunsListPage() {
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr>
                 <th style={th}>Run</th>
-                <th style={th}>Product</th>
-                <th style={th}>Swap</th>
                 <th style={th}>Progress</th>
                 <th style={th}>Status</th>
+                <th style={th}>Notes</th>
                 <th style={th}>Created</th>
               </tr></thead>
               <tbody>
                 {rows.map(r => {
-                  const variant = [r.variant_model, r.colour].filter(Boolean).join(' ');
                   const repacked = r.repacked || 0;
                   const pct = r.target_qty > 0 ? Math.round((repacked / r.target_qty) * 100) : 0;
                   return (
                     <tr key={r.id} style={{ cursor: 'pointer' }} onClick={() => router.push(`/repack-runs/detail?id=${r.id}`)}>
                       <td style={{ ...td, color: 'var(--yellow)', fontWeight: 700 }}>{r.run_no}</td>
-                      <td style={{ ...td, fontFamily: 'var(--cond)', fontWeight: 600 }}>
-                        {r.product}
-                        {variant && <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginTop: 2 }}>{variant}</div>}
-                      </td>
-                      <td style={{ ...td, color: 'var(--t2)' }}>{r.from_channel} → {r.to_channel}</td>
                       <td style={td}>
                         <span style={{ color: repacked >= r.target_qty ? 'var(--green, #34d399)' : 'var(--t1)', fontWeight: 700 }}>{repacked}</span>
                         <span style={{ color: 'var(--t3)' }}> / {r.target_qty}</span>
                         <span style={{ color: 'var(--t3)', marginLeft: 6, fontSize: 11 }}>{pct}%</span>
                       </td>
                       <td style={td}><RpkStatusBadge status={r.status} /></td>
+                      <td style={{ ...td, color: 'var(--t2)', maxWidth: 320, fontSize: 12 }}>{r.notes || '—'}</td>
                       <td style={{ ...td, fontSize: 11, color: 'var(--t3)' }}>{fmtDate(r.created_at)}</td>
                     </tr>
                   );
