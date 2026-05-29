@@ -1,5 +1,5 @@
 'use client';
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { ConfirmModal, EmptyState, Modal, Spinner, useToast } from '@throttle/ui';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { ReceiptPanel } from './ReceiptPanel.js';
@@ -172,8 +172,10 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
   const shortCount = pickList.filter((p) => (Number(p.shortfall) || 0) > 0).length;
 
   // Group pick list rows by category (and sub-group by part_type) — restores
-  // the legacy Garage picklist layout (S84, regression from G-W4 migration)
-  const pickGroups = useMemo(() => {
+  // the legacy Garage picklist layout (S84, regression from G-W4 migration).
+  // Plain computation (not useMemo) — this runs after early returns above, so
+  // a hook here would violate rules-of-hooks; the grouping is cheap.
+  const pickGroups = (() => {
     const sorted = (pickList || []).slice().sort((a, b) => pickSortKey(a) - pickSortKey(b));
     const out = [];
     let lastCat = null, lastType = null, current = null;
@@ -193,7 +195,7 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
       current.types[current.types.length - 1].parts.push(p);
     });
     return out;
-  }, [pickList]);
+  })();
 
   async function handleCancel() {
     setCancelling(true);

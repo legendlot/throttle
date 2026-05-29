@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
-import { Spinner, Combobox } from '@throttle/ui';
+import { Spinner, Combobox, Modal } from '@throttle/ui';
 import { useProducts } from '../../../../hooks/useProducts.js';
 
 const TONE_STYLES = {
@@ -54,6 +54,7 @@ export default function LibraryPartsPage() {
   const [filterProduct, setFilterProduct] = useState('');
   const [filterTier, setFilterTier] = useState('');
   const [filterCat, setFilterCat] = useState('');
+  const [imgView, setImgView] = useState(null); // { part_code, part_name, image_url } | null
 
   useEffect(() => {
     if (!session || productsLoading || !PRODUCTS.length) return;
@@ -79,9 +80,13 @@ export default function LibraryPartsPage() {
                 products:     [],
                 variants:     [],
                 qty_per_unit: r.qty_per_unit || 1,
+                image_url:    r.image_url || null,
               };
             }
             const entry = map[r.part_code];
+            // image_url is keyed per part_code in material_master (identical
+            // across products) — backfill if the first-seen row lacked it.
+            if (!entry.image_url && r.image_url) entry.image_url = r.image_url;
             if (!entry.products.includes(product)) entry.products.push(product);
             entry.variants.push({
               product,
@@ -218,6 +223,7 @@ export default function LibraryPartsPage() {
                 <th style={tableThStyle}>Products</th>
                 <th style={tableThStyle}>Variant / Model</th>
                 <th style={tableThStyle}>Qty / Unit</th>
+                <th style={tableThStyle}>Image</th>
               </tr></thead>
               <tbody>
                 {capped.map((r) => {
@@ -243,12 +249,22 @@ export default function LibraryPartsPage() {
                         {variantSet.size === 0 ? '—' : [...variantSet].join(', ')}
                       </td>
                       <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{qtyDisplay}</td>
+                      <td style={tableTdStyle}>
+                        {r.image_url ? (
+                          <button
+                            onClick={() => setImgView(r)}
+                            style={{ ...btnSecondary, padding: '4px 10px', fontSize: 10, color: 'var(--t1)', whiteSpace: 'nowrap' }}
+                          >View image</button>
+                        ) : (
+                          <span style={{ color: 'var(--t3)' }}>—</span>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
                 {filtered.length > 300 && (
                   <tr>
-                    <td colSpan={8} style={{ ...tableTdStyle, textAlign: 'center', color: 'var(--t3)', fontStyle: 'italic' }}>
+                    <td colSpan={9} style={{ ...tableTdStyle, textAlign: 'center', color: 'var(--t3)', fontStyle: 'italic' }}>
                       Showing first 300 of {filtered.length.toLocaleString()} results — narrow your search.
                     </td>
                   </tr>
@@ -258,6 +274,29 @@ export default function LibraryPartsPage() {
           )}
         </div>
       </div>
+
+      <Modal
+        open={!!imgView}
+        onClose={() => setImgView(null)}
+        size="lg"
+        title={imgView ? `${imgView.part_code} — ${imgView.part_name || ''}`.trim() : ''}
+      >
+        {imgView && (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+            <img
+              src={imgView.image_url}
+              alt={imgView.part_code}
+              style={{ maxWidth: '100%', maxHeight: '70dvh', borderRadius: 4, background: '#000' }}
+            />
+            <a
+              href={imgView.image_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}
+            >Open original ↗</a>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }
