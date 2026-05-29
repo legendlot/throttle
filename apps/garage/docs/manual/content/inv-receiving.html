@@ -1,0 +1,22 @@
+<p class="lead">Receiving manages an inbound shipment end to end: log the arriving consignment, register its boxes (shipping marks), count what is actually inside each box, reconcile against what was expected, print bag labels, and finally raise GRNs to book the counted goods into stock. It is the upstream step that feeds GRN Entry.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Counting shipments in, box by box.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: heavy workflow.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sto">Store</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Feeds</div><div class="g-val">GRN Entry &amp; Stock.</div></div>
+</div>
+
+<h2 class="sec">The receiving workflow</h2>
+<ol class="steps">
+  <li><span class="s-title">Log the shipment.</span> Use <strong>+ New Shipment</strong>: supplier (required), optionally a PO reference (auto-fills supplier and origin), arrival date, expected boxes, and the receive format (Parts/CKD or FBU Units). Pending POs appear as <strong>Upcoming Shipments</strong> you can turn into a shipment in one click.</li>
+  <li><span class="s-title">Add shipping marks (boxes).</span> Inside the shipment, add marks one at a time or as a numbered range (for example BOX-1 to BOX-30, skipping any missing).</li>
+  <li><span class="s-title">Open a box and count it.</span> For each expected line, enter how many arrived OK versus damaged. Items not on the list go under <strong>Unexpected Items</strong>. Submit the box (optionally printing bag labels for the OK quantity).</li>
+  <li><span class="s-title">Reconcile.</span> The Reconciliation panel shows expected versus counted per line, with a status: Matched, Short, Over, Has Damage, Pending or GRN Raised.</li>
+  <li><span class="s-title">Raise GRN.</span> When lines are counted, <strong>Raise GRN</strong> turns them into a GRN and books the stock. This is the bridge into the Stock Ledger.</li>
+</ol>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; A few things to know</div>
+  <p>Bag labels are generated from the <strong>OK</strong> quantity only; damaged pieces never get labels. Re-opening a counted box to fix it runs in <strong>amend</strong> mode, which overwrites all that box&rsquo;s lines with whatever you enter (including zeros), so do not blank a field you did not mean to clear. <strong>Raise GRN</strong> only picks up lines that have a count and no existing GRN; re-counting after a GRN will not re-raise it.</p>
+</div>

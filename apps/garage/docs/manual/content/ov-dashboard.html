@@ -1,0 +1,36 @@
+<p class="lead">The Dashboard is Garage&rsquo;s morning overview. It shows the day&rsquo;s key numbers, what needs reordering, what each product can still be built into, and recent inward, production and returns activity. Open it first thing to see the state of the operation at a glance. It refreshes itself every minute.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">The store&rsquo;s state at a glance.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read-only.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sto">Store</span> <span class="role prd">Production</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Updates</div><div class="g-val">Every 60s.</div></div>
+</div>
+
+<h2 class="sec">The KPI cards</h2>
+<table class="tbl">
+  <thead><tr><th>Card</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Open Work Orders</strong></td><td>Ad hoc requests still open.</td></tr>
+    <tr><td><strong>Today&rsquo;s GRNs</strong></td><td>Goods received notes booked today.</td></tr>
+    <tr><td><strong>WOs Issued Today</strong></td><td>Work orders issued to production today.</td></tr>
+    <tr><td><strong>Reorder Flags</strong></td><td>Parts at or below their reorder level (red when above zero).</td></tr>
+    <tr><td><strong>Stock Value (₹)</strong></td><td>Total value of stock on hand. Only shown to users with finance-report access.</td></tr>
+    <tr><td><strong>Pending Returns</strong></td><td>Returned units waiting to be processed.</td></tr>
+  </tbody>
+</table>
+
+<h2 class="sec">The panels</h2>
+<p>Below the cards, the Dashboard lays out the working picture:</p>
+<ul>
+  <li><strong>Reorder Flags:</strong> parts that have hit their reorder point, with on-hand versus reorder level (shows the top 10; the header carries the full count).</li>
+  <li><strong>Producible Units by Product:</strong> how many whole units each product can be built into right now, with the limiting (bottleneck) part named. Click a product to see what is short.</li>
+  <li><strong>Recent Shipments, GRNs, Planned Issues, Ad Hoc Issues:</strong> the last few days of inward and issuing activity.</li>
+  <li><strong>Returns by Channel:</strong> a 30-day bar chart of where returns came from.</li>
+  <li><strong>Recent Activity:</strong> the last 10 system events, with a link to the full Activity Log.</li>
+</ul>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; &ldquo;Producible&rdquo; is the bottleneck count</div>
+  <p>The producible number for a product is how many <em>whole</em> units you can actually build given the part that runs out first, not a sum or an average. A green number means nothing is constraining it; red means the bottleneck part is short. The day-window panels (&ldquo;last 7 days&rdquo;) count back from the current time of day, so a record dated exactly 7 days ago can fall just outside.</p>
+</div>

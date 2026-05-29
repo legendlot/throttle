@@ -1,0 +1,36 @@
+<p class="lead">Garage shows each person the screens that match their job. The store team sees receiving and stock, procurement sees purchasing, and configuration screens stay with admins. This chapter explains the four roles used throughout this manual and which screens each one reaches.</p>
+
+<h2 class="sec">The four roles</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key"><span class="role sto">Store</span></div><div class="a-val"><p><strong>Store Team.</strong> The core warehouse persona: receiving goods, booking GRNs, managing the stock ledger, issuing parts to production, running counts, and handling returns.</p></div></div>
+  <div class="a-row"><div class="a-key"><span class="role prd">Production</span></div><div class="a-val"><p><strong>Production Team.</strong> Plans and runs production: creating production runs, raising ad hoc part requests, returning leftovers via line flush, and checking what can be built.</p></div></div>
+  <div class="a-row"><div class="a-key"><span class="role prc">Procurement</span></div><div class="a-val"><p><strong>Procurement.</strong> Buys what the factory needs: purchase orders, vendors, freight forwarders, reorder requests, and registering new products.</p></div></div>
+  <div class="a-row"><div class="a-key"><span class="role adm">Admin</span></div><div class="a-val"><p><strong>Manager / Admin.</strong> Full access: everything above, plus managing users and the permission matrix, reports, and configuration.</p></div></div>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; How access actually works</div>
+  <p>Your access is decided by the <strong>role on your account</strong>, set by an admin in the Users screen. Garage permissions are fine-grained (raising a purchase order, approving a China order, recording a cycle count and approving one are each separate rights), so two people both called &ldquo;procurement&rdquo; may not see exactly the same buttons. The four tags in this manual are plain-language groupings: they describe <em>who a screen is for</em>. If you should be able to open something but cannot, your account role needs changing; ask an admin.</p>
+</div>
+
+<h2 class="sec">Who sees what</h2>
+<p>A quick map of the main areas against the roles that typically use them. A dot means &ldquo;this is part of your job&rdquo;.</p>
+<table class="tbl">
+  <thead><tr><th>Area</th><th style="text-align:center">Store</th><th style="text-align:center">Prod</th><th style="text-align:center">Proc</th><th style="text-align:center">Admin</th></tr></thead>
+  <tbody>
+    <tr><td>Dashboard, Alerts, Library</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>Stock Ledger, GRN, Receiving</td><td style="text-align:center">&bull;</td><td style="text-align:center"></td><td style="text-align:center"></td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>Issue Queue, Flush Verify, Counts, Adjustments</td><td style="text-align:center">&bull;</td><td style="text-align:center"></td><td style="text-align:center"></td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>Returns, Direct Issuance, Store logs</td><td style="text-align:center">&bull;</td><td style="text-align:center"></td><td style="text-align:center"></td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>Production Runs, Ad Hoc, Line Flush</td><td style="text-align:center"></td><td style="text-align:center">&bull;</td><td style="text-align:center"></td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>Producibility, Process Deviations</td><td style="text-align:center"></td><td style="text-align:center">&bull;</td><td style="text-align:center"></td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>Purchase Orders, Vendors, Forwarders, New Product</td><td style="text-align:center"></td><td style="text-align:center"></td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>Reorder Requests</td><td style="text-align:center">&bull;</td><td style="text-align:center"></td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>Reports, Activity Log, Users &amp; Roles</td><td style="text-align:center"></td><td style="text-align:center"></td><td style="text-align:center"></td><td style="text-align:center">&bull;</td></tr>
+  </tbody>
+</table>
+
+<div class="callout tip">
+  <div class="c-title">&#10003; Tip</div>
+  <p>This table is a guide, not a rulebook. Many people wear more than one hat (a store lead who also raises reorder requests, a manager who does everything), and their role combines access. The dots show the <em>primary</em> owner of each area so you know who to ask about it.</p>
+</div>

@@ -1,0 +1,22 @@
+<p class="lead">Reports is the analytics and export hub. It pulls registers (stock, GRNs, purchase orders, returns and more) as CSV files for a date range, and shows quick on-screen summaries organised by business domain. Open it to extract data for audits or to read at-a-glance analytics.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">CSV extracts and quick summaries.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read; downloads CSVs.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role adm">Admin</span> (reports access)</div></div>
+  <div class="g-cell"><div class="g-lbl">Range</div><div class="g-val">From / To date filter.</div></div>
+</div>
+
+<h2 class="sec">How it&rsquo;s organised</h2>
+<p>Nine sub-tabs group the reports by area: <strong>Inventory, Inward, Production, Line Flush, Procurement, Returns, Issuance, Compliance</strong> and <strong>Analytics</strong>. Set the From and To dates once at the top, click <strong>Apply Filter</strong>, then either download a CSV card or load a summary panel.</p>
+
+<h2 class="sec">Two things on every tab</h2>
+<ul>
+  <li><strong>Download cards:</strong> click a card to download that register as a CSV (named <code>LOT_TYPE_date.csv</code>). Date-bearing reports respect the From/To range; an empty range tells you there were no rows.</li>
+  <li><strong>Summary panels:</strong> each carries a <span class="mono">&#8635; Load</span> button. Summaries do not load on their own; click Load to fetch. The Analytics tab adds a procurement-to-production flow, parts runway, weekly production trend and a production-versus-dispatch gap.</li>
+</ul>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Opening the CSVs and what&rsquo;s gated</div>
+  <p>Files are UTF-8 with a BOM, so Excel opens them cleanly. The <strong>Compliance</strong> tab is hidden without compliance-report access, and the finance panels (Vendor Spend, Production vs Dispatch Gap) and the Stock-Value figures need finance-report access. For richer per-module views, the footer points to the live screens themselves.</p>
+</div>

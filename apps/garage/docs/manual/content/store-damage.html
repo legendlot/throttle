@@ -1,0 +1,24 @@
+<p class="lead">The Damage / Scrap Ledger is the register of damaged, scratched or written-off stock. It tracks each item from the moment damage is recorded through repair, return-to-vendor, scrapping or restocking. Open it to log damage, batch items for action (which prints a manifest), and read the full audit trail.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">The lifecycle of damaged stock.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">View-only without the damage permission.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sto">Store</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Prints</div><div class="g-val">Batch manifests.</div></div>
+</div>
+
+<h2 class="sec">The lifecycle</h2>
+<p>Each row carries a status, shown as a tab and a badge: <strong>Pending</strong> (yellow), <strong>Sent to Repair</strong> (blue), <strong>Returned to Vendor</strong> (orange), <strong>Scrapped</strong> (red), <strong>Restocked</strong> (green), <strong>Cancelled</strong> (grey).</p>
+
+<h2 class="sec">Working the ledger</h2>
+<ul>
+  <li><strong>+ Record Damage:</strong> log a part code, name and quantity, with a source and reason (the reason shows on the manifest).</li>
+  <li><strong>Select rows, then act in bulk:</strong> <strong>Send to Repair</strong> (needs a destination), <strong>Return to Vendor</strong> (needs a vendor) or <strong>Scrap</strong>. Each groups the rows into a batch and prints a manifest.</li>
+  <li><strong>Per row:</strong> <strong>History</strong> shows the full transition log; a repair row can be marked <strong>Restock</strong> (repaired) or <strong>Not Repairable</strong>; a pending row can be cancelled.</li>
+  <li><strong>Reprint</strong> any batch manifest by its batch number.</li>
+</ul>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Bulk actions need a consistent selection</div>
+  <p>A bulk button only works when <em>every</em> selected row is in an eligible status; mixing statuses disables it. &ldquo;Not Repairable&rdquo; does not scrap an item immediately: it sends it back to Pending so it can be batch-scrapped. Without the damage-manage permission the screen is view-only.</p>
+</div>

@@ -1,0 +1,25 @@
+<p class="lead">The Issue Queue is the store&rsquo;s pick-and-issue desk. It shows every open request for parts from production (production runs, ad hoc requests, rework, short re-issues) and lets you record what was physically picked and issue it. This is where parts leave the store for the floor.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Issuing parts to production.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: issues stock.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sto">Store</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Prints</div><div class="g-val">Pick lists.</div></div>
+</div>
+
+<h2 class="sec">Reading the queue</h2>
+<p>Each request shows a colour-coded <strong>type</strong>: <span class="mono">PROD RUN</span> (blue), <span class="mono">PICKING</span> (amber, a run being scan-picked on the floor), <span class="mono">OUTSOURCED</span> (amber), <span class="mono">SHORT ISSUE</span> (orange), <span class="mono">REWORK</span> (red) or <span class="mono">AD HOC</span> (yellow). Filter by All / In-House / Outsourced.</p>
+
+<h2 class="sec">Issuing a request</h2>
+<ol class="steps">
+  <li><span class="s-title">Click ISSUE.</span> The detail opens with the pick list (for a run, grouped by category and material type), showing Required, In Stock (red if short) and an editable <strong>Actual Issue Qty</strong> per part.</li>
+  <li><span class="s-title">Set the quantities.</span> Use <strong>All as planned</strong> to reset to the planned amounts, or edit each line to what was physically picked.</li>
+  <li><span class="s-title">Tick the confirmation box.</span> &ldquo;I confirm parts have been physically picked&rdquo; is required; the issue button stays disabled until you tick it.</li>
+  <li><span class="s-title">Confirm Issue.</span> An Issue number is created, stock comes down, and the queue and Recent Issues refresh.</li>
+</ol>
+<p><strong>Print</strong> produces a pick sheet for the floor. <strong>Reject</strong> (runs and non-short work orders) needs a reason and removes the request. For a scan-picked run, the <strong>Pick Status</strong> panel shows each part as Complete, Partial, Pending or Not needed.</p>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Short stock does not block issuing</div>
+  <p>A red <strong>In Stock</strong> figure means the part is short, but you can still issue (the system records what you actually gave). Issuing a scan-picked run before every bag is scanned is also allowed; the &ldquo;pick incomplete&rdquo; message is informational, not a stop. Quantities are rounded to whole units on submit.</p>
+</div>

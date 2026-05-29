@@ -1,0 +1,22 @@
+<p class="lead">Stock Adjustments is the approval-and-posting queue for stock corrections, both auto-proposed (from cycle counts) and manually requested. Adjustments must be approved, by one or two tiers depending on value, before they post to the ledger. This is the controlled gate where recorded stock actually changes.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Approving and posting stock corrections.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: changes the ledger.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sto">Store</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Tabs</div><div class="g-val">Pending L1 / L2 · Approved · Rejected.</div></div>
+</div>
+
+<h2 class="sec">The approval flow</h2>
+<ol class="steps">
+  <li><span class="s-title">An adjustment appears</span> (requested here, or proposed by a completed cycle count). It starts at Pending L1, or Pending L2 if the value is high.</li>
+  <li><span class="s-title">Approve or reject</span> from the detail, if you hold the matching tier. A high-value item moves L1 then L2.</li>
+  <li><span class="s-title">Post to Ledger.</span> Once Approved, an approver posts it. <strong>This is the step that actually moves stock.</strong></li>
+  <li><span class="s-title">Reverse</span> a posted adjustment if needed (with a reason); this creates a reversing entry.</li>
+</ol>
+<p>A manual <strong>+ Manual Adjustment</strong> asks for the part or unit, the target quantity, and a reason code (cycle-count variance, damage, pilferage, found stock, and so on; &ldquo;Other&rdquo; needs an explanation).</p>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; Approving is not posting</div>
+  <p>Approval only clears the tier; <strong>Post to Ledger is the action that changes stock</strong>. An approved-but-unposted adjustment has moved nothing yet. High-value adjustments need both L1 and L2 before they can be posted. Reject and Reverse both require a reason.</p>
+</div>

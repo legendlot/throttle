@@ -1,0 +1,32 @@
+<p class="lead">Producibility answers one question: how many finished units of each product can we build right now from the parts on hand, and which part is the limiting factor? Open it to decide what to produce next and what to expedite.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">What can be built, and what&rsquo;s blocking it.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read-only.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role prd">Production</span> <span class="role sto">Store</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Updates</div><div class="g-val">Manual refresh.</div></div>
+</div>
+
+<h2 class="sec">The three views</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Summary</div><div class="a-val"><p>A card per product showing how many units it can build and its bottleneck part. Click a card to drill in.</p></div></div>
+  <div class="a-row"><div class="a-key">By Product</div><div class="a-val"><p>Per-variant breakdown plus the top constraining parts (stock, per-unit need, and how many units each allows).</p></div></div>
+  <div class="a-row"><div class="a-key">Bottlenecks</div><div class="a-val"><p>The parts limiting production, and which products each one is blocking.</p></div></div>
+</div>
+
+<h2 class="sec">Reading the status</h2>
+<p>The producible number is colour-coded by how many whole units can be built:</p>
+<table class="tbl">
+  <thead><tr><th>Status</th><th>Units buildable</th></tr></thead>
+  <tbody>
+    <tr><td><strong style="color:#c01f1f">Blocked</strong></td><td>0 (a part has run out).</td></tr>
+    <tr><td><strong style="color:#c2570a">Critical</strong></td><td>Under 100.</td></tr>
+    <tr><td><strong style="color:#8a6d00">Low</strong></td><td>Under 500.</td></tr>
+    <tr><td><strong style="color:#1a8f43">Healthy</strong></td><td>500 or more.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; It&rsquo;s the minimum, not a sum</div>
+  <p>&ldquo;Producible&rdquo; is the <em>lowest</em> buildable count across all the parts in the product&rsquo;s recipe, so it reflects true whole-unit capacity. The &ldquo;total buildable units&rdquo; KPI sums each product&rsquo;s figure across the portfolio; it is not units of any one product. Thresholds are fixed unit counts, not percentages.</p>
+</div>

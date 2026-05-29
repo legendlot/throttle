@@ -1,0 +1,30 @@
+<p class="lead">Flush Verify is where the store physically counts the materials production returned in a line flush and decides where each part goes: back to stock, quarantine, scrap or rework. The store&rsquo;s count is the figure that actually moves stock.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Counting and dispositioning flush returns.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: returns stock.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sto">Store</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Then</div><div class="g-val">Auto-creates a flush GRN.</div></div>
+</div>
+
+<h2 class="sec">Verifying a flush</h2>
+<ol class="steps">
+  <li><span class="s-title">Open a pending flush.</span> Each returned part gets a card pre-filled with one &ldquo;Return to Stock&rdquo; split at the quantity production raised.</li>
+  <li><span class="s-title">Set the disposition per part.</span> Split a part across destinations as needed. Each split has a quantity and, where relevant, a bag size or bin.</li>
+  <li><span class="s-title">Confirm Verification.</span> Stock is credited for the restocked quantities, and if any carry a bag size, bag labels generate and print.</li>
+</ol>
+
+<table class="tbl">
+  <thead><tr><th>Disposition</th><th>Means</th></tr></thead>
+  <tbody>
+    <tr><td><strong style="color:#1a8f43">Return to Stock</strong></td><td>Goes back into usable inventory (can print bag labels).</td></tr>
+    <tr><td><strong style="color:#c01f1f">Quarantine</strong></td><td>Held aside in a named bin.</td></tr>
+    <tr><td><strong style="color:#767c86">Scrap</strong></td><td>Written off (damaged or scratched).</td></tr>
+    <tr><td><strong style="color:#8a6d00">Rework Queue</strong></td><td>Sent for rework.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; The store&rsquo;s count wins, but it is logged</div>
+  <p>Each part shows a balance line against what production raised: Balanced, over, or under. If your total differs from production&rsquo;s number, a <strong>Confirm qty override</strong> step asks for a reason before saving. Your physical count becomes the count of record; the difference is saved and logged. Set a split&rsquo;s bag size to 0 to skip printing its labels.</p>
+</div>

@@ -1,0 +1,20 @@
+<p class="lead">The Repair Pool is a worklist of returned units triaged to the workshop, grouped by variant. Use it to batch units into a scheduled repair run that the floor will work through.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Batching repair returns into a run.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: schedule a run.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sto">Store</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Fed by</div><div class="g-val">Return triage (workshop).</div></div>
+</div>
+
+<h2 class="sec">Scheduling a repair run</h2>
+<ol class="steps">
+  <li><span class="s-title">Select the variant buckets</span> you want to repair (each row aggregates units of one product / model / colour; the count and oldest age are shown).</li>
+  <li><span class="s-title">Schedule Selected.</span> A modal lets you set the quantity per variant (up to what is available), choose a repair line (L1, L2, L3) and add notes.</li>
+  <li><span class="s-title">Create Run.</span> A repair run is created for the floor to work through; the store then issues the parts it needs.</li>
+</ol>
+
+<div class="callout note">
+  <div class="c-title">&#9432; How units get here</div>
+  <p>Units land in this pool when they are triaged &ldquo;Send to Workshop&rdquo; during return processing. The screen aggregates by variant, so individual units are visible only through the sample UPCs on each row. After a run is created, the floor runs the repair-pass and repair-scrap steps at the scanner&rsquo;s repair station.</p>
+</div>

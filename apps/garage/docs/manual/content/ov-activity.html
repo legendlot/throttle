@@ -1,0 +1,19 @@
+<p class="lead">The Activity Log is the system-wide audit trail: every significant action across Garage (GRNs, work orders, stock issues, returns, shipments, flushes, purchase orders) with who did it and when. Open it to trace what happened, by whom, and against a specific reference number.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Tracing who did what, and when.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read-only.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role adm">Admin</span> (reports access)</div></div>
+  <div class="g-cell"><div class="g-lbl">Updates</div><div class="g-val">Manual refresh.</div></div>
+</div>
+
+<h2 class="sec">Reading it</h2>
+<p>Each row shows the time (as &ldquo;5m ago&rdquo;, falling back to a date), who did it, a colour-coded <strong>type</strong> badge (GRN, Work Orders, Stock Issues, Returns, Shipments, Flushes, POs), the reference number, and a one-line summary with an action icon.</p>
+
+<h2 class="sec">Finding something</h2>
+<p>Filter by <strong>Type</strong> and choose how many rows to pull (Last 50 / 100 / 250). Then narrow with the <strong>Search</strong> box (summary, action or reference) and the <strong>Actor</strong> box. <strong>Load more</strong> appears when the list is full, adding another 100 rows.</p>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Two filters work differently</div>
+  <p>Type and the row limit query the server, but <strong>Search and Actor filter only what has already been loaded</strong>. So a name search finds matches within the current window, not the entire history; raise the limit (or use Load more) if you are hunting something older. The page is restricted to users with reports or user-view access.</p>
+</div>

@@ -1,0 +1,22 @@
+<p class="lead">Direct Store Issuance records stock leaving the warehouse for non-production reasons: samples, office requests, external testing, customer replacements, marketing events. Each issuance is a numbered document (DI) created as a draft, filled with part or unit lines, then approved and issued (which actually deducts stock).</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Issuing stock for non-production needs.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: deducts stock.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sto">Store</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Lifecycle</div><div class="g-val">Draft &rarr; Issued &rarr; Closed.</div></div>
+</div>
+
+<h2 class="sec">The flow</h2>
+<ol class="steps">
+  <li><span class="s-title">+ New Issue.</span> Pick a purpose, destination and contact, then <strong>Create Draft</strong>.</li>
+  <li><span class="s-title">Add lines.</span> Add part lines (with quantities) and unit lines (by UPC), and save.</li>
+  <li><span class="s-title">Approve &amp; Issue.</span> An approver confirms; this deducts the parts from stock, flips the units to &ldquo;direct issued&rdquo;, stamps the issuer, and opens an accountability sticker to print.</li>
+  <li><span class="s-title">Mark Closed</span> when items return, optionally logging a GRN reference.</li>
+</ol>
+<p>The list filters by status (Draft, Issued, Closed, Cancelled) and by purpose. A draft can be edited or cancelled; once issued, the header and lines lock.</p>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; Issuing is irreversible</div>
+  <p><strong>Approve &amp; Issue</strong> deducts real stock and cannot be undone in the app; to reverse it you would book the items back via a GRN. Closing does <em>not</em> auto-return stock either: a physical return goes through the normal GRN flow. Creating and filling a draft needs request access; approving and issuing needs approve access, so a requester cannot issue their own draft without an approver.</p>
+</div>

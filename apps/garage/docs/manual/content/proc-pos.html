@@ -1,0 +1,34 @@
+<p class="lead">Purchase Orders is the heart of procurement: the master list of every PO, plus the wizard to raise a new one and the detail screen where each order moves through its lifecycle. Open it to find, create, approve, send, confirm, amend or print a PO.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Raising and managing purchase orders.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role prc">Procurement</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Lifecycle</div><div class="g-val">Draft &rarr; Approved &rarr; Sent &rarr; Confirmed.</div></div>
+</div>
+
+<h2 class="sec">Reading the statuses</h2>
+<table class="tbl">
+  <thead><tr><th>Status</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><strong style="color:#c2570a">Soft</strong></td><td>A China placeholder for an unnamed product; cannot be sent until promoted.</td></tr>
+    <tr><td><strong>Draft</strong></td><td>Created, awaiting approval.</td></tr>
+    <tr><td><strong style="color:#2138c0">Approved</strong></td><td>Signed off, ready to send.</td></tr>
+    <tr><td><strong style="color:#8a6d00">Sent</strong></td><td>Sent to the vendor.</td></tr>
+    <tr><td><strong style="color:#1a8f43">Confirmed &amp; Payment Done</strong></td><td>Vendor confirmed and paid; awaiting goods.</td></tr>
+    <tr><td><strong>Partially Received / Closed</strong></td><td>Goods arriving / fully received.</td></tr>
+  </tbody>
+</table>
+
+<h2 class="sec">Raising a PO</h2>
+<ol class="steps">
+  <li><span class="s-title">+ New PO, pick a category.</span> Full Products, Components, Packaging, Metal, Electronics, Consumables, Para, Stickers or Custom. The category presets the order type, source, currency and incoterms.</li>
+  <li><span class="s-title">Choose the vendor</span> (which auto-fills payment terms, currency, source and lead time) and add line items, from the BOM, by hand, or by units.</li>
+  <li><span class="s-title">Set the shipping timeline</span> (forwarder, mode, transit) and <strong>Create PO</strong>.</li>
+  <li><span class="s-title">Move it along on the detail screen:</span> Approve, Mark Sent, then Confirmed &amp; Paid; Amend (with a change summary) or Cancel (with a reason); Print at any point.</li>
+</ol>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; China orders hide the money</div>
+  <p>For INR orders, GST is added automatically (CGST plus SGST in-state, IGST out-of-state, decided from the vendor&rsquo;s GSTIN). <strong>China-sourced POs hide all prices and values</strong> from anyone without China-procurement access, in the list, the detail and the printout (which becomes a &ldquo;Receiving Copy&rdquo;). Approval is separate from raising, and a China PO needs a China approver who is not the person who raised it.</p>
+</div>

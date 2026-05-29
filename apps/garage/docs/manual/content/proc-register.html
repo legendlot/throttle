@@ -1,0 +1,21 @@
+<p class="lead">New Product Registration creates a brand-new product family (with its variants), or adds variants to an existing family, assigning each variant a barcode (EAN) from the shared pool. This is how a new toy gets into the system before it can be ordered or produced.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Registering new products and variants.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: creates records.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role prc">Procurement</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Needs</div><div class="g-val">China-procurement access.</div></div>
+</div>
+
+<h2 class="sec">Registering</h2>
+<ol class="steps">
+  <li><span class="s-title">Choose a mode.</span> New product family, or add variants to an existing one (which pre-fills and locks the base details so variants stay consistent).</li>
+  <li><span class="s-title">Fill the base details.</span> Product name, code prefix, component type (car / drone / accessory), receive format (FBU / CKD / both), whether it has a remote, packaging and default batch size.</li>
+  <li><span class="s-title">Add variants.</span> Each needs a model, colour, SKU and product code; the EAN is assigned automatically from the pool.</li>
+  <li><span class="s-title">Register.</span> The family and its variants are created, and the EAN pool count drops by the number of variants.</li>
+</ol>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Watch the EAN pool</div>
+  <p>EANs are never typed by hand: each variant draws one from the shared pool (a remote gets a generated &ldquo;synthetic&rdquo; code instead). The pool indicator turns amber when 50 or fewer remain; if it has fewer EANs than the variants you are registering, the submit is blocked until more are bulk-loaded. SKUs and codes are auto-uppercased, and duplicates within one submission are rejected. The screen needs China-procurement access.</p>
+</div>

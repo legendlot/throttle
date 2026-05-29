@@ -1,0 +1,31 @@
+<p class="lead">GRN Entry records goods that have physically arrived, creating a Goods Received Note that books them into stock. Use it when a delivery comes in and you need to put parts or finished units into inventory. Three modes cover the common situations.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Booking received goods into stock.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: raises stock.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sto">Store</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Prints</div><div class="g-val">Bag labels (optional).</div></div>
+</div>
+
+<h2 class="sec">The three modes</h2>
+<table class="tbl">
+  <thead><tr><th>Mode</th><th>Use when</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Bulk (BOM)</strong></td><td>A supplier ships all the parts to build N units. Pick the product and units; the system expands the bill of materials into a parts table you adjust.</td></tr>
+    <tr><td><strong>FBU Units</strong></td><td>Finished, retail-ready units arrive. Records a unit count only, no part-level detail.</td></tr>
+    <tr><td><strong>Parts</strong></td><td>Ad hoc receipt of individual parts not tied to a full BOM. Search each part and enter quantities.</td></tr>
+  </tbody>
+</table>
+
+<h2 class="sec">Booking a Bulk (BOM) GRN</h2>
+<ol class="steps">
+  <li><span class="s-title">Pick the product and enter units received.</span> The bill of materials loads into a table, each part pre-filled with its expected quantity (BOM qty &times; units).</li>
+  <li><span class="s-title">Adjust each line.</span> Set the actual <strong>Received</strong>, any <strong>Damaged</strong> or <strong>Rejected</strong>, the inspection result (Pass / Fail), and <strong>Qty/Bag</strong> (how many pieces per bag label; 0 prints none). Lines where received differs from expected are tinted yellow.</li>
+  <li><span class="s-title">Submit.</span> A GRN number is created and stock goes up. If any line has a bag size, bag labels generate and a print window opens.</li>
+</ol>
+<p>The <strong>Parts</strong> mode is similar but you search and add each part by hand; <strong>FBU</strong> mode just needs product, units and date. Recent GRNs are listed below; click one to view its detail and reprint bag labels.</p>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; Bulk pre-fills the full expected quantity</div>
+  <p>In Bulk mode every line starts at the full expected quantity. If a line arrived <strong>short</strong>, you must lower its Received yourself, or it books the full amount into stock. A failed bag-label print does <em>not</em> undo the GRN: stock is already booked, so reprint from the GRN detail rather than re-submitting.</p>
+</div>

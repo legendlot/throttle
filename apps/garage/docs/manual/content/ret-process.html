@@ -1,0 +1,30 @@
+<p class="lead">Process is the core triage workspace for returns. For a selected shipment you log each returned unit, inspect it, and assign a disposition: re-dispatch, workshop repair, or write-off. When the good units are triaged, you hand them over to production.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Triaging each returned unit.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sto">Store</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Routes to</div><div class="g-val">UDR / Repair / Losses.</div></div>
+</div>
+
+<h2 class="sec">Triaging a shipment</h2>
+<ol class="steps">
+  <li><span class="s-title">Log each unit.</span> Pick the return category (UDR undamaged, CXR customer return, BRV bulk/vendor) and the product. For UDR you can enter the batch label.</li>
+  <li><span class="s-title">Inspect it.</span> Record the box condition, whether the product is present and its condition, then choose a <strong>disposition</strong>.</li>
+  <li><span class="s-title">Hand over to production.</span> Once the shipment is fully processed, the <strong>Hand Over</strong> button groups the good (UDR and repair) units and routes them to production, out of the returns queue.</li>
+</ol>
+
+<table class="tbl">
+  <thead><tr><th>Disposition</th><th>Means</th></tr></thead>
+  <tbody>
+    <tr><td><strong style="color:#1a8f43">UDR</strong></td><td>Sealed and intact: re-enters dispatch stock.</td></tr>
+    <tr><td><strong style="color:#c2570a">Send to Workshop</strong></td><td>Present but needs inspection or repair.</td></tr>
+    <tr><td><strong style="color:#c01f1f">Loss &middot; Damage</strong></td><td>Beyond repair or destroyed: raises a damage note.</td></tr>
+    <tr><td><strong style="color:#c01f1f">Loss &middot; Rejection</strong></td><td>Empty box, switcheroo or wrong product: raises a rejection note.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Two things to watch</div>
+  <p>Setting <strong>Product Present = No</strong> automatically switches the disposition to Loss &middot; Rejection, so notice that auto-selection. A loss disposition requires a description and never goes to handover; it creates a loss note reviewed on the Losses screen. The Hand Over button only appears once the shipment is fully processed.</p>
+</div>

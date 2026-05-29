@@ -1,0 +1,20 @@
+<p class="lead">The Stock Ledger is the live, read-only view of how much of every part and every finished unit is on hand. Open it to check stock levels, spot parts that need reordering, or export the current position to a spreadsheet.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Live inventory position per part.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read-only (CSV export).</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sto">Store</span> <span class="role prc">Procurement</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Updates</div><div class="g-val">On open / reload.</div></div>
+</div>
+
+<h2 class="sec">Two tabs</h2>
+<p><strong>Components</strong> lists individual parts and materials (the default). <strong>FBU Units</strong> lists fully-built units received ready to sell, by product, variant and colour.</p>
+
+<h2 class="sec">Reading a component row</h2>
+<p>Each row walks the part&rsquo;s movement: <strong>Opening</strong>, then <strong>Received</strong> (green), <strong>Issued</strong> (red), <strong>Returned</strong> (blue), ending at <strong>Closing</strong> (the current on-hand, bold). It also shows category, type, reorder level, location, and a <strong>Status</strong> badge: <span class="mono">OK</span> (green) or <span class="mono">Reorder</span> (red). Unit cost is shown only to users with finance access.</p>
+<p>Filter with the search box (multi-word, for example &ldquo;Flare metal&rdquo; matches both words), the Product picker (including a <strong>Common (UNV/HW)</strong> option for shared parts), Category, Type and Status. <strong>Download CSV</strong> exports exactly the rows currently shown.</p>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; A part with no reorder level never flags</div>
+  <p>The <span class="mono">Reorder</span> badge only appears when a reorder level is set <em>and</em> closing stock is at or below it. A part whose reorder level is 0 (not set) always reads <span class="mono">OK</span>, even at zero stock; do not read that as &ldquo;fine&rdquo;. The numbers are a snapshot from when you opened the page, so reload for fresh figures.</p>
+</div>

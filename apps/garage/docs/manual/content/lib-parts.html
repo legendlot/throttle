@@ -1,0 +1,16 @@
+<p class="lead">The Parts Database is a searchable master list of every part used across all products, de-duplicated by part code, showing which products use each part and at what quantity. It is the reference screen for &ldquo;what is this part and where is it used?&rdquo;.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">The cross-product parts catalogue.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read-only.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sto">Store</span> <span class="role prd">Production</span> <span class="role prc">Procurement</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Built from</div><div class="g-val">All product BOMs.</div></div>
+</div>
+
+<h2 class="sec">Reading a row</h2>
+<p>Each part shows its code, name, category, type, a <strong>tier</strong> badge (Common green, Model blue, Colour yellow), the <strong>products</strong> that use it, the variant/model it ties to, and the <strong>quantity per unit</strong> (a single number, or a range like &ldquo;1&ndash;4&rdquo; if it differs across variants). Search is multi-word (every word must match somewhere), and you can filter by product, tier and category.</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Built live from BOMs, capped at 300</div>
+  <p>This catalogue is assembled live from every product&rsquo;s BOM, so a part that is in no BOM will not appear here. The table shows the first 300 matches; if more match, narrow your search.</p>
+</div>

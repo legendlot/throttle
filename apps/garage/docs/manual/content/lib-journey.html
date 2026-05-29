@@ -1,0 +1,16 @@
+<p class="lead">Part Journey is the full life history of a single part: every receipt, issue, flush, damage event and more, in one timeline, with a stock summary and an optional running balance. Open it to investigate a stock discrepancy or trace what happened to a part.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">One part&rsquo;s complete history.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read-only.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sto">Store</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">When</div><div class="g-val">Investigating discrepancies.</div></div>
+</div>
+
+<h2 class="sec">Reading the timeline</h2>
+<p>Type a part code or name to load it. The header shows stock tiles (Opening, Received, Issued, Returned, Closing). The timeline lists every event with its type (GRN, Issuance, Line Flush, Damage Logged, Damage Action, Bag Generated, Run Pick), a reference, the signed stock change, and a running <strong>Balance</strong> after each event. Toggle event types with the filter chips.</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; About the running balance</div>
+  <p>By default, <strong>Bag Generated</strong> and <strong>Run Pick</strong> events are hidden, so the visible list may not appear to sum exactly to the stock tiles until you enable those chips. If an amber banner says the computed balance differs from stored closing stock, that is informational (some flush or damage events show as neutral but were already reflected in the ledger), not an error to fix. Very high-volume parts are capped at the most recent 500 events.</p>
+</div>

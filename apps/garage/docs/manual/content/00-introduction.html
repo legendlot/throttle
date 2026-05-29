@@ -1,0 +1,39 @@
+<p class="lead">Garage is the store and supply system for Legend of Toys. It is where parts and finished units come into the building, get counted and stored, get issued to the production floor, and where purchasing, returns and the parts library all live. This manual is your self-serve guide to every screen in it.</p>
+
+<h2 class="sec">What Garage is (and isn&rsquo;t)</h2>
+<p>Legend of Toys runs on three connected tools that share one database, so an action in one shows up instantly in the others:</p>
+
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Garage</div><div class="a-val"><p><strong>This tool.</strong> The store and supply side: goods receiving, the stock ledger, production-run planning, issuing parts, returns, procurement and the parts library.</p></div></div>
+  <div class="a-row"><div class="a-key">Redline</div><div class="a-val"><p>The production-floor dashboard: live line output, QC, dispatch and shipments. Garage plans and supplies; Redline runs the floor.</p></div></div>
+  <div class="a-row"><div class="a-key">Scanner</div><div class="a-val"><p>The handheld app on the floor, where the physical work is recorded scan by scan. Many Garage numbers (issued, flushed, returned) are driven by what the scanner and Redline record.</p></div></div>
+</div>
+
+<h2 class="sec">The flow of stock</h2>
+<p>Almost everything in Garage tracks materials moving along this path. Knowing it makes every screen easier to read:</p>
+<ol class="steps">
+  <li><span class="s-title">Buy.</span> Procurement raises a purchase order to a vendor; reorder requests flag what is short.</li>
+  <li><span class="s-title">Receive.</span> The shipment arrives, is counted box by box, and a Goods Received Note (GRN) books it into stock.</li>
+  <li><span class="s-title">Store.</span> The stock ledger holds the live on-hand quantity of every part and finished unit.</li>
+  <li><span class="s-title">Issue.</span> When production needs parts, the store issues them from the Issue Queue against a production run or an ad hoc request.</li>
+  <li><span class="s-title">Reconcile.</span> Leftovers come back as a line flush; cycle counts and adjustments keep the recorded stock honest; returned units are triaged back to stock, repair or write-off.</li>
+</ol>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Reads versus actions</div>
+  <p>Some Garage screens just show you numbers (the Dashboard, Stock Ledger, Store History). Others change real stock or money: receiving goods, issuing parts, posting adjustments, approving purchase orders. Each chapter says clearly at the top whether a screen is read-only or an action screen, and the important actions carry an <strong>Important</strong> callout.</p>
+</div>
+
+<h2 class="sec">How to use this manual</h2>
+<p>Each chapter covers one Garage screen and follows the same shape: <strong>what it is for</strong>, <strong>when you would open it</strong>, <strong>how to read every part of it</strong>, and <strong>what to do</strong> with what you see. You do not need to read cover to cover; jump to the screen you are on using the Contents page or the bookmarks panel in your PDF reader.</p>
+
+<h3 class="sub">Role tags</h3>
+<p>Every chapter is tagged with the people who typically use that screen. If you only do one job, you can skim past chapters that are not tagged for you.</p>
+<p style="margin-top:3mm"><span class="role sto">Store</span> &nbsp; <span class="role prd">Production</span> &nbsp; <span class="role prc">Procurement</span> &nbsp; <span class="role adm">Admin</span></p>
+<p style="margin-top:3mm">The next chapter, <strong>Roles &amp; What You Can See</strong>, explains exactly what each tag means and which screens it unlocks.</p>
+
+<h3 class="sub">Callout boxes</h3>
+<p>Coloured boxes flag things worth slowing down for:</p>
+<div class="callout tip"><div class="c-title">&#10003; Tip</div><p>A faster or smarter way to do something.</p></div>
+<div class="callout warn"><div class="c-title">&#9888; Watch out</div><p>A common mistake or a number that is easy to misread.</p></div>
+<div class="callout danger"><div class="c-title">&#9940; Important</div><p>Something that affects real stock, shipments or money: get it right.</p></div>

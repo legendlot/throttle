@@ -1,0 +1,17 @@
+<p class="lead">Store History is a read-only record of everything the store has issued to production and every line flush. Open it to look up what went out, when, and how it compared to the bill of materials.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Looking up past issues and flushes.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read-only.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sto">Store</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Tabs</div><div class="g-val">Issues · Line Flushes.</div></div>
+</div>
+
+<h2 class="sec">The two tabs</h2>
+<p><strong>Issues</strong> lists each issue document (one row per issue, parts collapsed into a count) with its type (Planned, Ad Hoc, Rework, Short Issue), work order or run, product and total quantity. Click an issue number to see its parts, with BOM quantity versus actual issued and the variance. Filter by product, type and date range.</p>
+<p><strong>Line Flushes</strong> lists each flush with its run or work order, line, shift, who raised and verified it, and status (Pending Verification, Verified, Disputed). Filter by status.</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Two filters behave differently</div>
+  <p>On the Issues tab, the product, type and date filters narrow the list <em>already loaded</em> rather than re-querying; the Flush status filter does re-query. The &ldquo;Parts&rdquo; column counts the part lines within an issue, not separate issues.</p>
+</div>
