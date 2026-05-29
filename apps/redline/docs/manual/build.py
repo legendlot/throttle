@@ -187,15 +187,16 @@ def finalize(rendered_pdf, out_pdf, cfg, page_of_ch, page_of_part):
     W, H = float(box.width), float(box.height)
     c = canvas.Canvas(overlay_path, pagesize=(W, H))
     grey = HexColor("#767c86"); rule = HexColor("#c9cdd5"); red = HexColor("#DE2A2A")
+    m = 26 * 72 / 25.4  # 26mm side margin, matches @page in theme.css
     for i in range(n):
         if i > 0:  # skip cover
-            y = 34
-            c.setStrokeColor(rule); c.setLineWidth(0.5); c.line(51, y + 12, W - 51, y + 12)
-            c.setFillColor(red); c.rect(51, y + 11, 22, 2.2, fill=1, stroke=0)
+            y = 36
+            c.setStrokeColor(rule); c.setLineWidth(0.5); c.line(m, y + 12, W - m, y + 12)
+            c.setFillColor(red); c.rect(m, y + 11, 22, 2.2, fill=1, stroke=0)
             c.setFont("Courier", 7.5); c.setFillColor(grey)
-            c.drawString(51, y, foot.upper())
+            c.drawString(m, y, foot.upper())
             c.drawCentredString(W / 2, y, ver)
-            c.drawRightString(W - 51, y, f"PAGE {i + 1}")
+            c.drawRightString(W - m, y, f"PAGE {i + 1}")
         c.showPage()
     c.save()
 

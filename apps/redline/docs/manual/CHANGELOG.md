@@ -6,6 +6,19 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md` → Versioning).
 
+## [1.0.1] — 2026-05-29
+### Changed
+- Formatting/visual polish pass (impeccable), aligned to Redline's DESIGN.md:
+  - Callouts redesigned — removed the side-stripe `border-left` accent (banned);
+    now full tinted border + background + colored icon-label (color + icon + label).
+  - Typography: body 11pt / line-height 1.62, side margins widened to 26mm so the
+    text measure stays ~72ch; `h3` size lifted to restore hierarchy; lead 12pt.
+  - Colour: warm-tinted OKLCH neutral ramp toward the brand hue, AA-safe tertiary
+    ink (brand `#1f1f1f` / `#F2CD1A` kept verbatim).
+  - Tables/glance/anatomy spacing on-scale; lighter header rule; warm zebra.
+  - Print: orphans/widows control, `text-wrap: pretty/balance`, footer re-aligned
+    to the new margins.
+
 ## [1.0.0] — 2026-05-29
 ### Added
 - **Complete manual** — every one of the 30 Redline screens is now written out in
