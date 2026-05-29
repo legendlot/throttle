@@ -1,9 +1,132 @@
 # Repack Run (Channel Swap) — Implementation Plan
 
 > Created 2026-05-29 (Session 86). Lotops (Garage/Redline/Scanner) feature.
-> Status: **design approved, not yet built.** Build blocked only on Supabase MCP
-> reconnect (schema verification + DDL). Forward workflow only — no reconciliation
-> of already-swapped units.
+> Status: **schema CONFIRMED + migrations APPROVED (S86). Ready to execute.**
+> Forward workflow only — no reconciliation of already-swapped units.
+> Single-agent: Claude Code plans AND executes — run the migrations directly via the
+> Supabase MCP (`mcp__plugin_supabase_supabase__execute_sql` / `apply_migration`),
+> author worker + scanner + UI, commit/push/deploy. No CC-task handoff.
+
+---
+
+## RESUME HERE (S86 confirmed state)
+
+Schema verified live 2026-05-29 and migrations approved by Afshaan. Next session:
+pull → read CORE.md + BUSINESS_RULES.md + systems/lotops.md + this doc → **run Step 1
+then Step 2 below via Supabase MCP** → build worker → scanner → UI.
+
+### Confirmed schema facts
+- `public.unit_status` is an **enum** (18 vals); `in_repack` absent → needs `ALTER TYPE`.
+- `public.activity_type` is an **enum** (20 vals); `REPACK_IN`/`REPACK_OUT` absent → `ALTER TYPE`.
+  Caveat: a new enum value can't be *used* in the same txn it's added → run enum adds
+  as a standalone step BEFORE the tables.
+- `store.sequences` 'repack' is **free** (existing: lot=120530, rep=4, ext_run=2).
+- `store.repack_runs` + `public.channel_swap_history` **don't exist** → clean create.
+- `dispatch_box_units.removed_by` is **text** (not uuid) — write operator_id as text.
+- `dispatch_boxes` carries `channel_id uuid` (the dispatch_channels row) + `status`
+  (`open`/`packed`/`shipped`) + `fulfillment_model` + `unit_count`.
+- `dispatch_channels`: 18 rows, `type ∈ {retail, ecom, other}`. **retail = {MT, GT}**,
+  ecom = 12 marketplaces, other = {Influencer, Sold from WH, Export, Giveaway, Internal}.
+- Primary Packaging BOM = **2 parts per channel** (Box + Tray). Flare: retail
+  `FL-PP-15/16`, ecom `FL-PP-20/21`. Channel encoded via `qty_ecomm`/`qty_retail` (RULE-012).
+
+### Two design refinements (locked)
+1. **`from_channel`/`to_channel` = packaging type `'retail'`/`'ecom'`, NOT a dispatch_channel
+   row.** Packaging only comes in retail vs ecom (BOM + `pkg_scans.channel`). The specific
+   destination marketplace is assigned at re-pack by which box the unit enters.
+2. **A repack run is global** (product + variant + from→to + qty), not bound to D1/D2.
+   Scanner stations bind to a line like every dispatch station; the run does not. (Matches
+   `production_runs`.)
+
+### APPROVED migrations — run in order
+
+**Step 1 (enums, standalone first):**
+```sql
+ALTER TYPE public.unit_status   ADD VALUE IF NOT EXISTS 'in_repack';
+ALTER TYPE public.activity_type ADD VALUE IF NOT EXISTS 'REPACK_IN';
+ALTER TYPE public.activity_type ADD VALUE IF NOT EXISTS 'REPACK_OUT';
+```
+
+**Step 2 (sequence + tables + grants):**
+```sql
+INSERT INTO store.sequences (name, current_val) VALUES ('repack', 0)
+ON CONFLICT (name) DO NOTHING;
+
+CREATE TABLE store.repack_runs (
+  id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  run_no        text NOT NULL UNIQUE,                       -- RPK-NNNN
+  product       text NOT NULL,
+  variant_model text,
+  colour        text,
+  from_channel  text NOT NULL CHECK (from_channel IN ('retail','ecom')),
+  to_channel    text NOT NULL CHECK (to_channel   IN ('retail','ecom')),
+  target_qty    integer NOT NULL CHECK (target_qty > 0),
+  status        text NOT NULL DEFAULT 'Open'
+                  CHECK (status IN ('Open','In Progress','Completed','Cancelled')),
+  notes         text,
+  created_by    uuid,
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  completed_at  timestamptz,
+  CONSTRAINT repack_runs_diff_channel CHECK (from_channel <> to_channel)
+);
+CREATE INDEX repack_runs_status_idx  ON store.repack_runs (status);
+CREATE INDEX repack_runs_product_idx ON store.repack_runs (product);
+
+CREATE TABLE public.channel_swap_history (   -- append-only, one row per car swapped
+  id                 bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  repack_run_id      bigint NOT NULL,         -- text-join to store.repack_runs.id (no cross-schema FK)
+  repack_run_no      text,
+  car_upc            text NOT NULL,
+  paired_remote_upc  text,
+  from_channel       text NOT NULL,
+  to_channel         text NOT NULL,
+  old_box_id         uuid,
+  new_box_id         uuid,
+  old_batch_label    text,
+  new_batch_label    text,
+  repack_in_scan_id  uuid,
+  repack_out_scan_id uuid,
+  operator_id        text,
+  line               text,
+  repacked_in_at     timestamptz,
+  repacked_out_at    timestamptz,
+  created_at         timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX channel_swap_history_run_idx ON public.channel_swap_history (repack_run_id);
+CREATE INDEX channel_swap_history_car_idx ON public.channel_swap_history (car_upc);
+
+ALTER TABLE store.repack_runs            ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.channel_swap_history  ENABLE ROW LEVEL SECURITY;
+
+GRANT ALL ON store.repack_runs           TO service_role;
+GRANT ALL ON public.channel_swap_history TO service_role;
+```
+
+### Build order (after migrations)
+1. **Worker (`01_worker/worker.js`):** `postRepackIn` + `postRepackOut` SCANNER_ACTIONS
+   (add both to the `SCANNER_ACTIONS` array) + JWT CRUD `createRepackRun` / `getRepackRuns`
+   / `getRepackRun` / `completeRepackRun` / `cancelRepackRun`. Permission `repack_run_manage`
+   (confirm/seed in `store.roles`). On create: compute dest Primary Packaging (2 parts ×
+   qty) → raise Issue Request (work_order). Then commit → push → `cd 01_worker && npx wrangler deploy`.
+   - `postRepackIn`: scan OLD box label → all active `dispatch_box_units` in box → per car
+     (+paired remote via `unit_pairs`): append `REPACK_IN` scan, `is_active=false`
+     (removed_at/removed_by=operator text), DELETE `pkg_scans`, status→`in_repack`,
+     `release_dispatch_line_slot` if line-attributed. Stage-agnostic. Validate scope (from_channel + product/variant).
+   - `postRepackOut`: scan car (`in_repack`, in this run) + dest box → validate box channel
+     type == to_channel → new `pkg_scans` (channel + `-E`/`-R` label) → new `dispatch_box_units`
+     → UPSERT `dispatch_allocations` (new channel_id) → status→`packed_dispatch` →
+     `increment_box_unit_count` → append `REPACK_OUT` scan → write `channel_swap_history` →
+     mirror remote.
+2. **Scanner (`02_scanner/index.html`):** stations `REPACK_IN`/`REPACK_OUT` in dispatch group
+   (add to `DISPATCH_STATION_CODES`), D1/D2 picker. Register device rows `REPACK_IN-D1/D2`,
+   `REPACK_OUT-D1/D2` (DB insert). REPACK_IN UI scans box; REPACK_OUT scans car→print new
+   sticker→scan into new box.
+3. **UI (Redline dispatch):** Repack Run list + detail mirroring Production Run; create form;
+   "Flush old boxes" → standalone `postFlush` (from_channel Primary Packaging, `return_type='Unused'`).
+4. **Knowledge files:** systems/lotops.md + BUSINESS_RULES.md (RULE-REPACK-*) + close BACKLOG
+   item + archive/SESSIONS.md + LEARNINGS if any incident.
+
+Phase 1 = steps 1–2 (stops the hand-editing). Phase 2 = step 3 + reports.
 
 ## Problem
 
