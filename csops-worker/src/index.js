@@ -242,6 +242,12 @@ async function resolveDeptFilter(slugParam, auth, env) {
 // ── Domain constants ─────────────────────────────────────────────────────────
 
 const SLA_DAYS = { pending: 7, query: 1, no_action: 1, awaiting_info: 7, replacement: 5, refund: 7, repair: 14 };
+// Coalesce window for repeat calls (RULE-PITSTOP-018): a new answered call from a
+// phone that already has an OPEN ticket in the same department created within this
+// window attaches to that ticket instead of spawning a duplicate. Every call is
+// still logged independently in cs_calls. 24h captures dropped-call + callback +
+// same-day follow-up bursts without merging genuinely-separate later interactions.
+const COALESCE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 const SHARED_STAGES = [
   'intake', 'awaiting_evidence', 'verified', 'pickup_scheduled',
@@ -1466,6 +1472,33 @@ async function webhookCallAnswered(body, env, account) {
   }
 
   const phone = toE164(c.phone);
+
+  // Coalesce repeat calls (RULE-PITSTOP-018): if this phone already has an OPEN
+  // ticket in the same department created within COALESCE_WINDOW_MS, attach this
+  // call to it (cs_calls.ticket_id + a history note) rather than spawning a
+  // duplicate. A customer who calls several times — dropped + callback + same-day
+  // follow-up — stays on one ticket; every call is still its own cs_calls row.
+  if (phone) {
+    const sinceIso = new Date(Date.now() - COALESCE_WINDOW_MS).toISOString();
+    const dept = account?.default_department_id || null;
+    const deptFilter = dept ? `&cs_department_id=eq.${dept}` : `&cs_department_id=is.null`;
+    const open = await sb(
+      `/rest/v1/cs_tickets?customer_phone=eq.${encodeURIComponent(phone)}`
+      + `&stage=not.in.(closed,cancelled,rejected)`
+      + `&created_at=gte.${encodeURIComponent(sinceIso)}`
+      + deptFilter
+      + `&select=id,ticket_no&order=created_at.desc&limit=1`, env);
+    if (open.data?.[0]) {
+      const keep = open.data[0];
+      await sb(`/rest/v1/cs_calls?myop_account_id=eq.${account.id}&call_session_id=eq.${encodeURIComponent(c.session_id)}`, env, {
+        method: 'PATCH', body: JSON.stringify({ ticket_id: keep.id }),
+      });
+      await insertHistorySystem(keep.id, 'call_coalesced', null, c.session_id,
+        `repeat call coalesced into this ticket (session ${c.session_id}${c.direction ? ', ' + c.direction : ''}) — see call log`, env);
+      return json({ ok: true, coalesced_into: keep.ticket_no });
+    }
+  }
+
   const agentEmail = agentEmailFromLegs(c.legs);   // usually null on answered; backfilled by call.summary
   const [agent, shop] = await Promise.all([ resolveAgentByEmail(agentEmail, env), shopifyLookup({ phone }, env) ]);
 
