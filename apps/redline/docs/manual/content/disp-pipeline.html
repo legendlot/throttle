@@ -1,15 +1,15 @@
-<p class="lead">The Dispatch Pipeline is your single answer to the question &ldquo;what do we have ready to ship, and where is it committed?&rdquo;. It&rsquo;s one table showing every unit that is built but not yet shipped &mdash; broken down by product, by whether it&rsquo;s still in production or finished, and by which sales channel it&rsquo;s been allocated to. It&rsquo;s the planning view dispatch and supervisors use to decide what to pack next.</p>
+<p class="lead">The Dispatch Pipeline is your single answer to the question &ldquo;what do we have ready to ship, and where is it committed?&rdquo;. It&rsquo;s one table showing every unit that is built but not yet shipped, broken down by product, by whether it&rsquo;s still in production or finished, and by which sales channel it&rsquo;s been allocated to. It&rsquo;s the planning view dispatch and supervisors use to decide what to pack next.</p>
 
 <div class="glance">
   <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Seeing all open (un-shipped) inventory in one place.</div></div>
-  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read-only &mdash; a planning view.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read-only: a planning view.</div></div>
   <div class="g-cell"><div class="g-lbl">Covers</div><div class="g-val">Every product with open units.</div></div>
   <div class="g-cell"><div class="g-lbl">Updates</div><div class="g-val">On open, and on &#8635; Refresh.</div></div>
 </div>
 
 <div class="callout note">
   <div class="c-title">&#9432; &ldquo;Open inventory&rdquo; means</div>
-  <p>Units that exist but have <strong>not yet shipped</strong> &mdash; anything between coming off the line and going out the door. Once a unit ships, it leaves this table. So a shrinking pipeline through the day is normal and healthy; a growing one means you&rsquo;re building faster than you&rsquo;re shipping.</p>
+  <p>Units that exist but have <strong>not yet shipped</strong>: anything between coming off the line and going out the door. Once a unit ships, it leaves this table. So a shrinking pipeline through the day is normal and healthy; a growing one means you&rsquo;re building faster than you&rsquo;re shipping.</p>
 </div>
 
 <h2 class="sec">Reading the columns</h2>
@@ -17,8 +17,8 @@
 
 <div class="anatomy">
   <div class="a-row"><div class="a-key">Product / Variant</div><div class="a-val"><p>The product name. Click the row to expand it into its variants (model + colour). The little arrow (&#9654; / &#9660;) shows whether it&rsquo;s open.</p></div></div>
-  <div class="a-row"><div class="a-key">With Production</div><div class="a-val"><p>Units still in the production stage &mdash; built and inwarded but <strong>not yet finished and ready for dispatch</strong>. These are coming, but you can&rsquo;t ship them yet.</p></div></div>
-  <div class="a-row"><div class="a-key">Unalloc (R)</div><div class="a-val"><p><strong>Unallocated, Retail.</strong> Finished, packed for the <em>Retail</em> channel, but not yet committed to a specific dispatch channel. Shown in yellow &mdash; this is stock waiting for a decision.</p></div></div>
+  <div class="a-row"><div class="a-key">With Production</div><div class="a-val"><p>Units still in the production stage, built and inwarded but <strong>not yet finished and ready for dispatch</strong>. These are coming, but you can&rsquo;t ship them yet.</p></div></div>
+  <div class="a-row"><div class="a-key">Unalloc (R)</div><div class="a-val"><p><strong>Unallocated, Retail.</strong> Finished, packed for the <em>Retail</em> channel, but not yet committed to a specific dispatch channel. Shown in yellow: this is stock waiting for a decision.</p></div></div>
   <div class="a-row"><div class="a-key">Unalloc (E)</div><div class="a-val"><p><strong>Unallocated, Ecom.</strong> The same, but packed for the <em>Ecom</em> channel. Also yellow.</p></div></div>
   <div class="a-row"><div class="a-key">Total Allocated</div><div class="a-val"><p>Units already committed to a channel and waiting to be packed into a shipment (green). The sum of all the channel columns to its right.</p></div></div>
   <div class="a-row"><div class="a-key">Channel columns</div><div class="a-val"><p>One column per active sales channel (Amazon, Flipkart, Cred, retail partners&hellip;), showing how many allocated units are committed to each. These are the live channels from the Channel Master.</p></div></div>
@@ -26,27 +26,27 @@
 
 <div class="callout tip">
   <div class="c-title">&#10003; Reading R vs E</div>
-  <p>&ldquo;Retail&rdquo; and &ldquo;Ecom&rdquo; here are the <strong>packing format</strong> a unit was finished in &mdash; the sticker it carries &mdash; not its final destination channel. A unit is first packed Retail or Ecom, then later <em>allocated</em> to a specific channel. That&rsquo;s why a unit moves from the yellow Unalloc columns into a green channel column as dispatch commits it.</p>
+  <p>&ldquo;Retail&rdquo; and &ldquo;Ecom&rdquo; here are the <strong>packing format</strong> a unit was finished in (the sticker it carries), not its final destination channel. A unit is first packed Retail or Ecom, then later <em>allocated</em> to a specific channel. That&rsquo;s why a unit moves from the yellow Unalloc columns into a green channel column as dispatch commits it.</p>
 </div>
 
 <h2 class="sec">The totals row</h2>
-<p>The bold row pinned at the top of the table sums every column across all products &mdash; your whole open pipeline at a glance, with a count of how many products it spans. Read it first to size up the day, then drill into individual products below.</p>
+<p>The bold row pinned at the top of the table sums every column across all products: your whole open pipeline at a glance, with a count of how many products it spans. Read it first to size up the day, then drill into individual products below.</p>
 
 <h2 class="sec">Expanding a product</h2>
-<p>Click any product row to reveal its <strong>variants</strong> &mdash; each model and colour combination on its own indented line, with the same columns. This is how you answer questions like &ldquo;we have 40 of this product unallocated, but is it the <em>red</em> one the channel wants, or the blue?&rdquo;. Click again to collapse.</p>
+<p>Click any product row to reveal its <strong>variants</strong>: each model and colour combination on its own indented line, with the same columns. This is how you answer questions like &ldquo;we have 40 of this product unallocated, but is it the <em>red</em> one the channel wants, or the blue?&rdquo;. Click again to collapse.</p>
 
 <h2 class="sec">Putting it to work</h2>
 <ol class="steps">
   <li><span class="s-title">Start with the totals row.</span> How much is finished-but-unallocated (yellow) versus already committed (green)? A big yellow number is stock you could be allocating and shipping now.</li>
-  <li><span class="s-title">Find products with high Unalloc.</span> These are your easiest wins &mdash; finished units only waiting to be pointed at a channel.</li>
+  <li><span class="s-title">Find products with high Unalloc.</span> These are your easiest wins: finished units only waiting to be pointed at a channel.</li>
   <li><span class="s-title">Check the channel columns against demand.</span> If a channel needs units and a product has them sitting unallocated in the matching format, that&rsquo;s the next thing to allocate and pack.</li>
-  <li><span class="s-title">Use With Production to plan ahead.</span> A low ready figure but a high With Production figure means supply is on the way &mdash; don&rsquo;t over-promise from current stock.</li>
-  <li><span class="s-title">Expand a product to confirm the variant</span> before committing &mdash; the right total of the wrong colour won&rsquo;t fill the order.</li>
+  <li><span class="s-title">Use With Production to plan ahead.</span> A low ready figure but a high With Production figure means supply is on the way; don&rsquo;t over-promise from current stock.</li>
+  <li><span class="s-title">Expand a product to confirm the variant</span> before committing; the right total of the wrong colour won&rsquo;t fill the order.</li>
 </ol>
 
 <div class="callout warn">
   <div class="c-title">&#9888; Watch out</div>
-  <p>A dash (&mdash;) means zero &mdash; the column is empty for that product, not missing data. And remember this view is a <em>snapshot</em>: it reflects scans up to the moment you opened it or last hit Refresh. After a busy packing burst, refresh before you make a call.</p>
+  <p>A dash (&mdash;) means zero: the column is empty for that product, not missing data. And remember this view is a <em>snapshot</em>: it reflects scans up to the moment you opened it or last hit Refresh. After a busy packing burst, refresh before you make a call.</p>
 </div>
 
 <div class="callout note">

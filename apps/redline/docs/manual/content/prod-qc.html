@@ -1,19 +1,19 @@
-<p class="lead">The QC screen is your daily quality scoreboard. It does not pass or fail units &mdash; that happens on the scanner during the quality check &mdash; but it turns every one of those pass/fail scans into a clear picture of <strong>how fast QC is moving</strong>, <strong>how much is passing first time</strong>, and <strong>what is going wrong and where</strong>. It refreshes itself every 30 seconds, so you can leave it open and trust the numbers.</p>
+<p class="lead">The QC screen is your daily quality scoreboard. It does not pass or fail units (that happens on the scanner during the quality check), but it turns every one of those pass/fail scans into a clear picture of <strong>how fast QC is moving</strong>, <strong>how much is passing first time</strong>, and <strong>what is going wrong and where</strong>. It refreshes itself every 30 seconds, so you can leave it open and trust the numbers.</p>
 
 <div class="glance">
   <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Spotting quality problems on the floor as they happen, today.</div></div>
-  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read-only &mdash; a live view.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read-only: a live view.</div></div>
   <div class="g-cell"><div class="g-lbl">Covers</div><div class="g-val">Today, all lines (L1&ndash;L3).</div></div>
   <div class="g-cell"><div class="g-lbl">Updates</div><div class="g-val">Automatically, every 30s.</div></div>
 </div>
 
 <div class="callout note">
   <div class="c-title">&#9432; Where the numbers come from</div>
-  <p>When a unit is inwarded it gets an <strong>INW</strong> scan; when it&rsquo;s checked it gets a <strong>QC&nbsp;Pass</strong> or <strong>QC&nbsp;Fail</strong> scan, and a failure records one or more <strong>defect codes</strong>. This screen simply adds those scans up for today. Nothing here changes a unit &mdash; to actually pass, fail or re-check a unit, use the scanner on the floor.</p>
+  <p>When a unit is inwarded it gets an <strong>INW</strong> scan; when it&rsquo;s checked it gets a <strong>QC&nbsp;Pass</strong> or <strong>QC&nbsp;Fail</strong> scan, and a failure records one or more <strong>defect codes</strong>. This screen simply adds those scans up for today. Nothing here changes a unit; to actually pass, fail or re-check a unit, use the scanner on the floor.</p>
 </div>
 
-<h2 class="sec">QC Cycle Time &mdash; INW to outcome</h2>
-<p>This is how long units are spending in quality control: the time from a unit being inwarded (INW) to it getting its QC Pass or Fail. Shorter is better &mdash; long cycle times mean units are piling up at the QC bench.</p>
+<h2 class="sec">QC Cycle Time: INW to outcome</h2>
+<p>This is how long units are spending in quality control: the time from a unit being inwarded (INW) to it getting its QC Pass or Fail. Shorter is better; long cycle times mean units are piling up at the QC bench.</p>
 
 <h3 class="sub">The summary cards</h3>
 <table class="tbl">
@@ -21,10 +21,10 @@
   <tbody>
     <tr><td><strong>Avg Cycle Time</strong></td><td>The average across all lines, with the number of units it&rsquo;s based on. <strong>Colour-coded:</strong> green up to 30&nbsp;min, yellow up to 60&nbsp;min, red beyond. This is your headline number.</td></tr>
     <tr><td><strong>Median</strong></td><td>The middle unit&rsquo;s time. If the median is much lower than the average, a few slow units are dragging the average up.</td></tr>
-    <tr><td><strong>Avg &mdash; QC Pass</strong></td><td>Average time for units that passed (green). Usually the fastest.</td></tr>
-    <tr><td><strong>Avg &mdash; QC Fail</strong></td><td>Average time for units that failed (red). Often longer &mdash; failures take more inspection.</td></tr>
+    <tr><td><strong>Avg, QC Pass</strong></td><td>Average time for units that passed (green). Usually the fastest.</td></tr>
+    <tr><td><strong>Avg, QC Fail</strong></td><td>Average time for units that failed (red). Often longer, as failures take more inspection.</td></tr>
     <tr><td><strong>Fastest</strong></td><td>The quickest unit through QC today.</td></tr>
-    <tr><td><strong>Slowest (Normal)</strong></td><td>The slowest unit that still counts as normal &mdash; genuine outliers are excluded (see below).</td></tr>
+    <tr><td><strong>Slowest (Normal)</strong></td><td>The slowest unit that still counts as normal; genuine outliers are excluded (see below).</td></tr>
   </tbody>
 </table>
 
@@ -34,7 +34,7 @@
 </div>
 
 <h3 class="sub">Per-line breakdown</h3>
-<p>Below the summary, each active line (L1, L2, L3) gets its own card with the same figures. Use this to compare lines &mdash; if one line&rsquo;s average is red while the others are green, that&rsquo;s where to look first.</p>
+<p>Below the summary, each active line (L1, L2, L3) gets its own card with the same figures. Use this to compare lines; if one line&rsquo;s average is red while the others are green, that&rsquo;s where to look first.</p>
 
 <h2 class="sec">First Pass Yield by line</h2>
 <p>First Pass Yield (FPY) is the single most important quality number: <strong>the percentage of units that passed QC the first time</strong>, without needing repair. Each row is a line + product + date, with a coloured bar and a percentage.</p>
@@ -43,7 +43,7 @@
   <tbody>
     <tr><td><strong style="color:#1a8f43">Green</strong></td><td class="mono">95%+</td><td>Healthy. The line is building right the first time.</td></tr>
     <tr><td><strong style="color:#8a6d00">Yellow</strong></td><td class="mono">85&ndash;94%</td><td>Watch it. Something is slipping; check the defects below.</td></tr>
-    <tr><td><strong style="color:#c01f1f">Red</strong></td><td class="mono">under 85%</td><td>Act. Too many units failing first time &mdash; find the cause now.</td></tr>
+    <tr><td><strong style="color:#c01f1f">Red</strong></td><td class="mono">under 85%</td><td>Act. Too many units failing first time; find the cause now.</td></tr>
   </tbody>
 </table>
 
@@ -55,28 +55,28 @@
 <h2 class="sec">Top Defects</h2>
 <p>For each line, the most common defects today, split into two columns:</p>
 <ul>
-  <li><strong>Functional</strong> (red total) &mdash; the toy doesn&rsquo;t work right: motor, electronics, movement.</li>
-  <li><strong>Visual</strong> (orange total) &mdash; how it looks: scratches, paint, stickers, finish.</li>
+  <li><strong>Functional</strong> (red total): the toy doesn&rsquo;t work right: motor, electronics, movement.</li>
+  <li><strong>Visual</strong> (orange total): how it looks: scratches, paint, stickers, finish.</li>
 </ul>
-<p>Each defect appears as a small card showing its <strong>code</strong>, a short <strong>description</strong>, its <strong>category</strong>, a <strong>severity</strong> (Critical, Major or Minor), and how many times it occurred. Cards are ordered worst-first &mdash; Critical before Major before Minor, then by count. A <span class="role sup" style="font-size:7pt">Flag</span> marker means the defect is flagged for operator training.</p>
+<p>Each defect appears as a small card showing its <strong>code</strong>, a short <strong>description</strong>, its <strong>category</strong>, a <strong>severity</strong> (Critical, Major or Minor), and how many times it occurred. Cards are ordered worst-first: Critical before Major before Minor, then by count. A <span class="role sup" style="font-size:7pt">Flag</span> marker means the defect is flagged for operator training.</p>
 
 <h2 class="sec">Defect Breakdown by product</h2>
-<p>The same defects, organised by <strong>product</strong> instead of line. Each product is a row showing its total defect count &mdash; <strong>click a row to expand it</strong>. Inside, defects are grouped first by component (Car vs Remote), then by severity, then listed individually with their code, description and count. A <span class="role sup" style="font-size:7pt">Training</span> tag again marks defects flagged for coaching.</p>
+<p>The same defects, organised by <strong>product</strong> instead of line. Each product is a row showing its total defect count; <strong>click a row to expand it</strong>. Inside, defects are grouped first by component (Car vs Remote), then by severity, then listed individually with their code, description and count. A <span class="role sup" style="font-size:7pt">Training</span> tag again marks defects flagged for coaching.</p>
 <div class="callout floor">
   <div class="c-title">&#9874; On the floor</div>
   <p>Use <em>Top Defects</em> when you&rsquo;re asking &ldquo;which line needs help right now?&rdquo; and <em>Defect Breakdown</em> when you&rsquo;re asking &ldquo;which product is giving us trouble?&rdquo;. Same data, two lenses.</p>
 </div>
 
 <h2 class="sec">Repeat Failures</h2>
-<p>The last section is a table of individual units that failed with <strong>more than one defect</strong> &mdash; the units giving the most trouble. Each row shows the unit&rsquo;s UPC, product, total defect count (red), how many unique defect codes it hit, and the list of codes.</p>
+<p>The last section is a table of individual units that failed with <strong>more than one defect</strong>: the units giving the most trouble. Each row shows the unit&rsquo;s UPC, product, total defect count (red), how many unique defect codes it hit, and the list of codes.</p>
 <div class="callout danger">
   <div class="c-title">&#9940; Important</div>
-  <p>A unit appearing here with many defects is a candidate for a deeper look before it&rsquo;s re-worked &mdash; repeated, varied failures on one unit can point to a damaged part or a build that should be pulled rather than patched. Cross-check its UPC in the <strong>Scans</strong> screen to see its full history.</p>
+  <p>A unit appearing here with many defects is a candidate for a deeper look before it&rsquo;s re-worked; repeated, varied failures on one unit can point to a damaged part or a build that should be pulled rather than patched. Cross-check its UPC in the <strong>Scans</strong> screen to see its full history.</p>
 </div>
 
 <h2 class="sec">A typical QC check-in</h2>
 <ol class="steps">
-  <li><span class="s-title">Glance at the Avg Cycle Time card.</span> Green and steady? QC is keeping pace. Red? Units are backing up &mdash; check which line in the per-line cards.</li>
+  <li><span class="s-title">Glance at the Avg Cycle Time card.</span> Green and steady? QC is keeping pace. Red? Units are backing up; check which line in the per-line cards.</li>
   <li><span class="s-title">Scan the FPY bars.</span> Any red or yellow line is your priority.</li>
   <li><span class="s-title">For a problem line, read its Top Defects.</span> Functional or visual? Critical or minor? That tells you whether it&rsquo;s a parts/assembly issue or a finishing issue.</li>
   <li><span class="s-title">If a product keeps recurring, expand it in Defect Breakdown</span> to see exactly which defects and components are driving it.</li>

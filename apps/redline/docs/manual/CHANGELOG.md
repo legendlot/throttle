@@ -6,6 +6,14 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md` → Versioning).
 
+## [1.0.2] - 2026-05-29
+### Changed
+- Copy convention: removed em dashes throughout (house style), replacing each with
+  a comma, colon, semicolon, period or parentheses as the sentence required. The
+  only dashes kept are the two that refer to the dash character shown on screen
+  (the "a dash means zero" note and the EWB empty-value indicator). En dashes in
+  numeric ranges are unaffected.
+
 ## [1.0.1] — 2026-05-29
 ### Changed
 - Formatting/visual polish pass (impeccable), aligned to Redline's DESIGN.md:

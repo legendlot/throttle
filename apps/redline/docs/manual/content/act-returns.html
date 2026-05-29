@@ -1,23 +1,23 @@
-<p class="lead">Returns is a floor-monitor view of what&rsquo;s sitting in the two returns pools &mdash; units to re-dispatch versus units awaiting repair &mdash; plus a count of customer repair cases in flight. It shows the backlog at a glance. The actual processing of a return happens in Garage.</p>
+<p class="lead">Returns is a floor-monitor view of what&rsquo;s sitting in the two returns pools (units to re-dispatch versus units awaiting repair), plus a count of customer repair cases in flight. It shows the backlog at a glance. The actual processing of a return happens in Garage.</p>
 
 <div class="glance">
   <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Watching the returns backlog.</div></div>
-  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read-only &mdash; act in Garage.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read-only: act in Garage.</div></div>
   <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sup">Supervisor</span> <span class="role dis">Dispatch</span> <span class="role adm">Admin</span></div></div>
   <div class="g-cell"><div class="g-lbl">Updates</div><div class="g-val">Every 60s.</div></div>
 </div>
 
 <h2 class="sec">The two pools</h2>
 <div class="anatomy">
-  <div class="a-row"><div class="a-key">UDR Pool</div><div class="a-val"><p>(green) Undamaged returns to <strong>re-dispatch via PKG_OUT</strong> &mdash; units that came back fine and can go out again.</p></div></div>
-  <div class="a-row"><div class="a-key">Repair Pool</div><div class="a-val"><p>(orange) Returns <strong>awaiting a repair run</strong> &mdash; units that need rework before they can ship.</p></div></div>
+  <div class="a-row"><div class="a-key">UDR Pool</div><div class="a-val"><p>(green) Undamaged returns to <strong>re-dispatch via PKG_OUT</strong>: units that came back fine and can go out again.</p></div></div>
+  <div class="a-row"><div class="a-key">Repair Pool</div><div class="a-val"><p>(orange) Returns <strong>awaiting a repair run</strong>: units that need rework before they can ship.</p></div></div>
 </div>
 <p>Each pool is a table grouped by product / model / colour, with a <strong>Count</strong> and the age of the <strong>Oldest</strong> item in that group. Four overview cards summarise total UDR and Repair pending, and the oldest item in each.</p>
 
 <h2 class="sec">Customer Repairs callout</h2>
-<p>For users who manage customer repairs, a panel at the top shows three tiles &mdash; <strong>Awaiting at store</strong>, <strong>With production</strong>, <strong>Ready to dispatch</strong> &mdash; each linking into the <strong>Customer Repairs</strong> screen at that stage.</p>
+<p>For users who manage customer repairs, a panel at the top shows three tiles (<strong>Awaiting at store</strong>, <strong>With production</strong>, <strong>Ready to dispatch</strong>), each linking into the <strong>Customer Repairs</strong> screen at that stage.</p>
 
 <div class="callout note">
   <div class="c-title">&#9432; This screen doesn&rsquo;t move anything</div>
-  <p>Returns here is purely a window. To actually process a return &mdash; route it to re-dispatch, repair or scrap &mdash; use <strong>Garage → Returns</strong>, as the footer reminds you. The &ldquo;Count&rdquo; on a row is a group total, and the pending cards sum all groups, so don&rsquo;t read one row as the whole pool.</p>
+  <p>Returns here is purely a window. To actually process a return (route it to re-dispatch, repair or scrap), use <strong>Garage → Returns</strong>, as the footer reminds you. The &ldquo;Count&rdquo; on a row is a group total, and the pending cards sum all groups, so don&rsquo;t read one row as the whole pool.</p>
 </div>
