@@ -1,0 +1,26 @@
+<p class="lead">The Board is the brand team&rsquo;s live Kanban of active tasks. Members work their tasks here and leads triage the flow. Clicking any task opens a side panel with everything about it and every action you can take.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Working and tracking tasks.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: move and work tasks.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role mem">Member</span> <span class="role lead">Lead</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Views</div><div class="g-val">Kanban or Table.</div></div>
+</div>
+
+<h2 class="sec">The columns</h2>
+<p>The Kanban has a column per stage: <strong>Backlog</strong>, <strong>In Sprint</strong>, <strong>In Progress</strong>, <strong>Ext. Blocked</strong>, <strong>In Review</strong>, <strong>Approved</strong>, <strong>Delivered</strong>, <strong>Done</strong>. Each card shows its ID (for example <span class="mono">T-001</span>), type, title, product, owner and due date (amber when close, red when overdue). Drag a card to move it; you can only make the moves your role allows, and an illegal drop snaps back. A Table view, a person filter, and a <span class="kbd">/</span> search are also there.</p>
+
+<h2 class="sec">Working a task (the side panel)</h2>
+<p>Click a task to open its panel. From here you (depending on role and stage):</p>
+<ul>
+  <li><strong>Assign:</strong> claim a task as owner, add yourself as a collaborator, or (lead/admin) set the owner.</li>
+  <li><strong>Move stage:</strong> pick an allowed next stage; moving to Ext. Blocked or Abandoned needs a typed reason.</li>
+  <li><strong>Submit for Review:</strong> add the deliverable link to send your work to a lead (moves it to In Review).</li>
+  <li><strong>Review work</strong> (lead/admin): Approve it, or request a revision with feedback (sends it back to In Progress).</li>
+  <li><strong>Deliver</strong> to the requester, or <strong>Mark Done</strong>; set priority and due date; add notes, attachments and comments.</li>
+</ul>
+
+<div class="callout note">
+  <div class="c-title">&#9432; The flow in one line</div>
+  <p>A task goes Backlog &rarr; pulled into a sprint &rarr; a member takes it In Progress &rarr; submits for review &rarr; a lead approves the work &rarr; it&rsquo;s delivered to the requester (who accepts, or it auto-accepts) &rarr; Done. A revision sends it back a step; Ext. Blocked parks it; Abandoned stops it. Big requests appear as sibling tasks like <span class="mono">T-001/2</span>.</p>
+</div>

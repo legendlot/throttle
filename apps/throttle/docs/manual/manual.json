@@ -1,0 +1,59 @@
+{
+  "title": "Throttle",
+  "title_accent": "Operations Manual",
+  "subtitle": "The self-serve guide to the brand team's work OS: requests, tasks, sprints and social.",
+  "version": "1.0.0",
+  "date": "2026-05-29",
+  "app_url": "throttle.legendoftoys.com",
+  "owner": "Legend of Toys",
+  "roles": {
+    "req":  { "label": "Requester", "name": "Requester", "desc": "Non-brand staff who submit work requests and review what comes back." },
+    "mem":  { "label": "Member",    "name": "Brand Team Member", "desc": "Designers, copywriters and creators who work tasks on the board." },
+    "lead": { "label": "Lead",      "name": "Brand Lead", "desc": "Approves requests, runs sprints, reviews work, and reads the dashboard." },
+    "adm":  { "label": "Admin",     "name": "Admin", "desc": "Full access including Settings (roles, disciplines, ageing thresholds)." }
+  },
+  "parts": [
+    {
+      "part": "Getting Started",
+      "subtitle": "What Throttle is, how to sign in and get around, and what your role can see.",
+      "chapters": [
+        { "id": "intro",      "title": "Welcome to Throttle",          "file": "00-introduction.html", "roles": ["req","mem","lead","adm"] },
+        { "id": "navigation", "title": "Signing In & Getting Around",  "file": "01-navigation.html",   "roles": ["req","mem","lead","adm"] },
+        { "id": "roles",      "title": "Roles & What You Can See",      "file": "02-roles.html",        "roles": ["req","mem","lead","adm"] }
+      ]
+    },
+    {
+      "part": "Requests",
+      "subtitle": "Submitting work, getting it approved, and reviewing what comes back.",
+      "chapters": [
+        { "id": "requests", "title": "Requests",        "route": "/requests",          "file": "req-requests.html", "roles": ["req","mem","lead","adm"] },
+        { "id": "new",      "title": "New Request",     "route": "/requests/new",      "file": "req-new.html",      "roles": ["req","mem","lead","adm"] },
+        { "id": "approval", "title": "Approval Queue",  "route": "/requests/approval", "file": "req-approval.html", "roles": ["lead","adm"] },
+        { "id": "feedback", "title": "Giving Feedback", "route": "/requests/feedback", "file": "req-feedback.html", "roles": ["req"] }
+      ]
+    },
+    {
+      "part": "Tasks & Sprints",
+      "subtitle": "The board where work happens, and the sprints that schedule it.",
+      "chapters": [
+        { "id": "board",   "title": "The Board",  "route": "/board",   "file": "task-board.html",   "roles": ["mem","lead","adm"] },
+        { "id": "sprints", "title": "Sprints",    "route": "/sprints", "file": "task-sprints.html", "roles": ["lead","adm"] }
+      ]
+    },
+    {
+      "part": "Reporting & Social",
+      "subtitle": "The manager dashboard and the social content calendar.",
+      "chapters": [
+        { "id": "dashboard", "title": "Dashboard", "route": "/dashboard", "file": "rep-dashboard.html", "roles": ["lead","adm"] },
+        { "id": "social",    "title": "Social",    "route": "/social",    "file": "rep-social.html",    "roles": ["req","mem","lead","adm"] }
+      ]
+    },
+    {
+      "part": "Admin",
+      "subtitle": "Managing roles, disciplines and ageing thresholds.",
+      "chapters": [
+        { "id": "settings", "title": "Settings", "route": "/settings", "file": "admin-settings.html", "roles": ["adm"] }
+      ]
+    }
+  ]
+}
