@@ -1,0 +1,16 @@
+<p class="lead">Sheet Import documents how the legacy &ldquo;Omnipresent&rdquo; influencer spreadsheet is loaded into Ignition. It is a reference runbook for the technical team, not a button you click.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Documenting the data import.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read-only (instructions).</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role adm">Admin</span> (technical)</div></div>
+  <div class="g-cell"><div class="g-lbl">How</div><div class="g-val">A command-line script.</div></div>
+</div>
+
+<h2 class="sec">What it explains</h2>
+<p>The page lays out the one-time migration steps: place the latest <code>Omnipresent - Influencer.xlsx</code> in Downloads, run the import script from the workspace, which posts the rows into the database through one-shot import routines. The import is idempotent (re-running it will not create duplicates), and the routines are removed afterward.</p>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; No upload button here</div>
+  <p>Despite the name, there is nothing to click on this screen: it is a runbook for an engineer doing a data migration from the command line. For day-to-day work you will never need it; influencers and engagements are added through the normal screens.</p>
+</div>
