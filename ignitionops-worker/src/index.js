@@ -409,13 +409,47 @@ async function getKpis(url, auth, env) {
     return m ? Number(m[1]) : 0;
   }
   const ACTIVE = "stage=in.(invited,engaged,negotiating,agreed,shipped,delivered,script_review,script_signed_off,scheduled,live,tracking)";
-  const [active, live, closed, ghosted] = await Promise.all([
+  const [active, live, closed, ghosted, overdue] = await Promise.all([
     count(ACTIVE),
     count('stage=eq.live'),
     count('stage=eq.closed'),
     count('stage=eq.ghosted'),
+    count(overdueFilter()),
   ]);
-  return ok({ active, live, closed, ghosted });
+  return ok({ active, live, closed, ghosted, overdue });
+}
+
+// ── Overdue-post detection (auto-rating signal) ──────────────────────────────
+// An engagement is "overdue" when its expected post date has passed by more
+// than `days` and it still hasn't gone live (no post_date, not in a posted/
+// terminal stage). Drives the dashboard signal + the flagOverdueRatings sweep.
+const OVERDUE_DEFAULT_DAYS = 7;
+const POSTED_OR_TERMINAL = ['live', 'tracking', 'closed', 'declined', 'ghosted', 'dropped'];
+
+function overdueCutoffDate(days) {
+  const n = Number(days) || OVERDUE_DEFAULT_DAYS;
+  return new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+}
+function overdueFilter(days) {
+  const cutoff = overdueCutoffDate(days);
+  return `expected_post_date=lt.${cutoff}&post_date=is.null&stage=not.in.(${POSTED_OR_TERMINAL.join(',')})`;
+}
+
+async function getOverdueEngagements(url, auth, env) {
+  const days = url.searchParams.get('days') || OVERDUE_DEFAULT_DAYS;
+  const r = await sb(
+    `/rest/v1/engagements?${overdueFilter(days)}&select=id,engagement_no,stage,product_code,product_variant,expected_post_date,influencer:influencer_id(id,influencer_code,channel_name,person_name,quality_rating)&order=expected_post_date.asc&limit=500`,
+    env,
+  );
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
+  const today = new Date().toISOString().slice(0, 10);
+  const rows = (r.data || []).map(e => ({
+    ...e,
+    days_overdue: e.expected_post_date
+      ? Math.floor((Date.parse(today) - Date.parse(e.expected_post_date)) / 86400000)
+      : null,
+  }));
+  return ok({ overdue: rows, days: Number(days) || OVERDUE_DEFAULT_DAYS });
 }
 
 async function getCatalogs(url, auth, env) {
@@ -752,6 +786,40 @@ async function updateCampaign(body, auth, env) {
   return ok(r.data?.[0]);
 }
 
+// Sweep overdue engagements and flip the offending influencers' rating to red.
+// Conservative: only touches influencers currently rated 'unrated' or 'green',
+// so a human-set 'yellow'/'red' (or a deliberate green) is never clobbered.
+// Returns the list flagged so the dashboard can show what changed.
+async function flagOverdueRatings(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  const days = body.days || OVERDUE_DEFAULT_DAYS;
+
+  const r = await sb(
+    `/rest/v1/engagements?${overdueFilter(days)}&select=influencer_id,influencer:influencer_id(quality_rating)&limit=1000`,
+    env,
+  );
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
+
+  // Distinct influencer_ids whose current rating is auto-flippable.
+  const ids = [...new Set(
+    (r.data || [])
+      .filter(e => ['unrated', 'green'].includes(e.influencer?.quality_rating))
+      .map(e => e.influencer_id)
+      .filter(Boolean),
+  )];
+  if (ids.length === 0) return ok({ flagged: 0, influencer_ids: [] });
+
+  const note = `Auto-flagged red — post overdue >${Number(days) || OVERDUE_DEFAULT_DAYS}d past expected date (${nowIso().slice(0, 10)})`;
+  const pr = await sb(
+    `/rest/v1/influencers?id=in.(${ids.join(',')})&quality_rating=in.(unrated,green)`, env, {
+    method: 'PATCH',
+    body: JSON.stringify({ quality_rating: 'red', rating_notes: note, updated_at: nowIso() }),
+    prefer: 'return=minimal',
+  });
+  if (!pr.ok) return err(`db_error: ${JSON.stringify(pr.data)}`, 400);
+  return ok({ flagged: ids.length, influencer_ids: ids });
+}
+
 // Attach an engagement to a campaign (or detach when campaign_id is null/''):
 // sets ignition.engagements.campaign_id. The FK guarantees the campaign exists.
 async function assignEngagementToCampaign(body, auth, env) {
@@ -779,6 +847,7 @@ const GET_ACTIONS = {
   getDiscountCodes,
   getCampaigns,
   getCampaign,
+  getOverdueEngagements,
   getKpis,
   getCatalogs,
   getMe,
@@ -799,6 +868,7 @@ const POST_ACTIONS = {
   createCampaign,
   updateCampaign,
   assignEngagementToCampaign,
+  flagOverdueRatings,
 };
 
 async function handleGet(url, request, env) {
