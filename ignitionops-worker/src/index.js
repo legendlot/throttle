@@ -581,6 +581,7 @@ const INFLUENCER_FIELDS = [
   'influencer_type','categories','reach','audience','location',
   'contact_number','address','email','contact_poc_type','contact_poc_name',
   'first_invite_sent_at','list_status','quality_rating','rating_notes',
+  'onboarded','onboarded_at',
 ];
 
 const ENGAGEMENT_FIELDS = [

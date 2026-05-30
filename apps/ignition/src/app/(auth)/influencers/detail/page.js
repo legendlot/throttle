@@ -60,6 +60,10 @@ export default function InfluencerDetailPage() {
         <KV label="Reach" value={inf.reach?.toLocaleString() || '—'} />
         <KV label="Audience" value={inf.audience || '—'} />
         <KV label="Location" value={inf.location || '—'} />
+        <KV label="Onboarded" value={
+          inf.onboarded === true ? `Yes${inf.onboarded_at ? ` · ${inf.onboarded_at}` : ''}`
+          : inf.onboarded === false ? 'No' : '—'
+        } />
       </Card>
 
       <Card title="Contact">
