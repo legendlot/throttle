@@ -452,6 +452,96 @@ async function getOverdueEngagements(url, auth, env) {
   return ok({ overdue: rows, days: Number(days) || OVERDUE_DEFAULT_DAYS });
 }
 
+// ── Reports (spend / ROAS / CPM / top performers) ───────────────────────────
+// One range-scoped query over engagements; all aggregation happens in JS to
+// stay within the 50-subrequest budget. Gated on ignition_reports_view.
+async function getReports(url, auth, env) {
+  const gate = requirePerm('ignition_reports_view', auth); if (gate) return gate;
+  const from = url.searchParams.get('from');
+  const to = url.searchParams.get('to');
+  const filters = [];
+  if (from) filters.push(`created_at=gte.${encodeURIComponent(from)}`);
+  if (to) filters.push(`created_at=lte.${encodeURIComponent(to)}`);
+
+  const r = await sb(
+    `/rest/v1/engagements?${filters.join('&')}&select=engagement_no,created_at,post_date,product_code,engagement_type,deal_type,payment_amount,total_cost,ad_spend,commission_amount,views,orders,conversions_value,cpm,actual_roas,roas_on_ad_spend,influencer:influencer_id(influencer_code,channel_name,person_name)&order=created_at.desc&limit=5000`,
+    env,
+  );
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
+  const rows = r.data || [];
+  const num = v => (v == null || isNaN(Number(v)) ? 0 : Number(v));
+  const spendOf = e => (e.total_cost != null ? num(e.total_cost) : num(e.payment_amount) + num(e.ad_spend) + num(e.commission_amount));
+  const roasOf = e => (e.actual_roas != null ? num(e.actual_roas) : (e.roas_on_ad_spend != null ? num(e.roas_on_ad_spend) : null));
+
+  // Spend / orders / views by month (post_date if posted, else created_at).
+  const byMonthMap = {};
+  const byProductMap = {};
+  let totalSpend = 0, totalOrders = 0, totalViews = 0, totalConv = 0;
+  let cpmSum = 0, cpmN = 0, roasSum = 0, roasN = 0;
+
+  const ROAS_BUCKETS = [{ k: '<1', lo: -Infinity, hi: 1 }, { k: '1–2', lo: 1, hi: 2 }, { k: '2–3', lo: 2, hi: 3 }, { k: '3–5', lo: 3, hi: 5 }, { k: '5+', lo: 5, hi: Infinity }];
+  const CPM_BUCKETS = [{ k: '<50', lo: -Infinity, hi: 50 }, { k: '50–100', lo: 50, hi: 100 }, { k: '100–200', lo: 100, hi: 200 }, { k: '200–500', lo: 200, hi: 500 }, { k: '500+', lo: 500, hi: Infinity }];
+  const roasDist = Object.fromEntries(ROAS_BUCKETS.map(b => [b.k, 0]));
+  const cpmDist = Object.fromEntries(CPM_BUCKETS.map(b => [b.k, 0]));
+  const bucketOf = (buckets, v) => (buckets.find(b => v >= b.lo && v < b.hi) || buckets[buckets.length - 1]).k;
+
+  for (const e of rows) {
+    const spend = spendOf(e);
+    const orders = num(e.orders), views = num(e.views), conv = num(e.conversions_value);
+    totalSpend += spend; totalOrders += orders; totalViews += views; totalConv += conv;
+
+    const month = (e.post_date || e.created_at || '').slice(0, 7);
+    if (month) {
+      const m = byMonthMap[month] || (byMonthMap[month] = { month, spend: 0, orders: 0, views: 0, deals: 0 });
+      m.spend += spend; m.orders += orders; m.views += views; m.deals += 1;
+    }
+    const prod = e.product_code || '—';
+    const p = byProductMap[prod] || (byProductMap[prod] = { name: prod, deals: 0, spend: 0, orders: 0, views: 0 });
+    p.deals += 1; p.spend += spend; p.orders += orders; p.views += views;
+
+    if (e.cpm != null) { const c = num(e.cpm); cpmSum += c; cpmN++; cpmDist[bucketOf(CPM_BUCKETS, c)]++; }
+    const roas = roasOf(e);
+    if (roas != null) { roasSum += roas; roasN++; roasDist[bucketOf(ROAS_BUCKETS, roas)]++; }
+  }
+
+  const byMonth = Object.values(byMonthMap).sort((a, b) => a.month.localeCompare(b.month))
+    .map(m => ({ ...m, spend: Math.round(m.spend) }));
+  const byProduct = Object.values(byProductMap).sort((a, b) => b.spend - a.spend)
+    .map(p => ({ ...p, spend: Math.round(p.spend) }));
+
+  const topPerformers = rows
+    .map(e => ({
+      engagement_no: e.engagement_no,
+      influencer: e.influencer?.channel_name || e.influencer?.person_name || e.influencer?.influencer_code || '—',
+      product: e.product_code || '—',
+      orders: num(e.orders),
+      conversions_value: Math.round(num(e.conversions_value)),
+      spend: Math.round(spendOf(e)),
+      roas: roasOf(e),
+    }))
+    .filter(e => e.orders > 0 || e.conversions_value > 0 || e.roas != null)
+    .sort((a, b) => (b.conversions_value - a.conversions_value) || (b.orders - a.orders))
+    .slice(0, 15);
+
+  return ok({
+    range: { from: from || null, to: to || null, total_deals: rows.length },
+    totals: {
+      deals: rows.length,
+      spend: Math.round(totalSpend),
+      orders: totalOrders,
+      views: totalViews,
+      conversions_value: Math.round(totalConv),
+      avg_cpm: cpmN ? Math.round((cpmSum / cpmN) * 100) / 100 : null,
+      avg_roas: roasN ? Math.round((roasSum / roasN) * 100) / 100 : null,
+    },
+    by_month: byMonth,
+    by_product: byProduct,
+    roas_distribution: ROAS_BUCKETS.map(b => ({ bucket: b.k, count: roasDist[b.k] })),
+    cpm_distribution: CPM_BUCKETS.map(b => ({ bucket: b.k, count: cpmDist[b.k] })),
+    top_performers: topPerformers,
+  });
+}
+
 async function getCatalogs(url, auth, env) {
   // Static enums + product list from store schema.
   const productsRes = await sbStore(
@@ -849,6 +939,7 @@ const GET_ACTIONS = {
   getCampaign,
   getOverdueEngagements,
   getKpis,
+  getReports,
   getCatalogs,
   getMe,
 };
