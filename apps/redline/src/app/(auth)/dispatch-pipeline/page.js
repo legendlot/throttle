@@ -108,6 +108,7 @@ export default function DispatchPipelinePage() {
                   <th style={numTh}>With Production</th>
                   <th style={numTh}>Unalloc (R)</th>
                   <th style={numTh}>Unalloc (E)</th>
+                  <th style={numTh}>Unalloc (Total)</th>
                   <th style={numTh}>Total Allocated</th>
                   {channels.map(ch => (
                     <th key={ch} style={numTh}>{ch}</th>
@@ -153,6 +154,7 @@ export default function DispatchPipelinePage() {
                       <td style={totalCell(totals.with_production, 'var(--t1)')}>{fmt(totals.with_production)}</td>
                       <td style={totalCell(totals.unallocated_retail, 'var(--yellow)')}>{fmt(totals.unallocated_retail)}</td>
                       <td style={totalCell(totals.unallocated_ecom, 'var(--yellow)')}>{fmt(totals.unallocated_ecom)}</td>
+                      <td style={totalCell(totals.unallocated_retail + totals.unallocated_ecom, 'var(--yellow)')}>{fmt(totals.unallocated_retail + totals.unallocated_ecom)}</td>
                       <td style={totalCell(grandAlloc, 'var(--green)')}>{fmt(grandAlloc)}</td>
                       {channels.map(ch => (
                         <td key={ch} style={totalCell(totals.channels[ch], 'var(--state-info, #7b93ff)')}>{fmt(totals.channels[ch])}</td>
@@ -177,6 +179,7 @@ export default function DispatchPipelinePage() {
                         <td style={numCell(p.totals?.with_production, 'var(--t1)')}>{fmt(p.totals?.with_production)}</td>
                         <td style={numCell(p.totals?.unallocated_retail, 'var(--yellow)')}>{fmt(p.totals?.unallocated_retail)}</td>
                         <td style={numCell(p.totals?.unallocated_ecom, 'var(--yellow)')}>{fmt(p.totals?.unallocated_ecom)}</td>
+                        <td style={numCell((p.totals?.unallocated_retail || 0) + (p.totals?.unallocated_ecom || 0), 'var(--yellow)')}>{fmt((p.totals?.unallocated_retail || 0) + (p.totals?.unallocated_ecom || 0))}</td>
                         <td style={numCell(totalAlloc, 'var(--green)')}>{fmt(totalAlloc)}</td>
                         {channels.map(ch => (
                           <td key={ch} style={numCell(p.totals?.channels?.[ch], 'var(--state-info, #7b93ff)')}>{fmt(p.totals?.channels?.[ch])}</td>
@@ -193,6 +196,7 @@ export default function DispatchPipelinePage() {
                             <td style={numCell(v.with_production, 'var(--t1)')}>{fmt(v.with_production)}</td>
                             <td style={numCell(v.unallocated_retail, 'var(--yellow)')}>{fmt(v.unallocated_retail)}</td>
                             <td style={numCell(v.unallocated_ecom, 'var(--yellow)')}>{fmt(v.unallocated_ecom)}</td>
+                            <td style={numCell((v.unallocated_retail || 0) + (v.unallocated_ecom || 0), 'var(--yellow)')}>{fmt((v.unallocated_retail || 0) + (v.unallocated_ecom || 0))}</td>
                             <td style={numCell(vTotal, 'var(--green)')}>{fmt(vTotal)}</td>
                             {channels.map(ch => (
                               <td key={ch} style={numCell(v.channels?.[ch], 'var(--state-info, #7b93ff)')}>{fmt(v.channels?.[ch])}</td>
