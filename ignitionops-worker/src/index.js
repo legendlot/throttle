@@ -343,16 +343,51 @@ async function getDiscountCodes(url, auth, env) {
   return ok({ codes: r.data || [], offset, limit });
 }
 
+// Roll up the embedded engagements of a campaign into summary numbers.
+// PostgREST returns numeric columns as strings — coerce with Number().
+function campaignRollup(c) {
+  const engs = c.engagements || [];
+  const num = v => Number(v) || 0;
+  const POSTED = new Set(['live', 'tracking', 'closed']);
+  const spend = engs.reduce((s, e) => s + (e.total_cost != null ? num(e.total_cost) : num(e.payment_amount)), 0);
+  return {
+    linked_count: engs.length,
+    posted_count: engs.filter(e => POSTED.has(e.stage)).length,
+    spend,
+    views: engs.reduce((s, e) => s + num(e.views), 0),
+    orders: engs.reduce((s, e) => s + num(e.orders), 0),
+  };
+}
+
+const CAMPAIGN_ENG_SELECT =
+  'engagements:engagements!campaign_id(id,engagement_no,engagement_type,stage,product_code,product_variant,payment_amount,total_cost,views,orders,post_date,expected_post_date,video_link)';
+
 async function getCampaigns(url, auth, env) {
   const status = url.searchParams.get('status');
   const filters = [];
   if (status) filters.push(`status=eq.${encodeURIComponent(status)}`);
   const r = await sb(
-    `/rest/v1/campaigns?${filters.join('&')}&select=*,influencer:influencer_id(influencer_code,channel_name)&order=created_at.desc`,
+    `/rest/v1/campaigns?${filters.join('&')}&select=*,influencer:influencer_id(influencer_code,channel_name,person_name),${CAMPAIGN_ENG_SELECT}&order=created_at.desc`,
     env,
   );
-  if (!r.ok) return err('db_error', 500);
-  return ok({ campaigns: r.data || [] });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
+  const campaigns = (r.data || []).map(c => ({ ...c, rollup: campaignRollup(c) }));
+  return ok({ campaigns });
+}
+
+async function getCampaign(url, auth, env) {
+  const id = url.searchParams.get('id');
+  const no = url.searchParams.get('campaign_no');
+  if (!id && !no) return err('id or campaign_no required', 400);
+  const filter = id ? `id=eq.${id}` : `campaign_no=eq.${encodeURIComponent(no)}`;
+  const r = await sb(
+    `/rest/v1/campaigns?${filter}&select=*,influencer:influencer_id(*),${CAMPAIGN_ENG_SELECT}&limit=1`,
+    env,
+  );
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
+  const c = r.data?.[0];
+  if (!c) return err('not_found', 404);
+  return ok({ campaign: { ...c, rollup: campaignRollup(c) } });
 }
 
 async function getKpis(url, auth, env) {
@@ -699,6 +734,38 @@ async function createCampaign(body, auth, env) {
   return ok(r.data?.[0]);
 }
 
+const CAMPAIGN_FIELDS = ['video_count', 'agreed_total', 'status'];
+
+async function updateCampaign(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!body.campaign_id) return err('campaign_id required', 400);
+  const patch = pickPatch(body, CAMPAIGN_FIELDS);
+  if (Object.keys(patch).length === 0) return err('no_patch', 400);
+  if ('status' in patch && !['active', 'completed', 'cancelled'].includes(patch.status)) {
+    return err('invalid_status', 400);
+  }
+  const r = await sb(`/rest/v1/campaigns?id=eq.${body.campaign_id}`, env, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  return ok(r.data?.[0]);
+}
+
+// Attach an engagement to a campaign (or detach when campaign_id is null/''):
+// sets ignition.engagements.campaign_id. The FK guarantees the campaign exists.
+async function assignEngagementToCampaign(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!body.engagement_id) return err('engagement_id required', 400);
+  const campaign_id = body.campaign_id || null; // null = detach
+  const r = await sb(`/rest/v1/engagements?id=eq.${body.engagement_id}`, env, {
+    method: 'PATCH',
+    body: JSON.stringify({ campaign_id, updated_at: nowIso() }),
+  });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  return ok(r.data?.[0]);
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // DISPATCH
 // ────────────────────────────────────────────────────────────────────────────
@@ -711,6 +778,7 @@ const GET_ACTIONS = {
   getRoster,
   getDiscountCodes,
   getCampaigns,
+  getCampaign,
   getKpis,
   getCatalogs,
   getMe,
@@ -729,6 +797,8 @@ const POST_ACTIONS = {
   assignDiscountCode,
   openPitstopTicket,
   createCampaign,
+  updateCampaign,
+  assignEngagementToCampaign,
 };
 
 async function handleGet(url, request, env) {
