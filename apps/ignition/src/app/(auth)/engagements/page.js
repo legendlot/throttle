@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { Spinner, Chip } from '@throttle/ui';
+import { Spinner, Chip, useListNav } from '@throttle/ui';
 import { ignitionopsGet } from '../../../lib/ignitionopsFetch.js';
 import StageBadge from '../../../components/StageBadge.js';
 import DealTypeBadge from '../../../components/DealTypeBadge.js';
@@ -25,6 +25,9 @@ export default function EngagementsPage() {
   const [search, setSearch] = useState('');
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
+  const { focusedIdx, setFocusedIdx } = useListNav(rows.length, (i) => {
+    const r = rows[i]; if (r) router.push(`/engagements/detail/?id=${r.id}`);
+  });
 
   useEffect(() => {
     if (!session) return;
@@ -103,12 +106,15 @@ export default function EngagementsPage() {
               {rows.length === 0 && (
                 <tr><td colSpan={8} style={{ ...td, color: 'var(--text-3)', textAlign: 'center' }}>No engagements</td></tr>
               )}
-              {rows.map(r => (
+              {rows.map((r, i) => (
                 <tr key={r.id}
                   onClick={() => router.push(`/engagements/detail/?id=${r.id}`)}
-                  style={{ cursor: 'pointer', borderTop: '1px solid var(--border)' }}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-2)'; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                  style={{
+                    cursor: 'pointer', borderTop: '1px solid var(--border)',
+                    background: focusedIdx === i ? 'var(--surface-2)' : 'transparent',
+                    outline: focusedIdx === i ? '2px solid #FF6B00' : 'none', outlineOffset: '-2px',
+                  }}
+                  onMouseEnter={() => setFocusedIdx(i)}
                 >
                   <td style={td}><span style={{ color: '#FF6B00', fontWeight: 600 }}>{r.engagement_no}</span></td>
                   <td style={td}>

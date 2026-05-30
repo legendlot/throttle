@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { Spinner, Modal, useToast } from '@throttle/ui';
+import { Spinner, Modal, useToast, useListNav } from '@throttle/ui';
 import { Plus } from 'lucide-react';
 import { ignitionopsGet, ignitionopsPost } from '../../../lib/ignitionopsFetch.js';
 
@@ -16,6 +16,9 @@ export default function CampaignsPage() {
   const [loading, setLoading] = useState(false);
   const [showNew, setShowNew] = useState(false);
   const canManage = !!perms?.ignition_manage;
+  const { focusedIdx, setFocusedIdx } = useListNav(rows.length, (i) => {
+    const c = rows[i]; if (c) router.push(`/campaigns/detail/?id=${c.id}`);
+  });
 
   function load() {
     if (!session) return;
@@ -55,9 +58,14 @@ export default function CampaignsPage() {
             </tr></thead>
             <tbody>
               {rows.length === 0 && <tr><td colSpan={8} style={{ ...td, color: 'var(--text-3)', textAlign: 'center' }}>No campaigns yet.</td></tr>}
-              {rows.map(c => (
+              {rows.map((c, i) => (
                 <tr key={c.id} onClick={() => router.push(`/campaigns/detail/?id=${c.id}`)}
-                  style={{ borderTop: '1px solid var(--border)', cursor: 'pointer' }}>
+                  onMouseEnter={() => setFocusedIdx(i)}
+                  style={{
+                    borderTop: '1px solid var(--border)', cursor: 'pointer',
+                    background: focusedIdx === i ? 'var(--surface-2)' : 'transparent',
+                    outline: focusedIdx === i ? '2px solid #FF6B00' : 'none', outlineOffset: '-2px',
+                  }}>
                   <td style={td}><span style={{ color: '#FF6B00', fontWeight: 600 }}>{c.campaign_no}</span></td>
                   <td style={td}>{c.influencer?.channel_name || c.influencer?.person_name || c.influencer?.influencer_code || '—'}</td>
                   <td style={td}>{c.video_count}</td>
