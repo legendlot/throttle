@@ -74,6 +74,104 @@ async function sbStore(path, env, opts = {}) {
   return { ok: res.ok, status: res.status, data };
 }
 
+// ── Shopify helpers (ported from csops — same Dev Dashboard app/store) ────────
+//
+// Ignition reuses the SAME Shopify Dev Dashboard app as Pitstop (one LOT store,
+// `ed7e3f-cf.myshopify.com`). There is no static token to copy: tokens are minted
+// per-worker via the client-credentials grant (PATTERN-084) and expire in ~24h.
+// Set the SAME three secrets on ignitionops:
+//   wrangler secret put SHOPIFY_CLIENT_ID
+//   wrangler secret put SHOPIFY_CLIENT_SECRET
+//   wrangler secret put SHOPIFY_STORE_DOMAIN
+// Until they are set, shopifyLookup() returns { configured:false } gracefully.
+
+// Normalise an India phone to E.164.
+function toE164(raw) {
+  if (!raw) return null;
+  const d = String(raw).replace(/\D/g, '');
+  if (d.length === 10) return `+91${d}`;
+  if (d.length === 12 && d.startsWith('91')) return `+${d}`;
+  return `+${d}`;
+}
+
+const SHOPIFY_API_VERSION = '2026-04';
+
+// Module-level token cache (per isolate). client_id/client_secret are static secrets.
+let _shopifyToken = null;
+let _shopifyTokenExp = 0;
+
+async function getShopifyToken(env, forceRefresh = false) {
+  const now = Date.now();
+  if (!forceRefresh && _shopifyToken && now < _shopifyTokenExp - 60_000) return _shopifyToken;
+  const res = await fetch(`https://${env.SHOPIFY_STORE_DOMAIN}/admin/oauth/access_token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'client_credentials',
+      client_id: env.SHOPIFY_CLIENT_ID,
+      client_secret: env.SHOPIFY_CLIENT_SECRET,
+    }),
+  }).catch(() => null);
+  if (!res || !res.ok) { _shopifyToken = null; _shopifyTokenExp = 0; return null; }
+  const data = await res.json().catch(() => null);
+  if (!data?.access_token) { _shopifyToken = null; _shopifyTokenExp = 0; return null; }
+  _shopifyToken = data.access_token;
+  _shopifyTokenExp = now + (Number(data.expires_in) || 86399) * 1000;
+  return _shopifyToken;
+}
+
+// Lazy on-demand Shopify customer lookup by phone (email fallback).
+// Returns graceful states, never throws.
+async function shopifyLookup({ phone, email }, env) {
+  if (!env.SHOPIFY_STORE_DOMAIN || !env.SHOPIFY_CLIENT_ID || !env.SHOPIFY_CLIENT_SECRET) {
+    return { configured: false, found: false, customer: null, recent_orders: [] };
+  }
+  const e164 = toE164(phone);
+  const term = e164 ? `phone:${e164}` : (email ? `email:${email}` : null);
+  if (!term) return { configured: true, found: false, customer: null, recent_orders: [] };
+
+  const query = `query($q:String!){ customers(first:1, query:$q){ edges{ node{
+    id displayName email phone numberOfOrders
+    amountSpent{ amount currencyCode }
+    orders(first:5, sortKey: CREATED_AT, reverse:true){ edges{ node{
+      name createdAt displayFulfillmentStatus displayFinancialStatus
+      currentTotalPriceSet{ shopMoney{ amount currencyCode } }
+    }}}
+  }}}}`;
+  const runQuery = (token) => fetch(`https://${env.SHOPIFY_STORE_DOMAIN}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': token },
+    body: JSON.stringify({ query, variables: { q: term } }),
+  });
+
+  let token = await getShopifyToken(env);
+  if (!token) return { configured: true, found: false, error: 'shopify auth failed (client credentials)', customer: null, recent_orders: [] };
+  let res = await runQuery(token).catch(() => null);
+  // Token rejected mid-flight (expired/rotated) — force one refresh and retry.
+  if (res && res.status === 401) {
+    token = await getShopifyToken(env, true);
+    if (!token) return { configured: true, found: false, error: 'shopify auth failed (client credentials)', customer: null, recent_orders: [] };
+    res = await runQuery(token).catch(() => null);
+  }
+  if (!res || !res.ok) return { configured: true, found: false, error: `shopify ${res ? res.status : 'network'}`, customer: null, recent_orders: [] };
+  const data = await res.json().catch(() => null);
+  if (data?.errors?.length) {
+    return { configured: true, found: false, error: data.errors[0]?.message, customer: null, recent_orders: [] };
+  }
+  const node = data?.data?.customers?.edges?.[0]?.node || null;
+  if (!node) return { configured: true, found: false, customer: null, recent_orders: [] };
+  const customer = {
+    id: node.id, name: node.displayName, email: node.email, phone: node.phone,
+    orders_count: node.numberOfOrders, total_spent: node.amountSpent?.amount, currency: node.amountSpent?.currencyCode,
+  };
+  const recent_orders = (node.orders?.edges || []).map(e => ({
+    order_no: e.node.name, created_at: e.node.createdAt,
+    fulfillment: e.node.displayFulfillmentStatus, financial: e.node.displayFinancialStatus,
+    total: e.node.currentTotalPriceSet?.shopMoney?.amount, currency: e.node.currentTotalPriceSet?.shopMoney?.currencyCode,
+  }));
+  return { configured: true, found: true, customer, recent_orders };
+}
+
 // ── Auth ────────────────────────────────────────────────────────────────────
 
 async function verifyJWT(authHeader, env) {
@@ -572,6 +670,37 @@ async function getMe(url, auth, env) {
   });
 }
 
+// ── Shopify lookups ──────────────────────────────────────────────────────────
+
+// Generic ad-hoc lookup by phone/email (parity with csops searchShopifyCustomer).
+async function searchShopifyCustomer(url, auth, env) {
+  const phone = url.searchParams.get('phone');
+  const email = url.searchParams.get('email');
+  if (!phone && !email) return err('phone or email required', 400);
+  return ok(await shopifyLookup({ phone, email }, env));
+}
+
+// Influencer → Shopify customer match. Resolves the influencer's stored
+// contact_number (email fallback), then looks the customer up on Shopify.
+// On-demand (UI-triggered), mirrors Pitstop's ShopifyPanel — does NOT slow
+// the main getInfluencer read. Safe before secrets are set (configured:false).
+async function getInfluencerShopify(url, auth, env) {
+  const id = url.searchParams.get('id');
+  const code = url.searchParams.get('code');
+  if (!id && !code) return err('id or code required', 400);
+  const filter = id ? `id=eq.${id}` : `influencer_code=eq.${encodeURIComponent(code)}`;
+  const r = await sb(`/rest/v1/influencers?${filter}&select=influencer_code,contact_number,email&limit=1`, env);
+  if (!r.ok) return err('db_error', 500);
+  const inf = r.data?.[0];
+  if (!inf) return err('not_found', 404);
+  if (!inf.contact_number && !inf.email) {
+    return ok({ influencer_code: inf.influencer_code, matched_by: null, configured: true, found: false, customer: null, recent_orders: [] });
+  }
+  const result = await shopifyLookup({ phone: inf.contact_number, email: inf.email }, env);
+  const matched_by = result.found ? (inf.contact_number ? 'phone' : 'email') : null;
+  return ok({ influencer_code: inf.influencer_code, matched_by, ...result });
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // POST ACTIONS
 // ────────────────────────────────────────────────────────────────────────────
@@ -943,6 +1072,8 @@ const GET_ACTIONS = {
   getReports,
   getCatalogs,
   getMe,
+  searchShopifyCustomer,
+  getInfluencerShopify,
 };
 
 const POST_ACTIONS = {
