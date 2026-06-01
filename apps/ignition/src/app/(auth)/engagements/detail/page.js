@@ -83,6 +83,18 @@ export default function EngagementDetailPage() {
           <KV label="Deal type" value={e.deal_type} />
           <KV label="Payment terms" value={e.payment_terms || '—'} />
           <KV label="Payment amount" value={`₹${Number(e.payment_amount || 0).toLocaleString()}`} />
+          {(() => {
+            const agreed = Number(e.payment_amount || 0);
+            const paid = Number(data.paid_total || 0);
+            const done = agreed > 0 && paid >= agreed;
+            return (
+              <KV label="Paid" value={
+                <span style={{ color: done ? '#27c93f' : paid > 0 ? '#F2CD1A' : 'var(--text-3)', fontWeight: 600 }}>
+                  ₹{paid.toLocaleString()} of ₹{agreed.toLocaleString()}{done ? ' ✓' : ''}
+                </span>
+              } />
+            );
+          })()}
           {e.affiliate_pct != null && <KV label="Affiliate %" value={`${e.affiliate_pct}%`} />}
           {e.commission_amount != null && <KV label="Commission" value={`₹${Number(e.commission_amount).toLocaleString()}`} />}
         </Card>

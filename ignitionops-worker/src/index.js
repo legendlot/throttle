@@ -454,17 +454,23 @@ async function getEngagement(url, auth, env) {
   const eng = r.data?.[0];
   if (!eng) return err('not_found', 404);
 
-  const [hr, nr, ar] = await Promise.all([
+  const [hr, nr, ar, pr] = await Promise.all([
     sb(`/rest/v1/engagement_history?engagement_id=eq.${eng.id}&select=*&order=created_at.desc&limit=200`, env),
     sb(`/rest/v1/engagement_notes?engagement_id=eq.${eng.id}&select=*&order=created_at.desc&limit=200`, env),
     sb(`/rest/v1/engagement_attachments?engagement_id=eq.${eng.id}&select=*&order=created_at.desc&limit=200`, env),
+    sb(`/rest/v1/payments?engagement_id=eq.${eng.id}&select=*&order=paid_on.desc,created_at.desc&limit=200`, env),
   ]);
+
+  const payments = pr.data || [];
+  const paid_total = payments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
 
   return ok({
     engagement: eng,
     history: hr.data || [],
     notes: nr.data || [],
     attachments: ar.data || [],
+    payments,
+    paid_total: Math.round(paid_total),
     allowed_next: allowedTransitions(eng.stage),
   });
 }
