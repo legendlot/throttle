@@ -779,6 +779,7 @@ function NewPOPage() {
               loadBomChecklist={loadBomChecklist}
               addBomSelected={addBomSelected}
               loading={bomLoading}
+              cardFilter={selectedCategory?.bom_filter}
             />
           )}
 
@@ -952,9 +953,19 @@ function NewPOPage() {
 }
 
 function BomMode(props) {
-  const { bomProduct, setBomProduct, bomVariant, setBomVariant, bomQty, setBomQty, bomGroup, setBomGroup, bomChecklist, setBomChecklist, loadBomChecklist, addBomSelected, loading } = props;
+  const { bomProduct, setBomProduct, bomVariant, setBomVariant, bomQty, setBomQty, bomGroup, setBomGroup, bomChecklist, setBomChecklist, loadBomChecklist, addBomSelected, loading, cardFilter } = props;
   const { PRODUCTS, PRODUCT_VARIANTS } = useProducts();
   const variants = bomProduct ? (PRODUCT_VARIANTS[bomProduct] || []) : [];
+
+  // When the chosen PO category carries a bom_filter (Metal / Electronics /
+  // Packaging / Para / Stickers / Consumables), that card already defines the
+  // BOM bucket. Surface it as a locked badge and auto-load on product select —
+  // the generic group selector below would only be redundant/confusing here.
+  // loadBomChecklist applies cardFilter on top regardless of bomGroup, and with
+  // bomGroup left null no extra group narrowing is layered on.
+  const cardFilterLabel = cardFilter
+    ? (Array.isArray(cardFilter.value) ? cardFilter.value.join(' / ') : cardFilter.value)
+    : null;
 
   function toggleAll(checked) {
     setBomChecklist((rows) => rows.map((r) => ({ ...r, checked })));
@@ -963,6 +974,16 @@ function BomMode(props) {
     setBomChecklist((rows) => rows.map((r, j) => (j === i ? { ...r, [field]: value } : r)));
   }
 
+  // Auto-load the filtered checklist whenever the product/variant/qty changes
+  // on a pre-filtered card. (Re-runs with fresh deps, so no stale-closure risk.)
+  useEffect(() => {
+    if (cardFilter && bomProduct) {
+      const t = setTimeout(loadBomChecklist, 0);
+      return () => clearTimeout(t);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cardFilter, bomProduct, bomVariant, bomQty]);
+
   return (
     <>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 100px auto', gap: 10, alignItems: 'end', marginBottom: 12 }}>
@@ -970,17 +991,28 @@ function BomMode(props) {
         <SelectField label="Variant" value={bomVariant} onChange={setBomVariant} options={['', ...variants]} />
         <Field label="Units Qty" type="number" value={bomQty} onChange={setBomQty} />
       </div>
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
-        {BOM_GROUPS.map((g) => (
-          <button
-            key={g.key}
-            style={modeBtn(bomGroup === g.key)}
-            onClick={() => { setBomGroup(g.key); setTimeout(loadBomChecklist, 0); }}
-          >
-            {g.label}
-          </button>
-        ))}
-      </div>
+      {cardFilterLabel ? (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--t3)' }}>Showing only</span>
+          <StatusBadge label={cardFilterLabel} tone="blue" />
+          <span style={{ fontSize: 11, color: 'var(--t3)' }}>— set by the selected PO category</span>
+          {bomProduct && (
+            <button style={modeBtn(false)} onClick={() => setTimeout(loadBomChecklist, 0)}>↻ Reload</button>
+          )}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
+          {BOM_GROUPS.map((g) => (
+            <button
+              key={g.key}
+              style={modeBtn(bomGroup === g.key)}
+              onClick={() => { setBomGroup(g.key); setTimeout(loadBomChecklist, 0); }}
+            >
+              {g.label}
+            </button>
+          ))}
+        </div>
+      )}
       {loading ? (
         <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
       ) : bomChecklist.length > 0 && (
