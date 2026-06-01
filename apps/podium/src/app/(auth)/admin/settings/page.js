@@ -58,7 +58,7 @@ export default function SettingsPage() {
           Podium permissions (<code>podium_admin</code>, <code>podium_hr</code>, <code>podium_comp</code>,
           <code> podium_view</code>) are managed centrally with all LOT roles in Garage.
         </p>
-        <a href="https://garage.legendoftoys.com/users" target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--podium-green)', fontSize: 13, marginTop: 4 }}>
+        <a href="https://garage.legendoftoys.com/users" target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--podium-accent)', fontSize: 13, marginTop: 4 }}>
           Open Garage → Users <ExternalLink size={13} />
         </a>
       </div>

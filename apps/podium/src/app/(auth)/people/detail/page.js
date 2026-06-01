@@ -41,7 +41,7 @@ export default function PersonDetailPage() {
             <StatusBadge status={e.status} />
           </div>
           <div style={{ color: 'var(--text-2)', fontSize: 13 }}>
-            <span style={{ color: 'var(--podium-green)', fontWeight: 600 }}>{e.employee_code}</span>
+            <span style={{ color: 'var(--podium-accent)', fontWeight: 600 }}>{e.employee_code}</span>
             {e.job_title && <> · {e.job_title}</>}
             {e.department?.name && <> · {e.department.name}</>}
           </div>
@@ -177,7 +177,7 @@ function CompCard({ employeeId, session, canManage }) {
             (data.events || []).map(ev => (
               <div key={ev.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderTop: '1px solid var(--border)', fontSize: 12 }}>
                 <span>{fmtDate(ev.effective_date)} · {ev.event_type.replace(/_/g, ' ')}</span>
-                <span style={{ fontWeight: 600, color: 'var(--podium-green)' }}>
+                <span style={{ fontWeight: 600, color: 'var(--podium-accent)' }}>
                   {ev.increment_pct != null ? `+${ev.increment_pct}%` : ''}{ev.amount != null ? ` ${fmtMoney(ev.amount, ev.currency)}` : ''}
                 </span>
               </div>
@@ -197,7 +197,7 @@ function CompCard({ employeeId, session, canManage }) {
               <input placeholder="Bonus ₹" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} style={cinp(100)} />
               <input type="date" value={form.effective_date} onChange={e => setForm(f => ({ ...f, effective_date: e.target.value }))} style={cinp(140)} />
               <input placeholder="Reason" value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))} style={cinp(160)} />
-              <button onClick={add} style={{ ...editBtn, background: 'var(--podium-green)', color: '#04130d', border: 'none' }}>Add</button>
+              <button onClick={add} style={{ ...editBtn, background: 'var(--podium-accent)', color: '#1f1f1f', border: 'none' }}>Add</button>
             </div>
           </div>
         )}
@@ -209,7 +209,7 @@ function CompCard({ employeeId, session, canManage }) {
 function Avatar({ emp }) {
   const initials = (emp.full_name || '?').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
   return (
-    <div style={{ width: 56, height: 56, borderRadius: 'var(--radius-full)', overflow: 'hidden', background: 'var(--surface-3)', color: 'var(--podium-green)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, fontWeight: 700, flex: '0 0 auto' }}>
+    <div style={{ width: 56, height: 56, borderRadius: 'var(--radius-full)', overflow: 'hidden', background: 'var(--surface-3)', color: 'var(--podium-accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, fontWeight: 700, flex: '0 0 auto' }}>
       {emp.photo_url ? <img src={emp.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : initials}
     </div>
   );

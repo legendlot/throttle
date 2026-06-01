@@ -110,8 +110,8 @@ function upcoming(arr, field) {
 const h1 = { fontFamily: 'var(--font-cond)', fontSize: 22, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: 16 };
 function Tile({ label, value, accent }) {
   return (
-    <div style={{ flex: '1 1 130px', minWidth: 120, background: accent ? 'var(--accent-bg)' : 'var(--surface)', border: `1px solid ${accent ? 'var(--podium-green)' : 'var(--border)'}`, borderRadius: 'var(--radius-md)', padding: '14px 16px' }}>
-      <div style={{ fontSize: 11, color: accent ? 'var(--podium-green)' : 'var(--text-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
+    <div style={{ flex: '1 1 130px', minWidth: 120, background: accent ? 'var(--accent-bg)' : 'var(--surface)', border: `1px solid ${accent ? 'var(--podium-accent)' : 'var(--border)'}`, borderRadius: 'var(--radius-md)', padding: '14px 16px' }}>
+      <div style={{ fontSize: 11, color: accent ? 'var(--podium-accent)' : 'var(--text-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
       <div style={{ fontSize: 28, fontWeight: 700, fontFamily: 'var(--font-cond)', marginTop: 2 }}>{value}</div>
     </div>
   );
@@ -131,7 +131,7 @@ function ClickRow({ label, sub, value, onClick }) {
   return (
     <div onClick={onClick} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderTop: '1px solid var(--border)', fontSize: 13, cursor: 'pointer' }}>
       <span><span>{label}</span>{sub && <span style={{ color: 'var(--text-3)', fontSize: 11, marginLeft: 6 }}>{sub}</span>}</span>
-      <span style={{ color: 'var(--podium-green)', fontSize: 12, fontWeight: 600 }}>{value}</span>
+      <span style={{ color: 'var(--podium-accent)', fontSize: 12, fontWeight: 600 }}>{value}</span>
     </div>
   );
 }

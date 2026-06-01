@@ -122,10 +122,10 @@ const ORG_CSS = `
   padding: 8px 10px; min-width: 170px; max-width: 220px; text-align: left; cursor: pointer;
   transition: border-color .12s, background .12s;
 }
-.pdorg-card:hover { border-color: var(--podium-green); background: var(--surface-3); }
+.pdorg-card:hover { border-color: var(--podium-accent); background: var(--surface-3); }
 .pdorg-avatar {
   flex: 0 0 auto; width: 34px; height: 34px; border-radius: var(--radius-full);
-  background: var(--surface-3); color: var(--podium-green); overflow: hidden;
+  background: var(--surface-3); color: var(--podium-accent); overflow: hidden;
   display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700;
 }
 .pdorg-avatar img { width: 100%; height: 100%; object-fit: cover; }
@@ -139,5 +139,5 @@ const ORG_CSS = `
   color: var(--text-2); border: 1px solid var(--border-2); border-radius: var(--radius-full);
   padding: 1px 6px; cursor: pointer; z-index: 2;
 }
-.pdorg-count { font-size: 10px; font-weight: 700; color: var(--podium-green); }
+.pdorg-count { font-size: 10px; font-weight: 700; color: var(--podium-accent); }
 `;

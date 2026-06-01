@@ -80,8 +80,8 @@ export default function PeoplePage() {
               {rows.length === 0 && <tr><td colSpan={6} style={{ ...td, color: 'var(--text-3)', textAlign: 'center' }}>No results</td></tr>}
               {rows.map((r, i) => (
                 <tr key={r.id} onClick={() => router.push(`/people/detail/?id=${r.id}`)} onMouseEnter={() => setFocusedIdx(i)}
-                  style={{ cursor: 'pointer', borderTop: '1px solid var(--border)', background: focusedIdx === i ? 'var(--surface-2)' : 'transparent', outline: focusedIdx === i ? '2px solid var(--podium-green)' : 'none', outlineOffset: '-2px' }}>
-                  <td style={td}><span style={{ color: 'var(--podium-green)', fontWeight: 600 }}>{r.employee_code}</span></td>
+                  style={{ cursor: 'pointer', borderTop: '1px solid var(--border)', background: focusedIdx === i ? 'var(--surface-2)' : 'transparent', outline: focusedIdx === i ? '2px solid var(--podium-accent)' : 'none', outlineOffset: '-2px' }}>
+                  <td style={td}><span style={{ color: 'var(--podium-accent)', fontWeight: 600 }}>{r.employee_code}</span></td>
                   <td style={td}>{r.full_name}{r.preferred_name && <span style={{ color: 'var(--text-3)', fontSize: 11, marginLeft: 6 }}>({r.preferred_name})</span>}</td>
                   <td style={td}>{r.job_title || '—'}</td>
                   <td style={td}>{r.department?.name || '—'}</td>
@@ -100,5 +100,5 @@ export default function PeoplePage() {
 const h1 = { fontFamily: 'var(--font-cond)', fontSize: 22, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' };
 const th = { padding: '10px 12px', fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600 };
 const td = { padding: '10px 12px' };
-const newBtn = { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--podium-green)', color: '#04130d', border: 'none', borderRadius: 'var(--radius-sm)', padding: '8px 14px', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer' };
+const newBtn = { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--podium-accent)', color: '#1f1f1f', border: 'none', borderRadius: 'var(--radius-sm)', padding: '8px 14px', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer' };
 function inputStyle(w) { return { background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 10px', fontFamily: 'var(--font-mono)', fontSize: 13, width: w }; }

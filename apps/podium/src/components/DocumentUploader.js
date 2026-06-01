@@ -70,7 +70,7 @@ const inp = (w) => ({
   borderRadius: 'var(--radius-sm)', padding: '6px 10px', fontFamily: 'var(--font-mono)', fontSize: 13, width: w,
 });
 const uploadBtn = (busy) => ({
-  display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--podium-green)', color: '#04130d',
+  display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--podium-accent)', color: '#1f1f1f',
   border: 'none', borderRadius: 'var(--radius-sm)', padding: '7px 14px', fontWeight: 700, fontSize: 12,
   letterSpacing: '0.04em', textTransform: 'uppercase', cursor: busy ? 'wait' : 'pointer', opacity: busy ? 0.7 : 1,
 });

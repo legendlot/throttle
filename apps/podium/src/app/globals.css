@@ -26,9 +26,9 @@
   --brand-green:       #22c55e;
   --brand-orange:      #f97316;
 
-  /* Podium accent — the "winners' stand" cue (emerald: performance / go / growth) */
-  --podium-green:      #10B981;
-  --podium-green-deep: #059669;
+  /* Podium accent — the logo's podium-yellow (LOT brand yellow on charcoal mark) */
+  --podium-accent:      #F2CD1A;
+  --podium-accent-deep: #d4b200;
   --podium-gold:       #EAB308;
 
   --state-warning:    #fbbf24;
@@ -44,9 +44,9 @@
   --state-info-fg:    #7b93ff;
   --state-info-bg:    rgba(33, 60, 226, 0.20);
 
-  --accent:    var(--podium-green);
-  --accent-fg: #04130d;
-  --accent-bg: rgba(16, 185, 129, 0.08);
+  --accent:    var(--podium-accent);
+  --accent-fg: #1f1f1f;
+  --accent-bg: rgba(242, 205, 26, 0.10);
 
   --text-2xs:  11px;
   --text-xs:   12px;
@@ -96,7 +96,7 @@
   --blue:     var(--brand-blue);
   --red:      var(--brand-red);
   --green:    var(--brand-green);
-  --orange:   var(--podium-green);
+  --orange:   var(--podium-accent);
   --mono:     var(--font-mono);
   --cond:     var(--font-cond);
 }
@@ -118,13 +118,13 @@ button { font-family: inherit; }
 
 :focus { outline: none; }
 :focus-visible {
-  outline: 2px solid rgba(16, 185, 129, 0.6);
+  outline: 2px solid rgba(242, 205, 26, 0.6);
   outline-offset: 2px;
   border-radius: 2px;
 }
 
 ::selection {
-  background: rgba(16, 185, 129, 0.35);
+  background: rgba(242, 205, 26, 0.35);
   color: var(--text-1);
 }
 
