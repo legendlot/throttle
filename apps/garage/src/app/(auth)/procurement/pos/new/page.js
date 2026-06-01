@@ -1276,6 +1276,11 @@ function ManualMode({
                         }}
                         style={{ ...inputStyle, width: 80, fontFamily: 'var(--mono)' }}
                       />
+                      {l.hsn_code && hsnMap[l.hsn_code] == null && (
+                        <div style={{ fontSize: 9, color: '#fbbf24', marginTop: 3, fontFamily: 'var(--mono)', lineHeight: 1.2, maxWidth: 110 }}>
+                          ⚠ no known rate — enter GST manually
+                        </div>
+                      )}
                     </td>
                   )}
                   {currency === 'INR' && (() => {
