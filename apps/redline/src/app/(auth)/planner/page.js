@@ -238,6 +238,7 @@ export default function PlannerPage() {
   // FEAT-018 — per-line BOM stock warnings: { [lineId]: { loading, short: [{ part_code, part_name, required, available }] } }
   const [stockWarnings, setStockWarnings] = useState({});
   const fileRef = useRef();
+  const cartsHydrated = useRef(false); // gate localStorage writes until after first read
 
   const todayLocalISO = formatLocalISO(new Date());
   const makeId = () => (typeof crypto !== 'undefined' && crypto.randomUUID
@@ -268,6 +269,28 @@ export default function PlannerPage() {
 
   useEffect(() => { loadPlan(); }, [loadPlan]);
   useEffect(() => { if (view === 'config') loadBatchConfig(); }, [view, loadBatchConfig]);
+
+  // Cart persistence (FEAT-003 follow-up): planner carts live in React state, so a
+  // refresh used to wipe an in-progress schedule. Persist to localStorage and
+  // rehydrate on mount. cartsHydrated gates the writer so the initial empty [] never
+  // clobbers a saved schedule before the reader runs.
+  useEffect(() => {
+    try {
+      const raw = typeof window !== 'undefined' && window.localStorage.getItem('planner.carts.v1');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length) setCarts(parsed);
+      }
+    } catch { /* corrupt/absent — start fresh */ }
+    cartsHydrated.current = true;
+  }, []);
+  useEffect(() => {
+    if (!cartsHydrated.current || typeof window === 'undefined') return;
+    try {
+      if (carts.length) window.localStorage.setItem('planner.carts.v1', JSON.stringify(carts));
+      else window.localStorage.removeItem('planner.carts.v1');
+    } catch { /* quota/private mode — non-fatal */ }
+  }, [carts]);
 
   // Auto-expand all gap dates when plan loads
   useEffect(() => {
