@@ -120,11 +120,18 @@ async function shopifyLookup({ phone, email }, env) {
   if (!term) return { configured: true, found: false, customer: null, recent_orders: [] };
 
   const query = `query($q:String!){ customers(first:1, query:$q){ edges{ node{
-    id displayName email phone numberOfOrders
+    id displayName email phone numberOfOrders createdAt
     amountSpent{ amount currencyCode }
-    orders(first:5, sortKey: CREATED_AT, reverse:true){ edges{ node{
+    defaultAddress{ city province country }
+    orders(first:10, sortKey: CREATED_AT, reverse:true){ edges{ node{
       name createdAt displayFulfillmentStatus displayFinancialStatus
       currentTotalPriceSet{ shopMoney{ amount currencyCode } }
+      subtotalPriceSet{ shopMoney{ amount } }
+      totalShippingPriceSet{ shopMoney{ amount } }
+      shippingAddress{ city province country }
+      fulfillments(first:5){ status trackingInfo{ number company url } }
+      lineItems(first:25){ edges{ node{ title quantity sku variantTitle
+        originalTotalSet{ shopMoney{ amount currencyCode } } } } }
     }}}
   }}}}`;
   const runQuery = (token) => fetch(`https://${env.SHOPIFY_STORE_DOMAIN}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
@@ -149,15 +156,34 @@ async function shopifyLookup({ phone, email }, env) {
   }
   const node = data?.data?.customers?.edges?.[0]?.node || null;
   if (!node) return { configured: true, found: false, customer: null, recent_orders: [] };
+  const addr = a => a ? [a.city, a.province, a.country].filter(Boolean).join(', ') : null;
   const customer = {
     id: node.id, name: node.displayName, email: node.email, phone: node.phone,
     orders_count: node.numberOfOrders, total_spent: node.amountSpent?.amount, currency: node.amountSpent?.currencyCode,
+    since: node.createdAt, location: addr(node.defaultAddress),
   };
-  const recent_orders = (node.orders?.edges || []).map(e => ({
-    order_no: e.node.name, created_at: e.node.createdAt,
-    fulfillment: e.node.displayFulfillmentStatus, financial: e.node.displayFinancialStatus,
-    total: e.node.currentTotalPriceSet?.shopMoney?.amount, currency: e.node.currentTotalPriceSet?.shopMoney?.currencyCode,
-  }));
+  const recent_orders = (node.orders?.edges || []).map(e => {
+    const o = e.node;
+    const tracking = [];
+    for (const f of (o.fulfillments || [])) {
+      for (const ti of (f.trackingInfo || [])) {
+        if (ti.number || ti.url) tracking.push({ number: ti.number, company: ti.company, url: ti.url });
+      }
+    }
+    return {
+      order_no: o.name, created_at: o.createdAt,
+      fulfillment: o.displayFulfillmentStatus, financial: o.displayFinancialStatus,
+      total: o.currentTotalPriceSet?.shopMoney?.amount, currency: o.currentTotalPriceSet?.shopMoney?.currencyCode,
+      subtotal: o.subtotalPriceSet?.shopMoney?.amount,
+      shipping: o.totalShippingPriceSet?.shopMoney?.amount,
+      ship_to: addr(o.shippingAddress),
+      tracking,
+      line_items: (o.lineItems?.edges || []).map(li => ({
+        title: li.node.title, quantity: li.node.quantity, variant: li.node.variantTitle, sku: li.node.sku,
+        amount: li.node.originalTotalSet?.shopMoney?.amount,
+      })),
+    };
+  });
   return { configured: true, found: true, customer, recent_orders };
 }
 
