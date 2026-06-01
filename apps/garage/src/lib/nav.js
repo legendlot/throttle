@@ -57,6 +57,7 @@ const GROUPS = [
       { id: 'stock-adjustments', label: 'Stock Adjustments', route: '/stock-adjustments',  icon: ArrowUpDown,    gate: (p) => hasPermission(p, 'cycle_count_record') || hasPermission(p, 'cycle_count_approve_l1') || hasPermission(p, 'cycle_count_approve_l2') },
       { id: 'unit-counts',       label: 'Dispatch Counts',   route: '/dispatch/unit-counts', icon: PackageCheck, gate: (p) => hasPermission(p, 'cycle_count_record') || hasPermission(p, 'cycle_count_admin') },
       { id: 'direct-issuance',   label: 'Direct Issuance',   route: '/direct-issuance',    icon: Gift,         gate: (p) => hasPermission(p, 'direct_issuance_request') || hasPermission(p, 'direct_issuance_approve') || hasPermission(p, 'users_manage') },
+      { id: 'restock',           label: 'Unit Restock',      route: '/restock',            icon: RefreshCw,    gate: (p) => hasPermission(p, 'dispatch_restock') || hasPermission(p, 'users_manage') },
       { id: 'store-history',     label: 'Store History',     route: '/store-history',      icon: History },
       { separator: true },
       { id: 'manpower',      label: 'Manpower',      route: '/manpower',      icon: UserCog,     gate: (p) => hasPermission(p, 'dashboard') },
