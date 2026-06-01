@@ -609,6 +609,29 @@ export default function IssueQueuePage() {
       return w.colour ? `${v} ${w.colour} ×${w.qty}` : `${v} ×${w.qty}`;
     }).join(', ');
     const totalUnits = (item.wos || []).reduce((s, w) => s + (w.qty || 0), 0);
+    // FBU units (fully-built cars, e.g. Nitro/Rift/Rumble) — these are issued as a
+    // unit, not assembled from a Car BOM row, so the worker returns them in
+    // `fbu_lines` separately. Render them as their own pickable section at the top
+    // of the body so the picker pulls them from FBU stock (not just the Variants
+    // header chip). Mirrors the on-screen RunPickListTable FBU section.
+    let fbuRows = '';
+    (item.fbu_lines || []).forEach((f, i) => {
+      if (i === 0) fbuRows += `<tr class="cat-row"><td colspan="${COLSPAN}">▶ FBU UNITS</td></tr>`;
+      const label = [f.product, f.variant, f.color].filter(Boolean).join(' ');
+      const status = (f.shortfall || 0) > 0 ? 'SHORT' : 'OK';
+      fbuRows += `
+        <tr>
+          <td class="check"></td>
+          <td class="mono">FBU</td>
+          <td>${escapeHtml(label)}</td>
+          <td>${escapeHtml(run?.product || '')}</td>
+          <td class="num mono">${f.qty || 0}</td>
+          <td class="num mono">${f.available || 0}</td>
+          <td class="num mono">—</td>
+          <td class="num mono">—</td>
+          <td class="${status === 'SHORT' ? 'short' : 'ok'}">${status}</td>
+        </tr>`;
+    });
     return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Pick List — ${escapeHtml(item.ref)}</title>
 <style>
   body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 24px; color: #111; }
@@ -646,7 +669,7 @@ export default function IssueQueuePage() {
   </div>
   <table>
     <thead><tr><th>✓</th><th>Part Code</th><th>Part Name</th><th>Product</th><th>Qty Required</th><th>In Stock</th><th>Bag Size</th><th>Bags</th><th>Status</th></tr></thead>
-    <tbody>${partRows}</tbody>
+    <tbody>${fbuRows}${partRows}</tbody>
   </table>
   <div class="sig">
     <div>Picked By</div>
