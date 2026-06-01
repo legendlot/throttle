@@ -791,11 +791,6 @@ function DownloadsSection({ downloadQc, downloadPva, downloadDefects, downloadMo
         <h2 style={{ ...sectionLabel, marginBottom: 14 }}>Audit & Compliance Exports{periodLabel && ` — ${periodLabel}`}</h2>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 10 }}>
           <DownloadCard
-            title="Customer Repairs"
-            sub="CR-NNN intake: stage, channel, captured-by, aging"
-            onClick={() => downloadModule('customer_repairs', 'Customer Repairs')}
-          />
-          <DownloadCard
             title="Process Deviations"
             sub="PD-NNN proposals and approvals across severity tiers"
             onClick={() => downloadModule('process_deviations', 'Process Deviations')}

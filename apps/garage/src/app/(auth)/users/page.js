@@ -46,9 +46,6 @@ const PERM_DEFS = [
     { key: 'direct_issuance_request', label: 'Request Direct Issuance', type: 'bool' },
     { key: 'direct_issuance_approve', label: 'Approve & Issue / Close', type: 'bool' },
   ] },
-  { group: 'Customer Repairs', items: [
-    { key: 'customer_repair_manage', label: 'Manage Customer Repairs', type: 'bool' },
-  ] },
   { group: 'Dispatch', items: [
     { key: 'dispatch_pack',    label: 'Pack Shipments (Add / Delete Boxes)', type: 'bool' },
     { key: 'dispatch_restock', label: 'Unit Restock (Scanner)',  type: 'bool' },

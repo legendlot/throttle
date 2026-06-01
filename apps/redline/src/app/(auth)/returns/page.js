@@ -1,8 +1,7 @@
 'use client';
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import Link from 'next/link';
-import { useAuth, hasPermission } from '@throttle/auth';
-import { garageFetch, workerFetch } from '@throttle/db';
+import { useAuth } from '@throttle/auth';
+import { garageFetch } from '@throttle/db';
 import { Spinner, EmptyState, Panel, KpiCard } from '@throttle/ui';
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -35,93 +34,6 @@ const tdStyle = {
   whiteSpace: 'nowrap',
   color: 'var(--t1)',
 };
-
-// ── Customer Repairs callout (Redline `/returns`) ─────────────
-// Visibility for production team: how many ad-hoc customer repairs are
-// (a) awaiting at store, (b) with production, (c) ready to dispatch.
-function CustomerRepairsCallout({ session, perms }) {
-  const allowed = hasPermission(perms, 'customer_repair_manage') || hasPermission(perms, 'users_manage');
-  const [counts, setCounts] = useState({ reached_stores: 0, handed_to_production: 0, repaired_ready: 0, total: 0 });
-  const [loading, setLoading] = useState(false);
-
-  const load = useCallback(async () => {
-    if (!session || !allowed) return;
-    setLoading(true);
-    try {
-      const r = await workerFetch('getCustomerRepairs', {
-        data: { stage: 'reached_stores,handed_to_production,repaired_ready', limit: 500 },
-      }, session);
-      const rows = (r?.ok && Array.isArray(r.data)) ? r.data : [];
-      const c = { reached_stores: 0, handed_to_production: 0, repaired_ready: 0, total: rows.length };
-      rows.forEach(x => { if (c[x.stage] != null) c[x.stage]++; });
-      setCounts(c);
-    } catch { /* swallow */ } finally { setLoading(false); }
-  }, [session, allowed]);
-
-  useEffect(() => { load(); }, [load]);
-  useEffect(() => {
-    if (!session || !allowed) return;
-    const t = setInterval(load, 60000);
-    return () => clearInterval(t);
-  }, [load, session, allowed]);
-
-  if (!allowed) return null;
-
-  const tiles = [
-    { key: 'reached_stores',       label: 'Awaiting at store',  count: counts.reached_stores,       color: '#fbbf24' },
-    { key: 'handed_to_production', label: 'With production',    count: counts.handed_to_production, color: '#7b93ff' },
-    { key: 'repaired_ready',       label: 'Ready to dispatch',  count: counts.repaired_ready,       color: '#4ade80' },
-  ];
-
-  return (
-    <div style={{ marginBottom: 20 }}>
-      <Panel
-        header={<><span style={{ color: 'var(--yellow)' }}>● </span>Customer Repairs · Ad-hoc</>}
-        headerAction={
-          <Link href="/customer-repairs" style={{ color: 'var(--t2)', textDecoration: 'none' }}>
-            View all →
-          </Link>
-        }
-      >
-        {loading && counts.total === 0 ? (
-          <div style={{ display: 'flex', justifyContent: 'center', padding: 8 }}><Spinner /></div>
-        ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
-            {tiles.map(t => (
-              <Link
-                key={t.key}
-                href={`/customer-repairs?stage=${t.key}`}
-                style={{
-                  textDecoration: 'none',
-                  background: 'var(--surface2)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 4,
-                  padding: '12px 14px',
-                  display: 'block',
-                  transition: 'border-color 120ms',
-                }}>
-                <div style={{
-                  fontFamily: 'var(--mono)', fontSize: 11,
-                  color: 'var(--t3)', letterSpacing: '0.08em',
-                  textTransform: 'uppercase', marginBottom: 6,
-                }}>
-                  {t.label}
-                </div>
-                <div style={{
-                  fontFamily: 'var(--cond)', fontSize: 28, fontWeight: 700,
-                  color: t.count > 0 ? t.color : 'var(--t3)',
-                  lineHeight: 1,
-                }}>
-                  {t.count}
-                </div>
-              </Link>
-            ))}
-          </div>
-        )}
-      </Panel>
-    </div>
-  );
-}
 
 // ── Returns Page (Redline — read-only) ────────────────────────
 export default function ReturnsPage() {
@@ -167,9 +79,6 @@ export default function ReturnsPage() {
 
   return (
     <div>
-      {/* Customer Repairs callout — surfaces ad-hoc CS-driven repair work above the regular returns pools */}
-      <CustomerRepairsCallout session={session} perms={perms} />
-
       {/* KPI strip */}
       <section style={{ marginBottom: 24 }}>
         <h2 style={{ margin: '0 0 14px 0', fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t2)' }}>

@@ -41,7 +41,6 @@ const REPORT_DOWNLOADS = {
   ],
   returns: [
     { type: 'returns',           Icon: RotateCw,      title: 'Returns Log',      desc: 'RTO and RTV returns across all channels, filterable by date' },
-    { type: 'customer_repairs',  Icon: Wrench,        title: 'Customer Repairs', desc: 'CR-NNN intake: stage, channel, captured-by, aging' },
     { type: 'unit_restocks',     Icon: Undo2,         title: 'Unit Restocks',    desc: 'Units flipped back to stock by reason, channel, operator' },
   ],
   issuance: [

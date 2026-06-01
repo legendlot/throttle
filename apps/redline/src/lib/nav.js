@@ -2,7 +2,7 @@ import {
   Factory, GitBranch, ShieldCheck,
   Bell, Undo2, ScanLine, Edit3,
   Truck, Network, Send, Tag,
-  Wrench, LifeBuoy,
+  Wrench,
   BarChart3, Clock,
   QrCode, Users, Printer,
   CalendarClock, LayoutGrid, ClipboardList,
@@ -50,7 +50,6 @@ export const NAV_GROUPS = [
   {
     id: 'repair', label: 'REPAIR', icon: Wrench,
     items: [
-      { id: 'customer-repairs', label: 'Customer Repairs', route: '/customer-repairs', icon: LifeBuoy },
       { id: 'repair-queue',     label: 'Queue',            route: '/repair-queue',     icon: Wrench },
     ],
   },
