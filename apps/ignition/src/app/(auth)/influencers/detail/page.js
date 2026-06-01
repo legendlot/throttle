@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState, Fragment } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
+import { ArrowLeft, ExternalLink } from 'lucide-react';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
 import { ignitionopsGet, ignitionopsPost } from '../../../../lib/ignitionopsFetch.js';
@@ -38,8 +39,12 @@ export default function InfluencerDetailPage() {
   const inf = data.influencer;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 1100 }}>
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+    <div style={{ maxWidth: 1400 }}>
+      <button onClick={() => router.back()} style={backBtn}>
+        <ArrowLeft size={14} strokeWidth={2} /> Back
+      </button>
+
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16 }}>
         <span style={{ color: '#FF6B00', fontWeight: 700, fontSize: 18 }}>{inf.influencer_code}</span>
         <h1 style={{ fontFamily: 'var(--font-cond)', fontSize: 22, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
           {inf.channel_name || inf.person_name || '(no name)'}
@@ -52,64 +57,77 @@ export default function InfluencerDetailPage() {
         </div>
       </div>
 
-      <Card title="Identity">
-        <KV label="Channel link" value={inf.channel_link ? <a href={inf.channel_link} target="_blank" rel="noreferrer" style={{ color: '#FF6B00' }}>{inf.channel_link}</a> : '—'} />
-        <KV label="Platform" value={inf.channel_platform || '—'} />
-        <KV label="Type" value={inf.influencer_type || '—'} />
-        <KV label="Categories" value={(inf.categories || []).join(', ') || '—'} />
-        <KV label="Reach" value={inf.reach?.toLocaleString() || '—'} />
-        <KV label="Audience" value={inf.audience || '—'} />
-        <KV label="Location" value={inf.location || '—'} />
-        <KV label="Onboarded" value={
-          inf.onboarded === true ? `Yes${inf.onboarded_at ? ` · ${inf.onboarded_at}` : ''}`
-          : inf.onboarded === false ? 'No' : '—'
-        } />
-      </Card>
+      {/* Two-column: narrow left (identity/contact), wide right (engagements/shopify).
+          flex-wrap stacks them on narrow viewports so it never breaks on a laptop. */}
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+        <div style={{ flex: '1 1 300px', minWidth: 280, maxWidth: 420, display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <Card title="Identity">
+            <KV label="Channel link" value={inf.channel_link ? <a href={inf.channel_link} target="_blank" rel="noreferrer" style={{ color: '#FF6B00' }}>{inf.channel_link}</a> : '—'} />
+            <KV label="Platform" value={inf.channel_platform || '—'} />
+            <KV label="Type" value={inf.influencer_type || '—'} />
+            <KV label="Categories" value={(inf.categories || []).join(', ') || '—'} />
+            <KV label="Reach" value={inf.reach?.toLocaleString() || '—'} />
+            <KV label="Audience" value={inf.audience || '—'} />
+            <KV label="Location" value={inf.location || '—'} />
+            <KV label="Onboarded" value={
+              inf.onboarded === true ? `Yes${inf.onboarded_at ? ` · ${inf.onboarded_at}` : ''}`
+              : inf.onboarded === false ? 'No' : '—'
+            } />
+          </Card>
 
-      <Card title="Contact">
-        <KV label="POC type" value={inf.contact_poc_type || '—'} />
-        <KV label="POC name" value={inf.contact_poc_name || '—'} />
-        <KV label="Phone" value={inf.contact_number || '—'} />
-        <KV label="Email" value={inf.email || '—'} />
-        <KV label="Address" value={inf.address || '—'} />
-        <KV label="First invite" value={inf.first_invite_sent_at ? new Date(inf.first_invite_sent_at).toLocaleDateString() : 'Not sent'} />
-      </Card>
+          <Card title="Contact">
+            <KV label="POC type" value={inf.contact_poc_type || '—'} />
+            <KV label="POC name" value={inf.contact_poc_name || '—'} />
+            <KV label="Phone" value={inf.contact_number || '—'} />
+            <KV label="Email" value={inf.email || '—'} />
+            <KV label="Address" value={inf.address || '—'} />
+            <KV label="First invite" value={inf.first_invite_sent_at ? new Date(inf.first_invite_sent_at).toLocaleDateString() : 'Not sent'} />
+          </Card>
 
-      <ShopifyCard inf={inf} session={session} />
+          {inf.rating_notes && (
+            <Card title="Rating notes">
+              <div style={{ whiteSpace: 'pre-wrap', color: 'var(--text-2)' }}>{inf.rating_notes}</div>
+            </Card>
+          )}
+        </div>
 
-      <Card title={`Engagements (${data.engagements.length})`}>
-        {data.engagements.length === 0 ? (
-          <div style={{ color: 'var(--text-3)' }}>No engagements yet.</div>
-        ) : (
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-            <thead>
-              <tr style={{ background: 'var(--surface-2)', textAlign: 'left' }}>
-                <th style={th}>Engagement #</th><th style={th}>Type</th><th style={th}>Stage</th>
-                <th style={th}>Deal</th><th style={th}>Post date</th><th style={th}>Total cost</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.engagements.map(e => (
-                <tr key={e.id} onClick={() => router.push(`/engagements/detail/?id=${e.id}`)}
-                  style={{ cursor: 'pointer', borderTop: '1px solid var(--border)' }}>
-                  <td style={td}><span style={{ color: '#FF6B00', fontWeight: 600 }}>{e.engagement_no}</span></td>
-                  <td style={td}>{e.engagement_type}</td>
-                  <td style={td}><StageBadge stage={e.stage} /></td>
-                  <td style={td}><DealTypeBadge dealType={e.deal_type} /></td>
-                  <td style={td}>{e.post_date || '—'}</td>
-                  <td style={td}>₹{Number(e.total_cost || 0).toLocaleString()}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </Card>
+        <div style={{ flex: '3 1 460px', minWidth: 320, display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <Card title={`Engagements (${data.engagements.length})`}>
+            {data.engagements.length === 0 ? (
+              <div style={{ color: 'var(--text-3)' }}>No engagements yet.</div>
+            ) : (
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ background: 'var(--surface-2)', textAlign: 'left' }}>
+                    <th style={th}>Engagement #</th><th style={th}>Type</th><th style={th}>Stage</th>
+                    <th style={th}>Deal</th><th style={th}>Post date</th><th style={th}>Post</th><th style={th}>Total cost</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.engagements.map(e => (
+                    <tr key={e.id} onClick={() => router.push(`/engagements/detail/?id=${e.id}`)}
+                      style={{ cursor: 'pointer', borderTop: '1px solid var(--border)' }}>
+                      <td style={td}><span style={{ color: '#FF6B00', fontWeight: 600 }}>{e.engagement_no}</span></td>
+                      <td style={td}>{e.engagement_type}</td>
+                      <td style={td}><StageBadge stage={e.stage} /></td>
+                      <td style={td}><DealTypeBadge dealType={e.deal_type} /></td>
+                      <td style={td}>{e.post_date || (e.expected_post_date ? <span style={{ color: 'var(--text-3)' }}>{`~${e.expected_post_date}`}</span> : '—')}</td>
+                      <td style={td}>
+                        {e.video_link
+                          ? <a href={e.video_link} target="_blank" rel="noreferrer" onClick={ev => ev.stopPropagation()} style={{ color: '#FF6B00', display: 'inline-flex', alignItems: 'center', gap: 3 }}>View <ExternalLink size={12} strokeWidth={2} /></a>
+                          : <span style={{ color: 'var(--text-3)' }}>—</span>}
+                      </td>
+                      <td style={td}>₹{Number(e.total_cost || 0).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </Card>
 
-      {inf.rating_notes && (
-        <Card title="Rating notes">
-          <div style={{ whiteSpace: 'pre-wrap', color: 'var(--text-2)' }}>{inf.rating_notes}</div>
-        </Card>
-      )}
+          <ShopifyCard inf={inf} session={session} />
+        </div>
+      </div>
     </div>
   );
 }
@@ -240,6 +258,12 @@ function KV({ label, value }) {
   );
 }
 
+const backBtn = {
+  display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 14,
+  background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border)',
+  borderRadius: 'var(--radius-sm)', padding: '6px 12px',
+  fontFamily: 'var(--font-mono)', fontSize: 12, cursor: 'pointer',
+};
 const ratingBtn = {
   padding: '4px 8px', background: 'transparent', color: 'var(--text-2)',
   border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
