@@ -45,6 +45,7 @@ export const NAV_GROUPS = [
       { id: 'dispatch-challans',  label: 'Delivery Challans', route: '/dispatch-challans', icon: FileText },
       { id: 'dispatch-channels',  label: 'Channel Master',  route: '/dispatch-channels',  icon: Tag },
       { id: 'repack-runs',        label: 'Repack Runs',     route: '/repack-runs',        icon: ArrowLeftRight },
+      { id: 'repack-reports',     label: 'Repack Reports',  route: '/repack-runs/reports', icon: BarChart3 },
     ],
   },
   {
