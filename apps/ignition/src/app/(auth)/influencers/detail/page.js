@@ -75,6 +75,8 @@ export default function InfluencerDetailPage() {
         <KV label="First invite" value={inf.first_invite_sent_at ? new Date(inf.first_invite_sent_at).toLocaleDateString() : 'Not sent'} />
       </Card>
 
+      <ShopifyCard inf={inf} session={session} />
+
       <Card title={`Engagements (${data.engagements.length})`}>
         {data.engagements.length === 0 ? (
           <div style={{ color: 'var(--text-3)' }}>No engagements yet.</div>
@@ -109,6 +111,90 @@ export default function InfluencerDetailPage() {
         </Card>
       )}
     </div>
+  );
+}
+
+// Shopify customer match — resolves the influencer's phone/email to a Shopify
+// customer + recent orders via the ignitionops getInfluencerShopify action.
+// Auto-loads on open (mirrors Pitstop's ShopifyPanel autoLoad). Inert/graceful
+// until the SHOPIFY_* secrets are set on the worker (configured:false).
+function ShopifyCard({ inf, session }) {
+  const [state, setState] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  function lookup() {
+    if (!session || !inf) return;
+    setLoading(true);
+    const params = inf.id ? { id: inf.id } : { code: inf.influencer_code };
+    ignitionopsGet('getInfluencerShopify', params, session)
+      .then(setState)
+      .catch(e => setState({ error: e.message }))
+      .finally(() => setLoading(false));
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(lookup, [inf?.id, session]);
+
+  const noContact = !inf.contact_number && !inf.email;
+
+  return (
+    <Card title="Shopify">
+      {loading && <div style={{ color: 'var(--text-3)', fontSize: 13 }}>Looking up customer…</div>}
+      {!loading && state?.error && (
+        <div style={{ color: 'var(--state-error-fg)', fontSize: 13 }}>{state.error}</div>
+      )}
+      {!loading && state && state.configured === false && (
+        <div style={{ color: 'var(--text-3)', fontSize: 13 }}>Shopify not connected yet.</div>
+      )}
+      {!loading && state && state.configured && !state.found && !state.error && (
+        <div style={{ color: 'var(--text-3)', fontSize: 13 }}>
+          {noContact
+            ? 'No phone or email on file — nothing to match against Shopify.'
+            : 'No Shopify customer matched this influencer’s phone or email.'}
+        </div>
+      )}
+      {!loading && state?.found && (
+        <div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
+            <span style={{ color: 'var(--text-1)', fontSize: 15, fontWeight: 700 }}>{state.customer.name || '(no name)'}</span>
+            {state.matched_by && (
+              <span style={{ fontSize: 10, color: 'var(--text-3)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '2px 6px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                matched by {state.matched_by}
+              </span>
+            )}
+          </div>
+          <KV label="Email" value={state.customer.email || '—'} />
+          <KV label="Phone" value={state.customer.phone || '—'} />
+          <KV label="Orders" value={state.customer.orders_count ?? '—'} />
+          <KV label="Total spent" value={
+            state.customer.total_spent != null
+              ? `${Number(state.customer.total_spent).toLocaleString()} ${state.customer.currency || ''}`.trim()
+              : '—'
+          } />
+          {state.recent_orders?.length > 0 && (
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginTop: 10 }}>
+              <thead>
+                <tr style={{ background: 'var(--surface-2)', textAlign: 'left' }}>
+                  <th style={th}>Order</th><th style={th}>Date</th><th style={th}>Status</th><th style={th}>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {state.recent_orders.map(o => (
+                  <tr key={o.order_no} style={{ borderTop: '1px solid var(--border)' }}>
+                    <td style={td}><span style={{ color: '#FF6B00', fontWeight: 600 }}>{o.order_no}</span></td>
+                    <td style={td}>{o.created_at ? new Date(o.created_at).toLocaleDateString() : '—'}</td>
+                    <td style={td}>{o.financial}/{o.fulfillment}</td>
+                    <td style={td}>{o.total != null ? `${Number(o.total).toLocaleString()} ${o.currency || ''}`.trim() : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+      {!loading && !state && (
+        <button type="button" onClick={lookup} style={ratingBtn}>Look up Shopify</button>
+      )}
+    </Card>
   );
 }
 
