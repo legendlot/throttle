@@ -45,17 +45,6 @@ export default function CallDetailPage() {
     catch (e) { alert(e.message); }
   }
 
-  const [resolving, setResolving] = useState(false);
-  async function resolveRecording() {
-    setResolving(true);
-    try {
-      const d = await csopsPost('resolveCallRecording', { call_id: id }, session);
-      if (d?.recording_url) load();
-      else alert(d?.message || 'Could not resolve recording yet.');
-    } catch (e) { alert(e.message); }
-    finally { setResolving(false); }
-  }
-
   function convert() {
     if (!call) return;
     const qs = new URLSearchParams({
@@ -133,10 +122,7 @@ export default function CallDetailPage() {
                   Open <ExternalLink size={11} />
                 </a>
               ) : (
-                <button onClick={resolveRecording} disabled={resolving}
-                  style={{ fontSize: 11, color: 'var(--accent)', background: 'transparent', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '4px 10px', cursor: resolving ? 'wait' : 'pointer', fontFamily: 'var(--font-mono)' }}>
-                  {resolving ? 'Resolving…' : 'Resolve recording'}
-                </button>
+                <span style={{ fontSize: 11, color: 'var(--t3)' }}>(URL not yet resolved)</span>
               )}
             </div>
           </div>
