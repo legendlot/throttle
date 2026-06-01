@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Fragment } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
@@ -179,12 +179,28 @@ function ShopifyCard({ inf, session }) {
               </thead>
               <tbody>
                 {state.recent_orders.map(o => (
-                  <tr key={o.order_no} style={{ borderTop: '1px solid var(--border)' }}>
-                    <td style={td}><span style={{ color: '#FF6B00', fontWeight: 600 }}>{o.order_no}</span></td>
-                    <td style={td}>{o.created_at ? new Date(o.created_at).toLocaleDateString() : '—'}</td>
-                    <td style={td}>{o.financial}/{o.fulfillment}</td>
-                    <td style={td}>{o.total != null ? `${Number(o.total).toLocaleString()} ${o.currency || ''}`.trim() : '—'}</td>
-                  </tr>
+                  <Fragment key={o.order_no}>
+                    <tr style={{ borderTop: '1px solid var(--border)' }}>
+                      <td style={td}><span style={{ color: '#FF6B00', fontWeight: 600 }}>{o.order_no}</span></td>
+                      <td style={td}>{o.created_at ? new Date(o.created_at).toLocaleDateString() : '—'}</td>
+                      <td style={td}>{o.financial}/{o.fulfillment}</td>
+                      <td style={td}>{o.total != null ? `${Number(o.total).toLocaleString()} ${o.currency || ''}`.trim() : '—'}</td>
+                    </tr>
+                    {o.line_items?.length > 0 && (
+                      <tr>
+                        <td style={{ padding: '0 10px 8px 10px' }} colSpan={4}>
+                          {o.line_items.map((li, i) => (
+                            <div key={i} style={{ color: 'var(--text-2)', fontSize: 12, paddingLeft: 12 }}>
+                              <span style={{ color: 'var(--text-3)' }}>{li.quantity} ×</span>{' '}
+                              {li.title}
+                              {li.variant && li.variant !== 'Default Title' ? ` — ${li.variant}` : ''}
+                              {li.sku ? <span style={{ color: 'var(--text-3)' }}>{`  (${li.sku})`}</span> : ''}
+                            </div>
+                          ))}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>

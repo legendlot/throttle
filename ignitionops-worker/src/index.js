@@ -136,6 +136,7 @@ async function shopifyLookup({ phone, email }, env) {
     orders(first:5, sortKey: CREATED_AT, reverse:true){ edges{ node{
       name createdAt displayFulfillmentStatus displayFinancialStatus
       currentTotalPriceSet{ shopMoney{ amount currencyCode } }
+      lineItems(first:25){ edges{ node{ title quantity variantTitle sku } } }
     }}}
   }}}}`;
   const runQuery = (token) => fetch(`https://${env.SHOPIFY_STORE_DOMAIN}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
@@ -168,6 +169,9 @@ async function shopifyLookup({ phone, email }, env) {
     order_no: e.node.name, created_at: e.node.createdAt,
     fulfillment: e.node.displayFulfillmentStatus, financial: e.node.displayFinancialStatus,
     total: e.node.currentTotalPriceSet?.shopMoney?.amount, currency: e.node.currentTotalPriceSet?.shopMoney?.currencyCode,
+    line_items: (e.node.lineItems?.edges || []).map(li => ({
+      title: li.node.title, quantity: li.node.quantity, variant: li.node.variantTitle, sku: li.node.sku,
+    })),
   }));
   return { configured: true, found: true, customer, recent_orders };
 }
