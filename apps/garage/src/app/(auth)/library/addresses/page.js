@@ -36,7 +36,7 @@ function Badge({ label, tone }) {
 
 export default function AddressesPage() {
   const { session, perms } = useAuth();
-  const { toast } = useToast();
+  const { showToast } = useToast();
   const canManage = hasPermission(perms, 'company_address_manage');
 
   const [rows, setRows]       = useState([]);
@@ -86,16 +86,16 @@ export default function AddressesPage() {
 
   async function saveForm() {
     for (const [f, lbl] of [['label','Label'],['legal_name','Legal name'],['line1','Address line 1'],['city','City'],['state','State'],['pincode','Pincode']]) {
-      if (!form[f] || !form[f].trim()) { toast(`${lbl} is required`, 'err'); return; }
+      if (!form[f] || !form[f].trim()) { showToast(`${lbl} is required`, 'error'); return; }
     }
-    if (!/^\d{6}$/.test(form.pincode.trim())) { toast('Pincode must be 6 digits', 'err'); return; }
+    if (!/^\d{6}$/.test(form.pincode.trim())) { showToast('Pincode must be 6 digits', 'error'); return; }
     setSaving(true);
     try {
       const action = editId ? 'updateCompanyAddress' : 'createCompanyAddress';
       const payload = editId ? { ...form, id: editId } : { ...form };
       const r = await workerFetch(action, { data: payload }, session);
-      if (!r.ok) { toast(r.data?.error || 'Save failed', 'err'); return; }
-      toast(editId ? 'Saved' : 'Address added', 'ok');
+      if (!r.ok) { showToast(r.data?.error || 'Save failed', 'error'); return; }
+      showToast(editId ? 'Saved' : 'Address added', 'success');
       setFormOpen(false);
       loadAll();
     } finally {
@@ -107,8 +107,8 @@ export default function AddressesPage() {
     setBusyId(id);
     try {
       const r = await workerFetch(action, { data: { id } }, session);
-      if (!r.ok) { toast(r.data?.error || 'Action failed', 'err'); return; }
-      toast(okMsg, 'ok');
+      if (!r.ok) { showToast(r.data?.error || 'Action failed', 'error'); return; }
+      showToast(okMsg, 'success');
       loadAll();
     } finally {
       setBusyId(null);
@@ -120,8 +120,8 @@ export default function AddressesPage() {
     setBusyId(r.id);
     try {
       const r2 = await workerFetch('updateCompanyAddress', { data: { id: r.id, active: !r.active } }, session);
-      if (!r2.ok) { toast(r2.data?.error || 'Action failed', 'err'); return; }
-      toast(r.active ? 'Deactivated' : 'Activated', 'ok');
+      if (!r2.ok) { showToast(r2.data?.error || 'Action failed', 'error'); return; }
+      showToast(r.active ? 'Deactivated' : 'Activated', 'success');
       loadAll();
     } finally {
       setBusyId(null);
