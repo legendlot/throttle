@@ -279,7 +279,7 @@ export default function VendorsPage() {
               Vendor master — drives PO auto-fill.
             </p>
           </div>
-          {perms?.procurement_raise && (
+          {perms?.vendor_manage && (
             <button style={btnPrimary} onClick={startCreate}>+ New Vendor</button>
           )}
         </div>
@@ -358,7 +358,7 @@ export default function VendorsPage() {
                         <StatusBadge label={v.active ? 'Active' : 'Inactive'} tone={v.active ? 'green' : 'red'} />
                       </td>
                       <td style={{ ...tableTdStyle, textAlign: 'right' }}>
-                        {perms?.procurement_raise && (
+                        {perms?.vendor_manage && (
                           <button style={btnSecondary} onClick={() => startEdit(v.vendor_code)}>Edit</button>
                         )}
                       </td>

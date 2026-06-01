@@ -182,7 +182,7 @@ export default function ProductRegisterPage() {
     }
   }
 
-  if (perms && !perms.procurement_china) {
+  if (perms && !perms.po_china) {
     return (
       <div style={{ padding: 24, color: 'var(--t3)' }}>
         Access restricted. Product registration requires the <code style={{ color: 'var(--yellow)' }}>procurement_china</code> permission.

@@ -225,7 +225,7 @@ export default function ReordersPage() {
     return <div style={{ padding: 24, color: 'var(--t3)' }}>Access restricted.</div>;
   }
 
-  const canRaise = perms?.procurement_raise || perms?.reorder_raise;
+  const canRaise = perms?.po_create || perms?.reorder_raise;
   const variants = product ? (PRODUCT_VARIANTS[product] || []) : [];
 
   return (
@@ -407,7 +407,7 @@ export default function ReordersPage() {
                         )}
                       </td>
                       <td style={{ ...tableTdStyle, textAlign: 'right' }}>
-                        {r.status === 'Pending' && perms?.procurement_raise && (
+                        {r.status === 'Pending' && perms?.po_create && (
                           <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
                             <button
                               style={btnPrimary}

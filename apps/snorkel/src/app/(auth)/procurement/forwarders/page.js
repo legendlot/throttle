@@ -192,7 +192,7 @@ export default function ForwardersPage() {
               Freight forwarder master — drives expected-arrival calc on POs.
             </p>
           </div>
-          {perms?.procurement_raise && (
+          {perms?.vendor_manage && (
             <button style={btnPrimary} onClick={startCreate}>+ New Forwarder</button>
           )}
         </div>
@@ -244,7 +244,7 @@ export default function ForwardersPage() {
                         <td style={tableTdStyle}>{f.contact_name || '—'}</td>
                         <td style={tableTdStyle}><StatusBadge label={f.active ? 'Active' : 'Inactive'} tone={f.active ? 'green' : 'red'} /></td>
                         <td style={{ ...tableTdStyle, textAlign: 'right' }}>
-                          {perms?.procurement_raise && (
+                          {perms?.vendor_manage && (
                             <button style={btnSecondary} onClick={() => startEdit(f.forwarder_code)}>Edit</button>
                           )}
                         </td>

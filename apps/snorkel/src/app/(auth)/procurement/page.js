@@ -180,7 +180,7 @@ export default function ProcurementOverviewPage() {
                       <td style={tableTdStyle}>{r.requested_by || '—'}</td>
                       <td style={tableTdStyle}>{formatDate(r.created_at)}</td>
                       <td style={{ ...tableTdStyle, textAlign: 'right' }}>
-                        {perms?.procurement_raise && (
+                        {perms?.po_create && (
                           <button
                             style={btnPrimary}
                             onClick={() => router.push(`/procurement/pos/new?rr=${encodeURIComponent(r.request_id)}`)}

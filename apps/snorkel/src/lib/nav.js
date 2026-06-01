@@ -1,17 +1,32 @@
 import {
   ShoppingCart, BarChart3, FileText, RefreshCw, Building, Truck, Package, BookOpen,
+  Inbox, Wallet, Shield, Users,
 } from 'lucide-react';
 
 export const NAV_GROUPS = [
+  {
+    // Requests = everyone's front door. No `requires` → visible to any authed user.
+    id: 'requests', label: 'REQUESTS', icon: Inbox,
+    items: [
+      { id: 'requests',     label: 'PO Requests', route: '/requests',     icon: Inbox },
+      { id: 'requests-new', label: 'New Request',  route: '/requests/new', icon: FileText, accent: 'orange' },
+    ],
+  },
   {
     id: 'procurement', label: 'PROCUREMENT', icon: ShoppingCart,
     items: [
       { id: 'procurement-overview',   label: 'Overview',        route: '/procurement',            icon: BarChart3, requires: 'procurement_view' },
       { id: 'procurement-pos',        label: 'Purchase Orders', route: '/procurement/pos',        icon: FileText,  requires: 'procurement_view' },
       { id: 'procurement-reorders',   label: 'Reorders',        route: '/procurement/reorders',   icon: RefreshCw, requires: 'procurement_view' },
-      { id: 'procurement-vendors',    label: 'Vendors',         route: '/procurement/vendors',    icon: Building,  requires: 'procurement_view' },
-      { id: 'procurement-forwarders', label: 'Forwarders',      route: '/procurement/forwarders', icon: Truck,     requires: 'procurement_view' },
-      { id: 'products-register',      label: 'New Product',     route: '/products/register',      icon: Package,   requires: 'procurement_china' },
+      { id: 'procurement-vendors',    label: 'Vendors',         route: '/procurement/vendors',    icon: Building,  requires: 'vendor_manage' },
+      { id: 'procurement-forwarders', label: 'Forwarders',      route: '/procurement/forwarders', icon: Truck,     requires: 'vendor_manage' },
+      { id: 'products-register',      label: 'New Product',     route: '/products/register',      icon: Package,   requires: 'po_china' },
+    ],
+  },
+  {
+    id: 'payments', label: 'PAYMENTS', icon: Wallet,
+    items: [
+      { id: 'payments', label: 'Payment Queue', route: '/payments', icon: Wallet, requires: 'payment_route' },
     ],
   },
   {
@@ -20,10 +35,17 @@ export const NAV_GROUPS = [
       { id: 'library-addresses', label: 'Addresses', route: '/library/addresses', icon: Building, requires: 'company_address_manage' },
     ],
   },
+  {
+    id: 'admin', label: 'ADMIN', icon: Shield,
+    items: [
+      { id: 'admin-roles', label: 'Roles & Permissions', route: '/admin/roles', icon: Shield, requires: 'snorkel_admin' },
+      { id: 'admin-users', label: 'Users',                route: '/admin/users', icon: Users,  requires: 'snorkel_admin' },
+    ],
+  },
 ];
 
-// Mirrors the ignition/pitstop pattern: drop items the user lacks `requires` for,
-// then drop now-empty groups. Items with no `requires` are always visible.
+// Items with no `requires` are always visible. Drop items the user lacks the perm for,
+// then drop now-empty groups. (perms = the user's Snorkel permissions from getMe.)
 export function filterNavByPerms(groups, perms) {
   return groups
     .map(g => ({

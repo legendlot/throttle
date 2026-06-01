@@ -126,7 +126,7 @@ export default function POListPage() {
             All purchase orders raised across categories.
           </p>
         </div>
-        {perms?.procurement_raise && (
+        {perms?.po_create && (
           <button style={btnPrimary} onClick={() => router.push('/procurement/pos/new')}>+ New PO</button>
         )}
       </div>
@@ -205,7 +205,7 @@ export default function POListPage() {
                     <td style={tableTdStyle}>{r.vendor_name || '—'}</td>
                     <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.line_count ?? r.lines ?? 0}</td>
                     <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>
-                      {r.source === 'China' && !perms?.procurement_china
+                      {r.source === 'China' && !perms?.po_china
                         ? <span style={{ color: 'var(--t3)', fontStyle: 'italic' }}>Restricted</span>
                         : <>{r.currency || ''} {(r.po_value ?? 0).toLocaleString('en-IN')}</>
                       }

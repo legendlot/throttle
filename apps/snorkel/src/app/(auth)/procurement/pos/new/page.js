@@ -206,6 +206,15 @@ function NewPOPage() {
   const [submitting, setSubmitting] = useState(false);
   const rrParam = searchParams?.get('rr') || null;
   const announcedRR = useRef(false);
+  // Side-by-side: when arriving from a PO request, load it to show alongside the form.
+  const requestParam = searchParams?.get('request') || null;
+  const [linkedRequest, setLinkedRequest] = useState(null);
+  useEffect(() => {
+    if (!session || !requestParam) return;
+    garageFetch('getRequest', { request_no: requestParam }, session)
+      .then((res) => setLinkedRequest(res?.request || null))
+      .catch(() => {});
+  }, [session, requestParam]);
 
   // Lazy caches
   useEffect(() => {
@@ -514,6 +523,7 @@ function NewPOPage() {
       transit_days: transitDays ? parseInt(transitDays, 10) : null,
       delivery_address_id: deliveryAddressId ? parseInt(deliveryAddressId, 10) : null,
       notes: notes || null,
+      source_request_no: requestParam || null,
       lines: lines.map((l) => ({
         part_code:      l.part_code || null,
         description:    l.description || null,
@@ -554,8 +564,8 @@ function NewPOPage() {
   if (perms && !perms.procurement_view) {
     return <div style={{ padding: 24, color: 'var(--t3)' }}>Access restricted.</div>;
   }
-  if (perms && !perms.procurement_raise) {
-    return <div style={{ padding: 24, color: 'var(--t3)' }}>You don&apos;t have permission to raise POs.</div>;
+  if (perms && !perms.po_create) {
+    return <div style={{ padding: 24, color: 'var(--t3)' }}>You don&apos;t have permission to create POs.</div>;
   }
 
   // STEP 1 — Category picker
@@ -609,7 +619,7 @@ function NewPOPage() {
         </div>
 
         {/* China PO card — visible only to procurement_china holders, on the top-level (not sub) view. */}
-        {!chinaMode && perms?.procurement_china && (
+        {!chinaMode && perms?.po_china && (
           <div style={{ maxWidth: 960, marginTop: 24 }}>
             <div style={{ ...labelStyle, marginBottom: 8 }}>Restricted Access</div>
             <div
@@ -652,7 +662,34 @@ function NewPOPage() {
   const allowedModes = ModesByCategory(selectedCategory?.key);
 
   return (
-    <div style={{ color: 'var(--t1)' }}>
+    <div style={{ color: 'var(--t1)', paddingRight: linkedRequest ? 332 : 0 }}>
+      {linkedRequest && (
+        <div style={{
+          position: 'fixed', top: 64, right: 16, width: 300, maxHeight: 'calc(100dvh - 96px)',
+          overflowY: 'auto', zIndex: 40,
+          background: 'var(--surface)', border: '1px solid var(--yellow)', borderRadius: 4,
+        }}>
+          <div style={{ ...panelHeaderStyle, position: 'sticky', top: 0, background: 'var(--surface)' }}>
+            <span>📋 Request {linkedRequest.request_no}</span>
+          </div>
+          <div style={{ padding: '12px 14px', fontSize: 12, lineHeight: 1.5 }}>
+            <div style={{ fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 14, marginBottom: 8 }}>{linkedRequest.title}</div>
+            <div style={{ whiteSpace: 'pre-wrap', color: 'var(--t1)', marginBottom: 10 }}>{linkedRequest.details}</div>
+            {[['Category', linkedRequest.category], ['Suggested vendor', linkedRequest.suggested_vendor],
+              ['Est. cost', linkedRequest.estimated_cost != null ? `${linkedRequest.currency || ''} ${Number(linkedRequest.estimated_cost).toLocaleString('en-IN')}` : null],
+              ['Urgency', linkedRequest.urgency], ['Requested by', linkedRequest.requested_by_name],
+              ['Notes', linkedRequest.notes]].filter(([, v]) => v).map(([k, v]) => (
+              <div key={k} style={{ marginBottom: 6 }}>
+                <span style={{ ...labelStyle, marginBottom: 2 }}>{k}</span>
+                <div style={{ color: 'var(--t2)' }}>{v}</div>
+              </div>
+            ))}
+            <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 8, fontStyle: 'italic' }}>
+              Copy what you need into the PO. Accepting the PO will mark this request approved.
+            </div>
+          </div>
+        </div>
+      )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
         <button style={btnSecondary} onClick={() => setStep('category')}>← Categories</button>
         <span style={{ color: 'var(--t3)' }}>|</span>
@@ -661,6 +698,7 @@ function NewPOPage() {
         </span>
         {selectedCategory && <StatusBadge label={selectedCategory.title} tone="blue" />}
         {rrParam && <StatusBadge label={`Linking ${rrParam}`} tone="yellow" />}
+        {requestParam && <StatusBadge label={`From ${requestParam}`} tone="yellow" />}
       </div>
 
       {/* Product selector for Full Products */}

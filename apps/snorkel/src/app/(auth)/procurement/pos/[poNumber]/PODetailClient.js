@@ -9,7 +9,8 @@ import { computeTax } from '@/lib/poTax';
 const PO_STATUS_TONES = {
   Soft:                           'orange',
   Draft:                          'gray',
-  Approved:                       'blue',
+  Accepted:                       'yellow',
+  Approved:                       'green',
   Sent:                           'yellow',
   'Confirmed & Payment Done':     'green',
   'Partially Received':           'yellow',
@@ -170,18 +171,24 @@ export default function PODetailPage() {
     setAmendOpen(true);
   }
 
-  async function handleAction(action) {
+  async function handleAction(action, extra) {
     setActionLoading(true);
     try {
-      if (action === 'approve') {
-        await workerFetch('approvePO', { data: { po_number: po.po_number } }, session);
+      if (action === 'accept') {
+        await workerFetch('acceptPO', { data: { po_number: po.po_number } }, session);
+        showToast(`${po.po_number} accepted`, 'success');
+      } else if (action === 'finalApprove') {
+        await workerFetch('finalApprovePO', { data: { po_number: po.po_number } }, session);
         showToast(`${po.po_number} approved`, 'success');
       } else if (action === 'send') {
         await workerFetch('updatePOStatus', { data: { po_number: po.po_number, status: 'Sent' } }, session);
         showToast(`${po.po_number} marked sent`, 'success');
-      } else if (action === 'confirm') {
-        await workerFetch('updatePOStatus', { data: { po_number: po.po_number, status: 'Confirmed & Payment Done' } }, session);
-        showToast(`${po.po_number} confirmed & paid`, 'success');
+      } else if (action === 'route') {
+        await workerFetch('routePayment', { data: { po_number: po.po_number, route_to: extra } }, session);
+        showToast(`Payment requested from ${extra}`, 'success');
+      } else if (action === 'markPaid') {
+        await workerFetch('markPaid', { data: { po_number: po.po_number } }, session);
+        showToast(`${po.po_number} marked paid`, 'success');
       }
       loadPO();
     } catch (e) {
@@ -235,18 +242,19 @@ export default function PODetailPage() {
   const comparisonTotal = isInr ? tax.grand : lineTotal;
   const mismatch = invoiceValue > 0 && Math.abs(invoiceValue - comparisonTotal) / Math.max(1, comparisonTotal) > 0.01;
 
-  // China PO gating (procurement redesign, 2026-05-21)
-  // - China-source POs restrict financial fields to procurement_china holders.
-  // - Approval requires procurement_china_approve + four-eyes (enforced server-side).
+  // Snorkel approval chain: Draft → Accepted → Approved → payment routing.
+  // Financial fields on China POs gated by po_china (Snorkel perm).
   const isChina = po.source === 'China';
-  const isFinanceVisible = !isChina || !!perms?.procurement_china;
+  const isFinanceVisible = !isChina || !!perms?.po_china;
   const isSoft = status === 'Soft';
-  const canApprove = status === 'Draft' && (isChina ? perms?.procurement_china_approve : perms?.procurement_approve);
-  const canSend    = !isSoft && ((status === 'Draft' && perms?.procurement_raise) || status === 'Approved');
-  const canConfirm = !isSoft && status === 'Sent';
-  const canAmend   = !isSoft && ['Draft', 'Approved', 'Sent', 'Confirmed & Payment Done'].includes(status) && perms?.procurement_raise;
-  const canCancel  = !['Closed', 'Cancelled'].includes(status);
-  const canPromote = isSoft && !!perms?.procurement_china;
+  const canAccept       = status === 'Draft'    && !!perms?.po_request_accept;
+  const canFinalApprove = status === 'Accepted' && !!perms?.po_approve;
+  const canSend         = status === 'Approved' && !!perms?.po_create;
+  const canAmend        = !isSoft && ['Draft', 'Accepted', 'Approved', 'Sent'].includes(status) && !!perms?.po_create;
+  const canCancel       = !['Closed', 'Cancelled'].includes(status) && !!perms?.po_create;
+  const canPromote      = isSoft && !!perms?.po_china;
+  const canPay          = status === 'Approved' && !!perms?.payment_route;
+  const payStatus       = po.payment_status || 'none';
 
   return (
     <div style={{ color: 'var(--t1)' }}>
@@ -264,13 +272,41 @@ export default function PODetailPage() {
             disabled={actionLoading}
             title="Open printable PO in a new tab"
           >🖨 Print PO</button>
-          {canApprove && <button style={btnPrimary} onClick={() => handleAction('approve')} disabled={actionLoading}>✅ Approve</button>}
-          {canSend    && <button style={btnSecondary} onClick={() => handleAction('send')} disabled={actionLoading}>Mark Sent</button>}
-          {canConfirm && <button style={btnPrimary} onClick={() => handleAction('confirm')} disabled={actionLoading}>Confirmed & Paid</button>}
-          {canAmend   && <button style={btnSecondary} onClick={openAmend} disabled={actionLoading}>Amend</button>}
-          {canCancel  && <button style={btnDanger} onClick={() => setCancelOpen(true)} disabled={actionLoading}>Cancel</button>}
+          {canAccept       && <button style={btnPrimary}   onClick={() => handleAction('accept')} disabled={actionLoading}>Accept</button>}
+          {canFinalApprove && <button style={btnPrimary}   onClick={() => handleAction('finalApprove')} disabled={actionLoading}>✅ Final Approve</button>}
+          {canPay && payStatus === 'none' && <button style={btnSecondary} onClick={() => handleAction('route', 'finance')}   disabled={actionLoading}>Request Finance to Pay</button>}
+          {canPay && payStatus === 'none' && <button style={btnSecondary} onClick={() => handleAction('route', 'requester')} disabled={actionLoading}>Request Requester to Pay</button>}
+          {canPay && payStatus === 'requested' && <button style={btnPrimary} onClick={() => handleAction('markPaid')} disabled={actionLoading}>Mark Paid</button>}
+          {canSend         && <button style={btnSecondary} onClick={() => handleAction('send')} disabled={actionLoading}>Mark Sent</button>}
+          {canAmend        && <button style={btnSecondary} onClick={openAmend} disabled={actionLoading}>Amend</button>}
+          {canCancel       && <button style={btnDanger}    onClick={() => setCancelOpen(true)} disabled={actionLoading}>Cancel</button>}
         </div>
       </div>
+
+      {(po.source_request_no || payStatus !== 'none') && (
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
+          {po.source_request_no && (
+            <button
+              style={{ ...btnSecondary, fontSize: 11 }}
+              onClick={() => router.push(`/requests/detail/?request_no=${encodeURIComponent(po.source_request_no)}`)}
+            >
+              📋 From request {po.source_request_no} →
+            </button>
+          )}
+          {payStatus !== 'none' && (
+            <div style={{
+              padding: '6px 12px', borderRadius: 3, fontSize: 11, fontFamily: 'var(--mono)',
+              background: payStatus === 'paid' ? 'rgba(34,197,94,.12)' : 'rgba(242,205,26,.12)',
+              color: payStatus === 'paid' ? '#4ade80' : '#f2cd1a',
+              border: `1px solid ${payStatus === 'paid' ? 'rgba(34,197,94,.25)' : 'rgba(242,205,26,.25)'}`,
+            }}>
+              Payment {payStatus === 'paid' ? 'PAID' : 'REQUESTED'}
+              {po.payment_routed_to ? ` · ${po.payment_routed_to}` : ''}
+              {payStatus === 'paid' && po.paid_by ? ` · by ${po.paid_by}` : ''}
+            </div>
+          )}
+        </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
         <section style={panelStyle}>
