@@ -293,29 +293,50 @@ async function writeHistory(env, engagement_id, action, from, to, note, actor) {
 // GET ACTIONS
 // ────────────────────────────────────────────────────────────────────────────
 
-async function getInfluencers(url, auth, env) {
+const INFLUENCER_TYPES = ['nano', 'micro', 'macro', 'brand', 'store'];
+
+// Scope filters shared by getInfluencers + getInfluencerCounts — everything
+// EXCEPT influencer_type, so the type-breakdown cards stay a faithful facet of
+// whatever else (tab / search / rating / location / reach) is currently applied.
+function influencerScopeFilters(url) {
   const tab = (url.searchParams.get('tab') || 'master').toLowerCase();
-  const type = url.searchParams.get('type');
   const category = url.searchParams.get('category');
   const location = url.searchParams.get('location');
-  const status = url.searchParams.get('status');
   const rating = url.searchParams.get('rating');
   const search = (url.searchParams.get('search') || '').trim();
-  const limit = Math.min(Number(url.searchParams.get('limit') || 50), 200);
-  const offset = Math.max(Number(url.searchParams.get('offset') || 0), 0);
+  const reachMin = url.searchParams.get('reach_min');
+  const reachMax = url.searchParams.get('reach_max');
 
   const filters = [];
   if (tab === 'master')   filters.push('list_status=eq.master');
   else if (tab === 'b_list') filters.push('list_status=eq.b_list');
   else if (tab === 'archived') filters.push('list_status=eq.archived');
-  if (type)     filters.push(`influencer_type=eq.${encodeURIComponent(type)}`);
   if (location) filters.push(`location=ilike.*${encodeURIComponent(location)}*`);
   if (rating)   filters.push(`quality_rating=eq.${encodeURIComponent(rating)}`);
   if (category) filters.push(`categories=cs.{${encodeURIComponent(category)}}`);
+  if (reachMin && Number.isFinite(Number(reachMin))) filters.push(`reach=gte.${Number(reachMin)}`);
+  if (reachMax && Number.isFinite(Number(reachMax))) filters.push(`reach=lt.${Number(reachMax)}`);
   if (search) {
     const s = encodeURIComponent(search);
     filters.push(`or=(channel_name.ilike.*${s}*,person_name.ilike.*${s}*,email.ilike.*${s}*,contact_number.ilike.*${s}*,influencer_code.ilike.*${s}*)`);
   }
+  return filters;
+}
+
+// Map a UI type selection to a PostgREST filter ('__untyped__' → IS NULL).
+function influencerTypeFilter(type) {
+  if (!type) return null;
+  if (type === '__untyped__') return 'influencer_type=is.null';
+  return `influencer_type=eq.${encodeURIComponent(type)}`;
+}
+
+async function getInfluencers(url, auth, env) {
+  const limit = Math.min(Number(url.searchParams.get('limit') || 50), 200);
+  const offset = Math.max(Number(url.searchParams.get('offset') || 0), 0);
+
+  const filters = influencerScopeFilters(url);
+  const typeF = influencerTypeFilter(url.searchParams.get('type'));
+  if (typeF) filters.push(typeF);
 
   const qs = filters.join('&');
   const r = await sb(
@@ -324,6 +345,39 @@ async function getInfluencers(url, auth, env) {
   );
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
   return ok({ influencers: r.data || [], offset, limit });
+}
+
+// Exact row count via PostgREST count=exact (reads the Content-Range header).
+async function countInfluencers(filters, env) {
+  const qs = [...filters, 'select=id', 'limit=1'].join('&');
+  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/influencers?${qs}`, {
+    headers: {
+      'apikey':         env.SUPABASE_SERVICE_ROLE_KEY,
+      'Authorization':  `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      'Accept-Profile': 'ignition',
+      'Prefer':         'count=exact',
+      'Range-Unit':     'items',
+      'Range':          '0-0',
+    },
+  });
+  const cr = res.headers.get('content-range') || '';
+  const total = Number(cr.split('/')[1]);
+  return Number.isFinite(total) ? total : 0;
+}
+
+// Type breakdown for the type cards. Honours every scope filter EXCEPT type, so
+// the cards always show the full type distribution you can drill into. Untyped
+// is derived (total − sum of known types) to save a query.
+async function getInfluencerCounts(url, auth, env) {
+  const base = influencerScopeFilters(url);
+  const [total, ...typeCounts] = await Promise.all([
+    countInfluencers(base, env),
+    ...INFLUENCER_TYPES.map(t => countInfluencers([...base, `influencer_type=eq.${t}`], env)),
+  ]);
+  const counts = {};
+  let known = 0;
+  INFLUENCER_TYPES.forEach((t, i) => { counts[t] = typeCounts[i]; known += typeCounts[i]; });
+  return ok({ total, counts, untyped: Math.max(total - known, 0) });
 }
 
 async function getInfluencer(url, auth, env) {
@@ -1064,6 +1118,7 @@ async function assignEngagementToCampaign(body, auth, env) {
 
 const GET_ACTIONS = {
   getInfluencers,
+  getInfluencerCounts,
   getInfluencer,
   getEngagements,
   getEngagement,
