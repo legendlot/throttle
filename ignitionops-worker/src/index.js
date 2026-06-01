@@ -278,6 +278,17 @@ async function mintEngagementNo(env, year) {
   return `IGN-${yyyy}-${seq}`;
 }
 
+// Atomic influencer-code mint (IN<n>) from store.sequences (RULE-IGN-001/002).
+async function mintInfluencerCode(env) {
+  const r = await sbStore(`/rest/v1/rpc/next_influencer_seq`, env, {
+    method: 'POST',
+    headers: { 'Accept-Profile': 'ignition', 'Content-Profile': 'ignition' },
+    body: JSON.stringify({}),
+  });
+  if (!r.ok || typeof r.data !== 'number') return null;
+  return `IN${r.data}`;
+}
+
 async function writeHistory(env, engagement_id, action, from, to, note, actor) {
   return sb(`/rest/v1/engagement_history`, env, {
     method: 'POST',
@@ -608,6 +619,29 @@ async function getOverdueEngagements(url, auth, env) {
   return ok({ overdue: rows, days: Number(days) || OVERDUE_DEFAULT_DAYS });
 }
 
+// Schedule — engagements with a planned (expected_post_date) or actual
+// (post_date) date inside [from,to], for the calendar + list view. Each row's
+// effective_date = post_date || expected_post_date; is_planned flags the ones
+// not yet posted. Bounded window keeps one query.
+async function getSchedule(url, auth, env) {
+  const from = url.searchParams.get('from');
+  const to   = url.searchParams.get('to');
+  if (!from || !to) return err('from and to required (YYYY-MM-DD)', 400);
+  const f = encodeURIComponent(from), t = encodeURIComponent(to);
+  const dateOr = `or=(and(expected_post_date.gte.${f},expected_post_date.lte.${t}),and(post_date.gte.${f},post_date.lte.${t}))`;
+  const r = await sb(
+    `/rest/v1/engagements?${dateOr}&select=id,engagement_no,stage,engagement_type,product_code,product_variant,deal_type,expected_post_date,post_date,video_link,influencer:influencer_id(id,influencer_code,channel_name,person_name)&order=expected_post_date.asc&limit=1000`,
+    env,
+  );
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
+  const rows = (r.data || []).map(e => ({
+    ...e,
+    effective_date: e.post_date || e.expected_post_date,
+    is_planned: !e.post_date,
+  })).sort((a, b) => (a.effective_date || '').localeCompare(b.effective_date || ''));
+  return ok({ engagements: rows, from, to });
+}
+
 // ── Reports (spend / ROAS / CPM / top performers) ───────────────────────────
 // One range-scoped query over engagements; all aggregation happens in JS to
 // stay within the 50-subrequest budget. Gated on ignition_reports_view.
@@ -785,9 +819,13 @@ const ENGAGEMENT_FIELDS = [
 async function createInfluencer(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
 
-  // influencer_code is required and immutable (RULE-IGN-001).
-  const code = String(body.influencer_code || '').trim();
-  if (!code) return err('influencer_code required', 400);
+  // influencer_code is immutable once set (RULE-IGN-001). Auto-mint IN<n> from
+  // the ignition_influencer sequence when the caller doesn't supply one.
+  let code = String(body.influencer_code || '').trim();
+  if (!code) {
+    code = await mintInfluencerCode(env);
+    if (!code) return err('failed_to_mint_influencer_code', 500);
+  }
 
   const row = { influencer_code: code, created_by: auth.userId };
   for (const k of INFLUENCER_FIELDS) {
@@ -1127,6 +1165,7 @@ const GET_ACTIONS = {
   getCampaigns,
   getCampaign,
   getOverdueEngagements,
+  getSchedule,
   getKpis,
   getReports,
   getCatalogs,

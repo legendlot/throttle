@@ -3,8 +3,11 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, Chip, useListNav } from '@throttle/ui';
+import { Plus, ChevronDown } from 'lucide-react';
 import { ignitionopsGet } from '../../../lib/ignitionopsFetch.js';
 import RatingBadge from '../../../components/RatingBadge.js';
+import { NewInfluencerModal } from '../../../components/NewInfluencerModal.js';
+import { NewDealModal } from '../../../components/NewDealModal.js';
 
 const TABS = [
   { id: 'master',   label: 'Master' },
@@ -33,6 +36,8 @@ export default function InfluencersPage() {
   const [rows, setRows] = useState([]);
   const [counts, setCounts] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [modal, setModal] = useState(null);     // 'influencer' | 'deal' | null
+  const [menuOpen, setMenuOpen] = useState(false);
   const { focusedIdx, setFocusedIdx } = useListNav(rows.length, (i) => {
     const r = rows[i]; if (r) router.push(`/influencers/detail/?id=${r.id}`);
   });
@@ -85,6 +90,20 @@ export default function InfluencersPage() {
           fontFamily: 'var(--font-cond)', fontSize: 22, fontWeight: 700,
           letterSpacing: '0.04em', textTransform: 'uppercase',
         }}>Influencers</h1>
+        <div style={{ position: 'relative' }}>
+          <button onClick={() => setMenuOpen(o => !o)} style={newBtn}>
+            <Plus size={15} strokeWidth={2.25} /> New <ChevronDown size={14} />
+          </button>
+          {menuOpen && (
+            <>
+              <div onClick={() => setMenuOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 20 }} />
+              <div style={menuStyle}>
+                <button style={menuItem} onClick={() => { setMenuOpen(false); setModal('influencer'); }}>Add Influencer</button>
+                <button style={menuItem} onClick={() => { setMenuOpen(false); setModal('deal'); }}>Add Deal</button>
+              </div>
+            </>
+          )}
+        </div>
       </header>
 
       <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
@@ -187,12 +206,31 @@ export default function InfluencersPage() {
           </table>
         </div>
       )}
+
+      <NewInfluencerModal open={modal === 'influencer'} onClose={() => setModal(null)} session={session} />
+      <NewDealModal open={modal === 'deal'} onClose={() => setModal(null)} session={session} />
     </div>
   );
 }
 
 const th = { padding: '10px 12px', fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600 };
 const td = { padding: '10px 12px' };
+const newBtn = {
+  display: 'inline-flex', alignItems: 'center', gap: 6, background: '#FF6B00', color: '#fff',
+  border: 'none', borderRadius: 'var(--radius-sm)', padding: '8px 14px',
+  fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700,
+  letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer',
+};
+const menuStyle = {
+  position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 21,
+  background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
+  minWidth: 180, overflow: 'hidden', boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+};
+const menuItem = {
+  display: 'block', width: '100%', textAlign: 'left', background: 'transparent',
+  color: 'var(--text-1)', border: 'none', borderBottom: '1px solid var(--border)',
+  padding: '10px 14px', fontFamily: 'var(--font-mono)', fontSize: 13, cursor: 'pointer',
+};
 function inputStyle(w) {
   return {
     background: 'var(--surface-2)', color: 'var(--text-1)',
