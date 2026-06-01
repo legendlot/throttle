@@ -91,12 +91,17 @@ const COUNTRY_ISO = {
 function countryToISO(country) { return COUNTRY_ISO[country] || 'XX'; }
 
 // ── Store schema helper ────────────────────────────────────────
+// NOTE: service-role calls send the secret key as BOTH apikey and Authorization.
+// This is the canonical modern pattern and works with new `sb_secret_…` keys
+// (which are NOT JWTs, so they can't grant service_role via Bearer alone — the
+// gateway resolves the role from the apikey header). Only the auth endpoint in
+// verifyJWT uses the publishable key + the user's JWT.
 async function sb(path, opts = {}) {
   const res = await fetch(`${SUPABASE_URL}${path}`, {
     ...opts,
     headers: {
       'Content-Type':   'application/json',
-      'apikey':         SUPABASE_KEY,
+      'apikey':         SUPABASE_SERVICE_KEY,
       'Authorization':  `Bearer ${SUPABASE_SERVICE_KEY}`,
       'Accept-Profile': 'store',
       'Content-Profile':'store',
@@ -115,7 +120,7 @@ async function sbPublic(path, opts = {}) {
     ...opts,
     headers: {
       'Content-Type':  'application/json',
-      'apikey':        SUPABASE_KEY,
+      'apikey':        SUPABASE_SERVICE_KEY,
       'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
       'Prefer':        opts.prefer || '',
       ...opts.headers,
