@@ -4,7 +4,6 @@ import { usePathname, useRouter } from 'next/navigation';
 import { RequireAuth, useAuth } from '@throttle/auth';
 import { Sidebar, Spinner, Topbar, useSearchShortcut } from '@throttle/ui';
 import { NAV_GROUPS, filterNavByPerms } from '../../lib/nav.js';
-import { IgnitionIcon } from '../../components/IgnitionIcon.js';
 
 const RefreshContext = createContext({
   refreshing: false,    setRefreshing:    () => {},
@@ -68,7 +67,7 @@ function AuthLayoutInner({ children }) {
         onToggle={() => setSidebarCollapsed(c => !c)}
         appLabel="IGNITION"
         appShortLabel="IG"
-        appIcon={<IgnitionIcon bar={2} gap={2} />}
+        appIcon={<img src="/favicon.svg" alt="Ignition" style={{ height: 20, width: 'auto', display: 'block' }} />}
       />
       <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
         <Topbar

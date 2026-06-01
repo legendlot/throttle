@@ -1,6 +1,6 @@
 import {
   Inbox, Users, Flame, Star, ListChecks, BarChart3, Plus,
-  Settings, Tag, Layers, FileSpreadsheet, UserCircle, CalendarDays,
+  Settings, Tag, Layers, FileSpreadsheet, UserCircle, CalendarDays, Wallet,
 } from 'lucide-react';
 
 export const NAV_GROUPS = [
@@ -11,6 +11,7 @@ export const NAV_GROUPS = [
       { id: 'influencers', label: 'Influencers',  route: '/influencers',  icon: Users },
       { id: 'engagements', label: 'Engagements',  route: '/engagements',  icon: ListChecks },
       { id: 'schedule',    label: 'Schedule',     route: '/schedule',     icon: CalendarDays },
+      { id: 'payments',    label: 'Payments',     route: '/payments',     icon: Wallet },
       { id: 'new',         label: 'New Deal',     route: '/engagements/new', icon: Plus, accent: 'orange' },
     ],
   },

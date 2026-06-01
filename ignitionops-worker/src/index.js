@@ -642,6 +642,77 @@ async function getSchedule(url, auth, env) {
   return ok({ engagements: rows, from, to });
 }
 
+// ── Payments ─────────────────────────────────────────────────────────────────
+// Simple per-deal payment log (advance / final / other). One table; spend
+// tiles are aggregated in JS from a single read.
+const PAYMENT_KINDS = ['advance', 'final', 'other'];
+
+async function addPayment(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!body.engagement_id) return err('engagement_id required', 400);
+  const amount = Number(body.amount);
+  if (!(amount >= 0)) return err('valid amount required', 400);
+  const kind = PAYMENT_KINDS.includes(body.kind) ? body.kind : 'advance';
+
+  const er = await sb(`/rest/v1/engagements?id=eq.${body.engagement_id}&select=influencer_id&limit=1`, env);
+  if (!er.ok || !er.data?.[0]) return err('engagement_not_found', 404);
+
+  const row = {
+    engagement_id: body.engagement_id,
+    influencer_id: er.data[0].influencer_id,
+    kind,
+    amount: Math.round(amount * 100) / 100,
+    paid_on: body.paid_on || undefined,   // omit → DB default current_date
+    note: body.note || null,
+    created_by: auth.userId,
+  };
+  const r = await sb(`/rest/v1/payments`, env, { method: 'POST', body: JSON.stringify([row]) });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  return ok(r.data?.[0]);
+}
+
+async function deletePayment(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!body.id) return err('id required', 400);
+  const r = await sb(`/rest/v1/payments?id=eq.${body.id}`, env, { method: 'DELETE', prefer: 'return=minimal' });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  return ok({ deleted: body.id });
+}
+
+async function getPayments(url, auth, env) {
+  const r = await sb(
+    `/rest/v1/payments?select=*,influencer:influencer_id(influencer_code,channel_name,person_name),engagement:engagement_id(engagement_no,product_code)&order=paid_on.desc,created_at.desc&limit=2000`,
+    env,
+  );
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
+  const rows = r.data || [];
+
+  const now = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const todayStr = now.toISOString().slice(0, 10);
+  const monthStart = `${now.getUTCFullYear()}-${pad(now.getUTCMonth() + 1)}-01`;
+  const dow = (now.getUTCDay() + 6) % 7;                 // 0 = Monday
+  const ws = new Date(now); ws.setUTCDate(now.getUTCDate() - dow);
+  const weekStart = ws.toISOString().slice(0, 10);
+
+  const tally = (pred) => {
+    let amount = 0, count = 0; const infs = new Set();
+    for (const p of rows) {
+      if (!pred(p.paid_on)) continue;
+      amount += Number(p.amount) || 0; count++;
+      if (p.influencer_id) infs.add(p.influencer_id);
+    }
+    return { amount: Math.round(amount), count, influencers: infs.size };
+  };
+  const summary = {
+    today: tally(d => d === todayStr),
+    week:  tally(d => d >= weekStart),
+    month: tally(d => d >= monthStart),
+    all:   tally(() => true),
+  };
+  return ok({ payments: rows.slice(0, 200), summary });
+}
+
 // ── Reports (spend / ROAS / CPM / top performers) ───────────────────────────
 // One range-scoped query over engagements; all aggregation happens in JS to
 // stay within the 50-subrequest budget. Gated on ignition_reports_view.
@@ -1166,6 +1237,7 @@ const GET_ACTIONS = {
   getCampaign,
   getOverdueEngagements,
   getSchedule,
+  getPayments,
   getKpis,
   getReports,
   getCatalogs,
@@ -1190,6 +1262,8 @@ const POST_ACTIONS = {
   updateCampaign,
   assignEngagementToCampaign,
   flagOverdueRatings,
+  addPayment,
+  deletePayment,
 };
 
 async function handleGet(url, request, env) {
