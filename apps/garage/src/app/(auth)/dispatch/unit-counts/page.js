@@ -40,7 +40,7 @@ function fmtDate(d) { if (!d) return '—'; try { return new Date(d + (d.length 
 
 export default function UnitCountsPage() {
   const { session, perms } = useAuth();
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
   const canRecord = hasPermission(perms, 'cycle_count_record');
 
   const [tab,     setTab]     = useState('in_progress');
@@ -138,8 +138,8 @@ function NewUnitCountModal({ session, toast, onClose, onCreated }) {
           notes:        form.counter ? `Counter: ${form.counter.trim()}${form.notes ? ' · ' + form.notes.trim() : ''}` : (form.notes.trim() || null),
         },
       }, session);
-      if (!r?.ok) { toast(r?.data?.error || 'Failed', 'err'); return; }
-      toast(`Created ${r.data.count_no} · ${r.data.expected_count} units`, 'ok');
+      if (!r?.ok) { toast(r?.data?.error || 'Failed', 'error'); return; }
+      toast(`Created ${r.data.count_no} · ${r.data.expected_count} units`, 'success');
       onCreated(r.data.count_no);
     } finally { setSubmitting(false); }
   }
@@ -181,14 +181,14 @@ function UnitCountDetail({ header, lines, session, toast, onBack, onReload, canR
       ...Object.entries(pending).map(([unit_upc, result]) => ({ unit_upc, result })),
       ...extraExtras.map(upc => ({ unit_upc: upc, result: 'extra' })),
     ];
-    if (!results.length) { toast('Nothing to apply', 'err'); return; }
+    if (!results.length) { toast('Nothing to apply', 'error'); return; }
     setSaving(true);
     try {
       const r = await workerFetch('enterUnitCountResults', {
         data: { count_no: header.count_no, results },
       }, session);
-      if (!r?.ok) { toast(r?.data?.error || 'Save failed', 'err'); return; }
-      toast(`Applied ${r.data.applied}`, 'ok');
+      if (!r?.ok) { toast(r?.data?.error || 'Save failed', 'error'); return; }
+      toast(`Applied ${r.data.applied}`, 'success');
       setPending({});
       setExtraInput('');
       onReload();
@@ -206,9 +206,9 @@ function UnitCountDetail({ header, lines, session, toast, onBack, onReload, canR
     setCompleting(true);
     try {
       const r = await workerFetch('completeUnitCount', { data: { count_no: header.count_no } }, session);
-      if (!r?.ok) { toast(r?.data?.error || 'Failed', 'err'); return; }
+      if (!r?.ok) { toast(r?.data?.error || 'Failed', 'error'); return; }
       const d = r.data;
-      toast(`Completed · present ${d.present_count} / missing ${d.missing_count} / extra ${d.extra_count} · ${d.adjustments_created} adjustment(s) created`, 'ok');
+      toast(`Completed · present ${d.present_count} / missing ${d.missing_count} / extra ${d.extra_count} · ${d.adjustments_created} adjustment(s) created`, 'success');
       onReload();
     } finally { setCompleting(false); }
   }

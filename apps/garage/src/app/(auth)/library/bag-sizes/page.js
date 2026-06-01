@@ -22,7 +22,7 @@ function fmtTs(ts) {
 
 export default function BagSizesPage() {
   const { session, perms } = useAuth();
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
   const canEdit = hasPermission(perms, 'users_manage');
 
   const [defaults, setDefaults] = useState([]);   // store.part_bag_sizes rows
@@ -120,10 +120,10 @@ export default function BagSizesPage() {
   async function saveEdit() {
     if (!editTarget || !editForm) return;
     const newSize = Math.round(Number(editForm.size) || 0);
-    if (newSize <= 0) { toast('Bag size must be > 0', 'err'); return; }
+    if (newSize <= 0) { toast('Bag size must be > 0', 'error'); return; }
     const isChange = editTarget.default_bag_size != null && editTarget.default_bag_size !== newSize;
     if (isChange && !editForm.reason.trim()) {
-      toast('Reason required when changing an existing default', 'err');
+      toast('Reason required when changing an existing default', 'error');
       return;
     }
     setSaving(true);
@@ -137,8 +137,8 @@ export default function BagSizesPage() {
           source:    'library',
         },
       }, session);
-      if (!r.ok) { toast(r.data?.error || 'Save failed', 'err'); return; }
-      toast(r.data?.unchanged ? 'No change' : 'Saved', 'ok');
+      if (!r.ok) { toast(r.data?.error || 'Save failed', 'error'); return; }
+      toast(r.data?.unchanged ? 'No change' : 'Saved', 'success');
       setEditTarget(null);
       setEditForm(null);
       loadAll();
@@ -162,8 +162,8 @@ export default function BagSizesPage() {
   async function saveAdd() {
     const partCode = (addForm.part_code || '').trim();
     const size     = Math.round(Number(addForm.size) || 0);
-    if (!partCode) { toast('Part code required', 'err'); return; }
-    if (size <= 0) { toast('Bag size must be > 0', 'err'); return; }
+    if (!partCode) { toast('Part code required', 'error'); return; }
+    if (size <= 0) { toast('Bag size must be > 0', 'error'); return; }
     setSaving(true);
     try {
       const r = await workerFetch('setPartBagSize', {
@@ -175,8 +175,8 @@ export default function BagSizesPage() {
           source:    'library',
         },
       }, session);
-      if (!r.ok) { toast(r.data?.error || 'Save failed', 'err'); return; }
-      toast('Added', 'ok');
+      if (!r.ok) { toast(r.data?.error || 'Save failed', 'error'); return; }
+      toast('Added', 'success');
       setAddOpen(false);
       setAddForm({ part_code: '', size: '', notes: '' });
       loadAll();

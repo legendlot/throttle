@@ -34,7 +34,7 @@ const btnP = { background: 'var(--yellow)', border: '1px solid var(--yellow)', b
 export default function RepackRunsListPage() {
   const router = useRouter();
   const { session, perms } = useAuth();
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
   const allowed = canManageRepack(perms);
 
   const [rows, setRows]       = useState([]);
@@ -48,10 +48,10 @@ export default function RepackRunsListPage() {
       const filter = {};
       if (statusF) filter.status = statusF;
       const r = await workerFetch('getRepackRuns', { data: filter }, session);
-      if (!r?.ok) { toast(r?.error || 'Failed', 'err'); setRows([]); return; }
+      if (!r?.ok) { toast(r?.error || 'Failed', 'error'); setRows([]); return; }
       setRows(Array.isArray(r.data) ? r.data : []);
     } catch (e) {
-      toast(e.message || 'Failed', 'err');
+      toast(e.message || 'Failed', 'error');
       setRows([]);
     } finally { setLoading(false); }
   }

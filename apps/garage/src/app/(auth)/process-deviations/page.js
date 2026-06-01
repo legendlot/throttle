@@ -83,7 +83,7 @@ function isCurrentlyActive(dev) {
 
 export default function ProcessDeviationsPage() {
   const { session, perms } = useAuth();
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
   const canPropose    = hasPermission(perms, 'deviation_propose');
   const canApproveL1  = hasPermission(perms, 'deviation_approve_l1');
   const canApproveL2  = hasPermission(perms, 'deviation_approve_l2');
@@ -248,7 +248,7 @@ function DeviationDetailModal({ deviation_no, detail, loading, session, toast, c
     if (!action || !detail) return;
     if ((action === 'reject' || action === 'cancel' || action === 'escalate' || action === 'close' || action === 'confirm_no' || action === 'confirm_yes') && action !== 'approve' && action !== 'ack') {
       if (!reason.trim() && (action === 'reject' || action === 'cancel' || action === 'close')) {
-        toast('Reason required', 'err'); return;
+        toast('Reason required', 'error'); return;
       }
     }
     setActing(true);
@@ -263,8 +263,8 @@ function DeviationDetailModal({ deviation_no, detail, loading, session, toast, c
       else if (action === 'close')       r = await workerFetch('closeDeviation',       { data: payload }, session);
       else if (action === 'confirm_yes') r = await workerFetch('confirmRetroactiveDeviation', { data: { ...payload, confirmed: true } }, session);
       else if (action === 'confirm_no')  r = await workerFetch('confirmRetroactiveDeviation', { data: { ...payload, confirmed: false } }, session);
-      if (!r?.ok) { toast(r?.data?.error || 'Failed', 'err'); return; }
-      toast(`${action.toUpperCase()} · ${deviation_no}`, 'ok');
+      if (!r?.ok) { toast(r?.data?.error || 'Failed', 'error'); return; }
+      toast(`${action.toUpperCase()} · ${deviation_no}`, 'success');
       setAction(null);
       setReason('');
       onReload();
@@ -419,8 +419,8 @@ function NewDeviationModal({ session, toast, onClose, onCreated }) {
   const [submitting, setSubmitting] = useState(false);
 
   async function submit() {
-    if (!form.title.trim() || form.title.trim().length < 3) { toast('Title required (min 3 chars)', 'err'); return; }
-    if (!form.description.trim() || form.description.trim().length < 10) { toast('Description required (min 10 chars)', 'err'); return; }
+    if (!form.title.trim() || form.title.trim().length < 3) { toast('Title required (min 3 chars)', 'error'); return; }
+    if (!form.description.trim() || form.description.trim().length < 10) { toast('Description required (min 10 chars)', 'error'); return; }
     setSubmitting(true);
     try {
       const data = {
@@ -441,8 +441,8 @@ function NewDeviationModal({ session, toast, onClose, onCreated }) {
         reactive:   form.reactive,
       };
       const r = await workerFetch('proposeDeviation', { data }, session);
-      if (!r?.ok) { toast(r?.data?.error || 'Failed', 'err'); return; }
-      toast(`Created ${r.data.deviation_no} · tier=${r.data.current_tier.toUpperCase()}${r.data.needs_retroactive_signoff ? ' · needs retro sign-off' : ''}`, 'ok');
+      if (!r?.ok) { toast(r?.data?.error || 'Failed', 'error'); return; }
+      toast(`Created ${r.data.deviation_no} · tier=${r.data.current_tier.toUpperCase()}${r.data.needs_retroactive_signoff ? ' · needs retro sign-off' : ''}`, 'success');
       onCreated();
     } finally { setSubmitting(false); }
   }

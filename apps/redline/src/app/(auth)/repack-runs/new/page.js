@@ -19,7 +19,7 @@ export function canManageRepack(perms) {
 export default function RepackRunNewPage() {
   const router = useRouter();
   const { session, perms } = useAuth();
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
   const allowed = canManageRepack(perms);
 
   const [f, setF] = useState({ target_qty: '', notes: '' });
@@ -29,18 +29,18 @@ export default function RepackRunNewPage() {
 
   async function submit() {
     const qty = parseInt(f.target_qty, 10);
-    if (!qty || qty < 1) { toast('Target quantity must be a positive number', 'err'); return; }
+    if (!qty || qty < 1) { toast('Target quantity must be a positive number', 'error'); return; }
     setSubmitting(true);
     try {
       const r = await workerFetch('createRepackRun', { data: {
         target_qty: qty,
         notes:      f.notes.trim() || null,
       } }, session);
-      if (!r?.ok) { toast(r?.error || 'Failed', 'err'); return; }
-      toast(`${r.data.run_no} created`, 'ok');
+      if (!r?.ok) { toast(r?.error || 'Failed', 'error'); return; }
+      toast(`${r.data.run_no} created`, 'success');
       router.push(`/repack-runs/detail?id=${r.data.id}`);
     } catch (e) {
-      toast(e.message || 'Failed', 'err');
+      toast(e.message || 'Failed', 'error');
     } finally { setSubmitting(false); }
   }
 

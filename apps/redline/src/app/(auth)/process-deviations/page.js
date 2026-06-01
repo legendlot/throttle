@@ -39,7 +39,7 @@ function fmtTs(ts) { if (!ts) return '—'; try { return new Date(ts).toLocaleSt
 
 export default function RedlineProcessDeviationsPage() {
   const { session, perms } = useAuth();
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
   const canPropose   = hasPermission(perms, 'deviation_propose');
   const canApproveL1 = hasPermission(perms, 'deviation_approve_l1');
 
@@ -80,8 +80,8 @@ export default function RedlineProcessDeviationsPage() {
     setAckBusy(devNo);
     try {
       const r = await workerFetch('acknowledgeDeviation', { data: { deviation_no: devNo } }, session);
-      if (!r?.ok) { toast(r?.data?.error || 'Failed', 'err'); return; }
-      toast(`Acknowledged ${devNo}`, 'ok');
+      if (!r?.ok) { toast(r?.data?.error || 'Failed', 'error'); return; }
+      toast(`Acknowledged ${devNo}`, 'success');
       loadAll();
     } finally { setAckBusy(null); }
   }
@@ -217,8 +217,8 @@ function NewDeviationModal({ session, toast, onClose, onCreated }) {
   const [submitting, setSubmitting] = useState(false);
 
   async function submit() {
-    if (!form.title.trim() || form.title.length < 3) { toast('Title required (min 3 chars)', 'err'); return; }
-    if (!form.description.trim() || form.description.length < 10) { toast('Description required (min 10 chars)', 'err'); return; }
+    if (!form.title.trim() || form.title.length < 3) { toast('Title required (min 3 chars)', 'error'); return; }
+    if (!form.description.trim() || form.description.length < 10) { toast('Description required (min 10 chars)', 'error'); return; }
     setSubmitting(true);
     try {
       const r = await workerFetch('proposeDeviation', {
@@ -234,8 +234,8 @@ function NewDeviationModal({ session, toast, onClose, onCreated }) {
           reactive:   form.reactive,
         },
       }, session);
-      if (!r?.ok) { toast(r?.data?.error || 'Failed', 'err'); return; }
-      toast(`${r.data.deviation_no} · ${r.data.status}`, 'ok');
+      if (!r?.ok) { toast(r?.data?.error || 'Failed', 'error'); return; }
+      toast(`${r.data.deviation_no} · ${r.data.status}`, 'success');
       onCreated();
     } finally { setSubmitting(false); }
   }

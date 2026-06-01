@@ -72,7 +72,7 @@ function StockTile({ label, value, tone = 'gray' }) {
 
 export default function PartJourneyPage() {
   const { session } = useAuth();
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
 
   const [partsCat, setPartsCat] = useState([]);
   const [partCode, setPartCode] = useState('');
@@ -94,7 +94,7 @@ export default function PartJourneyPage() {
     setLoading(true);
     try {
       const r = await workerFetch('getPartJourney', { data: { part_code: code, limit: 500 } }, session);
-      if (!r?.ok) { toast(r?.data?.error || 'Load failed', 'err'); setJourney(null); return; }
+      if (!r?.ok) { toast(r?.data?.error || 'Load failed', 'error'); setJourney(null); return; }
       setJourney(r.data);
     } finally {
       setLoading(false);

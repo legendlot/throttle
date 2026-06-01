@@ -17,7 +17,7 @@ const btnS  = { background: 'transparent', border: '1px solid var(--border)', bo
 export default function DirectIssuanceNewPage() {
   const router = useRouter();
   const { session, perms } = useAuth();
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
   const allowed = hasPermission(perms, 'direct_issuance_request') || hasPermission(perms, 'users_manage');
 
   const [f, setF] = useState({
@@ -33,15 +33,15 @@ export default function DirectIssuanceNewPage() {
   function setField(k, v) { setF(prev => ({ ...prev, [k]: v })); }
 
   async function submit() {
-    if (!f.purpose) { toast('Purpose required', 'err'); return; }
+    if (!f.purpose) { toast('Purpose required', 'error'); return; }
     setSubmitting(true);
     try {
       const r = await workerFetch('saveDirectIssuance', { data: f }, session);
-      if (!r?.ok) { toast(r?.error || 'Failed', 'err'); return; }
-      toast(`${r.data.issue_no} created`, 'ok');
+      if (!r?.ok) { toast(r?.error || 'Failed', 'error'); return; }
+      toast(`${r.data.issue_no} created`, 'success');
       router.push(`/direct-issuance/detail?id=${r.data.id}`);
     } catch (e) {
-      toast(e.message || 'Failed', 'err');
+      toast(e.message || 'Failed', 'error');
     } finally { setSubmitting(false); }
   }
 

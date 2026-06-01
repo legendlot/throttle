@@ -70,7 +70,7 @@ const chipActive = { ...chip, background: '#f2cd1a', color: '#0a0a0a', border: '
 export default function DirectIssuanceListPage() {
   const router = useRouter();
   const { session, perms } = useAuth();
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
   const canRequest = hasPermission(perms, 'direct_issuance_request') || hasPermission(perms, 'users_manage');
 
   const [rows,      setRows]      = useState([]);
@@ -95,10 +95,10 @@ export default function DirectIssuanceListPage() {
       if (purposeF)  filter.purpose = purposeF;
       if (debounced) filter.search = debounced;
       const r = await workerFetch('getDirectIssuances', { data: filter }, session);
-      if (!r?.ok) { toast(r?.error || 'Failed', 'err'); setRows([]); return; }
+      if (!r?.ok) { toast(r?.error || 'Failed', 'error'); setRows([]); return; }
       setRows(Array.isArray(r.data) ? r.data : []);
     } catch (e) {
-      toast(e.message || 'Failed', 'err');
+      toast(e.message || 'Failed', 'error');
       setRows([]);
     } finally { setLoading(false); }
   }

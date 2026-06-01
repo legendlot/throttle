@@ -32,7 +32,7 @@ function DetailInner() {
   const sp = useSearchParams();
   const id = sp.get('id');
   const { session, perms } = useAuth();
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
   const canRequest = hasPermission(perms, 'direct_issuance_request') || hasPermission(perms, 'users_manage');
   const canApprove = hasPermission(perms, 'direct_issuance_approve') || hasPermission(perms, 'users_manage');
 
@@ -58,7 +58,7 @@ function DetailInner() {
     setLoading(true);
     try {
       const r = await workerFetch('getDirectIssuance', { data: { id } }, session);
-      if (!r?.ok) { toast(r?.error || 'Failed', 'err'); return; }
+      if (!r?.ok) { toast(r?.error || 'Failed', 'error'); return; }
       const { items: lines = [], history: hist = [], ...rest } = r.data || {};
       setHeader(rest);
       setItems(lines);
@@ -67,7 +67,7 @@ function DetailInner() {
       HEADER_FIELDS.forEach(k => { seed[k] = rest[k] ?? ''; });
       setForm(seed);
     } catch (e) {
-      toast(e.message || 'Failed', 'err');
+      toast(e.message || 'Failed', 'error');
     } finally { setLoading(false); }
   }, [session, canRequest, id, toast]);
 
@@ -105,16 +105,16 @@ function DetailInner() {
         notes:     it.notes,
       }));
       const r = await workerFetch('saveDirectIssuance', { data: payload }, session);
-      if (!r?.ok) { toast(r?.error || 'Save failed', 'err'); return false; }
-      toast('Saved', 'ok');
+      if (!r?.ok) { toast(r?.error || 'Save failed', 'error'); return false; }
+      toast('Saved', 'success');
       load();
       return true;
-    } catch (e) { toast(e.message || 'Failed', 'err'); return false; }
+    } catch (e) { toast(e.message || 'Failed', 'error'); return false; }
     finally { setSaving(false); }
   }
 
   async function approveAndIssue() {
-    if (items.length === 0) { toast('Add at least one item', 'err'); return; }
+    if (items.length === 0) { toast('Add at least one item', 'error'); return; }
     // Always save items first to make sure they're persisted
     setBusy(true);
     try {
@@ -122,13 +122,13 @@ function DetailInner() {
       const persisted = await saveHeader(true);
       if (!persisted) return;
       const r = await workerFetch('approveAndIssue', { data: { id } }, session);
-      if (!r?.ok) { toast(r?.error || 'Issue failed', 'err'); return; }
-      toast(`${header.issue_no} issued — ${r.data.parts_updated} parts, ${r.data.units_flipped} units`, 'ok');
+      if (!r?.ok) { toast(r?.error || 'Issue failed', 'error'); return; }
+      toast(`${header.issue_no} issued — ${r.data.parts_updated} parts, ${r.data.units_flipped} units`, 'success');
       setIssueConfirmOpen(false);
       load();
       // Trigger sticker print after a brief render
       setTimeout(() => printSticker(), 400);
-    } catch (e) { toast(e.message || 'Failed', 'err'); }
+    } catch (e) { toast(e.message || 'Failed', 'error'); }
     finally { setBusy(false); }
   }
 
@@ -136,12 +136,12 @@ function DetailInner() {
     setBusy(true);
     try {
       const r = await workerFetch('closeDirectIssuance', { data: { id, ...closeForm } }, session);
-      if (!r?.ok) { toast(r?.error || 'Close failed', 'err'); return; }
-      toast('Closed', 'ok');
+      if (!r?.ok) { toast(r?.error || 'Close failed', 'error'); return; }
+      toast('Closed', 'success');
       setCloseOpen(false);
       setCloseForm({ return_note: '', return_grn_ref: '' });
       load();
-    } catch (e) { toast(e.message || 'Failed', 'err'); }
+    } catch (e) { toast(e.message || 'Failed', 'error'); }
     finally { setBusy(false); }
   }
 
@@ -149,11 +149,11 @@ function DetailInner() {
     setBusy(true);
     try {
       const r = await workerFetch('cancelDirectIssuance', { data: { id } }, session);
-      if (!r?.ok) { toast(r?.error || 'Cancel failed', 'err'); return; }
-      toast('Cancelled', 'ok');
+      if (!r?.ok) { toast(r?.error || 'Cancel failed', 'error'); return; }
+      toast('Cancelled', 'success');
       setCancelConfirmOpen(false);
       load();
-    } catch (e) { toast(e.message || 'Failed', 'err'); }
+    } catch (e) { toast(e.message || 'Failed', 'error'); }
     finally { setBusy(false); }
   }
 

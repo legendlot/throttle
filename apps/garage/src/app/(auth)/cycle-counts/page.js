@@ -41,7 +41,7 @@ function fmtDate(d) { if (!d) return '—'; try { return new Date(d + (d.length 
 
 export default function CycleCountsPage() {
   const { session, perms } = useAuth();
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
   const canRecord  = hasPermission(perms, 'cycle_count_record');
   const canAdmin   = hasPermission(perms, 'cycle_count_admin');
 
@@ -209,7 +209,7 @@ function NewCountModal({ onClose, onCreated, session, toast }) {
   }
 
   async function submit() {
-    if (selected.size === 0) { toast('Select at least one part', 'err'); return; }
+    if (selected.size === 0) { toast('Select at least one part', 'error'); return; }
     setCreating(true);
     try {
       const r = await workerFetch('createCycleCount', {
@@ -220,8 +220,8 @@ function NewCountModal({ onClose, onCreated, session, toast }) {
           notes:      counterName ? `Counter: ${counterName.trim()}${notes ? ' · ' + notes.trim() : ''}` : (notes.trim() || null),
         },
       }, session);
-      if (!r?.ok) { toast(r?.data?.error || 'Create failed', 'err'); return; }
-      toast(`Created ${r.data.count_no} · ${r.data.lines_created} lines`, 'ok');
+      if (!r?.ok) { toast(r?.data?.error || 'Create failed', 'error'); return; }
+      toast(`Created ${r.data.count_no} · ${r.data.lines_created} lines`, 'success');
       onCreated(r.data.count_no);
     } finally { setCreating(false); }
   }
@@ -319,15 +319,15 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
 
   async function saveLine(line) {
     const val = entries[line.part_code];
-    if (val == null || val === '') { toast('Enter a count', 'err'); return; }
+    if (val == null || val === '') { toast('Enter a count', 'error'); return; }
     const counted = Number(val);
-    if (!isFinite(counted) || counted < 0) { toast('Invalid count', 'err'); return; }
+    if (!isFinite(counted) || counted < 0) { toast('Invalid count', 'error'); return; }
     setSavingPart(line.part_code);
     try {
       const r = await workerFetch('enterCycleCountLine', {
         data: { count_no: header.count_no, part_code: line.part_code, counted_qty: counted },
       }, session);
-      if (!r?.ok) { toast(r?.data?.error || 'Save failed', 'err'); return; }
+      if (!r?.ok) { toast(r?.data?.error || 'Save failed', 'error'); return; }
       // Reload to fetch updated line with revealed variance
       onReload();
       // Keep entry value for visibility
@@ -337,12 +337,12 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
   async function flagRecount() {
     if (recountSel.size === 0) return;
     const reason = recountReason.trim();
-    if (!reason) { toast('Reason required', 'err'); return; }
+    if (!reason) { toast('Reason required', 'error'); return; }
     const r = await workerFetch('requestRecount', {
       data: { line_ids: [...recountSel], reason },
     }, session);
-    if (!r?.ok) { toast(r?.data?.error || 'Failed', 'err'); return; }
-    toast(`${r.data.flagged} line(s) flagged for recount`, 'ok');
+    if (!r?.ok) { toast(r?.data?.error || 'Failed', 'error'); return; }
+    toast(`${r.data.flagged} line(s) flagged for recount`, 'success');
     setRecountSel(new Set());
     setRecountReason('');
     setRecountOpen(false);
@@ -354,9 +354,9 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
     setCompleting(true);
     try {
       const r = await workerFetch('completeCycleCount', { data: { count_no: header.count_no } }, session);
-      if (!r?.ok) { toast(r?.data?.error || 'Complete failed', 'err'); return; }
+      if (!r?.ok) { toast(r?.data?.error || 'Complete failed', 'error'); return; }
       const d = r.data;
-      toast(`Completed · ${d.lines_counted} counted · ${d.adjustments_created} adjustment(s) proposed${d.lines_recount_queued ? ` · ${d.lines_recount_queued} recount queued` : ''}`, 'ok');
+      toast(`Completed · ${d.lines_counted} counted · ${d.adjustments_created} adjustment(s) proposed${d.lines_recount_queued ? ` · ${d.lines_recount_queued} recount queued` : ''}`, 'success');
       onReload();
     } finally { setCompleting(false); }
   }
@@ -367,8 +367,8 @@ function CountDetailView({ header, lines, session, toast, onBack, onReload, canR
     setCancelling(true);
     try {
       const r = await workerFetch('cancelCycleCount', { data: { count_no: header.count_no, reason: reason.trim() } }, session);
-      if (!r?.ok) { toast(r?.data?.error || 'Cancel failed', 'err'); return; }
-      toast(`${header.count_no} cancelled`, 'ok');
+      if (!r?.ok) { toast(r?.data?.error || 'Cancel failed', 'error'); return; }
+      toast(`${header.count_no} cancelled`, 'success');
       onBack();
     } finally { setCancelling(false); }
   }

@@ -60,7 +60,7 @@ function fmtNum(n) { if (n == null) return '—'; return Number(n).toLocaleStrin
 
 export default function StockAdjustmentsPage() {
   const { session, perms } = useAuth();
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
   const canRecord     = hasPermission(perms, 'cycle_count_record');
   const canApproveL1  = hasPermission(perms, 'cycle_count_approve_l1');
   const canApproveL2  = hasPermission(perms, 'cycle_count_approve_l2');
@@ -203,7 +203,7 @@ function AdjustmentDetailModal({ adjNo, detail, loading, session, toast, canAppr
 
   async function doAction() {
     if (!action || !detail) return;
-    if ((action === 'reject' || action === 'reverse') && !reason.trim()) { toast('Reason required', 'err'); return; }
+    if ((action === 'reject' || action === 'reverse') && !reason.trim()) { toast('Reason required', 'error'); return; }
     setActing(true);
     try {
       let r;
@@ -214,8 +214,8 @@ function AdjustmentDetailModal({ adjNo, detail, loading, session, toast, canAppr
       } else if (action === 'reverse') {
         r = await workerFetch('reverseStockAdjustment', { data: { adj_no: adjNo, reason: reason.trim() } }, session);
       }
-      if (!r?.ok) { toast(r?.data?.error || 'Failed', 'err'); return; }
-      toast(`${action.toUpperCase()} · ${adjNo}${r.data?.adj_no && r.data.adj_no !== adjNo ? ` → ${r.data.adj_no}` : ''}`, 'ok');
+      if (!r?.ok) { toast(r?.data?.error || 'Failed', 'error'); return; }
+      toast(`${action.toUpperCase()} · ${adjNo}${r.data?.adj_no && r.data.adj_no !== adjNo ? ` → ${r.data.adj_no}` : ''}`, 'success');
       setAction(null);
       setReason('');
       onReload();
@@ -332,10 +332,10 @@ function NewAdjustmentModal({ session, toast, onClose, onCreated }) {
   const partOpts = useMemo(() => partsCat.map(p => ({ value: p.part_code, label: `${p.part_code}${p.part_name ? ' — ' + p.part_name : ''}` })), [partsCat]);
 
   async function submit() {
-    if (form.adj_type === 'parts' && !form.part_code) { toast('Pick a part', 'err'); return; }
-    if (form.adj_type === 'unit'  && !form.unit_upc)  { toast('Enter unit UPC', 'err'); return; }
-    if (form.after_qty === '')                         { toast('after_qty required', 'err'); return; }
-    if (form.reason_code === 'other' && !form.reason_text.trim()) { toast('Explanation required when reason=Other', 'err'); return; }
+    if (form.adj_type === 'parts' && !form.part_code) { toast('Pick a part', 'error'); return; }
+    if (form.adj_type === 'unit'  && !form.unit_upc)  { toast('Enter unit UPC', 'error'); return; }
+    if (form.after_qty === '')                         { toast('after_qty required', 'error'); return; }
+    if (form.reason_code === 'other' && !form.reason_text.trim()) { toast('Explanation required when reason=Other', 'error'); return; }
     setSubmitting(true);
     try {
       const r = await workerFetch('requestStockAdjustment', {
@@ -349,8 +349,8 @@ function NewAdjustmentModal({ session, toast, onClose, onCreated }) {
           notes:       form.notes.trim() || null,
         },
       }, session);
-      if (!r?.ok) { toast(r?.data?.error || 'Failed', 'err'); return; }
-      toast(`Created ${r.data.adj_no} · tier=${r.data.required_tier.toUpperCase()} · status=${r.data.approval_status}`, 'ok');
+      if (!r?.ok) { toast(r?.data?.error || 'Failed', 'error'); return; }
+      toast(`Created ${r.data.adj_no} · tier=${r.data.required_tier.toUpperCase()} · status=${r.data.approval_status}`, 'success');
       onCreated();
     } finally { setSubmitting(false); }
   }

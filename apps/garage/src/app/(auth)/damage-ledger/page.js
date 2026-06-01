@@ -61,7 +61,7 @@ function fmtTs(ts) {
 
 export default function DamageLedgerPage() {
   const { session, perms } = useAuth();
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
   const canEdit = hasPermission(perms, 'damage_manage');
 
   const [tab,      setTab]      = useState('pending');
@@ -155,26 +155,26 @@ export default function DamageLedgerPage() {
     if (!batchNo) return;
     try {
       const r = await workerFetch('getDamageBatch', { data: { batch_no: batchNo } }, session);
-      if (!r?.ok) { toast('Could not fetch batch', 'err'); return; }
+      if (!r?.ok) { toast('Could not fetch batch', 'error'); return; }
       const { rows: batchRows, ...header } = r.data;
-      if (!batchRows?.length) { toast('Batch is empty', 'err'); return; }
+      if (!batchRows?.length) { toast('Batch is empty', 'error'); return; }
       printWindow(buildDamageManifestHtml(header, batchRows));
     } catch (e) {
-      toast(e.message || 'Print failed', 'err');
+      toast(e.message || 'Print failed', 'error');
     }
   }
 
   async function submitRepair() {
     if (!canBatchRepair) return;
     const destination = repairForm.destination.trim();
-    if (!destination) { toast('Destination required', 'err'); return; }
+    if (!destination) { toast('Destination required', 'error'); return; }
     setActing(true);
     try {
       const r = await workerFetch('damageBatchSendToRepair', {
         data: { ledger_ids: [...selected], destination, notes: repairForm.notes.trim() },
       }, session);
-      if (!r?.ok) { toast(r?.data?.error || 'Send to repair failed', 'err'); return; }
-      toast(`Sent to repair · ${r.data.batch_no} · ${r.data.item_count} item${r.data.item_count === 1 ? '' : 's'}`, 'ok');
+      if (!r?.ok) { toast(r?.data?.error || 'Send to repair failed', 'error'); return; }
+      toast(`Sent to repair · ${r.data.batch_no} · ${r.data.item_count} item${r.data.item_count === 1 ? '' : 's'}`, 'success');
       setRepairOpen(false);
       setRepairForm({ destination: '', notes: '' });
       await loadLedger();
@@ -188,8 +188,8 @@ export default function DamageLedgerPage() {
       const r = await workerFetch('damageBatchScrap', {
         data: { ledger_ids: [...selected], notes: scrapForm.notes.trim() },
       }, session);
-      if (!r?.ok) { toast(r?.data?.error || 'Scrap failed', 'err'); return; }
-      toast(`Scrapped · ${r.data.batch_no} · ${r.data.item_count} item${r.data.item_count === 1 ? '' : 's'}`, 'ok');
+      if (!r?.ok) { toast(r?.data?.error || 'Scrap failed', 'error'); return; }
+      toast(`Scrapped · ${r.data.batch_no} · ${r.data.item_count} item${r.data.item_count === 1 ? '' : 's'}`, 'success');
       setScrapOpen(false);
       setScrapForm({ notes: '' });
       await loadLedger();
@@ -199,14 +199,14 @@ export default function DamageLedgerPage() {
   async function submitRtv() {
     if (!canBatchRtv) return;
     const destination = rtvForm.destination.trim();
-    if (!destination) { toast('Vendor required', 'err'); return; }
+    if (!destination) { toast('Vendor required', 'error'); return; }
     setActing(true);
     try {
       const r = await workerFetch('damageBatchReturnToVendor', {
         data: { ledger_ids: [...selected], destination, notes: rtvForm.notes.trim() },
       }, session);
-      if (!r?.ok) { toast(r?.data?.error || 'RTV failed', 'err'); return; }
-      toast(`Returned to vendor · ${r.data.batch_no} · ${r.data.item_count} item${r.data.item_count === 1 ? '' : 's'}`, 'ok');
+      if (!r?.ok) { toast(r?.data?.error || 'RTV failed', 'error'); return; }
+      toast(`Returned to vendor · ${r.data.batch_no} · ${r.data.item_count} item${r.data.item_count === 1 ? '' : 's'}`, 'success');
       setRtvOpen(false);
       setRtvForm({ destination: '', notes: '' });
       await loadLedger();
@@ -217,7 +217,7 @@ export default function DamageLedgerPage() {
   async function submitRecord() {
     const f = recordForm;
     if (!f.part_code.trim() || !f.part_name.trim() || !(parseInt(f.qty) > 0)) {
-      toast('Part code, name and qty required', 'err'); return;
+      toast('Part code, name and qty required', 'error'); return;
     }
     setActing(true);
     try {
@@ -232,8 +232,8 @@ export default function DamageLedgerPage() {
           entry_type: 'damage',
         },
       }, session);
-      if (!r?.ok) { toast(r?.data?.error || 'Record failed', 'err'); return; }
-      toast(`Recorded · ${r.data.ledger_no}`, 'ok');
+      if (!r?.ok) { toast(r?.data?.error || 'Record failed', 'error'); return; }
+      toast(`Recorded · ${r.data.ledger_no}`, 'success');
       setRecordOpen(false);
       setRecordForm({ part_code: '', part_name: '', product: '', qty: '', source: 'manual', reason: '', notes: '' });
       await loadLedger();
@@ -243,24 +243,24 @@ export default function DamageLedgerPage() {
   async function markRepaired(row) {
     if (!confirm(`Mark ${row.ledger_no} as repaired and restock ${row.qty} ${row.part_code}?`)) return;
     const r = await workerFetch('damageMarkRepaired', { data: { ledger_id: row.id } }, session);
-    if (!r?.ok) { toast(r?.data?.error || 'Failed', 'err'); return; }
-    toast(`${row.ledger_no} restocked +${r.data.restocked_qty}`, 'ok');
+    if (!r?.ok) { toast(r?.data?.error || 'Failed', 'error'); return; }
+    toast(`${row.ledger_no} restocked +${r.data.restocked_qty}`, 'success');
     loadLedger();
   }
   async function markNotRepairable(row) {
     const reason = prompt(`Why is ${row.ledger_no} not repairable? (becomes scrap on next batch)`);
     if (reason == null) return;
     const r = await workerFetch('damageMarkNotRepairable', { data: { ledger_id: row.id, notes: reason } }, session);
-    if (!r?.ok) { toast(r?.data?.error || 'Failed', 'err'); return; }
-    toast(`${row.ledger_no} returned to pending`, 'ok');
+    if (!r?.ok) { toast(r?.data?.error || 'Failed', 'error'); return; }
+    toast(`${row.ledger_no} returned to pending`, 'success');
     loadLedger();
   }
   async function cancelRow(row) {
     const reason = prompt(`Cancel ${row.ledger_no} — reason?`);
     if (!reason || !reason.trim()) return;
     const r = await workerFetch('damageCancel', { data: { ledger_id: row.id, reason: reason.trim() } }, session);
-    if (!r?.ok) { toast(r?.data?.error || 'Failed', 'err'); return; }
-    toast(`${row.ledger_no} cancelled`, 'ok');
+    if (!r?.ok) { toast(r?.data?.error || 'Failed', 'error'); return; }
+    toast(`${row.ledger_no} cancelled`, 'success');
     loadLedger();
   }
 

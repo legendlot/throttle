@@ -27,7 +27,7 @@ function RepackRunDetailInner() {
   const sp = useSearchParams();
   const id = sp.get('id');
   const { session, perms } = useAuth();
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
   const allowed = canManageRepack(perms);
 
   const [run, setRun]     = useState(null);
@@ -39,9 +39,9 @@ function RepackRunDetailInner() {
     setLd(true);
     try {
       const r = await workerFetch('getRepackRun', { data: { id } }, session);
-      if (!r?.ok) { toast(r?.error || 'Failed', 'err'); setRun(null); return; }
+      if (!r?.ok) { toast(r?.error || 'Failed', 'error'); setRun(null); return; }
       setRun(r.data);
-    } catch (e) { toast(e.message || 'Failed', 'err'); setRun(null); }
+    } catch (e) { toast(e.message || 'Failed', 'error'); setRun(null); }
     finally { setLd(false); }
   }, [session, allowed, id]); // eslint-disable-line
 
@@ -52,10 +52,10 @@ function RepackRunDetailInner() {
     setBusy(true);
     try {
       const r = await workerFetch(action, { data: { id } }, session);
-      if (!r?.ok) { toast(r?.error || 'Failed', 'err'); return; }
-      toast(`${label} — ${r.data.run_no || ''}`, 'ok');
+      if (!r?.ok) { toast(r?.error || 'Failed', 'error'); return; }
+      toast(`${label} — ${r.data.run_no || ''}`, 'success');
       await load();
-    } catch (e) { toast(e.message || 'Failed', 'err'); }
+    } catch (e) { toast(e.message || 'Failed', 'error'); }
     finally { setBusy(false); }
   }
 
