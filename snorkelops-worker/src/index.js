@@ -31,17 +31,19 @@ async function logActivity(actor, actorRole, action, entityType, entityId, summa
   }
 }
 
-// ── Permission gates (procurement subset, copied from lotopsproxy) ──
-const canWrite           = p => p.grn === 'write' || p.stock_issue === 'write' || p.receiving === 'write';
-const canRaisePO         = p => !!p.procurement_raise;
-const canApprovePO       = p => !!p.procurement_approve;
+// ── Permission gates — SNORKEL-ONLY permission layer (keys in store.snorkel_roles,
+//    resolved per-user via store.snorkel_user_roles; NOT the shared store.roles). ──
+const canView            = p => !!p.procurement_view;     // see PO/vendor/forwarder workspace
+const canRaisePO         = p => !!p.po_create;            // create / amend / cancel POs, status moves
+const canManageVendors   = p => !!p.vendor_manage;        // vendors / forwarders / supplied-items
 const canManageAddresses = p => !!p.company_address_manage;
-// China PO gating: procurement_china = create/amend/view-financials on China POs
-// + register products + see Soft POs. procurement_china_approve = approve China
-// POs (four-eyes enforced: approver != raiser).
-const canRaiseChinaPO    = p => !!p.procurement_china;
-const canApproveChinaPO  = p => !!p.procurement_china_approve;
-const canViewChina       = p => !!p.procurement_china;
+const canRaiseChinaPO    = p => !!p.po_china;             // China POs + product registration
+const canViewChina       = p => !!p.po_china;             // China financial visibility (strip when false)
+const canAcceptPO        = p => !!p.po_request_accept;    // Draft → Accepted (flips linked request → approved)
+const canFinalApprove    = p => !!p.po_approve;           // Accepted → Approved (final sign-off)
+const canRoutePayment    = p => !!p.payment_route;        // route payment + mark paid
+const canSnorkelAdmin    = p => !!p.snorkel_admin;        // manage Snorkel roles / assign users
+const canWrite           = p => !!p.procurement_view;     // reorder-request create (any procurement viewer)
 
 // Strip financial fields from a China PO read when caller lacks procurement_china.
 function stripChinaPOHeader(row) {
@@ -56,10 +58,15 @@ function stripChinaPOLine(line) {
   return rest;
 }
 
-async function getRolePermissions(roleId) {
-  const r = await sb(`/rest/v1/roles?role_id=eq.${encodeURIComponent(roleId)}&select=permissions&limit=1`);
-  if (!r.ok || !r.data[0]) return null;
-  return r.data[0].permissions || {};
+// Resolve a user's SNORKEL permissions: snorkel_user_roles(user) → role_key →
+// snorkel_roles.permissions. Returns {} when the user has no Snorkel role (they can
+// still file requests — request creation needs no permission key).
+async function getSnorkelPerms(userId) {
+  const ur = await sb(`/rest/v1/snorkel_user_roles?user_id=eq.${userId}&select=role_key&limit=1`);
+  if (!ur.ok || !ur.data[0]) return { __role: null, perms: {} };
+  const roleKey = ur.data[0].role_key;
+  const r = await sb(`/rest/v1/snorkel_roles?role_key=eq.${encodeURIComponent(roleKey)}&select=permissions&limit=1`);
+  return { __role: roleKey, perms: (r.ok && r.data[0]?.permissions) || {} };
 }
 
 async function verifyJWT(authHeader) {
@@ -75,11 +82,13 @@ async function verifyJWT(authHeader) {
   if (!profileRes.ok || !profileRes.data[0]) return null;
   const profile = profileRes.data[0];
   if (!profile.active) return null;
-  const permissions = await getRolePermissions(profile.role) || {};
+  // Snorkel permissions come from the Snorkel-only layer, NOT the user's global role.
+  const sp = await getSnorkelPerms(user.id);
   return {
     userId: user.id, email: user.email, role: profile.role,
     fullName: profile.full_name, mustChangePwd: profile.must_change_password,
-    permissions,
+    snorkelRole: sp.__role,
+    permissions: sp.perms,
   };
 }
 
@@ -554,6 +563,66 @@ export default {
             return ok(r.data);
           }
 
+          // ── PO Requests (free-form front door — any authed user) ──
+          case 'getRequests': {
+            // Internal procurement tool — any authenticated LOT user sees the queue.
+            const status = url.searchParams.get('status') || '';
+            const mine   = url.searchParams.get('mine');
+            let filter = '?order=created_at.desc&limit=300';
+            if (status) filter += `&status=eq.${encodeURIComponent(status)}`;
+            if (mine === '1' && userId) filter += `&requested_by_user_id=eq.${userId}`;
+            const r = await query('po_requests', filter);
+            if (!r.ok) return err(r.data);
+            return ok(r.data);
+          }
+
+          case 'getRequest': {
+            const no = url.searchParams.get('request_no');
+            if (!no) return err('request_no required');
+            const r = await query('po_requests', `?request_no=eq.${encodeURIComponent(no)}&limit=1`);
+            if (!r.ok || !r.data[0]) return err('Request not found');
+            let linkedPo = null;
+            if (r.data[0].linked_po_number) {
+              const pr = await query('purchase_orders',
+                `?po_number=eq.${encodeURIComponent(r.data[0].linked_po_number)}&select=po_number,status,vendor_name&limit=1`);
+              linkedPo = pr.data?.[0] || null;
+            }
+            return ok({ request: r.data[0], linked_po: linkedPo });
+          }
+
+          // ── Payment queue (Approved POs to route / mark paid) ──
+          case 'getPaymentQueue': {
+            if (!canRoutePayment(P) && !canView(P)) return err('Forbidden', 403);
+            const r = await query('purchase_orders',
+              `?status=eq.Approved&select=po_number,vendor_name,currency,invoice_value,payment_status,payment_routed_to,payment_requested_by,payment_requested_at,paid_by,paid_at,source_request_no,approved_at,approved_by&order=approved_at.desc&limit=200`);
+            if (!r.ok) return err(r.data);
+            return ok(r.data);
+          }
+
+          // ── Snorkel permission admin (roles are world-readable for the admin UI;
+          //    user list + writes are gated by snorkel_admin) ──
+          case 'getSnorkelRoles': {
+            const r = await query('snorkel_roles', '?order=role_key.asc');
+            if (!r.ok) return err(r.data);
+            return ok(r.data);
+          }
+
+          case 'getSnorkelUsers': {
+            if (!canSnorkelAdmin(P)) return err('Admin only', 403);
+            const r = await query('users_profile', '?order=full_name.asc&select=id,full_name,role,active');
+            if (!r.ok) return err(r.data);
+            const ur = await query('snorkel_user_roles', '?select=user_id,role_key');
+            const roleMap = {};
+            if (ur.ok) (ur.data || []).forEach(x => { roleMap[x.user_id] = x.role_key; });
+            const authUsers = await fetch(`${SUPABASE_URL}/auth/v1/admin/users?per_page=1000`, {
+              headers: { 'apikey': SUPABASE_SERVICE_KEY, 'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}` },
+            });
+            const authData = authUsers.ok ? await authUsers.json() : { users: [] };
+            const emailMap = {};
+            (authData.users || []).forEach(u => { emailMap[u.id] = u.email; });
+            return ok(r.data.map(u => ({ ...u, email: emailMap[u.id] || '', snorkel_role: roleMap[u.id] || null })));
+          }
+
           default:
             return err('Unknown action: ' + action, 400);
         }
@@ -568,7 +637,7 @@ export default {
         switch (body.action) {
 
           case 'postForwarder': {
-            if (!canRaisePO(P)) return err('No permission', 403);
+            if (!canManageVendors(P)) return err('No permission', 403);
             const d = body.data;
             if (!d.company_name) return err('company_name required');
             const iso  = countryToISO(d.country||'Other');
@@ -588,7 +657,7 @@ export default {
           }
 
           case 'updateForwarder': {
-            if (!canRaisePO(P)) return err('No permission', 403);
+            if (!canManageVendors(P)) return err('No permission', 403);
             const d = body.data;
             if (!d.forwarder_code) return err('forwarder_code required');
             const fields = ['company_name','country','location','modes_supported','sea_days',
@@ -603,7 +672,7 @@ export default {
           }
 
           case 'postVendor': {
-            if (!canRaisePO(P)) return err('No permission to add vendors', 403);
+            if (!canManageVendors(P)) return err('No permission to add vendors', 403);
             const d = body.data;
             if (!d.vendor_name) return err('vendor_name required');
             const iso  = countryToISO(d.source_country||'Other');
@@ -631,7 +700,7 @@ export default {
           }
 
           case 'updateVendor': {
-            if (!canRaisePO(P)) return err('No permission', 403);
+            if (!canManageVendors(P)) return err('No permission', 403);
             const d = body.data;
             if (!d.vendor_code) return err('vendor_code required');
             const fields = ['vendor_name','category','source_country','location','contact_name',
@@ -727,7 +796,7 @@ export default {
           }
 
           case 'postVendorSuppliedItem': {
-            if (!canRaisePO(P)) return err('No permission', 403);
+            if (!canManageVendors(P)) return err('No permission', 403);
             const d = body.data;
             if (!d.vendor_code || !d.supply_type || !d.reference) return err('vendor_code, supply_type, reference required');
             const r = await insert('vendor_supplied_items', {
@@ -743,7 +812,7 @@ export default {
           }
 
           case 'deleteVendorSuppliedItem': {
-            if (!canRaisePO(P)) return err('No permission', 403);
+            if (!canManageVendors(P)) return err('No permission', 403);
             const d = body.data;
             if (!d.id) return err('id required');
             await sb(`/rest/v1/vendor_supplied_items?id=eq.${d.id}`, { method: 'DELETE' });
@@ -784,6 +853,7 @@ export default {
               raised_by: postRole, raised_by_user_id: userId, raised_date: todayISO(),
               notes: d.notes||null,
               delivery_address_id: d.delivery_address_id ?? null,
+              source_request_no: d.source_request_no || null,
             });
             if (!r.ok) return err('PO insert failed: '+JSON.stringify(r.data));
             const lines = Array.isArray(d.lines) ? d.lines : [];
@@ -814,29 +884,53 @@ export default {
             return ok({ po_number: poNumber, status: isSoft ? 'Soft' : 'Draft' });
           }
 
-          case 'approvePO': {
+          // Draft → Accepted. This is the proc-manager's "accept" — it ALSO flips the
+          // linked PO request (if any) to `approved`. Final sign-off is finalApprovePO.
+          case 'acceptPO': {
+            if (!canAcceptPO(P)) return err('No permission to accept POs', 403);
             const d = body.data;
             if (!d.po_number) return err('po_number required');
             const existing = await query('purchase_orders', `?po_number=eq.${encodeURIComponent(d.po_number)}&limit=1`);
             if (!existing.ok||!existing.data[0]) return err('PO not found');
             const po = existing.data[0];
-            if (po.status!=='Draft') return err('Only Draft POs can be approved');
-            if (po.source === 'China') {
-              if (!canApproveChinaPO(P)) return err('China POs require procurement_china_approve permission', 403);
-              if (po.raised_by_user_id && po.raised_by_user_id === userId) {
-                return err('Four-eyes required: approver cannot be the same person who raised this China PO', 403);
-              }
-            } else {
-              if (!canApprovePO(P)) return err('No permission to approve POs', 403);
-            }
+            if (po.status !== 'Draft') return err('Only Draft POs can be accepted');
+            const now = new Date().toISOString();
             await update('purchase_orders',
-              { status: 'Approved', approved_by: postRole, approved_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+              { status: 'Accepted', accepted_by: postRole, accepted_at: now, updated_at: now },
               `po_number=eq.${encodeURIComponent(d.po_number)}`);
             await insert('po_revisions', {
-              po_number: d.po_number, revision: po.revision,
-              changed_by: postRole, change_summary: 'PO approved',
+              po_number: d.po_number, revision: po.revision, changed_by: postRole, change_summary: 'PO accepted',
             });
-            await logActivity(authResult?.fullName||postRole, postRole, 'PO_APPROVED', 'PO', d.po_number, `PO ${d.po_number} approved`, {});
+            if (po.source_request_no) {
+              await update('po_requests',
+                { status: 'approved', accepted_by: postRole, accepted_at: now, linked_po_number: d.po_number, updated_at: now },
+                `request_no=eq.${encodeURIComponent(po.source_request_no)}`);
+            }
+            await logActivity(authResult?.fullName||postRole, postRole, 'PO_ACCEPTED', 'PO', d.po_number,
+              `PO ${d.po_number} accepted${po.source_request_no ? ` (request ${po.source_request_no} approved)` : ''}`, {});
+            return ok({ po_number: d.po_number, status: 'Accepted' });
+          }
+
+          // Accepted → Approved. Final sign-off (Vinay/Afshaan). China four-eyes kept.
+          case 'finalApprovePO': {
+            if (!canFinalApprove(P)) return err('No permission for final approval', 403);
+            const d = body.data;
+            if (!d.po_number) return err('po_number required');
+            const existing = await query('purchase_orders', `?po_number=eq.${encodeURIComponent(d.po_number)}&limit=1`);
+            if (!existing.ok||!existing.data[0]) return err('PO not found');
+            const po = existing.data[0];
+            if (po.status !== 'Accepted') return err('Only Accepted POs can be approved');
+            if (po.source === 'China' && po.raised_by_user_id && po.raised_by_user_id === userId) {
+              return err('Four-eyes required: approver cannot be the person who raised this China PO', 403);
+            }
+            const now = new Date().toISOString();
+            await update('purchase_orders',
+              { status: 'Approved', approved_by: postRole, approved_at: now, updated_at: now },
+              `po_number=eq.${encodeURIComponent(d.po_number)}`);
+            await insert('po_revisions', {
+              po_number: d.po_number, revision: po.revision, changed_by: postRole, change_summary: 'PO final-approved',
+            });
+            await logActivity(authResult?.fullName||postRole, postRole, 'PO_APPROVED', 'PO', d.po_number, `PO ${d.po_number} approved (final)`, {});
             return ok({ po_number: d.po_number, status: 'Approved' });
           }
 
@@ -846,8 +940,8 @@ export default {
             const existing = await query('purchase_orders', `?po_number=eq.${encodeURIComponent(d.po_number)}&limit=1`);
             if (!existing.ok||!existing.data[0]) return err('PO not found');
             const po = existing.data[0];
-            if (d.status === 'Approved') {
-              return err('Use approvePO action to approve a PO', 400);
+            if (d.status === 'Accepted' || d.status === 'Approved') {
+              return err('Use the Accept / Final Approve actions for those transitions', 400);
             }
             if (po.source === 'China' && !canRaiseChinaPO(P)) {
               return err('China PO status changes require procurement_china permission', 403);
@@ -1058,6 +1152,150 @@ export default {
               return ok({ request_id: d.request_id, status: 'Converted' });
             }
             return err('Unknown action');
+          }
+
+          // ══════════════════════════════════════════════════
+          // PO REQUESTS — free-form front door (any authed user)
+          // ══════════════════════════════════════════════════
+          case 'postRequest': {
+            // No permission key — anyone with a @legendoftoys.com login may file a request.
+            const d = body.data || {};
+            if (!d.title || !d.details) return err('title and details required');
+            const reqNo = await nextSeq('po_request', 'PR-');
+            const r = await insert('po_requests', {
+              request_no: reqNo,
+              title: d.title, details: d.details,
+              category: d.category || null,
+              suggested_vendor: d.suggested_vendor || null,
+              estimated_cost: d.estimated_cost != null && d.estimated_cost !== '' ? Number(d.estimated_cost) : null,
+              currency: d.currency || 'INR',
+              urgency: d.urgency || 'Normal',
+              needed_by: d.needed_by || null,
+              notes: d.notes || null,
+              status: 'pending',
+              requested_by_user_id: userId,
+              requested_by_name: authResult?.fullName || postRole,
+              requested_by_email: authResult?.email || null,
+            });
+            if (!r.ok) return err('Request insert failed: ' + JSON.stringify(r.data));
+            await logActivity(authResult?.fullName||postRole, postRole, 'PO_REQUEST_CREATED', 'po_request', reqNo,
+              `PO request ${reqNo} filed — ${d.title}`, { urgency: d.urgency || 'Normal' });
+            return ok({ request_no: reqNo });
+          }
+
+          case 'cancelRequest': {
+            const d = body.data || {};
+            if (!d.request_no) return err('request_no required');
+            const ex = await query('po_requests', `?request_no=eq.${encodeURIComponent(d.request_no)}&limit=1`);
+            if (!ex.ok || !ex.data[0]) return err('Request not found');
+            const req = ex.data[0];
+            if (req.requested_by_user_id !== userId && !canSnorkelAdmin(P))
+              return err('Only the requester or an admin can cancel a request', 403);
+            if (req.status !== 'pending') return err('Only pending requests can be cancelled');
+            await update('po_requests', { status: 'cancelled', updated_at: new Date().toISOString() },
+              `request_no=eq.${encodeURIComponent(d.request_no)}`);
+            return ok({ request_no: d.request_no, status: 'cancelled' });
+          }
+
+          case 'rejectRequest': {
+            if (!canAcceptPO(P)) return err('No permission to reject requests', 403);
+            const d = body.data || {};
+            if (!d.request_no || !d.rejection_note) return err('request_no and rejection_note required');
+            await update('po_requests',
+              { status: 'rejected', rejected_by: postRole, rejection_note: d.rejection_note, updated_at: new Date().toISOString() },
+              `request_no=eq.${encodeURIComponent(d.request_no)}`);
+            await logActivity(authResult?.fullName||postRole, postRole, 'PO_REQUEST_REJECTED', 'po_request', d.request_no,
+              `PO request ${d.request_no} rejected`, { note: d.rejection_note });
+            return ok({ request_no: d.request_no, status: 'rejected' });
+          }
+
+          // ══════════════════════════════════════════════════
+          // PAYMENT ROUTING (after final approval)
+          // ══════════════════════════════════════════════════
+          case 'routePayment': {
+            if (!canRoutePayment(P)) return err('No permission to route payment', 403);
+            const d = body.data || {};
+            if (!d.po_number || !d.route_to) return err('po_number and route_to required');
+            if (!['finance','requester'].includes(d.route_to)) return err('route_to must be finance or requester');
+            const ex = await query('purchase_orders', `?po_number=eq.${encodeURIComponent(d.po_number)}&select=status&limit=1`);
+            if (!ex.ok || !ex.data[0]) return err('PO not found');
+            if (ex.data[0].status !== 'Approved') return err('Only Approved POs can be routed for payment');
+            const now = new Date().toISOString();
+            await update('purchase_orders',
+              { payment_routed_to: d.route_to, payment_status: 'requested', payment_requested_by: postRole,
+                payment_requested_at: now, payment_note: d.note || null, updated_at: now },
+              `po_number=eq.${encodeURIComponent(d.po_number)}`);
+            await logActivity(authResult?.fullName||postRole, postRole, 'PO_PAYMENT_ROUTED', 'PO', d.po_number,
+              `PO ${d.po_number} payment requested from ${d.route_to}`, { route_to: d.route_to });
+            return ok({ po_number: d.po_number, payment_routed_to: d.route_to, payment_status: 'requested' });
+          }
+
+          case 'markPaid': {
+            if (!canRoutePayment(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.po_number) return err('po_number required');
+            const now = new Date().toISOString();
+            const patch = { payment_status: 'paid', paid_by: postRole, paid_at: now, updated_at: now };
+            if (d.note) patch.payment_note = d.note;
+            await update('purchase_orders', patch, `po_number=eq.${encodeURIComponent(d.po_number)}`);
+            await logActivity(authResult?.fullName||postRole, postRole, 'PO_PAID', 'PO', d.po_number, `PO ${d.po_number} marked paid`, {});
+            return ok({ po_number: d.po_number, payment_status: 'paid' });
+          }
+
+          // ══════════════════════════════════════════════════
+          // SNORKEL PERMISSION ADMIN (snorkel_admin)
+          // ══════════════════════════════════════════════════
+          case 'createSnorkelRole': {
+            if (!canSnorkelAdmin(P)) return err('Admin only', 403);
+            const d = body.data || {};
+            if (!d.role_key || !d.label) return err('role_key and label required');
+            const key = String(d.role_key).trim().toLowerCase().replace(/\s+/g, '_');
+            const r = await insert('snorkel_roles', {
+              role_key: key, label: d.label, description: d.description || null,
+              permissions: d.permissions || {}, is_system: false,
+            });
+            if (!r.ok) return err('Create failed: ' + JSON.stringify(r.data));
+            return ok({ role_key: key });
+          }
+
+          case 'updateSnorkelRole': {
+            if (!canSnorkelAdmin(P)) return err('Admin only', 403);
+            const d = body.data || {};
+            if (!d.role_key) return err('role_key required');
+            const updates = { updated_at: new Date().toISOString() };
+            if (d.label !== undefined)       updates.label = d.label;
+            if (d.description !== undefined) updates.description = d.description;
+            if (d.permissions !== undefined) updates.permissions = d.permissions;
+            const r = await update('snorkel_roles', updates, `role_key=eq.${encodeURIComponent(d.role_key)}`);
+            if (!r.ok) return err('Update failed: ' + JSON.stringify(r.data));
+            return ok({ updated: d.role_key });
+          }
+
+          case 'deleteSnorkelRole': {
+            if (!canSnorkelAdmin(P)) return err('Admin only', 403);
+            const d = body.data || {};
+            if (!d.role_key) return err('role_key required');
+            const chk = await query('snorkel_roles', `?role_key=eq.${encodeURIComponent(d.role_key)}&limit=1`);
+            if (chk.ok && chk.data[0]?.is_system) return err('Cannot delete a system role');
+            const assigned = await query('snorkel_user_roles', `?role_key=eq.${encodeURIComponent(d.role_key)}&limit=1`);
+            if (assigned.ok && assigned.data.length) return err('Cannot delete a role with assigned users');
+            await sb(`/rest/v1/snorkel_roles?role_key=eq.${encodeURIComponent(d.role_key)}`, { method: 'DELETE' });
+            return ok({ deleted: d.role_key });
+          }
+
+          case 'assignSnorkelRole': {
+            if (!canSnorkelAdmin(P)) return err('Admin only', 403);
+            const d = body.data || {};
+            if (!d.user_id) return err('user_id required');
+            // Empty role_key → unassign (user falls back to no Snorkel perms = requester).
+            if (!d.role_key) {
+              await sb(`/rest/v1/snorkel_user_roles?user_id=eq.${encodeURIComponent(d.user_id)}`, { method: 'DELETE' });
+              return ok({ user_id: d.user_id, role_key: null });
+            }
+            const r = await insert('snorkel_user_roles',
+              { user_id: d.user_id, role_key: d.role_key, assigned_by: userId, assigned_at: new Date().toISOString() }, true);
+            if (!r.ok) return err('Assign failed: ' + JSON.stringify(r.data));
+            return ok({ user_id: d.user_id, role_key: d.role_key });
           }
 
           default:
