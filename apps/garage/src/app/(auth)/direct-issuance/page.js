@@ -7,6 +7,7 @@ import { Spinner, EmptyState, useToast } from '@throttle/ui';
 
 export const STATUSES = [
   { id: 'draft',     label: 'Draft',     tone: 'gray'   },
+  { id: 'approved',  label: 'Approved',  tone: 'blue'   },
   { id: 'issued',    label: 'Issued',    tone: 'yellow' },
   { id: 'closed',    label: 'Closed',    tone: 'green'  },
   { id: 'cancelled', label: 'Cancelled', tone: 'gray'   },
@@ -133,7 +134,7 @@ export default function DirectIssuanceListPage() {
           {/* Status filter chips */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
             <button onClick={() => setStatusF('')} style={statusF === '' ? chipActive : chip}>
-              Active · {counts.draft + counts.issued + counts.closed}
+              Active · {counts.draft + counts.approved + counts.issued + counts.closed}
             </button>
             {STATUSES.map(s => (
               <button key={s.id} onClick={() => setStatusF(s.id)} style={statusF === s.id ? chipActive : chip}>

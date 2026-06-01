@@ -52,6 +52,8 @@ function DetailInner() {
   const [closeOpen,        setCloseOpen]        = useState(false);
   const [closeForm,        setCloseForm]        = useState({ return_note: '', return_grn_ref: '' });
   const [cancelConfirmOpen,setCancelConfirmOpen]= useState(false);
+  const [forceOpen,        setForceOpen]        = useState(false);
+  const [forceForm,        setForceForm]        = useState({ reason: '' });
 
   const load = useCallback(async () => {
     if (!session || !canRequest || !id) return;
@@ -79,9 +81,10 @@ function DetailInner() {
       .catch(() => setPartsCat([]));
   }, [session]);
 
-  const isDraft  = header?.status === 'draft';
-  const isIssued = header?.status === 'issued';
-  const isClosed = header?.status === 'closed' || header?.status === 'cancelled';
+  const isDraft    = header?.status === 'draft';
+  const isApproved = header?.status === 'approved';
+  const isIssued   = header?.status === 'issued';
+  const isClosed   = header?.status === 'closed' || header?.status === 'cancelled';
 
   const dirty = useMemo(() => {
     if (!header || !isDraft) return false;
@@ -113,21 +116,36 @@ function DetailInner() {
     finally { setSaving(false); }
   }
 
-  async function approveAndIssue() {
+  // DSP V2: Approve = authorize only (no stock movement). Prints the sticker so it
+  // can be scanned out at the DSP_ISSUE station — that scan is when stock moves.
+  async function approveDI() {
     if (items.length === 0) { toast('Add at least one item', 'error'); return; }
-    // Always save items first to make sure they're persisted
     setBusy(true);
     try {
-      // Persist items first
-      const persisted = await saveHeader(true);
+      const persisted = await saveHeader(true);   // persist items first
       if (!persisted) return;
-      const r = await workerFetch('approveAndIssue', { data: { id } }, session);
-      if (!r?.ok) { toast(r?.error || 'Issue failed', 'error'); return; }
-      toast(`${header.issue_no} issued — ${r.data.parts_updated} parts, ${r.data.units_flipped} units`, 'success');
+      const r = await workerFetch('approveDI', { data: { id } }, session);
+      if (!r?.ok) { toast(r?.error || 'Approve failed', 'error'); return; }
+      toast(`${header.issue_no} approved — scan it out at DSP Issue to issue stock`, 'success');
       setIssueConfirmOpen(false);
       load();
-      // Trigger sticker print after a brief render
-      setTimeout(() => printSticker(), 400);
+      setTimeout(() => printSticker(), 400);   // sticker prints at approval now
+    } catch (e) { toast(e.message || 'Failed', 'error'); }
+    finally { setBusy(false); }
+  }
+
+  // The audited exception: issue an approved DI from the desk (no scan), with a reason.
+  async function forceIssue() {
+    const reason = (forceForm.reason || '').trim();
+    if (!reason) { toast('A reason is required to issue without a scan', 'error'); return; }
+    setBusy(true);
+    try {
+      const r = await workerFetch('forceIssueDI', { data: { id, reason } }, session);
+      if (!r?.ok) { toast(r?.error || 'Force issue failed', 'error'); return; }
+      toast(`${header.issue_no} issued (no scan) — ${r.data.parts_updated} parts, ${r.data.units_flipped} units`, 'success');
+      setForceOpen(false);
+      setForceForm({ reason: '' });
+      load();
     } catch (e) { toast(e.message || 'Failed', 'error'); }
     finally { setBusy(false); }
   }
@@ -214,20 +232,42 @@ function DetailInner() {
         <span style={{ fontSize: 11, color: 'var(--t3)' }}>
           Requested by <strong style={{ color: 'var(--t2)' }}>{header.requester_name || '—'}</strong> · {fmtTs(header.created_at)}
         </span>
+        {header.approved_at && (
+          <span style={{ fontSize: 11, color: 'var(--t3)' }}>
+            · Approved by <strong style={{ color: 'var(--t2)' }}>{header.approver_name || '—'}</strong> · {fmtTs(header.approved_at)}
+          </span>
+        )}
         {header.issued_at && (
           <span style={{ fontSize: 11, color: 'var(--t3)' }}>
-            · Issued by <strong style={{ color: 'var(--t2)' }}>{header.approver_name || '—'}</strong> · {fmtTs(header.issued_at)}
+            · Issued {header.issued_via === 'force'
+              ? <strong style={{ color: '#fbbf24' }}>without scan{header.force_issue_reason ? ` (${header.force_issue_reason})` : ''}</strong>
+              : <strong style={{ color: 'var(--t2)' }}>via scan{header.issued_device_code ? ` @ ${header.issued_device_code}` : ''}</strong>
+            } · {fmtTs(header.issued_at)}
           </span>
         )}
         <div style={{ flex: 1 }} />
         {/* Action buttons by state */}
         {isDraft && canApprove && (
           <button onClick={() => setIssueConfirmOpen(true)} style={btnP} disabled={busy || items.length === 0}>
-            APPROVE &amp; ISSUE
+            APPROVE
           </button>
         )}
         {isDraft && (
           <button onClick={() => setCancelConfirmOpen(true)} style={btnD} disabled={busy}>CANCEL DRAFT</button>
+        )}
+        {isApproved && (
+          <span style={{ fontSize: 11, color: '#7b93ff', fontFamily: 'var(--mono)', alignSelf: 'center', marginRight: 4 }}>
+            ⏳ Awaiting DSP Issue scan
+          </span>
+        )}
+        {isApproved && (
+          <button onClick={printSticker} style={btnS}>🖨 REPRINT STICKER</button>
+        )}
+        {isApproved && canApprove && (
+          <button onClick={() => setForceOpen(true)} style={btnS} disabled={busy}>FORCE ISSUE (NO SCAN)</button>
+        )}
+        {isApproved && (
+          <button onClick={() => setCancelConfirmOpen(true)} style={btnD} disabled={busy}>CANCEL</button>
         )}
         {isIssued && (
           <button onClick={printSticker} style={btnS}>🖨 PRINT STICKER</button>
@@ -465,19 +505,39 @@ function DetailInner() {
       {/* Approve & Issue confirm */}
       {issueConfirmOpen && (
         <Modal open onClose={() => setIssueConfirmOpen(false)} size="md"
-               title="Approve & Issue"
-               confirmLabel={busy ? 'ISSUING…' : 'CONFIRM ISSUE'}
-               onConfirm={approveAndIssue} loading={busy}>
+               title="Approve issuance"
+               confirmLabel={busy ? 'APPROVING…' : 'CONFIRM APPROVE'}
+               onConfirm={approveDI} loading={busy}>
           <div style={{ fontSize: 13, color: 'var(--t1)', marginBottom: 10 }}>
-            This will:
+            This authorizes the issuance and prints the DI sticker. It does <strong>not</strong> move stock yet.
           </div>
           <ul style={{ fontSize: 12, color: 'var(--t2)', lineHeight: 1.6, paddingLeft: 20, marginBottom: 12 }}>
-            {totalParts > 0 && <li>Issue <strong>{totalParts}</strong> total parts from stock — stock_ledger updated</li>}
-            {totalUnits > 0 && <li>Flip <strong>{totalUnits}</strong> unit(s) to <code>direct_issued</code> status</li>}
-            <li>Stamp you as the issuer + open the sticker print</li>
+            <li>Stamp you as the approver</li>
+            <li>Print the <strong>{header.issue_no}</strong> sticker</li>
+            {totalParts > 0 && <li>{totalParts} part(s) + </li>}
+            {totalUnits > 0 && <li>{totalUnits} unit(s) will issue <strong>when scanned out</strong> at the DSP&nbsp;Issue station</li>}
           </ul>
-          <div style={{ fontSize: 11, color: 'var(--t3)', padding: 8, background: 'rgba(245,158,11,.08)', border: '1px solid rgba(245,158,11,.2)', borderRadius: 3 }}>
-            This action is irreversible. To &ldquo;undo&rdquo;, you&apos;d need to GRN the items back.
+          <div style={{ fontSize: 11, color: 'var(--t3)', padding: 8, background: 'rgba(33,60,226,.08)', border: '1px solid rgba(33,60,226,.2)', borderRadius: 3 }}>
+            Stock moves on the <strong>DSP Issue scan</strong> — the physical record that the goods left. For a deskside hand-off with no scan, use <em>Force Issue</em> on the approved DI.
+          </div>
+        </Modal>
+      )}
+
+      {/* Force-issue (no scan) — audited exception */}
+      {forceOpen && (
+        <Modal open onClose={() => setForceOpen(false)} size="md"
+               title="Force issue (no scan)"
+               confirmLabel={busy ? 'ISSUING…' : 'CONFIRM FORCE ISSUE'}
+               onConfirm={forceIssue} loading={busy}>
+          <div style={{ fontSize: 12, color: 'var(--t2)', marginBottom: 10 }}>
+            Use only when the goods can&apos;t pass a DSP Issue scanner (e.g. a deskside hand-off). This moves stock now and is logged as <strong>issued without scan</strong> with your reason.
+          </div>
+          <div>
+            <label style={lbl}>Reason (required)</label>
+            <textarea rows={2} value={forceForm.reason} onChange={e => setForceForm({ reason: e.target.value })} placeholder="e.g. handed to marketing at desk — no floor scan" style={{ ...input, resize: 'vertical' }} />
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--t3)', marginTop: 10 }}>
+            {totalParts > 0 && <>Issues {totalParts} part(s). </>}{totalUnits > 0 && <>Flips {totalUnits} unit(s) to <code>direct_issued</code>.</>}
           </div>
         </Modal>
       )}
@@ -508,11 +568,11 @@ function DetailInner() {
       {cancelConfirmOpen && (
         <ConfirmModal
           open
-          title="Cancel draft?"
-          message="This draft will be marked cancelled. No stock will be affected."
+          title={isApproved ? 'Cancel this issuance?' : 'Cancel draft?'}
+          message="This DI will be marked cancelled. No stock has moved yet, so nothing is reversed."
           onCancel={() => setCancelConfirmOpen(false)}
           onConfirm={cancelIssuance}
-          confirmLabel="CANCEL DRAFT"
+          confirmLabel={isApproved ? 'CANCEL ISSUANCE' : 'CANCEL DRAFT'}
           loading={busy}
         />
       )}
