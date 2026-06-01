@@ -73,6 +73,12 @@ const PERM_DEFS = [
     { key: 'cs_ticket_admin',    label: 'CS Admin (force-close, depts, WA templates)', type: 'bool' },
     { key: 'cs_reports_view',    label: 'View CS Reports & Costs',           type: 'bool' },
   ] },
+  { group: 'Podium (People)', items: [
+    { key: 'podium_view',  label: 'View Podium (directory, org chart, own record)', type: 'bool' },
+    { key: 'podium_hr',    label: 'HR — manage people, roles, documents',          type: 'bool' },
+    { key: 'podium_comp',  label: 'View / edit Compensation & salary bands',        type: 'bool' },
+    { key: 'podium_admin', label: 'Podium Admin (settings, cycles, calibration)',   type: 'bool' },
+  ] },
 ];
 
 const LEVEL_OPTIONS = ['none', 'view', 'write'];
