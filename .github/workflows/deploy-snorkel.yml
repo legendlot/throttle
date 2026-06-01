@@ -1,0 +1,43 @@
+name: Deploy Snorkel
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout monorepo
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Snorkel
+        run: npx turbo build --filter=@throttle/snorkel
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          NEXT_PUBLIC_WORKER_URL: https://snorkelops.afshaan.workers.dev
+          NEXT_PUBLIC_SNORKELOPS_URL: https://snorkelops.afshaan.workers.dev
+
+      - name: Deploy to legendlot/snorkel
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          personal_token: ${{ secrets.DEPLOY_TOKEN }}
+          external_repository: legendlot/snorkel
+          publish_branch: gh-pages
+          publish_dir: apps/snorkel/out
+          cname: snorkel.legendoftoys.com
+          commit_message: 'deploy: Snorkel Procurement (LOT Monorepo)'
+          force_orphan: true
