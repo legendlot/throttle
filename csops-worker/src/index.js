@@ -444,6 +444,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'assignUserDepartment': return assignUserDepartment(body, auth, env);
     case 'setMyopDefaultDepartment': return setMyopDefaultDepartment(body, auth, env);
     case 'markCalledBack':           return markCalledBack(body, auth, env);
+    case 'resolveCallRecording':     return resolveCallRecording(body, auth, env);
     case 'createTicketFromCall':     return createTicketFromCall(body, auth, env);
     case 'sendWaMessage':            return sendWaMessage(body, auth, env);
     case 'recordInboundWaStub':      return recordInboundWaStub(body, auth, env);
@@ -1869,6 +1870,45 @@ async function markCalledBack(body, auth, env) {
   });
   if (!r.ok) return err(`mark called-back failed: ${JSON.stringify(r.data)}`, r.status);
   return ok({ call: r.data?.[0] });
+}
+
+// MyOperator CDR recording resolution. The actual MyOp CDR/recording endpoint +
+// per-account API token are NOT yet provisioned, so this is intentionally a stub:
+// when the contract is confirmed, fetch the playable URL here and return it.
+// Do NOT guess the endpoint — returning null keeps the caller graceful.
+async function fetchMyopRecordingUrl(filename, token, slug, env) {
+  // TODO(creds): GET MyOperator CDR API with `token` for `filename` → recording URL.
+  return null;
+}
+
+// Resolve a call's recording filename → playable URL via the MyOp CDR API and
+// cache it on cs_calls.recording_url. Per-account token MYOP_API_TOKEN_<UPPER_SLUG>
+// (falls back to MYOP_API_TOKEN for slug='main'). Inert + graceful until both the
+// token and the CDR endpoint (fetchMyopRecordingUrl) are wired.
+async function resolveCallRecording(body, auth, env) {
+  const g = require('cs_ticket_view', auth); if (g) return g;
+  const id = body.call_id || body.id;
+  if (!id) return err('call_id required');
+  const r = await sb(
+    `/rest/v1/cs_calls?id=eq.${encodeURIComponent(id)}&select=id,recording_filename,recording_url,myop_account:myop_account_id(slug)&limit=1`,
+    env,
+  );
+  const call = r.data?.[0];
+  if (!r.ok || !call) return err('Call not found', 404);
+  if (call.recording_url) return ok({ configured: true, found: true, recording_url: call.recording_url, cached: true });
+  if (!call.recording_filename) return ok({ configured: true, found: false, message: 'No recording on this call' });
+
+  const slug = call.myop_account?.slug || 'main';
+  const token = env[`MYOP_API_TOKEN_${slug.toUpperCase().replace(/-/g, '_')}`] || (slug === 'main' ? env.MYOP_API_TOKEN : null);
+  if (!token) return ok({ configured: false, message: `MyOp API token not set for account '${slug}'` });
+
+  const url = await fetchMyopRecordingUrl(call.recording_filename, token, slug, env);
+  if (!url) return ok({ configured: true, found: false, message: 'MyOp CDR endpoint not wired yet — confirm API contract' });
+
+  await sb(`/rest/v1/cs_calls?id=eq.${encodeURIComponent(id)}`, env, {
+    method: 'PATCH', body: JSON.stringify({ recording_url: url }), headers: { Prefer: 'return=minimal' },
+  });
+  return ok({ configured: true, found: true, recording_url: url });
 }
 
 // Build a ticket from a missed-call row. Reuses createTicket() so all the
