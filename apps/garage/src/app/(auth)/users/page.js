@@ -27,6 +27,7 @@ const PERM_DEFS = [
     { key: 'procurement_approve',       label: 'Approve POs',          type: 'bool' },
     { key: 'procurement_china',         label: 'View / Raise China POs', type: 'bool' },
     { key: 'procurement_china_approve', label: 'Approve China POs',    type: 'bool' },
+    { key: 'company_address_manage',    label: 'Manage Company Addresses', type: 'bool' },
   ] },
   { group: 'Damage / Cycle Counts', items: [
     { key: 'damage_manage',          label: 'Manage Damage Ledger', type: 'bool' },

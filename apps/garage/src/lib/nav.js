@@ -75,6 +75,7 @@ const GROUPS = [
       { id: 'library-parts',     label: 'Parts Database', route: '/library/parts',     icon: Wrench },
       { id: 'library-journey',   label: 'Part Journey',   route: '/library/journey',   icon: Route },
       { id: 'library-bag-sizes', label: 'Bag Sizes',      route: '/library/bag-sizes', icon: Scale,   gate: (p) => hasPermission(p, 'users_manage') },
+      { id: 'library-addresses', label: 'Addresses',      route: '/library/addresses', icon: Building, gate: (p) => hasPermission(p, 'company_address_manage') },
     ],
   },
   {
