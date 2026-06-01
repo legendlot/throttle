@@ -1,0 +1,14 @@
+name = "snorkelops"
+main = "src/index.js"
+compatibility_date = "2026-05-28"
+workers_dev = true
+
+# Snorkel — LOT Procurement system worker.
+# Reads/writes the SAME `store` schema tables as lotopsproxy (purchase_orders,
+# po_lines, vendors, forwarders, vendor_supplied_items, company_addresses,
+# reorder_requests, hsn_gst_rates) plus shared masters it consumes
+# (stock_ledger, material_current, bom_*, public.product_master). service_role
+# is the only DB client — no cross-worker calls.
+
+# Secrets set via `wrangler secret put` — never stored in this file:
+# SUPABASE_SERVICE_KEY   (Supabase service_role key — same project as lotopsproxy)
