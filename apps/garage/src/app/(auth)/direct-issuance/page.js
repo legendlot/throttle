@@ -124,7 +124,10 @@ export default function DirectIssuanceListPage() {
       <div style={panel}>
         <div style={phdr}>
           <span>Direct Store Issuance</span>
-          <button onClick={() => router.push('/direct-issuance/new')} style={btnP}>+ NEW ISSUE</button>
+          <span style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => router.push('/direct-issuance/reports')} style={{ ...btnP, background: 'transparent', color: 'var(--t2)', border: '1px solid var(--border)' }}>📊 Reports</button>
+            <button onClick={() => router.push('/direct-issuance/new')} style={btnP}>+ NEW ISSUE</button>
+          </span>
         </div>
         <div style={pbody}>
           {/* Status filter chips */}
