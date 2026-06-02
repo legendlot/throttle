@@ -67,7 +67,7 @@ function DetailInner() {
     if (!confirm(`Issue ${data.header.challan_no}? This locks it from further edits.`)) return;
     setBusy(true);
     try {
-      const res = await workerFetch('issueDeliveryChallan', { id }, session);
+      const res = await workerFetch('issueDeliveryChallan', { data: { id } }, session);
       if (!res.ok) showToast('Issue failed: ' + (res.error || 'unknown'), 'error');
       else {
         showToast(`Challan ${data.header.challan_no} issued`, 'success');
@@ -82,7 +82,7 @@ function DetailInner() {
     if (!confirm(`Cancel ${data.header.challan_no}?`)) return;
     setBusy(true);
     try {
-      const res = await workerFetch('cancelDeliveryChallan', { id, reason }, session);
+      const res = await workerFetch('cancelDeliveryChallan', { data: { id, reason } }, session);
       if (!res.ok) showToast('Cancel failed: ' + (res.error || 'unknown'), 'error');
       else {
         showToast(`Challan ${data.header.challan_no} cancelled`, 'info');

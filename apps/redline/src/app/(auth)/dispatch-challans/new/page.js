@@ -191,7 +191,7 @@ export default function NewChallanPage() {
         gst_rate:         Number(gstRate) || 0,
         lines:            cleanLines,
       };
-      const res = await workerFetch('createDeliveryChallan', payload, session);
+      const res = await workerFetch('createDeliveryChallan', { data: payload }, session);
       if (!res.ok) {
         showToast('Create failed: ' + (res.error || 'unknown'), 'error');
         setSaving(false);
@@ -199,7 +199,7 @@ export default function NewChallanPage() {
       }
       const created = res.data;
       if (andIssue) {
-        const iss = await workerFetch('issueDeliveryChallan', { id: created.id }, session);
+        const iss = await workerFetch('issueDeliveryChallan', { data: { id: created.id } }, session);
         if (!iss.ok) {
           showToast(`Created ${created.challan_no} as draft, but issue failed: ${iss.error || 'unknown'}`, 'info');
           router.push(`/dispatch-challans/detail?id=${created.id}`);
