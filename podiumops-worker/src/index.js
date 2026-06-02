@@ -706,10 +706,12 @@ async function getObservations(url, auth, env) {
     env,
   );
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
-  return ok({
-    observations: filterObservationsForViewer(r.data || [], auth, edges, employee_id),
-    can_add: canManage(auth, edges, employee_id),
+  const me = callerEmployee(edges, auth.userId);
+  const visible = filterObservationsForViewer(r.data || [], auth, edges, employee_id).map(row => {
+    const isAuthor = !!(me && row.author_employee_id === me.id);
+    return { ...row, _can_edit: isAuthor, _can_delete: isAuthor || isHr(auth) };
   });
+  return ok({ observations: visible, can_add: canManage(auth, edges, employee_id) });
 }
 
 const OBSERVATION_FIELDS = ['body', 'sentiment', 'tags', 'visibility', 'observed_on'];
@@ -759,7 +761,9 @@ async function getAccomplishments(url, auth, env) {
   const me = callerEmployee(edges, auth.userId);
   const r = await sb(`/rest/v1/accomplishments?employee_id=eq.${employee_id}&select=*&order=achieved_on.desc,created_at.desc`, env);
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
-  return ok({ accomplishments: r.data || [], can_add: !!(me && me.id === employee_id) });
+  const mine = !!(me && me.id === employee_id);
+  const rows = (r.data || []).map(row => ({ ...row, _can_edit: mine, _can_delete: mine || isHr(auth) }));
+  return ok({ accomplishments: rows, can_add: mine });
 }
 
 const ACCOMPLISHMENT_FIELDS = ['title', 'description', 'tags', 'achieved_on'];
@@ -801,10 +805,11 @@ async function getOneOnOnes(url, auth, env) {
     env,
   );
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
-  return ok({
-    one_on_ones: (r.data || []).map(row => projectOneOnOne(row, auth, me)),
-    can_add: canManage(auth, edges, employee_id),
+  const rows = (r.data || []).map(row => {
+    const isAuthor = !!(me && row.manager_employee_id === me.id);
+    return { ...projectOneOnOne(row, auth, me), _can_edit: isAuthor, _can_delete: isAuthor || isHr(auth) };
   });
+  return ok({ one_on_ones: rows, can_add: canManage(auth, edges, employee_id) });
 }
 
 const ONEONONE_FIELDS = ['met_on', 'shared_notes', 'private_notes', 'action_items'];
