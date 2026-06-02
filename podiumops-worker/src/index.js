@@ -638,6 +638,283 @@ async function updateSettings(body, auth, env) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// PHASE 2 — PERFORMANCE CAPTURE (observations, wins, 1:1s)
+// Access derives from the manager_id graph + isHr — no new perm keys.
+// See docs/superpowers/specs/2026-06-02-podium-phase2-performance-capture-design.md
+// ────────────────────────────────────────────────────────────────────────────
+
+async function meOf(auth, env) { return callerEmployee(await loadOrgEdges(env), auth.userId); }
+
+// Can the caller create/manage performance entries ABOUT employee E?
+// HR/admin, or an ancestor manager of E (not E themselves).
+function canManage(auth, edges, employeeId) {
+  if (isHr(auth)) return true;
+  const me = callerEmployee(edges, auth.userId);
+  if (!me || me.id === employeeId) return false;
+  return inManagerChain(edges, employeeId, me.id);
+}
+
+// All employee ids reporting (directly or transitively) up to rootEmpId. Excludes root.
+function descendantsOf(edges, rootEmpId) {
+  const out = new Set();
+  if (!rootEmpId) return out;
+  const children = {};
+  for (const e of edges) if (e.manager_id) (children[e.manager_id] ||= []).push(e.id);
+  const stack = [...(children[rootEmpId] || [])];
+  let guard = 0;
+  while (stack.length && guard++ < 10000) {
+    const id = stack.pop();
+    if (out.has(id)) continue;
+    out.add(id);
+    for (const c of (children[id] || [])) stack.push(c);
+  }
+  return out;
+}
+
+// Per-row observation visibility for `subjectId` (HR/admin already see all upstream).
+function filterObservationsForViewer(rows, auth, edges, subjectId) {
+  if (isHr(auth)) return rows;
+  const me = callerEmployee(edges, auth.userId);
+  const isSubject = !!(me && me.id === subjectId);
+  const isChainMgr = !!(me && me.id !== subjectId && inManagerChain(edges, subjectId, me.id));
+  return rows.filter(r => {
+    if (me && r.author_employee_id === me.id) return true;               // author sees own (any tier)
+    if (r.visibility === 'shared_with_employee') return isSubject || isChainMgr;
+    if (r.visibility === 'shared_with_managers') return isChainMgr;      // not the subject
+    return false;                                                        // private → author/HR only
+  });
+}
+
+// Strip a 1:1's private_notes unless the viewer is its authoring manager or HR.
+function projectOneOnOne(row, auth, me) {
+  if (isHr(auth) || (me && row.manager_employee_id === me.id)) return row;
+  return { ...row, private_notes: null, _private_hidden: true };
+}
+
+const OBS_EMBED = 'author:employees!author_employee_id(id,full_name,job_title)';
+const ONE_EMBED = 'manager:employees!manager_employee_id(id,full_name,job_title)';
+
+// ── Observations ─────────────────────────────────────────────────────────────
+
+async function getObservations(url, auth, env) {
+  const employee_id = url.searchParams.get('employee_id');
+  if (!employee_id) return err('employee_id required', 400);
+  const edges = await loadOrgEdges(env);
+  if (!canSeeFull(auth, edges, employee_id)) return err('forbidden', 403);
+  const r = await sb(
+    `/rest/v1/observations?subject_employee_id=eq.${employee_id}&select=*,${OBS_EMBED}&order=observed_on.desc,created_at.desc`,
+    env,
+  );
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
+  return ok({
+    observations: filterObservationsForViewer(r.data || [], auth, edges, employee_id),
+    can_add: canManage(auth, edges, employee_id),
+  });
+}
+
+const OBSERVATION_FIELDS = ['body', 'sentiment', 'tags', 'visibility', 'observed_on'];
+const SENTIMENTS = ['positive', 'neutral', 'constructive'];
+
+async function createObservation(body, auth, env) {
+  if (!body.subject_employee_id) return err('subject_employee_id required', 400);
+  if (!body.body) return err('body required', 400);
+  if (!SENTIMENTS.includes(body.sentiment)) return err('invalid sentiment', 400);
+  const edges = await loadOrgEdges(env);
+  if (!canManage(auth, edges, body.subject_employee_id)) return err('forbidden — not a manager of this person', 403);
+  const me = callerEmployee(edges, auth.userId);
+  if (!me) return err('no_employee_record', 403);
+  const row = {
+    subject_employee_id: body.subject_employee_id,
+    author_employee_id: me.id,
+    created_by: auth.userId,
+    ...pickFields(body, OBSERVATION_FIELDS),
+  };
+  const r = await sb(`/rest/v1/observations`, env, { method: 'POST', body: JSON.stringify([row]) });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  return ok(r.data?.[0]);
+}
+
+async function updateObservation(body, auth, env) {
+  if (!body.id) return err('id required', 400);
+  const cur = await sb(`/rest/v1/observations?id=eq.${body.id}&select=author_employee_id&limit=1`, env);
+  const row = cur.data?.[0]; if (!row) return err('not_found', 404);
+  const me = await meOf(auth, env);
+  if (!me || me.id !== row.author_employee_id) return err('forbidden — author only', 403);
+  const patch = pickPatch(body, OBSERVATION_FIELDS);
+  if (patch.sentiment && !SENTIMENTS.includes(patch.sentiment)) return err('invalid sentiment', 400);
+  patch.updated_at = nowIso();
+  if (Object.keys(patch).length === 1) return err('no_patch', 400);
+  const r = await sb(`/rest/v1/observations?id=eq.${body.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  return ok(r.data?.[0]);
+}
+
+// ── Accomplishments (wins) ───────────────────────────────────────────────────
+
+async function getAccomplishments(url, auth, env) {
+  const employee_id = url.searchParams.get('employee_id');
+  if (!employee_id) return err('employee_id required', 400);
+  const edges = await loadOrgEdges(env);
+  if (!canSeeFull(auth, edges, employee_id)) return err('forbidden', 403);
+  const me = callerEmployee(edges, auth.userId);
+  const r = await sb(`/rest/v1/accomplishments?employee_id=eq.${employee_id}&select=*&order=achieved_on.desc,created_at.desc`, env);
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
+  return ok({ accomplishments: r.data || [], can_add: !!(me && me.id === employee_id) });
+}
+
+const ACCOMPLISHMENT_FIELDS = ['title', 'description', 'tags', 'achieved_on'];
+
+async function createAccomplishment(body, auth, env) {
+  if (!body.title) return err('title required', 400);
+  const me = await meOf(auth, env);
+  if (!me) return err('no_employee_record — only employees can record wins', 403);
+  const row = { employee_id: me.id, created_by: auth.userId, ...pickFields(body, ACCOMPLISHMENT_FIELDS) };
+  const r = await sb(`/rest/v1/accomplishments`, env, { method: 'POST', body: JSON.stringify([row]) });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  return ok(r.data?.[0]);
+}
+
+async function updateAccomplishment(body, auth, env) {
+  if (!body.id) return err('id required', 400);
+  const cur = await sb(`/rest/v1/accomplishments?id=eq.${body.id}&select=employee_id&limit=1`, env);
+  const row = cur.data?.[0]; if (!row) return err('not_found', 404);
+  const me = await meOf(auth, env);
+  if (!me || me.id !== row.employee_id) return err('forbidden — author only', 403);
+  const patch = pickPatch(body, ACCOMPLISHMENT_FIELDS);
+  patch.updated_at = nowIso();
+  if (Object.keys(patch).length === 1) return err('no_patch', 400);
+  const r = await sb(`/rest/v1/accomplishments?id=eq.${body.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  return ok(r.data?.[0]);
+}
+
+// ── 1:1 notes ────────────────────────────────────────────────────────────────
+
+async function getOneOnOnes(url, auth, env) {
+  const employee_id = url.searchParams.get('employee_id'); // the report
+  if (!employee_id) return err('employee_id required', 400);
+  const edges = await loadOrgEdges(env);
+  if (!canSeeFull(auth, edges, employee_id)) return err('forbidden', 403);
+  const me = callerEmployee(edges, auth.userId);
+  const r = await sb(
+    `/rest/v1/one_on_ones?report_employee_id=eq.${employee_id}&select=*,${ONE_EMBED}&order=met_on.desc,created_at.desc`,
+    env,
+  );
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
+  return ok({
+    one_on_ones: (r.data || []).map(row => projectOneOnOne(row, auth, me)),
+    can_add: canManage(auth, edges, employee_id),
+  });
+}
+
+const ONEONONE_FIELDS = ['met_on', 'shared_notes', 'private_notes', 'action_items'];
+
+async function createOneOnOne(body, auth, env) {
+  if (!body.report_employee_id) return err('report_employee_id required', 400);
+  const edges = await loadOrgEdges(env);
+  if (!canManage(auth, edges, body.report_employee_id)) return err('forbidden — not a manager of this person', 403);
+  const me = callerEmployee(edges, auth.userId);
+  if (!me) return err('no_employee_record', 403);
+  const fields = pickFields(body, ONEONONE_FIELDS);
+  if (fields.action_items && !Array.isArray(fields.action_items)) delete fields.action_items;
+  const row = { report_employee_id: body.report_employee_id, manager_employee_id: me.id, created_by: auth.userId, ...fields };
+  const r = await sb(`/rest/v1/one_on_ones`, env, { method: 'POST', body: JSON.stringify([row]) });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  return ok(r.data?.[0]);
+}
+
+async function updateOneOnOne(body, auth, env) {
+  if (!body.id) return err('id required', 400);
+  const cur = await sb(`/rest/v1/one_on_ones?id=eq.${body.id}&select=manager_employee_id&limit=1`, env);
+  const row = cur.data?.[0]; if (!row) return err('not_found', 404);
+  const me = await meOf(auth, env);
+  if (!me || me.id !== row.manager_employee_id) return err('forbidden — author only', 403);
+  const patch = pickPatch(body, ONEONONE_FIELDS);
+  if (patch.action_items && !Array.isArray(patch.action_items)) delete patch.action_items;
+  patch.updated_at = nowIso();
+  if (Object.keys(patch).length === 1) return err('no_patch', 400);
+  const r = await sb(`/rest/v1/one_on_ones?id=eq.${body.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  return ok(r.data?.[0]);
+}
+
+// ── Shared delete (author or HR) ─────────────────────────────────────────────
+
+async function deleteEntry(table, ownerCol, body, auth, env) {
+  if (!body.id) return err('id required', 400);
+  const cur = await sb(`/rest/v1/${table}?id=eq.${body.id}&select=${ownerCol}&limit=1`, env);
+  const row = cur.data?.[0]; if (!row) return err('not_found', 404);
+  const me = await meOf(auth, env);
+  const isAuthor = !!(me && me.id === row[ownerCol]);
+  if (!isAuthor && !isHr(auth)) return err('forbidden — author or HR only', 403);
+  const r = await sb(`/rest/v1/${table}?id=eq.${body.id}`, env, { method: 'DELETE', prefer: 'return=minimal' });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  return ok({ deleted: body.id });
+}
+async function deleteObservation(body, auth, env)    { return deleteEntry('observations', 'author_employee_id', body, auth, env); }
+async function deleteAccomplishment(body, auth, env)  { return deleteEntry('accomplishments', 'employee_id', body, auth, env); }
+async function deleteOneOnOne(body, auth, env)        { return deleteEntry('one_on_ones', 'manager_employee_id', body, auth, env); }
+
+// ── Aggregate reads (My Performance + Team feed) ─────────────────────────────
+
+async function getMyPerformance(url, auth, env) {
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  if (!me) return ok({ employee_id: null, accomplishments: [], observations: [], one_on_ones: [], open_action_items: [] });
+  const [wins, obs, oned] = await Promise.all([
+    sb(`/rest/v1/accomplishments?employee_id=eq.${me.id}&select=*&order=achieved_on.desc&limit=200`, env),
+    sb(`/rest/v1/observations?subject_employee_id=eq.${me.id}&visibility=eq.shared_with_employee&select=*,${OBS_EMBED}&order=observed_on.desc&limit=200`, env),
+    sb(`/rest/v1/one_on_ones?report_employee_id=eq.${me.id}&select=*,${ONE_EMBED}&order=met_on.desc&limit=200`, env),
+  ]);
+  const oneRows = (oned.data || []).map(r => projectOneOnOne(r, auth, me)); // report ≠ author → private stripped
+  const openItems = [];
+  for (const o of oneRows)
+    for (const ai of (Array.isArray(o.action_items) ? o.action_items : []))
+      if (ai && !ai.done) openItems.push({ text: ai.text, met_on: o.met_on, one_on_one_id: o.id });
+  return ok({
+    employee_id: me.id,
+    accomplishments: wins.data || [],
+    observations: obs.data || [],            // subject view: shared_with_employee only
+    one_on_ones: oneRows,
+    open_action_items: openItems,
+  });
+}
+
+async function getTeamActivity(url, auth, env) {
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  let scope;
+  if (isHr(auth)) {
+    const focus = url.searchParams.get('employee_id');
+    scope = focus ? descendantsOf(edges, focus) : new Set(edges.map(e => e.id));
+  } else {
+    if (!me) return ok({ activity: [] });
+    scope = descendantsOf(edges, me.id);
+  }
+  const ids = [...scope];
+  if (ids.length === 0) return ok({ activity: [] });
+  const inList = `(${ids.join(',')})`;
+  const [obs, wins, oned] = await Promise.all([
+    sb(`/rest/v1/observations?subject_employee_id=in.${inList}&select=*,subject:employees!subject_employee_id(id,full_name),${OBS_EMBED}&order=observed_on.desc&limit=50`, env),
+    sb(`/rest/v1/accomplishments?employee_id=in.${inList}&select=*,employee:employees!employee_id(id,full_name)&order=achieved_on.desc&limit=50`, env),
+    sb(`/rest/v1/one_on_ones?report_employee_id=in.${inList}&select=*,report:employees!report_employee_id(id,full_name),${ONE_EMBED}&order=met_on.desc&limit=50`, env),
+  ]);
+  const obsRows = (obs.data || []).filter(r => {
+    if (isHr(auth)) return true;
+    if (me && r.author_employee_id === me.id) return true;
+    if (r.visibility === 'private') return false;
+    return !!(me && inManagerChain(edges, r.subject_employee_id, me.id)); // chain mgr sees both shared tiers
+  });
+  const onedRows = (oned.data || []).map(r => projectOneOnOne(r, auth, me));
+  const activity = [
+    ...obsRows.map(r => ({ kind: 'observation', date: r.observed_on, ...r })),
+    ...(wins.data || []).map(r => ({ kind: 'win', date: r.achieved_on, ...r })),
+    ...onedRows.map(r => ({ kind: 'one_on_one', date: r.met_on, ...r })),
+  ].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)).slice(0, 100);
+  return ok({ activity });
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // DISPATCH
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -649,6 +926,9 @@ const GET_ACTIONS = {
   getJobRoles, getJobRole,
   getCompensation,
   getDocuments, getDocumentDownloadUrl,
+  // Phase 2 — performance capture
+  getObservations, getAccomplishments, getOneOnOnes,
+  getMyPerformance, getTeamActivity,
 };
 
 const POST_ACTIONS = {
@@ -659,6 +939,10 @@ const POST_ACTIONS = {
   createDocumentUploadUrl, recordDocument, deleteDocument,
   captureOrgSnapshot,
   updateSettings,
+  // Phase 2 — performance capture
+  createObservation, updateObservation, deleteObservation,
+  createAccomplishment, updateAccomplishment, deleteAccomplishment,
+  createOneOnOne, updateOneOnOne, deleteOneOnOne,
 };
 
 async function handleGet(url, request, env) {
