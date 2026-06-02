@@ -1,6 +1,6 @@
 import {
   ShoppingCart, BarChart3, FileText, RefreshCw, Building, Truck, Package, BookOpen,
-  Inbox, Wallet, Shield, Users,
+  Inbox, Wallet, Shield, Users, Boxes, Settings,
 } from 'lucide-react';
 
 export const NAV_GROUPS = [
@@ -27,6 +27,13 @@ export const NAV_GROUPS = [
     id: 'payments', label: 'PAYMENTS', icon: Wallet,
     items: [
       { id: 'payments', label: 'Payment Queue', route: '/payments', icon: Wallet, requires: 'payment_route' },
+    ],
+  },
+  {
+    id: 'assets', label: 'ASSETS', icon: Boxes,
+    items: [
+      { id: 'assets',          label: 'Asset Register',         route: '/assets',          icon: Boxes,    requires: 'asset_view' },
+      { id: 'assets-settings', label: 'Categories & Locations', route: '/assets/settings', icon: Settings, requires: 'asset_manage' },
     ],
   },
   {
