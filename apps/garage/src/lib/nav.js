@@ -7,6 +7,7 @@ import {
   Undo2,
   BookOpen, Download, Wrench, Scale, Route,
   RefreshCw,
+  ShoppingCart, FileText,
   Users,
   Package, Factory, Store,
   Send,
@@ -78,8 +79,16 @@ const GROUPS = [
       { id: 'library-bag-sizes', label: 'Bag Sizes',      route: '/library/bag-sizes', icon: Scale,   gate: (p) => hasPermission(p, 'users_manage') },
     ],
   },
-  // PROCUREMENT moved out of Garage into Snorkel (snorkel.legendoftoys.com) — Session 94.
-  // Nav group + /procurement, /products/register, /library/addresses page dirs removed here.
+  // PROCUREMENT moved to Snorkel (snorkel.legendoftoys.com) — Session 94. All actionable
+  // procurement (raise/edit/approve POs, vendors, forwarders, reorders, new product, addresses)
+  // now lives there. Garage keeps ONE read-only Purchase Orders reference view with a banner
+  // pointing to Snorkel; the page dirs for everything else were deleted.
+  {
+    id: 'procurement', label: 'PROCUREMENT', icon: ShoppingCart,
+    items: [
+      { id: 'procurement-pos', label: 'Purchase Orders', route: '/procurement/pos', icon: FileText, gate: (p) => hasPermission(p, 'procurement_view') },
+    ],
+  },
   {
     id: 'users', label: 'USERS', flat: true, route: '/users',
     icon: Users,
