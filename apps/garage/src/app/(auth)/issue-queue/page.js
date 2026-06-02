@@ -88,6 +88,8 @@ export default function IssueQueuePage() {
   const [confirmChecked, setConfirmChecked] = useState(false);
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
   const [rejectWOModalOpen, setRejectWOModalOpen] = useState(false);
+  const [closeFulfilledOpen, setCloseFulfilledOpen] = useState(false);
+  const [closeReason, setCloseReason] = useState('');
   const [loading, setLoading] = useState(true);
   const [materialCache, setMaterialCache] = useState({});
   const [stockCache, setStockCache] = useState(null); // part_code -> total closing_stock
@@ -476,6 +478,28 @@ export default function IssueQueuePage() {
     setRejectWOModalOpen(false);
     closeItem();
     loadQueue();
+  }
+
+  // Close a short-issue request that was satisfied another way (e.g. a later ad hoc
+  // issue) — retires it with NO stock movement and resolves the linked receipt.
+  // Distinct from REJECT (which re-debits stock + contests production's receipt).
+  async function handleCloseFulfilled() {
+    if (!selectedItem) return;
+    const reason = closeReason.trim();
+    if (!reason) { showToast('Enter a reason', 'error'); return; }
+    setSubmitting(true);
+    try {
+      await workerFetch('closeShortIssueWO', { data: { wo_no: selectedItem.ref, reason } }, session);
+      showToast(`${selectedItem.ref} closed — no stock moved`, 'success');
+      setCloseFulfilledOpen(false);
+      setCloseReason('');
+      closeItem();
+      loadQueue();
+    } catch (e) {
+      showToast('Close failed: ' + (e.message || e), 'error');
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   async function handleVoidLine() {
@@ -942,6 +966,9 @@ export default function IssueQueuePage() {
                   {selectedItem.type === 'wo' && selectedItem.wo?.wo_type !== 'Short Supply' && (
                     <button style={btnDanger} onClick={() => setRejectWOModalOpen(true)} disabled={submitting}>REJECT</button>
                   )}
+                  {selectedItem.type === 'short-issue' && (
+                    <button style={btnSecondary} onClick={() => setCloseFulfilledOpen(true)} disabled={submitting}>CLOSE — FULFILLED ELSEWHERE</button>
+                  )}
                 </div>
                 <div style={{ display: 'flex', gap: 6 }}>
                   <button style={btnSecondary} onClick={setAllAsPlanned} disabled={submitting}>All as planned</button>
@@ -958,6 +985,32 @@ export default function IssueQueuePage() {
           </div>
         </div>
       )}
+
+      {/* Close short-issue as fulfilled-elsewhere (no stock movement) */}
+      <Modal
+        open={closeFulfilledOpen}
+        onClose={() => { if (!submitting) { setCloseFulfilledOpen(false); setCloseReason(''); } }}
+        title="Close short request — fulfilled elsewhere"
+        confirmLabel="Close request"
+        confirmColor="red"
+        onConfirm={handleCloseFulfilled}
+        loading={submitting}
+      >
+        <div style={{ fontSize: 12, lineHeight: 1.5 }}>
+          <p style={{ margin: '0 0 10px' }}>
+            Retires <strong style={{ fontFamily: 'var(--mono)' }}>{selectedItem?.ref}</strong> without issuing any stock — use when the short parts were already supplied another way (e.g. a separate ad hoc issue). It does <strong>not</strong> move stock or contest production&apos;s receipt.
+          </p>
+          <label style={{ display: 'block', fontSize: 11, color: 'var(--t3)', marginBottom: 4 }}>Reason *</label>
+          <input
+            type="text"
+            value={closeReason}
+            onChange={(e) => setCloseReason(e.target.value)}
+            placeholder="e.g. fulfilled via ad hoc issue ISS-397 / WO-588"
+            style={{ width: '100%', padding: '6px 8px', fontSize: 12, background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t1)' }}
+            disabled={submitting}
+          />
+        </div>
+      </Modal>
 
       {/* FEAT-020 — void pick line modal */}
       <Modal
