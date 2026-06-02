@@ -211,7 +211,7 @@ function DetailHeader({ ticket: t, onRefresh, session, stages, perms }) {
           fontWeight: 600, color: 'var(--t1)',
           marginBottom: 4,
         }}>
-          {t.customer_name} — {t.product || 'Unknown product'}{t.product_model && ` · ${t.product_model}`}
+          {t.customer_name} — {t.product || 'Unknown product'}{t.product_model && ` · ${t.product_model}`}{t.product_color && ` · ${t.product_color}`}
         </h1>
         <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--t3)', fontSize: 12 }}>{t.ticket_no}</span>
