@@ -897,8 +897,10 @@ async function getTeamActivity(url, auth, env) {
     scope = descendantsOf(edges, me.id);
   }
   const ids = [...scope];
-  if (ids.length === 0) return ok({ activity: [] });
+  if (ids.length === 0) return ok({ activity: [], team: [] });
   const inList = `(${ids.join(',')})`;
+  const teamRes = await sb(`/rest/v1/employees?id=in.${inList}&status=neq.exited&select=id,full_name,job_title&order=full_name.asc`, env);
+  const team = teamRes.data || [];
   const [obs, wins, oned] = await Promise.all([
     sb(`/rest/v1/observations?subject_employee_id=in.${inList}&select=*,subject:employees!subject_employee_id(id,full_name),${OBS_EMBED}&order=observed_on.desc&limit=50`, env),
     sb(`/rest/v1/accomplishments?employee_id=in.${inList}&select=*,employee:employees!employee_id(id,full_name)&order=achieved_on.desc&limit=50`, env),
@@ -916,7 +918,7 @@ async function getTeamActivity(url, auth, env) {
     ...(wins.data || []).map(r => ({ kind: 'win', date: r.achieved_on, ...r })),
     ...onedRows.map(r => ({ kind: 'one_on_one', date: r.met_on, ...r })),
   ].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)).slice(0, 100);
-  return ok({ activity });
+  return ok({ activity, team });
 }
 
 // ────────────────────────────────────────────────────────────────────────────
