@@ -6,7 +6,7 @@ import {
   ListChecks, CheckSquare, History, UserCog,
   Undo2,
   BookOpen, Download, Wrench, Scale, Route,
-  ShoppingCart, FileText, RefreshCw, Building, Truck,
+  RefreshCw,
   Users,
   Package, Factory, Store,
   Send,
@@ -76,22 +76,10 @@ const GROUPS = [
       { id: 'library-parts',     label: 'Parts Database', route: '/library/parts',     icon: Wrench },
       { id: 'library-journey',   label: 'Part Journey',   route: '/library/journey',   icon: Route },
       { id: 'library-bag-sizes', label: 'Bag Sizes',      route: '/library/bag-sizes', icon: Scale,   gate: (p) => hasPermission(p, 'users_manage') },
-      { id: 'library-addresses', label: 'Addresses',      route: '/library/addresses', icon: Building, gate: (p) => hasPermission(p, 'company_address_manage') },
     ],
   },
-  {
-    id: 'procurement', label: 'PROCUREMENT', icon: ShoppingCart,
-    items: [
-      { id: 'procurement-overview',   label: 'Overview',         route: '/procurement',               icon: BarChart3,  gate: (p) => hasPermission(p, 'procurement_view') },
-      { id: 'procurement-pos',        label: 'Purchase Orders',  route: '/procurement/pos',           icon: FileText,   gate: (p) => hasPermission(p, 'procurement_view') },
-      { id: 'procurement-reorders',   label: 'Reorders',         route: '/procurement/reorders',      icon: RefreshCw,  gate: (p) => hasPermission(p, 'procurement_view') },
-      { id: 'procurement-vendors',    label: 'Vendors',          route: '/procurement/vendors',       icon: Building,   gate: (p) => hasPermission(p, 'procurement_view') },
-      { id: 'procurement-forwarders', label: 'Forwarders',       route: '/procurement/forwarders',    icon: Truck,      gate: (p) => hasPermission(p, 'procurement_view') },
-      { separator: true },
-      // New Product Registration — gated on procurement_china (same restriction as China POs).
-      { id: 'products-register',      label: 'New Product',      route: '/products/register',         icon: Package,    gate: (p) => hasPermission(p, 'procurement_china') },
-    ],
-  },
+  // PROCUREMENT moved out of Garage into Snorkel (snorkel.legendoftoys.com) — Session 94.
+  // Nav group + /procurement, /products/register, /library/addresses page dirs removed here.
   {
     id: 'users', label: 'USERS', flat: true, route: '/users',
     icon: Users,
