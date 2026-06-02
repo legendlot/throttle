@@ -716,7 +716,15 @@ export default function IssueQueuePage() {
     try {
       const materials = await ensureMaterialCache();
       const today = new Date().toLocaleDateString('en-IN');
-      const partRows = issueGroup.lines.map((l) => {
+      // Fetch the COMPLETE set of issued lines by issue_no — the Recent Issues list
+      // is built from a 100-row window (getIssues), so a large multi-WO issue (e.g. a
+      // 374-line CKD run) is truncated there. Reprint must show every issued part.
+      let lines = issueGroup.lines || [];
+      try {
+        const full = await garageFetch('getIssueLines', { issue_no: issueGroup.issue_no }, session);
+        if (Array.isArray(full) && full.length) lines = full;
+      } catch { /* fall back to in-memory lines */ }
+      const partRows = lines.map((l) => {
         const bagSize = (materials[l.part_code]?.bag_size) || 25;
         const bags = Math.ceil((parseFloat(l.actual_issued) || 0) / bagSize);
         return `
