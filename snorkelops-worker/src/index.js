@@ -47,7 +47,7 @@ const canWrite           = p => !!p.procurement_view;     // reorder-request cre
 const canViewAssets      = p => !!p.asset_view || !!p.asset_manage; // read the asset register
 const canManageAssets    = p => !!p.asset_manage;         // create/edit/retire assets + manage cats/locations
 
-// Strip financial fields from a China PO read when caller lacks procurement_china.
+// Strip financial fields from a China PO read when caller lacks po_china.
 function stripChinaPOHeader(row) {
   if (!row) return row;
   const { po_value, currency, payment_terms, invoice_value, invoice_number,
@@ -644,8 +644,11 @@ export default {
           // ── Payment queue (Approved POs to route / mark paid) ──
           case 'getPaymentQueue': {
             if (!canRoutePayment(P) && !canView(P)) return err('Forbidden', 403);
+            // Approved POs awaiting payment routing PLUS any PO whose payment has been
+            // routed/paid — so a PO that later moves to Sent/Closed doesn't drop out of
+            // the queue (gives a paid-history view, not just the open queue).
             const r = await query('purchase_orders',
-              `?status=eq.Approved&select=po_number,vendor_name,currency,invoice_value,payment_status,payment_routed_to,payment_requested_by,payment_requested_at,paid_by,paid_at,source_request_no,approved_at,approved_by&order=approved_at.desc&limit=200`);
+              `?or=(status.eq.Approved,payment_status.in.(requested,paid))&select=po_number,vendor_name,currency,invoice_value,status,payment_status,payment_routed_to,payment_requested_by,payment_requested_at,paid_by,paid_at,source_request_no,approved_at,approved_by&order=approved_at.desc&limit=200`);
             if (!r.ok) return err(r.data);
             return ok(r.data);
           }
@@ -959,9 +962,9 @@ export default {
             if (!d.vendor_name||!d.source||!d.order_type) return err('vendor_name, source, order_type required');
             const isChina = d.source === 'China';
             const isSoft = d.status === 'Soft';
-            if (isChina && !canRaiseChinaPO(P)) return err('China POs require procurement_china permission', 403);
+            if (isChina && !canRaiseChinaPO(P)) return err('China POs require po_china permission', 403);
             if (isSoft && !isChina) return err("Soft status is only valid for China POs", 400);
-            if (isSoft && !canRaiseChinaPO(P)) return err('Soft POs require procurement_china permission', 403);
+            if (isSoft && !canRaiseChinaPO(P)) return err('Soft POs require po_china permission', 403);
             const srcCode  = countryToISO(d.source||'Other');
             const typeCode = {'Product':'PRD','Packaging':'PKG','Para':'PRA','Consumable':'CSM','Component':'CMP','Tools':'TLS','Machines':'MCH'}[d.order_type]||'OTH';
             const seq      = await nextSeq('po','');
@@ -1078,7 +1081,7 @@ export default {
               return err('Use the Accept / Final Approve actions for those transitions', 400);
             }
             if (po.source === 'China' && !canRaiseChinaPO(P)) {
-              return err('China PO status changes require procurement_china permission', 403);
+              return err('China PO status changes require po_china permission', 403);
             }
             if (po.source !== 'China' && !canRaisePO(P)) {
               return err('No permission to change PO status', 403);
@@ -1103,7 +1106,7 @@ export default {
             if (!existing.ok||!existing.data[0]) return err('PO not found');
             const po = existing.data[0];
             if (po.source === 'China' && !canRaiseChinaPO(P)) {
-              return err('China PO amend requires procurement_china permission', 403);
+              return err('China PO amend requires po_china permission', 403);
             }
             const newRev = po.revision+1;
             const linesR = await query('po_lines', `?po_number=eq.${encodeURIComponent(d.po_number)}&order=line_no.asc`);
@@ -1144,7 +1147,7 @@ export default {
             if (!existing.ok||!existing.data[0]) return err('PO not found');
             const po = existing.data[0];
             if (po.source === 'China' && !canRaiseChinaPO(P)) {
-              return err('China PO cancel requires procurement_china permission', 403);
+              return err('China PO cancel requires po_china permission', 403);
             }
             await update('purchase_orders',
               { status: 'Cancelled', cancellation_reason: d.reason, updated_at: new Date().toISOString() },
@@ -1159,7 +1162,7 @@ export default {
           }
 
           case 'promoteSoftPO': {
-            if (!canRaiseChinaPO(P)) return err('Restricted to procurement_china', 403);
+            if (!canRaiseChinaPO(P)) return err('Restricted to po_china', 403);
             const d = body.data;
             if (!d.po_number) return err('po_number required');
             if (!Array.isArray(d.line_links)) return err('line_links array required');
@@ -1195,7 +1198,7 @@ export default {
           }
 
           case 'registerProductFamily': {
-            if (!canRaiseChinaPO(P)) return err('Restricted to procurement_china', 403);
+            if (!canRaiseChinaPO(P)) return err('Restricted to po_china', 403);
             const d = body.data || {};
             const payload = { ...d, mode: d.mode || 'new' };
             const r = await rpc('register_product_family', { p_payload: payload, p_user_id: userId });
@@ -1208,7 +1211,7 @@ export default {
           }
 
           case 'addProductVariants': {
-            if (!canRaiseChinaPO(P)) return err('Restricted to procurement_china', 403);
+            if (!canRaiseChinaPO(P)) return err('Restricted to po_china', 403);
             const d = body.data || {};
             const payload = { ...d, mode: 'extend' };
             const r = await rpc('register_product_family', { p_payload: payload, p_user_id: userId });
