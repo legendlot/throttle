@@ -44,6 +44,8 @@ const canFinalApprove    = p => !!p.po_approve;           // Accepted → Approv
 const canRoutePayment    = p => !!p.payment_route;        // route payment + mark paid
 const canSnorkelAdmin    = p => !!p.snorkel_admin;        // manage Snorkel roles / assign users
 const canWrite           = p => !!p.procurement_view;     // reorder-request create (any procurement viewer)
+const canViewAssets      = p => !!p.asset_view || !!p.asset_manage; // read the asset register
+const canManageAssets    = p => !!p.asset_manage;         // create/edit/retire assets + manage cats/locations
 
 // Strip financial fields from a China PO read when caller lacks procurement_china.
 function stripChinaPOHeader(row) {
@@ -170,6 +172,55 @@ async function nextSeq(name, prefix) {
   const r = await rpc('next_seq', { seq_name: name });
   if (!r.ok) throw new Error('Sequence error: ' + JSON.stringify(r.data));
   return prefix + String(r.data).padStart(3, '0');
+}
+
+// ── Storage REST (private bucket snorkel-asset-docs). service_role only. ──
+// Same auth posture as sb(): the sb_secret key sent as apikey + Bearer.
+const ASSET_BUCKET = 'snorkel-asset-docs';
+async function storageFetch(path, opts = {}) {
+  const res = await fetch(`${SUPABASE_URL}/storage/v1${path}`, {
+    ...opts,
+    headers: {
+      'apikey':        SUPABASE_SERVICE_KEY,
+      'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
+      ...(opts.headers || {}),
+    },
+  });
+  const text = await res.text();
+  let data; try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  return { ok: res.ok, status: res.status, data };
+}
+function assetSafeSeg(s) { return String(s || '').replace(/[^\w.\-]+/g, '_'); }
+
+// Append an asset_history row (best-effort; never blocks the main mutation).
+async function logAssetHistory(assetId, eventType, fromVal, toVal, note, auth) {
+  try {
+    await insert('asset_history', {
+      asset_id: assetId, event_type: eventType,
+      from_value: fromVal != null ? String(fromVal) : null,
+      to_value:   toVal   != null ? String(toVal)   : null,
+      note: note || null,
+      changed_by: auth?.userId || null, changed_by_name: auth?.fullName || null,
+    });
+  } catch (e) { console.error('asset_history log failed:', e); }
+}
+
+// Writable asset columns (code/id/audit excluded). Used by create + update.
+const ASSET_WRITE_FIELDS = [
+  'name','description','category_id','status','acquisition_type','location_id',
+  'custodian_user_id','custodian_name','serial_no','model_no','secondary_ref',
+  'vendor_code','vendor_name','source_po_number','purchase_cost','currency',
+  'acquired_date','rental_cost','rental_period','rental_start_date','rental_end_date',
+  'warranty_expiry','amc_renewal',
+];
+const ASSET_INT_FIELDS = new Set(['category_id','location_id']);
+const ASSET_NUM_FIELDS = new Set(['purchase_cost','rental_cost']);
+// Coerce empty strings to NULL (date/uuid/numeric cols reject ''), numbers to numbers.
+function normAsset(field, v) {
+  if (v === '' || v === null || v === undefined) return null;
+  if (ASSET_INT_FIELDS.has(field)) { const n = Math.round(Number(v)); return Number.isNaN(n) ? null : n; }
+  if (ASSET_NUM_FIELDS.has(field)) { const n = Number(v); return Number.isNaN(n) ? null : n; }
+  return v;
 }
 
 function todayISO() { return new Date().toISOString().split('T')[0]; }
@@ -621,6 +672,89 @@ export default {
             const emailMap = {};
             (authData.users || []).forEach(u => { emailMap[u.id] = u.email; });
             return ok(r.data.map(u => ({ ...u, email: emailMap[u.id] || '', snorkel_role: roleMap[u.id] || null })));
+          }
+
+          // ── ASSET REGISTER (reads) ───────────────────────────────────
+          case 'getAssets': {
+            if (!canViewAssets(P)) return err('No permission', 403);
+            let params = '?select=*,asset_categories(name),asset_locations(name)&order=created_at.desc';
+            const st  = url.searchParams.get('status');
+            const cat = url.searchParams.get('category_id');
+            const loc = url.searchParams.get('location_id');
+            const acq = url.searchParams.get('acquisition_type');
+            if (st)  params += `&status=eq.${encodeURIComponent(st)}`;
+            if (cat) params += `&category_id=eq.${encodeURIComponent(cat)}`;
+            if (loc) params += `&location_id=eq.${encodeURIComponent(loc)}`;
+            if (acq) params += `&acquisition_type=eq.${encodeURIComponent(acq)}`;
+            const r = await query('assets', params);
+            if (!r.ok) return err(r.data);
+            const rows = (r.data || []).map(a => ({
+              ...a,
+              category_name: a.asset_categories?.name || null,
+              location_name: a.asset_locations?.name || null,
+              asset_categories: undefined, asset_locations: undefined,
+            }));
+            return ok(rows);
+          }
+
+          case 'getAsset': {
+            if (!canViewAssets(P)) return err('No permission', 403);
+            const id = url.searchParams.get('id');
+            if (!id) return err('id required');
+            const r = await query('assets', `?id=eq.${encodeURIComponent(id)}&select=*,asset_categories(name),asset_locations(name)&limit=1`);
+            if (!r.ok) return err(r.data);
+            const a = r.data?.[0];
+            if (!a) return err('Asset not found', 404);
+            const asset = {
+              ...a,
+              category_name: a.asset_categories?.name || null,
+              location_name: a.asset_locations?.name || null,
+              asset_categories: undefined, asset_locations: undefined,
+            };
+            const hist = await query('asset_history', `?asset_id=eq.${encodeURIComponent(id)}&order=created_at.desc`);
+            const docs = await query('asset_documents', `?asset_id=eq.${encodeURIComponent(id)}&order=created_at.desc`);
+            return ok({ asset, history: hist.ok ? hist.data : [], documents: docs.ok ? docs.data : [] });
+          }
+
+          case 'getAssetCategories': {
+            if (!canViewAssets(P)) return err('No permission', 403);
+            const all = url.searchParams.get('all') === '1';
+            const r = await query('asset_categories', `${all ? '?' : '?is_active=eq.true&'}order=sort_order.asc,name.asc`);
+            if (!r.ok) return err(r.data);
+            return ok(r.data);
+          }
+
+          case 'getAssetLocations': {
+            if (!canViewAssets(P)) return err('No permission', 403);
+            const all = url.searchParams.get('all') === '1';
+            const r = await query('asset_locations', `${all ? '?' : '?is_active=eq.true&'}order=sort_order.asc,name.asc`);
+            if (!r.ok) return err(r.data);
+            return ok(r.data);
+          }
+
+          case 'getAssetUsers': {
+            // Custodian picker (manage forms only). Active LOT users, id + name.
+            if (!canManageAssets(P)) return err('No permission', 403);
+            const r = await query('users_profile', '?active=eq.true&order=full_name.asc&select=id,full_name');
+            if (!r.ok) return err(r.data);
+            return ok(r.data);
+          }
+
+          case 'getAssetDocumentDownloadUrl': {
+            if (!canViewAssets(P)) return err('No permission', 403);
+            const docId = url.searchParams.get('document_id');
+            if (!docId) return err('document_id required');
+            const dr = await query('asset_documents', `?id=eq.${encodeURIComponent(docId)}&select=*&limit=1`);
+            if (!dr.ok) return err(dr.data);
+            const doc = dr.data?.[0];
+            if (!doc) return err('Document not found', 404);
+            const seg = String(doc.storage_path).split('/').map(encodeURIComponent).join('/');
+            const sr = await storageFetch(`/object/sign/${ASSET_BUCKET}/${seg}`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ expiresIn: 120 }),
+            });
+            if (!sr.ok || !sr.data?.signedURL) return err(`sign_failed: ${JSON.stringify(sr.data)}`, 502);
+            return ok({ url: `${SUPABASE_URL}/storage/v1${sr.data.signedURL}`, file_name: doc.file_name, mime_type: doc.mime_type });
           }
 
           default:
@@ -1296,6 +1430,141 @@ export default {
               { user_id: d.user_id, role_key: d.role_key, assigned_by: userId, assigned_at: new Date().toISOString() }, true);
             if (!r.ok) return err('Assign failed: ' + JSON.stringify(r.data));
             return ok({ user_id: d.user_id, role_key: d.role_key });
+          }
+
+          // ── ASSET REGISTER (writes) ──────────────────────────────────
+          case 'createAsset': {
+            if (!canManageAssets(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.name) return err('name required');
+            const sres = await rpc('next_seq', { seq_name: 'asset' });
+            if (!sres.ok) return err('Sequence error: ' + JSON.stringify(sres.data));
+            const asset_code = 'AST-' + String(sres.data).padStart(4, '0');
+            const row = { asset_code, created_by: userId, created_by_name: authResult.fullName };
+            ASSET_WRITE_FIELDS.forEach(f => { if (d[f] !== undefined) row[f] = normAsset(f, d[f]); });
+            const r = await insert('assets', row, false);
+            if (!r.ok) return err('Asset insert failed: ' + JSON.stringify(r.data));
+            const created = Array.isArray(r.data) ? r.data[0] : r.data;
+            await logAssetHistory(created.id, 'created', null, asset_code, d.name, authResult);
+            return ok({ id: created.id, asset_code });
+          }
+
+          case 'updateAsset': {
+            if (!canManageAssets(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.id) return err('id required');
+            const cur = await query('assets', `?id=eq.${encodeURIComponent(d.id)}&limit=1`);
+            if (!cur.ok || !cur.data[0]) return err('Asset not found', 404);
+            const prev = cur.data[0];
+            const updates = { updated_at: new Date().toISOString() };
+            ASSET_WRITE_FIELDS.forEach(f => { if (d[f] !== undefined) updates[f] = normAsset(f, d[f]); });
+            const r = await update('assets', updates, `id=eq.${encodeURIComponent(d.id)}`);
+            if (!r.ok) return err('Update failed: ' + JSON.stringify(r.data));
+            // Diff-aware history.
+            let logged = false;
+            if (updates.status !== undefined && updates.status !== prev.status) {
+              await logAssetHistory(d.id, 'status_change', prev.status, updates.status, null, authResult); logged = true;
+            }
+            const custChanged = (updates.custodian_user_id !== undefined && updates.custodian_user_id !== prev.custodian_user_id)
+                             || (updates.custodian_name !== undefined && updates.custodian_name !== prev.custodian_name);
+            if (custChanged) {
+              await logAssetHistory(d.id, 'custody_transfer', prev.custodian_name, updates.custodian_name ?? prev.custodian_name, null, authResult); logged = true;
+            }
+            if (updates.location_id !== undefined && updates.location_id !== prev.location_id) {
+              await logAssetHistory(d.id, 'location_change', prev.location_id, updates.location_id, null, authResult); logged = true;
+            }
+            if (!logged) await logAssetHistory(d.id, 'updated', null, null, null, authResult);
+            return ok({ updated: d.id });
+          }
+
+          case 'retireAsset': {
+            if (!canManageAssets(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.id) return err('id required');
+            const cur = await query('assets', `?id=eq.${encodeURIComponent(d.id)}&select=status&limit=1`);
+            if (!cur.ok || !cur.data[0]) return err('Asset not found', 404);
+            const r = await update('assets', {
+              status: 'retired', retired_at: new Date().toISOString(),
+              retired_reason: d.reason || null, updated_at: new Date().toISOString(),
+            }, `id=eq.${encodeURIComponent(d.id)}`);
+            if (!r.ok) return err('Retire failed: ' + JSON.stringify(r.data));
+            await logAssetHistory(d.id, 'retired', cur.data[0].status, 'retired', d.reason || null, authResult);
+            return ok({ retired: d.id });
+          }
+
+          case 'createAssetDocumentUploadUrl': {
+            if (!canManageAssets(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.asset_id) return err('asset_id required');
+            if (!d.file_name) return err('file_name required');
+            const docType = d.doc_type || 'other';
+            const path = `${d.asset_id}/${assetSafeSeg(docType)}/${Date.now()}_${assetSafeSeg(d.file_name)}`;
+            const sr = await storageFetch(`/object/upload/sign/${ASSET_BUCKET}/${path}`, { method: 'POST' });
+            if (!sr.ok || !sr.data?.url) return err(`sign_failed: ${JSON.stringify(sr.data)}`, 502);
+            const tokenMatch = String(sr.data.url).match(/token=([^&]+)/);
+            return ok({ storage_path: path, token: tokenMatch ? decodeURIComponent(tokenMatch[1]) : null, signed_url: sr.data.url });
+          }
+
+          case 'recordAssetDocument': {
+            if (!canManageAssets(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.asset_id) return err('asset_id required');
+            if (!d.storage_path) return err('storage_path required');
+            const r = await insert('asset_documents', {
+              asset_id: d.asset_id, doc_type: d.doc_type || 'other',
+              file_name: d.file_name || null, storage_path: d.storage_path,
+              mime_type: d.mime_type || null,
+              uploaded_by: userId, uploaded_by_name: authResult.fullName,
+            }, false);
+            if (!r.ok) return err('Document record failed: ' + JSON.stringify(r.data));
+            await logAssetHistory(d.asset_id, 'document_added', null, d.doc_type || 'other', d.file_name || null, authResult);
+            return ok(Array.isArray(r.data) ? r.data[0] : r.data);
+          }
+
+          case 'deleteAssetDocument': {
+            if (!canManageAssets(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.document_id) return err('document_id required');
+            const dr = await query('asset_documents', `?id=eq.${encodeURIComponent(d.document_id)}&select=asset_id,storage_path,file_name&limit=1`);
+            const doc = dr.ok ? dr.data?.[0] : null;
+            const del = await sb(`/rest/v1/asset_documents?id=eq.${encodeURIComponent(d.document_id)}`, { method: 'DELETE', prefer: 'return=minimal' });
+            if (!del.ok) return err('Delete failed: ' + JSON.stringify(del.data));
+            if (doc?.storage_path) {
+              const seg = String(doc.storage_path).split('/').map(encodeURIComponent).join('/');
+              await storageFetch(`/object/${ASSET_BUCKET}/${seg}`, { method: 'DELETE' });
+              await logAssetHistory(doc.asset_id, 'document_removed', doc.file_name || null, null, null, authResult);
+            }
+            return ok({ deleted: d.document_id });
+          }
+
+          case 'createAssetCategory':
+          case 'createAssetLocation': {
+            if (!canManageAssets(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.name) return err('name required');
+            const tbl = body.action === 'createAssetCategory' ? 'asset_categories' : 'asset_locations';
+            const r = await insert(tbl, {
+              name: d.name, sort_order: d.sort_order != null ? Math.round(Number(d.sort_order)) : 0,
+              is_active: d.is_active !== false,
+            }, false);
+            if (!r.ok) return err('Insert failed: ' + JSON.stringify(r.data));
+            return ok(Array.isArray(r.data) ? r.data[0] : r.data);
+          }
+
+          case 'updateAssetCategory':
+          case 'updateAssetLocation': {
+            if (!canManageAssets(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.id) return err('id required');
+            const tbl = body.action === 'updateAssetCategory' ? 'asset_categories' : 'asset_locations';
+            const updates = {};
+            if (d.name !== undefined)       updates.name = d.name;
+            if (d.is_active !== undefined)  updates.is_active = !!d.is_active;
+            if (d.sort_order !== undefined) updates.sort_order = Math.round(Number(d.sort_order));
+            if (!Object.keys(updates).length) return err('nothing to update');
+            const r = await update(tbl, updates, `id=eq.${encodeURIComponent(d.id)}`);
+            if (!r.ok) return err('Update failed: ' + JSON.stringify(r.data));
+            return ok({ updated: d.id });
           }
 
           default:
