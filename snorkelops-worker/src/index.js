@@ -691,10 +691,15 @@ export default {
             if (acq) params += `&acquisition_type=eq.${encodeURIComponent(acq)}`;
             const r = await query('assets', params);
             if (!r.ok) return err(r.data);
+            // Document counts (one query, counted in-worker — avoids N subrequests).
+            const dcRes = await query('asset_documents', '?select=asset_id');
+            const dc = {};
+            if (dcRes.ok) (dcRes.data || []).forEach(d => { dc[d.asset_id] = (dc[d.asset_id] || 0) + 1; });
             const rows = (r.data || []).map(a => ({
               ...a,
               category_name: a.asset_categories?.name || null,
               location_name: a.asset_locations?.name || null,
+              doc_count: dc[a.id] || 0,
               asset_categories: undefined, asset_locations: undefined,
             }));
             return ok(rows);

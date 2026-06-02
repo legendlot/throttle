@@ -8,7 +8,7 @@ import {
   panelStyle, panelHeaderStyle, tableThStyle, tableTdStyle, selectStyle, inputStyle,
   btnPrimary, btnSecondary, pageH1, pageSub, StatusBadge, fmtDate,
 } from '@/lib/snorkelui';
-import { ASSET_STATUSES, ACQ_TYPES, statusLabel, statusTone, acqLabel } from '@/lib/assets';
+import { ASSET_STATUSES, ACQ_TYPES, statusLabel, statusTone, acqLabel, assetExpiry, isExpiring } from '@/lib/assets';
 
 function costCell(a) {
   if (a.acquisition_type === 'rented') {
@@ -19,6 +19,15 @@ function costCell(a) {
   return `${a.currency || ''} ${Number(a.purchase_cost).toLocaleString('en-IN')}`;
 }
 
+const tileStyle = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: '10px 14px', minWidth: 110 };
+const tileNum   = { fontFamily: 'var(--cond)', fontSize: 24, fontWeight: 900, lineHeight: 1 };
+const tileLbl   = { fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 4 };
+
+function csvCell(v) {
+  const s = v == null ? '' : String(v);
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
 export default function AssetListPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
@@ -27,6 +36,7 @@ export default function AssetListPage() {
   const [cats, setCats] = useState([]);
   const [locs, setLocs] = useState([]);
   const [filters, setFilters] = useState({ status: '', category_id: '', location_id: '', acquisition_type: '' });
+  const [expiringOnly, setExpiringOnly] = useState(false);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
 
@@ -61,7 +71,7 @@ export default function AssetListPage() {
     return <div style={{ padding: 24, color: 'var(--t3)' }}>Access restricted.</div>;
   }
 
-  const filtered = !search.trim() ? rows : (() => {
+  let filtered = !search.trim() ? rows : (() => {
     const tokens = search.toLowerCase().split(/\s+/).filter(Boolean);
     return rows.filter(r => {
       const fields = [r.asset_code, r.name, r.serial_no, r.model_no, r.secondary_ref,
@@ -70,6 +80,36 @@ export default function AssetListPage() {
       return tokens.every(t => fields.some(f => f.includes(t)));
     });
   })();
+  if (expiringOnly) filtered = filtered.filter(r => isExpiring(r));
+
+  // KPI tiles (computed over the full loaded set, not the text-filtered view)
+  const kpi = {
+    total: rows.length,
+    in_use: rows.filter(r => r.status === 'in_use').length,
+    in_storage: rows.filter(r => r.status === 'in_storage').length,
+    attention: rows.filter(r => r.status === 'damaged' || r.status === 'in_repair').length,
+    expiring: rows.filter(r => isExpiring(r)).length,
+  };
+
+  function exportCsv() {
+    const cols = ['Code', 'Name', 'Category', 'Status', 'Acquisition', 'Location', 'Custodian',
+      'Serial', 'Model', 'Secondary Ref', 'Vendor', 'Currency', 'Purchase Cost', 'Rental Cost',
+      'Rental Period', 'Source PO', 'Warranty Expiry', 'AMC Renewal', 'Docs'];
+    const lines = [cols.join(',')];
+    for (const a of filtered) {
+      lines.push([
+        a.asset_code, a.name, a.category_name, statusLabel(a.status), acqLabel(a.acquisition_type),
+        a.location_name, a.custodian_name, a.serial_no, a.model_no, a.secondary_ref, a.vendor_name,
+        a.currency, a.purchase_cost, a.rental_cost, a.rental_period, a.source_po_number,
+        a.warranty_expiry, a.amc_renewal, a.doc_count ?? 0,
+      ].map(csvCell).join(','));
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `lot-asset-register-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  }
 
   return (
     <div style={{ color: 'var(--t1)' }}>
@@ -78,12 +118,30 @@ export default function AssetListPage() {
           <h1 style={pageH1}>Asset Register</h1>
           <p style={pageSub}>What we own &amp; rent — where it is, who has it, what it cost.</p>
         </div>
-        {canManage && <button style={btnPrimary} onClick={() => router.push('/assets/new')}>+ New Asset</button>}
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button style={btnSecondary} onClick={exportCsv} disabled={!filtered.length}>↓ Export CSV</button>
+          {canManage && <button style={btnPrimary} onClick={() => router.push('/assets/new')}>+ New Asset</button>}
+        </div>
+      </div>
+
+      {/* KPI tiles */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+        <div style={tileStyle}><div style={tileNum}>{kpi.total}</div><div style={tileLbl}>Total assets</div></div>
+        <div style={tileStyle}><div style={{ ...tileNum, color: '#4ade80' }}>{kpi.in_use}</div><div style={tileLbl}>In use</div></div>
+        <div style={tileStyle}><div style={{ ...tileNum, color: '#7b93ff' }}>{kpi.in_storage}</div><div style={tileLbl}>In storage</div></div>
+        <div style={tileStyle}><div style={{ ...tileNum, color: '#ff7070' }}>{kpi.attention}</div><div style={tileLbl}>Damaged / repair</div></div>
+        <div
+          style={{ ...tileStyle, cursor: 'pointer', borderColor: expiringOnly ? 'var(--yellow)' : 'var(--border)' }}
+          onClick={() => setExpiringOnly(v => !v)}
+          title="Warranty or AMC expired / within 60 days — click to filter"
+        >
+          <div style={{ ...tileNum, color: '#f2cd1a' }}>{kpi.expiring}</div><div style={tileLbl}>Expiring ⚠</div>
+        </div>
       </div>
 
       <div style={panelStyle}>
         <div style={panelHeaderStyle}>
-          <span>Filters {search.trim() && <span style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontWeight: 400, fontSize: 11 }}>· {filtered.length} of {rows.length}</span>}</span>
+          <span>Filters {(search.trim() || expiringOnly) && <span style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontWeight: 400, fontSize: 11 }}>· {filtered.length} of {rows.length}</span>}</span>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
             <input type="text" data-search-primary placeholder="Search code / name / serial · /" value={search} onChange={e => setSearch(e.target.value)} style={{ ...inputStyle, fontFamily: 'var(--mono)', minWidth: 200 }} />
             <select value={filters.status} onChange={e => setFilters(f => ({ ...f, status: e.target.value }))} style={selectStyle}>
@@ -102,6 +160,9 @@ export default function AssetListPage() {
               <option value="">All Locations</option>
               {locs.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
             </select>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--t2)', fontFamily: 'var(--mono)', cursor: 'pointer' }}>
+              <input type="checkbox" checked={expiringOnly} onChange={e => setExpiringOnly(e.target.checked)} /> Expiring
+            </label>
             <button style={btnSecondary} onClick={load} disabled={loading}>↻ Refresh</button>
           </div>
         </div>
@@ -121,20 +182,33 @@ export default function AssetListPage() {
                 <th style={tableThStyle}>Location</th>
                 <th style={tableThStyle}>Custodian</th>
                 <th style={tableThStyle}>Cost</th>
+                <th style={tableThStyle}>Warr/AMC</th>
+                <th style={{ ...tableThStyle, textAlign: 'center' }}>Docs</th>
               </tr></thead>
               <tbody>
-                {filtered.map(a => (
-                  <tr key={a.id} style={{ cursor: 'pointer' }} onClick={() => router.push(`/assets/detail?id=${encodeURIComponent(a.id)}`)}>
-                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{a.asset_code}</td>
-                    <td style={tableTdStyle}>{a.name}</td>
-                    <td style={tableTdStyle}>{a.category_name || '—'}</td>
-                    <td style={tableTdStyle}><StatusBadge label={statusLabel(a.status)} tone={statusTone(a.status)} /></td>
-                    <td style={tableTdStyle}>{acqLabel(a.acquisition_type)}</td>
-                    <td style={tableTdStyle}>{a.location_name || '—'}</td>
-                    <td style={tableTdStyle}>{a.custodian_name || '—'}</td>
-                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{costCell(a)}</td>
-                  </tr>
-                ))}
+                {filtered.map(a => {
+                  const exp = assetExpiry(a);
+                  return (
+                    <tr key={a.id} style={{ cursor: 'pointer' }} onClick={() => router.push(`/assets/detail?id=${encodeURIComponent(a.id)}`)}>
+                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{a.asset_code}</td>
+                      <td style={tableTdStyle}>{a.name}</td>
+                      <td style={tableTdStyle}>{a.category_name || '—'}</td>
+                      <td style={tableTdStyle}><StatusBadge label={statusLabel(a.status)} tone={statusTone(a.status)} /></td>
+                      <td style={tableTdStyle}>{acqLabel(a.acquisition_type)}</td>
+                      <td style={tableTdStyle}>{a.location_name || '—'}</td>
+                      <td style={tableTdStyle}>{a.custodian_name || <span style={{ color: 'var(--t3)' }}>—</span>}</td>
+                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{costCell(a)}</td>
+                      <td style={tableTdStyle}>
+                        {exp
+                          ? <StatusBadge label={exp.level === 'expired' ? `${exp.what} expired` : `${exp.what} ${exp.days}d`} tone={exp.tone} />
+                          : <span style={{ color: 'var(--t3)' }}>—</span>}
+                      </td>
+                      <td style={{ ...tableTdStyle, textAlign: 'center', fontFamily: 'var(--mono)', color: a.doc_count ? 'var(--t1)' : 'var(--t3)' }}>
+                        {a.doc_count ? `📎 ${a.doc_count}` : '—'}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}

@@ -12,6 +12,7 @@ import {
 import {
   ASSET_STATUSES, ACQ_TYPES, RENTAL_PERIODS, DOC_TYPES,
   statusLabel, statusTone, acqLabel, docTypeLabel, HISTORY_LABELS,
+  assetExpiry, printAssetLabel,
 } from '@/lib/assets';
 
 const ASSET_BUCKET = 'snorkel-asset-docs';
@@ -216,6 +217,7 @@ function AssetDetail() {
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button style={btnSecondary} onClick={() => router.push('/assets')}>← Back</button>
+          {!editing && <button style={btnSecondary} onClick={() => printAssetLabel(a)}>🏷 Print Label</button>}
           {canManage && !editing && <button style={btnPrimary} onClick={startEdit}>Edit</button>}
           {canManage && !editing && a.status !== 'retired' && <button style={btnDanger} onClick={retire}>Retire</button>}
         </div>
@@ -272,7 +274,14 @@ function AssetDetail() {
               </> : <>
                 <Read label="Purchase cost" value={a.purchase_cost != null ? `${a.currency || ''} ${Number(a.purchase_cost).toLocaleString('en-IN')}` : null} />
                 <Read label="Acquired date" value={fmtDate(a.acquired_date)} />
-                <Read label="Source PO" value={a.source_po_number} />
+                <div>
+                  <div style={labelStyle}>Source PO</div>
+                  <div style={{ fontSize: 13 }}>
+                    {a.source_po_number
+                      ? <a href={`/procurement/pos/print?po_number=${encodeURIComponent(a.source_po_number)}`} target="_blank" rel="noopener noreferrer" style={{ color: '#7b93ff', textDecoration: 'none' }}>{a.source_po_number} ↗</a>
+                      : <span style={{ color: 'var(--t3)' }}>—</span>}
+                  </div>
+                </div>
               </>}
             </div>
           ) : (
@@ -303,6 +312,16 @@ function AssetDetail() {
             <div style={grid}>
               <Read label="Warranty expiry" value={fmtDate(a.warranty_expiry)} />
               <Read label="AMC renewal" value={fmtDate(a.amc_renewal)} />
+              {assetExpiry(a) && (
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <StatusBadge
+                    label={assetExpiry(a).level === 'expired'
+                      ? `${assetExpiry(a).what} expired ${Math.abs(assetExpiry(a).days)}d ago`
+                      : `${assetExpiry(a).what} expires in ${assetExpiry(a).days}d`}
+                    tone={assetExpiry(a).tone}
+                  />
+                </div>
+              )}
             </div>
           ) : (
             <div style={grid}>
