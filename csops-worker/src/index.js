@@ -287,6 +287,10 @@ const BRANCH_STAGES = {
   // they resolve out of the shared flow. allowedTransitions already does BRANCH_STAGES[d] || [].
 };
 const SIDE_EXITS = ['cancelled', 'rejected', 'escalated'];
+// closed_reason is a constrained enum (cs_tickets_closed_reason_check). Free-text
+// reasons (e.g. the cancel modal's note) must never be written into it — they get
+// coerced to the stage default and preserved as a history note instead.
+const ALLOWED_CLOSED_REASONS = ['resolved', 'duplicate', 'no_response', 'wrong_system', 'goodwill', 'rejected', 'no_action', 'historical_import'];
 
 // Returns the next allowed stages for a given (current, disposition)
 function allowedTransitions(current, disposition) {
@@ -1193,12 +1197,22 @@ async function advanceStage(body, auth, env, request) {
   if (target_stage === 'at_warehouse' && !merged.warehouse_received_at) {
     update.warehouse_received_at = new Date().toISOString();
   }
+  let freeTextReason = null;
   if (['closed', 'cancelled', 'rejected'].includes(target_stage)) {
     update.closed_at = new Date().toISOString();
     update.closed_by_user_id = auth.userId;
-    if (target_stage === 'cancelled') update.closed_reason = patch.closed_reason || 'no_response';
-    if (target_stage === 'rejected')  update.closed_reason = 'rejected';
-    if (target_stage === 'closed')    update.closed_reason = patch.closed_reason || 'resolved';
+    const fallback = target_stage === 'rejected' ? 'rejected'
+                   : target_stage === 'cancelled' ? 'no_response'
+                   : 'resolved';
+    const raw = target_stage === 'rejected' ? 'rejected' : patch.closed_reason;
+    if (raw && ALLOWED_CLOSED_REASONS.includes(raw)) {
+      update.closed_reason = raw;
+    } else {
+      // Free text (e.g. "Test" from the cancel modal) can't go into the enum —
+      // use the stage default and keep the note for the history trail.
+      update.closed_reason = fallback;
+      if (raw && String(raw).trim()) freeTextReason = String(raw).trim();
+    }
   }
 
   const upd = await sb(`/rest/v1/cs_tickets?id=eq.${ticket_id}`, env, {
@@ -1211,6 +1225,9 @@ async function advanceStage(body, auth, env, request) {
   await insertHistory(ticket_id, 'stage', t.stage, target_stage, null, auth, env);
   for (const [k, v] of Object.entries(cleanPatch)) {
     await insertHistory(ticket_id, k, t[k], v, null, auth, env);
+  }
+  if (freeTextReason) {
+    await insertHistory(ticket_id, 'close_note', null, freeTextReason.slice(0, 200), null, auth, env);
   }
 
   return ok({ new_stage: target_stage, ticket: upd.data?.[0] });

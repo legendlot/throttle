@@ -90,6 +90,7 @@ export default function IssueQueuePage() {
   const [rejectWOModalOpen, setRejectWOModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [materialCache, setMaterialCache] = useState({});
+  const [stockCache, setStockCache] = useState(null); // part_code -> total closing_stock
   const [rejectedRefs, setRejectedRefs] = useState(() => new Set());
   const [issuedState, setIssuedState] = useState(null);
   // { ref, issueNo, product } — set on successful issue, cleared on close
@@ -117,6 +118,24 @@ export default function IssueQueuePage() {
       return {};
     }
   }, [session, materialCache]);
+
+  // Stock by part_code (summed across product rows). Parts Request / short-issue
+  // WOs carry no product context, so in-stock must be keyed by part_code alone
+  // (RULE-003), not (part_code, product).
+  const ensureStockCache = useCallback(async () => {
+    if (stockCache) return stockCache;
+    try {
+      const rows = await garageFetch('getStock', {}, session);
+      const map = {};
+      (rows || []).forEach((r) => {
+        map[r.part_code] = (map[r.part_code] || 0) + (Number(r.closing_stock) || 0);
+      });
+      setStockCache(map);
+      return map;
+    } catch {
+      return {};
+    }
+  }, [session, stockCache]);
 
   const loadQueue = useCallback(async () => {
     if (!session) return;
@@ -275,9 +294,10 @@ export default function IssueQueuePage() {
           }
         }
       } else if (row.type === 'short-issue') {
-        const [woParts, materials] = await Promise.all([
+        const [woParts, materials, stock] = await Promise.all([
           garageFetch('getWOParts', { wo_no: row.ref }, session),
           ensureMaterialCache(),
+          ensureStockCache(),
         ]);
         // wo is row.raw
         const lines = (woParts || []).map((p) => ({
@@ -285,19 +305,22 @@ export default function IssueQueuePage() {
           part_name: p.part_name,
           product:   row.product,
           required:  p.qty_requested,
-          available: 0,
+          available: stock[p.part_code] || 0,
         }));
         setSelectedItem({ ...row, wo: row.raw, lines });
       } else if (row.type === 'wo') {
         const wo = row.raw;
         if (wo.wo_type === 'Parts Request') {
-          const woParts = await garageFetch('getWOParts', { wo_no: row.ref }, session);
+          const [woParts, stock] = await Promise.all([
+            garageFetch('getWOParts', { wo_no: row.ref }, session),
+            ensureStockCache(),
+          ]);
           const lines = (woParts || []).map((p) => ({
             part_code: p.part_code,
             part_name: p.part_name,
             product:   wo.product,
             required:  p.qty_requested,
-            available: 0,
+            available: stock[p.part_code] || 0,
           }));
           setSelectedItem({ ...row, wo, lines });
         } else {
