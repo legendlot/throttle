@@ -8,7 +8,15 @@ import { podiumopsGet, podiumopsPost } from '../../../../lib/podiumopsFetch.js';
 import EmployeeForm from '../../../../components/EmployeeForm.js';
 import DocumentUploader from '../../../../components/DocumentUploader.js';
 import StatusBadge from '../../../../components/StatusBadge.js';
+import { ObservationsPanel, WinsPanel, OneOnOnesPanel } from '../../../../components/PerformancePanels.js';
 import { fmtDate, fmtMoney, tenure, labelOf, EMPLOYMENT_TYPES, DOC_TYPES } from '../../../../lib/format.js';
+
+const TABS = [
+  { id: 'profile',      label: 'Profile' },
+  { id: 'observations', label: 'Observations' },
+  { id: 'wins',         label: 'Wins' },
+  { id: '1on1',         label: '1:1s' },
+];
 
 export default function PersonDetailPage() {
   const { session, perms } = useAuth();
@@ -16,6 +24,7 @@ export default function PersonDetailPage() {
   const id = useSearchParams().get('id');
   const [data, setData] = useState(null);
   const [editing, setEditing] = useState(false);
+  const [tab, setTab] = useState('profile');
 
   const load = useCallback(() => {
     if (!session || !id) return;
@@ -51,7 +60,14 @@ export default function PersonDetailPage() {
 
       {!full && <div style={notice}><Lock size={13} /> Limited view — full profile is visible to HR, the person, and their managers.</div>}
 
-      {editing ? (
+      <div style={tabBar}>
+        {TABS.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} style={{ ...tabBtn, ...(tab === t.id ? tabBtnActive : {}) }}>{t.label}</button>
+        ))}
+      </div>
+
+      {tab === 'profile' ? (
+        editing ? (
         <div style={card}>
           <EmployeeForm session={session} initial={e} onSaved={() => { setEditing(false); load(); }} onCancel={() => setEditing(false)} />
         </div>
@@ -96,6 +112,13 @@ export default function PersonDetailPage() {
           {full && <DocumentsCard employeeId={e.id} session={session} canManage={canEdit} />}
           {data.can_see_comp && <CompCard employeeId={e.id} session={session} canManage={!!(perms?.podium_comp || perms?.podium_admin)} />}
         </div>
+        )
+      ) : tab === 'observations' ? (
+        <ObservationsPanel employeeId={e.id} session={session} />
+      ) : tab === 'wins' ? (
+        <WinsPanel employeeId={e.id} session={session} />
+      ) : (
+        <OneOnOnesPanel employeeId={e.id} session={session} />
       )}
     </div>
   );
@@ -227,4 +250,7 @@ const editBtn = { display: 'inline-flex', alignItems: 'center', gap: 6, backgrou
 const iconBtn = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, background: 'var(--surface-2)', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', cursor: 'pointer' };
 const reportRow = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderTop: '1px solid var(--border)', fontSize: 13, cursor: 'pointer' };
 const notice = { display: 'flex', alignItems: 'center', gap: 8, background: 'var(--state-warning-bg)', color: 'var(--state-warning-fg)', border: '1px solid var(--state-warning)', borderRadius: 'var(--radius-sm)', padding: '8px 12px', fontSize: 12, marginBottom: 14 };
+const tabBar = { display: 'flex', gap: 4, borderBottom: '1px solid var(--border)', marginBottom: 16 };
+const tabBtn = { background: 'transparent', color: 'var(--text-3)', border: 'none', borderBottom: '2px solid transparent', padding: '8px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer', marginBottom: -1 };
+const tabBtnActive = { color: 'var(--text-1)', borderBottomColor: 'var(--podium-accent)' };
 const cinp = (w) => ({ background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 8px', fontFamily: 'var(--font-mono)', fontSize: 12, width: w });

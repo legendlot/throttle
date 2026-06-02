@@ -1,5 +1,6 @@
 import {
   Users, Network, Briefcase, Building2, BarChart3, Plus, Settings, UserPlus,
+  Star, Activity,
 } from 'lucide-react';
 
 export const NAV_GROUPS = [
@@ -10,6 +11,13 @@ export const NAV_GROUPS = [
       { id: 'people',      label: 'Directory',   route: '/people',      icon: Users },
       { id: 'org',         label: 'Org Chart',   route: '/org',         icon: Network },
       { id: 'new',         label: 'New Person',  route: '/people/new',  icon: UserPlus, accent: 'orange', requires: 'podium_hr' },
+    ],
+  },
+  {
+    id: 'performance', label: 'PERFORMANCE', icon: Activity,
+    items: [
+      { id: 'me',   label: 'My Performance', route: '/me',   icon: Star },
+      { id: 'team', label: 'Team',           route: '/team', icon: Activity },
     ],
   },
   {
