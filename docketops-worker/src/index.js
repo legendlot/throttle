@@ -255,6 +255,15 @@ async function getTask(url, auth, env) {
     ? await sbPodium(`/rest/v1/employees?id=in.${inList(empIds)}&select=id,full_name`, env) : { data: [] };
   const empName = {}; (empRes.data || []).forEach(e => { empName[e.id] = e.full_name; });
 
+  // Resolve LOT user names for comment authors + history actors (store.users_profile).
+  const userIds = uniq([
+    ...(commRes.data || []).map(c => c.author_user_id),
+    ...(histRes.data || []).map(h => h.actor_user_id),
+  ]);
+  const upRes = userIds.length
+    ? await sbStore(`/rest/v1/users_profile?id=in.${inList(userIds)}&select=id,full_name`, env) : { data: [] };
+  const userName = {}; (upRes.data || []).forEach(u => { userName[u.id] = u.full_name; });
+
   const children = (childRes.data || []).map(c => ({ ...c, assignee_name: empName[c.assignee_employee_id] || null }));
   return ok({
     ...task,
@@ -267,8 +276,8 @@ async function getTask(url, auth, env) {
     child_done: children.filter(c => c.status === 'done').length,
     collaborators: (collabRes.data || []).map(c => ({ ...c, full_name: empName[c.employee_id] || null })),
     documents: docRes.data || [],
-    comments: commRes.data || [],
-    history: histRes.data || [],
+    comments: (commRes.data || []).map(c => ({ ...c, author_name: userName[c.author_user_id] || null })),
+    history: (histRes.data || []).map(h => ({ ...h, actor_name: userName[h.actor_user_id] || null })),
     _can_edit: canEditTask(auth, task),
   });
 }
