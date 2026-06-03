@@ -1,0 +1,15 @@
+{
+  "name": "docketops-worker",
+  "version": "1.0.0",
+  "description": "Docket Org Task Manager API — Cloudflare Worker",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "type": "commonjs",
+  "devDependencies": {
+    "wrangler": "^4.83.0"
+  }
+}
