@@ -1,7 +1,7 @@
 # Snorkel — Offline Sales Orders module (GT / MT) — Design
 
 > Status: APPROVED (brainstorm 2026-06-03, Session 98). Build with full autonomy per Afshaan.
-> System: Snorkel (`snorkelops` + `apps/snorkel`). Cross-system touch: minimal, into Redline's `store.dispatch_shipments`.
+> System: Snorkel (`snorkelops` + `apps/snorkel`). Cross-system touch: minimal, into Redline's `public.dispatch_shipments`.
 
 ## 1. Problem
 
@@ -44,9 +44,16 @@ SNORKEL (snorkelops + apps/snorkel)            REDLINE (lotopsproxy + apps/redli
 
 **Decisions (locked):**
 
-- **All data lives in `store`** — no new schema (avoids the PostgREST "exposed schemas" step;
-  matches Snorkel's locked "data stays in store, multiple workers operate on the same rows"
+- **All `sales_*` data lives in `store`** — no new schema (avoids the PostgREST "exposed schemas"
+  step; matches Snorkel's locked "data stays in store, multiple workers operate on the same rows"
   decision). RLS-on / `service_role`-only on every new table.
+- **NB (live-schema correction):** the dispatch tables + `product_master` live in **`public`**,
+  not `store` (`public.dispatch_shipments` / `public.dispatch_shipment_lines` /
+  `public.dispatch_channels` / `public.product_master`). The 3 new shipment columns go on
+  `public.dispatch_shipments`. **GT and MT already exist as `public.dispatch_channels` rows**
+  (GT=`95aa6676-e008-458f-b3bc-6e70d78edb1a`, MT=`6deae6c3-d64b-4967-8500-ff5f74e04040`, both
+  `type=retail`, `fulfillment_model=bulk`) — the auto-shipment maps straight onto them, no new
+  dispatch channel needed.
 - **Write-ownership is split, no shared-write race:**
   - Snorkel owns everything on `sales_*` tables, and performs the **one-time INSERT** of the
     dispatch shipment + its lines on Confirm.
@@ -71,9 +78,9 @@ SNORKEL (snorkelops + apps/snorkel)            REDLINE (lotopsproxy + apps/redli
 | `sort_order` | int default 0 | |
 | `created_at` / `updated_at` | timestamptz | |
 
-Seed: `GT` / `MT` (active). `dispatch_channel_id` mapped at build to the existing **Offline**
-dispatch channel (verify `store.dispatch_channels` live; if GT/MT need distinct dispatch channels,
-map each — else both point at the one Offline channel).
+Seed: `GT` → dispatch channel `95aa6676-e008-458f-b3bc-6e70d78edb1a`; `MT` →
+`6deae6c3-d64b-4967-8500-ff5f74e04040` (the existing `public.dispatch_channels` GT/MT rows). Each
+sales channel maps to its own dispatch channel (not a shared "Offline" one).
 
 ### 3.2 `sales_partners` (partner master)
 | col | type | notes |
@@ -165,7 +172,7 @@ CGST/SGST vs IGST split is computed at invoice/print time from `place_of_supply`
 
 On insert/delete the worker recomputes `sales_orders.amount_received` + `payment_status`.
 
-### 3.6 `dispatch_shipments` — 3 new columns (shared Redline table)
+### 3.6 `public.dispatch_shipments` — 3 new columns (shared Redline table)
 - `sales_order_id uuid null` — link back to the originating order.
 - `sales_order_no text null` — denormalised for display in the dispatch UI (no join needed).
 - `delivery_date date null` — recorded by the dispatch team after the goods arrive.
@@ -173,10 +180,19 @@ On insert/delete the worker recomputes `sales_orders.amount_received` + `payment
 These are additive + nullable → zero impact on existing dispatch/ecom flows.
 
 ### 3.7 Sequences (`store.sequences`)
-- `sales_partner` → `SP-NNNN`
-- `sales_order` → `SO-NNNN`
+- `sales_partner` → `SP-NNNN` (seed row `('sales_partner',0)` in the migration)
+- `sales_order` → `SO-NNNN` (seed row `('sales_order',0)`)
 - `sales_invoice_<FY>` → GST-continuous per Indian FY (Apr–Mar). Format: **`LOT/SL/<YY-YY>/NNNN`**
   (e.g. `LOT/SL/26-27/0001`). FY derived from `invoice_date` (≥ Apr → that year, else prior).
+
+**`store.next_seq(name)` only UPDATEs an existing row — it does NOT auto-create.** So `sales_partner`
++ `sales_order` rows are seeded in the migration; the per-FY invoice key is created lazily by the
+worker (`INSERT INTO store.sequences(name,current_val) VALUES (key,0) ON CONFLICT DO NOTHING`, then
+`next_seq(key)`).
+
+The auto-shipment INSERT **omits `shipment_no` and `status`** — `public.dispatch_shipments` defaults
+them (`shipment_no` = `DSO-NNNN` via `dso_seq`; `status='draft'`; `packed_count=0`), exactly as the
+existing `createShipment` handler does.
 
 ## 4. Order lifecycle
 
