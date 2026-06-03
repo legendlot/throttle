@@ -14,7 +14,7 @@ import {
   Bell,
   AlertTriangle,
   ClipboardCheck, ArrowUpDown, PackageCheck,
-  Gift,
+  Gift, Truck,
 } from 'lucide-react';
 
 // Mirrors legacy 04_stores/index.html nav structure (lines 1018–1080):
@@ -60,6 +60,7 @@ const GROUPS = [
       { id: 'direct-issuance',   label: 'Direct Issuance',   route: '/direct-issuance',    icon: Gift,         gate: (p) => hasPermission(p, 'direct_issuance_request') || hasPermission(p, 'direct_issuance_approve') || hasPermission(p, 'users_manage') },
       { id: 'restock',           label: 'Unit Restock',      route: '/restock',            icon: RefreshCw,    gate: (p) => hasPermission(p, 'dispatch_restock') || hasPermission(p, 'users_manage') },
       { id: 'store-history',     label: 'Store History',     route: '/store-history',      icon: History },
+      { id: 'gate-pass',         label: 'Gate Pass',         route: '/gate-pass',          icon: Truck,        gate: (p) => hasPermission(p, 'gate_pass') },
       { separator: true },
       { id: 'manpower',      label: 'Manpower',      route: '/manpower',      icon: UserCog,     gate: (p) => hasPermission(p, 'dashboard') },
       { id: 'dispatch',      label: 'Dispatch',      route: '/dispatch',      icon: Send,        gate: (p) => hasPermission(p, 'dashboard') },
