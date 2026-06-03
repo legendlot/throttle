@@ -2,7 +2,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner, EmptyState, useToast, Combobox } from '@throttle/ui';
-import { Search, ChevronRight, ChevronDown, Link2, MessageSquare, GitBranch, Plus, Check, X, Flag, AlertTriangle, SlidersHorizontal } from 'lucide-react';
+import { Search, ChevronRight, ChevronDown, Link2, MessageSquare, Plus, Check, X, Flag, AlertTriangle, SlidersHorizontal } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../../../lib/docketopsFetch.js';
 import { StatusBadge } from '../../../components/StatusBadge.js';
 import { PriorityBadge } from '../../../components/PriorityBadge.js';
@@ -17,9 +17,9 @@ const COLS = [
   { w: 60 },   // ID
   {},          // Title (flex)
   { w: 128 },  // Team
-  { w: 140 },  // Owner
-  { w: 104 },  // Collaborators
-  { w: 118 },  // Status
+  { w: 120 },  // Owner (first name; full on hover)
+  { w: 118 },  // Collaborators
+  { w: 110 },  // Status
   { w: 60 },   // Pri
   { w: 156 },  // Deadline
   { w: 64 },   // Meta
@@ -127,9 +127,26 @@ export default function TasksPage() {
     } catch (e) { showToast(e.message || 'Failed', 'error'); }
   }
   async function addSubtask(task, title) {
-    try { await docketopsPost('createSubtask', { parent_task_id: task.id, title }, session); patchRow(task.id, { child_count: (task.child_count || 0) + 1 }); showToast('Sub-task added', 'success'); }
+    try { await docketopsPost('createSubtask', { parent_task_id: task.id, title }, session); await load(); showToast('Sub-task added', 'success'); }
     catch (e) { showToast(e.message || 'Failed', 'error'); }
   }
+  async function addCollab(task, employeeId) {
+    if (!employeeId) return;
+    try { await docketopsPost('addCollaborator', { id: task.id, employee_id: employeeId }, session); await load(); }
+    catch (e) { showToast(e.message || 'Failed', 'error'); }
+  }
+  async function removeCollab(task, employeeId) {
+    try { await docketopsPost('removeCollaborator', { id: task.id, employee_id: employeeId }, session); await load(); }
+    catch (e) { showToast(e.message || 'Failed', 'error'); }
+  }
+
+  // Children grouped by parent (from the full visible set) so a parent row can expand
+  // its sub-tasks inline. Computed off all tasks, independent of the search filter.
+  const childrenByParent = useMemo(() => {
+    const m = {};
+    for (const t of tasks) { if (t.parent_task_id) (m[t.parent_task_id] = m[t.parent_task_id] || []).push(t); }
+    return m;
+  }, [tasks]);
 
   const topLevel = useMemo(() => tasks.filter(t => !t.parent_task_id && matchesQuery(t)), [tasks, matchesQuery]);
   const gridRows = useMemo(() => topLevel.filter(t => t.status !== 'abandoned' && (!t.deadline || !t.owner_employee_id)), [topLevel]);
@@ -143,7 +160,7 @@ export default function TasksPage() {
     return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([label, rows]) => ({ key: label, label, rows }));
   }, [boardRows, groupBy]);
 
-  const rowProps = { saveField, abandonInline, reviseInline, addSubtask, openDrawer: setDrawerId, teamOpts, empOpts, statusCellOpts, prioOpts };
+  const rowProps = { saveField, abandonInline, reviseInline, addSubtask, addCollab, removeCollab, childrenByParent, openDrawer: setDrawerId, teamOpts, empOpts, statusCellOpts, prioOpts };
 
   return (
     <div>
@@ -266,35 +283,119 @@ function FilterPopover({ onClose, status, setStatus, departmentId, setDepartment
   );
 }
 
-function TaskTable({ rows, saveField, abandonInline, reviseInline, addSubtask, openDrawer, teamOpts, empOpts, statusCellOpts, prioOpts }) {
+function TaskTable({ rows, childrenByParent, saveField, abandonInline, reviseInline, addSubtask, addCollab, removeCollab, openDrawer, teamOpts, empOpts, statusCellOpts, prioOpts }) {
   // Property cells (team/owner/status/priority) use whole-row edit mode so native
   // Tab walks them in order; comboboxes commit on Tab (commitOnTab). The title and
-  // DKT-id open the drawer (Notion model: name opens the peek, properties edit inline).
+  // DKT-id open the drawer. Sub-tasks expand as indented rows under their parent
+  // (collapsed by default); the "+" on a parent adds an indented sub-task inline.
   const [editRow, setEditRow] = useState(null);
   const [focusField, setFocusField] = useState(null);
   const [abandonFor, setAbandonFor] = useState(null);
   const [abandonReason, setAbandonReason] = useState('');
-  const [subFor, setSubFor] = useState(null);
+  const [expanded, setExpanded] = useState({});   // parentId -> bool (default collapsed)
+  const [addingFor, setAddingFor] = useState(null);
   const [subTitle, setSubTitle] = useState('');
 
   useEffect(() => {
-    if (!editRow && !abandonFor && !subFor) return;
+    if (!editRow && !abandonFor) return;
     function onDown(e) {
-      const rowId = editRow || abandonFor || subFor;
+      const rowId = editRow || abandonFor;
       const el = document.getElementById('dk-row-' + rowId);
-      if (el && !el.contains(e.target)) { setEditRow(null); setAbandonFor(null); setSubFor(null); }
+      if (el && !el.contains(e.target)) { setEditRow(null); setAbandonFor(null); }
     }
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
-  }, [editRow, abandonFor, subFor]);
+  }, [editRow, abandonFor]);
 
   function startEdit(t, field) {
     if (!t._can_edit || t.status === 'abandoned') return;
     setFocusField(field); setEditRow(t.id);
   }
+  function toggleExpand(id) { setExpanded(s => ({ ...s, [id]: !s[id] })); }
+  function startAddSub(parent) { setSubTitle(''); setAddingFor(parent.id); setExpanded(s => ({ ...s, [parent.id]: true })); }
+  function submitSub(parent) { const v = subTitle.trim(); if (!v) return; addSubtask(parent, v); setSubTitle(''); setAddingFor(null); }
+
+  function renderRow(t, isChild) {
+    const od = isOverdue(t);
+    const ed = !!t._can_edit && t.status !== 'abandoned';
+    const isEdit = editRow === t.id;
+    const kids = childrenByParent[t.id] || [];
+    const hasKids = !isChild && ((t.child_count || 0) > 0 || kids.length > 0);
+    const isOpen = !!expanded[t.id];
+    const Disp = ({ field, children }) => (
+      <span onClick={() => startEdit(t, field)}
+        className={ed ? 'dk-editable' : undefined}
+        role={ed ? 'button' : undefined} tabIndex={ed ? 0 : undefined}
+        onKeyDown={ed ? (e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); startEdit(t, field); } }) : undefined}
+        style={{ cursor: ed ? 'pointer' : 'default', display: 'inline-block', minWidth: 24 }}>{children}</span>
+    );
+    return (
+      <tr key={t.id} id={'dk-row-' + t.id} className="dk-task-row" onKeyDown={e => { if (e.key === 'Escape') { setEditRow(null); setAbandonFor(null); } }}>
+        <td style={{ ...td, fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+          <button className="dk-idlink" style={idBtn} onClick={() => openDrawer(t.id)} title="Open task">{t.task_no}</button>
+        </td>
+
+        <td style={{ ...td, color: 'var(--text-1)', fontWeight: 500 }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, maxWidth: '100%', paddingLeft: isChild ? 22 : 0 }}>
+            {isChild ? <span style={branchGlyph}>↳</span>
+              : (hasKids
+                ? <button style={chevronBtn} onClick={() => toggleExpand(t.id)} title={isOpen ? 'Hide sub-tasks' : 'Show sub-tasks'}>{isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}</button>
+                : <span style={{ width: 13, flexShrink: 0 }} />)}
+            <span className="dk-idlink" onClick={() => openDrawer(t.id)} style={{ cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {t.title}{t.revised_deadline && <span style={flag}>revised</span>}
+            </span>
+            {hasKids && <span style={kidCount}>{t.child_done}/{t.child_count}</span>}
+            {!isChild && ed && <button className="dk-subadd dk-press" style={subAddBtn} title="Add sub-task" onClick={() => startAddSub(t)}><Plus size={12} /></button>}
+          </span>
+        </td>
+
+        <td style={td}>
+          {isEdit && ed ? <div style={{ minWidth: 110 }}><Combobox autoFocus={focusField === 'department_id'} value={t.department_id || ''} options={teamOpts} placeholder="Team…" commitOnTab style={cellInput} onChange={(v, opt) => { if (opt) saveField(t, 'department_id', v); }} /></div>
+            : <Disp field="department_id">{t.department_name || <Muted>set team</Muted>}</Disp>}
+        </td>
+        <td style={{ ...td, whiteSpace: 'nowrap' }}>
+          {isEdit && ed ? <div style={{ minWidth: 120 }}><Combobox autoFocus={focusField === 'owner_employee_id'} value={t.owner_employee_id || ''} options={empOpts} placeholder="Owner…" commitOnTab style={cellInput} onChange={(v, opt) => { if (opt) saveField(t, 'owner_employee_id', v); }} /></div>
+            : <Disp field="owner_employee_id">{t.owner_name ? <span title={t.owner_name}>{firstName(t.owner_name)}</span> : <Muted>set owner</Muted>}</Disp>}
+        </td>
+        <td style={td}>
+          <CollaboratorsCell task={t} editable={ed} empOpts={empOpts} onAdd={addCollab} onRemove={removeCollab} openDrawer={openDrawer} />
+        </td>
+        <td style={td}>
+          {isEdit && ed ? <div style={{ minWidth: 120 }}><Combobox autoFocus={focusField === 'status'} value={t.status} options={statusCellOpts} placeholder="Status…" allowClear={false} commitOnTab style={cellInput} onChange={(v, opt) => { if (!opt) return; if (v === 'abandoned') { setAbandonReason(''); setAbandonFor(t.id); } else saveField(t, 'status', v); }} /></div>
+            : (ed ? <Disp field="status"><StatusBadge status={t.status} /></Disp> : <StatusBadge status={t.status} />)}
+          {abandonFor === t.id && (
+            <div style={popover} onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
+              <div style={popLabel}>Abandon task</div>
+              <input autoFocus value={abandonReason} onChange={e => setAbandonReason(e.target.value)} placeholder="Reason (required, logged)" style={{ ...cellInput, width: '100%', marginBottom: 8 }}
+                onKeyDown={e => { if (e.key === 'Enter' && abandonReason.trim()) { abandonInline(t, abandonReason.trim()); setAbandonFor(null); } if (e.key === 'Escape') setAbandonFor(null); }} />
+              <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                <button style={popBtnGhost} onClick={() => setAbandonFor(null)}><X size={13} /></button>
+                <button className="dk-press" style={{ ...popBtnDanger, opacity: abandonReason.trim() ? 1 : 0.5 }} disabled={!abandonReason.trim()} onClick={() => { abandonInline(t, abandonReason.trim()); setAbandonFor(null); }}><Check size={13} /> Abandon</button>
+              </div>
+            </div>
+          )}
+        </td>
+        <td style={td}>
+          {isEdit && ed ? <div style={{ minWidth: 110 }}><Combobox autoFocus={focusField === 'priority'} value={t.priority} options={prioOpts} placeholder="Priority…" allowClear={false} commitOnTab style={cellInput} onChange={(v, opt) => { if (opt) saveField(t, 'priority', v); }} /></div>
+            : <Disp field="priority"><PriorityBadge priority={t.priority} /></Disp>}
+        </td>
+
+        <td style={td}>
+          <DeadlineCell task={t} editable={ed} od={od} onFirstSet={(iso) => saveField(t, 'deadline', iso)} onRevise={reviseInline} />
+        </td>
+
+        <td style={{ ...td, color: 'var(--text-4)', cursor: 'pointer' }} onClick={() => openDrawer(t.id)}>
+          <span style={meta}>
+            {t.doc_count > 0 && <span title="documents"><Link2 size={12} /> {t.doc_count}</span>}
+            {t.comment_count > 0 && <span title="comments"><MessageSquare size={12} /> {t.comment_count}</span>}
+          </span>
+        </td>
+      </tr>
+    );
+  }
 
   return (
-    <div style={{ overflow: editRow || abandonFor || subFor ? 'visible' : 'auto' }}>
+    <div style={{ overflow: editRow || abandonFor ? 'visible' : 'auto' }}>
       <table style={table}>
         <colgroup>{COLS.map((c, i) => <col key={i} style={c.w ? { width: c.w } : undefined} />)}</colgroup>
         <thead><tr>
@@ -303,84 +404,28 @@ function TaskTable({ rows, saveField, abandonInline, reviseInline, addSubtask, o
           <th style={th}>Pri</th><th style={th}>Deadline</th><th style={th}></th>
         </tr></thead>
         <tbody>
-          {rows.map(t => {
-            const od = isOverdue(t);
-            const ed = !!t._can_edit && t.status !== 'abandoned';
-            const isEdit = editRow === t.id;
-            const Disp = ({ field, children }) => (
-              <span onClick={() => startEdit(t, field)}
-                className={ed ? 'dk-editable' : undefined}
-                role={ed ? 'button' : undefined} tabIndex={ed ? 0 : undefined}
-                onKeyDown={ed ? (e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); startEdit(t, field); } }) : undefined}
-                style={{ cursor: ed ? 'pointer' : 'default', display: 'inline-block', minWidth: 24 }}>{children}</span>
-            );
-            return (
-              <tr key={t.id} id={'dk-row-' + t.id} className="dk-task-row" onKeyDown={e => { if (e.key === 'Escape') { setEditRow(null); setAbandonFor(null); setSubFor(null); } }}>
-                <td style={{ ...td, fontFamily: 'var(--font-mono)', fontSize: 11 }}>
-                  <button className="dk-idlink" style={idBtn} onClick={() => openDrawer(t.id)} title="Open task">{t.task_no}</button>
-                </td>
-
-                <td style={{ ...td, color: 'var(--text-1)', fontWeight: 500 }}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, position: 'relative', maxWidth: '100%' }}>
-                    <span className="dk-idlink" onClick={() => openDrawer(t.id)} style={{ cursor: 'pointer' }}>
-                      {t.title}{t.revised_deadline && <span style={flag}>revised</span>}
-                    </span>
-                    {ed && <button className="dk-subadd dk-press" style={subAddBtn} title="Add sub-task" onClick={() => { setSubTitle(''); setSubFor(t.id); }}><Plus size={12} /></button>}
-                    {subFor === t.id && (
-                      <span style={subPop} onMouseDown={e => e.stopPropagation()}>
-                        <GitBranch size={12} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
-                        <input autoFocus value={subTitle} onChange={e => setSubTitle(e.target.value)} placeholder="Sub-task title…" style={subInput}
-                          onKeyDown={e => { if (e.key === 'Enter' && subTitle.trim()) { addSubtask(t, subTitle.trim()); setSubFor(null); } if (e.key === 'Escape') setSubFor(null); }} />
-                        <button className="dk-press" style={subAddConfirm} disabled={!subTitle.trim()} onClick={() => { addSubtask(t, subTitle.trim()); setSubFor(null); }}><Check size={12} /></button>
+          {rows.flatMap(t => {
+            const out = [renderRow(t, false)];
+            if (expanded[t.id]) {
+              (childrenByParent[t.id] || []).forEach(c => out.push(renderRow(c, true)));
+              if (addingFor === t.id) {
+                out.push(
+                  <tr key={'add-' + t.id} className="dk-task-row">
+                    <td style={td}></td>
+                    <td style={td} colSpan={8}>
+                      <span style={subRow}>
+                        <span style={branchGlyph}>↳</span>
+                        <input autoFocus value={subTitle} onChange={e => setSubTitle(e.target.value)} placeholder="Sub-task title — Enter to add…" style={subRowInput}
+                          onKeyDown={e => { if (e.key === 'Enter') submitSub(t); if (e.key === 'Escape') setAddingFor(null); }} />
+                        <button className="dk-press" style={subAddConfirm} disabled={!subTitle.trim()} onClick={() => submitSub(t)} title="Add"><Check size={13} /></button>
+                        <button style={popBtnGhost} onClick={() => setAddingFor(null)} title="Cancel"><X size={13} /></button>
                       </span>
-                    )}
-                  </span>
-                </td>
-
-                <td style={td}>
-                  {isEdit && ed ? <div style={{ minWidth: 120 }}><Combobox autoFocus={focusField === 'department_id'} value={t.department_id || ''} options={teamOpts} placeholder="Team…" commitOnTab style={cellInput} onChange={(v, opt) => { if (opt) saveField(t, 'department_id', v); }} /></div>
-                    : <Disp field="department_id">{t.department_name || <Muted>set team</Muted>}</Disp>}
-                </td>
-                <td style={td}>
-                  {isEdit && ed ? <div style={{ minWidth: 130 }}><Combobox autoFocus={focusField === 'owner_employee_id'} value={t.owner_employee_id || ''} options={empOpts} placeholder="Owner…" commitOnTab style={cellInput} onChange={(v, opt) => { if (opt) saveField(t, 'owner_employee_id', v); }} /></div>
-                    : <Disp field="owner_employee_id">{t.owner_name || <Muted>set owner</Muted>}</Disp>}
-                </td>
-                <td style={td}>
-                  <span style={{ cursor: 'pointer' }} onClick={() => openDrawer(t.id)}><Collaborators list={t.collaborators} /></span>
-                </td>
-                <td style={td}>
-                  {isEdit && ed ? <div style={{ minWidth: 130 }}><Combobox autoFocus={focusField === 'status'} value={t.status} options={statusCellOpts} placeholder="Status…" allowClear={false} commitOnTab style={cellInput} onChange={(v, opt) => { if (!opt) return; if (v === 'abandoned') { setAbandonReason(''); setAbandonFor(t.id); } else saveField(t, 'status', v); }} /></div>
-                    : (ed ? <Disp field="status"><StatusBadge status={t.status} /></Disp> : <StatusBadge status={t.status} />)}
-                  {abandonFor === t.id && (
-                    <div style={popover} onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
-                      <div style={popLabel}>Abandon task</div>
-                      <input autoFocus value={abandonReason} onChange={e => setAbandonReason(e.target.value)} placeholder="Reason (required, logged)" style={{ ...cellInput, width: '100%', marginBottom: 8 }}
-                        onKeyDown={e => { if (e.key === 'Enter' && abandonReason.trim()) { abandonInline(t, abandonReason.trim()); setAbandonFor(null); } if (e.key === 'Escape') setAbandonFor(null); }} />
-                      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                        <button style={popBtnGhost} onClick={() => setAbandonFor(null)}><X size={13} /></button>
-                        <button className="dk-press" style={{ ...popBtnDanger, opacity: abandonReason.trim() ? 1 : 0.5 }} disabled={!abandonReason.trim()} onClick={() => { abandonInline(t, abandonReason.trim()); setAbandonFor(null); }}><Check size={13} /> Abandon</button>
-                      </div>
-                    </div>
-                  )}
-                </td>
-                <td style={td}>
-                  {isEdit && ed ? <div style={{ minWidth: 120 }}><Combobox autoFocus={focusField === 'priority'} value={t.priority} options={prioOpts} placeholder="Priority…" allowClear={false} commitOnTab style={cellInput} onChange={(v, opt) => { if (opt) saveField(t, 'priority', v); }} /></div>
-                    : <Disp field="priority"><PriorityBadge priority={t.priority} /></Disp>}
-                </td>
-
-                <td style={td}>
-                  <DeadlineCell task={t} editable={ed} od={od} onFirstSet={(iso) => saveField(t, 'deadline', iso)} onRevise={reviseInline} />
-                </td>
-
-                <td style={{ ...td, color: 'var(--text-4)', cursor: 'pointer' }} onClick={() => openDrawer(t.id)}>
-                  <span style={meta}>
-                    {t.child_count > 0 && <span title="sub-tasks"><GitBranch size={12} /> {t.child_done}/{t.child_count}</span>}
-                    {t.doc_count > 0 && <span title="documents"><Link2 size={12} /> {t.doc_count}</span>}
-                    {t.comment_count > 0 && <span title="comments"><MessageSquare size={12} /> {t.comment_count}</span>}
-                  </span>
-                </td>
-              </tr>
-            );
+                    </td>
+                  </tr>
+                );
+              }
+            }
+            return out;
           })}
         </tbody>
       </table>
@@ -390,20 +435,56 @@ function TaskTable({ rows, saveField, abandonInline, reviseInline, addSubtask, o
 
 function Muted({ children }) { return <span style={{ color: 'var(--text-4)', fontStyle: 'italic' }}>{children}</span>; }
 
+function firstName(name) { return name ? name.trim().split(/\s+/)[0] : ''; }
 function initials(name) {
   if (!name) return '?';
   const p = name.trim().split(/\s+/);
   return ((p[0]?.[0] || '') + (p[1]?.[0] || '')).toUpperCase() || '?';
 }
-function Collaborators({ list }) {
-  if (!list || !list.length) return <span style={{ color: 'var(--text-4)' }}>—</span>;
+function Avatars({ list }) {
   const shown = list.slice(0, 3);
   const extra = list.length - shown.length;
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+      {shown.map((c, i) => <span key={c.employee_id || c.id || i} style={{ ...avatar, marginLeft: i ? -7 : 0, zIndex: 5 - i }}>{initials(c.full_name)}</span>)}
+      {extra > 0 && <span style={{ ...avatar, marginLeft: -7, background: 'var(--surface-3)', color: 'var(--text-2)' }}>+{extra}</span>}
+    </span>
+  );
+}
+// People cell: overlapping initial pills (hover = names). When editable, click opens a
+// small manager popover to add (Combobox) or remove collaborators inline.
+function CollaboratorsCell({ task, editable, empOpts, onAdd, onRemove, openDrawer }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  const list = task.collaborators || [];
+  useEffect(() => {
+    if (!open) return;
+    function onDown(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
+    function onKey(e) { if (e.key === 'Escape') setOpen(false); }
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey); };
+  }, [open]);
+  const addable = empOpts.filter(o => o.value !== task.owner_employee_id && !list.some(c => c.employee_id === o.value));
   const names = list.map(c => c.full_name || '—').join(', ');
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center' }} title={names}>
-      {shown.map((c, i) => <span key={c.id || i} style={{ ...avatar, marginLeft: i ? -6 : 0, zIndex: 5 - i }}>{initials(c.full_name)}</span>)}
-      {extra > 0 && <span style={{ ...avatar, marginLeft: -6, background: 'var(--surface-3)', color: 'var(--text-2)' }}>+{extra}</span>}
+    <span ref={ref} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
+      <span title={names || undefined} onClick={editable ? () => setOpen(o => !o) : () => openDrawer(task.id)} style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }}>
+        {list.length > 0 && <Avatars list={list} />}
+        {editable
+          ? <span style={{ ...addPill, marginLeft: list.length ? -7 : 0 }}><Plus size={11} /></span>
+          : (list.length === 0 && <span style={{ color: 'var(--text-4)' }}>—</span>)}
+      </span>
+      {open && (
+        <div style={collabPop} onMouseDown={e => e.stopPropagation()}>
+          <div style={popLabel}>Collaborators</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+            {list.length === 0 && <span style={{ fontSize: 12, color: 'var(--text-3)' }}>None yet</span>}
+            {list.map(c => <span key={c.employee_id} style={collabChip}>{c.full_name || c.employee_id}<X size={11} style={{ cursor: 'pointer' }} onClick={() => onRemove(task, c.employee_id)} /></span>)}
+          </div>
+          <Combobox value="" options={addable} onChange={(v) => { if (v) onAdd(task, v); }} placeholder="Add collaborator…" allowClear={false} style={cellInput} />
+        </div>
+      )}
     </span>
   );
 }
@@ -514,8 +595,14 @@ const avatar = { display: 'inline-flex', alignItems: 'center', justifyContent: '
 const idBtn = { background: 'none', border: 'none', padding: 0, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer', transition: 'color var(--duration-fast) var(--ease-out)' };
 const clearBtn = { display: 'inline-flex', alignItems: 'center', gap: 4, background: 'var(--surface-2)', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 10px', fontFamily: 'var(--font-cond)', fontSize: 11, fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.05em' };
 const subAddBtn = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, background: 'var(--surface-2)', color: 'var(--text-3)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', cursor: 'pointer', flexShrink: 0 };
-const subPop = { position: 'absolute', top: '100%', left: 0, zIndex: 20, marginTop: 4, display: 'flex', alignItems: 'center', gap: 6, background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-md)', padding: '6px 8px', width: 300, boxShadow: '0 8px 24px rgba(0,0,0,0.4)' };
-const subInput = { flex: 1, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '5px 8px', fontSize: 12, outline: 'none', fontFamily: 'inherit' };
+const chevronBtn = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, background: 'transparent', color: 'var(--text-3)', border: 'none', borderRadius: 'var(--radius-sm)', cursor: 'pointer', flexShrink: 0, padding: 0 };
+const branchGlyph = { color: 'var(--text-4)', fontSize: 12, flexShrink: 0, width: 13, textAlign: 'center' };
+const kidCount = { fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-4)', background: 'var(--surface-2)', borderRadius: 3, padding: '1px 5px', flexShrink: 0 };
+const addPill = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, borderRadius: 'var(--radius-full)', background: 'transparent', color: 'var(--text-3)', border: '1px dashed var(--border-2)', flexShrink: 0 };
+const collabPop = { position: 'absolute', top: '100%', left: 0, zIndex: 20, marginTop: 4, background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-md)', padding: 10, width: 240, boxShadow: '0 8px 24px rgba(0,0,0,0.4)' };
+const collabChip = { display: 'inline-flex', alignItems: 'center', gap: 5, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-full)', padding: '2px 8px', fontSize: 11, color: 'var(--text-1)' };
+const subRow = { display: 'inline-flex', alignItems: 'center', gap: 6, width: '100%', maxWidth: 480, paddingLeft: 22 };
+const subRowInput = { flex: 1, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '5px 9px', fontSize: 13, outline: 'none', fontFamily: 'inherit' };
 const subAddConfirm = { display: 'inline-flex', alignItems: 'center', background: 'var(--docket-accent)', color: 'var(--accent-fg)', border: 'none', borderRadius: 'var(--radius-sm)', padding: '5px 8px', cursor: 'pointer' };
 const popover = { position: 'absolute', top: '100%', left: 0, zIndex: 20, marginTop: 4, background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-md)', padding: 10, minWidth: 220, boxShadow: '0 8px 24px rgba(0,0,0,0.4)' };
 const popLabel = { fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 };
