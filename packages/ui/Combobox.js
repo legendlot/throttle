@@ -32,6 +32,7 @@ export function Combobox({
   allowClear = true,
   style,
   inputStyle: inputStyleOverride,
+  onKeyDown: onKeyDownExternal,
   emptyLabel = 'No matches',
   loadingLabel = 'Loading…',
   loading = false,
@@ -124,6 +125,9 @@ export function Combobox({
       // Backspace on an empty input after clearing the label clears selection.
       onChange?.('', null);
     }
+    // Passthrough for keys the combobox doesn't own (e.g. Tab for grid-style cell
+    // navigation). Runs after internal handling; the parent decides whether to act.
+    onKeyDownExternal?.(e);
   }
 
   function handleChange(e) {

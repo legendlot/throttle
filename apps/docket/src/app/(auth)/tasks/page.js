@@ -76,7 +76,6 @@ export default function TasksPage() {
         if (field === 'owner_employee_id') patch.owner_name = empMap[value] || null;
         if (field === 'assignee_employee_id') patch.assignee_name = empMap[value] || null;
         if (field === 'department_id') patch.department_name = deptMap[value] || null;
-        if (field === 'deadline') patch.deadline = value || null;
         patchRow(task.id, patch);
       }
     } catch (e) { showToast(e.message || 'Save failed', 'error'); load(); }
@@ -96,7 +95,6 @@ export default function TasksPage() {
   }
 
   const topLevel = useMemo(() => tasks.filter(t => !t.parent_task_id), [tasks]);
-  // The Grid = quick-captured tasks not yet ready to launch (no owner OR no deadline).
   const gridRows = useMemo(() => topLevel.filter(t => t.status !== 'abandoned' && (!t.deadline || !t.owner_employee_id)), [topLevel]);
   const boardRows = useMemo(() => topLevel.filter(t => !(t.status !== 'abandoned' && (!t.deadline || !t.owner_employee_id))), [topLevel]);
 
@@ -114,17 +112,15 @@ export default function TasksPage() {
     <div>
       <div style={{ marginBottom: 14 }}>
         <h1 style={h1}>Tasks</h1>
-        <p style={sub}>{(perms?.docket_view_all || perms?.docket_admin) ? 'All org tasks. Type a title + Enter to capture; click any cell to edit.' : 'Your tasks, collaborations, and your team’s. Type a title + Enter to capture; click any cell to edit.'}</p>
+        <p style={sub}>{(perms?.docket_view_all || perms?.docket_admin) ? 'All org tasks. Type a title + Enter to capture; “/” to search; click a row and Tab through the cells.' : 'Your tasks, collaborations, and your team’s. Type a title + Enter to capture; “/” to search; Tab through a row’s cells.'}</p>
       </div>
 
-      {/* quick-capture: title + Enter → The Grid */}
       <QuickCapture session={session} onCreated={load} showToast={showToast} />
 
-      {/* filter bar (all searchable comboboxes) */}
       <div style={filterBar}>
         <div style={{ position: 'relative', flex: '1 1 180px', minWidth: 160 }}>
           <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: 'var(--text-3)', zIndex: 1 }} />
-          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search title / DKT-no…" style={{ ...finput, paddingLeft: 28, width: '100%' }} />
+          <input data-search-primary value={q} onChange={e => setQ(e.target.value)} placeholder="Search title / DKT-no…  ( / )" style={{ ...finput, paddingLeft: 28, width: '100%' }} />
         </div>
         <div style={fw}><Combobox value={status} options={statusOpts} onChange={setStatus} placeholder="All statuses" allowClear style={finput} /></div>
         <div style={fw}><Combobox value={departmentId} options={teamOpts} onChange={setDepartmentId} placeholder="All teams" allowClear style={finput} /></div>
@@ -140,7 +136,6 @@ export default function TasksPage() {
         <EmptyState title="No tasks" subtitle="Type a title above and hit Enter to capture your first one." />
       ) : (
         <>
-          {/* The Grid */}
           {gridRows.length > 0 && (
             <div style={{ marginBottom: 22 }}>
               <div style={gridHead}>
@@ -151,8 +146,6 @@ export default function TasksPage() {
               <TaskTable rows={gridRows} {...rowProps} />
             </div>
           )}
-
-          {/* The board */}
           {boardRows.length > 0 && groups.map(g => (
             <div key={g.key} style={{ marginBottom: g.label ? 18 : 0 }}>
               {g.label && (
@@ -171,6 +164,30 @@ export default function TasksPage() {
 }
 
 function TaskTable({ rows, saveField, abandonInline, reviseInline, router, teamOpts, empOpts, statusCellOpts, prioOpts }) {
+  // Row-edit mode: clicking a cell makes the whole row's cells editable controls,
+  // so native Tab walks title → team → owner → … in order. Exit on Escape / outside click.
+  const [editRow, setEditRow] = useState(null);
+  const [focusField, setFocusField] = useState(null);
+  const [titleDraft, setTitleDraft] = useState('');
+  const [ddDraft, setDdDraft] = useState('');
+
+  useEffect(() => {
+    if (!editRow) return;
+    function onDown(e) {
+      const el = document.getElementById('dk-row-' + editRow);
+      if (el && !el.contains(e.target)) setEditRow(null);
+    }
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [editRow]);
+
+  function startEdit(t, field) {
+    if (!t._can_edit || t.status === 'abandoned') return;
+    setTitleDraft(t.title || '');
+    setDdDraft(t.deadline ? toLocalInput(t.deadline) : '');
+    setFocusField(field); setEditRow(t.id);
+  }
+
   return (
     <div style={{ overflowX: 'auto' }}>
       <table style={table}>
@@ -183,33 +200,58 @@ function TaskTable({ rows, saveField, abandonInline, reviseInline, router, teamO
           {rows.map(t => {
             const od = isOverdue(t);
             const ed = !!t._can_edit && t.status !== 'abandoned';
+            const isEdit = editRow === t.id;
+            const Disp = ({ field, children }) => (
+              <span onClick={() => startEdit(t, field)}
+                style={{ cursor: ed ? 'pointer' : 'default', display: 'inline-block', minWidth: 24, borderBottom: '1px dotted transparent' }}
+                onMouseEnter={e => { if (ed) e.currentTarget.style.borderBottomColor = 'var(--border-2)'; }}
+                onMouseLeave={e => (e.currentTarget.style.borderBottomColor = 'transparent')}>{children}</span>
+            );
             return (
-              <tr key={t.id}>
+              <tr key={t.id} id={'dk-row-' + t.id} onKeyDown={e => { if (e.key === 'Escape') setEditRow(null); }}>
                 <td style={{ ...td, fontFamily: 'var(--font-mono)', fontSize: 11 }}>
                   <span style={{ color: 'var(--text-3)', cursor: 'pointer' }} onClick={() => router.push(`/tasks/detail/?id=${t.id}`)}>{t.task_no}</span>
                 </td>
+
                 <td style={{ ...td, color: 'var(--text-1)', fontWeight: 500, minWidth: 220 }}>
-                  <Cell editable={ed} type="text" value={t.title}
-                    display={<>{t.title}{t.revised_deadline && <span style={flag}>revised</span>}</>}
-                    onSave={(v) => v && saveField(t, 'title', v)} />
+                  {isEdit && ed ? (
+                    <input autoFocus={focusField === 'title'} value={titleDraft} style={cellInput}
+                      onChange={e => setTitleDraft(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                      onBlur={() => { const v = titleDraft.trim(); if (v && v !== t.title) saveField(t, 'title', v); }} />
+                  ) : <Disp field="title">{t.title}{t.revised_deadline && <span style={flag}>revised</span>}</Disp>}
                 </td>
-                <td style={td}><Cell editable={ed} type="combo" value={t.department_id || ''} options={teamOpts}
-                  placeholder="Team…" display={t.department_name || <Muted>set team</Muted>} onSave={(v) => saveField(t, 'department_id', v)} /></td>
-                <td style={td}><Cell editable={ed} type="combo" value={t.owner_employee_id || ''} options={empOpts}
-                  placeholder="Owner…" display={t.owner_name || <Muted>set owner</Muted>} onSave={(v) => saveField(t, 'owner_employee_id', v)} /></td>
-                <td style={td}><Cell editable={ed} type="combo" value={t.assignee_employee_id || ''} options={empOpts}
-                  placeholder="Assignee…" display={t.assignee_name || <Muted>—</Muted>} onSave={(v) => saveField(t, 'assignee_employee_id', v)} /></td>
+
                 <td style={td}>
-                  {ed ? <Cell editable type="combo" value={t.status} options={statusCellOpts} placeholder="Status…"
-                          display={<StatusBadge status={t.status} />}
-                          onSave={(v) => v === 'abandoned' ? abandonInline(t) : saveField(t, 'status', v)} />
-                      : <StatusBadge status={t.status} />}
+                  {isEdit && ed ? <div style={{ minWidth: 150 }}><Combobox autoFocus={focusField === 'department_id'} value={t.department_id || ''} options={teamOpts} placeholder="Team…" style={cellInput} onChange={(v) => saveField(t, 'department_id', v)} /></div>
+                    : <Disp field="department_id">{t.department_name || <Muted>set team</Muted>}</Disp>}
                 </td>
-                <td style={td}><Cell editable={ed} type="combo" value={t.priority} options={prioOpts} placeholder="Priority…"
-                  display={<PriorityBadge priority={t.priority} />} onSave={(v) => v && saveField(t, 'priority', v)} /></td>
+                <td style={td}>
+                  {isEdit && ed ? <div style={{ minWidth: 150 }}><Combobox autoFocus={focusField === 'owner_employee_id'} value={t.owner_employee_id || ''} options={empOpts} placeholder="Owner…" style={cellInput} onChange={(v) => saveField(t, 'owner_employee_id', v)} /></div>
+                    : <Disp field="owner_employee_id">{t.owner_name || <Muted>set owner</Muted>}</Disp>}
+                </td>
+                <td style={td}>
+                  {isEdit && ed ? <div style={{ minWidth: 150 }}><Combobox autoFocus={focusField === 'assignee_employee_id'} value={t.assignee_employee_id || ''} options={empOpts} placeholder="Assignee…" allowClear style={cellInput} onChange={(v) => saveField(t, 'assignee_employee_id', v)} /></div>
+                    : <Disp field="assignee_employee_id">{t.assignee_name || <Muted>—</Muted>}</Disp>}
+                </td>
+                <td style={td}>
+                  {isEdit && ed ? <div style={{ minWidth: 140 }}><Combobox autoFocus={focusField === 'status'} value={t.status} options={statusCellOpts} placeholder="Status…" allowClear={false} style={cellInput} onChange={(v) => v === 'abandoned' ? abandonInline(t) : saveField(t, 'status', v)} /></div>
+                    : (ed ? <Disp field="status"><StatusBadge status={t.status} /></Disp> : <StatusBadge status={t.status} />)}
+                </td>
+                <td style={td}>
+                  {isEdit && ed ? <div style={{ minWidth: 130 }}><Combobox autoFocus={focusField === 'priority'} value={t.priority} options={prioOpts} placeholder="Priority…" allowClear={false} style={cellInput} onChange={(v) => v && saveField(t, 'priority', v)} /></div>
+                    : <Disp field="priority"><PriorityBadge priority={t.priority} /></Disp>}
+                </td>
+
                 <td style={{ ...td, minWidth: 130 }}>
-                  <DeadlineCell task={t} editable={ed} od={od} onSet={(date) => saveField(t, 'deadline', new Date(date).toISOString())} onRevise={reviseInline} />
+                  {isEdit && ed && !t.deadline ? (
+                    <input type="datetime-local" autoFocus={focusField === 'deadline'} value={ddDraft} style={{ ...cellInput, width: 180 }}
+                      onChange={e => setDdDraft(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                      onBlur={() => { if (ddDraft) saveField(t, 'deadline', new Date(ddDraft).toISOString()); }} />
+                  ) : <DeadlineDisplay task={t} editable={ed} od={od} onStartSet={() => startEdit(t, 'deadline')} onRevise={reviseInline} />}
                 </td>
+
                 <td style={{ ...td, color: 'var(--text-4)', cursor: 'pointer' }} onClick={() => router.push(`/tasks/detail/?id=${t.id}`)}>
                   <span style={meta}>
                     {t.child_count > 0 && <span title="sub-tasks"><GitBranch size={12} /> {t.child_done}/{t.child_count}</span>}
@@ -228,7 +270,6 @@ function TaskTable({ rows, saveField, abandonInline, reviseInline, router, teamO
 
 function Muted({ children }) { return <span style={{ color: 'var(--text-4)', fontStyle: 'italic' }}>{children}</span>; }
 
-// ── quick-capture: a single title field → The Grid ──────────────────────────
 function QuickCapture({ session, onCreated, showToast }) {
   const [title, setTitle] = useState('');
   const [saving, setSaving] = useState(false);
@@ -255,47 +296,16 @@ function QuickCapture({ session, onCreated, showToast }) {
   );
 }
 
-// ── generic click-to-edit cell (text or searchable combobox) ────────────────
-function Cell({ editable, type, value, options, display, onSave, placeholder }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(value ?? '');
-  useEffect(() => { setDraft(value ?? ''); }, [value]);
-  if (!editable) return <span>{display}</span>;
-  if (!editing) {
-    return <span onClick={() => setEditing(true)}
-      style={{ cursor: 'pointer', display: 'inline-block', minWidth: 24, borderBottom: '1px dotted transparent' }}
-      onMouseEnter={e => (e.currentTarget.style.borderBottomColor = 'var(--border-2)')}
-      onMouseLeave={e => (e.currentTarget.style.borderBottomColor = 'transparent')}>{display}</span>;
-  }
-  if (type === 'combo') {
-    return <div style={{ minWidth: 150 }}><Combobox autoFocus value={draft} options={options} placeholder={placeholder} style={cellInput}
-      onChange={(v) => { setEditing(false); if (v !== (value ?? '')) onSave(v); }}
-      onBlur={() => setEditing(false)} /></div>;
-  }
-  return <input autoFocus value={draft} style={cellInput}
-    onChange={e => setDraft(e.target.value)}
-    onKeyDown={e => { if (e.key === 'Enter') { setEditing(false); if (draft.trim() !== value) onSave(draft.trim()); } if (e.key === 'Escape') setEditing(false); }}
-    onBlur={() => { setEditing(false); if (draft.trim() !== value) onSave(draft.trim()); }} />;
-}
-
-// Deadline: first-time set is a plain date (becomes the immutable original);
-// once set, editing opens a date+reason popover (audited revise — RULE-DOCKET-001).
-function DeadlineCell({ task, editable, od, onSet, onRevise }) {
-  const [setting, setSetting] = useState(false);
+// Deadline display: no-deadline → "set date" (enters row edit on the deadline cell);
+// set → date with click-to-revise (date+reason popover, audited — RULE-DOCKET-001).
+function DeadlineDisplay({ task, editable, od, onStartSet, onRevise }) {
   const [open, setOpen] = useState(false);
   const [date, setDate] = useState('');
   const [reason, setReason] = useState('');
-  const hasDeadline = !!task.deadline;
-
-  if (!hasDeadline) {
+  if (!task.deadline && !task.revised_deadline) {
     if (!editable) return <span style={{ color: 'var(--text-4)' }}>—</span>;
-    if (!setting) return <span onClick={() => { setDate(''); setSetting(true); }} style={{ cursor: 'pointer', color: 'var(--text-4)', fontStyle: 'italic' }}>set date</span>;
-    return <input type="datetime-local" autoFocus value={date} style={{ ...cellInput, width: 180 }}
-      onChange={e => setDate(e.target.value)}
-      onKeyDown={e => { if (e.key === 'Escape') setSetting(false); if (e.key === 'Enter' && date) { setSetting(false); onSet(date); } }}
-      onBlur={() => { setSetting(false); if (date) onSet(date); }} />;
+    return <span onClick={onStartSet} style={{ cursor: 'pointer', color: 'var(--text-4)', fontStyle: 'italic' }}>set date</span>;
   }
-
   const label = <span style={{ color: od ? 'var(--state-error-fg)' : 'var(--text-2)', fontWeight: od ? 600 : 400 }}>{fmtDate(effectiveDeadline(task))}</span>;
   if (!editable) return label;
   async function save() { if (!date || !reason.trim()) return; await onRevise(task, date, reason.trim()); setOpen(false); }
@@ -303,7 +313,7 @@ function DeadlineCell({ task, editable, od, onSet, onRevise }) {
     <span style={{ position: 'relative' }}>
       <span onClick={() => { setDate(toLocalInput(effectiveDeadline(task))); setReason(''); setOpen(true); }} style={{ cursor: 'pointer' }} title="Revise deadline (reason required, logged)">{label}</span>
       {open && (
-        <div style={popover} onClick={e => e.stopPropagation()}>
+        <div style={popover} onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
           <div style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>Revise deadline</div>
           <input type="datetime-local" value={date} onChange={e => setDate(e.target.value)} style={{ ...cellInput, width: '100%', marginBottom: 6 }} />
           <input value={reason} onChange={e => setReason(e.target.value)} placeholder="Reason (logged)" style={{ ...cellInput, width: '100%', marginBottom: 8 }} />
