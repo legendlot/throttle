@@ -64,15 +64,19 @@ export function Combobox({
 
   // Filter options against the query. When the query exactly matches the
   // selected label, show all options (user just opened the dropdown).
+  // Multi-token: split the query on whitespace and require EVERY token to match
+  // the label or hint (substring). So "flare para" matches an option whose label
+  // is the code+name and whose hint carries the product/category. A single token
+  // behaves exactly as a plain substring match (backward compatible).
   const filtered = useMemo(() => {
     const q = (query || '').trim().toLowerCase();
     if (!q || (selectedOption && q === selectedOption.label.toLowerCase())) {
       return options;
     }
+    const tokens = q.split(/\s+/).filter(Boolean);
     return options.filter((o) => {
-      const a = (o.label || '').toLowerCase();
-      const b = (o.hint || '').toLowerCase();
-      return a.includes(q) || b.includes(q);
+      const hay = `${(o.label || '').toLowerCase()} ${(o.hint || '').toLowerCase()}`;
+      return tokens.every((t) => hay.includes(t));
     });
   }, [options, query, selectedOption]);
 

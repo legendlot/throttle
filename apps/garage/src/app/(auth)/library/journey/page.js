@@ -138,10 +138,13 @@ export default function PartJourneyPage() {
     });
   }
 
+  // hint carries product · category · type so the combobox (multi-token) can match
+  // queries like "flare para" or "ghost spoiler", not just the code/name in the label.
   const comboboxOptions = useMemo(() =>
     partsCat.map(p => ({
       value: p.part_code,
       label: `${p.part_code}${p.part_name ? ' — ' + p.part_name : ''}`,
+      hint:  [p.product, p.part_category, p.part_type].filter(Boolean).join(' · '),
     })),
   [partsCat]);
 
