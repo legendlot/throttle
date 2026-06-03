@@ -385,7 +385,20 @@ function AdvanceModal({ open, onClose, ticket, targetStage, session, onAdvanced 
       loading={submitting}
       error={error}
     >
-      {fields.length === 0 ? (
+      {targetStage === 'verified' ? (
+        <div style={{ color: 'var(--t2)', fontSize: 13, lineHeight: 1.5 }}>
+          <p style={{ margin: '0 0 8px' }}>
+            Verifying requires <strong>at least one evidence attachment</strong> (the customer&apos;s
+            photo or video of the issue).
+          </p>
+          <p style={{ margin: 0 }}>
+            If you haven&apos;t added one yet: close this, click <strong>Attach link</strong> at the
+            top-right of the <strong>Activity</strong> panel, paste the WhatsApp / Drive link to the
+            photo or video, hit <strong>Add attachment</strong> — then come back and click
+            <strong> Advance</strong>.
+          </p>
+        </div>
+      ) : fields.length === 0 ? (
         <p style={{ color: 'var(--t2)', fontSize: 13 }}>
           No additional fields required. Click <strong>Advance</strong> to confirm.
         </p>
