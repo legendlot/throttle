@@ -226,23 +226,23 @@ function TaskTable({ rows, saveField, abandonInline, reviseInline, router, teamO
                 </td>
 
                 <td style={td}>
-                  {isEdit && ed ? <div style={{ minWidth: 150 }}><Combobox autoFocus={focusField === 'department_id'} value={t.department_id || ''} options={teamOpts} placeholder="Team…" style={cellInput} onChange={(v) => saveField(t, 'department_id', v)} /></div>
+                  {isEdit && ed ? <div style={{ minWidth: 150 }}><Combobox autoFocus={focusField === 'department_id'} value={t.department_id || ''} options={teamOpts} placeholder="Team…" style={cellInput} onChange={(v, opt) => { if (opt) saveField(t, 'department_id', v); }} /></div>
                     : <Disp field="department_id">{t.department_name || <Muted>set team</Muted>}</Disp>}
                 </td>
                 <td style={td}>
-                  {isEdit && ed ? <div style={{ minWidth: 150 }}><Combobox autoFocus={focusField === 'owner_employee_id'} value={t.owner_employee_id || ''} options={empOpts} placeholder="Owner…" style={cellInput} onChange={(v) => saveField(t, 'owner_employee_id', v)} /></div>
+                  {isEdit && ed ? <div style={{ minWidth: 150 }}><Combobox autoFocus={focusField === 'owner_employee_id'} value={t.owner_employee_id || ''} options={empOpts} placeholder="Owner…" style={cellInput} onChange={(v, opt) => { if (opt) saveField(t, 'owner_employee_id', v); }} /></div>
                     : <Disp field="owner_employee_id">{t.owner_name || <Muted>set owner</Muted>}</Disp>}
                 </td>
                 <td style={td}>
-                  {isEdit && ed ? <div style={{ minWidth: 150 }}><Combobox autoFocus={focusField === 'assignee_employee_id'} value={t.assignee_employee_id || ''} options={empOpts} placeholder="Assignee…" allowClear style={cellInput} onChange={(v) => saveField(t, 'assignee_employee_id', v)} /></div>
+                  {isEdit && ed ? <div style={{ minWidth: 150 }}><Combobox autoFocus={focusField === 'assignee_employee_id'} value={t.assignee_employee_id || ''} options={empOpts} placeholder="Assignee…" allowClear style={cellInput} onChange={(v, opt) => { if (opt) saveField(t, 'assignee_employee_id', v); }} /></div>
                     : <Disp field="assignee_employee_id">{t.assignee_name || <Muted>—</Muted>}</Disp>}
                 </td>
                 <td style={td}>
-                  {isEdit && ed ? <div style={{ minWidth: 140 }}><Combobox autoFocus={focusField === 'status'} value={t.status} options={statusCellOpts} placeholder="Status…" allowClear={false} style={cellInput} onChange={(v) => v === 'abandoned' ? abandonInline(t) : saveField(t, 'status', v)} /></div>
+                  {isEdit && ed ? <div style={{ minWidth: 140 }}><Combobox autoFocus={focusField === 'status'} value={t.status} options={statusCellOpts} placeholder="Status…" allowClear={false} style={cellInput} onChange={(v, opt) => { if (!opt) return; v === 'abandoned' ? abandonInline(t) : saveField(t, 'status', v); }} /></div>
                     : (ed ? <Disp field="status"><StatusBadge status={t.status} /></Disp> : <StatusBadge status={t.status} />)}
                 </td>
                 <td style={td}>
-                  {isEdit && ed ? <div style={{ minWidth: 130 }}><Combobox autoFocus={focusField === 'priority'} value={t.priority} options={prioOpts} placeholder="Priority…" allowClear={false} style={cellInput} onChange={(v) => v && saveField(t, 'priority', v)} /></div>
+                  {isEdit && ed ? <div style={{ minWidth: 130 }}><Combobox autoFocus={focusField === 'priority'} value={t.priority} options={prioOpts} placeholder="Priority…" allowClear={false} style={cellInput} onChange={(v, opt) => { if (opt) saveField(t, 'priority', v); }} /></div>
                     : <Disp field="priority"><PriorityBadge priority={t.priority} /></Disp>}
                 </td>
 

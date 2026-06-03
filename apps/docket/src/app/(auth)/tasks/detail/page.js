@@ -178,12 +178,12 @@ function DetailInner() {
             <div style={sectionTitle}>Details</div>
             <Field label="Team">
               {editing
-                ? <Combobox value={form.department_id || ''} options={deptOpts} onChange={(v) => setForm(f => ({ ...f, department_id: v }))} placeholder="Team…" style={input} />
+                ? <Combobox value={form.department_id || ''} options={deptOpts} onChange={(v, opt) => { if (opt) setForm(f => ({ ...f, department_id: v })); }} placeholder="Team…" style={input} />
                 : (task.department_name || '—')}
             </Field>
             <Field label="Owner">
               {editing
-                ? <Combobox value={form.owner_employee_id || ''} options={empOpts} onChange={(v) => setForm(f => ({ ...f, owner_employee_id: v }))} placeholder="Owner…" style={input} />
+                ? <Combobox value={form.owner_employee_id || ''} options={empOpts} onChange={(v, opt) => { if (opt) setForm(f => ({ ...f, owner_employee_id: v })); }} placeholder="Owner…" style={input} />
                 : (task.owner_name || '—')}
             </Field>
             <Field label="Assignee">
