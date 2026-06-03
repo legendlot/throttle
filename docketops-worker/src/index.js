@@ -171,7 +171,7 @@ async function getEmployees(url, auth, env) {
   return ok(r.data || []);
 }
 
-async function hydrateTasks(rows, env) {
+async function hydrateTasks(rows, auth, env) {
   if (!rows.length) return rows;
   const deptIds = uniq(rows.map(t => t.department_id));
   const empIds  = uniq([...rows.map(t => t.owner_employee_id), ...rows.map(t => t.assignee_employee_id)]);
@@ -200,6 +200,7 @@ async function hydrateTasks(rows, env) {
     assignee_name: empName[t.assignee_employee_id] || null,
     child_count: childCount[t.id] || 0, child_done: childDone[t.id] || 0,
     collab_count: collab[t.id] || 0, doc_count: docs[t.id] || 0, comment_count: comm[t.id] || 0,
+    _can_edit: canEditTask(auth, t),
   }));
 }
 
@@ -220,7 +221,7 @@ async function getTasks(url, auth, env) {
   };
   const r = await sbDocket(`/rest/v1/rpc/list_tasks`, env, { method: 'POST', body: JSON.stringify(params) });
   if (!r.ok) return err('db_error: ' + JSON.stringify(r.data), 500);
-  const rows = await hydrateTasks(r.data || [], env);
+  const rows = await hydrateTasks(r.data || [], auth, env);
   return ok(rows);
 }
 

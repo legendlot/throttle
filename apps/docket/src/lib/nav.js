@@ -1,4 +1,4 @@
-import { LayoutDashboard, ListChecks, Plus, ShieldCheck, UserCog, Settings } from 'lucide-react';
+import { LayoutDashboard, ListChecks, ShieldCheck, UserCog, Settings } from 'lucide-react';
 
 export const NAV_GROUPS = [
   {
@@ -6,8 +6,8 @@ export const NAV_GROUPS = [
     items: [
       // Dashboard is the founder/reviewer review surface — requires org-wide visibility.
       { id: 'dashboard', label: 'Dashboard', route: '/dashboard', icon: LayoutDashboard, requires: 'docket_view_all' },
+      // New tasks are added inline on the list (ClickUp/Asana-style) — no separate form in the nav.
       { id: 'tasks',     label: 'Tasks',     route: '/tasks',     icon: ListChecks },
-      { id: 'new',       label: 'New Task',  route: '/tasks/new',  icon: Plus, accent: 'orange' },
     ],
   },
   {
