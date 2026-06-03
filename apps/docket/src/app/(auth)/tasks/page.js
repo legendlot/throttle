@@ -341,12 +341,12 @@ function TaskTable({ rows, childrenByParent, saveField, abandonInline, reviseInl
         </td>
 
         <td style={{ ...td, color: 'var(--text-1)', fontWeight: 500 }}>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, maxWidth: '100%', paddingLeft: isChild ? 22 : 0 }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', minWidth: 0, paddingLeft: isChild ? 22 : 0 }}>
             {isChild ? <span style={branchGlyph}>↳</span>
               : (hasKids
                 ? <button style={chevronBtn} onClick={() => toggleExpand(t.id)} title={isOpen ? 'Hide sub-tasks' : 'Show sub-tasks'}>{isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}</button>
                 : <span style={{ width: 13, flexShrink: 0 }} />)}
-            <span className="dk-idlink" onClick={() => openDrawer(t.id)} style={{ cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <span className="dk-idlink" onClick={() => openDrawer(t.id)} style={{ cursor: 'pointer', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {t.title}{t.revised_deadline && <span style={flag}>revised</span>}
             </span>
             {hasKids && <span style={kidCount}>{t.child_done}/{t.child_count}</span>}
@@ -532,7 +532,7 @@ function DeadlineCell({ task, editable, od, onFirstSet, onRevise }) {
       {trigger}
       {od && <span style={odFlag}><AlertTriangle size={9} /> overdue</span>}
       {open && (
-        <div style={popover} onMouseDown={e => e.stopPropagation()}>
+        <div style={popoverRight} onMouseDown={e => e.stopPropagation()}>
           <DatePicker value={draft} onChange={setDraft} autoFocus />
           {task.deadline && <input value={reason} onChange={e => setReason(e.target.value)} placeholder="Reason (required, logged)" style={{ ...cellInput, width: '100%', marginTop: 8 }} />}
           <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 8 }}>
@@ -593,7 +593,10 @@ const boardLabel = { fontFamily: 'var(--font-cond)', fontSize: 12, fontWeight: 7
 
 const table = { width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' };
 const th = { textAlign: 'left', padding: '8px 10px', fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', borderBottom: '1px solid var(--border)', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
-const td = { padding: '7px 10px', fontSize: 13, color: 'var(--text-2)', borderBottom: '1px solid var(--border)', verticalAlign: 'middle', overflow: 'hidden', textOverflow: 'ellipsis' };
+// NOTE: no `overflow: hidden` here — it would clip the in-cell popovers (date picker,
+// collaborator manager, abandon) to the row height. Title truncation is handled by the
+// title cell's own inner span instead.
+const td = { padding: '7px 10px', fontSize: 13, color: 'var(--text-2)', borderBottom: '1px solid var(--border)', verticalAlign: 'middle' };
 const cellInput = { background: 'var(--surface-3)', color: 'var(--text-1)', border: '1px solid var(--docket-accent)', borderRadius: 'var(--radius-sm)', padding: '4px 6px', fontSize: 13, outline: 'none', fontFamily: 'inherit' };
 const groupHead = { display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontFamily: 'var(--font-cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-1)', padding: '8px 0', marginBottom: 4 };
 const flag = { marginLeft: 8, fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--state-warning-fg)', background: 'var(--state-warning-bg)', borderRadius: 3, padding: '1px 5px', textTransform: 'uppercase' };
@@ -613,6 +616,7 @@ const subRow = { display: 'inline-flex', alignItems: 'center', gap: 6, width: '1
 const subRowInput = { flex: 1, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '5px 9px', fontSize: 13, outline: 'none', fontFamily: 'inherit' };
 const subAddConfirm = { display: 'inline-flex', alignItems: 'center', background: 'var(--docket-accent)', color: 'var(--accent-fg)', border: 'none', borderRadius: 'var(--radius-sm)', padding: '5px 8px', cursor: 'pointer' };
 const popover = { position: 'absolute', top: '100%', left: 0, zIndex: 20, marginTop: 4, background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-md)', padding: 10, minWidth: 220, boxShadow: '0 8px 24px rgba(0,0,0,0.4)' };
+const popoverRight = { ...popover, left: 'auto', right: 0 };
 const popLabel = { fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 };
 const popBtnPrimary = { display: 'inline-flex', alignItems: 'center', gap: 4, background: 'var(--docket-accent)', color: 'var(--accent-fg)', border: 'none', borderRadius: 'var(--radius-sm)', padding: '4px 10px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-cond)', textTransform: 'uppercase' };
 const popBtnDanger = { display: 'inline-flex', alignItems: 'center', gap: 4, background: 'var(--state-error)', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', padding: '4px 10px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-cond)', textTransform: 'uppercase' };
