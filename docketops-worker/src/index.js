@@ -174,32 +174,41 @@ async function getEmployees(url, auth, env) {
 async function hydrateTasks(rows, auth, env) {
   if (!rows.length) return rows;
   const deptIds = uniq(rows.map(t => t.department_id));
-  const empIds  = uniq([...rows.map(t => t.owner_employee_id), ...rows.map(t => t.assignee_employee_id)]);
   const taskIds = uniq(rows.map(t => t.id));
-  const [deptRes, empRes, childRes, collabRes, docRes, commRes] = await Promise.all([
+  const userIds = uniq(rows.map(t => t.created_by_user_id));
+  const [deptRes, childRes, collabRes, docRes, commRes, creatorRes] = await Promise.all([
     deptIds.length ? sbPodium(`/rest/v1/departments?id=in.${inList(deptIds)}&select=id,name`, env) : { data: [] },
-    empIds.length  ? sbPodium(`/rest/v1/employees?id=in.${inList(empIds)}&select=id,full_name`, env) : { data: [] },
     sbDocket(`/rest/v1/tasks?parent_task_id=in.${inList(taskIds)}&select=parent_task_id,status`, env),
-    sbDocket(`/rest/v1/task_collaborators?task_id=in.${inList(taskIds)}&select=task_id`, env),
+    sbDocket(`/rest/v1/task_collaborators?task_id=in.${inList(taskIds)}&select=task_id,employee_id`, env),
     sbDocket(`/rest/v1/task_documents?task_id=in.${inList(taskIds)}&select=task_id`, env),
     sbDocket(`/rest/v1/task_comments?task_id=in.${inList(taskIds)}&deleted_at=is.null&select=task_id`, env),
+    userIds.length ? sbStore(`/rest/v1/users_profile?id=in.${inList(userIds)}&select=id,full_name`, env) : { data: [] },
   ]);
+  // Employee names: owners + every collaborator (collaborator ids are only known after collabRes).
+  const empIds = uniq([...rows.map(t => t.owner_employee_id), ...(collabRes.data || []).map(c => c.employee_id)]);
+  const empRes = empIds.length ? await sbPodium(`/rest/v1/employees?id=in.${inList(empIds)}&select=id,full_name`, env) : { data: [] };
   const deptName = {}; (deptRes.data || []).forEach(d => { deptName[d.id] = d.name; });
   const empName  = {}; (empRes.data  || []).forEach(e => { empName[e.id] = e.full_name; });
+  const creatorName = {}; (creatorRes.data || []).forEach(u => { creatorName[u.id] = u.full_name; });
   const childCount = {}, childDone = {};
   (childRes.data || []).forEach(c => {
     childCount[c.parent_task_id] = (childCount[c.parent_task_id] || 0) + 1;
     if (c.status === 'done') childDone[c.parent_task_id] = (childDone[c.parent_task_id] || 0) + 1;
   });
+  const collabByTask = {};
+  (collabRes.data || []).forEach(c => {
+    (collabByTask[c.task_id] = collabByTask[c.task_id] || []).push({ id: c.employee_id, full_name: empName[c.employee_id] || null });
+  });
   const tally = (res) => { const m = {}; (res.data || []).forEach(r => { m[r.task_id] = (m[r.task_id] || 0) + 1; }); return m; };
-  const collab = tally(collabRes), docs = tally(docRes), comm = tally(commRes);
+  const docs = tally(docRes), comm = tally(commRes);
   return rows.map(t => ({
     ...t,
     department_name: deptName[t.department_id] || null,
     owner_name: empName[t.owner_employee_id] || null,
-    assignee_name: empName[t.assignee_employee_id] || null,
+    creator_name: creatorName[t.created_by_user_id] || null,
+    collaborators: collabByTask[t.id] || [],
     child_count: childCount[t.id] || 0, child_done: childDone[t.id] || 0,
-    collab_count: collab[t.id] || 0, doc_count: docs[t.id] || 0, comment_count: comm[t.id] || 0,
+    collab_count: (collabByTask[t.id] || []).length, doc_count: docs[t.id] || 0, comment_count: comm[t.id] || 0,
     _can_edit: canEditTask(auth, t),
   }));
 }
@@ -236,7 +245,7 @@ async function getTask(url, auth, env) {
     task.parent_task_id
       ? sbDocket(`/rest/v1/tasks?id=eq.${enc(task.parent_task_id)}&select=id,task_no,title,status&limit=1`, env)
       : { data: [] },
-    sbDocket(`/rest/v1/tasks?parent_task_id=eq.${enc(id)}&select=id,task_no,title,status,priority,assignee_employee_id,deadline,revised_deadline&order=created_at.asc`, env),
+    sbDocket(`/rest/v1/tasks?parent_task_id=eq.${enc(id)}&select=id,task_no,title,status,priority,owner_employee_id,deadline,revised_deadline&order=created_at.asc`, env),
     sbDocket(`/rest/v1/task_collaborators?task_id=eq.${enc(id)}&select=employee_id,added_at`, env),
     sbDocket(`/rest/v1/task_documents?task_id=eq.${enc(id)}&select=*&order=added_at.asc`, env),
     sbDocket(`/rest/v1/task_comments?task_id=eq.${enc(id)}&deleted_at=is.null&select=*&order=created_at.asc`, env),
@@ -245,9 +254,9 @@ async function getTask(url, auth, env) {
 
   // Resolve all employee names referenced (owner/assignee/collaborators/children-assignees) in one read.
   const empIds = uniq([
-    task.owner_employee_id, task.assignee_employee_id,
+    task.owner_employee_id,
     ...(collabRes.data || []).map(c => c.employee_id),
-    ...(childRes.data || []).map(c => c.assignee_employee_id),
+    ...(childRes.data || []).map(c => c.owner_employee_id),
   ]);
   const deptRes = task.department_id
     ? await sbPodium(`/rest/v1/departments?id=eq.${enc(task.department_id)}&select=id,name&limit=1`, env)
@@ -256,8 +265,9 @@ async function getTask(url, auth, env) {
     ? await sbPodium(`/rest/v1/employees?id=in.${inList(empIds)}&select=id,full_name`, env) : { data: [] };
   const empName = {}; (empRes.data || []).forEach(e => { empName[e.id] = e.full_name; });
 
-  // Resolve LOT user names for comment authors + history actors (store.users_profile).
+  // Resolve LOT user names for the creator + comment authors + history actors (store.users_profile).
   const userIds = uniq([
+    task.created_by_user_id,
     ...(commRes.data || []).map(c => c.author_user_id),
     ...(histRes.data || []).map(h => h.actor_user_id),
   ]);
@@ -265,12 +275,12 @@ async function getTask(url, auth, env) {
     ? await sbStore(`/rest/v1/users_profile?id=in.${inList(userIds)}&select=id,full_name`, env) : { data: [] };
   const userName = {}; (upRes.data || []).forEach(u => { userName[u.id] = u.full_name; });
 
-  const children = (childRes.data || []).map(c => ({ ...c, assignee_name: empName[c.assignee_employee_id] || null }));
+  const children = (childRes.data || []).map(c => ({ ...c, owner_name: empName[c.owner_employee_id] || null }));
   return ok({
     ...task,
     department_name: deptRes.data?.[0]?.name || null,
     owner_name: empName[task.owner_employee_id] || null,
-    assignee_name: empName[task.assignee_employee_id] || null,
+    creator_name: userName[task.created_by_user_id] || null,
     parent: parentRes.data?.[0] || null,
     children,
     child_count: children.length,
@@ -338,7 +348,6 @@ async function createTaskCore(d, auth, env) {
     body: JSON.stringify([{
       task_no, title: String(d.title).trim(), description: d.description || null,
       department_id: d.department_id || null, owner_employee_id: d.owner_employee_id || null,
-      assignee_employee_id: d.assignee_employee_id || null,
       status: 'not_started', priority: d.priority || 'P2',
       parent_task_id: parentId, created_by_user_id: auth.userId,
       deadline: d.deadline || null, custom_fields: d.custom_fields || {},
@@ -368,7 +377,7 @@ async function createSubtask(body, auth, env) {
 }
 
 const PROTECTED = new Set(['id','task_no','created_at','created_by_user_id','deadline','status','action','data']);
-const EDITABLE  = ['title','description','department_id','owner_employee_id','assignee_employee_id','priority'];
+const EDITABLE  = ['title','description','department_id','owner_employee_id','priority'];
 async function updateTask(body, auth, env) {
   const d = body.data || body;
   if (!d.id) return err('id required', 400);

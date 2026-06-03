@@ -2,6 +2,7 @@
 import { useState, useMemo } from 'react';
 import { X } from 'lucide-react';
 import { Combobox } from '@throttle/ui';
+import { DatePicker } from './DatePicker.js';
 import { PRIORITIES } from '../lib/tasks.js';
 
 // Controlled create form. `departments` + `employees` are loaded by the parent.
@@ -11,7 +12,6 @@ export function TaskForm({ departments, employees, parentTask, onSubmit, saving 
   const [description, setDescription] = useState('');
   const [departmentId, setDepartmentId] = useState(parentTask?.department_id || '');
   const [ownerId, setOwnerId] = useState('');
-  const [assigneeId, setAssigneeId] = useState('');
   const [collaborators, setCollaborators] = useState([]); // [employee_id]
   const [collabPick, setCollabPick] = useState('');
   const [deadline, setDeadline] = useState('');
@@ -45,7 +45,6 @@ export function TaskForm({ departments, employees, parentTask, onSubmit, saving 
       description: description.trim() || null,
       department_id: departmentId,
       owner_employee_id: ownerId,
-      assignee_employee_id: assigneeId || null,
       collaborators,
       deadline: new Date(deadline).toISOString(),
       priority,
@@ -82,20 +81,14 @@ export function TaskForm({ departments, employees, parentTask, onSubmit, saving 
         </div>
       </div>
 
-      <div style={grid2}>
-        <div>
-          <label style={lbl}>Owner *</label>
-          <Combobox value={ownerId} options={empOpts} onChange={(v) => setOwnerId(v)} placeholder="Select owner…" disabled={saving} style={input} />
-        </div>
-        <div>
-          <label style={lbl}>Assignee</label>
-          <Combobox value={assigneeId} options={empOpts} onChange={(v) => setAssigneeId(v)} placeholder="— none —" allowClear disabled={saving} style={input} />
-        </div>
+      <div style={{ marginBottom: 12 }}>
+        <label style={lbl}>Owner *</label>
+        <Combobox value={ownerId} options={empOpts} onChange={(v) => setOwnerId(v)} placeholder="Select owner…" disabled={saving} style={input} />
       </div>
 
       <div style={{ marginBottom: 12 }}>
         <label style={lbl}>Deadline * (cannot be changed after creation — revisions are tracked separately)</label>
-        <input type="datetime-local" value={deadline} onChange={e => setDeadline(e.target.value)} style={input} disabled={saving} />
+        <DatePicker value={deadline || null} onChange={setDeadline} />
       </div>
 
       <div style={{ marginBottom: 12 }}>
@@ -154,5 +147,5 @@ const note = { background: 'var(--accent-bg)', border: '1px solid var(--border)'
 const chip = { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-full)', padding: '3px 10px', fontSize: 12, color: 'var(--text-1)' };
 const docRow = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 10px' };
 const btnBase = { display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 'var(--radius-sm)', padding: '7px 14px', fontFamily: 'var(--font-cond)', fontSize: 12, fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.04em' };
-const btnPrimary = { ...btnBase, background: 'var(--docket-accent)', color: '#1f1f1f', border: '1px solid var(--docket-accent)' };
+const btnPrimary = { ...btnBase, background: 'var(--docket-accent)', color: 'var(--accent-fg)', border: '1px solid var(--docket-accent)' };
 const btnSecondary = { ...btnBase, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)' };

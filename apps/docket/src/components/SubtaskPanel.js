@@ -32,7 +32,7 @@ export function SubtaskPanel({ task, session }) {
             <div key={c.id} style={row} onClick={() => router.push(`/tasks/detail/?id=${c.id}`)}>
               <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-4)', width: 70 }}>{c.task_no}</span>
               <span style={{ flex: 1, fontSize: 13, color: 'var(--text-1)' }}>{c.title}</span>
-              <span style={{ fontSize: 12, color: 'var(--text-3)' }}>{c.assignee_name || '—'}</span>
+              <span style={{ fontSize: 12, color: 'var(--text-3)' }}>{c.owner_name || '—'}</span>
               <PriorityBadge priority={c.priority} />
               <StatusBadge status={c.status} />
               <span style={{ fontSize: 11, color: 'var(--text-3)', width: 90, textAlign: 'right' }}>{fmtDate(effectiveDeadline(c))}</span>

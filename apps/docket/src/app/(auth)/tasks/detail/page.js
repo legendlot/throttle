@@ -11,8 +11,9 @@ import { CommentsPanel } from '../../../../components/CommentsPanel.js';
 import { HistoryPanel } from '../../../../components/HistoryPanel.js';
 import { SubtaskPanel } from '../../../../components/SubtaskPanel.js';
 import { DocLinksPanel } from '../../../../components/DocLinksPanel.js';
+import { DatePicker } from '../../../../components/DatePicker.js';
 import { SETTABLE_STATUSES, PRIORITIES, effectiveDeadline, isOverdue } from '../../../../lib/tasks.js';
-import { fmtDate, fmtDateTime, toLocalInput } from '../../../../lib/format.js';
+import { fmtDate, fmtDateTime } from '../../../../lib/format.js';
 
 function DetailInner() {
   const { session } = useAuth();
@@ -57,14 +58,14 @@ function DetailInner() {
     setForm({
       title: task.title, description: task.description || '',
       department_id: task.department_id, owner_employee_id: task.owner_employee_id,
-      assignee_employee_id: task.assignee_employee_id || '', priority: task.priority,
+      priority: task.priority,
     });
     setEditing(true);
   }
   async function saveEdit() {
     setBusy(true);
     try {
-      await docketopsPost('updateTask', { id: task.id, ...form, assignee_employee_id: form.assignee_employee_id || null }, session);
+      await docketopsPost('updateTask', { id: task.id, ...form }, session);
       setEditing(false); await load(); showToast('Saved', 'success');
     } catch (e) { showToast(e.message || 'Save failed', 'error'); }
     finally { setBusy(false); }
@@ -186,11 +187,6 @@ function DetailInner() {
                 ? <Combobox value={form.owner_employee_id || ''} options={empOpts} onChange={(v, opt) => { if (opt) setForm(f => ({ ...f, owner_employee_id: v })); }} placeholder="Owner…" style={input} />
                 : (task.owner_name || '—')}
             </Field>
-            <Field label="Assignee">
-              {editing
-                ? <Combobox value={form.assignee_employee_id || ''} options={empOpts} onChange={(v) => setForm(f => ({ ...f, assignee_employee_id: v }))} placeholder="— none —" allowClear style={input} />
-                : (task.assignee_name || '—')}
-            </Field>
             <Field label="Priority">
               {editing
                 ? <Combobox value={form.priority} options={prioOpts} onChange={(v) => setForm(f => ({ ...f, priority: v || 'P2' }))} placeholder="Priority…" allowClear={false} style={input} />
@@ -200,7 +196,7 @@ function DetailInner() {
 
           <section style={card}>
             <div style={sectionTitle}>Timeline</div>
-            <Field label="Created">{fmtDateTime(task.created_at)}</Field>
+            <Field label="Created">{fmtDateTime(task.created_at)}{task.creator_name ? ` · ${task.creator_name}` : ''}</Field>
             <Field label="Original deadline">{fmtDateTime(task.deadline)} <span style={lock}>locked</span></Field>
             <Field label="Current deadline">
               <span style={{ color: od ? 'var(--state-error-fg)' : 'var(--text-1)', fontWeight: od ? 600 : 400 }}>
@@ -210,7 +206,7 @@ function DetailInner() {
             </Field>
             {task.completed_at && <Field label="Completed">{fmtDateTime(task.completed_at)}</Field>}
             {canEdit && task.status !== 'abandoned' && (
-              <button style={{ ...btnSecondary, marginTop: 8 }} onClick={() => { setModal('revise'); setReason(''); setNewDeadline(toLocalInput(effectiveDeadline(task))); }}>
+              <button style={{ ...btnSecondary, marginTop: 8 }} onClick={() => { setModal('revise'); setReason(''); setNewDeadline(effectiveDeadline(task)); }}>
                 Revise deadline
               </button>
             )}
@@ -269,7 +265,7 @@ function DetailInner() {
             {modal === 'revise' && (
               <div style={{ marginBottom: 12 }}>
                 <label style={lbl}>New deadline</label>
-                <input type="datetime-local" value={newDeadline} onChange={e => setNewDeadline(e.target.value)} style={input} />
+                <DatePicker value={newDeadline} onChange={setNewDeadline} autoFocus />
               </div>
             )}
             <div style={{ marginBottom: 12 }}>

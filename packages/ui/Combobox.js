@@ -41,6 +41,7 @@ export function Combobox({
   id,
   name,
   onBlur: onBlurExternal,
+  commitOnTab = false,
 }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
@@ -116,6 +117,19 @@ export function Combobox({
       } else if (open && filtered.length === 1) {
         e.preventDefault();
         selectOption(filtered[0]);
+      }
+    } else if (e.key === 'Tab' && commitOnTab && open) {
+      // Opt-in grid-style commit: as the user Tabs to the next field, commit the
+      // highlighted option (or the sole match). Crucially we do NOT preventDefault
+      // and do NOT blur — so the same Tab keystroke also advances focus to the next
+      // cell. Lets keyboard users type → arrow → Tab in one motion (no extra Enter).
+      const opt = (highlight >= 0 && filtered[highlight]) ? filtered[highlight]
+        : (filtered.length === 1 ? filtered[0] : null);
+      if (opt && String(opt.value) !== String(value)) {
+        onChange?.(opt.value, opt);
+        setOpen(false);
+        setHighlight(-1);
+        setQuery(opt.label);
       }
     } else if (e.key === 'Escape') {
       setOpen(false);

@@ -172,3 +172,19 @@ button { font-family: inherit; }
 
 /* The DKT-id button in each row links to the task detail. */
 .dk-idlink:hover { color: var(--docket-accent); }
+
+/* Calendar day cells (DatePicker): hover only applies to non-selected days, since
+   the selected day carries an inline accent background that wins over this rule. */
+.dk-day { background: transparent; }
+.dk-day:hover { background: var(--surface-2); }
+
+/* Subtask quick-add "+" on the title cell — revealed on row hover. */
+.dk-subadd { opacity: 0; transition: opacity var(--duration-fast) var(--ease-out); }
+.dk-task-row:hover .dk-subadd { opacity: 1; }
+.dk-subadd:focus-visible { opacity: 1; }
+
+/* Task drawer (Notion-style peek): backdrop fade + panel slide-in from the right. */
+@keyframes dk-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes dk-drawer-in { from { transform: translateX(28px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+.dk-backdrop { animation: dk-backdrop-in 160ms var(--ease-out); }
+.dk-drawer { animation: dk-drawer-in var(--duration-slow) var(--ease-out); }
