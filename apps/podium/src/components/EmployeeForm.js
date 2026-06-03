@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useToast } from '@throttle/ui';
 import { podiumopsGet, podiumopsPost } from '../lib/podiumopsFetch.js';
-import { EMPLOYMENT_TYPES, EMPLOYEE_STATUSES, LEGAL_ENTITIES } from '../lib/format.js';
+import { EMPLOYMENT_TYPES, EMPLOYEE_STATUSES, LEGAL_ENTITIES, GENDER_OPTIONS, BLOOD_GROUPS } from '../lib/format.js';
 
 // Shared create/edit form. `initial` (with .id) → edit mode; else create.
 export default function EmployeeForm({ session, initial, onSaved, onCancel }) {
@@ -54,6 +54,19 @@ export default function EmployeeForm({ session, initial, onSaved, onCancel }) {
           <Field label="Personal email"><input style={inp} value={f.personal_email} onChange={e => set('personal_email', e.target.value)} /></Field>
           <Field label="Phone"><input style={inp} value={f.phone} onChange={e => set('phone', e.target.value)} /></Field>
           <Field label="Date of birth"><input type="date" style={inp} value={f.date_of_birth} onChange={e => set('date_of_birth', e.target.value)} /></Field>
+          <Field label="Gender">
+            <select style={inp} value={f.gender} onChange={e => set('gender', e.target.value)}>
+              <option value="">—</option>
+              {GENDER_OPTIONS.map(g => <option key={g.id} value={g.id}>{g.label}</option>)}
+            </select>
+          </Field>
+          <Field label="Blood group">
+            <select style={inp} value={f.blood_group} onChange={e => set('blood_group', e.target.value)}>
+              <option value="">—</option>
+              {BLOOD_GROUPS.map(b => <option key={b} value={b}>{b}</option>)}
+            </select>
+          </Field>
+          <Field label="PAN"><input style={inp} value={f.pan_number} onChange={e => set('pan_number', e.target.value.toUpperCase())} placeholder="ABCDE1234F" /></Field>
           <Field label="Photo URL"><input style={inp} value={f.photo_url} onChange={e => set('photo_url', e.target.value)} /></Field>
         </Grid>
       </Section>
@@ -122,7 +135,7 @@ export default function EmployeeForm({ session, initial, onSaved, onCancel }) {
   );
 }
 
-const FIELDS = ['full_name', 'preferred_name', 'work_email', 'personal_email', 'phone', 'date_of_birth', 'photo_url',
+const FIELDS = ['full_name', 'preferred_name', 'work_email', 'personal_email', 'phone', 'date_of_birth', 'gender', 'blood_group', 'pan_number', 'photo_url',
   'job_title', 'department_id', 'job_role_id', 'manager_id', 'employment_type', 'legal_entity', 'work_location',
   'date_joined', 'probation_end_date', 'confirmed_at', 'status', 'date_exited', 'exit_reason',
   'emergency_contact_name', 'emergency_contact_phone'];

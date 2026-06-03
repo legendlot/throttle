@@ -31,6 +31,15 @@ export const DOC_TYPES = [
 
 export const LEGAL_ENTITIES = ['Silverton Ventures', 'Fraternitas Ventures'];
 
+export const GENDER_OPTIONS = [
+  { id: 'm',     label: 'Male' },
+  { id: 'f',     label: 'Female' },
+  { id: 'other', label: 'Other' },
+];
+export const GENDER_LABELS = { m: 'Male', f: 'Female', other: 'Other' };
+
+export const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
+
 export function labelOf(list, id) {
   return list.find(x => x.id === id)?.label || id || '—';
 }

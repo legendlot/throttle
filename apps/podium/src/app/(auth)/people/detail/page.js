@@ -9,7 +9,7 @@ import EmployeeForm from '../../../../components/EmployeeForm.js';
 import DocumentUploader from '../../../../components/DocumentUploader.js';
 import StatusBadge from '../../../../components/StatusBadge.js';
 import { ObservationsPanel, WinsPanel, OneOnOnesPanel } from '../../../../components/PerformancePanels.js';
-import { fmtDate, fmtMoney, tenure, labelOf, EMPLOYMENT_TYPES, DOC_TYPES } from '../../../../lib/format.js';
+import { fmtDate, fmtMoney, tenure, labelOf, EMPLOYMENT_TYPES, DOC_TYPES, GENDER_LABELS } from '../../../../lib/format.js';
 
 const TABS = [
   { id: 'profile',      label: 'Profile' },
@@ -94,7 +94,10 @@ export default function PersonDetailPage() {
               <KV k="Personal email" v={e.personal_email} />
               <KV k="Phone" v={e.phone} />
               <KV k="Date of birth" v={fmtDate(e.date_of_birth)} />
+              <KV k="Gender" v={GENDER_LABELS[e.gender] || e.gender} />
+              <KV k="Blood group" v={e.blood_group} />
               <KV k="Emergency" v={e.emergency_contact_name ? `${e.emergency_contact_name} · ${e.emergency_contact_phone || ''}` : null} />
+              {'pan_number' in e && <KV k="PAN" v={e.pan_number} />}
             </Card>
           )}
 

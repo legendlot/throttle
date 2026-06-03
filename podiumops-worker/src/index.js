@@ -273,6 +273,18 @@ function canSeeFull(auth, edges, employeeId) {
   return inManagerChain(edges, employeeId, me.id); // self OR caller is an ancestor manager
 }
 
+// PAN is a government ID — HR/self ONLY, hidden even from the managing chain
+// (same posture as bank/ID documents, RULE-PODIUM-001). Apply to FULL rows only;
+// projectPublic() never includes pan_number anyway.
+function stripPan(row, auth, edges) {
+  if (!row || !('pan_number' in row)) return row;
+  if (isHr(auth)) return row;
+  const me = callerEmployee(edges, auth.userId);
+  if (me && me.id === row.id) return row;
+  const { pan_number, ...rest } = row;
+  return rest;
+}
+
 // Public (directory-safe) projection of an employee row.
 const PUBLIC_EMP_KEYS = [
   'id', 'employee_code', 'full_name', 'preferred_name', 'job_title',
@@ -341,7 +353,7 @@ async function getEmployees(url, auth, env) {
     loadOrgEdges(env),
   ]);
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
-  const rows = (r.data || []).map(e => (canSeeFull(auth, edges, e.id) ? e : projectPublic(e)));
+  const rows = (r.data || []).map(e => (canSeeFull(auth, edges, e.id) ? stripPan(e, auth, edges) : projectPublic(e)));
   return ok({ employees: rows, offset, limit });
 }
 
@@ -362,7 +374,7 @@ async function getEmployee(url, auth, env) {
   const reports = (r2 => (r2 || []))((await sb(
     `/rest/v1/employees?manager_id=eq.${emp.id}&status=neq.exited&select=id,employee_code,full_name,job_title,photo_url,status&order=full_name.asc`, env,
   )).data);
-  return ok({ employee: full ? emp : projectPublic(emp), can_see_full: full, can_see_comp: canComp(auth), reports });
+  return ok({ employee: full ? stripPan(emp, auth, edges) : projectPublic(emp), can_see_full: full, can_see_comp: canComp(auth), reports });
 }
 
 async function getOrgChart(url, auth, env) {
@@ -534,6 +546,7 @@ const EMPLOYEE_FIELDS = [
   'department_id', 'job_role_id', 'job_title', 'manager_id', 'employment_type',
   'legal_entity', 'work_location', 'date_joined', 'probation_end_date', 'confirmed_at',
   'date_exited', 'exit_reason', 'status', 'photo_url',
+  'gender', 'blood_group', 'pan_number',
 ];
 
 async function createEmployee(body, auth, env) {
