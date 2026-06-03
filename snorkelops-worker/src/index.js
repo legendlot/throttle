@@ -879,6 +879,13 @@ export default {
             return ok(r.data);
           }
 
+          case 'getDispatchChannels': {
+            if (!canSalesView(P)) return err('No permission', 403);
+            const r = await queryPublic('dispatch_channels', '?is_active=eq.true&order=name.asc&select=id,name,type,fulfillment_model');
+            if (!r.ok) return err(r.data);
+            return ok(r.data);
+          }
+
           case 'getSalesPartners': {
             if (!canSalesView(P)) return err('No permission', 403);
             let params = '?order=name.asc&select=*';
