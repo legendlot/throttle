@@ -1283,6 +1283,78 @@ async function assignEngagementToCampaign(body, auth, env) {
   return ok(r.data?.[0]);
 }
 
+// ── Monthly targets & budgets (Slice B) ──────────────────────────────────────
+// Reann sets a per-month views target + ₹ budget; we track actuals against them.
+// Actuals match the Reports by_month logic: month = post_date||created_at, spend=spendOf.
+async function getMonthlyTargets(url, auth, env) {
+  const tr = await sb(`/rest/v1/monthly_targets?select=*&order=month.desc`, env);
+  if (!tr.ok) return err(`db_error: ${JSON.stringify(tr.data)}`, 500);
+  const targets = tr.data || [];
+
+  const num = v => (v == null || isNaN(Number(v)) ? 0 : Number(v));
+  const spendOf = e => (e.total_cost != null ? num(e.total_cost) : num(e.payment_amount) + num(e.ad_spend) + num(e.commission_amount));
+  const er = await sb(`/rest/v1/engagements?select=post_date,created_at,views,total_cost,payment_amount,ad_spend,commission_amount&limit=5000`, env);
+  const actMap = {};
+  if (er.ok) {
+    for (const e of (er.data || [])) {
+      const month = (e.post_date || e.created_at || '').slice(0, 7);
+      if (!/^\d{4}-\d{2}$/.test(month)) continue;
+      const a = actMap[month] || (actMap[month] = { actual_views: 0, actual_spend: 0 });
+      a.actual_views += num(e.views); a.actual_spend += spendOf(e);
+    }
+  }
+
+  const months = new Set([...targets.map(t => t.month), ...Object.keys(actMap)]);
+  const rows = [...months].sort().reverse().slice(0, 24).map(month => {
+    const t = targets.find(x => x.month === month) || {};
+    const a = actMap[month] || { actual_views: 0, actual_spend: 0 };
+    const target_views = t.target_views != null ? Number(t.target_views) : null;
+    const budget_amount = t.budget_amount != null ? Number(t.budget_amount) : null;
+    return {
+      month, target_views, budget_amount, note: t.note || null,
+      actual_views: a.actual_views, actual_spend: Math.round(a.actual_spend),
+      views_pct: target_views ? Math.round(a.actual_views / target_views * 100) : null,
+      spend_pct: budget_amount ? Math.round(a.actual_spend / budget_amount * 100) : null,
+    };
+  });
+  return ok({ months: rows });
+}
+
+async function upsertMonthlyTarget(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  const month = String(body.month || '').trim();
+  if (!/^\d{4}-\d{2}$/.test(month)) return err('month must be YYYY-MM', 400);
+  // '' / null → null; negative/NaN → invalid (undefined sentinel)
+  const numOrNull = (v) => {
+    if (v === '' || v == null) return null;
+    const n = Number(v); if (isNaN(n) || n < 0) return undefined;
+    return n;
+  };
+  const tv = numOrNull(body.target_views);
+  const ba = numOrNull(body.budget_amount);
+  if (tv === undefined) return err('target_views must be a non-negative number', 400);
+  if (ba === undefined) return err('budget_amount must be a non-negative number', 400);
+  const note = (body.note != null && String(body.note).trim()) ? String(body.note).trim() : null;
+
+  const ex = await sb(`/rest/v1/monthly_targets?month=eq.${encodeURIComponent(month)}&select=month`, env);
+  const exists = ex.ok && (ex.data || []).length > 0;
+
+  let r;
+  if (exists) {
+    r = await sb(`/rest/v1/monthly_targets?month=eq.${encodeURIComponent(month)}`, env, {
+      method: 'PATCH',
+      body: JSON.stringify({ target_views: tv != null ? Math.round(tv) : null, budget_amount: ba, note, updated_by: auth.userId, updated_at: nowIso() }),
+    });
+  } else {
+    r = await sb(`/rest/v1/monthly_targets`, env, {
+      method: 'POST',
+      body: JSON.stringify([{ month, target_views: tv != null ? Math.round(tv) : null, budget_amount: ba, note, created_by: auth.userId }]),
+    });
+  }
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  return ok(Array.isArray(r.data) ? r.data[0] : r.data);
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // DISPATCH
 // ────────────────────────────────────────────────────────────────────────────
@@ -1302,6 +1374,7 @@ const GET_ACTIONS = {
   getPayments,
   getKpis,
   getReports,
+  getMonthlyTargets,
   getCatalogs,
   getMe,
   searchShopifyCustomer,
@@ -1326,6 +1399,7 @@ const POST_ACTIONS = {
   flagOverdueRatings,
   addPayment,
   deletePayment,
+  upsertMonthlyTarget,
 };
 
 async function handleGet(url, request, env) {
