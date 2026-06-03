@@ -174,6 +174,26 @@ function StatusBadge({ label, tone = 'gray' }) {
   );
 }
 
+// Wraps a KPI card in a link to the page that metric represents, with a subtle hover outline.
+function CardLink({ href, children }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <a
+      href={href}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        textDecoration: 'none', color: 'inherit', display: 'block',
+        borderRadius: 4, cursor: 'pointer',
+        outline: hover ? '1px solid var(--t2)' : '1px solid transparent',
+        transition: 'outline-color 0.12s ease',
+      }}
+    >
+      {children}
+    </a>
+  );
+}
+
 // Compact car/remote stat: caption + mono number. null => em-dash; negative => red.
 function UnitStat({ label, value, small = false }) {
   const isNull = value === null || value === undefined;
@@ -321,24 +341,36 @@ export default function DashboardPage() {
         <div style={{ padding: 32, textAlign: 'center' }}><Spinner /></div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 16 }}>
-          <KpiCard label="Open Work Orders" value={kpis?.open_work_orders ?? '—'} color="yellow" />
-          <KpiCard label="Today's GRNs"     value={kpis?.today_grn_count   ?? '—'} color="green"  />
-          <KpiCard label="WOs Issued Today" value={kpis?.today_wo_count    ?? '—'} color="blue"   />
-          <KpiCard
-            label="Reorder Flags"
-            value={reorderCount ?? '—'}
-            color={reorderCount > 0 ? 'red' : 'green'}
-          />
-          {hasPermission(perms, 'reports_finance') && (
+          <CardLink href="/issue-queue">
+            <KpiCard label="Open Work Orders" value={kpis?.open_work_orders ?? '—'} color="yellow" />
+          </CardLink>
+          <CardLink href="/grn">
+            <KpiCard label="Today's GRNs"     value={kpis?.today_grn_count   ?? '—'} color="green"  />
+          </CardLink>
+          <CardLink href="/store-history">
+            <KpiCard label="WOs Issued Today" value={kpis?.today_wo_count    ?? '—'} color="blue"   />
+          </CardLink>
+          <CardLink href="/stock">
             <KpiCard
-              label="Stock Value (₹)"
-              value={kpis?.total_stock_value !== undefined
-                ? '₹' + Number(kpis.total_stock_value).toLocaleString('en-IN')
-                : '—'}
-              color="yellow"
+              label="Reorder Flags"
+              value={reorderCount ?? '—'}
+              color={reorderCount > 0 ? 'red' : 'green'}
             />
+          </CardLink>
+          {hasPermission(perms, 'reports_finance') && (
+            <CardLink href="/stock">
+              <KpiCard
+                label="Stock Value (₹)"
+                value={kpis?.total_stock_value !== undefined
+                  ? '₹' + Number(kpis.total_stock_value).toLocaleString('en-IN')
+                  : '—'}
+                color="yellow"
+              />
+            </CardLink>
           )}
-          <KpiCard label="Pending Returns" value={kpis?.pending_returns ?? '—'} color="green" />
+          <CardLink href="/returns/shipments">
+            <KpiCard label="Pending Returns" value={kpis?.pending_returns ?? '—'} color="green" />
+          </CardLink>
         </div>
       )}
 
