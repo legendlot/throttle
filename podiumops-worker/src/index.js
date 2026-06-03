@@ -1273,6 +1273,383 @@ async function importDirectoryCandidates(body, auth, env) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// APPRAISAL ENGINE (Phase 3) — RULE-PODIUM-008.
+// Twice-yearly (Apr 1 / Oct 1) two-sided hybrid reviews → lightweight calibration
+// → banded (pro-rated) increment → share + acknowledge; PIP flag. Participation is
+// relationship-scoped (subject / manager-chain), NOT podium_view-gated.
+// ────────────────────────────────────────────────────────────────────────────
+
+function clampRating(v) { const n = Math.round(Number(v)); return (n >= 1 && n <= 5) ? n : null; }
+function isoMinusMonths(dateStr, months) { const x = new Date(dateStr + 'T00:00:00Z'); x.setUTCMonth(x.getUTCMonth() - months); return x.toISOString().slice(0, 10); }
+function isoMinusDays(dateStr, days) { const x = new Date(dateStr + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() - days); return x.toISOString().slice(0, 10); }
+function periodMonths(start, end) {
+  if (!start || !end) return 6;
+  const s = new Date(start + 'T00:00:00Z'), e = new Date(end + 'T00:00:00Z');
+  let m = (e.getUTCFullYear() - s.getUTCFullYear()) * 12 + (e.getUTCMonth() - s.getUTCMonth());
+  if (e.getUTCDate() < s.getUTCDate()) m -= 1;
+  return Math.max(m, 1);
+}
+function suggestedPct(bands, rating, months) {
+  const b = (bands || []).find(x => Number(x.rating) === Number(rating));
+  if (!b) return null;
+  const base = Number(b.mid != null ? b.mid : (b.default || 0));
+  return Math.round(base * (months / 6) * 100) / 100;
+}
+async function loadAppraisalSettings(env) {
+  const r = await sb(`/rest/v1/settings?id=eq.1&select=increment_bands,appraisal_prompts,pip_rating_threshold,comp_vault_enabled&limit=1`, env);
+  const s = r.data?.[0] || {};
+  return {
+    bands: s.increment_bands || [],
+    prompts: s.appraisal_prompts || ['What went well', 'What could have gone better', 'Focus for the next period'],
+    pipThreshold: s.pip_rating_threshold ?? 2,
+    vault: !!s.comp_vault_enabled,
+  };
+}
+async function saveKpiRatings(appraisalId, list, side, env) {
+  if (!Array.isArray(list) || !list.length) return;
+  const col = side === 'manager' ? 'manager_rating' : 'self_rating';
+  for (const item of list.slice(0, 25)) {
+    if (!item || !item.id) continue;
+    await sb(`/rest/v1/appraisal_kpi_ratings?id=eq.${item.id}&appraisal_id=eq.${appraisalId}`, env,
+      { method: 'PATCH', body: JSON.stringify({ [col]: clampRating(item.rating) }) });
+  }
+}
+// Subject sees own self-side always; manager qualitative + final + outcome only once shared;
+// never manager_overall_rating or calibration_note.
+function projectAppraisalForSubject(a) {
+  const o = {
+    id: a.id, cycle: a.cycle, status: a.status,
+    review_period_start: a.review_period_start, review_period_end: a.review_period_end,
+    self_overall_rating: a.self_overall_rating, self_did_well: a.self_did_well,
+    self_improve: a.self_improve, self_focus: a.self_focus, self_submitted_at: a.self_submitted_at,
+  };
+  if (a.status === 'shared' || a.status === 'acknowledged') {
+    o.final_rating = a.final_rating; o.outcome = a.outcome;
+    o.manager_did_well = a.manager_did_well; o.manager_improve = a.manager_improve; o.manager_focus = a.manager_focus;
+    o.shared_at = a.shared_at; o.acknowledged_at = a.acknowledged_at; o.ack_note = a.ack_note;
+  }
+  return o;
+}
+
+// ── Config (self-serve; bands/threshold only for HR/comp) ─────────────────────
+async function getAppraisalConfig(url, auth, env) {
+  const s = await loadAppraisalSettings(env);
+  const out = { appraisal_prompts: s.prompts };
+  if (isHr(auth) || canComp(auth)) { out.increment_bands = s.bands; out.pip_rating_threshold = s.pipThreshold; }
+  return ok(out);
+}
+
+// ── Cycles (HR) ───────────────────────────────────────────────────────────────
+async function getAppraisalCycles(url, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const r = await sb(`/rest/v1/appraisal_cycles?select=*&order=appraisal_date.desc&limit=100`, env);
+  return ok({ cycles: r.data || [] });
+}
+async function getAppraisalCycle(url, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const id = url.searchParams.get('id'); if (!id) return err('id required', 400);
+  const [cr, ar] = await Promise.all([
+    sb(`/rest/v1/appraisal_cycles?id=eq.${id}&select=*&limit=1`, env),
+    sb(`/rest/v1/appraisals?cycle_id=eq.${id}&select=status,self_submitted_at,manager_submitted_at,final_rating,outcome&limit=2000`, env),
+  ]);
+  const cycle = cr.data?.[0]; if (!cycle) return err('not_found', 404);
+  const a = ar.data || [];
+  return ok({
+    cycle,
+    counts: {
+      total: a.length,
+      self_done: a.filter(x => x.self_submitted_at).length,
+      manager_done: a.filter(x => x.manager_submitted_at).length,
+      finalized: a.filter(x => x.final_rating).length,
+      shared: a.filter(x => x.status === 'shared' || x.status === 'acknowledged').length,
+      acknowledged: a.filter(x => x.status === 'acknowledged').length,
+      pip: a.filter(x => x.outcome === 'pip').length,
+    },
+  });
+}
+async function createAppraisalCycle(body, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const d = body.data || body;
+  if (!d.appraisal_date) return err('appraisal_date required (e.g. an Apr 1 / Oct 1)', 400);
+  const ad = d.appraisal_date;
+  const row = {
+    name: d.name || ('Appraisal ' + ad),
+    appraisal_date: ad,
+    period_start: d.period_start || isoMinusMonths(ad, 6),
+    period_end: d.period_end || isoMinusDays(ad, 1),
+    eligibility_cutoff_date: d.eligibility_cutoff_date || isoMinusMonths(ad, 3),
+    self_review_due: d.self_review_due || null,
+    manager_review_due: d.manager_review_due || null,
+    status: 'draft',
+    created_by: auth.userId,
+  };
+  const r = await sb(`/rest/v1/appraisal_cycles`, env, { method: 'POST', body: JSON.stringify([row]) });
+  if (!r.ok) return err('create_failed: ' + JSON.stringify(r.data), 400);
+  return ok(r.data?.[0]);
+}
+async function setCycleStatus(body, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const d = body.data || body;
+  if (!d.cycle_id || !['draft', 'active', 'calibration', 'closed'].includes(d.status)) return err('cycle_id + valid status required', 400);
+  const r = await sb(`/rest/v1/appraisal_cycles?id=eq.${d.cycle_id}`, env, { method: 'PATCH', body: JSON.stringify({ status: d.status, updated_at: nowIso() }) });
+  if (!r.ok) return err('update_failed', 400);
+  return ok({ cycle_id: d.cycle_id, status: d.status });
+}
+
+// ── Enrollment (HR) ────────────────────────────────────────────────────────────
+async function getEnrollmentPreview(url, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const cycleId = url.searchParams.get('cycle_id'); if (!cycleId) return err('cycle_id required', 400);
+  const cr = await sb(`/rest/v1/appraisal_cycles?id=eq.${cycleId}&select=*&limit=1`, env);
+  const cycle = cr.data?.[0]; if (!cycle) return err('cycle not found', 404);
+  const [er, ar, existing] = await Promise.all([
+    sb(`/rest/v1/employees?status=eq.active&select=id,full_name,date_joined,manager_id&order=full_name.asc&limit=5000`, env),
+    sb(`/rest/v1/appraisals?select=employee_id,cycle:cycle_id(appraisal_date)&limit=5000`, env),
+    sb(`/rest/v1/appraisals?cycle_id=eq.${cycleId}&select=employee_id&limit=5000`, env),
+  ]);
+  const emps = er.data || [];
+  const empById = new Map(emps.map(e => [e.id, e]));
+  const enrolled = new Set((existing.data || []).map(x => x.employee_id));
+  const lastByEmp = {};
+  for (const a of (ar.data || [])) { const ad = a.cycle?.appraisal_date; if (ad && (!lastByEmp[a.employee_id] || ad > lastByEmp[a.employee_id])) lastByEmp[a.employee_id] = ad; }
+  const cutoff = cycle.eligibility_cutoff_date;
+  const cands = emps.map(e => {
+    let eligibility = 'eligible', flag = null;
+    if (!e.date_joined) { eligibility = 'unknown'; flag = 'no join date'; }
+    else if (e.date_joined < cutoff) { eligibility = 'eligible'; }
+    else {
+      eligibility = 'ineligible';
+      const days = (new Date(e.date_joined + 'T00:00:00Z') - new Date(cutoff + 'T00:00:00Z')) / 86400000;
+      if (days >= 0 && days <= 7) flag = 'borderline';
+    }
+    const ps = lastByEmp[e.id] || e.date_joined || cycle.period_start;
+    const mgr = e.manager_id ? empById.get(e.manager_id) : null;
+    return {
+      employee_id: e.id, full_name: e.full_name, date_joined: e.date_joined,
+      eligibility, flag, already_enrolled: enrolled.has(e.id),
+      review_period_start: ps, review_period_end: cycle.appraisal_date,
+      review_period_months: periodMonths(ps, cycle.appraisal_date),
+      manager_id: e.manager_id, manager_name: mgr ? mgr.full_name : null,
+    };
+  });
+  return ok({ cycle, candidates: cands });
+}
+async function enrollAppraisalCycle(body, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const d = body.data || body;
+  const cycleId = d.cycle_id, ids = Array.isArray(d.employee_ids) ? d.employee_ids : [];
+  if (!cycleId || !ids.length) return err('cycle_id and employee_ids[] required', 400);
+  const cr = await sb(`/rest/v1/appraisal_cycles?id=eq.${cycleId}&select=*&limit=1`, env);
+  const cycle = cr.data?.[0]; if (!cycle) return err('cycle not found', 404);
+  const ex = await sb(`/rest/v1/appraisals?cycle_id=eq.${cycleId}&select=employee_id&limit=5000`, env);
+  const already = new Set((ex.data || []).map(x => x.employee_id));
+  const toAdd = ids.filter(id => !already.has(id));
+  if (!toAdd.length) return ok({ enrolled: 0, skipped: ids.length });
+  const [er, ar] = await Promise.all([
+    sb(`/rest/v1/employees?id=in.(${toAdd.join(',')})&select=id,date_joined,manager_id,job_role_id&limit=5000`, env),
+    sb(`/rest/v1/appraisals?select=employee_id,cycle:cycle_id(appraisal_date)&limit=5000`, env),
+  ]);
+  const emps = er.data || [];
+  const lastByEmp = {};
+  for (const a of (ar.data || [])) { const ad = a.cycle?.appraisal_date; if (ad && (!lastByEmp[a.employee_id] || ad > lastByEmp[a.employee_id])) lastByEmp[a.employee_id] = ad; }
+  const roleIds = [...new Set(emps.map(e => e.job_role_id).filter(Boolean))];
+  const kpisByRole = {};
+  if (roleIds.length) {
+    const kr = await sb(`/rest/v1/role_kpis?job_role_id=in.(${roleIds.join(',')})&active=eq.true&select=id,job_role_id,name,weight,sort_order&order=sort_order.asc&limit=2000`, env);
+    for (const k of (kr.data || [])) (kpisByRole[k.job_role_id] ||= []).push(k);
+  }
+  const rows = emps.map(e => ({
+    cycle_id: cycleId, employee_id: e.id, manager_id: e.manager_id || null,
+    review_period_start: lastByEmp[e.id] || e.date_joined || cycle.period_start,
+    review_period_end: cycle.appraisal_date, status: 'self_review',
+  }));
+  const ins = await sb(`/rest/v1/appraisals`, env, { method: 'POST', body: JSON.stringify(rows), prefer: 'return=representation' });
+  if (!ins.ok) return err('enroll_failed: ' + JSON.stringify(ins.data), 400);
+  const created = ins.data || [];
+  const kpiRows = [];
+  for (const a of created) {
+    const e = emps.find(x => x.id === a.employee_id);
+    for (const k of ((e && kpisByRole[e.job_role_id]) || [])) kpiRows.push({ appraisal_id: a.id, role_kpi_id: k.id, kpi_name: k.name, weight: k.weight, sort_order: k.sort_order || 0 });
+  }
+  if (kpiRows.length) await sb(`/rest/v1/appraisal_kpi_ratings`, env, { method: 'POST', body: JSON.stringify(kpiRows), prefer: 'return=minimal' });
+  return ok({ enrolled: created.length, kpis: kpiRows.length });
+}
+
+// ── Reviews (self-serve, relationship-checked) ─────────────────────────────────
+async function submitSelfReview(body, auth, env) {
+  const d = body.data || body;
+  if (!d.appraisal_id) return err('appraisal_id required', 400);
+  const ar = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}&select=*,cycle:cycle_id(status)&limit=1`, env);
+  const a = ar.data?.[0]; if (!a) return err('not_found', 404);
+  const me = await meOf(auth, env);
+  if (!me || me.id !== a.employee_id) return err('forbidden — your own self-review only', 403);
+  if (a.cycle?.status !== 'active') return err('cycle is not open for reviews', 422);
+  if (a.status === 'shared' || a.status === 'acknowledged') return err('already finalized', 422);
+  const patch = {
+    self_overall_rating: clampRating(d.self_overall_rating),
+    self_did_well: d.self_did_well ?? null, self_improve: d.self_improve ?? null, self_focus: d.self_focus ?? null,
+    self_submitted_at: nowIso(), updated_at: nowIso(),
+  };
+  if (a.status === 'self_review') patch.status = 'manager_review';
+  const r = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+  if (!r.ok) return err('save_failed: ' + JSON.stringify(r.data), 400);
+  await saveKpiRatings(d.appraisal_id, d.kpi_ratings, 'self', env);
+  return ok({ id: d.appraisal_id, status: patch.status || a.status });
+}
+async function submitManagerReview(body, auth, env) {
+  const d = body.data || body;
+  if (!d.appraisal_id) return err('appraisal_id required', 400);
+  const ar = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}&select=*,cycle:cycle_id(status)&limit=1`, env);
+  const a = ar.data?.[0]; if (!a) return err('not_found', 404);
+  const edges = await loadOrgEdges(env);
+  if (!canManage(auth, edges, a.employee_id)) return err('forbidden — manager only', 403);
+  if (a.cycle?.status !== 'active') return err('cycle is not open for reviews', 422);
+  if (a.status === 'shared' || a.status === 'acknowledged') return err('already finalized', 422);
+  const patch = {
+    manager_overall_rating: clampRating(d.manager_overall_rating),
+    manager_did_well: d.manager_did_well ?? null, manager_improve: d.manager_improve ?? null, manager_focus: d.manager_focus ?? null,
+    manager_submitted_at: nowIso(), status: 'calibration', updated_at: nowIso(),
+  };
+  const r = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+  if (!r.ok) return err('save_failed: ' + JSON.stringify(r.data), 400);
+  await saveKpiRatings(d.appraisal_id, d.kpi_ratings, 'manager', env);
+  return ok({ id: d.appraisal_id, status: 'calibration' });
+}
+async function acknowledgeAppraisal(body, auth, env) {
+  const d = body.data || body;
+  if (!d.appraisal_id) return err('appraisal_id required', 400);
+  const ar = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}&select=employee_id,status&limit=1`, env);
+  const a = ar.data?.[0]; if (!a) return err('not_found', 404);
+  const me = await meOf(auth, env);
+  if (!me || me.id !== a.employee_id) return err('forbidden', 403);
+  if (a.status !== 'shared') return err('not yet shared', 422);
+  const r = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}`, env, { method: 'PATCH', body: JSON.stringify({ status: 'acknowledged', acknowledged_at: nowIso(), ack_note: d.ack_note ?? null, updated_at: nowIso() }) });
+  if (!r.ok) return err('ack_failed', 400);
+  return ok({ id: d.appraisal_id, status: 'acknowledged' });
+}
+
+// ── Calibration / finalize / share (HR) ────────────────────────────────────────
+async function finalizeAppraisal(body, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const d = body.data || body;
+  const fr = clampRating(d.final_rating);
+  if (!d.appraisal_id || !fr) return err('appraisal_id + final_rating (1-5) required', 400);
+  const s = await loadAppraisalSettings(env);
+  const r = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}`, env, {
+    method: 'PATCH', body: JSON.stringify({
+      final_rating: fr, calibration_note: d.calibration_note ?? null,
+      calibrated_by: auth.userId, calibrated_at: nowIso(),
+      outcome: fr <= s.pipThreshold ? 'pip' : 'standard', updated_at: nowIso(),
+    }),
+  });
+  if (!r.ok) return err('finalize_failed: ' + JSON.stringify(r.data), 400);
+  return ok({ id: d.appraisal_id, final_rating: fr, outcome: fr <= s.pipThreshold ? 'pip' : 'standard' });
+}
+async function shareAppraisal(body, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const d = body.data || body;
+  const ids = Array.isArray(d.appraisal_ids) ? d.appraisal_ids : (d.appraisal_id ? [d.appraisal_id] : []);
+  if (!ids.length) return err('appraisal_id or appraisal_ids[] required', 400);
+  const r = await sb(`/rest/v1/appraisals?id=in.(${ids.join(',')})&final_rating=not.is.null&status=neq.acknowledged`, env,
+    { method: 'PATCH', body: JSON.stringify({ status: 'shared', shared_at: nowIso(), updated_at: nowIso() }), prefer: 'return=representation' });
+  if (!r.ok) return err('share_failed: ' + JSON.stringify(r.data), 400);
+  return ok({ shared: (r.data || []).length });
+}
+async function applyIncrement(body, auth, env) {
+  const gate = requireComp(auth); if (gate) return gate;
+  const d = body.data || body;
+  if (!d.appraisal_id) return err('appraisal_id required', 400);
+  const ar = await sb(`/rest/v1/appraisals?id=eq.${d.appraisal_id}&select=employee_id,final_rating,cycle:cycle_id(appraisal_date)&limit=1`, env);
+  const a = ar.data?.[0]; if (!a) return err('not_found', 404);
+  if (!a.final_rating) return err('finalize the appraisal first', 422);
+  const pct = d.increment_pct != null && d.increment_pct !== '' ? Number(d.increment_pct) : null;
+  const bonus = d.bonus_amount != null && d.bonus_amount !== '' ? Number(d.bonus_amount) : null;
+  if (pct == null && bonus == null) return err('increment_pct or bonus_amount required', 400);
+  const row = {
+    employee_id: a.employee_id,
+    event_type: pct != null ? 'increment' : 'one_time_bonus',
+    effective_date: d.effective_date || a.cycle?.appraisal_date,
+    increment_pct: pct, amount: bonus, currency: d.currency || 'INR',
+    reason: d.reason || 'Appraisal increment', appraisal_id: d.appraisal_id,
+    approved_by: auth.userId, created_by: auth.userId,
+  };
+  // Vault OFF: CTC fields never accepted here (not read from input).
+  const ins = await sb(`/rest/v1/compensation_events`, env, { method: 'POST', body: JSON.stringify([row]) });
+  if (!ins.ok) return err('increment_failed: ' + JSON.stringify(ins.data), 400);
+  return ok(ins.data?.[0]);
+}
+
+// ── Reads: subject / manager / HR views ────────────────────────────────────────
+async function getMyAppraisals(url, auth, env) {
+  const me = await meOf(auth, env);
+  if (!me) return ok({ employee_id: null, appraisals: [], to_review: [] });
+  const [ar, tr] = await Promise.all([
+    sb(`/rest/v1/appraisals?employee_id=eq.${me.id}&select=*,cycle:cycle_id(name,appraisal_date,status,self_review_due)&order=created_at.desc&limit=200`, env),
+    sb(`/rest/v1/appraisals?manager_id=eq.${me.id}&select=id,status,manager_submitted_at,employee:employee_id(full_name,job_title),cycle:cycle_id(name,status,manager_review_due)&order=created_at.desc&limit=300`, env),
+  ]);
+  const appraisals = (ar.data || []).map(projectAppraisalForSubject);
+  const to_review = (tr.data || []).filter(a => a.cycle?.status === 'active')
+    .map(a => ({ id: a.id, employee: a.employee, status: a.status, done: !!a.manager_submitted_at, cycle: a.cycle }));
+  return ok({ employee_id: me.id, appraisals, to_review });
+}
+async function getTeamAppraisals(url, auth, env) {
+  const me = await meOf(auth, env);
+  const hr = isHr(auth);
+  if (!me && !hr) return ok({ appraisals: [] });
+  const cycleId = url.searchParams.get('cycle_id');
+  let filter = cycleId ? `cycle_id=eq.${cycleId}` : `cycle_id=not.is.null`;
+  if (!hr) filter += `&manager_id=eq.${me.id}`;
+  const ar = await sb(`/rest/v1/appraisals?${filter}&select=id,status,self_submitted_at,manager_submitted_at,final_rating,outcome,employee:employee_id(full_name,job_title),cycle:cycle_id(name,status)&order=created_at.desc&limit=500`, env);
+  return ok({ appraisals: ar.data || [] });
+}
+async function getAppraisal(url, auth, env) {
+  const id = url.searchParams.get('id'); if (!id) return err('id required', 400);
+  const ar = await sb(`/rest/v1/appraisals?id=eq.${id}&select=*,cycle:cycle_id(*),employee:employee_id(id,full_name,job_title,department:department_id(name)),manager:manager_id(id,full_name)&limit=1`, env);
+  const a = ar.data?.[0]; if (!a) return err('not_found', 404);
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const isSubject = !!(me && me.id === a.employee_id);
+  const hr = isHr(auth);
+  const isMgr = !hr && !isSubject && canManage(auth, edges, a.employee_id);
+  if (!isSubject && !isMgr && !hr) return err('forbidden', 403);
+  const kr = await sb(`/rest/v1/appraisal_kpi_ratings?appraisal_id=eq.${id}&select=*&order=sort_order.asc`, env);
+  const kpis = kr.data || [];
+  let increment = null;
+  if (isSubject || canComp(auth)) {
+    const cr = await sb(`/rest/v1/compensation_events?appraisal_id=eq.${id}&select=increment_pct,amount,currency,effective_date,event_type&order=created_at.desc&limit=1`, env);
+    increment = cr.data?.[0] || null;
+    if (isSubject && !(a.status === 'shared' || a.status === 'acknowledged')) increment = null;
+  }
+  if (hr || isMgr) {
+    const out = { ...a, kpis, increment, _role: hr ? 'hr' : 'manager', _can_calibrate: hr, _can_comp: canComp(auth) };
+    if (!hr) out.calibration_note = null; // HR-internal
+    return ok(out);
+  }
+  // subject
+  const out = projectAppraisalForSubject(a);
+  out._role = 'subject';
+  out.increment = increment;
+  out.kpis = kpis.map(k => ({ id: k.id, kpi_name: k.kpi_name, weight: k.weight, self_rating: k.self_rating, manager_rating: (a.status === 'shared' || a.status === 'acknowledged') ? k.manager_rating : null }));
+  return ok(out);
+}
+async function getAppraisals(url, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const cycleId = url.searchParams.get('cycle_id'); if (!cycleId) return err('cycle_id required', 400);
+  const compOk = canComp(auth);
+  const [cr, ar] = await Promise.all([
+    sb(`/rest/v1/appraisal_cycles?id=eq.${cycleId}&select=*&limit=1`, env),
+    sb(`/rest/v1/appraisals?cycle_id=eq.${cycleId}&select=*,employee:employee_id(full_name,job_title,department:department_id(name)),manager:manager_id(full_name)&order=created_at.desc&limit=2000`, env),
+  ]);
+  const cycle = cr.data?.[0];
+  const s = await loadAppraisalSettings(env);
+  const rows = (ar.data || []).map(a => {
+    const months = periodMonths(a.review_period_start, a.review_period_end);
+    return { ...a, review_period_months: months, suggested_pct: compOk ? suggestedPct(s.bands, a.final_rating || a.manager_overall_rating, months) : null };
+  });
+  return ok({ cycle, appraisals: rows, increment_bands: compOk ? s.bands : null, pip_rating_threshold: s.pipThreshold });
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // DISPATCH
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -1291,6 +1668,9 @@ const GET_ACTIONS = {
   getPodiumRoles, getPodiumUsers,
   // Google Directory sync
   getDirectorySyncPreview,
+  // Appraisal engine
+  getAppraisalConfig, getMyAppraisals, getAppraisal, getTeamAppraisals,
+  getAppraisals, getAppraisalCycles, getAppraisalCycle, getEnrollmentPreview,
 };
 
 const POST_ACTIONS = {
@@ -1309,6 +1689,10 @@ const POST_ACTIONS = {
   createPodiumRole, updatePodiumRole, deletePodiumRole, assignPodiumRole,
   // Google Directory sync
   importDirectoryCandidates,
+  // Appraisal engine
+  createAppraisalCycle, setCycleStatus, enrollAppraisalCycle,
+  submitSelfReview, submitManagerReview, acknowledgeAppraisal,
+  finalizeAppraisal, shareAppraisal, applyIncrement,
 };
 
 // Self-only baseline (RULE-PODIUM-006): actions reachable WITHOUT podium_view.
@@ -1318,9 +1702,13 @@ const POST_ACTIONS = {
 const SELF_SERVE_GET = new Set([
   'getMe', 'getPodiumRoles',
   'getEmployee', 'getMyPerformance', 'getAccomplishments', 'getObservations', 'getOneOnOnes',
+  // Appraisal participation — relationship-scoped inside each handler, not podium_view-gated.
+  'getAppraisalConfig', 'getMyAppraisals', 'getAppraisal', 'getTeamAppraisals',
 ]);
 const SELF_SERVE_POST = new Set([
   'createAccomplishment', 'updateAccomplishment', 'deleteAccomplishment',
+  // Appraisal participation (self-review / manager-review / acknowledge).
+  'submitSelfReview', 'submitManagerReview', 'acknowledgeAppraisal',
 ]);
 
 async function handleGet(url, request, env) {

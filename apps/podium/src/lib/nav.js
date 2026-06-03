@@ -1,6 +1,6 @@
 import {
   Users, Network, Briefcase, Building2, BarChart3, Settings, UserPlus,
-  Star, Activity, ShieldCheck, UserCog,
+  Star, Activity, ShieldCheck, UserCog, ClipboardCheck,
 } from 'lucide-react';
 
 export const NAV_GROUPS = [
@@ -19,6 +19,7 @@ export const NAV_GROUPS = [
     items: [
       { id: 'me',   label: 'My Performance', route: '/me',   icon: Star },
       { id: 'team', label: 'Team',           route: '/team', icon: Activity, requires: 'podium_view' },
+      { id: 'appraisals', label: 'Appraisals', route: '/appraisals', icon: ClipboardCheck, requires: 'podium_hr' },
     ],
   },
   {

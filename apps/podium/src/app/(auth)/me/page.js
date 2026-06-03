@@ -1,8 +1,9 @@
 'use client';
 import { useEffect, useState, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
-import { CheckSquare } from 'lucide-react';
+import { CheckSquare, ClipboardCheck, ChevronRight } from 'lucide-react';
 import { podiumopsGet } from '../../../lib/podiumopsFetch.js';
 import { fmtDate } from '../../../lib/format.js';
 import { ObservationsPanel, WinsPanel, OneOnOnesPanel } from '../../../components/PerformancePanels.js';
@@ -39,6 +40,8 @@ export default function MyPerformancePage() {
     <div style={{ maxWidth: 820 }}>
       <h1 style={h1}>My Performance</h1>
 
+      <AppraisalsBlock session={session} />
+
       {open.length > 0 && (
         <div style={banner}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontWeight: 600, marginBottom: 6 }}>
@@ -65,6 +68,38 @@ export default function MyPerformancePage() {
   );
 }
 
+function AppraisalsBlock({ session }) {
+  const router = useRouter();
+  const [d, setD] = useState(null);
+  useEffect(() => { podiumopsGet('getMyAppraisals', {}, session).then(setD).catch(() => setD(false)); }, [session]);
+  if (!d || d === false) return null;
+  const mine = (d.appraisals || []).filter(a => ['self_review', 'manager_review', 'shared'].includes(a.status));
+  const toReview = (d.to_review || []).filter(r => !r.done);
+  if (!mine.length && !toReview.length) return null;
+  const go = (id) => router.push(`/appraisals/detail/?id=${id}`);
+  return (
+    <div style={apBox}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontWeight: 700, marginBottom: 8, fontSize: 13, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-2)' }}>
+        <ClipboardCheck size={15} /> Appraisals
+      </div>
+      {mine.map(a => (
+        <div key={a.id} onClick={() => go(a.id)} style={apRow}>
+          <span>{a.cycle?.name} — {a.status === 'shared' ? 'your result is ready' : a.self_submitted_at ? 'self-review submitted (editable)' : 'start your self-review'}</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--podium-accent)' }}>{a.status === 'shared' ? 'View' : 'Open'} <ChevronRight size={14} /></span>
+        </div>
+      ))}
+      {toReview.map(r => (
+        <div key={r.id} onClick={() => go(r.id)} style={apRow}>
+          <span>Review <b>{r.employee?.full_name}</b> <span style={{ color: 'var(--text-3)', fontSize: 12 }}>· {r.cycle?.name}</span></span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--podium-accent)' }}>Review <ChevronRight size={14} /></span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const apBox = { background: 'var(--accent-bg)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '12px 14px', marginBottom: 16 };
+const apRow = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '8px 10px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 13, marginTop: 6 };
 const h1 = { fontFamily: 'var(--font-cond)', fontSize: 24, fontWeight: 700, letterSpacing: '0.03em', marginBottom: 16 };
 const empty = { color: 'var(--text-3)', fontSize: 14 };
 const banner = { background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '12px 14px', marginBottom: 16 };
