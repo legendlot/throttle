@@ -1,6 +1,6 @@
 import {
   Inbox, Users, Flame, Star, ListChecks, BarChart3, Plus,
-  Settings, Tag, Layers, FileSpreadsheet, UserCircle, CalendarDays, Wallet,
+  Settings, Tag, Layers, FileSpreadsheet, UserCircle, CalendarDays, Wallet, Target,
 } from 'lucide-react';
 
 export const NAV_GROUPS = [
@@ -29,6 +29,7 @@ export const NAV_GROUPS = [
     id: 'analyze', label: 'ANALYZE', icon: BarChart3,
     items: [
       { id: 'reports', label: 'Reports', route: '/reports', icon: BarChart3, requires: 'ignition_reports_view' },
+      { id: 'targets', label: 'Targets', route: '/targets', icon: Target },
     ],
   },
   {

@@ -15,6 +15,7 @@ export default function DashboardPage() {
   const canManage = !!perms?.ignition_manage;
   const [kpis, setKpis] = useState(null);
   const [overdue, setOverdue] = useState(null);
+  const [monthRow, setMonthRow] = useState(undefined); // undefined=loading, null=no target
   const [err, setErr] = useState(null);
   const [flagging, setFlagging] = useState(false);
 
@@ -23,6 +24,10 @@ export default function DashboardPage() {
     ignitionopsGet('getKpis', {}, session).then(setKpis).catch(e => setErr(e.message));
     ignitionopsGet('getOverdueEngagements', { days: OVERDUE_DAYS }, session)
       .then(r => setOverdue(r.overdue || [])).catch(() => setOverdue([]));
+    const cm = new Date().toISOString().slice(0, 7);
+    ignitionopsGet('getMonthlyTargets', {}, session)
+      .then(r => setMonthRow((r.months || []).find(m => m.month === cm) || null))
+      .catch(() => setMonthRow(null));
   }, [session]);
   useEffect(load, [load]);
 
@@ -68,6 +73,23 @@ export default function DashboardPage() {
         </section>
       )}
 
+      <section style={{ marginTop: 24, maxWidth: 1100 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 10 }}>
+          <span style={{ fontFamily: 'var(--font-cond)', fontSize: 14, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--text-2)' }}>This month</span>
+          <a href="/targets" style={{ fontSize: 11, color: '#FF6B00', fontFamily: 'var(--font-mono)' }}>Targets →</a>
+        </div>
+        {monthRow && (monthRow.target_views != null || monthRow.budget_amount != null) ? (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
+            <MonthProgress label="Views" actual={monthRow.actual_views} target={monthRow.target_views} pct={monthRow.views_pct} kind="views" />
+            <MonthProgress label="Spend" actual={monthRow.actual_spend} target={monthRow.budget_amount} pct={monthRow.spend_pct} kind="spend" money />
+          </div>
+        ) : (
+          <div style={{ padding: 14, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', color: 'var(--text-3)', fontSize: 13 }}>
+            No target set for this month. <a href="/targets" style={{ color: '#FF6B00' }}>Set one →</a>
+          </div>
+        )}
+      </section>
+
       {overdue && overdue.length > 0 && (
         <section style={{ marginTop: 24, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', overflow: 'hidden', maxWidth: 1100 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
@@ -112,6 +134,30 @@ function RatingDot({ rating }) {
       <span style={{ width: 8, height: 8, borderRadius: '50%', background: map[rating] || '#666' }} />
       {rating || 'unrated'}
     </span>
+  );
+}
+
+function MonthProgress({ label, actual, target, pct, kind, money }) {
+  const fmt = (n) => money ? `₹${Number(n || 0).toLocaleString('en-IN')}` : Number(n || 0).toLocaleString('en-IN');
+  const w = pct == null ? 0 : Math.min(100, Math.max(0, pct));
+  let color = '#FF6B00';
+  if (pct != null) {
+    if (kind === 'spend') color = pct > 100 ? '#ff7070' : pct > 85 ? '#fbbf24' : '#4ade80';
+    else color = pct >= 100 ? '#4ade80' : pct >= 70 ? '#fbbf24' : '#FF6B00';
+  }
+  return (
+    <div style={{ padding: 14, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
+        <span style={{ fontSize: 12, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</span>
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color }}>{pct != null ? `${pct}%` : '—'}</span>
+      </div>
+      <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'var(--font-mono)' }}>
+        {fmt(actual)} <span style={{ fontSize: 12, color: 'var(--text-3)', fontWeight: 400 }}>/ {target != null ? fmt(target) : '—'}</span>
+      </div>
+      <div style={{ marginTop: 8, height: 6, background: 'var(--surface-2)', borderRadius: 3, overflow: 'hidden' }}>
+        <div style={{ width: `${w}%`, height: '100%', background: color }} />
+      </div>
+    </div>
   );
 }
 
