@@ -589,7 +589,32 @@ async function getKpis(url, auth, env) {
     count('stage=eq.ghosted'),
     count(overdueFilter()),
   ]);
-  return ok({ active, live, closed, ghosted, overdue });
+
+  // All-time engagement totals + UGC summary (Reann dashboard tiles). One scan,
+  // summed in JS (PostgREST has no SUM here) — ~2k small rows, within the budget.
+  const num = v => (v == null || isNaN(Number(v)) ? 0 : Number(v));
+  const spendOf = e => (e.total_cost != null ? num(e.total_cost) : num(e.payment_amount) + num(e.ad_spend) + num(e.commission_amount));
+  let engagement_totals = { views: 0, likes: 0, shares: 0 };
+  const ugc_summary = { deals: 0, views: 0, likes: 0, budget_consumed: 0, orders: 0, conversions_value: 0 };
+  const aggR = await sb(
+    `/rest/v1/engagements?select=engagement_type,views,likes,shares,orders,conversions_value,total_cost,payment_amount,ad_spend,commission_amount&limit=5000`,
+    env,
+  );
+  if (aggR.ok) {
+    for (const e of (aggR.data || [])) {
+      const v = num(e.views), l = num(e.likes), s = num(e.shares);
+      engagement_totals.views += v; engagement_totals.likes += l; engagement_totals.shares += s;
+      if (e.engagement_type === 'ugc') {
+        ugc_summary.deals += 1; ugc_summary.views += v; ugc_summary.likes += l;
+        ugc_summary.budget_consumed += spendOf(e); ugc_summary.orders += num(e.orders);
+        ugc_summary.conversions_value += num(e.conversions_value);
+      }
+    }
+    ugc_summary.budget_consumed = Math.round(ugc_summary.budget_consumed);
+    ugc_summary.conversions_value = Math.round(ugc_summary.conversions_value);
+  }
+
+  return ok({ active, live, closed, ghosted, overdue, engagement_totals, ugc_summary });
 }
 
 // ── Overdue-post detection (auto-rating signal) ──────────────────────────────
@@ -731,7 +756,7 @@ async function getReports(url, auth, env) {
   if (to) filters.push(`created_at=lte.${encodeURIComponent(to)}`);
 
   const r = await sb(
-    `/rest/v1/engagements?${filters.join('&')}&select=engagement_no,created_at,post_date,product_code,engagement_type,deal_type,payment_amount,total_cost,ad_spend,commission_amount,views,orders,conversions_value,cpm,actual_roas,roas_on_ad_spend,influencer:influencer_id(influencer_code,channel_name,person_name)&order=created_at.desc&limit=5000`,
+    `/rest/v1/engagements?${filters.join('&')}&select=engagement_no,created_at,post_date,product_code,engagement_type,deal_type,payment_amount,total_cost,ad_spend,commission_amount,views,likes,shares,orders,conversions_value,cpm,actual_roas,roas_on_ad_spend,influencer:influencer_id(influencer_code,channel_name,person_name,influencer_type)&order=created_at.desc&limit=5000`,
     env,
   );
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
@@ -744,7 +769,10 @@ async function getReports(url, auth, env) {
   const byMonthMap = {};
   const byProductMap = {};
   let totalSpend = 0, totalOrders = 0, totalViews = 0, totalConv = 0;
+  let totLikes = 0, totShares = 0;
   let cpmSum = 0, cpmN = 0, roasSum = 0, roasN = 0;
+  const byTierMap = {};
+  const ugcAgg = { deals: 0, views: 0, likes: 0, budget_consumed: 0, orders: 0, conversions_value: 0 };
 
   const ROAS_BUCKETS = [{ k: '<1', lo: -Infinity, hi: 1 }, { k: '1–2', lo: 1, hi: 2 }, { k: '2–3', lo: 2, hi: 3 }, { k: '3–5', lo: 3, hi: 5 }, { k: '5+', lo: 5, hi: Infinity }];
   const CPM_BUCKETS = [{ k: '<50', lo: -Infinity, hi: 50 }, { k: '50–100', lo: 50, hi: 100 }, { k: '100–200', lo: 100, hi: 200 }, { k: '200–500', lo: 200, hi: 500 }, { k: '500+', lo: 500, hi: Infinity }];
@@ -755,7 +783,21 @@ async function getReports(url, auth, env) {
   for (const e of rows) {
     const spend = spendOf(e);
     const orders = num(e.orders), views = num(e.views), conv = num(e.conversions_value);
+    const likes = num(e.likes), shares = num(e.shares);
     totalSpend += spend; totalOrders += orders; totalViews += views; totalConv += conv;
+    totLikes += likes; totShares += shares;
+
+    // By influencer tier (Reann analytics): delivered views/likes/shares + distinct active influencers.
+    const tier = (e.influencer && e.influencer.influencer_type) || 'untyped';
+    const t = byTierMap[tier] || (byTierMap[tier] = { tier, deals: 0, views: 0, likes: 0, shares: 0, spend: 0, orders: 0, conversions_value: 0, influencer_ids: new Set() });
+    t.deals += 1; t.views += views; t.likes += likes; t.shares += shares; t.spend += spend; t.orders += orders; t.conversions_value += conv;
+    if (e.influencer && e.influencer.influencer_code) t.influencer_ids.add(e.influencer.influencer_code);
+
+    // UGC rollup
+    if (e.engagement_type === 'ugc') {
+      ugcAgg.deals += 1; ugcAgg.views += views; ugcAgg.likes += likes;
+      ugcAgg.budget_consumed += spend; ugcAgg.orders += orders; ugcAgg.conversions_value += conv;
+    }
 
     const month = (e.post_date || e.created_at || '').slice(0, 7);
     if (month) {
@@ -775,6 +817,17 @@ async function getReports(url, auth, env) {
     .map(m => ({ ...m, spend: Math.round(m.spend) }));
   const byProduct = Object.values(byProductMap).sort((a, b) => b.spend - a.spend)
     .map(p => ({ ...p, spend: Math.round(p.spend) }));
+
+  const by_tier = Object.values(byTierMap)
+    .map(t => ({
+      tier: t.tier, deals: t.deals, views: t.views, likes: t.likes, shares: t.shares,
+      spend: Math.round(t.spend), orders: t.orders, conversions_value: Math.round(t.conversions_value),
+      influencer_count: t.influencer_ids.size,
+      avg_views_per_influencer: t.influencer_ids.size ? Math.round(t.views / t.influencer_ids.size) : 0,
+    }))
+    .sort((a, b) => b.views - a.views);
+  const engagement_totals = { views: totalViews, likes: totLikes, shares: totShares };
+  const ugc = { ...ugcAgg, budget_consumed: Math.round(ugcAgg.budget_consumed), conversions_value: Math.round(ugcAgg.conversions_value) };
 
   const topPerformers = rows
     .map(e => ({
@@ -806,6 +859,9 @@ async function getReports(url, auth, env) {
     roas_distribution: ROAS_BUCKETS.map(b => ({ bucket: b.k, count: roasDist[b.k] })),
     cpm_distribution: CPM_BUCKETS.map(b => ({ bucket: b.k, count: cpmDist[b.k] })),
     top_performers: topPerformers,
+    by_tier,
+    engagement_totals,
+    ugc,
   });
 }
 
