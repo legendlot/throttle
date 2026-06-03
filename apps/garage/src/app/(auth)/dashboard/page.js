@@ -183,7 +183,7 @@ function UnitStat({ label, value, small = false }) {
     : (Number(value) < 0 ? 'var(--state-error-fg)' : 'var(--t1)');
   return (
     <div style={{ minWidth: 56 }}>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: small ? 13 : 18, color }}>{display}</div>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: small ? 13 : 15, color }}>{display}</div>
       <div style={{ fontSize: 9, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</div>
     </div>
   );
@@ -354,21 +354,38 @@ export default function DashboardPage() {
               <div style={{ padding: 16, textAlign: 'center' }}><Spinner size="sm" /></div>
             ) : units.pcb.length === 0 ? (
               <EmptyState message="No PCB parts found" />
-            ) : (
-              units.pcb.map((r, i) => (
+            ) : (() => {
+              const nz = (v) => v !== null && v !== undefined && v !== 0;
+              const active = units.pcb.filter(r => nz(r.car_stock) || nz(r.remote_stock));
+              const zero   = units.pcb.filter(r => !(nz(r.car_stock) || nz(r.remote_stock)));
+              const renderRow = (r, i, arr) => (
                 <div key={r.product} style={{
                   display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                  padding: '10px 16px',
-                  borderBottom: i === units.pcb.length - 1 ? 'none' : '1px solid var(--border)',
+                  padding: '5px 16px',
+                  borderBottom: i === arr.length - 1 ? 'none' : '1px solid var(--border)',
                 }}>
-                  <div style={{ fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 14 }}>{r.product}</div>
-                  <div style={{ display: 'flex', gap: 28, textAlign: 'right' }}>
-                    <UnitStat label="Car" value={r.car_stock} />
-                    <UnitStat label="Remote" value={r.remote_stock} />
+                  <div style={{ fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 13 }}>{r.product}</div>
+                  <div style={{ display: 'flex', gap: 24, textAlign: 'right' }}>
+                    <UnitStat label="Car" value={r.car_stock} small />
+                    <UnitStat label="Remote" value={r.remote_stock} small />
                   </div>
                 </div>
-              ))
-            )}
+              );
+              return (
+                <>
+                  {active.map((r, i) => renderRow(r, i, active))}
+                  {zero.length > 0 && (
+                    <div style={{
+                      padding: '3px 16px', background: 'var(--surface2)',
+                      fontFamily: 'var(--mono)', fontSize: 9, textTransform: 'uppercase',
+                      letterSpacing: '0.08em', color: 'var(--t3)',
+                      borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)',
+                    }}>No stock ({zero.length})</div>
+                  )}
+                  {zero.map((r, i) => renderRow(r, i, zero))}
+                </>
+              );
+            })()}
           </div>
         </section>
 
@@ -390,7 +407,7 @@ export default function DashboardPage() {
                 const hasVariants = (r.variants || []).length > 1;
                 return (
                   <div key={r.product} style={{
-                    padding: '10px 16px',
+                    padding: '5px 16px',
                     borderBottom: isLast ? 'none' : '1px solid var(--border)',
                   }}>
                     <div
@@ -398,7 +415,7 @@ export default function DashboardPage() {
                       onClick={() => hasVariants && setExpandedUnitIndex(isOpen ? null : i)}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span style={{ fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 14 }}>{r.product}</span>
+                        <span style={{ fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 13 }}>{r.product}</span>
                         {(r.formats || []).map(f => (
                           <StatusBadge key={f} label={f} tone={f === 'SKD' ? 'orange' : 'blue'} />
                         ))}
