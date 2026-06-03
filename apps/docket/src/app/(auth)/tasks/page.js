@@ -127,8 +127,11 @@ export default function TasksPage() {
     } catch (e) { showToast(e.message || 'Failed', 'error'); }
   }
   async function addSubtask(task, title) {
-    try { await docketopsPost('createSubtask', { parent_task_id: task.id, title }, session); await load(); showToast('Sub-task added', 'success'); }
-    catch (e) { showToast(e.message || 'Failed', 'error'); }
+    // Inherit team + owner from the parent (editable afterwards).
+    try {
+      await docketopsPost('createSubtask', { parent_task_id: task.id, title, department_id: task.department_id || null, owner_employee_id: task.owner_employee_id || null }, session);
+      await load(); showToast('Sub-task added', 'success');
+    } catch (e) { showToast(e.message || 'Failed', 'error'); }
   }
   async function addCollab(task, employeeId) {
     if (!employeeId) return;
@@ -332,7 +335,9 @@ function TaskTable({ rows, childrenByParent, saveField, abandonInline, reviseInl
     return (
       <tr key={t.id} id={'dk-row-' + t.id} className="dk-task-row" onKeyDown={e => { if (e.key === 'Escape') { setEditRow(null); setAbandonFor(null); } }}>
         <td style={{ ...td, fontFamily: 'var(--font-mono)', fontSize: 11 }}>
-          <button className="dk-idlink" style={idBtn} onClick={() => openDrawer(t.id)} title="Open task">{t.task_no}</button>
+          {/* Sub-tasks read as nested items, not standalone tasks — no top-level ID;
+              the indent + branch glyph in the title carries the nesting. */}
+          {isChild ? null : <button className="dk-idlink" style={idBtn} onClick={() => openDrawer(t.id)} title="Open task">{t.task_no}</button>}
         </td>
 
         <td style={{ ...td, color: 'var(--text-1)', fontWeight: 500 }}>
@@ -395,7 +400,10 @@ function TaskTable({ rows, childrenByParent, saveField, abandonInline, reviseInl
   }
 
   return (
-    <div style={{ overflow: editRow || abandonFor ? 'visible' : 'auto' }}>
+    // overflow must stay visible so the inline popovers (date picker, collaborator
+    // manager, abandon, combobox dropdowns) float over the rows instead of being
+    // clipped to a sliver by the scroll container.
+    <div style={{ overflow: 'visible' }}>
       <table style={table}>
         <colgroup>{COLS.map((c, i) => <col key={i} style={c.w ? { width: c.w } : undefined} />)}</colgroup>
         <thead><tr>
