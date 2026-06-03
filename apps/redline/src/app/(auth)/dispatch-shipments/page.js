@@ -194,6 +194,18 @@ export default function DispatchShipmentsPage() {
     }
   }
 
+  // Offline-sales shipments (carry sales_order_no) record a delivery date here.
+  // Snorkel reads it to start the payment-due clock (45d from delivery, falling back to dispatch).
+  async function saveDeliveryDate(shipment_id, delivery_date) {
+    try {
+      await workerFetch('updateShipment', { shipment_id, delivery_date: delivery_date || null }, session);
+      showToast('Delivery date saved', 'success');
+      refreshDetail();
+    } catch (e) {
+      showToast(e.message || 'Failed to save delivery date', 'error');
+    }
+  }
+
   async function toggleBoxUnits(boxId) {
     if (expandedBoxes.has(boxId)) {
       setExpandedBoxes(prev => { const n = new Set(prev); n.delete(boxId); return n; });
@@ -799,6 +811,7 @@ export default function DispatchShipmentsPage() {
                         <td style={{ ...tdStyle, color: 'var(--yellow)' }}>
                           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                             {s.shipment_no}
+                            {s.sales_order_no && <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: '#7b93ff', border: '1px solid rgba(33,60,226,.3)', background: 'rgba(33,60,226,.12)', borderRadius: 2, padding: '1px 5px' }} title={`Offline sales order ${s.sales_order_no}`}>{s.sales_order_no}</span>}
                             {ready && <StatusBadge variant="success" icon="✓">Ready</StatusBadge>}
                           </span>
                         </td>
@@ -850,6 +863,11 @@ export default function DispatchShipmentsPage() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
               <span style={{ fontFamily: 'var(--mono)', color: 'var(--yellow)', fontSize: 14, fontWeight: 700 }}>{detailShipment.shipment_no}</span>
               <ShipmentStatusBadge status={detailShipment.status} />
+              {detailShipment.sales_order_no && (
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: '#7b93ff', border: '1px solid rgba(33,60,226,.3)', background: 'rgba(33,60,226,.12)', borderRadius: 2, padding: '2px 6px' }}>
+                  Order {detailShipment.sales_order_no}
+                </span>
+              )}
               {detailShipment.title && <span style={{ color: 'var(--t2)', fontSize: 12 }}>· {detailShipment.title}</span>}
               <div style={{ flex: 1 }} />
               {detailLoading && <Spinner size="sm" />}
@@ -863,6 +881,22 @@ export default function DispatchShipmentsPage() {
               <MetaCard label="Packed"    value={fmt(detailShipment.packed_count)} sub={`of ${fmt(detailShipment.expected_units)}`} />
               <MetaCard label="Scheduled" value={formatDate(detailShipment.scheduled_date)} />
             </div>
+
+            {/* Offline-sales delivery date — drives the partner's payment-due clock in Snorkel */}
+            {detailShipment.sales_order_no && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18, padding: '8px 12px', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 4 }}>
+                <span style={{ ...sectionLabel, marginBottom: 0 }}>Delivery date</span>
+                <input
+                  type="date"
+                  defaultValue={detailShipment.delivery_date || ''}
+                  onChange={e => saveDeliveryDate(detailShipment.id, e.target.value)}
+                  style={{ ...inputStyle, width: 160 }}
+                />
+                <span style={{ fontSize: 11, color: 'var(--t3)' }}>
+                  Sales order {detailShipment.sales_order_no} — set the date goods reached the partner (defaults to dispatch date if blank).
+                </span>
+              </div>
+            )}
 
             {/* Manifest */}
             <div style={{ marginBottom: 18 }}>
