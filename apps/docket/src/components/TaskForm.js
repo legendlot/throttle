@@ -1,6 +1,7 @@
 'use client';
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { X } from 'lucide-react';
+import { Combobox } from '@throttle/ui';
 import { PRIORITIES } from '../lib/tasks.js';
 
 // Controlled create form. `departments` + `employees` are loaded by the parent.
@@ -20,6 +21,10 @@ export function TaskForm({ departments, employees, parentTask, onSubmit, saving 
   const [docUrl, setDocUrl] = useState('');
 
   const empName = Object.fromEntries((employees || []).map(e => [e.id, e.full_name]));
+  const deptOpts = useMemo(() => (departments || []).map(d => ({ value: d.id, label: d.name })), [departments]);
+  const empOpts = useMemo(() => (employees || []).map(e => ({ value: e.id, label: e.full_name })), [employees]);
+  const prioOpts = PRIORITIES.map(p => ({ value: p.key, label: p.label }));
+  const collabOpts = useMemo(() => (employees || []).filter(e => !collaborators.includes(e.id) && e.id !== ownerId).map(e => ({ value: e.id, label: e.full_name })), [employees, collaborators, ownerId]);
 
   function addCollab() {
     if (collabPick && !collaborators.includes(collabPick)) setCollaborators(c => [...c, collabPick]);
@@ -69,33 +74,22 @@ export function TaskForm({ departments, employees, parentTask, onSubmit, saving 
       <div style={grid2}>
         <div>
           <label style={lbl}>Department (Team) *</label>
-          <select value={departmentId} onChange={e => setDepartmentId(e.target.value)} style={input} disabled={saving}>
-            <option value="">Select…</option>
-            {(departments || []).map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-          </select>
+          <Combobox value={departmentId} options={deptOpts} onChange={(v) => setDepartmentId(v)} placeholder="Select team…" disabled={saving} style={input} />
         </div>
         <div>
           <label style={lbl}>Priority</label>
-          <select value={priority} onChange={e => setPriority(e.target.value)} style={input} disabled={saving}>
-            {PRIORITIES.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
-          </select>
+          <Combobox value={priority} options={prioOpts} onChange={(v) => setPriority(v || 'P2')} placeholder="Priority…" allowClear={false} disabled={saving} style={input} />
         </div>
       </div>
 
       <div style={grid2}>
         <div>
           <label style={lbl}>Owner *</label>
-          <select value={ownerId} onChange={e => setOwnerId(e.target.value)} style={input} disabled={saving}>
-            <option value="">Select…</option>
-            {(employees || []).map(e => <option key={e.id} value={e.id}>{e.full_name}</option>)}
-          </select>
+          <Combobox value={ownerId} options={empOpts} onChange={(v) => setOwnerId(v)} placeholder="Select owner…" disabled={saving} style={input} />
         </div>
         <div>
           <label style={lbl}>Assignee</label>
-          <select value={assigneeId} onChange={e => setAssigneeId(e.target.value)} style={input} disabled={saving}>
-            <option value="">— none —</option>
-            {(employees || []).map(e => <option key={e.id} value={e.id}>{e.full_name}</option>)}
-          </select>
+          <Combobox value={assigneeId} options={empOpts} onChange={(v) => setAssigneeId(v)} placeholder="— none —" allowClear disabled={saving} style={input} />
         </div>
       </div>
 
@@ -106,13 +100,8 @@ export function TaskForm({ departments, employees, parentTask, onSubmit, saving 
 
       <div style={{ marginBottom: 12 }}>
         <label style={lbl}>Collaborators</label>
-        <div style={{ display: 'flex', gap: 6 }}>
-          <select value={collabPick} onChange={e => setCollabPick(e.target.value)} style={{ ...input, flex: 1 }} disabled={saving}>
-            <option value="">Add a collaborator…</option>
-            {(employees || []).filter(e => !collaborators.includes(e.id) && e.id !== ownerId).map(e => (
-              <option key={e.id} value={e.id}>{e.full_name}</option>
-            ))}
-          </select>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <div style={{ flex: 1 }}><Combobox value={collabPick} options={collabOpts} onChange={(v) => setCollabPick(v)} placeholder="Add a collaborator…" allowClear disabled={saving} style={input} /></div>
           <button type="button" style={btnSecondary} onClick={addCollab} disabled={saving || !collabPick}>Add</button>
         </div>
         {collaborators.length > 0 && (

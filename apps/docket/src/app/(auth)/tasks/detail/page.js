@@ -2,7 +2,7 @@
 import { useEffect, useState, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { Spinner, useToast } from '@throttle/ui';
+import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { ArrowLeft, ArrowUp, X, Plus } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../../../../lib/docketopsFetch.js';
 import { StatusBadge } from '../../../../components/StatusBadge.js';
@@ -108,6 +108,10 @@ function DetailInner() {
   if (loading) return <Spinner />;
   if (!task) return <div style={{ color: 'var(--text-3)' }}>Task not found.</div>;
   const od = isOverdue(task);
+  const deptOpts = departments.map(d => ({ value: d.id, label: d.name }));
+  const empOpts = employees.map(e => ({ value: e.id, label: e.full_name }));
+  const prioOpts = PRIORITIES.map(p => ({ value: p.key, label: p.label }));
+  const collabOpts = employees.filter(e => !(task.collaborators || []).some(c => c.employee_id === e.id)).map(e => ({ value: e.id, label: e.full_name }));
 
   return (
     <div style={{ maxWidth: 1040 }}>
@@ -174,26 +178,22 @@ function DetailInner() {
             <div style={sectionTitle}>Details</div>
             <Field label="Team">
               {editing
-                ? <select value={form.department_id} onChange={e => setForm(f => ({ ...f, department_id: e.target.value }))} style={input}>
-                    {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select>
+                ? <Combobox value={form.department_id || ''} options={deptOpts} onChange={(v) => setForm(f => ({ ...f, department_id: v }))} placeholder="Team…" style={input} />
                 : (task.department_name || '—')}
             </Field>
             <Field label="Owner">
               {editing
-                ? <select value={form.owner_employee_id} onChange={e => setForm(f => ({ ...f, owner_employee_id: e.target.value }))} style={input}>
-                    {employees.map(e => <option key={e.id} value={e.id}>{e.full_name}</option>)}</select>
+                ? <Combobox value={form.owner_employee_id || ''} options={empOpts} onChange={(v) => setForm(f => ({ ...f, owner_employee_id: v }))} placeholder="Owner…" style={input} />
                 : (task.owner_name || '—')}
             </Field>
             <Field label="Assignee">
               {editing
-                ? <select value={form.assignee_employee_id} onChange={e => setForm(f => ({ ...f, assignee_employee_id: e.target.value }))} style={input}>
-                    <option value="">— none —</option>{employees.map(e => <option key={e.id} value={e.id}>{e.full_name}</option>)}</select>
+                ? <Combobox value={form.assignee_employee_id || ''} options={empOpts} onChange={(v) => setForm(f => ({ ...f, assignee_employee_id: v }))} placeholder="— none —" allowClear style={input} />
                 : (task.assignee_name || '—')}
             </Field>
             <Field label="Priority">
               {editing
-                ? <select value={form.priority} onChange={e => setForm(f => ({ ...f, priority: e.target.value }))} style={input}>
-                    {PRIORITIES.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}</select>
+                ? <Combobox value={form.priority} options={prioOpts} onChange={(v) => setForm(f => ({ ...f, priority: v || 'P2' }))} placeholder="Priority…" allowClear={false} style={input} />
                 : <PriorityBadge priority={task.priority} />}
             </Field>
           </section>
@@ -228,13 +228,8 @@ function DetailInner() {
               ))}
             </div>
             {canEdit && (
-              <div style={{ display: 'flex', gap: 6 }}>
-                <select value={collabPick} onChange={e => setCollabPick(e.target.value)} style={{ ...input, flex: 1 }}>
-                  <option value="">Add collaborator…</option>
-                  {employees.filter(e => !(task.collaborators || []).some(c => c.employee_id === e.id)).map(e => (
-                    <option key={e.id} value={e.id}>{e.full_name}</option>
-                  ))}
-                </select>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <div style={{ flex: 1 }}><Combobox value={collabPick} options={collabOpts} onChange={(v) => setCollabPick(v)} placeholder="Add collaborator…" allowClear style={input} /></div>
                 <button style={btnSecondary} onClick={addCollab} disabled={busy || !collabPick}><Plus size={13} /></button>
               </div>
             )}

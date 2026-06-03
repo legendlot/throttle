@@ -321,8 +321,10 @@ async function mintTaskNo(env) {
 }
 
 async function createTaskCore(d, auth, env) {
-  if (!d.title || !d.department_id || !d.owner_employee_id || !d.deadline)
-    return err('title, department_id, owner_employee_id, deadline required', 400);
+  // Quick-capture: only a title is required. Everything else (team/owner/assignee/
+  // deadline) is optional and enriched later — the task lands in "The Grid" until it
+  // has both an owner and a deadline. (RULE-DOCKET-001, V2.)
+  if (!d.title || !String(d.title).trim()) return err('title required', 400);
 
   let parentId = d.parent_task_id || null;
   if (parentId) {
@@ -334,12 +336,12 @@ async function createTaskCore(d, auth, env) {
   const ins = await sbDocket(`/rest/v1/tasks`, env, {
     method: 'POST',
     body: JSON.stringify([{
-      task_no, title: d.title, description: d.description || null,
-      department_id: d.department_id, owner_employee_id: d.owner_employee_id,
+      task_no, title: String(d.title).trim(), description: d.description || null,
+      department_id: d.department_id || null, owner_employee_id: d.owner_employee_id || null,
       assignee_employee_id: d.assignee_employee_id || null,
       status: 'not_started', priority: d.priority || 'P2',
       parent_task_id: parentId, created_by_user_id: auth.userId,
-      deadline: d.deadline, custom_fields: d.custom_fields || {},
+      deadline: d.deadline || null, custom_fields: d.custom_fields || {},
     }]),
   });
   if (!ins.ok || !ins.data?.[0]) return err('create_failed: ' + JSON.stringify(ins.data), 400);
@@ -380,13 +382,18 @@ async function updateTask(body, auth, env) {
       updates[f] = d[f]; changes.push([f, task[f], d[f]]);
     }
   }
+  // First-time deadline set (task was quick-captured to The Grid with no deadline).
+  // This becomes the immutable original — afterwards only reviseDeadline changes it.
+  let deadlineSet = false;
+  if (d.deadline && !task.deadline) { updates.deadline = d.deadline; deadlineSet = true; }
   if (d.custom_fields !== undefined) updates.custom_fields = d.custom_fields;
   if (!Object.keys(updates).length) return ok({ id: task.id, unchanged: true });
   updates.updated_by = auth.userId; updates.updated_at = nowIso();
   const r = await sbDocket(`/rest/v1/tasks?id=eq.${enc(d.id)}`, env, { method: 'PATCH', body: JSON.stringify(updates) });
   if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
   for (const [f, oldV, newV] of changes) await logHistory(env, task.id, auth.userId, `${f}_changed`, { field: f, old: oldV, new: newV });
-  return ok({ id: task.id, updated: changes.map(c => c[0]) });
+  if (deadlineSet) await logHistory(env, task.id, auth.userId, 'deadline_set', { field: 'deadline', new: d.deadline });
+  return ok({ id: task.id, updated: [...changes.map(c => c[0]), ...(deadlineSet ? ['deadline'] : [])] });
 }
 
 const STATUSES = ['not_started','in_progress','done','blocked','abandoned'];

@@ -35,6 +35,7 @@ export function isOverdue(t) {
 export const EVENT_LABEL = {
   created: 'Created',
   status_changed: 'Status changed',
+  deadline_set: 'Deadline set',
   deadline_revised: 'Deadline revised',
   owner_employee_id_changed: 'Owner changed',
   assignee_employee_id_changed: 'Assignee changed',
