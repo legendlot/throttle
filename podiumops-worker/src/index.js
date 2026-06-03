@@ -148,6 +148,90 @@ async function verifyJWT(authHeader, env) {
   };
 }
 
+// ── Google Workspace Directory (service account + domain-wide delegation) ─────
+// Read-only sync of @legendoftoys.com accounts → Podium employees. Graceful when
+// the GOOGLE_* secrets are absent (the action returns google_not_configured).
+
+function b64urlBytes(bytes) {
+  let s = '';
+  const arr = new Uint8Array(bytes);
+  for (let i = 0; i < arr.length; i++) s += String.fromCharCode(arr[i]);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function b64urlStr(str) { return b64urlBytes(new TextEncoder().encode(str)); }
+function pemToPkcs8(pem) {
+  const body = pem.replace(/-----BEGIN PRIVATE KEY-----/, '').replace(/-----END PRIVATE KEY-----/, '').replace(/\s+/g, '');
+  const bin = atob(body);
+  const buf = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+  return buf.buffer;
+}
+function googleConfigured(env) { return !!(env.GOOGLE_SA_JSON && env.GOOGLE_ADMIN_IMPERSONATE_EMAIL); }
+
+async function googleAccessToken(env) {
+  const sa = JSON.parse(env.GOOGLE_SA_JSON);
+  const now = Math.floor(Date.now() / 1000);
+  const header = b64urlStr(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const claim = b64urlStr(JSON.stringify({
+    iss: sa.client_email,
+    sub: env.GOOGLE_ADMIN_IMPERSONATE_EMAIL,
+    scope: 'https://www.googleapis.com/auth/admin.directory.user.readonly',
+    aud: 'https://oauth2.googleapis.com/token',
+    iat: now, exp: now + 3600,
+  }));
+  const signingInput = `${header}.${claim}`;
+  const key = await crypto.subtle.importKey('pkcs8', pemToPkcs8(sa.private_key),
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']);
+  const sigBuf = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, new TextEncoder().encode(signingInput));
+  const jwt = `${signingInput}.${b64urlBytes(sigBuf)}`;
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: jwt }),
+  });
+  const t = await res.json();
+  if (!t.access_token) throw new Error('google_token_failed: ' + JSON.stringify(t));
+  return t.access_token;
+}
+
+async function fetchGoogleUsers(env) {
+  const token = await googleAccessToken(env);
+  const out = [];
+  let pageToken = '', pages = 0;
+  do {
+    const u = new URL('https://admin.googleapis.com/admin/directory/v1/users');
+    u.searchParams.set('customer', 'my_customer');
+    u.searchParams.set('maxResults', '500');
+    u.searchParams.set('orderBy', 'email');
+    u.searchParams.set('projection', 'full');
+    if (pageToken) u.searchParams.set('pageToken', pageToken);
+    const r = await fetch(u, { headers: { Authorization: `Bearer ${token}` } });
+    const d = await r.json();
+    if (!r.ok) throw new Error('google_dir_failed: ' + JSON.stringify(d));
+    (d.users || []).forEach(x => out.push(x));
+    pageToken = d.nextPageToken || '';
+  } while (pageToken && ++pages < 10);
+  return out;
+}
+
+// email(lowercased) → auth.users id, via the GoTrue admin API.
+async function authEmailMap(env) {
+  const res = await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users?per_page=1000`, {
+    headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` },
+  });
+  if (!res.ok) return {};
+  const d = await res.json();
+  const m = {};
+  (d.users || []).forEach(u => { if (u.email) m[u.email.toLowerCase()] = u.id; });
+  return m;
+}
+
+async function nextEmployeeSeq(env) {
+  const r = await sb(`/rest/v1/rpc/next_employee_seq`, env, { method: 'POST', body: JSON.stringify({}) });
+  if (!r.ok) return null;
+  const v = Array.isArray(r.data) ? r.data[0] : r.data;
+  return Number(v);
+}
+
 // ── Permission tiers ─────────────────────────────────────────────────────────
 
 function hasPerm(auth, perm) { return !!auth?.permissions?.[perm]; }
@@ -1044,6 +1128,151 @@ async function assignPodiumRole(body, auth, env) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// GOOGLE DIRECTORY SYNC (on-demand) — HR-gated. RULE-PODIUM-007.
+// Excludes shared/role OUs + an ignore list; proposes new joiners + departures;
+// imports are review-and-confirm (drafts nothing, never clobbers manual edits).
+// ────────────────────────────────────────────────────────────────────────────
+
+const DEPT_ALIAS = { 'd2c': 'D2C / Website' }; // OU leaf → podium department name
+
+function ouExcluded(ou, excluded) {
+  return (excluded || []).some(x => ou === x || (ou || '').startsWith(x + '/'));
+}
+function mapOuToDept(ou, deptByName) {
+  if (!ou || ou === '/') return null;
+  const leaf = ou.split('/').filter(Boolean).pop() || '';
+  const name = (DEPT_ALIAS[leaf.toLowerCase()] || leaf).toLowerCase();
+  return deptByName.get(name) || null;
+}
+
+async function getDirectorySyncPreview(url, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  if (!googleConfigured(env)) return err('google_not_configured', 400);
+  let gusers;
+  try { gusers = await fetchGoogleUsers(env); }
+  catch (e) { return err('google_sync_failed: ' + (e?.message || e), 502); }
+
+  const [sres, igRes, eRes, dRes] = await Promise.all([
+    sb(`/rest/v1/settings?id=eq.1&select=directory_excluded_ous&limit=1`, env),
+    sb(`/rest/v1/directory_ignored?select=email`, env),
+    sb(`/rest/v1/employees?select=id,full_name,work_email,status&limit=5000`, env),
+    sb(`/rest/v1/departments?select=id,name&limit=500`, env),
+  ]);
+  const excluded = (sres.ok && sres.data?.[0]?.directory_excluded_ous) || ['/Admin and general'];
+  const ignored = new Set((igRes.ok ? igRes.data : []).map(r => (r.email || '').toLowerCase()));
+  const emps = eRes.ok ? eRes.data : [];
+  const empByEmail = new Map(emps.map(e => [(e.work_email || '').toLowerCase(), e]));
+  const depts = (dRes.ok ? dRes.data : []).slice().sort((a, b) => a.name.localeCompare(b.name));
+  const deptByName = new Map(depts.map(d => [d.name.toLowerCase(), d.id]));
+  const authMap = await authEmailMap(env);
+
+  const gEmails = new Set();
+  const gSuspended = new Set();
+  let excludedCount = 0;
+  const newCands = [];
+  for (const gu of gusers) {
+    const email = (gu.primaryEmail || '').toLowerCase();
+    if (!email) continue;
+    gEmails.add(email);
+    if (gu.suspended) gSuspended.add(email);
+    if (ouExcluded(gu.orgUnitPath, excluded)) { excludedCount++; continue; }
+    if (ignored.has(email)) continue;
+    if (empByEmail.has(email)) continue;     // already an employee
+    if (gu.suspended) continue;              // suspended & not in Podium → not a new active hire
+    const deptId = mapOuToDept(gu.orgUnitPath, deptByName);
+    const rel = (gu.relations || []).find(r => r.type === 'manager' && r.value);
+    const mgr = rel ? empByEmail.get(rel.value.toLowerCase()) : null;
+    newCands.push({
+      email: gu.primaryEmail,
+      full_name: [gu.name?.givenName, gu.name?.familyName].filter(Boolean).join(' ') || gu.name?.fullName || gu.primaryEmail,
+      org_unit: gu.orgUnitPath || '',
+      job_title: gu.organizations?.[0]?.title || '',
+      suggested_department_id: deptId,
+      suggested_manager_id: mgr ? mgr.id : null,
+      has_login: !!authMap[email],
+    });
+  }
+  // Departures: active LOT-domain employees whose Google account is gone or suspended.
+  const departed = emps.filter(e => {
+    if (e.status !== 'active' || !e.work_email) return false;
+    const em = e.work_email.toLowerCase();
+    if (!em.endsWith('@legendoftoys.com')) return false; // only judge accounts we expect in Google
+    return !gEmails.has(em) || gSuspended.has(em);
+  }).map(e => ({
+    id: e.id, full_name: e.full_name, work_email: e.work_email,
+    reason: gSuspended.has(e.work_email.toLowerCase()) ? 'suspended in Google' : 'no Google account',
+  }));
+
+  return ok({
+    new_candidates: newCands.sort((a, b) => a.full_name.localeCompare(b.full_name)),
+    departed,
+    departments: depts,
+    managers: emps.filter(e => e.status === 'active').map(e => ({ id: e.id, full_name: e.full_name }))
+                  .sort((a, b) => a.full_name.localeCompare(b.full_name)),
+    counts: { google_total: gusers.length, excluded_ou: excludedCount, new: newCands.length, departed: departed.length },
+  });
+}
+
+async function importDirectoryCandidates(body, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  if (!googleConfigured(env)) return err('google_not_configured', 400);
+  const d = body.data || body;
+  const create = Array.isArray(d.create) ? d.create : []; // [{email, department_id, manager_id, job_title}]
+  const exit = Array.isArray(d.exit) ? d.exit : [];        // [email,...]
+  const ignore = Array.isArray(d.ignore) ? d.ignore : [];  // [email,...]
+  if (create.length > 20) return err('import at most 20 people per sync (subrequest limit) — run again for the rest', 400);
+  const result = { created: [], exited: [], ignored: [], errors: [] };
+
+  if (ignore.length) {
+    const rows = ignore.map(em => ({ email: String(em).toLowerCase(), ignored_by: auth.userId }));
+    await sb(`/rest/v1/directory_ignored?on_conflict=email`, env,
+      { method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify(rows) });
+    result.ignored = ignore;
+  }
+
+  for (const em of exit) {
+    const r = await sb(`/rest/v1/employees?work_email=eq.${encodeURIComponent(em)}&status=eq.active`, env,
+      { method: 'PATCH', body: JSON.stringify({ status: 'exited', date_exited: nowIso().slice(0, 10), updated_at: nowIso() }) });
+    if (r.ok) result.exited.push(em); else result.errors.push(`exit ${em}: ${JSON.stringify(r.data)}`);
+  }
+
+  if (create.length) {
+    let gusers;
+    try { gusers = await fetchGoogleUsers(env); }
+    catch (e) { return err('google_sync_failed: ' + (e?.message || e), 502); }
+    const gByEmail = new Map(gusers.map(u => [(u.primaryEmail || '').toLowerCase(), u]));
+    const authMap = await authEmailMap(env);
+    const exRes = await sb(`/rest/v1/employees?select=work_email&limit=5000`, env);
+    const existing = new Set((exRes.ok ? exRes.data : []).map(e => (e.work_email || '').toLowerCase()));
+    for (const c of create) {
+      const em = (c.email || '').toLowerCase();
+      if (!em || existing.has(em)) { result.errors.push(`${c.email || '?'}: already exists`); continue; }
+      const gu = gByEmail.get(em);
+      if (!gu) { result.errors.push(`${c.email}: not in Google directory`); continue; }
+      const seq = await nextEmployeeSeq(env);
+      if (!seq && seq !== 0) { result.errors.push(`${c.email}: sequence error`); continue; }
+      const row = {
+        employee_code: 'EMP-' + String(seq).padStart(3, '0'),
+        full_name: [gu.name?.givenName, gu.name?.familyName].filter(Boolean).join(' ') || gu.name?.fullName || gu.primaryEmail,
+        work_email: gu.primaryEmail,
+        department_id: c.department_id || null,
+        manager_id: c.manager_id || null,
+        job_title: c.job_title || gu.organizations?.[0]?.title || null,
+        status: 'active',
+        auth_user_id: authMap[em] || null,
+        google_user_id: gu.id || null,
+        synced_from_google_at: nowIso(),
+        created_by: auth.userId,
+      };
+      const ins = await sb(`/rest/v1/employees`, env, { method: 'POST', body: JSON.stringify([row]) });
+      if (ins.ok) { existing.add(em); result.created.push({ email: gu.primaryEmail, employee_code: row.employee_code }); }
+      else result.errors.push(`${c.email}: ${JSON.stringify(ins.data)}`);
+    }
+  }
+  return ok(result);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // DISPATCH
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -1060,6 +1289,8 @@ const GET_ACTIONS = {
   getMyPerformance, getTeamActivity,
   // Permission layer (Podium-managed)
   getPodiumRoles, getPodiumUsers,
+  // Google Directory sync
+  getDirectorySyncPreview,
 };
 
 const POST_ACTIONS = {
@@ -1076,6 +1307,8 @@ const POST_ACTIONS = {
   createOneOnOne, updateOneOnOne, deleteOneOnOne,
   // Permission layer (Podium-managed)
   createPodiumRole, updatePodiumRole, deletePodiumRole, assignPodiumRole,
+  // Google Directory sync
+  importDirectoryCandidates,
 };
 
 // Self-only baseline (RULE-PODIUM-006): actions reachable WITHOUT podium_view.

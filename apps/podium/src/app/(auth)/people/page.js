@@ -3,9 +3,10 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, Chip, useListNav } from '@throttle/ui';
-import { UserPlus } from 'lucide-react';
+import { UserPlus, RefreshCw } from 'lucide-react';
 import { podiumopsGet } from '../../../lib/podiumopsFetch.js';
 import StatusBadge from '../../../components/StatusBadge.js';
+import DirectorySyncModal from '../../../components/DirectorySyncModal.js';
 
 const TABS = [
   { id: 'active', label: 'Active' },
@@ -24,6 +25,8 @@ export default function PeoplePage() {
   const [depts, setDepts] = useState([]);
   const [dept, setDept] = useState('');
   const [loading, setLoading] = useState(false);
+  const [syncOpen, setSyncOpen] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const { focusedIdx, setFocusedIdx } = useListNav(rows.length, (i) => {
     const r = rows[i]; if (r) router.push(`/people/detail/?id=${r.id}`);
   });
@@ -42,18 +45,31 @@ export default function PeoplePage() {
     podiumopsGet('getEmployees', params, session)
       .then(r => setRows(r.employees || []))
       .finally(() => setLoading(false));
-  }, [tab, search, dept, session]);
+  }, [tab, search, dept, session, reloadKey]);
 
   return (
     <div>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <h1 style={h1}>Directory</h1>
         {perms?.podium_hr && (
-          <button onClick={() => router.push('/people/new')} style={newBtn}>
-            <UserPlus size={15} strokeWidth={2.25} /> New Person
-          </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => setSyncOpen(true)} style={syncBtn}>
+              <RefreshCw size={14} strokeWidth={2.25} /> Sync from Google
+            </button>
+            <button onClick={() => router.push('/people/new')} style={newBtn}>
+              <UserPlus size={15} strokeWidth={2.25} /> New Person
+            </button>
+          </div>
         )}
       </header>
+
+      {syncOpen && (
+        <DirectorySyncModal
+          session={session}
+          onClose={() => setSyncOpen(false)}
+          onDone={() => setReloadKey(k => k + 1)}
+        />
+      )}
 
       <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
         {TABS.map(t => <Chip key={t.id} active={tab === t.id} onClick={() => setTab(t.id)}>{t.label}</Chip>)}
@@ -101,4 +117,5 @@ const h1 = { fontFamily: 'var(--font-cond)', fontSize: 22, fontWeight: 700, lett
 const th = { padding: '10px 12px', fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600 };
 const td = { padding: '10px 12px' };
 const newBtn = { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--podium-accent)', color: '#1f1f1f', border: 'none', borderRadius: 'var(--radius-sm)', padding: '8px 14px', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer' };
+const syncBtn = { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '8px 14px', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer' };
 function inputStyle(w) { return { background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 10px', fontFamily: 'var(--font-mono)', fontSize: 13, width: w }; }
