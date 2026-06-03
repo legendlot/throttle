@@ -189,7 +189,10 @@ function TaskTable({ rows, saveField, abandonInline, reviseInline, router, teamO
   }
 
   return (
-    <div style={{ overflowX: 'auto' }}>
+    // While a row is in edit mode, let the wrapper overflow so combobox dropdowns
+    // float out over the rows below instead of being clipped (overflow-x:auto also
+    // clips vertically). Horizontal scroll resumes once editing ends.
+    <div style={{ overflow: editRow ? 'visible' : 'auto' }}>
       <table style={table}>
         <thead><tr>
           <th style={th}>ID</th><th style={th}>Title</th><th style={th}>Team</th>
