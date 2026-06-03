@@ -119,16 +119,29 @@ async function verifyJWT(authHeader, env) {
   const profile = profileRes.data[0];
   if (!profile.active) return null;
 
-  const rolesRes = await sbStore(
-    `/rest/v1/roles?role_id=eq.${encodeURIComponent(profile.role)}&select=permissions&limit=1`,
+  // Podium permissions come from Podium's OWN layer (store.podium_user_roles →
+  // store.podium_roles.permissions), NOT the shared store.roles (RULE-PODIUM-006,
+  // mirrors Snorkel/RULE-SNORKEL-002). No assigned role → {} → self-only baseline
+  // (own profile + own wins via /me; see the self-serve gate in handleGet/handlePost).
+  const urRes = await sbStore(
+    `/rest/v1/podium_user_roles?user_id=eq.${user.id}&select=role_key&limit=1`,
     env,
   );
-  const permissions = (rolesRes.ok && rolesRes.data?.[0]?.permissions) || {};
+  const podiumRole = (urRes.ok && urRes.data?.[0]?.role_key) || null;
+  let permissions = {};
+  if (podiumRole) {
+    const prRes = await sbStore(
+      `/rest/v1/podium_roles?role_key=eq.${encodeURIComponent(podiumRole)}&select=permissions&limit=1`,
+      env,
+    );
+    permissions = (prRes.ok && prRes.data?.[0]?.permissions) || {};
+  }
 
   return {
     userId: user.id,
     email: user.email,
     role: profile.role,
+    podiumRole,
     fullName: profile.full_name,
     permissions,
     bearer: token,
@@ -922,6 +935,115 @@ async function getTeamActivity(url, auth, env) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// PERMISSION LAYER — Podium-managed roles (store.podium_roles / podium_user_roles)
+// Mirrors Snorkel (RULE-SNORKEL-002). RULE-PODIUM-006. Admin actions gated on
+// podium_admin; role list is open metadata (no PII).
+// ────────────────────────────────────────────────────────────────────────────
+
+const PODIUM_PERM_KEYS = ['podium_view', 'podium_hr', 'podium_comp', 'podium_admin'];
+
+// Keep only known keys as `true`; any elevated key implies podium_view so an admin
+// can't mint a role that 403s itself at the gate (RULE-PODIUM-001 corollary).
+function normalizePodiumPerms(permissions) {
+  const out = {};
+  for (const k of PODIUM_PERM_KEYS) if (permissions && permissions[k]) out[k] = true;
+  if (out.podium_hr || out.podium_comp || out.podium_admin) out.podium_view = true;
+  return out;
+}
+
+async function getPodiumRoles(url, auth, env) {
+  const r = await sbStore(`/rest/v1/podium_roles?select=*&order=is_system.desc,label.asc`, env);
+  if (!r.ok) return err('db_error', 500);
+  return ok(r.data || []);
+}
+
+async function getPodiumUsers(url, auth, env) {
+  const gate = requireAdmin(auth); if (gate) return gate;
+  const [up, ur] = await Promise.all([
+    sbStore(`/rest/v1/users_profile?select=id,full_name,role,active&order=full_name.asc`, env),
+    sbStore(`/rest/v1/podium_user_roles?select=user_id,role_key`, env),
+  ]);
+  if (!up.ok) return err('db_error', 500);
+  const roleMap = {};
+  if (ur.ok) (ur.data || []).forEach(x => { roleMap[x.user_id] = x.role_key; });
+  const authUsers = await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users?per_page=1000`, {
+    headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` },
+  });
+  const authData = authUsers.ok ? await authUsers.json() : { users: [] };
+  const emailMap = {};
+  (authData.users || []).forEach(u => { emailMap[u.id] = u.email; });
+  return ok((up.data || []).map(u => ({ ...u, email: emailMap[u.id] || '', podium_role: roleMap[u.id] || null })));
+}
+
+async function createPodiumRole(body, auth, env) {
+  const gate = requireAdmin(auth); if (gate) return gate;
+  const d = body.data || {};
+  if (!d.role_key || !d.label) return err('role_key and label required', 400);
+  const key = String(d.role_key).trim().toLowerCase().replace(/\s+/g, '_');
+  const r = await sbStore(`/rest/v1/podium_roles`, env, {
+    method: 'POST',
+    body: JSON.stringify([{
+      role_key: key, label: d.label, description: d.description || null,
+      permissions: normalizePodiumPerms(d.permissions), is_system: false,
+    }]),
+  });
+  if (!r.ok) return err('create_failed: ' + JSON.stringify(r.data), 400);
+  return ok({ role_key: key });
+}
+
+async function updatePodiumRole(body, auth, env) {
+  const gate = requireAdmin(auth); if (gate) return gate;
+  const d = body.data || {};
+  if (!d.role_key) return err('role_key required', 400);
+  const cur = await sbStore(`/rest/v1/podium_roles?role_key=eq.${encodeURIComponent(d.role_key)}&select=is_system&limit=1`, env);
+  const isSys = !!(cur.ok && cur.data?.[0]?.is_system);
+  const updates = { updated_at: nowIso() };
+  if (d.label !== undefined)       updates.label = d.label;
+  if (d.description !== undefined) updates.description = d.description;
+  // System roles (admin / employee) have immutable permissions — prevents an admin from
+  // dropping podium_admin off the admin role and locking everyone out. Label/desc editable.
+  if (d.permissions !== undefined && !isSys) updates.permissions = normalizePodiumPerms(d.permissions);
+  const r = await sbStore(`/rest/v1/podium_roles?role_key=eq.${encodeURIComponent(d.role_key)}`, env, {
+    method: 'PATCH', body: JSON.stringify(updates),
+  });
+  if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
+  return ok({ updated: d.role_key });
+}
+
+async function deletePodiumRole(body, auth, env) {
+  const gate = requireAdmin(auth); if (gate) return gate;
+  const d = body.data || {};
+  if (!d.role_key) return err('role_key required', 400);
+  const chk = await sbStore(`/rest/v1/podium_roles?role_key=eq.${encodeURIComponent(d.role_key)}&select=is_system&limit=1`, env);
+  if (chk.ok && chk.data?.[0]?.is_system) return err('cannot delete a system role', 400);
+  const assigned = await sbStore(`/rest/v1/podium_user_roles?role_key=eq.${encodeURIComponent(d.role_key)}&limit=1`, env);
+  if (assigned.ok && assigned.data?.length) return err('cannot delete a role with assigned users', 400);
+  const r = await sbStore(`/rest/v1/podium_roles?role_key=eq.${encodeURIComponent(d.role_key)}`, env, { method: 'DELETE', prefer: 'return=minimal' });
+  if (!r.ok) return err('delete_failed', 400);
+  return ok({ deleted: d.role_key });
+}
+
+async function assignPodiumRole(body, auth, env) {
+  const gate = requireAdmin(auth); if (gate) return gate;
+  const d = body.data || {};
+  if (!d.user_id) return err('user_id required', 400);
+  // Empty role_key → unassign → user falls back to self-only baseline.
+  if (!d.role_key) {
+    await sbStore(`/rest/v1/podium_user_roles?user_id=eq.${encodeURIComponent(d.user_id)}`, env, { method: 'DELETE', prefer: 'return=minimal' });
+    return ok({ user_id: d.user_id, role_key: null });
+  }
+  const chk = await sbStore(`/rest/v1/podium_roles?role_key=eq.${encodeURIComponent(d.role_key)}&select=role_key&limit=1`, env);
+  if (!chk.ok || !chk.data?.[0]) return err('unknown role', 400);
+  const r = await sbStore(`/rest/v1/podium_user_roles?on_conflict=user_id`, env, {
+    method: 'POST',
+    prefer: 'return=representation,resolution=merge-duplicates',
+    body: JSON.stringify({ user_id: d.user_id, role_key: d.role_key, assigned_by: auth.userId, assigned_at: nowIso() }),
+  });
+  if (!r.ok) return err('assign_failed: ' + JSON.stringify(r.data), 400);
+  return ok({ user_id: d.user_id, role_key: d.role_key });
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // DISPATCH
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -936,6 +1058,8 @@ const GET_ACTIONS = {
   // Phase 2 — performance capture
   getObservations, getAccomplishments, getOneOnOnes,
   getMyPerformance, getTeamActivity,
+  // Permission layer (Podium-managed)
+  getPodiumRoles, getPodiumUsers,
 };
 
 const POST_ACTIONS = {
@@ -950,7 +1074,21 @@ const POST_ACTIONS = {
   createObservation, updateObservation, deleteObservation,
   createAccomplishment, updateAccomplishment, deleteAccomplishment,
   createOneOnOne, updateOneOnOne, deleteOneOnOne,
+  // Permission layer (Podium-managed)
+  createPodiumRole, updatePodiumRole, deletePodiumRole, assignPodiumRole,
 };
+
+// Self-only baseline (RULE-PODIUM-006): actions reachable WITHOUT podium_view.
+// getMe + getPodiumRoles are pure metadata; the rest are self-scoped by canSeeFull
+// (which treats self as visible) or callerEmployee, so a no-role user can only ever
+// reach their OWN profile + wins via /me. Everything else still requires podium_view.
+const SELF_SERVE_GET = new Set([
+  'getMe', 'getPodiumRoles',
+  'getEmployee', 'getMyPerformance', 'getAccomplishments', 'getObservations', 'getOneOnOnes',
+]);
+const SELF_SERVE_POST = new Set([
+  'createAccomplishment', 'updateAccomplishment', 'deleteAccomplishment',
+]);
 
 async function handleGet(url, request, env) {
   const action = url.searchParams.get('action');
@@ -958,10 +1096,10 @@ async function handleGet(url, request, env) {
   if (action === 'ping') return ok({ pong: true });
   const auth = await verifyJWT(request.headers.get('Authorization'), env);
   if (!auth) return err('unauthorized', 401);
-  if (!auth.permissions?.podium_view) return err('forbidden_podium_view', 403);
 
   const handler = GET_ACTIONS[action];
   if (!handler) return err(`unknown_action: ${action}`, 400);
+  if (!auth.permissions?.podium_view && !SELF_SERVE_GET.has(action)) return err('forbidden_podium_view', 403);
   try { return await handler(url, auth, env); }
   catch (e) { return err(`server_error: ${e?.message || String(e)}`, 500); }
 }
@@ -969,7 +1107,6 @@ async function handleGet(url, request, env) {
 async function handlePost(request, env) {
   const auth = await verifyJWT(request.headers.get('Authorization'), env);
   if (!auth) return err('unauthorized', 401);
-  if (!auth.permissions?.podium_view) return err('forbidden_podium_view', 403);
 
   let body;
   try { body = await request.json(); } catch { return err('bad_json', 400); }
@@ -977,6 +1114,7 @@ async function handlePost(request, env) {
   if (!action) return err('action_required', 400);
   const handler = POST_ACTIONS[action];
   if (!handler) return err(`unknown_action: ${action}`, 400);
+  if (!auth.permissions?.podium_view && !SELF_SERVE_POST.has(action)) return err('forbidden_podium_view', 403);
   try { return await handler(body, auth, env); }
   catch (e) { return err(`server_error: ${e?.message || String(e)}`, 500); }
 }

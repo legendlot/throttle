@@ -55,12 +55,19 @@ export default function SettingsPage() {
       <div style={{ ...card, marginTop: 14 }}>
         <div style={cardTitle}>Permissions</div>
         <p style={p}>
-          Podium permissions (<code>podium_admin</code>, <code>podium_hr</code>, <code>podium_comp</code>,
-          <code> podium_view</code>) are managed centrally with all LOT roles in Garage.
+          Podium runs its <strong>own</strong> permission layer (<code>podium_view</code>, <code>podium_hr</code>,
+          <code> podium_comp</code>, <code>podium_admin</code>) — managed here in Podium, not in Garage. Define
+          custom roles on <strong>Roles &amp; Permissions</strong>, then assign them to people on <strong>Users</strong>.
+          Anyone with no assigned role gets self-only access (their own profile + their own wins via My Performance).
         </p>
-        <a href="https://garage.legendoftoys.com/users" target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--podium-accent)', fontSize: 13, marginTop: 4 }}>
-          Open Garage → Users <ExternalLink size={13} />
-        </a>
+        <div style={{ display: 'flex', gap: 14, marginTop: 6 }}>
+          <a href="/admin/roles" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--podium-accent)', fontSize: 13 }}>
+            Roles &amp; Permissions <ExternalLink size={13} />
+          </a>
+          <a href="/admin/users" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--podium-accent)', fontSize: 13 }}>
+            Users <ExternalLink size={13} />
+          </a>
+        </div>
       </div>
     </div>
   );

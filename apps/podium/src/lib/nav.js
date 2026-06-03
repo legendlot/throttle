@@ -1,15 +1,16 @@
 import {
-  Users, Network, Briefcase, Building2, BarChart3, Plus, Settings, UserPlus,
-  Star, Activity,
+  Users, Network, Briefcase, Building2, BarChart3, Settings, UserPlus,
+  Star, Activity, ShieldCheck, UserCog,
 } from 'lucide-react';
 
 export const NAV_GROUPS = [
   {
     id: 'people', label: 'PEOPLE', icon: Users,
     items: [
-      { id: 'dashboard',   label: 'Dashboard',   route: '/dashboard',   icon: BarChart3 },
-      { id: 'people',      label: 'Directory',   route: '/people',      icon: Users },
-      { id: 'org',         label: 'Org Chart',   route: '/org',         icon: Network },
+      // Browse surfaces require podium_view — a self-only user (no role) sees only My Performance.
+      { id: 'dashboard',   label: 'Dashboard',   route: '/dashboard',   icon: BarChart3, requires: 'podium_view' },
+      { id: 'people',      label: 'Directory',   route: '/people',      icon: Users,     requires: 'podium_view' },
+      { id: 'org',         label: 'Org Chart',   route: '/org',         icon: Network,   requires: 'podium_view' },
       { id: 'new',         label: 'New Person',  route: '/people/new',  icon: UserPlus, accent: 'orange', requires: 'podium_hr' },
     ],
   },
@@ -17,20 +18,22 @@ export const NAV_GROUPS = [
     id: 'performance', label: 'PERFORMANCE', icon: Activity,
     items: [
       { id: 'me',   label: 'My Performance', route: '/me',   icon: Star },
-      { id: 'team', label: 'Team',           route: '/team', icon: Activity },
+      { id: 'team', label: 'Team',           route: '/team', icon: Activity, requires: 'podium_view' },
     ],
   },
   {
     id: 'org', label: 'ORG DESIGN', icon: Briefcase,
     items: [
-      { id: 'roles',       label: 'Roles & KPIs', route: '/roles',       icon: Briefcase },
-      { id: 'departments', label: 'Departments',  route: '/departments', icon: Building2 },
+      { id: 'roles',       label: 'Roles & KPIs', route: '/roles',       icon: Briefcase, requires: 'podium_view' },
+      { id: 'departments', label: 'Departments',  route: '/departments', icon: Building2,  requires: 'podium_view' },
     ],
   },
   {
     id: 'admin', label: 'ADMIN', icon: Settings,
     items: [
-      { id: 'settings', label: 'Settings', route: '/admin/settings', icon: Settings, requires: 'podium_admin' },
+      { id: 'perm-roles', label: 'Roles & Permissions', route: '/admin/roles',    icon: ShieldCheck, requires: 'podium_admin' },
+      { id: 'perm-users', label: 'Users',               route: '/admin/users',    icon: UserCog,     requires: 'podium_admin' },
+      { id: 'settings',   label: 'Settings',            route: '/admin/settings', icon: Settings,    requires: 'podium_admin' },
     ],
   },
 ];
