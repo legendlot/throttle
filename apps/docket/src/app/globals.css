@@ -142,3 +142,33 @@ button { font-family: inherit; }
     scroll-behavior: auto !important;
   }
 }
+
+/* ── Tasks table interactivity ──────────────────────────────────────────
+   Inline styles can't express :hover/:active, so the motion + state layer
+   lives here. Tokens (--duration-fast/--ease-out) come from :root above. */
+
+/* Whole-row hover — replaces the old per-cell JS mouseenter listeners. */
+.dk-task-row { transition: background var(--duration-fast) var(--ease-out); }
+.dk-task-row:hover { background: var(--surface-2); }
+
+/* Editable-cell affordance: a dotted underline that only shows on row hover,
+   so the user sees which cells they can click to edit. */
+.dk-editable {
+  display: inline-block;
+  min-width: 24px;
+  border-bottom: 1px dotted transparent;
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+.dk-task-row:hover .dk-editable { border-bottom-color: var(--border-2); }
+
+/* Buttons + toggles: smooth state changes and a physical pressed feel. */
+.dk-press {
+  transition: background var(--duration-fast) var(--ease-out),
+              border-color var(--duration-fast) var(--ease-out),
+              color var(--duration-fast) var(--ease-out),
+              opacity var(--duration-fast) var(--ease-out);
+}
+.dk-press:active:not(:disabled) { transform: translateY(1px); }
+
+/* The DKT-id button in each row links to the task detail. */
+.dk-idlink:hover { color: var(--docket-accent); }

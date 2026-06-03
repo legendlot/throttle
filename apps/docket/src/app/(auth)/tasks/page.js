@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, EmptyState, useToast, Combobox } from '@throttle/ui';
-import { Search, ChevronRight, ChevronDown, Link2, MessageSquare, GitBranch, Plus, Check, X, Flag } from 'lucide-react';
+import { Search, ChevronRight, ChevronDown, Link2, MessageSquare, GitBranch, Plus, Check, X, Flag, AlertTriangle } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../../../lib/docketopsFetch.js';
 import { StatusBadge } from '../../../components/StatusBadge.js';
 import { PriorityBadge } from '../../../components/PriorityBadge.js';
@@ -29,7 +29,11 @@ export default function TasksPage() {
   const [revised, setRevised] = useState(false);
   const [mine, setMine] = useState(false);
   const [q, setQ] = useState('');
+  const [qDebounced, setQDebounced] = useState('');
   const [groupBy, setGroupBy] = useState('none');
+
+  // Debounce the search box so we don't hit getTasks on every keystroke.
+  useEffect(() => { const id = setTimeout(() => setQDebounced(q), 250); return () => clearTimeout(id); }, [q]);
 
   const empMap = useMemo(() => Object.fromEntries(employees.map(e => [e.id, e.full_name])), [employees]);
   const deptMap = useMemo(() => Object.fromEntries(departments.map(d => [d.id, d.name])), [departments]);
@@ -54,14 +58,20 @@ export default function TasksPage() {
     try {
       const params = {
         status, department_id: departmentId, employee_id: employeeId, priority,
-        overdue: overdue ? '1' : '', revised: revised ? '1' : '', lens: mine ? 'mine' : '', q: q.trim(),
+        overdue: overdue ? '1' : '', revised: revised ? '1' : '', lens: mine ? 'mine' : '', q: qDebounced.trim(),
       };
       const r = await docketopsGet('getTasks', params, session);
       setTasks(Array.isArray(r) ? r : []);
     } catch (e) { showToast(e.message || 'Failed to load tasks', 'error'); }
     finally { setLoading(false); }
-  }, [session, status, departmentId, employeeId, priority, overdue, revised, mine, q, showToast]);
+  }, [session, status, departmentId, employeeId, priority, overdue, revised, mine, qDebounced, showToast]);
   useEffect(() => { load(); }, [load]);
+
+  const hasActiveFilters = !!(status || departmentId || employeeId || priority || overdue || revised || mine || qDebounced.trim());
+  function clearFilters() {
+    setStatus(''); setDepartmentId(''); setEmployeeId(''); setPriority('');
+    setOverdue(false); setRevised(false); setMine(false); setQ('');
+  }
 
   function patchRow(id, patch) { setTasks(ts => ts.map(t => (t.id === id ? { ...t, ...patch } : t))); }
 
@@ -80,10 +90,9 @@ export default function TasksPage() {
       }
     } catch (e) { showToast(e.message || 'Save failed', 'error'); load(); }
   }
-  async function abandonInline(task) {
-    const reason = window.prompt('Reason for abandoning this task (logged):');
+  async function abandonInline(task, reason) {
     if (!reason || !reason.trim()) return;
-    try { await docketopsPost('abandonTask', { id: task.id, reason: reason.trim() }, session); patchRow(task.id, { status: 'abandoned' }); }
+    try { await docketopsPost('abandonTask', { id: task.id, reason: reason.trim() }, session); patchRow(task.id, { status: 'abandoned' }); showToast('Task abandoned', 'success'); }
     catch (e) { showToast(e.message || 'Failed', 'error'); }
   }
   async function reviseInline(task, newDeadline, reason) {
@@ -127,15 +136,25 @@ export default function TasksPage() {
         <div style={fw}><Combobox value={employeeId} options={empOpts} onChange={setEmployeeId} placeholder="Anyone" allowClear style={finput} /></div>
         <div style={{ width: 130 }}><Combobox value={priority} options={prioOpts} onChange={setPriority} placeholder="All priorities" allowClear style={finput} /></div>
         <div style={{ width: 150 }}><Combobox value={groupBy} options={groupOpts} onChange={(v) => setGroupBy(v || 'none')} placeholder="Grouping" allowClear={false} style={finput} /></div>
-        <button style={toggleBtn(mine)} onClick={() => setMine(m => !m)}>My tasks</button>
-        <button style={toggleBtn(overdue)} onClick={() => setOverdue(o => !o)}>Overdue</button>
-        <button style={toggleBtn(revised)} onClick={() => setRevised(r => !r)}>Revised</button>
+        <button className="dk-press" style={toggleBtn(mine)} onClick={() => setMine(m => !m)}>My tasks</button>
+        <button className="dk-press" style={toggleBtn(overdue)} onClick={() => setOverdue(o => !o)}>Overdue</button>
+        <button className="dk-press" style={toggleBtn(revised)} onClick={() => setRevised(r => !r)}>Revised</button>
+        {hasActiveFilters && (
+          <button className="dk-press" style={clearBtn} onClick={clearFilters}><X size={12} /> Clear</button>
+        )}
       </div>
 
-      {loading ? <Spinner /> : (topLevel.length === 0 ? (
-        <EmptyState title="No tasks" subtitle="Type a title above and hit Enter to capture your first one." />
+      {loading && tasks.length === 0 ? <Spinner /> : (topLevel.length === 0 ? (
+        hasActiveFilters ? (
+          <div style={{ textAlign: 'center', padding: '8px 16px 4px' }}>
+            <EmptyState title="No tasks match these filters" message="Try widening or clearing them." />
+            <button className="dk-press" style={{ ...clearBtn, marginTop: 8 }} onClick={clearFilters}><X size={12} /> Clear filters</button>
+          </div>
+        ) : (
+          <EmptyState title="No tasks" message="Type a title above and hit Enter to capture your first one." />
+        )
       ) : (
-        <>
+        <div style={{ opacity: loading ? 0.5 : 1, pointerEvents: loading ? 'none' : 'auto', transition: 'opacity var(--duration-default) var(--ease-out)' }}>
           {gridRows.length > 0 && (
             <div style={{ marginBottom: 22 }}>
               <div style={gridHead}>
@@ -157,7 +176,7 @@ export default function TasksPage() {
               {!collapsed[g.key] && <TaskTable rows={g.rows} {...rowProps} />}
             </div>
           ))}
-        </>
+        </div>
       ))}
     </div>
   );
@@ -170,16 +189,19 @@ function TaskTable({ rows, saveField, abandonInline, reviseInline, router, teamO
   const [focusField, setFocusField] = useState(null);
   const [titleDraft, setTitleDraft] = useState('');
   const [ddDraft, setDdDraft] = useState('');
+  const [abandonFor, setAbandonFor] = useState(null);   // task id whose abandon-reason popover is open
+  const [abandonReason, setAbandonReason] = useState('');
 
   useEffect(() => {
-    if (!editRow) return;
+    if (!editRow && !abandonFor) return;
     function onDown(e) {
-      const el = document.getElementById('dk-row-' + editRow);
-      if (el && !el.contains(e.target)) setEditRow(null);
+      const rowId = editRow || abandonFor;
+      const el = document.getElementById('dk-row-' + rowId);
+      if (el && !el.contains(e.target)) { setEditRow(null); setAbandonFor(null); }
     }
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
-  }, [editRow]);
+  }, [editRow, abandonFor]);
 
   function startEdit(t, field) {
     if (!t._can_edit || t.status === 'abandoned') return;
@@ -206,14 +228,15 @@ function TaskTable({ rows, saveField, abandonInline, reviseInline, router, teamO
             const isEdit = editRow === t.id;
             const Disp = ({ field, children }) => (
               <span onClick={() => startEdit(t, field)}
-                style={{ cursor: ed ? 'pointer' : 'default', display: 'inline-block', minWidth: 24, borderBottom: '1px dotted transparent' }}
-                onMouseEnter={e => { if (ed) e.currentTarget.style.borderBottomColor = 'var(--border-2)'; }}
-                onMouseLeave={e => (e.currentTarget.style.borderBottomColor = 'transparent')}>{children}</span>
+                className={ed ? 'dk-editable' : undefined}
+                role={ed ? 'button' : undefined} tabIndex={ed ? 0 : undefined}
+                onKeyDown={ed ? (e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); startEdit(t, field); } }) : undefined}
+                style={{ cursor: ed ? 'pointer' : 'default', display: 'inline-block', minWidth: 24 }}>{children}</span>
             );
             return (
-              <tr key={t.id} id={'dk-row-' + t.id} onKeyDown={e => { if (e.key === 'Escape') setEditRow(null); }}>
+              <tr key={t.id} id={'dk-row-' + t.id} className="dk-task-row" onKeyDown={e => { if (e.key === 'Escape') { setEditRow(null); setAbandonFor(null); } }}>
                 <td style={{ ...td, fontFamily: 'var(--font-mono)', fontSize: 11 }}>
-                  <span style={{ color: 'var(--text-3)', cursor: 'pointer' }} onClick={() => router.push(`/tasks/detail/?id=${t.id}`)}>{t.task_no}</span>
+                  <button className="dk-idlink" style={idBtn} onClick={() => router.push(`/tasks/detail/?id=${t.id}`)} title="Open task">{t.task_no}</button>
                 </td>
 
                 <td style={{ ...td, color: 'var(--text-1)', fontWeight: 500, minWidth: 220 }}>
@@ -237,9 +260,20 @@ function TaskTable({ rows, saveField, abandonInline, reviseInline, router, teamO
                   {isEdit && ed ? <div style={{ minWidth: 150 }}><Combobox autoFocus={focusField === 'assignee_employee_id'} value={t.assignee_employee_id || ''} options={empOpts} placeholder="Assignee…" allowClear style={cellInput} onChange={(v, opt) => { if (opt) saveField(t, 'assignee_employee_id', v); }} /></div>
                     : <Disp field="assignee_employee_id">{t.assignee_name || <Muted>—</Muted>}</Disp>}
                 </td>
-                <td style={td}>
-                  {isEdit && ed ? <div style={{ minWidth: 140 }}><Combobox autoFocus={focusField === 'status'} value={t.status} options={statusCellOpts} placeholder="Status…" allowClear={false} style={cellInput} onChange={(v, opt) => { if (!opt) return; v === 'abandoned' ? abandonInline(t) : saveField(t, 'status', v); }} /></div>
+                <td style={{ ...td, position: 'relative' }}>
+                  {isEdit && ed ? <div style={{ minWidth: 140 }}><Combobox autoFocus={focusField === 'status'} value={t.status} options={statusCellOpts} placeholder="Status…" allowClear={false} style={cellInput} onChange={(v, opt) => { if (!opt) return; if (v === 'abandoned') { setAbandonReason(''); setAbandonFor(t.id); } else saveField(t, 'status', v); }} /></div>
                     : (ed ? <Disp field="status"><StatusBadge status={t.status} /></Disp> : <StatusBadge status={t.status} />)}
+                  {abandonFor === t.id && (
+                    <div style={popover} onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
+                      <div style={popLabel}>Abandon task</div>
+                      <input autoFocus value={abandonReason} onChange={e => setAbandonReason(e.target.value)} placeholder="Reason (required, logged)" style={{ ...cellInput, width: '100%', marginBottom: 8 }}
+                        onKeyDown={e => { if (e.key === 'Enter' && abandonReason.trim()) { abandonInline(t, abandonReason.trim()); setAbandonFor(null); } if (e.key === 'Escape') setAbandonFor(null); }} />
+                      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                        <button style={popBtnGhost} onClick={() => setAbandonFor(null)}><X size={13} /></button>
+                        <button className="dk-press" style={{ ...popBtnDanger, opacity: abandonReason.trim() ? 1 : 0.5 }} disabled={!abandonReason.trim()} onClick={() => { abandonInline(t, abandonReason.trim()); setAbandonFor(null); }}><Check size={13} /> Abandon</button>
+                      </div>
+                    </div>
+                  )}
                 </td>
                 <td style={td}>
                   {isEdit && ed ? <div style={{ minWidth: 130 }}><Combobox autoFocus={focusField === 'priority'} value={t.priority} options={prioOpts} placeholder="Priority…" allowClear={false} style={cellInput} onChange={(v, opt) => { if (opt) saveField(t, 'priority', v); }} /></div>
@@ -292,7 +326,7 @@ function QuickCapture({ session, onCreated, showToast }) {
         onKeyDown={e => { if (e.key === 'Enter') add(); }}
         placeholder="Add a task — type a title and press Enter (it lands on The Grid to fill in later)…"
         style={{ ...ainput, flex: 1 }} disabled={saving} />
-      <button style={{ ...addBtn, opacity: title.trim() && !saving ? 1 : 0.5 }} onClick={add} disabled={!title.trim() || saving}>
+      <button className="dk-press" style={{ ...addBtn, opacity: title.trim() && !saving ? 1 : 0.5 }} onClick={add} disabled={!title.trim() || saving}>
         {saving ? '…' : 'Add'}
       </button>
     </div>
@@ -309,7 +343,12 @@ function DeadlineDisplay({ task, editable, od, onStartSet, onRevise }) {
     if (!editable) return <span style={{ color: 'var(--text-4)' }}>—</span>;
     return <span onClick={onStartSet} style={{ cursor: 'pointer', color: 'var(--text-4)', fontStyle: 'italic' }}>set date</span>;
   }
-  const label = <span style={{ color: od ? 'var(--state-error-fg)' : 'var(--text-2)', fontWeight: od ? 600 : 400 }}>{fmtDate(effectiveDeadline(task))}</span>;
+  const label = (
+    <span style={{ color: od ? 'var(--state-error-fg)' : 'var(--text-2)', fontWeight: od ? 600 : 400, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+      {fmtDate(effectiveDeadline(task))}
+      {od && <span style={odFlag}><AlertTriangle size={9} /> overdue</span>}
+    </span>
+  );
   if (!editable) return label;
   async function save() { if (!date || !reason.trim()) return; await onRevise(task, date, reason.trim()); setOpen(false); }
   return (
@@ -322,7 +361,7 @@ function DeadlineDisplay({ task, editable, od, onStartSet, onRevise }) {
           <input value={reason} onChange={e => setReason(e.target.value)} placeholder="Reason (logged)" style={{ ...cellInput, width: '100%', marginBottom: 8 }} />
           <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
             <button style={popBtnGhost} onClick={() => setOpen(false)}><X size={13} /></button>
-            <button style={{ ...popBtnPrimary, opacity: date && reason.trim() ? 1 : 0.5 }} onClick={save} disabled={!date || !reason.trim()}><Check size={13} /> Revise</button>
+            <button className="dk-press" style={{ ...popBtnPrimary, opacity: date && reason.trim() ? 1 : 0.5 }} onClick={save} disabled={!date || !reason.trim()}><Check size={13} /> Revise</button>
           </div>
         </div>
       )}
@@ -334,7 +373,10 @@ const h1 = { fontFamily: 'var(--font-cond)', fontSize: 22, fontWeight: 700, lett
 const sub = { fontSize: 13, color: 'var(--text-3)', marginTop: 4 };
 const addRow = { display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-md)', padding: '9px 14px', marginBottom: 14 };
 const ainput = { background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', fontSize: 13, outline: 'none', fontFamily: 'inherit' };
-const addBtn = { background: 'var(--docket-accent)', color: '#1f1f1f', border: '1px solid var(--docket-accent)', borderRadius: 'var(--radius-sm)', padding: '8px 18px', fontFamily: 'var(--font-cond)', fontSize: 12, fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.04em' };
+const addBtn = { background: 'var(--docket-accent)', color: 'var(--accent-fg)', border: '1px solid var(--docket-accent)', borderRadius: 'var(--radius-sm)', padding: '8px 18px', fontFamily: 'var(--font-cond)', fontSize: 12, fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.04em' };
+const idBtn = { background: 'none', border: 'none', padding: 0, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer', transition: 'color var(--duration-fast) var(--ease-out)' };
+const clearBtn = { display: 'inline-flex', alignItems: 'center', gap: 4, background: 'var(--surface-2)', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 10px', fontFamily: 'var(--font-cond)', fontSize: 11, fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.05em' };
+const odFlag = { display: 'inline-flex', alignItems: 'center', gap: 3, fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--state-error-fg)', background: 'var(--state-error-bg)', borderRadius: 3, padding: '1px 5px', textTransform: 'uppercase', fontWeight: 600 };
 const filterBar = { display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16, alignItems: 'center' };
 const fw = { width: 150 };
 const finput = { background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '7px 10px', fontSize: 12, outline: 'none', width: '100%' };
@@ -348,8 +390,10 @@ const gridHint = { fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--t
 const flag = { marginLeft: 8, fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--state-warning-fg)', background: 'var(--state-warning-bg)', borderRadius: 3, padding: '1px 5px', textTransform: 'uppercase' };
 const meta = { display: 'inline-flex', gap: 10, alignItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 11 };
 const popover = { position: 'absolute', top: '100%', left: 0, zIndex: 20, marginTop: 4, background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-md)', padding: 10, width: 220, boxShadow: '0 8px 24px rgba(0,0,0,0.4)' };
-const popBtnPrimary = { display: 'inline-flex', alignItems: 'center', gap: 4, background: 'var(--docket-accent)', color: '#1f1f1f', border: 'none', borderRadius: 'var(--radius-sm)', padding: '4px 10px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-cond)', textTransform: 'uppercase' };
+const popLabel = { fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 };
+const popBtnPrimary = { display: 'inline-flex', alignItems: 'center', gap: 4, background: 'var(--docket-accent)', color: 'var(--accent-fg)', border: 'none', borderRadius: 'var(--radius-sm)', padding: '4px 10px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-cond)', textTransform: 'uppercase' };
+const popBtnDanger = { display: 'inline-flex', alignItems: 'center', gap: 4, background: 'var(--state-error)', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', padding: '4px 10px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-cond)', textTransform: 'uppercase' };
 const popBtnGhost = { display: 'inline-flex', alignItems: 'center', background: 'var(--surface-3)', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '4px 8px', cursor: 'pointer' };
 function toggleBtn(on) {
-  return { background: on ? 'var(--docket-accent)' : 'var(--surface-2)', color: on ? '#1f1f1f' : 'var(--text-3)', border: `1px solid ${on ? 'var(--docket-accent)' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', padding: '6px 12px', fontFamily: 'var(--font-cond)', fontSize: 11, fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.05em' };
+  return { background: on ? 'var(--docket-accent)' : 'var(--surface-2)', color: on ? 'var(--accent-fg)' : 'var(--text-3)', border: `1px solid ${on ? 'var(--docket-accent)' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', padding: '6px 12px', fontFamily: 'var(--font-cond)', fontSize: 11, fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.05em' };
 }
