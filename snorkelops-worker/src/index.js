@@ -46,6 +46,12 @@ const canSnorkelAdmin    = p => !!p.snorkel_admin;        // manage Snorkel role
 const canWrite           = p => !!p.procurement_view;     // reorder-request create (any procurement viewer)
 const canViewAssets      = p => !!p.asset_view || !!p.asset_manage; // read the asset register
 const canManageAssets    = p => !!p.asset_manage;         // create/edit/retire assets + manage cats/locations
+// Offline Sales (GT/MT) — own keys; any sales key grants read.
+const canSalesView    = p => !!p.sales_view || !!p.sales_order_manage || !!p.sales_order_confirm || !!p.sales_payment_manage || !!p.sales_partner_manage;
+const canSalesManage  = p => !!p.sales_order_manage;   // create/edit/cancel draft + generate invoice
+const canSalesConfirm = p => !!p.sales_order_confirm;  // confirm → auto-create dispatch shipment
+const canSalesPayment = p => !!p.sales_payment_manage; // record/delete collection receipts
+const canSalesPartner = p => !!p.sales_partner_manage; // partner master + sales channels
 
 // Strip financial fields from a China PO read when caller lacks po_china.
 function stripChinaPOHeader(row) {
@@ -172,6 +178,105 @@ async function nextSeq(name, prefix) {
   const r = await rpc('next_seq', { seq_name: name });
   if (!r.ok) throw new Error('Sequence error: ' + JSON.stringify(r.data));
   return prefix + String(r.data).padStart(3, '0');
+}
+
+// ── Offline Sales helpers ──────────────────────────────────────
+// Pad-4 code minter (SP-/SO-). next_seq is UPDATE-only; rows seeded in migration.
+async function nextSeq4(name, prefix) {
+  const r = await rpc('next_seq', { seq_name: name });
+  if (!r.ok || r.data == null) throw new Error('Sequence error: ' + JSON.stringify(r.data));
+  return prefix + String(r.data).padStart(4, '0');
+}
+// Indian FY label: 2026-04..2027-03 → "26-27".
+function fyLabel(dateISO) {
+  const d = new Date(dateISO + 'T00:00:00Z');
+  const y = d.getUTCFullYear(), m = d.getUTCMonth() + 1;
+  const start = m >= 4 ? y : y - 1;
+  return String(start % 100).padStart(2, '0') + '-' + String((start + 1) % 100).padStart(2, '0');
+}
+// GST-continuous invoice no per FY: LOT/SL/<fy>/NNNN. Lazily creates the seq row
+// (plain insert, ignore conflict — never merge-duplicates, which would zero an existing counter).
+async function nextInvoiceNo(dateISO) {
+  const fy = fyLabel(dateISO);
+  const key = 'sales_invoice_' + fy;
+  await sb('/rest/v1/sequences', {
+    method: 'POST', body: JSON.stringify({ name: key, current_val: 0 }),
+    prefer: 'return=minimal',
+  }); // 409 on existing row is fine — we ignore it and increment below.
+  const r = await rpc('next_seq', { seq_name: key });
+  if (!r.ok || r.data == null) throw new Error('Invoice seq error: ' + JSON.stringify(r.data));
+  return `LOT/SL/${fy}/${String(r.data).padStart(4, '0')}`;
+}
+// Line math (PostgREST returns numerics as strings → Number()).
+function computeSalesLine(l) {
+  const qty  = Math.round(Number(l.qty) || 0);
+  const rate = Number(l.rate) || 0;
+  const disc = Number(l.discount_pct) || 0;
+  const gst  = Number(l.gst_pct) || 0;
+  const taxable = +(qty * rate * (1 - disc / 100)).toFixed(2);
+  const gstAmt  = +(taxable * gst / 100).toFixed(2);
+  return {
+    product: l.product || null, model: l.model || null, color: l.color || null,
+    sku: l.sku || null, hsn_code: l.hsn_code || null, description: l.description || null,
+    qty, rate, discount_pct: disc, gst_pct: gst,
+    taxable_value: taxable, gst_amount: gstAmt, line_total: +(taxable + gstAmt).toFixed(2),
+    sort_order: Math.round(Number(l.sort_order) || 0),
+  };
+}
+// Map shipment.status → sales-facing fulfilment label.
+function fulfilmentFromShipment(sh) {
+  if (!sh) return 'not_dispatched';
+  if (sh.status === 'shipped')   return 'fulfilled';
+  if (sh.status === 'cancelled') return 'cancelled';
+  if (sh.status === 'packing' || sh.status === 'ready') return 'in_progress';
+  return 'pending'; // draft
+}
+function addDays(dateISO, days) {
+  if (!dateISO) return null;
+  const d = new Date(dateISO + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + (days || 0));
+  return d.toISOString().split('T')[0];
+}
+// Attach derived fulfilment/payment fields to an order given its (optional) shipment row.
+function decorateSalesOrder(o, sh) {
+  const fulfilment_status = fulfilmentFromShipment(sh);
+  const dispatch_date = sh?.shipped_at ? String(sh.shipped_at).split('T')[0] : null;
+  const delivery_date = sh?.delivery_date || null;
+  const due_date = addDays(delivery_date || dispatch_date, Number(o.credit_days) || 0);
+  const balance = +(Number(o.grand_total) - Number(o.amount_received)).toFixed(2);
+  const overdue = balance > 0.005 && !!due_date && due_date < todayISO();
+  return { ...o, fulfilment_status, dispatch_date, delivery_date, due_date, balance, overdue };
+}
+// Batch-fetch shipments for a set of orders (single subrequest), return id→row map.
+async function fetchShipmentMap(orders) {
+  const ids = [...new Set(orders.map(o => o.dispatch_shipment_id).filter(Boolean))];
+  if (!ids.length) return {};
+  const r = await queryPublic('dispatch_shipments',
+    `?id=in.(${ids.join(',')})&select=id,status,shipped_at,delivery_date`);
+  const map = {};
+  if (r.ok) (r.data || []).forEach(s => { map[s.id] = s; });
+  return map;
+}
+// Writable partner columns (code/id/audit excluded). Used by create + update.
+const SALES_PARTNER_FIELDS = ['name','channel_key','partner_type','gstin','state','city','pincode',
+  'billing_address','shipping_address','contact_person','phone','email','default_credit_days','is_active','notes'];
+function normSalesPartner(field, v) {
+  if (field === 'default_credit_days') { const n = Math.round(Number(v)); return Number.isNaN(n) ? 45 : n; }
+  if (field === 'is_active') return v !== false;
+  if (v === '' || v === undefined) return null;
+  return v;
+}
+// Recompute an order's amount_received + payment_status from its receipts.
+async function recomputeSalesPayment(orderId) {
+  const [oR, pR] = await Promise.all([
+    query('sales_orders', `?id=eq.${encodeURIComponent(orderId)}&select=grand_total&limit=1`),
+    query('sales_payments', `?order_id=eq.${encodeURIComponent(orderId)}&select=amount`),
+  ]);
+  const grand = oR.ok ? Number(oR.data?.[0]?.grand_total) || 0 : 0;
+  const recv  = pR.ok ? (pR.data || []).reduce((s, p) => s + (Number(p.amount) || 0), 0) : 0;
+  const status = (recv > 0 && recv >= grand - 0.005) ? 'paid' : recv > 0 ? 'partial' : 'unpaid';
+  await update('sales_orders',
+    { amount_received: +recv.toFixed(2), payment_status: status, updated_at: new Date().toISOString() },
+    `id=eq.${encodeURIComponent(orderId)}`);
 }
 
 // ── Storage REST (private bucket snorkel-asset-docs). service_role only. ──
@@ -763,6 +868,125 @@ export default {
             });
             if (!sr.ok || !sr.data?.signedURL) return err(`sign_failed: ${JSON.stringify(sr.data)}`, 502);
             return ok({ url: `${SUPABASE_URL}/storage/v1${sr.data.signedURL}`, file_name: doc.file_name, mime_type: doc.mime_type });
+          }
+
+          // ── OFFLINE SALES (reads) ────────────────────────────────────
+          case 'getSalesChannels': {
+            if (!canSalesView(P)) return err('No permission', 403);
+            const all = url.searchParams.get('all') === '1';
+            const r = await query('sales_channels', `${all ? '?' : '?is_active=eq.true&'}order=sort_order.asc`);
+            if (!r.ok) return err(r.data);
+            return ok(r.data);
+          }
+
+          case 'getSalesPartners': {
+            if (!canSalesView(P)) return err('No permission', 403);
+            let params = '?order=name.asc&select=*';
+            if (url.searchParams.get('active') === '1') params += '&is_active=eq.true';
+            const ch = url.searchParams.get('channel_key');
+            if (ch) params += `&channel_key=eq.${encodeURIComponent(ch)}`;
+            const r = await query('sales_partners', params);
+            if (!r.ok) return err(r.data);
+            return ok(r.data);
+          }
+
+          case 'getSalesPartner': {
+            if (!canSalesView(P)) return err('No permission', 403);
+            const id = url.searchParams.get('id');
+            if (!id) return err('id required');
+            const r = await query('sales_partners', `?id=eq.${encodeURIComponent(id)}&select=*&limit=1`);
+            if (!r.ok) return err(r.data);
+            if (!r.data?.[0]) return err('Partner not found', 404);
+            return ok(r.data[0]);
+          }
+
+          case 'getSalesOrders': {
+            if (!canSalesView(P)) return err('No permission', 403);
+            let params = '?order=created_at.desc&select=*,sales_partners(name,state,channel_key)';
+            const st = url.searchParams.get('status');
+            const ch = url.searchParams.get('channel_key');
+            const pid = url.searchParams.get('partner_id');
+            if (st)  params += `&status=eq.${encodeURIComponent(st)}`;
+            if (ch)  params += `&channel_key=eq.${encodeURIComponent(ch)}`;
+            if (pid) params += `&partner_id=eq.${encodeURIComponent(pid)}`;
+            const r = await query('sales_orders', params);
+            if (!r.ok) return err(r.data);
+            const orders = r.data || [];
+            const shMap = await fetchShipmentMap(orders);
+            const rows = orders.map(o => {
+              const dec = decorateSalesOrder(o, shMap[o.dispatch_shipment_id]);
+              return { ...dec, partner_name: o.sales_partners?.name || null,
+                       partner_state: o.sales_partners?.state || null, sales_partners: undefined };
+            });
+            return ok(rows);
+          }
+
+          case 'getSalesOrder': {
+            if (!canSalesView(P)) return err('No permission', 403);
+            const id = url.searchParams.get('id');
+            if (!id) return err('id required');
+            const r = await query('sales_orders', `?id=eq.${encodeURIComponent(id)}&select=*,sales_partners(*)&limit=1`);
+            if (!r.ok) return err(r.data);
+            const o = r.data?.[0];
+            if (!o) return err('Order not found', 404);
+            const partner = o.sales_partners || null;
+            const [linesR, paysR] = await Promise.all([
+              query('sales_order_lines', `?order_id=eq.${encodeURIComponent(id)}&order=sort_order.asc`),
+              query('sales_payments', `?order_id=eq.${encodeURIComponent(id)}&order=received_date.desc,created_at.desc`),
+            ]);
+            let sh = null;
+            if (o.dispatch_shipment_id) {
+              const shR = await queryPublic('dispatch_shipments',
+                `?id=eq.${encodeURIComponent(o.dispatch_shipment_id)}&select=id,shipment_no,status,shipped_at,delivery_date&limit=1`);
+              sh = shR.ok ? shR.data?.[0] || null : null;
+            }
+            const dec = decorateSalesOrder({ ...o, sales_partners: undefined }, sh);
+            return ok({ ...dec, partner, shipment: sh,
+              lines: linesR.ok ? linesR.data : [], payments: paysR.ok ? paysR.data : [] });
+          }
+
+          case 'getSalesCollections': {
+            if (!canSalesView(P)) return err('No permission', 403);
+            const r = await query('sales_orders',
+              `?status=eq.confirmed&invoice_generated=eq.true&select=*,sales_partners(name)`);
+            if (!r.ok) return err(r.data);
+            const orders = r.data || [];
+            const shMap = await fetchShipmentMap(orders);
+            const rows = orders
+              .map(o => ({ ...decorateSalesOrder(o, shMap[o.dispatch_shipment_id]),
+                           partner_name: o.sales_partners?.name || null, sales_partners: undefined }))
+              .filter(o => o.balance > 0.005)
+              .sort((a, b) => {
+                if (a.overdue !== b.overdue) return a.overdue ? -1 : 1;
+                return String(a.due_date || '9999').localeCompare(String(b.due_date || '9999'));
+              });
+            return ok(rows);
+          }
+
+          case 'getSalesInvoiceData': {
+            if (!canSalesView(P)) return err('No permission', 403);
+            const id = url.searchParams.get('id');
+            if (!id) return err('id required');
+            const r = await query('sales_orders', `?id=eq.${encodeURIComponent(id)}&select=*,sales_partners(*)&limit=1`);
+            if (!r.ok) return err(r.data);
+            const o = r.data?.[0];
+            if (!o) return err('Order not found', 404);
+            const linesR = await query('sales_order_lines', `?order_id=eq.${encodeURIComponent(id)}&order=sort_order.asc`);
+            const sellerR = await query('company_addresses', '?is_registered_office=eq.true&active=eq.true&select=*&limit=1');
+            const seller = sellerR.ok ? sellerR.data?.[0] || null : null;
+            const placeOfSupply = o.place_of_supply || o.sales_partners?.state || null;
+            const intra = !!(seller?.state && placeOfSupply &&
+                           seller.state.trim().toLowerCase() === placeOfSupply.trim().toLowerCase());
+            const lines = (linesR.ok ? linesR.data : []).map(l => {
+              const gstAmt = Number(l.gst_amount) || 0, gstPct = Number(l.gst_pct) || 0;
+              return { ...l,
+                cgst_pct: intra ? gstPct / 2 : 0, sgst_pct: intra ? gstPct / 2 : 0, igst_pct: intra ? 0 : gstPct,
+                cgst_amount: intra ? +(gstAmt / 2).toFixed(2) : 0,
+                sgst_amount: intra ? +(gstAmt / 2).toFixed(2) : 0,
+                igst_amount: intra ? 0 : +gstAmt.toFixed(2) };
+            });
+            return ok({ order: { ...o, sales_partners: undefined }, partner: o.sales_partners || null,
+              seller, place_of_supply: placeOfSupply, intra, lines });
           }
 
           default:
@@ -1573,6 +1797,240 @@ export default {
             const r = await update(tbl, updates, `id=eq.${encodeURIComponent(d.id)}`);
             if (!r.ok) return err('Update failed: ' + JSON.stringify(r.data));
             return ok({ updated: d.id });
+          }
+
+          // ══════════════════════════════════════════════════
+          // OFFLINE SALES (writes)
+          // ══════════════════════════════════════════════════
+          case 'createSalesPartner': {
+            if (!canSalesPartner(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.name) return err('name required');
+            const partner_code = await nextSeq4('sales_partner', 'SP-');
+            const row = { partner_code, created_by: userId };
+            SALES_PARTNER_FIELDS.forEach(f => { if (d[f] !== undefined) row[f] = normSalesPartner(f, d[f]); });
+            const r = await insert('sales_partners', row, false);
+            if (!r.ok) return err('Partner insert failed: ' + JSON.stringify(r.data));
+            const created = Array.isArray(r.data) ? r.data[0] : r.data;
+            return ok({ id: created.id, partner_code });
+          }
+
+          case 'updateSalesPartner': {
+            if (!canSalesPartner(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.id) return err('id required');
+            const updates = { updated_at: new Date().toISOString() };
+            SALES_PARTNER_FIELDS.forEach(f => { if (d[f] !== undefined) updates[f] = normSalesPartner(f, d[f]); });
+            const r = await update('sales_partners', updates, `id=eq.${encodeURIComponent(d.id)}`);
+            if (!r.ok) return err('Update failed: ' + JSON.stringify(r.data));
+            return ok({ updated: d.id });
+          }
+
+          case 'createSalesChannel': {
+            if (!canSalesPartner(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.channel_key || !d.label) return err('channel_key and label required');
+            const r = await insert('sales_channels', {
+              channel_key: String(d.channel_key).trim().toUpperCase(),
+              label: d.label, dispatch_channel_id: d.dispatch_channel_id || null,
+              is_active: d.is_active !== false, sort_order: Math.round(Number(d.sort_order) || 0),
+            }, false);
+            if (!r.ok) return err('Create failed: ' + JSON.stringify(r.data));
+            return ok(Array.isArray(r.data) ? r.data[0] : r.data);
+          }
+
+          case 'updateSalesChannel': {
+            if (!canSalesPartner(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.id) return err('id required');
+            const updates = { updated_at: new Date().toISOString() };
+            if (d.label !== undefined)               updates.label = d.label;
+            if (d.dispatch_channel_id !== undefined) updates.dispatch_channel_id = d.dispatch_channel_id || null;
+            if (d.is_active !== undefined)           updates.is_active = !!d.is_active;
+            if (d.sort_order !== undefined)          updates.sort_order = Math.round(Number(d.sort_order) || 0);
+            const r = await update('sales_channels', updates, `id=eq.${encodeURIComponent(d.id)}`);
+            if (!r.ok) return err('Update failed: ' + JSON.stringify(r.data));
+            return ok({ updated: d.id });
+          }
+
+          case 'createSalesOrder': {
+            if (!canSalesManage(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.partner_id) return err('partner_id required');
+            if (!d.lines?.length) return err('At least one order line required');
+            const pr = await query('sales_partners', `?id=eq.${encodeURIComponent(d.partner_id)}&select=channel_key,default_credit_days&limit=1`);
+            if (!pr.ok || !pr.data[0]) return err('Partner not found', 404);
+            const partner = pr.data[0];
+            const order_no = await nextSeq4('sales_order', 'SO-');
+            const lines = d.lines.map(computeSalesLine);
+            const subtotal    = +lines.reduce((s, l) => s + l.taxable_value, 0).toFixed(2);
+            const tax_total   = +lines.reduce((s, l) => s + l.gst_amount, 0).toFixed(2);
+            const grand_total = +(subtotal + tax_total).toFixed(2);
+            const orderRow = {
+              order_no, partner_id: d.partner_id,
+              channel_key: d.channel_key || partner.channel_key || null,
+              order_date: d.order_date || todayISO(),
+              credit_days: d.credit_days != null ? Math.round(Number(d.credit_days)) : (partner.default_credit_days ?? 45),
+              partner_po_ref: d.partner_po_ref || null,
+              expected_dispatch_date: d.expected_dispatch_date || null,
+              notes: d.notes || null,
+              subtotal, tax_total, grand_total, created_by: userId,
+            };
+            const r = await insert('sales_orders', orderRow, false);
+            if (!r.ok) return err('Order insert failed: ' + JSON.stringify(r.data));
+            const order = Array.isArray(r.data) ? r.data[0] : r.data;
+            const lineRows = lines.map((l, i) => ({ ...l, order_id: order.id, sort_order: l.sort_order || i }));
+            const li = await insert('sales_order_lines', lineRows, false);
+            if (!li.ok) return err('Line insert failed: ' + JSON.stringify(li.data));
+            return ok({ id: order.id, order_no });
+          }
+
+          case 'updateSalesOrder': {
+            if (!canSalesManage(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.id) return err('id required');
+            const cur = await query('sales_orders', `?id=eq.${encodeURIComponent(d.id)}&select=status,invoice_generated&limit=1`);
+            if (!cur.ok || !cur.data[0]) return err('Order not found', 404);
+            if (cur.data[0].status !== 'draft' || cur.data[0].invoice_generated)
+              return err('Only draft, un-invoiced orders can be edited', 422);
+            const updates = { updated_at: new Date().toISOString() };
+            ['channel_key','order_date','partner_po_ref','expected_dispatch_date','notes'].forEach(f => {
+              if (d[f] !== undefined) updates[f] = d[f] || null;
+            });
+            if (d.credit_days !== undefined) updates.credit_days = Math.round(Number(d.credit_days) || 0);
+            if (Array.isArray(d.lines)) {
+              const lines = d.lines.map(computeSalesLine);
+              updates.subtotal    = +lines.reduce((s, l) => s + l.taxable_value, 0).toFixed(2);
+              updates.tax_total   = +lines.reduce((s, l) => s + l.gst_amount, 0).toFixed(2);
+              updates.grand_total = +(updates.subtotal + updates.tax_total).toFixed(2);
+              await sb(`/rest/v1/sales_order_lines?order_id=eq.${encodeURIComponent(d.id)}`, { method: 'DELETE', prefer: 'return=minimal' });
+              const lineRows = lines.map((l, i) => ({ ...l, order_id: d.id, sort_order: l.sort_order || i }));
+              const li = await insert('sales_order_lines', lineRows, false);
+              if (!li.ok) return err('Line update failed: ' + JSON.stringify(li.data));
+            }
+            const r = await update('sales_orders', updates, `id=eq.${encodeURIComponent(d.id)}`);
+            if (!r.ok) return err('Update failed: ' + JSON.stringify(r.data));
+            return ok({ updated: d.id });
+          }
+
+          case 'cancelOrder': {
+            if (!canSalesManage(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.id) return err('id required');
+            if (!d.reason) return err('reason required');
+            const cur = await query('sales_orders', `?id=eq.${encodeURIComponent(d.id)}&select=status,dispatch_shipment_id&limit=1`);
+            if (!cur.ok || !cur.data[0]) return err('Order not found', 404);
+            const o = cur.data[0];
+            if (!['draft', 'confirmed'].includes(o.status)) return err('Only draft/confirmed orders can be cancelled', 422);
+            if (o.dispatch_shipment_id) {
+              const shR = await queryPublic('dispatch_shipments', `?id=eq.${encodeURIComponent(o.dispatch_shipment_id)}&select=status&limit=1`);
+              const shStatus = shR.ok ? shR.data?.[0]?.status : null;
+              if (shStatus === 'shipped') return err('Goods already dispatched — handle as a return, not a cancel', 422);
+              if (['draft', 'packing'].includes(shStatus))
+                await sbPublic(`/rest/v1/dispatch_shipments?id=eq.${encodeURIComponent(o.dispatch_shipment_id)}`,
+                  { method: 'PATCH', body: JSON.stringify({ status: 'cancelled' }), headers: { Prefer: 'return=minimal' } });
+            }
+            const now = new Date().toISOString();
+            const r = await update('sales_orders',
+              { status: 'cancelled', cancelled_by: userId, cancelled_at: now, cancel_reason: d.reason, updated_at: now },
+              `id=eq.${encodeURIComponent(d.id)}`);
+            if (!r.ok) return err('Cancel failed: ' + JSON.stringify(r.data));
+            return ok({ cancelled: d.id });
+          }
+
+          case 'confirmOrder': {
+            if (!canSalesConfirm(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.id) return err('id required');
+            const cur = await query('sales_orders', `?id=eq.${encodeURIComponent(d.id)}&select=*,sales_partners(name)&limit=1`);
+            if (!cur.ok || !cur.data[0]) return err('Order not found', 404);
+            const o = cur.data[0];
+            if (o.status !== 'draft') return err('Only draft orders can be confirmed', 422);
+            const linesR = await query('sales_order_lines', `?order_id=eq.${encodeURIComponent(d.id)}&order=sort_order.asc`);
+            const lines = linesR.ok ? linesR.data : [];
+            if (!lines.length) return err('Order has no lines', 422);
+            // Resolve the dispatch channel mapped to this order's sales channel.
+            const chR = await query('sales_channels', `?channel_key=eq.${encodeURIComponent(o.channel_key || '')}&select=dispatch_channel_id&limit=1`);
+            const dispatchChannelId = chR.ok ? chR.data?.[0]?.dispatch_channel_id : null;
+            if (!dispatchChannelId) return err('No dispatch channel mapped for this sales channel — set it in Sales → Settings', 422);
+            const partnerName = o.sales_partners?.name || '';
+            const shRes = await sbPublic('/rest/v1/dispatch_shipments', {
+              method: 'POST', prefer: 'return=representation',
+              body: JSON.stringify({
+                channel_id: dispatchChannelId,
+                title: `${o.order_no} · ${partnerName}`.trim(),
+                scheduled_date: o.expected_dispatch_date || todayISO(),
+                created_by: userId,
+                expected_units: lines.reduce((s, l) => s + (Math.round(Number(l.qty)) || 0), 0),
+                sales_order_id: o.id, sales_order_no: o.order_no,
+              }),
+            });
+            if (!shRes.ok || !shRes.data?.[0]) return err('Shipment create failed: ' + JSON.stringify(shRes.data), 502);
+            const shipmentId = shRes.data[0].id;
+            const shipLines = lines.map(l => ({
+              shipment_id: shipmentId, product: l.product, model: l.model || null, color: l.color || null,
+              target_qty: Math.round(Number(l.qty)) || 0, packed_qty: 0,
+            }));
+            const slRes = await sbPublic('/rest/v1/dispatch_shipment_lines', {
+              method: 'POST', body: JSON.stringify(shipLines), headers: { Prefer: 'return=minimal' },
+            });
+            if (!slRes.ok) return err('Shipment lines failed: ' + JSON.stringify(slRes.data), 502);
+            const now = new Date().toISOString();
+            await update('sales_orders',
+              { status: 'confirmed', confirmed_by: userId, confirmed_at: now, dispatch_shipment_id: shipmentId, updated_at: now },
+              `id=eq.${encodeURIComponent(d.id)}`);
+            return ok({ confirmed: d.id, dispatch_shipment_id: shipmentId, shipment_no: shRes.data[0].shipment_no });
+          }
+
+          case 'generateInvoice': {
+            if (!canSalesManage(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.id) return err('id required');
+            const cur = await query('sales_orders', `?id=eq.${encodeURIComponent(d.id)}&select=*,sales_partners(state)&limit=1`);
+            if (!cur.ok || !cur.data[0]) return err('Order not found', 404);
+            const o = cur.data[0];
+            if (o.status !== 'confirmed') return err('Order must be confirmed before invoicing', 422);
+            if (o.invoice_generated) return err('Invoice already generated', 422);
+            const linesR = await query('sales_order_lines', `?order_id=eq.${encodeURIComponent(d.id)}&select=hsn_code`);
+            const missing = (linesR.ok ? linesR.data : []).filter(l => !l.hsn_code || !String(l.hsn_code).trim());
+            if (missing.length) return err(`HSN code required on every line before invoicing (${missing.length} missing)`, 422);
+            const date = todayISO();
+            const invoice_no = await nextInvoiceNo(date);
+            const r = await update('sales_orders',
+              { invoice_no, invoice_date: date, invoice_generated: true,
+                place_of_supply: o.sales_partners?.state || null, updated_at: new Date().toISOString() },
+              `id=eq.${encodeURIComponent(d.id)}`);
+            if (!r.ok) return err('Invoice failed: ' + JSON.stringify(r.data));
+            return ok({ invoice_no, invoice_date: date });
+          }
+
+          case 'recordSalesPayment': {
+            if (!canSalesPayment(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.order_id) return err('order_id required');
+            const amt = Number(d.amount);
+            if (!(amt > 0)) return err('amount must be greater than 0', 422);
+            const ins = await insert('sales_payments', {
+              order_id: d.order_id, amount: +amt.toFixed(2),
+              received_date: d.received_date || todayISO(), mode: d.mode || 'bank',
+              reference: d.reference || null, note: d.note || null,
+              recorded_by: userId, recorded_by_name: authResult.fullName,
+            }, false);
+            if (!ins.ok) return err('Payment insert failed: ' + JSON.stringify(ins.data));
+            await recomputeSalesPayment(d.order_id);
+            return ok({ recorded: true });
+          }
+
+          case 'deleteSalesPayment': {
+            if (!canSalesPayment(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.id) return err('id required');
+            const pr = await query('sales_payments', `?id=eq.${encodeURIComponent(d.id)}&select=order_id&limit=1`);
+            const orderId = pr.ok ? pr.data?.[0]?.order_id : null;
+            const del = await sb(`/rest/v1/sales_payments?id=eq.${encodeURIComponent(d.id)}`, { method: 'DELETE', prefer: 'return=minimal' });
+            if (!del.ok) return err('Delete failed: ' + JSON.stringify(del.data));
+            if (orderId) await recomputeSalesPayment(orderId);
+            return ok({ deleted: d.id });
           }
 
           default:
