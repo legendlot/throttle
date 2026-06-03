@@ -313,8 +313,9 @@ export default function IssueQueuePage() {
       } else if (row.type === 'wo') {
         const wo = row.raw;
         if (wo.wo_type === 'Parts Request') {
-          const [woParts, stock] = await Promise.all([
+          const [woParts, , stock] = await Promise.all([
             garageFetch('getWOParts', { wo_no: row.ref }, session),
+            ensureMaterialCache(),
             ensureStockCache(),
           ]);
           const lines = (woParts || []).map((p) => ({
@@ -327,6 +328,7 @@ export default function IssueQueuePage() {
           setSelectedItem({ ...row, wo, lines });
         } else {
           // Rework / standalone — calc kit
+          await ensureMaterialCache();
           const kitData = await garageFetch('calcKit', {
             product: wo.product || '',
             variant: wo.variant || '',
@@ -1187,7 +1189,7 @@ function DetailBody({ item, materialCache, pickedMap }) {
         )}
       </div>
 
-      <SimplePartTable lines={lines} showProduct={item.type !== 'wo' || wo.wo_type === 'Parts Request'} />
+      <SimplePartTable lines={lines} showProduct={item.type !== 'wo' || wo.wo_type === 'Parts Request'} materialCache={materialCache} />
     </>
   );
 }
@@ -1201,10 +1203,14 @@ function Chip({ label, value }) {
   );
 }
 
-function SimplePartTable({ lines, showProduct }) {
+function SimplePartTable({ lines, showProduct, materialCache }) {
   if (!lines.length) {
     return <div style={{ padding: 16, textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>No parts to issue</div>;
   }
+  // Sort identically to the printed pick list (pickSortKey: category → material
+  // type) so the on-screen sequence matches the paper the floor picks from.
+  const sorted = (lines || []).slice()
+    .sort((a, b) => pickSortKey(a, materialCache || {}) - pickSortKey(b, materialCache || {}));
   return (
     <div style={{ overflowX: 'auto' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -1219,7 +1225,7 @@ function SimplePartTable({ lines, showProduct }) {
           </tr>
         </thead>
         <tbody>
-          {lines.map((l) => {
+          {sorted.map((l) => {
             const planned = l.required || 0;
             const short = (l.available || 0) < planned;
             return (
