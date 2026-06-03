@@ -87,16 +87,28 @@ blast radius on lotopsproxy is minimal.
 
 A part is a PCB iff:
 - `part_code` matches `…-EL-…` (electronics-coded), **and**
-- `part_name` contains `PCB` or `Controller` (case-insensitive). The `Controller`
-  synonym catches Bumble's remote board (`BM-EL-13 "Controller"`). The `-EL-`
-  code guard excludes `BM-PB-38 "PCB Cover"` (a plastic cover, code `-PB-`).
+- `part_name` contains `PCB` (case-insensitive). The `-EL-` code guard excludes
+  `BM-PB-38 "PCB Cover"` (a plastic cover, code `-PB-`).
+
+We deliberately match on `PCB` only (no `Controller` synonym). Verified against
+live data: the only remote-category `-EL-` parts whose name lacks "PCB" are
+Bumble's `BM-EL-13 "Controller"` (0 stock — redundant with its real
+`BM-EL-01 "Remote PCB"` at 166) and Dash's `DS-EL-02 "ON/OFF Switch with Cable"`
+(correctly *not* a PCB). So "PCB"-only loses no real board and avoids noise.
 
 Car vs Remote split: `part_category = 'Remote'` → remote PCB; any other category
-(`Car`, `Train`, …) → car PCB. Live stock = `stock_ledger.closing_stock` for the
-part code. Only active `bom_register` rows are considered.
+(`Car`, `Train`, `Drone`, …) → car PCB. Live stock = `stock_ledger.closing_stock`
+for the part code. Only active `bom_register` rows are considered. If a product
+has more than one PCB part on a side, sum their stock for that side.
 
-If a product somehow has more than one car-side (or remote-side) PCB part, sum
-their stock for that side (defensive; not expected in current data).
+**Known edge cases (cosmetic, both currently 0 stock — left as-is):**
+- **McCloud** is a drone (category `Drone`): it has 4 PCB-named parts
+  (`Main/Sensor/Camera PCB`, `BLDC Motor With PCB`) which sum onto the car side
+  and no remote → renders `CAR 0 / REMOTE —`.
+- **Ellie** is a train (category `Train`): one `PCB` part on the car side, no
+  remote → `CAR <n> / REMOTE —`.
+  Neither product fits the car/remote framing cleanly, but both have PCB parts so
+  they appear per the "only products with a PCB part" rule. No special-casing.
 
 ### FBU identification
 
