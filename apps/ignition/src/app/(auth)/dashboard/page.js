@@ -49,7 +49,24 @@ export default function DashboardPage() {
         <KpiCard label="Closed" value={kpis.closed} />
         <KpiCard label="Ghosted" value={kpis.ghosted} accent="#ff7070" />
         <KpiCard label={`Overdue posts (>${OVERDUE_DAYS}d)`} value={kpis.overdue ?? 0} accent={kpis.overdue > 0 ? '#ff7070' : undefined} />
+        <KpiCard label="Total views" value={(kpis.engagement_totals?.views ?? 0).toLocaleString()} />
+        <KpiCard label="Total likes" value={(kpis.engagement_totals?.likes ?? 0).toLocaleString()} />
+        <KpiCard label="Total shares" value={(kpis.engagement_totals?.shares ?? 0).toLocaleString()} />
       </div>
+
+      {kpis.ugc_summary && (
+        <section style={{ marginTop: 24, maxWidth: 1100 }}>
+          <div style={{ fontFamily: 'var(--font-cond)', fontSize: 14, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--text-2)', marginBottom: 10 }}>UGC summary</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
+            <KpiCard label="UGC deals" value={(kpis.ugc_summary.deals ?? 0).toLocaleString()} />
+            <KpiCard label="UGC views" value={(kpis.ugc_summary.views ?? 0).toLocaleString()} />
+            <KpiCard label="UGC likes" value={(kpis.ugc_summary.likes ?? 0).toLocaleString()} />
+            <KpiCard label="Budget consumed" value={`₹${Number(kpis.ugc_summary.budget_consumed ?? 0).toLocaleString('en-IN')}`} accent="#FF6B00" />
+            <KpiCard label="Orders" value={(kpis.ugc_summary.orders ?? 0).toLocaleString()} />
+            <KpiCard label="Conv. value" value={`₹${Number(kpis.ugc_summary.conversions_value ?? 0).toLocaleString('en-IN')}`} />
+          </div>
+        </section>
+      )}
 
       {overdue && overdue.length > 0 && (
         <section style={{ marginTop: 24, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', overflow: 'hidden', maxWidth: 1100 }}>

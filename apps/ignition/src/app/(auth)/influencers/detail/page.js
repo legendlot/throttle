@@ -14,10 +14,14 @@ export default function InfluencerDetailPage() {
   const router = useRouter();
   const id = sp.get('id');
   const code = sp.get('code');
-  const { session } = useAuth();
+  const { session, perms } = useAuth();
+  const canManage = !!perms?.ignition_manage;
   const { toast } = useToast();
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({});
 
   function reload() {
     if (!session || (!id && !code)) return;
@@ -32,6 +36,48 @@ export default function InfluencerDetailPage() {
       toast(`Rating set to ${rating}`, 'success');
       reload();
     } catch (e) { toast(e.message, 'error'); }
+  }
+
+  function startEdit() {
+    const i = data.influencer;
+    setForm({
+      channel_name: i.channel_name || '', person_name: i.person_name || '',
+      channel_link: i.channel_link || '', channel_platform: i.channel_platform || '',
+      influencer_type: i.influencer_type || '', categories: (i.categories || []).join(', '),
+      reach: i.reach ?? '', audience: i.audience || '', location: i.location || '',
+      contact_poc_type: i.contact_poc_type || '', contact_poc_name: i.contact_poc_name || '',
+      contact_number: i.contact_number || '', email: i.email || '', address: i.address || '',
+    });
+    setEditing(true);
+  }
+  function setF(k, v) { setForm(s => ({ ...s, [k]: v })); }
+  async function saveEdit() {
+    setSaving(true);
+    try {
+      const rn = Number(form.reach);
+      const payload = {
+        influencer_id: data.influencer.id,
+        channel_name: form.channel_name.trim() || null,
+        person_name: form.person_name.trim() || null,
+        channel_link: form.channel_link.trim() || null,
+        channel_platform: form.channel_platform || null,
+        influencer_type: form.influencer_type || null,
+        categories: form.categories.split(',').map(s => s.trim()).filter(Boolean),
+        reach: (form.reach === '' || isNaN(rn)) ? null : Math.round(rn),
+        audience: form.audience.trim() || null,
+        location: form.location.trim() || null,
+        contact_poc_type: form.contact_poc_type || null,
+        contact_poc_name: form.contact_poc_name.trim() || null,
+        contact_number: form.contact_number.trim() || null,
+        email: form.email.trim() || null,
+        address: form.address.trim() || null,
+      };
+      await ignitionopsPost('updateInfluencer', payload, session);
+      toast('Identity updated', 'success');
+      setEditing(false);
+      reload();
+    } catch (e) { toast(e.message, 'error'); }
+    finally { setSaving(false); }
   }
 
   if (err) return <div style={{ color: 'var(--state-error-fg)', padding: 16 }}>Error: {err}</div>;
@@ -61,27 +107,62 @@ export default function InfluencerDetailPage() {
           flex-wrap stacks them on narrow viewports so it never breaks on a laptop. */}
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-start' }}>
         <div style={{ flex: '1 1 300px', minWidth: 280, maxWidth: 420, display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <Card title="Identity">
-            <KV label="Channel link" value={inf.channel_link ? <a href={inf.channel_link} target="_blank" rel="noreferrer" style={{ color: '#FF6B00' }}>{inf.channel_link}</a> : '—'} />
-            <KV label="Platform" value={inf.channel_platform || '—'} />
-            <KV label="Type" value={inf.influencer_type || '—'} />
-            <KV label="Categories" value={(inf.categories || []).join(', ') || '—'} />
-            <KV label="Reach" value={inf.reach?.toLocaleString() || '—'} />
-            <KV label="Audience" value={inf.audience || '—'} />
-            <KV label="Location" value={inf.location || '—'} />
-            <KV label="Onboarded" value={
-              inf.onboarded === true ? `Yes${inf.onboarded_at ? ` · ${inf.onboarded_at}` : ''}`
-              : inf.onboarded === false ? 'No' : '—'
-            } />
+          <Card title="Identity" action={
+            editing
+              ? <span style={{ display: 'flex', gap: 6 }}>
+                  <button onClick={saveEdit} disabled={saving} style={saveBtn}>{saving ? 'Saving…' : 'Save'}</button>
+                  <button onClick={() => setEditing(false)} disabled={saving} style={editBtn}>Cancel</button>
+                </span>
+              : (canManage ? <button onClick={startEdit} style={editBtn}>Edit</button> : null)
+          }>
+            {editing ? (
+              <>
+                <Field label="Name"><input style={editInput} value={form.channel_name} onChange={e => setF('channel_name', e.target.value)} placeholder="Channel name" /></Field>
+                <Field label="Person"><input style={editInput} value={form.person_name} onChange={e => setF('person_name', e.target.value)} /></Field>
+                <Field label="Channel link"><input style={editInput} value={form.channel_link} onChange={e => setF('channel_link', e.target.value)} /></Field>
+                <Field label="Platform"><select style={editInput} value={form.channel_platform} onChange={e => setF('channel_platform', e.target.value)}><option value="">—</option>{['instagram', 'youtube', 'tiktok', 'other'].map(o => <option key={o} value={o}>{o}</option>)}</select></Field>
+                <Field label="Type"><select style={editInput} value={form.influencer_type} onChange={e => setF('influencer_type', e.target.value)}><option value="">—</option>{['nano', 'micro', 'macro', 'brand', 'store'].map(o => <option key={o} value={o}>{o}</option>)}</select></Field>
+                <Field label="Categories"><input style={editInput} value={form.categories} onChange={e => setF('categories', e.target.value)} placeholder="comma, separated" /></Field>
+                <Field label="Reach"><input style={editInput} type="number" value={form.reach} onChange={e => setF('reach', e.target.value)} /></Field>
+                <Field label="Audience"><input style={editInput} value={form.audience} onChange={e => setF('audience', e.target.value)} /></Field>
+                <Field label="Location"><input style={editInput} value={form.location} onChange={e => setF('location', e.target.value)} /></Field>
+              </>
+            ) : (
+              <>
+                <KV label="Channel link" value={inf.channel_link ? <a href={inf.channel_link} target="_blank" rel="noreferrer" style={{ color: '#FF6B00' }}>{inf.channel_link}</a> : '—'} />
+                <KV label="Platform" value={inf.channel_platform || '—'} />
+                <KV label="Type" value={inf.influencer_type || '—'} />
+                <KV label="Categories" value={(inf.categories || []).join(', ') || '—'} />
+                <KV label="Reach" value={inf.reach?.toLocaleString() || '—'} />
+                <KV label="Audience" value={inf.audience || '—'} />
+                <KV label="Location" value={inf.location || '—'} />
+                <KV label="Onboarded" value={
+                  inf.onboarded === true ? `Yes${inf.onboarded_at ? ` · ${inf.onboarded_at}` : ''}`
+                  : inf.onboarded === false ? 'No' : '—'
+                } />
+              </>
+            )}
           </Card>
 
           <Card title="Contact">
-            <KV label="POC type" value={inf.contact_poc_type || '—'} />
-            <KV label="POC name" value={inf.contact_poc_name || '—'} />
-            <KV label="Phone" value={inf.contact_number || '—'} />
-            <KV label="Email" value={inf.email || '—'} />
-            <KV label="Address" value={inf.address || '—'} />
-            <KV label="First invite" value={inf.first_invite_sent_at ? new Date(inf.first_invite_sent_at).toLocaleDateString() : 'Not sent'} />
+            {editing ? (
+              <>
+                <Field label="POC type"><select style={editInput} value={form.contact_poc_type} onChange={e => setF('contact_poc_type', e.target.value)}><option value="">—</option>{['manager', 'influencer', 'agency'].map(o => <option key={o} value={o}>{o}</option>)}</select></Field>
+                <Field label="POC name"><input style={editInput} value={form.contact_poc_name} onChange={e => setF('contact_poc_name', e.target.value)} /></Field>
+                <Field label="Phone"><input style={editInput} value={form.contact_number} onChange={e => setF('contact_number', e.target.value)} /></Field>
+                <Field label="Email"><input style={editInput} value={form.email} onChange={e => setF('email', e.target.value)} /></Field>
+                <Field label="Address"><input style={editInput} value={form.address} onChange={e => setF('address', e.target.value)} /></Field>
+              </>
+            ) : (
+              <>
+                <KV label="POC type" value={inf.contact_poc_type || '—'} />
+                <KV label="POC name" value={inf.contact_poc_name || '—'} />
+                <KV label="Phone" value={inf.contact_number || '—'} />
+                <KV label="Email" value={inf.email || '—'} />
+                <KV label="Address" value={inf.address || '—'} />
+                <KV label="First invite" value={inf.first_invite_sent_at ? new Date(inf.first_invite_sent_at).toLocaleDateString() : 'Not sent'} />
+              </>
+            )}
           </Card>
 
           {inf.rating_notes && (
@@ -232,20 +313,36 @@ function ShopifyCard({ inf, session }) {
   );
 }
 
-function Card({ title, children }) {
+function Card({ title, children, action }) {
   return (
     <section style={{
       background: 'var(--surface)', border: '1px solid var(--border)',
       borderRadius: 'var(--radius-md)', padding: 16,
     }}>
-      <h2 style={{
-        fontSize: 12, color: 'var(--text-3)', letterSpacing: '0.08em',
-        textTransform: 'uppercase', marginBottom: 12,
-      }}>{title}</h2>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 8 }}>
+        <h2 style={{
+          fontSize: 12, color: 'var(--text-3)', letterSpacing: '0.08em',
+          textTransform: 'uppercase', margin: 0,
+        }}>{title}</h2>
+        {action}
+      </div>
       {children}
     </section>
   );
 }
+
+function Field({ label, children }) {
+  return (
+    <div style={{ display: 'flex', gap: 8, padding: '4px 0', alignItems: 'center' }}>
+      <span style={{ width: 140, color: 'var(--text-3)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</span>
+      <span style={{ flex: 1 }}>{children}</span>
+    </div>
+  );
+}
+
+const editInput = { width: '100%', background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '5px 8px', fontSize: 13, fontFamily: 'inherit', boxSizing: 'border-box' };
+const editBtn = { padding: '4px 10px', background: 'var(--surface-2)', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.04em' };
+const saveBtn = { ...editBtn, background: '#FF6B00', color: '#fff', border: '1px solid #FF6B00' };
 
 function KV({ label, value }) {
   return (

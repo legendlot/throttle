@@ -9,6 +9,8 @@ import {
 import { ignitionopsGet } from '../../../lib/ignitionopsFetch.js';
 
 function inr(n) { return n == null || isNaN(n) ? '—' : `₹${Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`; }
+const TIER_LABELS = { nano: 'Nano', micro: 'Micro', macro: 'Macro', brand: 'Brand', store: 'Store', untyped: 'Untyped' };
+function tierLabel(t) { return TIER_LABELS[t] || (t ? t[0].toUpperCase() + t.slice(1) : '—'); }
 const ORANGE = '#FF6B00';
 const GRID = '#2a2a2a';
 
@@ -52,6 +54,15 @@ export default function ReportsPage() {
     lines.push('');
     lines.push('Top performers,Engagement,Influencer,Product,Orders,Conv value,Spend,ROAS');
     for (const p of data.top_performers) lines.push(`,${p.engagement_no},${p.influencer},${p.product},${p.orders},${p.conversions_value},${p.spend},${p.roas ?? ''}`);
+    lines.push('');
+    lines.push('By tier,Tier,Influencers,Deals,Views,Avg views/inf,Likes,Shares,Spend,Orders,Conv value');
+    for (const t of (data.by_tier || [])) lines.push(`,${t.tier},${t.influencer_count},${t.deals},${t.views},${t.avg_views_per_influencer},${t.likes},${t.shares},${t.spend},${t.orders},${t.conversions_value}`);
+    lines.push('');
+    lines.push('Engagement totals,Views,Likes,Shares');
+    lines.push(`,${data.engagement_totals?.views ?? 0},${data.engagement_totals?.likes ?? 0},${data.engagement_totals?.shares ?? 0}`);
+    lines.push('');
+    lines.push('UGC,Deals,Views,Likes,Budget consumed,Orders,Conv value');
+    if (data.ugc) lines.push(`,${data.ugc.deals},${data.ugc.views},${data.ugc.likes},${data.ugc.budget_consumed},${data.ugc.orders},${data.ugc.conversions_value}`);
     const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -87,7 +98,46 @@ export default function ReportsPage() {
             <KpiCard label="Conv. value" value={inr(data.totals.conversions_value)} />
             <KpiCard label="Avg CPM" value={data.totals.avg_cpm != null ? `₹${data.totals.avg_cpm}` : '—'} />
             <KpiCard label="Avg ROAS" value={data.totals.avg_roas != null ? `${data.totals.avg_roas}×` : '—'} />
+            <KpiCard label="Total views" value={(data.engagement_totals?.views ?? 0).toLocaleString()} />
+            <KpiCard label="Total likes" value={(data.engagement_totals?.likes ?? 0).toLocaleString()} />
+            <KpiCard label="Total shares" value={(data.engagement_totals?.shares ?? 0).toLocaleString()} />
           </div>
+
+          <Panel title="By influencer tier">
+            <table style={tableStyle}>
+              <thead><tr>{['Tier', 'Influencers', 'Deals', 'Views', 'Avg views/inf', 'Likes', 'Shares', 'Spend', 'Orders', 'Conv. value'].map((h, i) => <th key={h} style={{ ...thr, textAlign: i ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
+              <tbody>
+                {(!data.by_tier || !data.by_tier.length) && <tr><td colSpan={10} style={{ ...tdl, color: 'var(--text-3)', textAlign: 'center' }}>No data</td></tr>}
+                {(data.by_tier || []).map(t => (
+                  <tr key={t.tier} style={{ borderTop: '1px solid var(--border)' }}>
+                    <td style={tdl}>{tierLabel(t.tier)}</td>
+                    <td style={tdr}>{t.influencer_count.toLocaleString()}</td>
+                    <td style={tdr}>{t.deals.toLocaleString()}</td>
+                    <td style={tdr}>{t.views.toLocaleString()}</td>
+                    <td style={tdr}>{t.avg_views_per_influencer.toLocaleString()}</td>
+                    <td style={tdr}>{t.likes.toLocaleString()}</td>
+                    <td style={tdr}>{t.shares.toLocaleString()}</td>
+                    <td style={{ ...tdr, color: ORANGE }}>{inr(t.spend)}</td>
+                    <td style={tdr}>{t.orders.toLocaleString()}</td>
+                    <td style={tdr}>{inr(t.conversions_value)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Panel>
+
+          {data.ugc && (
+            <Panel title="UGC — user-generated content">
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 12 }}>
+                <KpiCard label="UGC deals" value={data.ugc.deals.toLocaleString()} />
+                <KpiCard label="UGC views" value={data.ugc.views.toLocaleString()} />
+                <KpiCard label="UGC likes" value={data.ugc.likes.toLocaleString()} />
+                <KpiCard label="Budget consumed" value={inr(data.ugc.budget_consumed)} accent={ORANGE} />
+                <KpiCard label="Orders" value={data.ugc.orders.toLocaleString()} />
+                <KpiCard label="Conv. value" value={inr(data.ugc.conversions_value)} />
+              </div>
+            </Panel>
+          )}
 
           <Panel title="Spend by month">
             <Chart data={data.by_month} xKey="month" barKey="spend" money />
