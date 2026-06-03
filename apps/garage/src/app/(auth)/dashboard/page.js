@@ -116,6 +116,18 @@ async function loadProducible(session, products, setProducible, setProdLoading) 
   }
 }
 
+async function loadUnits(session, setUnits, setUnitsLoading) {
+  setUnitsLoading(true);
+  try {
+    const data = await garageFetch('getDashboardUnits', {}, session);
+    setUnits({ pcb: data?.pcb || [], units: data?.units || [] });
+  } catch (e) {
+    setUnits({ pcb: [], units: [] });
+  } finally {
+    setUnitsLoading(false);
+  }
+}
+
 async function loadActivity(session, setActivity, setActLoading) {
   setActLoading(true);
   try {
@@ -162,6 +174,21 @@ function StatusBadge({ label, tone = 'gray' }) {
   );
 }
 
+// Compact car/remote stat: caption + mono number. null => em-dash; negative => red.
+function UnitStat({ label, value, small = false }) {
+  const isNull = value === null || value === undefined;
+  const display = isNull ? '—' : Number(value).toLocaleString();
+  const color = isNull
+    ? 'var(--t3)'
+    : (Number(value) < 0 ? 'var(--state-error-fg)' : 'var(--t1)');
+  return (
+    <div style={{ minWidth: 56 }}>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: small ? 13 : 18, color }}>{display}</div>
+      <div style={{ fontSize: 9, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</div>
+    </div>
+  );
+}
+
 function shipmentStatusTone(status) {
   const s = (status || '').toLowerCase();
   if (s.includes('arriv') && !s.includes('complete')) return 'yellow';
@@ -194,6 +221,9 @@ export default function DashboardPage() {
   const [mainError, setMainError] = useState(null);
   const [producible, setProducible] = useState([]);
   const [prodLoading, setProdLoading] = useState(true);
+  const [units, setUnits] = useState({ pcb: [], units: [] });
+  const [unitsLoading, setUnitsLoading] = useState(true);
+  const [expandedUnitIndex, setExpandedUnitIndex] = useState(null);
   const [activity, setActivity] = useState([]);
   const [actLoading, setActLoading] = useState(true);
   const [expandedIndex, setExpandedIndex] = useState(null);
@@ -202,6 +232,7 @@ export default function DashboardPage() {
     if (!session || productsLoading) return;
     loadMain(session, setKpis, setSections, setMainLoading, setMainError, setRefreshing);
     loadProducible(session, PRODUCTS, setProducible, setProdLoading);
+    loadUnits(session, setUnits, setUnitsLoading);
     loadActivity(session, setActivity, setActLoading);
   }
 
@@ -310,6 +341,102 @@ export default function DashboardPage() {
           <KpiCard label="Pending Returns" value={kpis?.pending_returns ?? '—'} color="green" />
         </div>
       )}
+
+      <div style={twoColStyle}>
+        {/* ---- PCBs ---- */}
+        <section style={panelStyle}>
+          <header style={panelHeaderStyle}>
+            <span>PCBs — Car &amp; Remote</span>
+            <span style={{ color: 'var(--t3)' }}>{units.pcb.length} products</span>
+          </header>
+          <div>
+            {unitsLoading ? (
+              <div style={{ padding: 16, textAlign: 'center' }}><Spinner size="sm" /></div>
+            ) : units.pcb.length === 0 ? (
+              <EmptyState message="No PCB parts found" />
+            ) : (
+              units.pcb.map((r, i) => (
+                <div key={r.product} style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  padding: '10px 16px',
+                  borderBottom: i === units.pcb.length - 1 ? 'none' : '1px solid var(--border)',
+                }}>
+                  <div style={{ fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 14 }}>{r.product}</div>
+                  <div style={{ display: 'flex', gap: 28, textAlign: 'right' }}>
+                    <UnitStat label="Car" value={r.car_stock} />
+                    <UnitStat label="Remote" value={r.remote_stock} />
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </section>
+
+        {/* ---- FBU & SKD units ---- */}
+        <section style={panelStyle}>
+          <header style={panelHeaderStyle}>
+            <span>FBU &amp; SKD Units</span>
+            <span style={{ color: 'var(--t3)' }}>{units.units.length} products</span>
+          </header>
+          <div>
+            {unitsLoading ? (
+              <div style={{ padding: 16, textAlign: 'center' }}><Spinner size="sm" /></div>
+            ) : units.units.length === 0 ? (
+              <EmptyState message="No FBU or SKD stock" />
+            ) : (
+              units.units.map((r, i) => {
+                const isOpen = expandedUnitIndex === i;
+                const isLast = i === units.units.length - 1;
+                const hasVariants = (r.variants || []).length > 1;
+                return (
+                  <div key={r.product} style={{
+                    padding: '10px 16px',
+                    borderBottom: isLast ? 'none' : '1px solid var(--border)',
+                  }}>
+                    <div
+                      style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: hasVariants ? 'pointer' : 'default' }}
+                      onClick={() => hasVariants && setExpandedUnitIndex(isOpen ? null : i)}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 14 }}>{r.product}</span>
+                        {(r.formats || []).map(f => (
+                          <StatusBadge key={f} label={f} tone={f === 'SKD' ? 'orange' : 'blue'} />
+                        ))}
+                        {hasVariants && (
+                          <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>
+                            {isOpen ? '▼' : '▶'}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', gap: 28, textAlign: 'right' }}>
+                        <UnitStat label="Car" value={r.car_total} />
+                        <UnitStat label="Remote" value={r.remote_total} />
+                      </div>
+                    </div>
+                    {isOpen && hasVariants && (
+                      <div style={{ marginTop: 8, padding: '8px 10px', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3 }}>
+                        {r.variants.map((v, j) => (
+                          <div key={j} style={{
+                            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                            padding: '3px 0', fontSize: 12,
+                            borderBottom: j < r.variants.length - 1 ? '1px solid rgba(42,42,42,.4)' : 'none',
+                          }}>
+                            <span style={{ color: 'var(--t2)' }}>{v.label}</span>
+                            <div style={{ display: 'flex', gap: 24, textAlign: 'right' }}>
+                              <UnitStat label="Car" value={v.car} small />
+                              <UnitStat label="Remote" value={v.remote} small />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </section>
+      </div>
 
       <div style={twoColStyle}>
         <section style={panelStyle}>
