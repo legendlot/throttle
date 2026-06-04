@@ -25,7 +25,7 @@ export function SubtaskPanel({ task, session }) {
           </button>
         )}
       </div>
-      {isChild && <div style={note}>This is a sub-task of its parent — sub-tasks are one level deep, so it can’t have its own sub-tasks.</div>}
+      {isChild && <div style={note}>This is a sub-task of its parent. Sub-tasks are one level deep, so it can’t have its own sub-tasks.</div>}
       {children.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {children.map(c => (

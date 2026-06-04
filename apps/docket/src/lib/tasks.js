@@ -2,7 +2,7 @@
 // Mirrors the worker enums exactly (keep in lockstep with docket.tasks CHECKs).
 
 export const STATUSES = [
-  { key: 'not_started', label: 'Not started', color: 'var(--text-3)',        bg: 'var(--surface-3)' },
+  { key: 'not_started', label: 'Not started', color: 'var(--text-2)',        bg: 'var(--surface-3)' },
   { key: 'in_progress', label: 'In progress', color: 'var(--state-info-fg)', bg: 'var(--state-info-bg)' },
   { key: 'done',        label: 'Done',        color: 'var(--state-success-fg)', bg: 'var(--state-success-bg)' },
   { key: 'blocked',     label: 'Blocked',     color: 'var(--state-warning-fg)', bg: 'var(--state-warning-bg)' },
@@ -16,7 +16,7 @@ export const PRIORITIES = [
   { key: 'P0', label: 'P0 · Immediate', short: 'P0', color: '#fff',             bg: 'var(--state-error)' },
   { key: 'P1', label: 'P1 · Urgent',    short: 'P1', color: 'var(--brand-orange)', bg: 'rgba(249,115,22,0.15)' },
   { key: 'P2', label: 'P2 · Normal',    short: 'P2', color: 'var(--text-2)',     bg: 'var(--surface-3)' },
-  { key: 'P3', label: 'P3 · Low',       short: 'P3', color: 'var(--text-3)',     bg: 'var(--surface-2)' },
+  { key: 'P3', label: 'P3 · Low',       short: 'P3', color: 'var(--text-2)',     bg: 'var(--surface-2)' },
 ];
 export const PRIORITY_MAP = Object.fromEntries(PRIORITIES.map(p => [p.key, p]));
 

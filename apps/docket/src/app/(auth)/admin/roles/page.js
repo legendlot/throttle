@@ -127,7 +127,7 @@ export default function RolesPage() {
             </div>
             <div style={{ marginBottom: 16 }}><span style={lbl}>Description</span><input value={desc} onChange={(e) => setDesc(e.target.value)} style={input} disabled={saving} /></div>
 
-            {editIsSystem && <div style={noteBox}><ShieldCheck size={14} /> System role — permissions are fixed. Label &amp; description only.</div>}
+            {editIsSystem && <div style={noteBox}><ShieldCheck size={14} /> System role: permissions are fixed. Label &amp; description only.</div>}
 
             {PERM_DEFS.map((g) => (
               <div key={g.group} style={{ marginBottom: 14 }}>
@@ -141,7 +141,7 @@ export default function RolesPage() {
                       <div key={it.key} style={permRow}>
                         <span style={{ fontSize: 13 }}>
                           {it.label} <span style={mono}>· {it.key}</span>
-                          {forced && <span style={{ fontSize: 11, color: 'var(--text-3)' }}> — required by admin</span>}
+                          {forced && <span style={{ fontSize: 11, color: 'var(--text-3)' }}> (required by admin)</span>}
                         </span>
                         <button type="button" style={toggleBtn(on)} onClick={() => toggle(it.key)} disabled={disabled}>{on ? 'On' : 'Off'}</button>
                       </div>
@@ -173,8 +173,8 @@ const permRow = { display: 'flex', justifyContent: 'space-between', alignItems: 
 const noteBox = { display: 'flex', alignItems: 'center', gap: 8, background: 'var(--accent-bg)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', fontSize: 12, color: 'var(--text-2)', marginBottom: 14 };
 const badgeGray = { fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-3)', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '1px 6px', textTransform: 'uppercase' };
 const badgeKey = { fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--state-info-fg)', background: 'var(--state-info-bg)', borderRadius: 'var(--radius-sm)', padding: '2px 7px' };
-function toggleBtn(on) { return { background: on ? 'var(--docket-accent)' : 'var(--surface-3)', color: on ? '#1f1f1f' : 'var(--text-3)', border: `1px solid ${on ? 'var(--docket-accent)' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', padding: '4px 14px', fontFamily: 'var(--font-cond)', fontSize: 11, fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.05em' }; }
+function toggleBtn(on) { return { background: on ? 'var(--docket-accent)' : 'var(--surface-3)', color: on ? 'var(--accent-fg)' : 'var(--text-3)', border: `1px solid ${on ? 'var(--docket-accent)' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', padding: '4px 14px', fontFamily: 'var(--font-cond)', fontSize: 11, fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.05em' }; }
 const btnBase = { display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 'var(--radius-sm)', padding: '7px 14px', fontFamily: 'var(--font-cond)', fontSize: 12, fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.04em' };
-const btnPrimary = { ...btnBase, background: 'var(--docket-accent)', color: '#1f1f1f', border: '1px solid var(--docket-accent)' };
+const btnPrimary = { ...btnBase, background: 'var(--docket-accent)', color: 'var(--accent-fg)', border: '1px solid var(--docket-accent)' };
 const btnSecondary = { ...btnBase, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)' };
 const btnDanger = { ...btnBase, background: 'transparent', color: 'var(--state-error-fg)', border: '1px solid var(--state-error)' };

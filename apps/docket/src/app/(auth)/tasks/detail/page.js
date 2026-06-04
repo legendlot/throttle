@@ -165,7 +165,7 @@ function DetailInner() {
         )}
         {task.status === 'abandoned' && (
           <div style={{ ...noteErr, marginTop: 14 }}>
-            Abandoned {task.abandoned_at ? `on ${fmtDate(task.abandoned_at)}` : ''}{task.abandon_reason ? ` — “${task.abandon_reason}”` : ''}.
+            Abandoned {task.abandoned_at ? `on ${fmtDate(task.abandoned_at)}` : ''}{task.abandon_reason ? `: “${task.abandon_reason}”` : ''}.
             {canEdit && <button style={{ ...btnGhost, marginLeft: 10 }} onClick={() => setStatus('not_started')} disabled={busy}>Reactivate</button>}
           </div>
         )}
@@ -311,11 +311,11 @@ const noteErr = { background: 'var(--state-error-bg)', border: '1px solid var(--
 const overlay = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, padding: 20 };
 const modalCard = { background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-md)', padding: '18px 20px', width: 440, maxWidth: '100%' };
 const btnBase = { display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 'var(--radius-sm)', padding: '7px 14px', fontFamily: 'var(--font-cond)', fontSize: 12, fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.04em' };
-const btnPrimary = { ...btnBase, background: 'var(--docket-accent)', color: '#1f1f1f', border: '1px solid var(--docket-accent)' };
+const btnPrimary = { ...btnBase, background: 'var(--docket-accent)', color: 'var(--accent-fg)', border: '1px solid var(--docket-accent)' };
 const btnSecondary = { ...btnBase, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)' };
 const btnGhost = { ...btnBase, background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border)' };
 function statusBtn(on) {
-  return { background: on ? 'var(--docket-accent)' : 'var(--surface-2)', color: on ? '#1f1f1f' : 'var(--text-2)', border: `1px solid ${on ? 'var(--docket-accent)' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', padding: '5px 12px', fontFamily: 'var(--font-cond)', fontSize: 11, fontWeight: 700, cursor: on ? 'default' : 'pointer', textTransform: 'uppercase', letterSpacing: '0.04em' };
+  return { background: on ? 'var(--docket-accent)' : 'var(--surface-2)', color: on ? 'var(--accent-fg)' : 'var(--text-2)', border: `1px solid ${on ? 'var(--docket-accent)' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', padding: '5px 12px', fontFamily: 'var(--font-cond)', fontSize: 11, fontWeight: 700, cursor: on ? 'default' : 'pointer', textTransform: 'uppercase', letterSpacing: '0.04em' };
 }
 function tabBtn(on) {
   return { background: 'none', border: 'none', borderBottom: `2px solid ${on ? 'var(--docket-accent)' : 'transparent'}`, color: on ? 'var(--text-1)' : 'var(--text-3)', padding: '8px 14px', fontFamily: 'var(--font-cond)', fontSize: 12, fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.05em' };

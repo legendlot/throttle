@@ -50,7 +50,7 @@ export default function LoginPage() {
         <button
           onClick={signInWithGoogle}
           style={{
-            width: '100%', background: 'var(--docket-accent)', color: '#1f1f1f', border: 'none',
+            width: '100%', background: 'var(--docket-accent)', color: 'var(--accent-fg)', border: 'none',
             borderRadius: 6, padding: '14px',
             fontFamily: COND, fontWeight: 700, fontSize: 12,
             letterSpacing: '0.2em', textTransform: 'uppercase', cursor: 'pointer',

@@ -54,7 +54,7 @@ function NewTaskInner() {
       <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 12 }}>
         <div>
           <h1 style={h1}>{parentTask ? 'New Sub-task' : 'New Task'}</h1>
-          <p style={sub}>Set the owner, team and deadline. The deadline is locked once created — later changes are tracked as revisions.</p>
+          <p style={sub}>Set the owner, team and deadline. The deadline is locked once created; later changes are tracked as revisions.</p>
         </div>
         <button style={btnSecondary} onClick={() => router.back()}><ArrowLeft size={14} /> Back</button>
       </div>

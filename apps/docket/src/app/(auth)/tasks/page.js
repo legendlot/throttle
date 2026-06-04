@@ -161,7 +161,7 @@ export default function TasksPage() {
 
   const groups = useMemo(() => {
     if (groupBy === 'none') return [{ key: 'all', label: null, rows: boardRows }];
-    const keyOf = (t) => groupBy === 'person' ? (t.owner_name || '— Unassigned —') : (t.department_name || '— No team —');
+    const keyOf = (t) => groupBy === 'person' ? (t.owner_name || 'Unassigned') : (t.department_name || 'No team');
     const m = new Map();
     for (const t of boardRows) { const k = keyOf(t); if (!m.has(k)) m.set(k, []); m.get(k).push(t); }
     return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([label, rows]) => ({ key: label, label, rows }));
@@ -211,8 +211,8 @@ export default function TasksPage() {
             <div style={tray}>
               <div style={trayHead}>
                 <Flag size={13} style={{ color: 'var(--docket-accent)' }} />
-                NEEDS SETUP <span style={{ color: 'var(--text-3)', fontWeight: 400 }}>· {gridRows.length}</span>
-                <span style={trayHint}>add an owner + deadline to move onto the board</span>
+                THE GRID · NEEDS SETUP <span style={{ color: 'var(--text-3)', fontWeight: 400 }}>· {gridRows.length}</span>
+                <span style={trayHint}>add an owner and deadline to move onto the board</span>
               </div>
               <TaskTable rows={gridRows} {...rowProps} />
             </div>
@@ -448,7 +448,7 @@ function TaskTable({ rows, childrenByParent, saveField, abandonInline, reviseInl
                     <td style={td} colSpan={8}>
                       <span style={subRow}>
                         <span style={branchGlyph}>↳</span>
-                        <input autoFocus value={subTitle} onChange={e => setSubTitle(e.target.value)} placeholder="Sub-task title — Enter to add…" style={subRowInput}
+                        <input autoFocus value={subTitle} onChange={e => setSubTitle(e.target.value)} placeholder="Sub-task title, Enter to add…" style={subRowInput}
                           onKeyDown={e => { if (e.key === 'Enter') submitSub(t); if (e.key === 'Escape') setAddingFor(null); }} />
                         <button className="dk-press" style={subAddConfirm} disabled={!subTitle.trim()} onClick={() => submitSub(t)} title="Add"><Check size={13} /></button>
                         <button style={popBtnGhost} onClick={() => setAddingFor(null)} title="Cancel"><X size={13} /></button>
@@ -587,7 +587,7 @@ function QuickCapture({ session, onCreated, showToast }) {
       <Plus size={16} style={{ color: 'var(--docket-accent)', flexShrink: 0 }} />
       <input ref={ref} value={title} onChange={e => setTitle(e.target.value)}
         onKeyDown={e => { if (e.key === 'Enter') add(); }}
-        placeholder="Add a task — type a title and press Enter (it lands under Needs Setup to fill in later)…"
+        placeholder="Add a task. Type a title and press Enter; it lands in The Grid to finish later…"
         style={{ ...ainput, flex: 1 }} disabled={saving} />
       <button className="dk-press" style={{ ...addBtn, opacity: title.trim() && !saving ? 1 : 0.5 }} onClick={add} disabled={!title.trim() || saving}>
         {saving ? '…' : 'Add'}

@@ -47,7 +47,7 @@ export default function UsersPage() {
     <div>
       <div style={{ marginBottom: 16 }}>
         <h1 style={h1}>Users</h1>
-        <p style={sub}>Assign a Docket role to each LOT user. Accounts are created in Garage — this only sets task-manager access. No role = baseline (own + collaborator + own-team tasks).</p>
+        <p style={sub}>Assign a Docket role to each LOT user. Accounts are created in Garage; this only sets task-manager access. No role = baseline (own + collaborator + own-team tasks).</p>
       </div>
 
       <div style={card}>

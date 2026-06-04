@@ -57,7 +57,7 @@ export function TaskForm({ departments, employees, parentTask, onSubmit, saving 
     <form onSubmit={submit} style={card}>
       {parentTask && (
         <div style={{ ...note, marginBottom: 14 }}>
-          Sub-task of <strong>{parentTask.task_no}</strong> — {parentTask.title}
+          Sub-task of <strong>{parentTask.task_no}</strong> · {parentTask.title}
         </div>
       )}
       <div style={{ marginBottom: 12 }}>
@@ -87,7 +87,7 @@ export function TaskForm({ departments, employees, parentTask, onSubmit, saving 
       </div>
 
       <div style={{ marginBottom: 12 }}>
-        <label style={lbl}>Deadline * (cannot be changed after creation — revisions are tracked separately)</label>
+        <label style={lbl}>Deadline * (cannot be changed after creation; revisions are tracked separately)</label>
         <DatePicker value={deadline || null} onChange={setDeadline} />
       </div>
 
@@ -121,7 +121,7 @@ export function TaskForm({ departments, employees, parentTask, onSubmit, saving 
             {docs.map((d, i) => (
               <div key={i} style={docRow}>
                 <span style={{ fontSize: 12, color: 'var(--text-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {d.title ? `${d.title} — ` : ''}{d.url}
+                  {d.title ? `${d.title} · ` : ''}{d.url}
                 </span>
                 <X size={13} style={{ cursor: 'pointer', flexShrink: 0 }} onClick={() => setDocs(x => x.filter((_, j) => j !== i))} />
               </div>

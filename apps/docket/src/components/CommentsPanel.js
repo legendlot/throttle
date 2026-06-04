@@ -77,6 +77,6 @@ export function CommentsPanel({ task, session, onChange }) {
 
 const comment = { background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '10px 12px' };
 const input = { width: '100%', background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', fontSize: 13, outline: 'none', fontFamily: 'inherit', resize: 'vertical' };
-const btnPrimary = { borderRadius: 'var(--radius-sm)', padding: '6px 14px', fontFamily: 'var(--font-cond)', fontSize: 11, fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.04em', background: 'var(--docket-accent)', color: '#1f1f1f', border: '1px solid var(--docket-accent)' };
+const btnPrimary = { borderRadius: 'var(--radius-sm)', padding: '6px 14px', fontFamily: 'var(--font-cond)', fontSize: 11, fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.04em', background: 'var(--docket-accent)', color: 'var(--accent-fg)', border: '1px solid var(--docket-accent)' };
 const btnGhost = { borderRadius: 'var(--radius-sm)', padding: '6px 14px', fontFamily: 'var(--font-cond)', fontSize: 11, fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase', background: 'var(--surface-3)', color: 'var(--text-2)', border: '1px solid var(--border)' };
 const linkBtn = { background: 'none', border: 'none', color: 'var(--text-3)', fontSize: 11, cursor: 'pointer', padding: 0, textDecoration: 'underline' };

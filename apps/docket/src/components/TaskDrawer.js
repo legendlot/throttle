@@ -151,7 +151,7 @@ export function TaskDrawer({ id, session, departments = [], employees = [], onCl
                 </div>
               )}
               {task.status === 'abandoned' && (
-                <div style={abandonedNote}>Abandoned{task.abandon_reason ? ` — “${task.abandon_reason}”` : ''}.{task._can_edit && <button style={{ ...ghostBtn, marginLeft: 10 }} onClick={() => setStatus('not_started')}>Reactivate</button>}</div>
+                <div style={abandonedNote}>Abandoned{task.abandon_reason ? `: “${task.abandon_reason}”` : ''}.{task._can_edit && <button style={{ ...ghostBtn, marginLeft: 10 }} onClick={() => setStatus('not_started')}>Reactivate</button>}</div>
               )}
 
               {/* Properties */}
