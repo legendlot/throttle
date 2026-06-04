@@ -1063,7 +1063,12 @@ function RecentGrnsPanel({ grns, loading, onOpenDetail }) {
                 <td style={{ ...td, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{r.grn_no || '—'}</td>
                 <td style={{ ...td, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{formatDisplayDate(r.grn_date)}</td>
                 <td style={td}>{r.supplier || '—'}</td>
-                <td style={td}>{r.product || '—'}</td>
+                <td style={td}>
+                  {r.product || '—'}
+                  {r.is_fbu && (
+                    <span style={{ marginLeft: 6, fontSize: 9, fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--yellow)', border: '1px solid var(--yellow)', borderRadius: 3, padding: '1px 4px', verticalAlign: 'middle' }}>FBU</span>
+                  )}
+                </td>
                 <td style={{ ...td, fontFamily: 'var(--mono)' }}>{(r.lines ?? '—')} · {(r.total_qty || 0).toLocaleString()} pcs</td>
                 <td style={td}>
                   <StatusBadge label={r.has_fail ? 'Issues' : 'Done'} tone={r.has_fail ? 'red' : 'green'} />
