@@ -105,6 +105,10 @@ export default function TasksPage() {
       if (field === 'status') {
         await docketopsPost('changeStatus', { id: task.id, status: value }, session);
         patchRow(task.id, { status: value });
+      } else if (field === 'title') {
+        // Title is never nulled — caller validates non-empty before calling.
+        await docketopsPost('updateTask', { id: task.id, title: value }, session);
+        patchRow(task.id, { title: value });
       } else {
         await docketopsPost('updateTask', { id: task.id, [field]: value || null }, session);
         const patch = { [field]: value || null };
@@ -325,6 +329,9 @@ function TaskTable({ rows, childrenByParent, saveField, abandonInline, reviseInl
     const kids = childrenByParent[t.id] || [];
     const hasKids = !isChild && ((t.child_count || 0) > 0 || kids.length > 0);
     const isOpen = !!expanded[t.id];
+    // A sub-task is one level under its parent — clicking it opens the PARENT
+    // task (which lists all its sub-tasks), not a standalone child view.
+    const drawerTarget = isChild ? (t.parent_task_id || t.id) : t.id;
     const Disp = ({ field, children }) => (
       <span onClick={() => startEdit(t, field)}
         className={ed ? 'dk-editable' : undefined}
@@ -333,7 +340,21 @@ function TaskTable({ rows, childrenByParent, saveField, abandonInline, reviseInl
         style={{ cursor: ed ? 'pointer' : 'default', display: 'inline-block', minWidth: 24 }}>{children}</span>
     );
     return (
-      <tr key={t.id} id={'dk-row-' + t.id} className="dk-task-row" onKeyDown={e => { if (e.key === 'Escape') { setEditRow(null); setAbandonFor(null); } }}>
+      <tr key={t.id} id={'dk-row-' + t.id} className="dk-task-row"
+        tabIndex={ed ? 0 : undefined}
+        onKeyDown={e => {
+          if (e.key === 'Escape') { setEditRow(null); setAbandonFor(null); return; }
+          // Keyboard nav only when the row itself (not an inner field) is focused.
+          if (e.target !== e.currentTarget) return;
+          if (ed && !isEdit && e.key === 'Enter') { e.preventDefault(); startEdit(t, 'title'); return; }
+          if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            const list = Array.from(document.querySelectorAll('tr.dk-task-row[tabindex="0"]'));
+            const i = list.indexOf(e.currentTarget);
+            const next = e.key === 'ArrowDown' ? list[i + 1] : list[i - 1];
+            next?.focus();
+          }
+        }}>
         <td style={{ ...td, fontFamily: 'var(--font-mono)', fontSize: 11 }}>
           {/* Sub-tasks read as nested items, not standalone tasks — no top-level ID;
               the indent + branch glyph in the title carries the nesting. */}
@@ -346,9 +367,13 @@ function TaskTable({ rows, childrenByParent, saveField, abandonInline, reviseInl
               : (hasKids
                 ? <button style={chevronBtn} onClick={() => toggleExpand(t.id)} title={isOpen ? 'Hide sub-tasks' : 'Show sub-tasks'}>{isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}</button>
                 : <span style={{ width: 13, flexShrink: 0 }} />)}
-            <span className="dk-idlink" onClick={() => openDrawer(t.id)} style={{ cursor: 'pointer', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {t.title}{t.revised_deadline && <span style={flag}>revised</span>}
-            </span>
+            {isEdit && ed
+              ? <input autoFocus={focusField === 'title'} defaultValue={t.title} placeholder="Title…" style={{ ...cellInput, flex: 1, minWidth: 0 }}
+                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } }}
+                  onBlur={e => { const v = e.target.value.trim(); if (v && v !== t.title) saveField(t, 'title', v); }} />
+              : <span className="dk-idlink" onClick={() => openDrawer(drawerTarget)} style={{ cursor: 'pointer', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {t.title}{t.revised_deadline && <span style={flag}>revised</span>}
+                </span>}
             {hasKids && <span style={kidCount}>{t.child_done}/{t.child_count}</span>}
             {!isChild && ed && <button className="dk-subadd dk-press" style={subAddBtn} title="Add sub-task" onClick={() => startAddSub(t)}><Plus size={12} /></button>}
           </span>
@@ -363,7 +388,7 @@ function TaskTable({ rows, childrenByParent, saveField, abandonInline, reviseInl
             : <Disp field="owner_employee_id">{t.owner_name ? <span title={t.owner_name}>{firstName(t.owner_name)}</span> : <Muted>set owner</Muted>}</Disp>}
         </td>
         <td style={td}>
-          <CollaboratorsCell task={t} editable={ed} empOpts={empOpts} onAdd={addCollab} onRemove={removeCollab} openDrawer={openDrawer} />
+          <CollaboratorsCell task={t} editable={ed} empOpts={empOpts} onAdd={addCollab} onRemove={removeCollab} openDrawer={openDrawer} drawerTarget={drawerTarget} />
         </td>
         <td style={td}>
           {isEdit && ed ? <div style={{ minWidth: 120 }}><Combobox autoFocus={focusField === 'status'} value={t.status} options={statusCellOpts} placeholder="Status…" allowClear={false} commitOnTab style={cellInput} onChange={(v, opt) => { if (!opt) return; if (v === 'abandoned') { setAbandonReason(''); setAbandonFor(t.id); } else saveField(t, 'status', v); }} /></div>
@@ -389,7 +414,7 @@ function TaskTable({ rows, childrenByParent, saveField, abandonInline, reviseInl
           <DeadlineCell task={t} editable={ed} od={od} onFirstSet={(iso) => saveField(t, 'deadline', iso)} onRevise={reviseInline} />
         </td>
 
-        <td style={{ ...td, color: 'var(--text-4)', cursor: 'pointer' }} onClick={() => openDrawer(t.id)}>
+        <td style={{ ...td, color: 'var(--text-4)', cursor: 'pointer' }} onClick={() => openDrawer(drawerTarget)}>
           <span style={meta}>
             {t.doc_count > 0 && <span title="documents"><Link2 size={12} /> {t.doc_count}</span>}
             {t.comment_count > 0 && <span title="comments"><MessageSquare size={12} /> {t.comment_count}</span>}
@@ -461,7 +486,7 @@ function Avatars({ list }) {
 }
 // People cell: overlapping initial pills (hover = names). When editable, click opens a
 // small manager popover to add (Combobox) or remove collaborators inline.
-function CollaboratorsCell({ task, editable, empOpts, onAdd, onRemove, openDrawer }) {
+function CollaboratorsCell({ task, editable, empOpts, onAdd, onRemove, openDrawer, drawerTarget }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   const list = task.collaborators || [];
@@ -477,7 +502,7 @@ function CollaboratorsCell({ task, editable, empOpts, onAdd, onRemove, openDrawe
   const names = list.map(c => c.full_name || '—').join(', ');
   return (
     <span ref={ref} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
-      <span title={names || undefined} onClick={editable ? () => setOpen(o => !o) : () => openDrawer(task.id)} style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }}>
+      <span title={names || undefined} onClick={editable ? () => setOpen(o => !o) : () => openDrawer(drawerTarget ?? task.id)} style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }}>
         {list.length > 0 && <Avatars list={list} />}
         {editable
           ? <span style={{ ...addPill, marginLeft: list.length ? -7 : 0 }}><Plus size={11} /></span>
@@ -605,7 +630,7 @@ const meta = { display: 'inline-flex', gap: 10, alignItems: 'center', fontFamily
 const avatar = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, borderRadius: 'var(--radius-full)', background: 'var(--docket-accent)', color: 'var(--accent-fg)', fontSize: 9, fontWeight: 700, fontFamily: 'var(--font-mono)', border: '1.5px solid var(--bg)', flexShrink: 0 };
 const idBtn = { background: 'none', border: 'none', padding: 0, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer', transition: 'color var(--duration-fast) var(--ease-out)' };
 const clearBtn = { display: 'inline-flex', alignItems: 'center', gap: 4, background: 'var(--surface-2)', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 10px', fontFamily: 'var(--font-cond)', fontSize: 11, fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.05em' };
-const subAddBtn = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, background: 'var(--surface-2)', color: 'var(--text-3)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', cursor: 'pointer', flexShrink: 0 };
+const subAddBtn = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, background: 'var(--accent-bg)', color: 'var(--docket-accent)', border: '1px solid var(--docket-accent)', borderRadius: 'var(--radius-sm)', cursor: 'pointer', flexShrink: 0 };
 const chevronBtn = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, background: 'transparent', color: 'var(--text-3)', border: 'none', borderRadius: 'var(--radius-sm)', cursor: 'pointer', flexShrink: 0, padding: 0 };
 const branchGlyph = { color: 'var(--text-4)', fontSize: 12, flexShrink: 0, width: 13, textAlign: 'center' };
 const kidCount = { fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-4)', background: 'var(--surface-2)', borderRadius: 3, padding: '1px 5px', flexShrink: 0 };

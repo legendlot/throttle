@@ -178,8 +178,9 @@ button { font-family: inherit; }
 .dk-day { background: transparent; }
 .dk-day:hover { background: var(--surface-2); }
 
-/* Subtask quick-add "+" on the title cell — revealed on row hover. */
-.dk-subadd { opacity: 0; transition: opacity var(--duration-fast) var(--ease-out); }
+/* Subtask quick-add "+" on the title cell — faintly visible at rest so it's
+   discoverable, full strength on row hover / keyboard focus. */
+.dk-subadd { opacity: 0.5; transition: opacity var(--duration-fast) var(--ease-out); }
 .dk-task-row:hover .dk-subadd { opacity: 1; }
 .dk-subadd:focus-visible { opacity: 1; }
 
