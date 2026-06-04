@@ -585,17 +585,24 @@ function BulkGrnPanel({ session, onSuccess }) {
 // ── FBU GRN Panel — units only ─────────────────────────────────────────────────
 function FbuGrnPanel({ session, onSuccess }) {
   const { showToast }               = useToast();
-  const { PRODUCTS, loading: productsLoading } = useProducts();
+  const { PRODUCTS, PRODUCT_COLORS, loading: productsLoading } = useProducts();
   const [product, setProduct]       = useState('');
   const [variant, setVariant]       = useState('');
+  const [color, setColor]           = useState('');
   const [units, setUnits]           = useState('');
   const [supplier, setSupplier]     = useState('');
   const [grnDate, setGrnDate]       = useState(todayISO());
   const [poRef, setPoRef]           = useState('');
   const [submitting, setSubmitting] = useState(false);
 
+  // Colours available for the chosen product + variant (FBU units are unit-level,
+  // so colour is captured here rather than via a BOM).
+  const colorOptions = (product && variant) ? (PRODUCT_COLORS[product]?.[variant] || []) : [];
+  // Reset colour whenever the product or variant changes.
+  useEffect(() => { setColor(''); }, [product, variant]);
+
   function clearForm() {
-    setProduct(''); setVariant('');
+    setProduct(''); setVariant(''); setColor('');
     setUnits(''); setSupplier(''); setPoRef('');
     setGrnDate(todayISO());
   }
@@ -608,7 +615,7 @@ function FbuGrnPanel({ session, onSuccess }) {
     setSubmitting(true);
     try {
       const res = await workerFetch('postFbuGRN', {
-        data: { product, variant: variant || null, color: null, qty_received: qty, grn_date: grnDate, supplier, po_ref: poRef }
+        data: { product, variant: variant || null, color: color || null, qty_received: qty, grn_date: grnDate, supplier, po_ref: poRef }
       }, session);
       showToast(`FBU GRN ${res.data.grn_no} created — ${qty} units`, 'success');
       clearForm();
@@ -642,7 +649,18 @@ function FbuGrnPanel({ session, onSuccess }) {
         </div>
       </div>
 
-      <VariantSelects product={product} variant={variant} setVariant={setVariant} />
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, alignItems: 'end' }}>
+        <VariantSelects product={product} variant={variant} setVariant={setVariant} />
+        {colorOptions.length > 0 && (
+          <div>
+            <span style={label}>Colour</span>
+            <select style={{ ...sel, width: '100%' }} value={color} onChange={e => setColor(e.target.value)}>
+              <option value="">— Select colour —</option>
+              {colorOptions.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+        )}
+      </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginTop: 10, marginBottom: 14 }}>
         <div>
