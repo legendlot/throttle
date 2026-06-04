@@ -49,7 +49,7 @@ function LineCards({ lines, crMap }) {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
               <div>
                 <div style={{ fontFamily: 'var(--cond)', fontSize: 16, fontWeight: 700, color: 'var(--t1)' }}>{l.line || '—'}</div>
-                <div style={{ fontSize: 12, color: 'var(--t2)', marginTop: 2 }}>{l.product || 'No run assigned'}</div>
+                <div style={{ fontSize: 12, color: 'var(--t2)', marginTop: 2 }}>{l.product || (l.run_no ? 'Repair run' : 'No run assigned')}</div>
               </div>
               <div style={{ textAlign: 'right' }}>
                 <div style={{ fontFamily: 'var(--cond)', fontSize: 22, fontWeight: 700, color: pctColor }}>{pct}%</div>
