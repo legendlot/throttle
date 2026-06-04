@@ -226,7 +226,7 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
   }
 
   async function handleMarkSentOut() {
-    if (!window.confirm(`Mark ${run.run_no} as sent out to vendor?`)) return;
+    if (!window.confirm(`Send ${run.run_no} to vendor? The issued materials are handed off; the run moves to In Progress and waits for the built units to be returned.`)) return;
     setSendingOut(true);
     try {
       await workerFetch('markRunSentOut', { data: { run_no: run.run_no } }, session);
@@ -308,11 +308,12 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
           )}
           {showMarkSentOut && (
             <button style={btnPri} disabled={sendingOut} onClick={handleMarkSentOut}>
-              {sendingOut ? 'SENDING…' : 'Mark Sent Out'}
+              {sendingOut ? 'SENDING…' : '→ Send to Vendor'}
             </button>
           )}
           {showAssignReturnLine && (
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <span style={{ fontSize: 11, color: 'var(--t3)' }}>Receive returns on</span>
               <select
                 value={returnLineSelect}
                 onChange={(e) => setReturnLineSelect(e.target.value)}
@@ -325,7 +326,7 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
                 {['L1','L2','L3','L4','L5'].map(L => <option key={L} value={L}>{L}</option>)}
               </select>
               <button style={btnPri} disabled={assigningLine} onClick={handleAssignLine}>
-                {assigningLine ? 'ASSIGNING…' : 'Assign Return Line'}
+                {assigningLine ? 'ASSIGNING…' : '← Receive from Vendor'}
               </button>
             </div>
           )}
@@ -376,7 +377,20 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
                   · Receiving line: <strong style={{ color: 'var(--t1)' }}>{run.line_no}</strong>
                 </span>
               )}
+              {run.ext_summary && run.sent_out_at && (
+                <span style={{ fontSize: 12, color: 'var(--t2)' }}>
+                  · Returned: <strong style={{ color: 'var(--t1)' }}>{run.ext_summary.returned_qty}</strong> / {run.ext_summary.planned_qty}
+                  {run.ext_summary.pending_qty > 0
+                    ? <span style={{ color: '#fbbf24' }}> · {run.ext_summary.pending_qty} pending</span>
+                    : (run.ext_summary.planned_qty > 0 && <span style={{ color: '#34d399' }}> · all received</span>)}
+                </span>
+              )}
             </div>
+            {run.status === 'Issued' && (
+              <div style={{ fontSize: 11, color: 'var(--t3)', marginTop: 6 }}>
+                Materials are issued. Hand them to the vendor, then click <strong>Send to Vendor</strong>. When the built units come back, use <strong>Receive from Vendor</strong> to assign a line and scan each unit (Ext Inwarding station).
+              </div>
+            )}
           </div>
         )}
 
