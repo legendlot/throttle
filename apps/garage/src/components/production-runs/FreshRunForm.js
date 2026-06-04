@@ -58,7 +58,7 @@ function blankRow() {
 
 export function FreshRunForm({ onSuccess, session }) {
   const { showToast } = useToast();
-  const { PRODUCTS, PRODUCT_VARIANTS, HAS_REMOTE, PRODUCT_COLORS, RECEIVE_FORMAT, loading } = useProducts();
+  const { PRODUCTS, PRODUCT_VARIANTS, HAS_REMOTE, PRODUCT_COLORS, RECEIVE_FORMAT, FBU_PRODUCTS, loading } = useProducts();
   const [product, setProduct] = useState('');
   const [runDate, setRunDate] = useState(tomorrowISO());
   const [line, setLine] = useState('L1');
@@ -112,10 +112,17 @@ export function FreshRunForm({ onSuccess, session }) {
     }
   }, [productHighlight]);
 
-  // isFbuFormat drives the Issue-As dropdown visibility AND the default issue_mode
-  // on each variant row. Anchored on product_master.receive_format — not has_remote,
-  // since drones like Wisp are FBU without a remote.
+  // isFbuFormat drives the DEFAULT issue_mode on each variant row. Anchored on
+  // product_master.receive_format — not has_remote, since drones like Wisp are FBU
+  // without a remote.
   const isFbuFormat = useMemo(() => RECEIVE_FORMAT[product] === 'FBU', [product, RECEIVE_FORMAT]);
+  // The "Issue As" selector shows for FBU-registered products AND any product that
+  // has FBU stock (dual-format, e.g. Shadow received built from an outsourcer) — so
+  // the same SKU can be run as CKD (loose parts) or FBU (whole units) per run.
+  const isDualFormat = useMemo(
+    () => isFbuFormat || FBU_PRODUCTS.has(product),
+    [isFbuFormat, FBU_PRODUCTS, product],
+  );
   const productVariants = product ? PRODUCT_VARIANTS[product] || [] : [];
 
   // Sync each row's issueMode to the product's receive_format when the product changes.
@@ -629,7 +636,7 @@ export function FreshRunForm({ onSuccess, session }) {
                   {total}
                 </div>
               </div>
-              {isFbuFormat && (
+              {isDualFormat && (
                 <div>
                   <span style={lbl}>Issue As</span>
                   <select
