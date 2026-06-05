@@ -217,7 +217,7 @@ function ProcessPage() {
           shipment_id:        shipmentId,
           return_category:    category,
           product,
-          batch_label:        category === 'UDR' ? (batchLabel || null) : null,
+          batch_label:        batchLabel || null,
           platform_return_id: platformId || null,
           notes:              unitNotes || null,
         },
@@ -417,12 +417,10 @@ function ProcessPage() {
                   disabled={submittingUnit}
                 />
               </div>
-              {category === 'UDR' && (
-                <div style={{ gridColumn: '1 / -1' }}>
-                  <span style={labelStyle}>Batch Label (UDR only)</span>
-                  <input type="text" value={batchLabel} onChange={(e) => setBatchLabel(e.target.value)} placeholder="LOT-XXXXXXXX" style={{ ...inputStyle, width: '100%', fontFamily: 'var(--mono)' }} disabled={submittingUnit} />
-                </div>
-              )}
+              <div style={{ gridColumn: '1 / -1' }}>
+                <span style={labelStyle}>Batch Label (optional)</span>
+                <input type="text" value={batchLabel} onChange={(e) => setBatchLabel(e.target.value)} placeholder="LOT-XXXXXXXX" style={{ ...inputStyle, width: '100%', fontFamily: 'var(--mono)' }} disabled={submittingUnit} />
+              </div>
               <div style={{ gridColumn: '1 / -1' }}>
                 <span style={labelStyle}>Platform Return ID (optional)</span>
                 <input type="text" value={platformId} onChange={(e) => setPlatformId(e.target.value)} style={{ ...inputStyle, width: '100%' }} disabled={submittingUnit} />
