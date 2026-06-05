@@ -184,7 +184,7 @@ function ProcessPage() {
     setInspErr('');
     setInspNotes('');
     setLossDesc('');
-    setUpcFound('');
+    setUpcFound(unit.car_upc || '');
     setWhatFound('');
     if (unit.return_category === 'UDR') {
       setBoxCondition('sealed');
@@ -226,7 +226,11 @@ function ProcessPage() {
       let msg = `✓ ${result.return_unit_id} logged`;
       if (result.car_upc) msg += ` — Car: ${result.car_upc}`;
       setStatusMsg({ text: msg, ok: true });
-      clearUnitForm();
+      // Keep category + product selected for rapid multi-unit logging of the
+      // same product; only clear the per-unit fields. (Piyush, 06-05.)
+      setBatchLabel('');
+      setPlatformId('');
+      setUnitNotes('');
       loadShipment();
     } catch (e) {
       setStatusMsg({ text: e.message || 'Submit failed', ok: false });
