@@ -1,13 +1,15 @@
 'use client';
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, EmptyState, useToast, Combobox } from '@throttle/ui';
-import { Search, ChevronRight, ChevronDown, Link2, MessageSquare, Plus, Check, X, Flag, AlertTriangle, SlidersHorizontal } from 'lucide-react';
+import { Search, ChevronRight, ChevronDown, Link2, MessageSquare, Plus, Check, X, Flag, AlertTriangle, SlidersHorizontal, Hash, Settings2, Lock, BarChart2 } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../../../lib/docketopsFetch.js';
 import { StatusBadge } from '../../../components/StatusBadge.js';
 import { PriorityBadge } from '../../../components/PriorityBadge.js';
 import { DatePicker } from '../../../components/DatePicker.js';
 import { TaskDrawer } from '../../../components/TaskDrawer.js';
+import { SpaceSettings } from '../../../components/SpaceSettings.js';
 import { STATUSES, SETTABLE_STATUSES, PRIORITIES, effectiveDeadline, isOverdue } from '../../../lib/tasks.js';
 import { fmtDate } from '../../../lib/format.js';
 
@@ -16,23 +18,32 @@ import { fmtDate } from '../../../lib/format.js';
 const COLS = [
   { w: 60 },   // ID
   {},          // Title (flex)
-  { w: 128 },  // Team
-  { w: 120 },  // Owner (first name; full on hover)
-  { w: 118 },  // Collaborators
-  { w: 110 },  // Status
-  { w: 60 },   // Pri
-  { w: 156 },  // Deadline
-  { w: 64 },   // Meta
+  { w: 124 },  // Team
+  { w: 124 },  // Program
+  { w: 110 },  // Owner (first name; full on hover)
+  { w: 108 },  // Collaborators
+  { w: 104 },  // Status
+  { w: 56 },   // Pri
+  { w: 150 },  // Deadline
+  { w: 56 },   // Meta
 ];
 const ROW_PAD = 12; // horizontal inset shared by the tray and the board so columns align
 
 export default function TasksPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
+  const router = useRouter();
+  const search = useSearchParams();
+
+  // Current space (ClickUp-style): ?space=<id> scopes the whole list; absent = General.
+  const spaceParam = search.get('space');
+  const spaceId = spaceParam && spaceParam !== 'new' ? spaceParam : '';
 
   const [tasks, setTasks] = useState([]);
   const [departments, setDepartments] = useState([]);
   const [employees, setEmployees] = useState([]);
+  const [programs, setPrograms] = useState([]);
+  const [spaces, setSpaces] = useState([]);
   const [loading, setLoading] = useState(true);
   const [collapsed, setCollapsed] = useState({});
 
@@ -41,6 +52,7 @@ export default function TasksPage() {
   const [departmentId, setDepartmentId] = useState('');
   const [employeeId, setEmployeeId] = useState('');
   const [priority, setPriority] = useState('');
+  const [programId, setProgramId] = useState('');
   const [overdue, setOverdue] = useState(false);
   const [revised, setRevised] = useState(false);
   const [mine, setMine] = useState(false);
@@ -49,38 +61,56 @@ export default function TasksPage() {
   const [q, setQ] = useState('');
   const [filterOpen, setFilterOpen] = useState(false);
   const [drawerId, setDrawerId] = useState(null);
+  const [newSpaceOpen, setNewSpaceOpen] = useState(false);
+  const [spaceSettingsOpen, setSpaceSettingsOpen] = useState(false);
 
   const empMap = useMemo(() => Object.fromEntries(employees.map(e => [e.id, e.full_name])), [employees]);
   const deptMap = useMemo(() => Object.fromEntries(departments.map(d => [d.id, d.name])), [departments]);
   const teamOpts = useMemo(() => departments.map(d => ({ value: d.id, label: d.name })), [departments]);
   const empOpts = useMemo(() => employees.map(e => ({ value: e.id, label: e.full_name })), [employees]);
+  // Program cell options carry a "none" sentinel so a selection can clear the program
+  // (the Combobox emits onChange(null) mid-type, which we must ignore — see Program cell).
+  const programOpts = useMemo(() => programs.map(p => ({ value: p.id, label: p.name })), [programs]);
+  const programCellOpts = useMemo(() => [{ value: '', label: '— No program —' }, ...programOpts], [programOpts]);
   const statusOpts = STATUSES.map(s => ({ value: s.key, label: s.label }));
   const prioOpts = PRIORITIES.map(p => ({ value: p.key, label: p.label }));
   const statusCellOpts = [...SETTABLE_STATUSES.map(s => ({ value: s.key, label: s.label })), { value: 'abandoned', label: 'Abandon…' }];
-  const groupOpts = [{ value: 'none', label: 'No grouping' }, { value: 'person', label: 'Group by owner' }, { value: 'department', label: 'Group by team' }];
+  const groupOpts = [{ value: 'none', label: 'No grouping' }, { value: 'person', label: 'Group by owner' }, { value: 'department', label: 'Group by team' }, { value: 'program', label: 'Group by program' }];
+
+  const currentSpace = useMemo(() => spaces.find(s => s.id === spaceId) || null, [spaces, spaceId]);
 
   useEffect(() => {
     if (!session) return;
     Promise.all([
       docketopsGet('getDepartments', {}, session).catch(() => []),
       docketopsGet('getEmployees', {}, session).catch(() => []),
-    ]).then(([d, e]) => { setDepartments(d || []); setEmployees(e || []); });
+      docketopsGet('getPrograms', {}, session).catch(() => []),
+      docketopsGet('getSpaces', {}, session).catch(() => []),
+    ]).then(([d, e, p, s]) => { setDepartments(d || []); setEmployees(e || []); setPrograms(p || []); setSpaces(s || []); });
   }, [session]);
+
+  // The sidebar "New space" item routes to ?space=new — open the create modal for it.
+  useEffect(() => { setNewSpaceOpen(spaceParam === 'new'); }, [spaceParam]);
 
   const load = useCallback(async () => {
     if (!session) return;
     setLoading(true);
     try {
       const params = {
-        status, department_id: departmentId, employee_id: employeeId, priority,
-        overdue: overdue ? '1' : '', revised: revised ? '1' : '', lens: mine ? 'mine' : '',
+        space_id: spaceId, status, department_id: departmentId, employee_id: employeeId, priority,
+        program_id: programId, overdue: overdue ? '1' : '', revised: revised ? '1' : '', lens: mine ? 'mine' : '',
       };
       const r = await docketopsGet('getTasks', params, session);
       setTasks(Array.isArray(r) ? r : []);
     } catch (e) { showToast(e.message || 'Failed to load tasks', 'error'); }
     finally { setLoading(false); }
-  }, [session, status, departmentId, employeeId, priority, overdue, revised, mine, showToast]);
+  }, [session, spaceId, status, departmentId, employeeId, priority, programId, overdue, revised, mine, showToast]);
   useEffect(() => { load(); }, [load]);
+
+  function refreshSpaces() {
+    docketopsGet('getSpaces', {}, session).then(s => setSpaces(s || [])).catch(() => {});
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event('docket:spaces-changed'));
+  }
 
   // Client-side multi-token search: every whitespace token must match somewhere in
   // task_no / title / owner / team / creator / collaborator names.
@@ -92,10 +122,10 @@ export default function TasksPage() {
     return tokens.every(tok => hay.includes(tok));
   }, [tokens]);
 
-  const activeFilterCount = [status, departmentId, employeeId, priority].filter(Boolean).length
+  const activeFilterCount = [status, departmentId, employeeId, priority, programId].filter(Boolean).length
     + [overdue, revised, mine].filter(Boolean).length;
   function clearFilters() {
-    setStatus(''); setDepartmentId(''); setEmployeeId(''); setPriority('');
+    setStatus(''); setDepartmentId(''); setEmployeeId(''); setPriority(''); setProgramId('');
     setOverdue(false); setRevised(false); setMine(false);
   }
 
@@ -114,9 +144,18 @@ export default function TasksPage() {
         const patch = { [field]: value || null };
         if (field === 'owner_employee_id') patch.owner_name = empMap[value] || null;
         if (field === 'department_id') patch.department_name = deptMap[value] || null;
+        if (field === 'program_id') patch.program = programs.find(p => p.id === value) || null;
         patchRow(task.id, patch);
       }
     } catch (e) { showToast(e.message || 'Save failed', 'error'); load(); }
+  }
+  // Inline "create on type": a Program name not in the list is created, then assigned.
+  async function createAndAssignProgram(task, name) {
+    try {
+      const prog = await docketopsPost('createProgram', { name }, session);
+      setPrograms(ps => ps.some(p => p.id === prog.id) ? ps : [...ps, prog].sort((a, b) => a.name.localeCompare(b.name)));
+      await saveField(task, 'program_id', prog.id);
+    } catch (e) { showToast(e.message || 'Failed to add program', 'error'); }
   }
   async function abandonInline(task, reason) {
     if (!reason || !reason.trim()) return;
@@ -161,17 +200,34 @@ export default function TasksPage() {
 
   const groups = useMemo(() => {
     if (groupBy === 'none') return [{ key: 'all', label: null, rows: boardRows }];
-    const keyOf = (t) => groupBy === 'person' ? (t.owner_name || 'Unassigned') : (t.department_name || 'No team');
+    const keyOf = (t) => groupBy === 'person' ? (t.owner_name || 'Unassigned')
+      : groupBy === 'program' ? (t.program?.name || 'No program')
+      : (t.department_name || 'No team');
     const m = new Map();
     for (const t of boardRows) { const k = keyOf(t); if (!m.has(k)) m.set(k, []); m.get(k).push(t); }
     return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([label, rows]) => ({ key: label, label, rows }));
   }, [boardRows, groupBy]);
 
-  const rowProps = { saveField, abandonInline, reviseInline, addSubtask, addCollab, removeCollab, childrenByParent, openDrawer: setDrawerId, teamOpts, empOpts, statusCellOpts, prioOpts };
+  const rowProps = { saveField, abandonInline, reviseInline, addSubtask, addCollab, removeCollab, childrenByParent, openDrawer: setDrawerId, teamOpts, empOpts, statusCellOpts, prioOpts, programCellOpts, createAndAssignProgram };
 
   return (
     <div>
-      <QuickCapture session={session} onCreated={load} showToast={showToast} />
+      {/* Space header — only when inside a private space (General needs no header). */}
+      {currentSpace && currentSpace.is_private && (
+        <div style={spaceHeader}>
+          <span style={spaceTitle}><Lock size={13} style={{ color: 'var(--docket-accent)' }} /> {currentSpace.name}</span>
+          <button className="dk-press" style={spaceGear} title="Space dashboard" onClick={() => router.push('/dashboard?space=' + currentSpace.id)}>
+            <BarChart2 size={14} />
+          </button>
+          {currentSpace.is_owner && (
+            <button className="dk-press" style={spaceGear} title="Space settings" onClick={() => setSpaceSettingsOpen(true)}>
+              <Settings2 size={14} />
+            </button>
+          )}
+        </div>
+      )}
+
+      <QuickCapture session={session} spaceId={spaceId} onCreated={load} showToast={showToast} />
 
       {/* Search + a single Filter button (consolidates the old 9-control bar). */}
       <div style={controlBar}>
@@ -188,8 +244,8 @@ export default function TasksPage() {
             <FilterPopover
               onClose={() => setFilterOpen(false)}
               {...{ status, setStatus, departmentId, setDepartmentId, employeeId, setEmployeeId, priority, setPriority,
-                overdue, setOverdue, revised, setRevised, mine, setMine, groupBy, setGroupBy,
-                statusOpts, teamOpts, empOpts, prioOpts, groupOpts, activeFilterCount, clearFilters }}
+                programId, setProgramId, overdue, setOverdue, revised, setRevised, mine, setMine, groupBy, setGroupBy,
+                statusOpts, teamOpts, empOpts, prioOpts, programOpts, groupOpts, activeFilterCount, clearFilters }}
             />
           )}
         </div>
@@ -241,13 +297,58 @@ export default function TasksPage() {
         <TaskDrawer id={drawerId} session={session} departments={departments} employees={employees}
           onClose={() => setDrawerId(null)} onMutated={load} />
       )}
+
+      {newSpaceOpen && (
+        <NewSpaceModal session={session} showToast={showToast}
+          onClose={() => { setNewSpaceOpen(false); if (spaceParam === 'new') router.push('/tasks'); }}
+          onCreated={(id) => { refreshSpaces(); router.push('/tasks?space=' + id); }} />
+      )}
+      {spaceSettingsOpen && currentSpace && (
+        <SpaceSettings space={currentSpace} session={session} employees={employees} showToast={showToast}
+          onClose={() => setSpaceSettingsOpen(false)}
+          onChanged={() => { refreshSpaces(); }}
+          onArchived={() => { setSpaceSettingsOpen(false); refreshSpaces(); router.push('/tasks'); }} />
+      )}
+    </div>
+  );
+}
+
+function NewSpaceModal({ session, onClose, onCreated, showToast }) {
+  const [name, setName] = useState('');
+  const [saving, setSaving] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    function onKey(e) { if (e.key === 'Escape') onClose(); }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  async function create() {
+    const n = name.trim(); if (!n || saving) return;
+    setSaving(true);
+    try { const r = await docketopsPost('createSpace', { name: n }, session); onCreated(r.id); }
+    catch (e) { showToast(e.message || 'Failed to create space', 'error'); setSaving(false); }
+  }
+  return (
+    <div style={modalBackdrop} onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div ref={ref} style={modalCard}>
+        <div style={modalTitle}><Lock size={14} style={{ color: 'var(--docket-accent)' }} /> New space</div>
+        <p style={modalHint}>A private space — only members you add can see its tasks (even admins can’t, unless added).</p>
+        <input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Space name (e.g. Skunkworks)"
+          onKeyDown={e => { if (e.key === 'Enter') create(); }} style={{ ...finput, marginTop: 4 }} />
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14 }}>
+          <button className="dk-press" style={clearBtn} onClick={onClose}>Cancel</button>
+          <button className="dk-press" style={{ ...createBtn, opacity: name.trim() && !saving ? 1 : 0.5 }} disabled={!name.trim() || saving} onClick={create}>
+            {saving ? '…' : 'Create space'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
 
 function FilterPopover({ onClose, status, setStatus, departmentId, setDepartmentId, employeeId, setEmployeeId,
-  priority, setPriority, overdue, setOverdue, revised, setRevised, mine, setMine, groupBy, setGroupBy,
-  statusOpts, teamOpts, empOpts, prioOpts, groupOpts, activeFilterCount, clearFilters }) {
+  priority, setPriority, programId, setProgramId, overdue, setOverdue, revised, setRevised, mine, setMine, groupBy, setGroupBy,
+  statusOpts, teamOpts, empOpts, prioOpts, programOpts, groupOpts, activeFilterCount, clearFilters }) {
   const ref = useRef(null);
   useEffect(() => {
     function onDown(e) { if (ref.current && !ref.current.contains(e.target)) onClose(); }
@@ -275,6 +376,10 @@ function FilterPopover({ onClose, status, setStatus, departmentId, setDepartment
         <Combobox value={priority} options={prioOpts} onChange={setPriority} placeholder="Any priority" allowClear style={finput} />
       </div>
       <div style={fpGroup}>
+        <label style={fpLabel}>Program</label>
+        <Combobox value={programId} options={programOpts} onChange={setProgramId} placeholder="Any program" allowClear style={finput} />
+      </div>
+      <div style={fpGroup}>
         <label style={fpLabel}>Group by</label>
         <Combobox value={groupBy} options={groupOpts} onChange={(v) => setGroupBy(v || 'none')} placeholder="No grouping" allowClear={false} style={finput} />
       </div>
@@ -290,7 +395,7 @@ function FilterPopover({ onClose, status, setStatus, departmentId, setDepartment
   );
 }
 
-function TaskTable({ rows, childrenByParent, saveField, abandonInline, reviseInline, addSubtask, addCollab, removeCollab, openDrawer, teamOpts, empOpts, statusCellOpts, prioOpts }) {
+function TaskTable({ rows, childrenByParent, saveField, abandonInline, reviseInline, addSubtask, addCollab, removeCollab, openDrawer, teamOpts, empOpts, statusCellOpts, prioOpts, programCellOpts, createAndAssignProgram }) {
   // Property cells (team/owner/status/priority) use whole-row edit mode so native
   // Tab walks them in order; comboboxes commit on Tab (commitOnTab). The title and
   // DKT-id open the drawer. Sub-tasks expand as indented rows under their parent
@@ -385,6 +490,15 @@ function TaskTable({ rows, childrenByParent, saveField, abandonInline, reviseInl
           {isEdit && ed ? <div style={{ minWidth: 110 }}><Combobox autoFocus={focusField === 'department_id'} value={t.department_id || ''} options={teamOpts} placeholder="Team…" commitOnTab style={cellInput} onChange={(v, opt) => { if (opt) saveField(t, 'department_id', v); }} /></div>
             : <Disp field="department_id">{t.department_name || <Muted>set team</Muted>}</Disp>}
         </td>
+        <td style={td}>
+          {/* Program: pick from the global list OR type a new name + Enter to create it.
+              The Combobox emits onChange(null) while typing → ignore it; act only on a
+              real option (the "— No program —" sentinel clears). */}
+          {isEdit && ed ? <div style={{ minWidth: 110 }}><Combobox autoFocus={focusField === 'program_id'} value={t.program_id || ''} options={programCellOpts} placeholder="Program…" allowClear={false} commitOnTab style={cellInput}
+              onChange={(v, opt) => { if (!opt) return; if (!opt.value) saveField(t, 'program_id', null); else saveField(t, 'program_id', opt.value); }}
+              onKeyDown={(e) => { if (e.key === 'Enter') { const text = (e.target.value || '').trim(); if (text && !programCellOpts.some(o => o.label.toLowerCase() === text.toLowerCase())) { e.preventDefault(); createAndAssignProgram(t, text); } } }} /></div>
+            : <Disp field="program_id">{t.program ? <span style={programChip}>{t.program.name}</span> : <Muted>set program</Muted>}</Disp>}
+        </td>
         <td style={{ ...td, whiteSpace: 'nowrap' }}>
           {isEdit && ed ? <div style={{ minWidth: 120 }}><Combobox autoFocus={focusField === 'owner_employee_id'} value={t.owner_employee_id || ''} options={empOpts} placeholder="Owner…" commitOnTab style={cellInput} onChange={(v, opt) => { if (opt) saveField(t, 'owner_employee_id', v); }} /></div>
             : <Disp field="owner_employee_id">{t.owner_name ? <span title={t.owner_name}>{firstName(t.owner_name)}</span> : <Muted>set owner</Muted>}</Disp>}
@@ -438,7 +552,7 @@ function TaskTable({ rows, childrenByParent, saveField, abandonInline, reviseInl
       <table style={table}>
         <colgroup>{COLS.map((c, i) => <col key={i} style={c.w ? { width: c.w } : undefined} />)}</colgroup>
         <thead><tr>
-          <th style={th}>ID</th><th style={th}>Title</th><th style={th}>Team</th>
+          <th style={th}>ID</th><th style={th}>Title</th><th style={th}>Team</th><th style={th}>Program</th>
           <th style={th}>Owner</th><th style={th}>People</th><th style={th}>Status</th>
           <th style={th}>Pri</th><th style={th}>Deadline</th><th style={th}></th>
         </tr></thead>
@@ -451,7 +565,7 @@ function TaskTable({ rows, childrenByParent, saveField, abandonInline, reviseInl
                 out.push(
                   <tr key={'add-' + t.id} className="dk-task-row">
                     <td style={td}></td>
-                    <td style={td} colSpan={8}>
+                    <td style={td} colSpan={9}>
                       <span style={subRow}>
                         <span style={branchGlyph}>↳</span>
                         <input autoFocus value={subTitle} onChange={e => setSubTitle(e.target.value)} placeholder="Sub-task title, Enter to add…" style={subRowInput}
@@ -576,7 +690,7 @@ function DeadlineCell({ task, editable, od, onFirstSet, onRevise }) {
   );
 }
 
-function QuickCapture({ session, onCreated, showToast }) {
+function QuickCapture({ session, spaceId, onCreated, showToast }) {
   const [title, setTitle] = useState('');
   const [saving, setSaving] = useState(false);
   const ref = useRef(null);
@@ -584,7 +698,8 @@ function QuickCapture({ session, onCreated, showToast }) {
     const t = title.trim();
     if (!t || saving) return;
     setSaving(true);
-    try { await docketopsPost('createTask', { title: t }, session); setTitle(''); await onCreated(); ref.current?.focus(); }
+    // Quick-captured tasks land in the space currently being viewed (General if none).
+    try { await docketopsPost('createTask', { title: t, space_id: spaceId || undefined }, session); setTitle(''); await onCreated(); ref.current?.focus(); }
     catch (e) { showToast(e.message || 'Create failed', 'error'); }
     finally { setSaving(false); }
   }
@@ -655,3 +770,13 @@ const popBtnGhost = { display: 'inline-flex', alignItems: 'center', background: 
 function toggleBtn(on) {
   return { background: on ? 'var(--docket-accent)' : 'var(--surface-2)', color: on ? 'var(--accent-fg)' : 'var(--text-3)', border: `1px solid ${on ? 'var(--docket-accent)' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', padding: '6px 12px', fontFamily: 'var(--font-cond)', fontSize: 11, fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.05em' };
 }
+
+const spaceHeader = { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 };
+const spaceTitle = { display: 'inline-flex', alignItems: 'center', gap: 7, fontFamily: 'var(--font-cond)', fontSize: 17, fontWeight: 700, letterSpacing: '0.03em', textTransform: 'uppercase', color: 'var(--text-1)' };
+const spaceGear = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, background: 'var(--surface-2)', color: 'var(--text-3)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', cursor: 'pointer' };
+const programChip = { display: 'inline-block', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom', fontSize: 11, color: 'var(--docket-accent)', background: 'var(--accent-bg)', border: '1px solid rgba(242,205,26,0.22)', borderRadius: 'var(--radius-full)', padding: '1px 9px' };
+const createBtn = { background: 'var(--docket-accent)', color: 'var(--accent-fg)', border: '1px solid var(--docket-accent)', borderRadius: 'var(--radius-sm)', padding: '7px 16px', fontFamily: 'var(--font-cond)', fontSize: 12, fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.04em' };
+const modalBackdrop = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: '14vh', zIndex: 80 };
+const modalCard = { width: 420, maxWidth: '92vw', background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-lg)', padding: 18, boxShadow: '0 18px 50px rgba(0,0,0,0.5)' };
+const modalTitle = { display: 'flex', alignItems: 'center', gap: 7, fontFamily: 'var(--font-cond)', fontSize: 15, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-1)' };
+const modalHint = { fontSize: 12, color: 'var(--text-3)', margin: '6px 0 0', lineHeight: 1.5 };

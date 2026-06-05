@@ -1,9 +1,10 @@
 'use client';
-import { useMemo, useState } from 'react';
-import { usePathname, useRouter } from 'next/navigation';
+import { useMemo, useState, useEffect, useCallback } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { RequireAuth, useAuth } from '@throttle/auth';
 import { Sidebar, Spinner, Topbar, useSearchShortcut } from '@throttle/ui';
-import { NAV_GROUPS, filterNavByPerms } from '../../lib/nav.js';
+import { buildNavGroups } from '../../lib/nav.js';
+import { docketopsGet } from '../../lib/docketopsFetch.js';
 
 export default function AuthLayout({ children }) {
   return (
@@ -14,14 +15,35 @@ export default function AuthLayout({ children }) {
 }
 
 function AuthLayoutInner({ children }) {
-  const { user, role, perms, signOut, loading } = useAuth();
+  const { user, role, perms, session, signOut, loading } = useAuth();
   const pathname  = usePathname();
+  const search    = useSearchParams();
   const router    = useRouter();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
+  const [spaces, setSpaces] = useState([]);
 
   useSearchShortcut();
 
-  const navGroups = useMemo(() => filterNavByPerms(NAV_GROUPS, perms || {}), [perms]);
+  // Accessible spaces drive the sidebar (General + owned/member private spaces).
+  const loadSpaces = useCallback(() => {
+    if (!session) return;
+    docketopsGet('getMe', {}, session).then(me => setSpaces(me?.spaces || [])).catch(() => {});
+  }, [session]);
+  useEffect(() => { loadSpaces(); }, [loadSpaces]);
+  // Re-fetch when a space is created/renamed/archived (signalled via a window event).
+  useEffect(() => {
+    const h = () => loadSpaces();
+    window.addEventListener('docket:spaces-changed', h);
+    return () => window.removeEventListener('docket:spaces-changed', h);
+  }, [loadSpaces]);
+
+  const navGroups = useMemo(() => buildNavGroups(perms || {}, spaces), [perms, spaces]);
+
+  // The Sidebar matches active by route string. Space items carry the ?space= query,
+  // so the active key must include it when we're on the Tasks list inside a space.
+  const spaceParam = search.get('space');
+  const activeKey = pathname === '/tasks' && spaceParam && spaceParam !== 'new'
+    ? `/tasks?space=${spaceParam}` : pathname;
 
   if (loading && !user) return <Spinner />;
 
@@ -32,7 +54,7 @@ function AuthLayoutInner({ children }) {
     <div style={{ display:'flex', height:'100dvh', overflow:'hidden' }}>
       <Sidebar
         groups={navGroups}
-        activeTab={pathname}
+        activeTab={activeKey}
         onTabSelect={(item) => router.push(item.route)}
         userLabel={displayName}
         userInitial={initial}

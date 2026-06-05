@@ -1,4 +1,4 @@
-import { LayoutDashboard, ListChecks, ShieldCheck, UserCog, Settings } from 'lucide-react';
+import { LayoutDashboard, ListChecks, ShieldCheck, UserCog, Settings, Hash, Plus, FolderLock } from 'lucide-react';
 
 export const NAV_GROUPS = [
   {
@@ -26,4 +26,22 @@ export function filterNavByPerms(groups, perms) {
       items: (g.items || []).filter(it => !it.requires || perms?.[it.requires]),
     }))
     .filter(g => g.items.length > 0);
+}
+
+// Build the live nav: the static base, plus the caller's accessible private spaces as
+// ClickUp-style items under TASKS (each routes to /tasks?space=<id>), a "New space"
+// affordance, and an admin "Spaces" item (break-glass) under ADMIN. RULE-DOCKET-003.
+export function buildNavGroups(perms, spaces = []) {
+  const base = filterNavByPerms(NAV_GROUPS, perms);
+  const privates = (spaces || []).filter(s => s.is_private);
+  return base.map(g => {
+    if (g.id === 'tasks') {
+      const spaceItems = privates.map(s => ({ id: 'space-' + s.id, label: s.name, route: '/tasks?space=' + s.id, icon: Hash }));
+      return { ...g, items: [...g.items, ...spaceItems, { id: 'space-new', label: 'New space', route: '/tasks?space=new', icon: Plus }] };
+    }
+    if (g.id === 'admin' && perms?.docket_admin) {
+      return { ...g, items: [...g.items, { id: 'admin-spaces', label: 'Spaces', route: '/admin/spaces', icon: FolderLock }] };
+    }
+    return g;
+  });
 }

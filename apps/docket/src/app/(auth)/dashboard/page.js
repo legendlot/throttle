@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
@@ -11,37 +11,48 @@ export default function DashboardPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
   const router = useRouter();
+  const search = useSearchParams();
+  const spaceId = search.get('space') || '';   // '' = General (org-wide)
   const [stats, setStats] = useState(null);
+  const [spaceName, setSpaceName] = useState('');
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     if (!session) return;
     setLoading(true);
-    try { setStats(await docketopsGet('getDashboard', {}, session)); }
+    try { setStats(await docketopsGet('getDashboard', { space_id: spaceId }, session)); }
     catch (e) { showToast(e.message || 'Failed to load dashboard', 'error'); }
     finally { setLoading(false); }
-  }, [session, showToast]);
+  }, [session, spaceId, showToast]);
   useEffect(() => { load(); }, [load]);
+  // Resolve the space name for the heading (membership already enforced server-side).
+  useEffect(() => {
+    if (!session || !spaceId) { setSpaceName(''); return; }
+    docketopsGet('getSpaces', {}, session).then(s => setSpaceName((s || []).find(x => x.id === spaceId)?.name || '')).catch(() => {});
+  }, [session, spaceId]);
 
-  if (perms && !(perms.docket_view_all || perms.docket_admin))
+  // General dashboard is org-wide (view_all-gated client-side); a private-space dashboard
+  // is open to its members — the worker enforces membership, so don't block here.
+  if (!spaceId && perms && !(perms.docket_view_all || perms.docket_admin))
     return <div style={{ color: 'var(--text-3)' }}>Requires org-wide visibility (docket_view_all).</div>;
   if (loading) return <Spinner />;
   if (!stats) return null;
+  const linkSuffix = spaceId ? `&space=${spaceId}` : '';
 
   const byStatus = STATUSES.map(s => ({ name: s.label, key: s.key, value: Number(stats.by_status?.[s.key] || 0), color: s.color }));
   const openTotal = byStatus.filter(s => s.key !== 'done' && s.key !== 'abandoned').reduce((a, b) => a + b.value, 0);
 
   return (
     <div>
-      <h1 style={h1}>Dashboard</h1>
-      <p style={sub}>Org-wide task review.</p>
+      <h1 style={h1}>{spaceName ? `${spaceName} · Dashboard` : 'Dashboard'}</h1>
+      <p style={sub}>{spaceName ? 'Space task review.' : 'Org-wide task review.'}</p>
 
       <div style={tileRow}>
-        <Tile label="Overdue" value={stats.overdue} accent="var(--state-error-fg)" onClick={() => router.push('/tasks?overdue=1')} />
+        <Tile label="Overdue" value={stats.overdue} accent="var(--state-error-fg)" onClick={() => router.push(`/tasks?overdue=1${linkSuffix}`)} />
         <Tile label="Due ≤ 7 days" value={stats.due_soon} accent="var(--state-warning-fg)" />
         <Tile label="Open" value={openTotal} />
         <Tile label="Done (30d)" value={stats.completed_30d} accent="var(--state-success-fg)" />
-        <Tile label="Deadline revised" value={stats.revised} accent="var(--state-warning-fg)" onClick={() => router.push('/tasks?revised=1')} />
+        <Tile label="Deadline revised" value={stats.revised} accent="var(--state-warning-fg)" onClick={() => router.push(`/tasks?revised=1${linkSuffix}`)} />
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 16 }}>
@@ -71,14 +82,14 @@ export default function DashboardPage() {
         <section style={card}>
           <div style={sectionTitle}>By team</div>
           <Table rows={stats.by_department || []} nameKey="dept_name"
-            onRow={(r) => router.push(`/tasks?department_id=${r.dept_id}`)} />
+            onRow={(r) => router.push(`/tasks?department_id=${r.dept_id}${linkSuffix}`)} />
         </section>
       </div>
 
       <section style={{ ...card, marginTop: 14 }}>
         <div style={sectionTitle}>By person (owner)</div>
         <Table rows={stats.by_person || []} nameKey="emp_name"
-          onRow={(r) => router.push(`/tasks?employee_id=${r.emp_id}`)} showBlocked={false} />
+          onRow={(r) => router.push(`/tasks?employee_id=${r.emp_id}${linkSuffix}`)} showBlocked={false} />
       </section>
     </div>
   );

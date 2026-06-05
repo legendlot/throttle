@@ -221,6 +221,18 @@ async function getPrograms(url, auth, env) {
   return ok(r.data || []);
 }
 async function getSpaces(url, auth, env) { return ok(await accessibleSpaces(auth, env)); }
+async function getSpaceMembers(url, auth, env) {
+  const spaceId = url.searchParams.get('space_id');
+  if (!spaceId) return err('space_id required', 400);
+  const space = await loadSpace(spaceId, env);
+  if (!space) return err('space_not_found', 404);
+  if (!(await canAccessSpace(auth, space, env)) && !isAdmin(auth)) return err('forbidden_space', 403);
+  const mr = await sbDocket(`/rest/v1/space_members?space_id=eq.${enc(spaceId)}&select=user_id,added_at&order=added_at.asc`, env);
+  const ids = uniq((mr.data || []).map(m => m.user_id));
+  const up = ids.length ? await sbStore(`/rest/v1/users_profile?id=in.${inList(ids)}&select=id,full_name`, env) : { data: [] };
+  const name = {}; (up.data || []).forEach(u => { name[u.id] = u.full_name; });
+  return ok((mr.data || []).map(m => ({ user_id: m.user_id, full_name: name[m.user_id] || null, is_owner: m.user_id === space.owner_user_id })));
+}
 // Admin break-glass list — metadata only (names/owner/counts), never task contents.
 async function getAllSpaces(url, auth, env) {
   const gate = requireAdmin(auth); if (gate) return gate;
@@ -847,7 +859,7 @@ async function recoverSpace(body, auth, env) {
 const GET_ACTIONS = {
   getMe, getDepartments, getEmployees,
   getTasks, getTask, getDashboard,
-  getPrograms, getSpaces, getAllSpaces,
+  getPrograms, getSpaces, getSpaceMembers, getAllSpaces,
   getDocketRoles, getDocketUsers,
 };
 const POST_ACTIONS = {
