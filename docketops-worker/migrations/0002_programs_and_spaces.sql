@@ -68,7 +68,11 @@ alter table docket.tasks add column space_id uuid references docket.spaces(id);
 alter table docket.tasks add column program_id uuid references docket.programs(id);
 update docket.tasks set space_id = (select id from docket.spaces where is_default) where space_id is null;
 alter table docket.tasks alter column space_id set not null;
-alter table docket.tasks alter column space_id set default (select id from docket.spaces where is_default);
+-- DEFAULT can't be a subquery → set General's literal id via dynamic SQL.
+do $$ declare v_general uuid; begin
+  select id into v_general from docket.spaces where is_default;
+  execute format('alter table docket.tasks alter column space_id set default %L', v_general);
+end $$;
 create index docket_tasks_space_idx on docket.tasks(space_id);
 create index docket_tasks_program_idx on docket.tasks(program_id);
 

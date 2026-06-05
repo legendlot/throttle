@@ -21,13 +21,18 @@ function AuthLayoutInner({ children }) {
   const router    = useRouter();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [spaces, setSpaces] = useState([]);
+  const [canViewDashboard, setCanViewDashboard] = useState(false);
 
   useSearchShortcut();
 
   // Accessible spaces drive the sidebar (General + owned/member private spaces).
+  // getMe also returns can_view_dashboard (RULE-DOCKET-006) → gates the Dashboard nav item.
   const loadSpaces = useCallback(() => {
     if (!session) return;
-    docketopsGet('getMe', {}, session).then(me => setSpaces(me?.spaces || [])).catch(() => {});
+    docketopsGet('getMe', {}, session).then(me => {
+      setSpaces(me?.spaces || []);
+      setCanViewDashboard(!!me?.can_view_dashboard);
+    }).catch(() => {});
   }, [session]);
   useEffect(() => { loadSpaces(); }, [loadSpaces]);
   // Re-fetch when a space is created/renamed/archived (signalled via a window event).
@@ -37,7 +42,9 @@ function AuthLayoutInner({ children }) {
     return () => window.removeEventListener('docket:spaces-changed', h);
   }, [loadSpaces]);
 
-  const navGroups = useMemo(() => buildNavGroups(perms || {}, spaces), [perms, spaces]);
+  const navGroups = useMemo(
+    () => buildNavGroups({ ...(perms || {}), _dashboard: canViewDashboard }, spaces),
+    [perms, spaces, canViewDashboard]);
 
   // The Sidebar matches active by route string. Space items carry the ?space= query,
   // so the active key must include it when we're on the Tasks list inside a space.

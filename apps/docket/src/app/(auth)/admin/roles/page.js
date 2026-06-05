@@ -1,8 +1,8 @@
 'use client';
 import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
-import { Spinner, useToast } from '@throttle/ui';
-import { Plus, ArrowLeft, ShieldCheck } from 'lucide-react';
+import { Spinner, useToast, Combobox } from '@throttle/ui';
+import { Plus, ArrowLeft, ShieldCheck, LayoutDashboard, X, Globe } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../../../../lib/docketopsFetch.js';
 
 // Docket permission matrix — 2 boolean keys. Define unlimited custom roles from
@@ -89,7 +89,10 @@ export default function RolesPage() {
       </div>
 
       {view === 'list' ? (
-        loading ? <Spinner /> : (
+        <>
+          <DashboardSharingCard session={session} />
+          <div style={{ ...lbl, marginBottom: 8 }}>Roles</div>
+          {loading ? <Spinner /> : (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             {roles.map((r) => (
               <div key={r.role_key} style={card}>
@@ -111,7 +114,8 @@ export default function RolesPage() {
               </div>
             ))}
           </div>
-        )
+          )}
+        </>
       ) : (
         <div style={card}>
           <div style={cardHead}><span>{editKey ? `Edit ${editKey}` : 'New Role'}</span></div>
@@ -161,6 +165,106 @@ export default function RolesPage() {
     </div>
   );
 }
+
+// ── Dashboard sharing (RULE-DOCKET-006) ─────────────────────────────────────
+// Decouples who can see the founder dashboard from docket_view_all: a persistent
+// "visible to everyone" toggle + per-person grants. Admin-only (page already gated).
+function DashboardSharingCard({ session }) {
+  const { showToast } = useToast();
+  const [pub, setPub] = useState(false);
+  const [viewers, setViewers] = useState([]);
+  const [employees, setEmployees] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [pick, setPick] = useState('');
+
+  const load = useCallback(async () => {
+    if (!session) return;
+    setLoading(true);
+    try {
+      const [s, emps] = await Promise.all([
+        docketopsGet('getDashboardSharing', {}, session),
+        docketopsGet('getEmployees', {}, session),
+      ]);
+      setPub(!!s?.public);
+      setViewers(Array.isArray(s?.viewers) ? s.viewers : []);
+      // Only employees with a login can be granted (grant keys on auth user_id).
+      setEmployees((Array.isArray(emps) ? emps : []).filter((e) => e.auth_user_id));
+    } catch (e) { showToast(e.message || 'Failed to load dashboard sharing', 'error'); }
+    finally { setLoading(false); }
+  }, [session, showToast]);
+  useEffect(() => { load(); }, [load]);
+
+  async function togglePublic() {
+    setBusy(true);
+    try { await docketopsPost('setDashboardPublic', { data: { value: !pub } }, session); setPub((p) => !p); }
+    catch (e) { showToast(e.message || 'Failed to update', 'error'); }
+    finally { setBusy(false); }
+  }
+  async function addViewer(userId) {
+    if (!userId) return;
+    setBusy(true);
+    try { await docketopsPost('addDashboardViewer', { data: { user_id: userId } }, session); setPick(''); await load(); }
+    catch (e) { showToast(e.message || 'Failed to add', 'error'); }
+    finally { setBusy(false); }
+  }
+  async function removeViewer(userId) {
+    setBusy(true);
+    try { await docketopsPost('removeDashboardViewer', { data: { user_id: userId } }, session); setViewers((v) => v.filter((x) => x.user_id !== userId)); }
+    catch (e) { showToast(e.message || 'Failed to remove', 'error'); }
+    finally { setBusy(false); }
+  }
+
+  const grantedIds = new Set(viewers.map((v) => v.user_id));
+  const pickOpts = employees.filter((e) => !grantedIds.has(e.auth_user_id)).map((e) => ({ value: e.auth_user_id, label: e.full_name }));
+
+  return (
+    <div style={{ ...card, marginBottom: 22 }}>
+      <div style={cardHead}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}><LayoutDashboard size={15} /> Dashboard sharing</span>
+      </div>
+      <div style={{ padding: '14px 16px' }}>
+        <p style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 14, lineHeight: 1.5, maxWidth: 620 }}>
+          Who can open the founder review <b>Dashboard</b>. Independent of all-tasks visibility — granted people
+          see the org-wide dashboard but still only their own/team/collaborator tasks when they click through.
+        </p>
+
+        {loading ? <Spinner /> : (
+          <>
+            <div style={permRow}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+                <Globe size={14} /> Visible to everyone
+                <span style={{ fontSize: 11, color: 'var(--text-3)' }}>· every current and future employee</span>
+              </span>
+              <button type="button" style={toggleBtn(pub)} onClick={togglePublic} disabled={busy}>{pub ? 'On' : 'Off'}</button>
+            </div>
+
+            <div style={{ marginTop: 16, opacity: pub ? 0.5 : 1 }}>
+              <div style={{ ...lbl, marginBottom: 6 }}>Specific people</div>
+              {pub && <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>Everyone already has access; these grants are kept for when “Visible to everyone” is turned off.</div>}
+              <div style={{ maxWidth: 320, marginBottom: 10 }}>
+                <Combobox value={pick} options={pickOpts} placeholder="Add a person…" allowClear
+                  onChange={(v, opt) => { if (opt) addViewer(v); }} style={input} />
+              </div>
+              {viewers.length === 0
+                ? <div style={{ fontSize: 12, color: 'var(--text-3)' }}>No individual grants. {pub ? '' : 'Only roles with “See all org tasks + the review dashboard” can see it.'}</div>
+                : <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {viewers.map((v) => (
+                      <span key={v.user_id} style={viewerChip}>
+                        {v.full_name || v.user_id}
+                        <button type="button" onClick={() => removeViewer(v.user_id)} disabled={busy} style={chipX} title="Remove"><X size={12} /></button>
+                      </span>
+                    ))}
+                  </div>}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+const viewerChip = { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '4px 6px 4px 10px', fontSize: 12, color: 'var(--text-1)' };
+const chipX = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', border: 'none', color: 'var(--text-3)', cursor: 'pointer', padding: 0 };
 
 const h1 = { fontFamily: 'var(--font-cond)', fontSize: 22, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' };
 const sub = { fontSize: 13, color: 'var(--text-3)', marginTop: 4, maxWidth: 620, lineHeight: 1.5 };

@@ -4,8 +4,10 @@ export const NAV_GROUPS = [
   {
     id: 'tasks', label: 'TASKS', icon: ListChecks,
     items: [
-      // Dashboard is the founder/reviewer review surface — requires org-wide visibility.
-      { id: 'dashboard', label: 'Dashboard', route: '/dashboard', icon: LayoutDashboard, requires: 'docket_view_all' },
+      // Dashboard is the founder/reviewer review surface. Visibility is shareable
+      // (RULE-DOCKET-006): view_all OR the dashboard_public flag OR a per-person grant.
+      // The layout feeds the computed `_dashboard` flag (from getMe.can_view_dashboard).
+      { id: 'dashboard', label: 'Dashboard', route: '/dashboard', icon: LayoutDashboard, requires: '_dashboard' },
       // New tasks are added inline on the list (ClickUp/Asana-style) — no separate form in the nav.
       { id: 'tasks',     label: 'Tasks',     route: '/tasks',     icon: ListChecks },
       // Personal private scratchpad — everyone gets it (no perm gate). RULE-DOCKET-005.

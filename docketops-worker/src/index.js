@@ -14,6 +14,9 @@
  * (mirrors Podium RULE-PODIUM-006 / Snorkel RULE-SNORKEL-002):
  *   - docket_admin    : role/user mgmt + see all + edit/abandon any task
  *   - docket_view_all : org-wide task visibility + review dashboard
+ *   (dashboard is ALSO shareable independently of view_all: a persistent
+ *    docket.settings.dashboard_public flag + per-person docket.dashboard_viewers
+ *    grants — admin-managed in /admin/roles. RULE-DOCKET-006.)
  *   - (no role)       : baseline — create tasks; see own + collaborator + own-dept;
  *                       edit/status/abandon tasks they own/are assigned/created.
  * People + departments are read live from podium.employees / podium.departments.
@@ -117,6 +120,25 @@ function isAdmin(auth)    { return !!auth.permissions?.docket_admin; }
 function canViewAll(auth) { return !!(auth.permissions?.docket_admin || auth.permissions?.docket_view_all); }
 function requireAdmin(auth) { return isAdmin(auth) ? null : err('forbidden_docket_admin', 403); }
 
+// ── Dashboard sharing (RULE-DOCKET-006) ─────────────────────────────────────
+// Dashboard visibility is decoupled from docket_view_all: a persistent global flag
+// (docket.settings.dashboard_public) + per-person grants (docket.dashboard_viewers,
+// keyed on auth user_id). canViewDashboard = view_all OR public OR granted.
+async function dashboardPublic(env) {
+  const r = await sbDocket(`/rest/v1/settings?key=eq.dashboard_public&select=value&limit=1`, env);
+  return !!(r.ok && r.data?.[0]?.value === true);
+}
+async function isDashboardViewer(userId, env) {
+  if (!userId) return false;
+  const r = await sbDocket(`/rest/v1/dashboard_viewers?user_id=eq.${enc(userId)}&select=user_id&limit=1`, env);
+  return !!(r.ok && r.data?.length);
+}
+async function canViewDashboard(auth, env) {
+  if (canViewAll(auth)) return true;
+  if (await dashboardPublic(env)) return true;
+  return isDashboardViewer(auth.userId, env);
+}
+
 // Edit a task's core fields: admin, creator, owner, or assignee.
 function canEditTask(auth, task) {
   return isAdmin(auth)
@@ -196,11 +218,14 @@ async function accessibleSpaces(auth, env) {
 // GET handlers
 // ════════════════════════════════════════════════════════════════════════════
 async function getMe(url, auth, env) {
-  const spaces = await accessibleSpaces(auth, env);
+  const [spaces, can_view_dashboard] = await Promise.all([
+    accessibleSpaces(auth, env),
+    canViewDashboard(auth, env),
+  ]);
   return ok({
     id: auth.userId, email: auth.email, role: auth.role, full_name: auth.fullName,
     permissions: auth.permissions || {}, employee_id: auth.employeeId, department_id: auth.departmentId,
-    spaces,
+    spaces, can_view_dashboard,
   });
 }
 async function getDepartments(url, auth, env) {
@@ -393,8 +418,9 @@ async function getDashboard(url, auth, env) {
   const spaceId = url.searchParams.get('space_id') || await defaultSpaceId(env);
   const space = await loadSpace(spaceId, env);
   if (!space) return err('space_not_found', 404);
-  // General dashboard is org-wide → view_all-gated (as V1); a private space's dashboard is open to its members.
-  if (space.is_default) { if (!canViewAll(auth)) return err('forbidden_docket_view_all', 403); }
+  // General dashboard is org-wide → shareable (view_all, or the dashboard_public flag, or a
+  // per-person grant — RULE-DOCKET-006); a private space's dashboard is open to its members.
+  if (space.is_default) { if (!(await canViewDashboard(auth, env))) return err('forbidden_dashboard', 403); }
   else { if (!(await canAccessSpace(auth, space, env))) return err('forbidden_space', 403); }
   const r = await sbDocket(`/rest/v1/rpc/dashboard_stats`, env, { method: 'POST', body: JSON.stringify({ p_space_id: spaceId }) });
   if (!r.ok) return err('db_error: ' + JSON.stringify(r.data), 500);
@@ -420,6 +446,22 @@ async function getDocketUsers(url, auth, env) {
   const authData = authUsers.ok ? await authUsers.json() : { users: [] };
   const emailMap = {}; (authData.users || []).forEach(u => { emailMap[u.id] = u.email; });
   return ok((up.data || []).map(u => ({ ...u, email: emailMap[u.id] || '', docket_role: roleMap[u.id] || null })));
+}
+
+// Dashboard sharing config (RULE-DOCKET-006) — admin only.
+async function getDashboardSharing(url, auth, env) {
+  const gate = requireAdmin(auth); if (gate) return gate;
+  const [pub, viewers] = await Promise.all([
+    dashboardPublic(env),
+    sbDocket(`/rest/v1/dashboard_viewers?select=user_id&order=granted_at.asc`, env),
+  ]);
+  const ids = (viewers.ok ? viewers.data : []).map(v => v.user_id);
+  let nameMap = {};
+  if (ids.length) {
+    const up = await sbStore(`/rest/v1/users_profile?select=id,full_name&id=in.${inList(ids)}`, env);
+    if (up.ok) (up.data || []).forEach(u => { nameMap[u.id] = u.full_name; });
+  }
+  return ok({ public: pub, viewers: ids.map(id => ({ user_id: id, full_name: nameMap[id] || '' })) });
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -763,6 +805,37 @@ async function assignDocketRole(body, auth, env) {
   return ok({ user_id: d.user_id, role_key: d.role_key });
 }
 
+// ── Dashboard sharing (RULE-DOCKET-006) — admin only ────────────────────────
+async function setDashboardPublic(body, auth, env) {
+  const gate = requireAdmin(auth); if (gate) return gate;
+  const d = body.data || body;
+  const value = d.value === true || d.value === 'true';
+  const r = await sbDocket(`/rest/v1/settings?on_conflict=key`, env, {
+    method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates',
+    body: JSON.stringify({ key: 'dashboard_public', value, updated_at: nowIso(), updated_by_user_id: auth.userId }),
+  });
+  if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
+  return ok({ public: value });
+}
+async function addDashboardViewer(body, auth, env) {
+  const gate = requireAdmin(auth); if (gate) return gate;
+  const d = body.data || body;
+  if (!d.user_id) return err('user_id required', 400);
+  const r = await sbDocket(`/rest/v1/dashboard_viewers?on_conflict=user_id`, env, {
+    method: 'POST', prefer: 'return=minimal,resolution=ignore-duplicates',
+    body: JSON.stringify({ user_id: d.user_id, granted_by_user_id: auth.userId }),
+  });
+  if (!r.ok) return err('add_failed: ' + JSON.stringify(r.data), 400);
+  return ok({ user_id: d.user_id });
+}
+async function removeDashboardViewer(body, auth, env) {
+  const gate = requireAdmin(auth); if (gate) return gate;
+  const d = body.data || body;
+  if (!d.user_id) return err('user_id required', 400);
+  await sbDocket(`/rest/v1/dashboard_viewers?user_id=eq.${enc(d.user_id)}`, env, { method: 'DELETE', prefer: 'return=minimal' });
+  return ok({ removed: d.user_id });
+}
+
 // ── Programs (RULE-DOCKET-004) ──────────────────────────────────────────────
 async function createProgram(body, auth, env) {
   const d = body.data || body;
@@ -894,7 +967,7 @@ const GET_ACTIONS = {
   getTasks, getTask, getDashboard,
   getPrograms, getSpaces, getSpaceMembers, getAllSpaces,
   getScratchNotes,
-  getDocketRoles, getDocketUsers,
+  getDocketRoles, getDocketUsers, getDashboardSharing,
 };
 const POST_ACTIONS = {
   createTask, createSubtask, updateTask, changeStatus, reviseDeadline, abandonTask, setParent, moveTask,
@@ -905,6 +978,7 @@ const POST_ACTIONS = {
   createSpace, renameSpace, archiveSpace, addSpaceMember, removeSpaceMember, transferSpaceOwnership, recoverSpace,
   createScratchNote, updateScratchNote, deleteScratchNote,
   createDocketRole, updateDocketRole, deleteDocketRole, assignDocketRole,
+  setDashboardPublic, addDashboardViewer, removeDashboardViewer,
 };
 
 async function handleGet(url, request, env) {

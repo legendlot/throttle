@@ -8,7 +8,7 @@ import { docketopsGet } from '../../../lib/docketopsFetch.js';
 import { STATUS_MAP, STATUSES } from '../../../lib/tasks.js';
 
 export default function DashboardPage() {
-  const { session, perms } = useAuth();
+  const { session } = useAuth();
   const { showToast } = useToast();
   const router = useRouter();
   const search = useSearchParams();
@@ -16,12 +16,18 @@ export default function DashboardPage() {
   const [stats, setStats] = useState(null);
   const [spaceName, setSpaceName] = useState('');
   const [loading, setLoading] = useState(true);
+  const [denied, setDenied] = useState(false);
 
   const load = useCallback(async () => {
     if (!session) return;
-    setLoading(true);
+    setLoading(true); setDenied(false);
     try { setStats(await docketopsGet('getDashboard', { space_id: spaceId }, session)); }
-    catch (e) { showToast(e.message || 'Failed to load dashboard', 'error'); }
+    catch (e) {
+      // Dashboard visibility is shareable (RULE-DOCKET-006) and enforced server-side;
+      // a 403 here just means this user hasn't been granted it — show a quiet message.
+      if (/forbidden/i.test(e.message || '')) setDenied(true);
+      else showToast(e.message || 'Failed to load dashboard', 'error');
+    }
     finally { setLoading(false); }
   }, [session, spaceId, showToast]);
   useEffect(() => { load(); }, [load]);
@@ -31,10 +37,11 @@ export default function DashboardPage() {
     docketopsGet('getSpaces', {}, session).then(s => setSpaceName((s || []).find(x => x.id === spaceId)?.name || '')).catch(() => {});
   }, [session, spaceId]);
 
-  // General dashboard is org-wide (view_all-gated client-side); a private-space dashboard
-  // is open to its members — the worker enforces membership, so don't block here.
-  if (!spaceId && perms && !(perms.docket_view_all || perms.docket_admin))
-    return <div style={{ color: 'var(--text-3)' }}>Requires org-wide visibility (docket_view_all).</div>;
+  // Visibility (org dashboard sharing + private-space membership) is enforced server-side
+  // by getDashboard — a 403 sets `denied`. No client-side perm gate, so a granted viewer
+  // (dashboard_public or per-person grant, without docket_view_all) loads fine.
+  if (denied)
+    return <div style={{ color: 'var(--text-3)' }}>You don’t have access to this dashboard.</div>;
   if (loading) return <Spinner />;
   if (!stats) return null;
   const linkSuffix = spaceId ? `&space=${spaceId}` : '';
