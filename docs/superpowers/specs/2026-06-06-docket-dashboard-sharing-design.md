@@ -33,7 +33,7 @@ is role-based, not per-user, so per-person grants would mean minting per-user ro
 "make all" doesn't map to a role at all. Dedicated tables are cleaner and keep the
 permission matrix unpolluted.
 
-## Data model — migration `docket_dashboard_sharing_v1` (`0003_dashboard_sharing.sql`)
+## Data model — migration `docket_dashboard_sharing_v1` (`0004_dashboard_sharing.sql`)
 
 ```sql
 -- key-value settings (extensible; first key = dashboard_public)

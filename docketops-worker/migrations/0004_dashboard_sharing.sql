@@ -5,7 +5,8 @@
 -- Decouples dashboard visibility from docket_view_all: a persistent global "public" flag
 -- (docket.settings) + per-person grants (docket.dashboard_viewers, keyed on auth user_id
 -- like space_members). Worker canViewDashboard = view_all OR public OR granted.
--- See docs/superpowers/specs/2026-06-06-docket-dashboard-sharing-design.md + RULE-DOCKET-006.
+-- File 0004 (0003 is scratchpad). See
+-- docs/superpowers/specs/2026-06-06-docket-dashboard-sharing-design.md + RULE-DOCKET-006.
 
 -- 1. settings (key-value; extensible) ───────────────────────────────────────
 create table docket.settings (
