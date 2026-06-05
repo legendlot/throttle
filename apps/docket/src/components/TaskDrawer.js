@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { X, Maximize2, Plus, Check } from 'lucide-react';
@@ -57,6 +57,15 @@ export function TaskDrawer({ id, session, departments = [], employees = [], onCl
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose, ddOpen, abandoning]);
+
+  // Click outside the deadline popover (calendar) closes it — matches the table cell.
+  const ddRef = useRef(null);
+  useEffect(() => {
+    if (!ddOpen) return;
+    function onDown(e) { if (ddRef.current && !ddRef.current.contains(e.target)) setDdOpen(false); }
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [ddOpen]);
 
   const canEdit = !!task?._can_edit && task?.status !== 'abandoned';
 
@@ -211,7 +220,7 @@ export function TaskDrawer({ id, session, departments = [], employees = [], onCl
                     : <PriorityBadge priority={task.priority} />}
                 </Prop>
                 <Prop label="Deadline">
-                  <span style={{ position: 'relative' }}>
+                  <span ref={ddRef} style={{ position: 'relative' }}>
                     <span onClick={canEdit ? () => { setDdDraft(effectiveDeadline(task)); setReviseReason(''); setDdOpen(true); } : undefined}
                       style={{ cursor: canEdit ? 'pointer' : 'default', color: od ? 'var(--state-error-fg)' : 'var(--text-1)', fontWeight: od ? 600 : 400 }}>
                       {effectiveDeadline(task) ? fmtDateTime(effectiveDeadline(task)) : (canEdit ? <em style={{ color: 'var(--text-4)' }}>set deadline</em> : '—')}

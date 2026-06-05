@@ -16,16 +16,16 @@ import { fmtDate } from '../../../lib/format.js';
 // Shared column widths so the Grid (tinted tray) and the active board line up exactly.
 // Title has no width → it absorbs the remaining space (table-layout: fixed).
 const COLS = [
-  { w: 60 },   // ID
+  { w: 54 },   // ID
   {},          // Title (flex)
-  { w: 124 },  // Team
-  { w: 124 },  // Program
-  { w: 110 },  // Owner (first name; full on hover)
-  { w: 108 },  // Collaborators
-  { w: 104 },  // Status
-  { w: 56 },   // Pri
+  { w: 118 },  // Team
+  { w: 118 },  // Program
+  { w: 116 },  // Owner (first name; full on hover)
+  { w: 92 },   // Collaborators
+  { w: 116 },  // Status
+  { w: 92 },   // Pri  (wide enough for the edit combobox so it can't overflow into Deadline)
   { w: 150 },  // Deadline
-  { w: 56 },   // Meta
+  { w: 50 },   // Meta
 ];
 const ROW_PAD = 12; // horizontal inset shared by the tray and the board so columns align
 
@@ -45,7 +45,10 @@ export default function TasksPage() {
   const [programs, setPrograms] = useState([]);
   const [spaces, setSpaces] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [collapsed, setCollapsed] = useState({});
+  const [collapsed, setCollapsed] = useState({});      // group collapse (group-by)
+  const [expanded, setExpanded] = useState({});        // sub-task expand (lifted from TaskTable so Expand/Collapse-all can drive it)
+  const [sortKey, setSortKey] = useState(null);        // null = server order; else a column key
+  const [sortDir, setSortDir] = useState('asc');
 
   // Structured filters (server-side) — live in the filter popover.
   const [status, setStatus] = useState('');
@@ -194,9 +197,42 @@ export default function TasksPage() {
     return m;
   }, [tasks]);
 
+  // Column sort (client-side, over the loaded rows). null sortKey = server order.
+  const statusRank = useMemo(() => Object.fromEntries(STATUSES.map((s, i) => [s.key, i])), []);
+  const sortFn = useCallback((a, b) => {
+    if (!sortKey) return 0;
+    const dir = sortDir === 'desc' ? -1 : 1;
+    const val = (t) => {
+      switch (sortKey) {
+        case 'task_no': return Number(String(t.task_no || '').replace(/\D/g, '')) || 0;
+        case 'title': return (t.title || '').toLowerCase();
+        case 'department_name': return (t.department_name || '').toLowerCase();
+        case 'program': return (t.program?.name || '').toLowerCase();
+        case 'owner_name': return (t.owner_name || '').toLowerCase();
+        case 'status': return statusRank[t.status] ?? 99;
+        case 'priority': return t.priority || 'P9';   // P0<P1<P2<P3 sorts naturally
+        case 'deadline': return effectiveDeadline(t) || '9999';   // ISO sorts lexically; no-date last
+        default: return 0;
+      }
+    };
+    const av = val(a), bv = val(b);
+    if (av < bv) return -1 * dir;
+    if (av > bv) return 1 * dir;
+    return 0;
+  }, [sortKey, sortDir, statusRank]);
+  function onSort(key) {
+    if (sortKey === key) { if (sortDir === 'asc') setSortDir('desc'); else { setSortKey(null); setSortDir('asc'); } }
+    else { setSortKey(key); setSortDir('asc'); }
+  }
+
   const topLevel = useMemo(() => tasks.filter(t => !t.parent_task_id && matchesQuery(t)), [tasks, matchesQuery]);
-  const gridRows = useMemo(() => topLevel.filter(t => t.status !== 'abandoned' && (!t.deadline || !t.owner_employee_id)), [topLevel]);
-  const boardRows = useMemo(() => topLevel.filter(t => !(t.status !== 'abandoned' && (!t.deadline || !t.owner_employee_id))), [topLevel]);
+  const gridRows = useMemo(() => topLevel.filter(t => t.status !== 'abandoned' && (!t.deadline || !t.owner_employee_id)).sort(sortFn), [topLevel, sortFn]);
+  const boardRows = useMemo(() => topLevel.filter(t => !(t.status !== 'abandoned' && (!t.deadline || !t.owner_employee_id))).sort(sortFn), [topLevel, sortFn]);
+
+  // Parents that actually have sub-tasks → drive Expand all / Collapse all.
+  const parentIds = useMemo(() => topLevel.filter(t => (t.child_count || 0) > 0 || (childrenByParent[t.id] || []).length).map(t => t.id), [topLevel, childrenByParent]);
+  function expandAll() { setExpanded(Object.fromEntries(parentIds.map(id => [id, true]))); }
+  function collapseAll() { setExpanded({}); }
 
   const groups = useMemo(() => {
     if (groupBy === 'none') return [{ key: 'all', label: null, rows: boardRows }];
@@ -208,7 +244,7 @@ export default function TasksPage() {
     return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([label, rows]) => ({ key: label, label, rows }));
   }, [boardRows, groupBy]);
 
-  const rowProps = { saveField, abandonInline, reviseInline, addSubtask, addCollab, removeCollab, childrenByParent, openDrawer: setDrawerId, teamOpts, empOpts, statusCellOpts, prioOpts, programCellOpts, createAndAssignProgram };
+  const rowProps = { saveField, abandonInline, reviseInline, addSubtask, addCollab, removeCollab, childrenByParent, openDrawer: setDrawerId, teamOpts, empOpts, statusCellOpts, prioOpts, programCellOpts, createAndAssignProgram, expanded, setExpanded, sortFn, sort: { key: sortKey, dir: sortDir }, onSort };
 
   return (
     <div>
@@ -236,9 +272,15 @@ export default function TasksPage() {
           <input data-search-primary value={q} onChange={e => setQ(e.target.value)} placeholder="Search tasks, owners, DKT-no…  ( / )" style={{ ...finput, paddingLeft: 30 }} />
           {q && <button onClick={() => setQ('')} style={searchClear} title="Clear search"><X size={13} /></button>}
         </div>
+        {parentIds.length > 0 && (
+          <div style={{ display: 'inline-flex', gap: 6 }}>
+            <button className="dk-press" style={clearBtn} onClick={expandAll} title="Expand all sub-tasks"><ChevronDown size={13} /> Expand all</button>
+            <button className="dk-press" style={clearBtn} onClick={collapseAll} title="Collapse all sub-tasks"><ChevronRight size={13} /> Collapse all</button>
+          </div>
+        )}
         <div style={{ position: 'relative' }}>
           <button className="dk-press" style={filterBtn(filterOpen || activeFilterCount > 0)} onClick={() => setFilterOpen(o => !o)}>
-            <SlidersHorizontal size={13} /> Filter{activeFilterCount > 0 && <span style={countBadge}>{activeFilterCount}</span>}
+            <SlidersHorizontal size={13} /> Manage{activeFilterCount > 0 && <span style={countBadge}>{activeFilterCount}</span>}
           </button>
           {filterOpen && (
             <FilterPopover
@@ -395,7 +437,7 @@ function FilterPopover({ onClose, status, setStatus, departmentId, setDepartment
   );
 }
 
-function TaskTable({ rows, childrenByParent, saveField, abandonInline, reviseInline, addSubtask, addCollab, removeCollab, openDrawer, teamOpts, empOpts, statusCellOpts, prioOpts, programCellOpts, createAndAssignProgram }) {
+function TaskTable({ rows, childrenByParent, saveField, abandonInline, reviseInline, addSubtask, addCollab, removeCollab, openDrawer, teamOpts, empOpts, statusCellOpts, prioOpts, programCellOpts, createAndAssignProgram, expanded, setExpanded, sortFn, sort, onSort }) {
   // Property cells (team/owner/status/priority) use whole-row edit mode so native
   // Tab walks them in order; comboboxes commit on Tab (commitOnTab). The title and
   // DKT-id open the drawer. Sub-tasks expand as indented rows under their parent
@@ -404,7 +446,7 @@ function TaskTable({ rows, childrenByParent, saveField, abandonInline, reviseInl
   const [focusField, setFocusField] = useState(null);
   const [abandonFor, setAbandonFor] = useState(null);
   const [abandonReason, setAbandonReason] = useState('');
-  const [expanded, setExpanded] = useState({});   // parentId -> bool (default collapsed)
+  // `expanded` + `setExpanded` are lifted to the page (Expand all / Collapse all drive them).
   const [addingFor, setAddingFor] = useState(null);
   const [subTitle, setSubTitle] = useState('');
 
@@ -487,20 +529,20 @@ function TaskTable({ rows, childrenByParent, saveField, abandonInline, reviseInl
         </td>
 
         <td style={td}>
-          {isEdit && ed ? <div style={{ minWidth: 110 }}><Combobox autoFocus={focusField === 'department_id'} value={t.department_id || ''} options={teamOpts} placeholder="Team…" commitOnTab style={cellInput} onChange={(v, opt) => { if (opt) saveField(t, 'department_id', v); }} /></div>
+          {isEdit && ed ? <div style={editWrap}><Combobox autoFocus={focusField === 'department_id'} value={t.department_id || ''} options={teamOpts} placeholder="Team…" commitOnTab style={cellInput} onChange={(v, opt) => { if (opt) saveField(t, 'department_id', v); }} /></div>
             : <Disp field="department_id">{t.department_name || <Muted>set team</Muted>}</Disp>}
         </td>
         <td style={td}>
           {/* Program: pick from the global list OR type a new name + Enter to create it.
               The Combobox emits onChange(null) while typing → ignore it; act only on a
               real option (the "— No program —" sentinel clears). */}
-          {isEdit && ed ? <div style={{ minWidth: 110 }}><Combobox autoFocus={focusField === 'program_id'} value={t.program_id || ''} options={programCellOpts} placeholder="Program…" allowClear={false} commitOnTab style={cellInput}
+          {isEdit && ed ? <div style={editWrap}><Combobox autoFocus={focusField === 'program_id'} value={t.program_id || ''} options={programCellOpts} placeholder="Program…" allowClear={false} commitOnTab style={cellInput}
               onChange={(v, opt) => { if (!opt) return; if (!opt.value) saveField(t, 'program_id', null); else saveField(t, 'program_id', opt.value); }}
               onKeyDown={(e) => { if (e.key === 'Enter') { const text = (e.target.value || '').trim(); if (text && !programCellOpts.some(o => o.label.toLowerCase() === text.toLowerCase())) { e.preventDefault(); createAndAssignProgram(t, text); } } }} /></div>
             : <Disp field="program_id">{t.program ? <span style={programChip}>{t.program.name}</span> : <Muted>set program</Muted>}</Disp>}
         </td>
         <td style={{ ...td, whiteSpace: 'nowrap' }}>
-          {isEdit && ed ? <div style={{ minWidth: 120 }}><Combobox autoFocus={focusField === 'owner_employee_id'} value={t.owner_employee_id || ''} options={empOpts} placeholder="Owner…" commitOnTab style={cellInput} onChange={(v, opt) => { if (opt) saveField(t, 'owner_employee_id', v); }} /></div>
+          {isEdit && ed ? <div style={editWrap}><Combobox autoFocus={focusField === 'owner_employee_id'} value={t.owner_employee_id || ''} options={empOpts} placeholder="Owner…" commitOnTab style={cellInput} onChange={(v, opt) => { if (opt) saveField(t, 'owner_employee_id', v); }} /></div>
             : <Disp field="owner_employee_id">{t.owner_name ? <span title={t.owner_name}>{firstName(t.owner_name)}</span> : <Muted>set owner</Muted>}</Disp>}
         </td>
         <td style={td}>
@@ -510,7 +552,7 @@ function TaskTable({ rows, childrenByParent, saveField, abandonInline, reviseInl
           {/* position:relative anchors the abandon popover to this cell — without it the
               absolute popover resolves against the viewport (it appeared bottom-left). */}
           <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
-            {isEdit && ed ? <div style={{ minWidth: 120 }}><Combobox autoFocus={focusField === 'status'} value={t.status} options={statusCellOpts} placeholder="Status…" allowClear={false} commitOnTab style={cellInput} onChange={(v, opt) => { if (!opt) return; if (v === 'abandoned') { setAbandonReason(''); setAbandonFor(t.id); } else saveField(t, 'status', v); }} /></div>
+            {isEdit && ed ? <div style={editWrap}><Combobox autoFocus={focusField === 'status'} value={t.status} options={statusCellOpts} placeholder="Status…" allowClear={false} commitOnTab style={cellInput} onChange={(v, opt) => { if (!opt) return; if (v === 'abandoned') { setAbandonReason(''); setAbandonFor(t.id); } else saveField(t, 'status', v); }} /></div>
               : (ed ? <Disp field="status"><StatusBadge status={t.status} /></Disp> : <StatusBadge status={t.status} />)}
             {abandonFor === t.id && (
               <div style={popover} onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
@@ -526,7 +568,7 @@ function TaskTable({ rows, childrenByParent, saveField, abandonInline, reviseInl
           </span>
         </td>
         <td style={td}>
-          {isEdit && ed ? <div style={{ minWidth: 110 }}><Combobox autoFocus={focusField === 'priority'} value={t.priority} options={prioOpts} placeholder="Priority…" allowClear={false} commitOnTab style={cellInput} onChange={(v, opt) => { if (opt) saveField(t, 'priority', v); }} /></div>
+          {isEdit && ed ? <div style={editWrap}><Combobox autoFocus={focusField === 'priority'} value={t.priority} options={prioOpts} placeholder="Priority…" allowClear={false} commitOnTab style={cellInput} onChange={(v, opt) => { if (opt) saveField(t, 'priority', v); }} /></div>
             : <Disp field="priority"><PriorityBadge priority={t.priority} /></Disp>}
         </td>
 
@@ -552,15 +594,22 @@ function TaskTable({ rows, childrenByParent, saveField, abandonInline, reviseInl
       <table style={table}>
         <colgroup>{COLS.map((c, i) => <col key={i} style={c.w ? { width: c.w } : undefined} />)}</colgroup>
         <thead><tr>
-          <th style={th}>ID</th><th style={th}>Title</th><th style={th}>Team</th><th style={th}>Program</th>
-          <th style={th}>Owner</th><th style={th}>People</th><th style={th}>Status</th>
-          <th style={th}>Pri</th><th style={th}>Deadline</th><th style={th}></th>
+          <SortTh label="ID" k="task_no" sort={sort} onSort={onSort} />
+          <SortTh label="Title" k="title" sort={sort} onSort={onSort} />
+          <SortTh label="Team" k="department_name" sort={sort} onSort={onSort} />
+          <SortTh label="Program" k="program" sort={sort} onSort={onSort} />
+          <SortTh label="Owner" k="owner_name" sort={sort} onSort={onSort} />
+          <th style={th}>People</th>
+          <SortTh label="Status" k="status" sort={sort} onSort={onSort} />
+          <SortTh label="Pri" k="priority" sort={sort} onSort={onSort} />
+          <SortTh label="Deadline" k="deadline" sort={sort} onSort={onSort} />
+          <th style={th}></th>
         </tr></thead>
         <tbody>
           {rows.flatMap(t => {
             const out = [renderRow(t, false)];
             if (expanded[t.id]) {
-              (childrenByParent[t.id] || []).forEach(c => out.push(renderRow(c, true)));
+              (childrenByParent[t.id] || []).slice().sort(sortFn).forEach(c => out.push(renderRow(c, true)));
               if (addingFor === t.id) {
                 out.push(
                   <tr key={'add-' + t.id} className="dk-task-row">
@@ -583,6 +632,20 @@ function TaskTable({ rows, childrenByParent, saveField, abandonInline, reviseInl
         </tbody>
       </table>
     </div>
+  );
+}
+
+// Clickable sortable column header: click cycles asc → desc → off (server order).
+function SortTh({ label, k, sort, onSort }) {
+  const active = sort?.key === k;
+  return (
+    <th style={{ ...th, cursor: 'pointer', userSelect: 'none', color: active ? 'var(--text-1)' : undefined }}
+      onClick={() => onSort && onSort(k)} title={`Sort by ${label}`}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+        {label}
+        <span style={{ fontSize: 9, opacity: active ? 1 : 0.3 }}>{active ? (sort.dir === 'asc' ? '▲' : '▼') : '↕'}</span>
+      </span>
+    </th>
   );
 }
 
@@ -744,6 +807,9 @@ const th = { textAlign: 'left', padding: '8px 10px', fontSize: 10, color: 'var(-
 // title cell's own inner span instead.
 const td = { padding: '7px 10px', fontSize: 13, color: 'var(--text-2)', borderBottom: '1px solid var(--border)', verticalAlign: 'middle' };
 const cellInput = { background: 'var(--surface-3)', color: 'var(--text-1)', border: '1px solid var(--docket-accent)', borderRadius: 'var(--radius-sm)', padding: '4px 6px', fontSize: 13, outline: 'none', fontFamily: 'inherit' };
+// Edit-mode combobox wrapper: fill the cell's column exactly so the dropdown can't
+// overflow into the next column (was a fixed minWidth that bled under Deadline).
+const editWrap = { width: '100%' };
 const groupHead = { display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontFamily: 'var(--font-cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-1)', padding: '8px 0', marginBottom: 4 };
 const flag = { marginLeft: 8, fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--state-warning-fg)', background: 'var(--state-warning-bg)', borderRadius: 3, padding: '1px 5px', textTransform: 'uppercase' };
 const odFlag = { display: 'inline-flex', alignItems: 'center', gap: 3, fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--state-error-fg)', background: 'var(--state-error-bg)', borderRadius: 3, padding: '1px 5px', textTransform: 'uppercase', fontWeight: 600 };

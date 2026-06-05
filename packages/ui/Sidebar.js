@@ -56,6 +56,10 @@ const STYLE = `
   border-left-color: var(--yellow);
 }
 .sb-item-label { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+/* Opt-in nested item (e.g. spaces under Tasks): indented + slightly smaller so it
+   reads as a child of the item above it. Default off → zero blast radius. */
+.sb-item.sb-subitem { padding-left: 40px; font-size: 13px; }
+.sb-item.sb-subitem .sb-item-icon { width: 14px; }
 .sb-item-icon { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 16px; color: var(--t3); }
 .sb-item.sb-active .sb-item-icon { color: var(--yellow); }
 .sb-item:hover .sb-item-icon { color: var(--t2); }
@@ -216,7 +220,7 @@ export function Sidebar({
                 return (
                   <div
                     key={item.id}
-                    className={`sb-item${isActive ? ' sb-active' : ''}`}
+                    className={`sb-item${isActive ? ' sb-active' : ''}${item.indent ? ' sb-subitem' : ''}`}
                     onClick={() => onTabSelect && onTabSelect(item)}
                   >
                     <span className="sb-item-icon">{renderIcon(item.icon, 14)}</span>

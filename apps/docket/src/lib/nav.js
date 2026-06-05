@@ -9,9 +9,8 @@ export const NAV_GROUPS = [
       // The layout feeds the computed `_dashboard` flag (from getMe.can_view_dashboard).
       { id: 'dashboard', label: 'Dashboard', route: '/dashboard', icon: LayoutDashboard, requires: '_dashboard' },
       // New tasks are added inline on the list (ClickUp/Asana-style) — no separate form in the nav.
+      // Spaces are appended (indented) under Tasks, then Scratchpad below them — see buildNavGroups.
       { id: 'tasks',     label: 'Tasks',     route: '/tasks',     icon: ListChecks },
-      // Personal private scratchpad — everyone gets it (no perm gate). RULE-DOCKET-005.
-      { id: 'scratchpad', label: 'Scratchpad', route: '/scratchpad', icon: NotebookPen },
     ],
   },
   {
@@ -40,8 +39,12 @@ export function buildNavGroups(perms, spaces = []) {
   const privates = (spaces || []).filter(s => s.is_private);
   return base.map(g => {
     if (g.id === 'tasks') {
-      const spaceItems = privates.map(s => ({ id: 'space-' + s.id, label: s.name, route: '/tasks?space=' + s.id, icon: Hash }));
-      return { ...g, items: [...g.items, ...spaceItems, { id: 'space-new', label: 'New space', route: '/tasks?space=new', icon: Plus }] };
+      // Spaces + New space are indented so they read as children of Tasks (RULE-DOCKET-003).
+      const spaceItems = privates.map(s => ({ id: 'space-' + s.id, label: s.name, route: '/tasks?space=' + s.id, icon: Hash, indent: true }));
+      const newSpace = { id: 'space-new', label: 'New space', route: '/tasks?space=new', icon: Plus, indent: true };
+      // Scratchpad lives BELOW all tasks/spaces, at the same level as Tasks (no perm gate). RULE-DOCKET-005.
+      const scratchpad = { id: 'scratchpad', label: 'Scratchpad', route: '/scratchpad', icon: NotebookPen };
+      return { ...g, items: [...g.items, ...spaceItems, newSpace, scratchpad] };
     }
     if (g.id === 'admin' && perms?.docket_admin) {
       return { ...g, items: [...g.items, { id: 'admin-spaces', label: 'Spaces', route: '/admin/spaces', icon: FolderLock }] };
