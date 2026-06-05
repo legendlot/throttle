@@ -371,7 +371,9 @@ function TaskTable({ rows, childrenByParent, saveField, abandonInline, reviseInl
               ? <input autoFocus={focusField === 'title'} defaultValue={t.title} placeholder="Title…" style={{ ...cellInput, flex: 1, minWidth: 0 }}
                   onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } }}
                   onBlur={e => { const v = e.target.value.trim(); if (v && v !== t.title) saveField(t, 'title', v); }} />
-              : <span className="dk-idlink" onClick={() => openDrawer(drawerTarget)} style={{ cursor: 'pointer', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              : <span className={ed ? undefined : 'dk-idlink'} onClick={() => (ed ? startEdit(t, 'title') : openDrawer(drawerTarget))}
+                  title={ed ? 'Click to rename · DKT-id opens the panel' : undefined}
+                  style={{ cursor: ed ? 'text' : 'pointer', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {t.title}{t.revised_deadline && <span style={flag}>revised</span>}
                 </span>}
             {hasKids && <span style={kidCount}>{t.child_done}/{t.child_count}</span>}
@@ -391,19 +393,23 @@ function TaskTable({ rows, childrenByParent, saveField, abandonInline, reviseInl
           <CollaboratorsCell task={t} editable={ed} empOpts={empOpts} onAdd={addCollab} onRemove={removeCollab} openDrawer={openDrawer} drawerTarget={drawerTarget} />
         </td>
         <td style={td}>
-          {isEdit && ed ? <div style={{ minWidth: 120 }}><Combobox autoFocus={focusField === 'status'} value={t.status} options={statusCellOpts} placeholder="Status…" allowClear={false} commitOnTab style={cellInput} onChange={(v, opt) => { if (!opt) return; if (v === 'abandoned') { setAbandonReason(''); setAbandonFor(t.id); } else saveField(t, 'status', v); }} /></div>
-            : (ed ? <Disp field="status"><StatusBadge status={t.status} /></Disp> : <StatusBadge status={t.status} />)}
-          {abandonFor === t.id && (
-            <div style={popover} onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
-              <div style={popLabel}>Abandon task</div>
-              <input autoFocus value={abandonReason} onChange={e => setAbandonReason(e.target.value)} placeholder="Reason (required, logged)" style={{ ...cellInput, width: '100%', marginBottom: 8 }}
-                onKeyDown={e => { if (e.key === 'Enter' && abandonReason.trim()) { abandonInline(t, abandonReason.trim()); setAbandonFor(null); } if (e.key === 'Escape') setAbandonFor(null); }} />
-              <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                <button style={popBtnGhost} onClick={() => setAbandonFor(null)}><X size={13} /></button>
-                <button className="dk-press" style={{ ...popBtnDanger, opacity: abandonReason.trim() ? 1 : 0.5 }} disabled={!abandonReason.trim()} onClick={() => { abandonInline(t, abandonReason.trim()); setAbandonFor(null); }}><Check size={13} /> Abandon</button>
+          {/* position:relative anchors the abandon popover to this cell — without it the
+              absolute popover resolves against the viewport (it appeared bottom-left). */}
+          <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
+            {isEdit && ed ? <div style={{ minWidth: 120 }}><Combobox autoFocus={focusField === 'status'} value={t.status} options={statusCellOpts} placeholder="Status…" allowClear={false} commitOnTab style={cellInput} onChange={(v, opt) => { if (!opt) return; if (v === 'abandoned') { setAbandonReason(''); setAbandonFor(t.id); } else saveField(t, 'status', v); }} /></div>
+              : (ed ? <Disp field="status"><StatusBadge status={t.status} /></Disp> : <StatusBadge status={t.status} />)}
+            {abandonFor === t.id && (
+              <div style={popover} onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
+                <div style={popLabel}>Abandon task</div>
+                <input autoFocus value={abandonReason} onChange={e => setAbandonReason(e.target.value)} placeholder="Reason (required, logged)" style={{ ...cellInput, width: '100%', marginBottom: 8 }}
+                  onKeyDown={e => { if (e.key === 'Enter' && abandonReason.trim()) { abandonInline(t, abandonReason.trim()); setAbandonFor(null); } if (e.key === 'Escape') setAbandonFor(null); }} />
+                <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                  <button style={popBtnGhost} onClick={() => setAbandonFor(null)}><X size={13} /></button>
+                  <button className="dk-press" style={{ ...popBtnDanger, opacity: abandonReason.trim() ? 1 : 0.5 }} disabled={!abandonReason.trim()} onClick={() => { abandonInline(t, abandonReason.trim()); setAbandonFor(null); }}><Check size={13} /> Abandon</button>
+                </div>
               </div>
-            </div>
-          )}
+            )}
+          </span>
         </td>
         <td style={td}>
           {isEdit && ed ? <div style={{ minWidth: 110 }}><Combobox autoFocus={focusField === 'priority'} value={t.priority} options={prioOpts} placeholder="Priority…" allowClear={false} commitOnTab style={cellInput} onChange={(v, opt) => { if (opt) saveField(t, 'priority', v); }} /></div>
