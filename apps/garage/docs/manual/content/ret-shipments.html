@@ -1,20 +1,22 @@
-<p class="lead">Receive Return Shipments is the Returns landing page. Log a physical consignment of returned units as it arrives back from a sales channel, and see recent intakes. Open it the moment a return shipment lands at the dock.</p>
+<p class="lead">Every return enters through the Store &mdash; the single intake door. Open a <strong>return shipment</strong> here first; it gets an <code>RS-NNN</code> number that the PWA scanner binds to. One shipment can carry any mix of products, channels and conditions.</p>
 
 <div class="glance">
-  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Logging a return consignment in.</div></div>
-  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: creates a shipment.</div></div>
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Opening the single intake door.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: open + track shipments.</div></div>
   <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sto">Store</span> <span class="role adm">Admin</span></div></div>
-  <div class="g-cell"><div class="g-lbl">Then</div><div class="g-val">Goes to Process.</div></div>
+  <div class="g-cell"><div class="g-lbl">Then</div><div class="g-val">Process / Disposition.</div></div>
 </div>
 
-<h2 class="sec">Receiving a shipment</h2>
+<h2 class="sec">Open a shipment</h2>
 <ol class="steps">
-  <li><span class="s-title">Fill the form.</span> Date received, the <strong>channel</strong> it came from (required), an optional platform reference (AWB), and units expected versus received.</li>
-  <li><span class="s-title">Receive Shipment.</span> The consignment is created and you are taken straight into the Process screen for it.</li>
+  <li><span class="s-title">Fill the form.</span> Date received and <strong>Courier</strong>; channel, platform reference and units-expected are optional.</li>
+  <li><span class="s-title">Receive Shipment.</span> You land straight on the Process tab for the new <code>RS-NNN</code>.</li>
 </ol>
-<p>The <strong>Recent Shipments</strong> list (filterable by date) shows each intake with its units (received / expected) and status: <strong>Open</strong> (yellow), <strong>Partially Processed</strong> (blue), <strong>Fully Processed</strong> or <strong>Handed Over</strong> (green), <strong>Closed</strong> (grey). Click any row or <strong>Process</strong> to work it.</p>
+
+<h2 class="sec">Bind the scanner</h2>
+<p>On the PWA pick <strong>Return Intake</strong>, then either select the open <code>RS-NNN</code> from the list or scan the <code>RS-NNN</code> code shown on the Process screen. The device now feeds <em>that</em> shipment. Two stations can run two shipments at once &mdash; each binds its own code.</p>
 
 <div class="callout note">
-  <div class="c-title">&#9432; Units is received / expected</div>
-  <p>The units column is two numbers (received over expected), not a fraction; both default to zero. Creating a shipment jumps you into Process on purpose, so you can start logging units right away.</p>
+  <div class="c-title">&#9432; Resumable, live</div>
+  <p>A shipment stays <strong>Open</strong> / <strong>Processing</strong> while you work it; the Process screen auto-refreshes as units are scanned in. Close it from Process when the pile is done; reopen any time.</p>
 </div>

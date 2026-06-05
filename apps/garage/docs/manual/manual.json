@@ -2,8 +2,8 @@
   "title": "Garage",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to store, inventory, production, returns and procurement at Legend of Toys.",
-  "version": "1.0.0",
-  "date": "2026-05-29",
+  "version": "1.1.0",
+  "date": "2026-06-06",
   "app_url": "garage.legendoftoys.com",
   "owner": "Legend of Toys",
   "roles": {
@@ -72,10 +72,10 @@
       "part": "Returns",
       "subtitle": "The journey of a returned unit: receive, triage, then route to re-dispatch, repair or write-off.",
       "chapters": [
-        { "id": "ret-shipments", "title": "Receive Return Shipments", "route": "/returns/shipments", "file": "ret-shipments.html", "roles": ["sto","adm"] },
-        { "id": "ret-process",   "title": "Process a Return",         "route": "/returns/process",   "file": "ret-process.html",   "roles": ["sto","adm"] },
-        { "id": "ret-repair",    "title": "Repair Pool",              "route": "/returns/repair-pool","file": "ret-repair.html",   "roles": ["sto","adm"] },
-        { "id": "ret-udr",       "title": "UDR Pool",                 "route": "/returns/udr-pool",  "file": "ret-udr.html",       "roles": ["sto","adm"] },
+        { "id": "ret-shipments", "title": "Open Return Shipments",    "route": "/returns/shipments", "file": "ret-shipments.html", "roles": ["sto","adm"] },
+        { "id": "ret-process",   "title": "Process / Disposition",    "route": "/returns/process",   "file": "ret-process.html",   "roles": ["sto","adm"] },
+        { "id": "ret-udr",       "title": "Issue UDR",                "route": "/returns/udr-pool",  "file": "ret-udr.html",       "roles": ["sto","adm"] },
+        { "id": "ret-repair",    "title": "Issue Repair",             "route": "/returns/repair-pool","file": "ret-repair.html",   "roles": ["sto","adm"] },
         { "id": "ret-losses",    "title": "Losses",                   "route": "/returns/losses",    "file": "ret-losses.html",    "roles": ["sto","adm"] },
         { "id": "ret-channels",  "title": "Return Channels",          "route": "/returns/channels",  "file": "ret-channels.html",  "roles": ["adm"] }
       ]

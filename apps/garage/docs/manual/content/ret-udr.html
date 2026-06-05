@@ -1,16 +1,21 @@
-<p class="lead">The UDR Pool is a worklist of undamaged, re-sellable returns, grouped by variant, waiting to be handed back to production so they can re-enter dispatch stock. Use it to mark batches as issued to production.</p>
+<p class="lead">Issue UDR is the scan-out worklist for undamaged returns. Issue each UDR unit to production &mdash; it then re-dispatches on its own sealed box at PKG OUT, no repair, no opening.</p>
 
 <div class="glance">
-  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Re-dispatching undamaged returns.</div></div>
-  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: mark issued.</div></div>
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Issuing undamaged returns out.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: scan-out.</div></div>
   <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sto">Store</span> <span class="role adm">Admin</span></div></div>
-  <div class="g-cell"><div class="g-lbl">Fed by</div><div class="g-val">Return triage (UDR).</div></div>
+  <div class="g-cell"><div class="g-lbl">Fed by</div><div class="g-val">Process (disposition = UDR).</div></div>
 </div>
 
 <h2 class="sec">Using it</h2>
-<p>Each row aggregates undamaged units of one product / model / colour, with a count, the oldest age, and sample UPCs. <strong>Mark Issued to Production</strong> hands the whole bucket back to production, which then re-packs each unit on the floor so it re-enters dispatch as a legitimate return.</p>
+<p>Two ways to issue, both write the same result:</p>
+<ul class="bullets">
+  <li><strong>Scan-out</strong> &mdash; scan each unit&rsquo;s box label or UPC into the box on the left (physical scan-out per unit).</li>
+  <li><strong>Issue all</strong> &mdash; each pick-list row aggregates one product / model / colour; the button issues the whole bucket at once.</li>
+</ul>
+<p>Once issued, the unit re-dispatches with a single scan at <strong>PKG OUT</strong> on its existing (or Store-printed legacy) box label.</p>
 
-<div class="callout warn">
-  <div class="c-title">&#9888; It issues the whole bucket</div>
-  <p>&ldquo;Mark Issued&rdquo; is all-or-nothing per variant: it issues every unit in that bucket, with no partial-quantity option (unlike the Repair Pool). Units arrive here when triaged with disposition UDR during return processing.</p>
+<div class="callout note">
+  <div class="c-title">&#9432; The box is never opened</div>
+  <p>UDR rides its intact box label out &mdash; PKG OUT does not delete the label, so the same sealed box re-dispatches as a legitimate return. Units arrive here only after they are dispositioned UDR on the Process tab.</p>
 </div>

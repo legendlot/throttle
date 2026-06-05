@@ -1,20 +1,20 @@
-<p class="lead">The Repair Pool is a worklist of returned units triaged to the workshop, grouped by variant. Use it to batch units into a scheduled repair run that the floor will work through.</p>
+<p class="lead">Issue Repair is the scan-out worklist for returns headed to the workshop (CXR and BRV). Pick or create a repair run, then issue each unit into it; the floor works the run through REP&nbsp;START &rarr; repair &rarr; QC.</p>
 
 <div class="glance">
-  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Batching repair returns into a run.</div></div>
-  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: schedule a run.</div></div>
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Issuing repair returns into a run.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: scan-out to a run.</div></div>
   <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sto">Store</span> <span class="role adm">Admin</span></div></div>
-  <div class="g-cell"><div class="g-lbl">Fed by</div><div class="g-val">Return triage (workshop).</div></div>
+  <div class="g-cell"><div class="g-lbl">Fed by</div><div class="g-val">Process (disposition = CXR / BRV).</div></div>
 </div>
 
-<h2 class="sec">Scheduling a repair run</h2>
+<h2 class="sec">Using it</h2>
 <ol class="steps">
-  <li><span class="s-title">Select the variant buckets</span> you want to repair (each row aggregates units of one product / model / colour; the count and oldest age are shown).</li>
-  <li><span class="s-title">Schedule Selected.</span> A modal lets you set the quantity per variant (up to what is available), choose a repair line (L1, L2, L3) and add notes.</li>
-  <li><span class="s-title">Create Run.</span> A repair run is created for the floor to work through; the store then issues the parts it needs.</li>
+  <li><span class="s-title">Set the run target.</span> Pick an open <code>REP-NNN</code> run, or press <strong>+ New repair run</strong> (choose a line). Production can also request a run from Redline.</li>
+  <li><span class="s-title">Issue units.</span> Scan each CXR/BRV unit into the box, or use <strong>Issue all</strong> on a pick-list row to issue the whole bucket into the selected run. A run may mix products.</li>
+  <li><span class="s-title">Floor takes over.</span> At the scanner repair station the floor runs REP&nbsp;START (Repair or Scrap) &rarr; repair &rarr; QC.</li>
 </ol>
 
 <div class="callout note">
-  <div class="c-title">&#9432; How units get here</div>
-  <p>Units land in this pool when they are triaged &ldquo;Send to Workshop&rdquo; during return processing. The screen aggregates by variant, so individual units are visible only through the sample UPCs on each row. After a run is created, the floor runs the repair-pass and repair-scrap steps at the scanner&rsquo;s repair station.</p>
+  <div class="c-title">&#9432; Pairing is re-made at QC PASS</div>
+  <p>Cars and remotes move through repair as independent units. A fresh car&harr;remote pair is created at the <strong>QC PASS</strong> station, exactly like a new production run. Mismatched counts are normal &mdash; build/request the shortfall and pair at QC.</p>
 </div>
