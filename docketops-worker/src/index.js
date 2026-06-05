@@ -853,6 +853,39 @@ async function recoverSpace(body, auth, env) {
   return ok({ space_id: d.space_id, owner_user_id: newOwner });
 }
 
+// ── Scratchpad (RULE-DOCKET-005) — strictly per-user; no admin path ──────────
+async function getScratchNotes(url, auth, env) {
+  const r = await sbDocket(`/rest/v1/scratch_notes?user_id=eq.${enc(auth.userId)}&select=id,title,body,created_at,updated_at&order=updated_at.desc.nullslast,created_at.desc`, env);
+  if (!r.ok) return err('db_error', 500);
+  return ok(r.data || []);
+}
+async function createScratchNote(body, auth, env) {
+  const d = body.data || body;
+  const r = await sbDocket(`/rest/v1/scratch_notes`, env, {
+    method: 'POST', body: JSON.stringify([{ user_id: auth.userId, title: d.title || null, body: d.body || '', updated_at: nowIso() }]) });
+  if (!r.ok || !r.data?.[0]) return err('create_failed: ' + JSON.stringify(r.data), 400);
+  return ok(r.data[0]);
+}
+async function updateScratchNote(body, auth, env) {
+  const d = body.data || body;
+  if (!d.id) return err('id required', 400);
+  const updates = { updated_at: nowIso() };
+  if (d.title !== undefined) updates.title = d.title;
+  if (d.body !== undefined) updates.body = d.body;
+  // user_id in the filter is the privacy gate — a note is only writable by its owner.
+  const r = await sbDocket(`/rest/v1/scratch_notes?id=eq.${enc(d.id)}&user_id=eq.${enc(auth.userId)}`, env, {
+    method: 'PATCH', prefer: 'return=representation', body: JSON.stringify(updates) });
+  if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
+  if (!r.data?.length) return err('not_found', 404);
+  return ok({ id: d.id, updated_at: updates.updated_at });
+}
+async function deleteScratchNote(body, auth, env) {
+  const d = body.data || body;
+  if (!d.id) return err('id required', 400);
+  await sbDocket(`/rest/v1/scratch_notes?id=eq.${enc(d.id)}&user_id=eq.${enc(auth.userId)}`, env, { method: 'DELETE', prefer: 'return=minimal' });
+  return ok({ deleted: d.id });
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // Dispatch
 // ════════════════════════════════════════════════════════════════════════════
@@ -860,6 +893,7 @@ const GET_ACTIONS = {
   getMe, getDepartments, getEmployees,
   getTasks, getTask, getDashboard,
   getPrograms, getSpaces, getSpaceMembers, getAllSpaces,
+  getScratchNotes,
   getDocketRoles, getDocketUsers,
 };
 const POST_ACTIONS = {
@@ -869,6 +903,7 @@ const POST_ACTIONS = {
   addComment, editComment, deleteComment,
   createProgram,
   createSpace, renameSpace, archiveSpace, addSpaceMember, removeSpaceMember, transferSpaceOwnership, recoverSpace,
+  createScratchNote, updateScratchNote, deleteScratchNote,
   createDocketRole, updateDocketRole, deleteDocketRole, assignDocketRole,
 };
 

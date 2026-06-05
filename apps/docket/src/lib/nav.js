@@ -1,4 +1,4 @@
-import { LayoutDashboard, ListChecks, ShieldCheck, UserCog, Settings, Hash, Plus, FolderLock } from 'lucide-react';
+import { LayoutDashboard, ListChecks, ShieldCheck, UserCog, Settings, Hash, Plus, FolderLock, NotebookPen } from 'lucide-react';
 
 export const NAV_GROUPS = [
   {
@@ -8,6 +8,8 @@ export const NAV_GROUPS = [
       { id: 'dashboard', label: 'Dashboard', route: '/dashboard', icon: LayoutDashboard, requires: 'docket_view_all' },
       // New tasks are added inline on the list (ClickUp/Asana-style) — no separate form in the nav.
       { id: 'tasks',     label: 'Tasks',     route: '/tasks',     icon: ListChecks },
+      // Personal private scratchpad — everyone gets it (no perm gate). RULE-DOCKET-005.
+      { id: 'scratchpad', label: 'Scratchpad', route: '/scratchpad', icon: NotebookPen },
     ],
   },
   {
