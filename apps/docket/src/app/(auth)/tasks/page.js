@@ -472,7 +472,7 @@ function TaskTable({ rows, childrenByParent, saveField, abandonInline, reviseInl
   );
 }
 
-function Muted({ children }) { return <span style={{ color: 'var(--text-4)', fontStyle: 'italic' }}>{children}</span>; }
+function Muted({ children }) { return <span style={{ color: 'var(--text-placeholder)', fontStyle: 'italic' }}>{children}</span>; }
 
 function firstName(name) { return name ? name.trim().split(/\s+/)[0] : ''; }
 function initials(name) {
@@ -555,7 +555,7 @@ function DeadlineCell({ task, editable, od, onFirstSet, onRevise }) {
   }
 
   const trigger = !eff
-    ? (editable ? <span onClick={start} style={{ cursor: 'pointer', color: 'var(--text-4)', fontStyle: 'italic' }}>set date</span> : <span style={{ color: 'var(--text-4)' }}>—</span>)
+    ? (editable ? <span onClick={start} style={{ cursor: 'pointer', color: 'var(--text-placeholder)', fontStyle: 'italic' }}>set date</span> : <span style={{ color: 'var(--text-4)' }}>—</span>)
     : <span onClick={editable ? start : undefined} style={{ cursor: editable ? 'pointer' : 'default', color: od ? 'var(--state-error-fg)' : 'var(--text-2)', fontWeight: od ? 600 : 400 }}>{fmtDate(eff)}</span>;
 
   return (
@@ -630,8 +630,8 @@ const th = { textAlign: 'left', padding: '8px 10px', fontSize: 10, color: 'var(-
 const td = { padding: '7px 10px', fontSize: 13, color: 'var(--text-2)', borderBottom: '1px solid var(--border)', verticalAlign: 'middle' };
 const cellInput = { background: 'var(--surface-3)', color: 'var(--text-1)', border: '1px solid var(--docket-accent)', borderRadius: 'var(--radius-sm)', padding: '4px 6px', fontSize: 13, outline: 'none', fontFamily: 'inherit' };
 const groupHead = { display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontFamily: 'var(--font-cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-1)', padding: '8px 0', marginBottom: 4 };
-const flag = { marginLeft: 8, fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--state-warning-fg)', background: 'var(--state-warning-bg)', borderRadius: 3, padding: '1px 5px', textTransform: 'uppercase' };
-const odFlag = { display: 'inline-flex', alignItems: 'center', gap: 3, fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--state-error-fg)', background: 'var(--state-error-bg)', borderRadius: 3, padding: '1px 5px', textTransform: 'uppercase', fontWeight: 600 };
+const flag = { marginLeft: 8, fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--state-warning-fg)', background: 'var(--state-warning-bg)', borderRadius: 3, padding: '1px 5px', textTransform: 'uppercase' };
+const odFlag = { display: 'inline-flex', alignItems: 'center', gap: 3, fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--state-error-fg)', background: 'var(--state-error-bg)', borderRadius: 3, padding: '1px 5px', textTransform: 'uppercase', fontWeight: 600 };
 const meta = { display: 'inline-flex', gap: 10, alignItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 11 };
 const avatar = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, borderRadius: 'var(--radius-full)', background: 'var(--docket-accent)', color: 'var(--accent-fg)', fontSize: 9, fontWeight: 700, fontFamily: 'var(--font-mono)', border: '1.5px solid var(--bg)', flexShrink: 0 };
 const idBtn = { background: 'none', border: 'none', padding: 0, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer', transition: 'color var(--duration-fast) var(--ease-out)' };
@@ -639,7 +639,7 @@ const clearBtn = { display: 'inline-flex', alignItems: 'center', gap: 4, backgro
 const subAddBtn = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, background: 'var(--accent-bg)', color: 'var(--docket-accent)', border: '1px solid var(--docket-accent)', borderRadius: 'var(--radius-sm)', cursor: 'pointer', flexShrink: 0 };
 const chevronBtn = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, background: 'transparent', color: 'var(--text-3)', border: 'none', borderRadius: 'var(--radius-sm)', cursor: 'pointer', flexShrink: 0, padding: 0 };
 const branchGlyph = { color: 'var(--text-4)', fontSize: 12, flexShrink: 0, width: 13, textAlign: 'center' };
-const kidCount = { fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-4)', background: 'var(--surface-2)', borderRadius: 3, padding: '1px 5px', flexShrink: 0 };
+const kidCount = { fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-2)', background: 'var(--surface-2)', borderRadius: 3, padding: '1px 5px', flexShrink: 0 };
 const addPill = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, borderRadius: 'var(--radius-full)', background: 'transparent', color: 'var(--text-3)', border: '1px dashed var(--border-2)', flexShrink: 0 };
 const collabPop = { position: 'absolute', top: '100%', left: 0, zIndex: 20, marginTop: 4, background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-md)', padding: 10, width: 240, boxShadow: '0 8px 24px rgba(0,0,0,0.4)' };
 const collabChip = { display: 'inline-flex', alignItems: 'center', gap: 5, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-full)', padding: '2px 8px', fontSize: 11, color: 'var(--text-1)' };

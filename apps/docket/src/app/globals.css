@@ -17,7 +17,10 @@
   --text-1:     #f5f5f5;
   --text-2:     #b0b0b0;
   --text-3:     #888888;
-  --text-4:     #666666;
+  --text-4:     #808080;   /* raised from #666 (2.87:1, failed AA + 3:1 UI floor) → 4.17 rest / 3.20 on row-hover */
+  /* Actionable empty-state hints ("set team/owner/date", Muted). Brighter than tertiary
+     on purpose — these are calls-to-action. 5.86 rest / 4.49 on hover (AA both). */
+  --text-placeholder: #9a9a9a;
 
   --brand-yellow:      #F2CD1A;
   --brand-yellow-deep: #d4b200;
