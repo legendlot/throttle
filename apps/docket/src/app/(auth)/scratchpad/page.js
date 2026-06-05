@@ -83,7 +83,7 @@ export default function ScratchpadPage() {
                 <input value={active.title || ''} onChange={e => onField(active.id, { title: e.target.value })} placeholder="Title…" style={titleInput} />
                 <button className="dk-press" style={delBtn} title="Delete note" onClick={() => del(active.id)}><Trash2 size={15} /></button>
               </div>
-              <NoteBody value={active.body || ''} onChange={(body) => onField(active.id, { body })} onToggleSave={(body) => onToggleSave(active.id, body)} />
+              <NoteBody key={active.id} initialValue={active.body || ''} onChange={(body) => onField(active.id, { body })} onToggleSave={(body) => onToggleSave(active.id, body)} />
             </>
           )}
         </section>
