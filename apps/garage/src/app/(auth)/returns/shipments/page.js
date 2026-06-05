@@ -43,6 +43,7 @@ export default function ShipmentsPage() {
 
   const [date, setDate] = useState(todayStr());
   const [channelId, setChannelId] = useState('');
+  const [courier, setCourier] = useState('');
   const [ref, setRef] = useState('');
   const [expected, setExpected] = useState('');
   const [received, setReceived] = useState('');
@@ -94,6 +95,7 @@ export default function ShipmentsPage() {
   function resetForm() {
     setDate(todayStr());
     setChannelId('');
+    setCourier('');
     setRef('');
     setExpected('');
     setReceived('');
@@ -101,16 +103,15 @@ export default function ShipmentsPage() {
   }
 
   async function handleSubmit() {
-    if (!channelId) { showToast('Select a channel', 'error'); return; }
     setSubmitting(true);
     try {
-      const res = await workerFetch('postReturnShipment', {
+      const res = await workerFetch('openReturnShipment', {
         data: {
           received_date:        date,
-          channel:              channelId,
+          channel:              channelId || null,
+          courier:              courier || null,
           platform_reference:   ref || null,
           total_units_expected: expected ? parseInt(expected, 10) : null,
-          total_units_received: received ? parseInt(received, 10) : null,
           notes:                notes || null,
         },
       }, session);
@@ -143,7 +144,11 @@ export default function ShipmentsPage() {
                 <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ ...inputStyle, width: '100%', fontFamily: 'var(--mono)' }} disabled={submitting} />
               </div>
               <div>
-                <span style={labelStyle}>Channel *</span>
+                <span style={labelStyle}>Courier</span>
+                <input type="text" value={courier} onChange={(e) => setCourier(e.target.value)} placeholder="e.g. Delhivery, Bluedart" style={{ ...inputStyle, width: '100%' }} disabled={submitting} />
+              </div>
+              <div>
+                <span style={labelStyle}>Channel (optional)</span>
                 <select value={channelId} onChange={(e) => setChannelId(e.target.value)} style={{ ...selectStyle, width: '100%' }} disabled={submitting}>
                   <option value="">{channelsAvailable ? 'Select…' : '(channels unavailable)'}</option>
                   {channels.map((c) => (
