@@ -93,3 +93,22 @@ export function fmtResult(n) {
   const r = Math.round(n * 1e6) / 1e6; // up to 6 dp, strip trailing zeros via Number→String
   return String(r);
 }
+
+// Parse a note line as a (possibly labelled) calculation. Handles three shapes:
+//   "25*5*3"                  → pure expression
+//   "room volume = 25*5*3"    → label = expression (evaluate the part after the last '=')
+//   "25*5*3 ="                → trailing-equals "compute this" gesture
+// Returns { value, trailingEq } when the expression is valid arithmetic with an operator,
+// else null (line stays plain text). The label/text itself is never parsed.
+export function parseMath(line) {
+  const trimmed = (line || '').trim();
+  if (!trimmed) return null;
+  const trailingEq = /=\s*$/.test(trimmed);
+  let work = trailingEq ? trimmed.replace(/=\s*$/, '').trim() : trimmed;
+  const eqIdx = work.lastIndexOf('=');
+  const exprStr = (eqIdx >= 0 ? work.slice(eqIdx + 1) : work).trim();
+  if (!exprStr || !HAS_OP.test(exprStr)) return null;   // require an operator (skip bare numbers/labels)
+  const r = evalExpr(exprStr);
+  if (!r.ok) return null;
+  return { value: r.value, trailingEq };
+}

@@ -1,6 +1,6 @@
 'use client';
 import { useState, useRef, useEffect } from 'react';
-import { isMathLine, evalLine, fmtResult } from '../lib/mathEval.js';
+import { parseMath, fmtResult } from '../lib/mathEval.js';
 
 // A line that STARTS (after optional indent) with [ ] / [x] is a checkbox; brackets
 // mid-sentence stay prose. RULE-DOCKET-005.
@@ -53,9 +53,10 @@ export function NoteBody({ value, onChange, onToggleSave }) {
             </div>
           );
         }
-        if (isMathLine(ln)) {
-          const r = evalLine(ln);
-          return <div key={i} style={mathRow}><span style={{ color: 'var(--text-1)' }}>{ln}</span>{r.ok && <span style={mathRes}>= {fmtResult(r.value)}</span>}</div>;
+        const calc = parseMath(ln);
+        if (calc) {
+          // trailing-equals line ("25*5 =") already shows the '='; otherwise prefix one.
+          return <div key={i} style={mathRow}><span style={{ color: 'var(--text-1)' }}>{ln}</span><span style={mathRes}>{calc.trailingEq ? '' : '= '}{fmtResult(calc.value)}</span></div>;
         }
         return <div key={i} style={{ color: 'var(--text-1)', minHeight: '1.5em', whiteSpace: 'pre-wrap' }}>{ln || ' '}</div>;
       })}
