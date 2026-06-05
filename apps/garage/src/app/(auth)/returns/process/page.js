@@ -167,7 +167,7 @@ function ProcessPage() {
   // Must run unconditionally on every render (Rules of Hooks), so it sits
   // alongside the other hooks. Self-contained on shipmentData.
   const handoverGroups = useMemo(() => {
-    const u = shipmentData?.units || [];
+    const u = Array.isArray(shipmentData?.units) ? shipmentData.units : [];
     const groups = {};
     u.forEach((row) => {
       if (row.status !== 'inspected') return;
@@ -304,7 +304,7 @@ function ProcessPage() {
   }
 
   const shipment = shipmentData?.shipment;
-  const units = shipmentData?.units || [];
+  const units = Array.isArray(shipmentData?.units) ? shipmentData.units : [];
 
   if (!shipment) {
     return (
