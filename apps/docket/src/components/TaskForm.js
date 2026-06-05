@@ -7,11 +7,12 @@ import { PRIORITIES } from '../lib/tasks.js';
 
 // Controlled create form. `departments` + `employees` are loaded by the parent.
 // onSubmit receives the assembled payload; parent calls createTask.
-export function TaskForm({ departments, employees, parentTask, onSubmit, saving }) {
+export function TaskForm({ departments, employees, programs = [], parentTask, onCreateProgram, onSubmit, saving }) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [departmentId, setDepartmentId] = useState(parentTask?.department_id || '');
   const [ownerId, setOwnerId] = useState('');
+  const [programId, setProgramId] = useState('');
   const [collaborators, setCollaborators] = useState([]); // [employee_id]
   const [collabPick, setCollabPick] = useState('');
   const [deadline, setDeadline] = useState('');
@@ -24,7 +25,20 @@ export function TaskForm({ departments, employees, parentTask, onSubmit, saving 
   const deptOpts = useMemo(() => (departments || []).map(d => ({ value: d.id, label: d.name })), [departments]);
   const empOpts = useMemo(() => (employees || []).map(e => ({ value: e.id, label: e.full_name })), [employees]);
   const prioOpts = PRIORITIES.map(p => ({ value: p.key, label: p.label }));
+  const programOpts = useMemo(() => [{ value: '', label: '— No program —' }, ...(programs || []).map(p => ({ value: p.id, label: p.name }))], [programs]);
   const collabOpts = useMemo(() => (employees || []).filter(e => !collaborators.includes(e.id) && e.id !== ownerId).map(e => ({ value: e.id, label: e.full_name })), [employees, collaborators, ownerId]);
+
+  async function pickProgram(v, opt) {
+    if (!opt) return;                      // ignore mid-type clears
+    setProgramId(opt.value || '');
+  }
+  async function maybeCreateProgram(e) {
+    if (e.key !== 'Enter' || !onCreateProgram) return;
+    const text = (e.target.value || '').trim();
+    if (!text || programOpts.some(o => o.label.toLowerCase() === text.toLowerCase())) return;
+    e.preventDefault();
+    try { const prog = await onCreateProgram(text); if (prog?.id) setProgramId(prog.id); } catch { /* parent toasts */ }
+  }
 
   function addCollab() {
     if (collabPick && !collaborators.includes(collabPick)) setCollaborators(c => [...c, collabPick]);
@@ -45,6 +59,7 @@ export function TaskForm({ departments, employees, parentTask, onSubmit, saving 
       description: description.trim() || null,
       department_id: departmentId,
       owner_employee_id: ownerId,
+      program_id: programId || null,
       collaborators,
       deadline: new Date(deadline).toISOString(),
       priority,
@@ -81,9 +96,16 @@ export function TaskForm({ departments, employees, parentTask, onSubmit, saving 
         </div>
       </div>
 
-      <div style={{ marginBottom: 12 }}>
-        <label style={lbl}>Owner *</label>
-        <Combobox value={ownerId} options={empOpts} onChange={(v) => setOwnerId(v)} placeholder="Select owner…" disabled={saving} style={input} />
+      <div style={grid2}>
+        <div>
+          <label style={lbl}>Owner *</label>
+          <Combobox value={ownerId} options={empOpts} onChange={(v) => setOwnerId(v)} placeholder="Select owner…" disabled={saving} style={input} />
+        </div>
+        <div>
+          <label style={lbl}>Program</label>
+          <Combobox value={programId} options={programOpts} onChange={pickProgram} onKeyDown={maybeCreateProgram}
+            placeholder={onCreateProgram ? 'Pick or type to create…' : 'Select program…'} allowClear={false} disabled={saving} style={input} />
+        </div>
       </div>
 
       <div style={{ marginBottom: 12 }}>

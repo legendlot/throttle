@@ -24,6 +24,8 @@ function DetailInner() {
   const [task, setTask] = useState(null);
   const [departments, setDepartments] = useState([]);
   const [employees, setEmployees] = useState([]);
+  const [programs, setPrograms] = useState([]);
+  const [spaces, setSpaces] = useState([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('comments');
   const [editing, setEditing] = useState(false);
@@ -48,7 +50,9 @@ function DetailInner() {
     Promise.all([
       docketopsGet('getDepartments', {}, session).catch(() => []),
       docketopsGet('getEmployees', {}, session).catch(() => []),
-    ]).then(([d, e]) => { setDepartments(d || []); setEmployees(e || []); });
+      docketopsGet('getPrograms', {}, session).catch(() => []),
+      docketopsGet('getSpaces', {}, session).catch(() => []),
+    ]).then(([d, e, p, s]) => { setDepartments(d || []); setEmployees(e || []); setPrograms(p || []); setSpaces(s || []); });
   }, [session]);
   useEffect(() => { load(); }, [load]);
 
@@ -58,9 +62,25 @@ function DetailInner() {
     setForm({
       title: task.title, description: task.description || '',
       department_id: task.department_id, owner_employee_id: task.owner_employee_id,
-      priority: task.priority,
+      priority: task.priority, program_id: task.program_id || null,
     });
     setEditing(true);
+  }
+  // Create a program on the fly and select it into the buffered edit form.
+  async function createProgramInline(name) {
+    try {
+      const prog = await docketopsPost('createProgram', { name }, session);
+      setPrograms(ps => ps.some(p => p.id === prog.id) ? ps : [...ps, prog].sort((a, b) => a.name.localeCompare(b.name)));
+      setForm(f => ({ ...f, program_id: prog.id }));
+    } catch (e) { showToast(e.message || 'Failed to add program', 'error'); }
+  }
+  // Space change is immediate (not part of the buffered form) — goes through moveTask.
+  async function moveToSpace(v) {
+    if (!v || v === task.space_id) return;
+    setBusy(true);
+    try { await docketopsPost('moveTask', { id: task.id, space_id: v }, session); await load(); showToast('Moved', 'success'); }
+    catch (e) { showToast(e.message || 'Failed', 'error'); }
+    finally { setBusy(false); }
   }
   async function saveEdit() {
     setBusy(true);
@@ -113,6 +133,8 @@ function DetailInner() {
   const empOpts = employees.map(e => ({ value: e.id, label: e.full_name }));
   const prioOpts = PRIORITIES.map(p => ({ value: p.key, label: p.label }));
   const collabOpts = employees.filter(e => !(task.collaborators || []).some(c => c.employee_id === e.id)).map(e => ({ value: e.id, label: e.full_name }));
+  const programCellOpts = [{ value: '', label: '— No program —' }, ...programs.map(p => ({ value: p.id, label: p.name }))];
+  const spaceOpts = spaces.map(s => ({ value: s.id, label: s.name + (s.is_private ? '' : ' (open)') }));
 
   return (
     <div style={{ maxWidth: 1040 }}>
@@ -191,6 +213,18 @@ function DetailInner() {
               {editing
                 ? <Combobox value={form.priority} options={prioOpts} onChange={(v) => setForm(f => ({ ...f, priority: v || 'P2' }))} placeholder="Priority…" allowClear={false} style={input} />
                 : <PriorityBadge priority={task.priority} />}
+            </Field>
+            <Field label="Program">
+              {editing
+                ? <Combobox value={form.program_id || ''} options={programCellOpts} allowClear={false} placeholder="Set program…" style={input}
+                    onChange={(v, opt) => { if (opt) setForm(f => ({ ...f, program_id: opt.value || null })); }}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { const text = (e.target.value || '').trim(); if (text && !programCellOpts.some(o => o.label.toLowerCase() === text.toLowerCase())) { e.preventDefault(); createProgramInline(text); } } }} />
+                : (task.program?.name || '—')}
+            </Field>
+            <Field label="Space">
+              {canEdit && spaceOpts.length > 1
+                ? <Combobox value={task.space_id || ''} options={spaceOpts} onChange={moveToSpace} allowClear={false} placeholder="Move to space…" style={input} />
+                : (task.space?.name || 'General')}
             </Field>
           </section>
 

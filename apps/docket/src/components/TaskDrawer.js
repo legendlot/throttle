@@ -32,6 +32,14 @@ export function TaskDrawer({ id, session, departments = [], employees = [], onCl
   const [abandonReason, setAbandonReason] = useState('');
   const [abandoning, setAbandoning] = useState(false);
   const [collabPick, setCollabPick] = useState('');
+  const [programs, setPrograms] = useState([]);
+  const [spaces, setSpaces] = useState([]);
+
+  useEffect(() => {
+    if (!session) return;
+    docketopsGet('getPrograms', {}, session).then(p => setPrograms(p || [])).catch(() => {});
+    docketopsGet('getSpaces', {}, session).then(s => setSpaces(s || [])).catch(() => {});
+  }, [session]);
 
   const load = useCallback(async (silent) => {
     if (!session || !id) return;
@@ -98,10 +106,33 @@ export function TaskDrawer({ id, session, departments = [], employees = [], onCl
     try { await docketopsPost('removeCollaborator', { id: task.id, employee_id: employeeId }, session); await mutated(); }
     catch (e) { showToast(e.message || 'Failed', 'error'); }
   }
+  async function assignProgram(v, opt) {
+    if (!opt) return;                               // ignore mid-type clears
+    if (!opt.value) { saveField('program_id', null); return; }
+    saveField('program_id', opt.value);
+  }
+  async function createProgramInline(name) {
+    setBusy(true);
+    try {
+      const prog = await docketopsPost('createProgram', { name }, session);
+      setPrograms(ps => ps.some(p => p.id === prog.id) ? ps : [...ps, prog].sort((a, b) => a.name.localeCompare(b.name)));
+      await docketopsPost('updateTask', { id: task.id, program_id: prog.id }, session); await mutated();
+    } catch (e) { showToast(e.message || 'Failed to add program', 'error'); }
+    finally { setBusy(false); }
+  }
+  async function moveToSpace(v) {
+    if (!v || v === task.space_id) return;
+    setBusy(true);
+    try { await docketopsPost('moveTask', { id: task.id, space_id: v }, session); await mutated(); showToast('Moved', 'success'); }
+    catch (e) { showToast(e.message || 'Failed', 'error'); }
+    finally { setBusy(false); }
+  }
 
   const deptOpts = departments.map(d => ({ value: d.id, label: d.name }));
   const empOpts = employees.map(e => ({ value: e.id, label: e.full_name }));
   const prioOpts = PRIORITIES.map(p => ({ value: p.key, label: p.label }));
+  const programCellOpts = [{ value: '', label: '— No program —' }, ...programs.map(p => ({ value: p.id, label: p.name }))];
+  const spaceOpts = spaces.map(s => ({ value: s.id, label: s.name + (s.is_private ? '' : ' (open)') }));
   const collabOpts = task ? employees.filter(e => !(task.collaborators || []).some(c => c.employee_id === e.id)).map(e => ({ value: e.id, label: e.full_name })) : [];
   const od = task && isOverdue(task);
 
@@ -159,6 +190,17 @@ export function TaskDrawer({ id, session, departments = [], employees = [], onCl
                 <Prop label="Team">
                   {canEdit ? <Combobox value={task.department_id || ''} options={deptOpts} placeholder="Set team…" allowClear commitOnTab style={field} onChange={(v) => saveField('department_id', v)} />
                     : (task.department_name || '—')}
+                </Prop>
+                <Prop label="Program">
+                  {canEdit ? <Combobox value={task.program_id || ''} options={programCellOpts} placeholder="Set program…" allowClear={false} commitOnTab style={field}
+                      onChange={assignProgram}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { const text = (e.target.value || '').trim(); if (text && !programCellOpts.some(o => o.label.toLowerCase() === text.toLowerCase())) { e.preventDefault(); createProgramInline(text); } } }} />
+                    : (task.program?.name || '—')}
+                </Prop>
+                <Prop label="Space">
+                  {canEdit && spaceOpts.length > 1
+                    ? <Combobox value={task.space_id || ''} options={spaceOpts} placeholder="Move to space…" allowClear={false} commitOnTab style={field} onChange={moveToSpace} />
+                    : (task.space?.name || 'General')}
                 </Prop>
                 <Prop label="Owner">
                   {canEdit ? <Combobox value={task.owner_employee_id || ''} options={empOpts} placeholder="Set owner…" allowClear commitOnTab style={field} onChange={(v) => saveField('owner_employee_id', v)} />
