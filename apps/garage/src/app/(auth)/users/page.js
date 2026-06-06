@@ -53,6 +53,7 @@ const PERM_DEFS = [
   { group: 'Dispatch', items: [
     { key: 'dispatch_pack',    label: 'Pack Shipments (Add / Delete Boxes)', type: 'bool' },
     { key: 'dispatch_restock', label: 'Unit Restock (Scanner)',  type: 'bool' },
+    { key: 'repack_run_manage', label: 'Manage Repack Runs (Channel Swap)', type: 'bool' },
     { key: 'dispatch_challan', label: 'Issue Delivery Challans', type: 'bool' },
   ] },
   { group: 'Scan Corrections', items: [
