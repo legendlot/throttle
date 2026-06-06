@@ -650,7 +650,7 @@ function AttendanceTab({ session, canManageFloor, operators }) {
           </div>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
             <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-              {rows.length} record{rows.length === 1 ? '' : 's'}
+              {new Set(rows.map(r => r.operator_id)).size} present · {rows.length} record{rows.length === 1 ? '' : 's'}
             </span>
             <button style={btnSecondary} onClick={load} disabled={loading}>↻</button>
           </div>
