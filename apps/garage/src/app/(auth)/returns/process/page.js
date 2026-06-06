@@ -5,6 +5,28 @@ import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast, Combobox, useEscapeClose } from '@throttle/ui';
 import { useProducts } from '../../../../hooks/useProducts.js';
+import QRCode from 'qrcode';
+
+// Scannable QR of the RS-NNN so the floor can scan it at the PWA Return Intake
+// station (decodes to the literal "RS-NNN", which the scanner's RET_IN handler
+// binds on). Falls back silently if QR generation fails — the dropdown still works.
+function RsQr({ value }) {
+  const [src, setSrc] = useState('');
+  useEffect(() => {
+    let alive = true;
+    QRCode.toDataURL(String(value), { margin: 1, width: 200, errorCorrectionLevel: 'M' })
+      .then((url) => { if (alive) setSrc(url); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [value]);
+  if (!src) return null;
+  return (
+    <div style={{ textAlign: 'center' }}>
+      <img src={src} alt={value} width={92} height={92} style={{ display: 'block', background: '#fff', borderRadius: 6, padding: 4 }} />
+      <div style={{ fontSize: 9, color: 'var(--t3)', fontFamily: 'var(--mono)', marginTop: 3, letterSpacing: '.05em' }}>SCAN AT INTAKE</div>
+    </div>
+  );
+}
 
 // ── Returns v2 dispositions (Store free-choice; see returns process manual) ──
 const DISPOSITIONS = [
@@ -259,6 +281,7 @@ function ProcessPage() {
             {counts.Loss > 0 && <StatusBadge label={`${counts.Loss} Loss`} tone="red" />}
           </div>
           <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: statusColor, fontWeight: 700 }}>{statusLabel(status)}</div>
+          {!closed && <RsQr value={shipment.shipment_id} />}
         </div>
         <div style={{ fontSize: 10, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>{closed ? 'closed' : 'live · auto-refreshing'}</div>
       </div>
