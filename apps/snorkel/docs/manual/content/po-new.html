@@ -1,0 +1,45 @@
+<p class="lead">Raising a purchase order is a guided, two-step flow: first pick the <strong>category</strong> of thing you are buying, then fill the form. The category sets sensible defaults (source country, currency, terms) and decides how you enter the lines, so you start most of the way there.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Creating a purchase order.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Act: you build and submit a PO.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role proc">Procurement</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Result</div><div class="g-val">A Draft PO (or a Soft China PO).</div></div>
+</div>
+
+<h2 class="sec">Step 1: pick a category</h2>
+<p>You land on a grid of cards. Each picks the order type and the right way to enter lines:</p>
+<table class="tbl">
+  <thead><tr><th>Card</th><th>Use it for</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Full Products</strong></td><td>Finished cars ordered at product level (by units, fully-built or knocked-down).</td></tr>
+    <tr><td><strong>Components</strong></td><td>Any parts across products: enter from a product&rsquo;s parts list, or type them in.</td></tr>
+    <tr><td><strong>Packaging / Metal Parts / Electronics / Consumables / Para / Stickers</strong></td><td>The same parts-list entry, but pre-filtered to just that kind of part.</td></tr>
+    <tr><td><strong>Custom / Other</strong></td><td>Free-form, type-it-yourself lines for anything ad-hoc.</td></tr>
+  </tbody>
+</table>
+<p>There is also a separate <strong>China PO</strong> card, visible only to people cleared for China procurement. It forces China sourcing and the right currency and terms, filters the vendor list to Chinese suppliers, and unlocks the <strong>Soft PO</strong> option.</p>
+
+<h2 class="sec">Step 2: fill the form</h2>
+<ol class="steps">
+  <li><span class="s-title">Pick the vendor.</span> Choosing one auto-fills the currency, payment terms, source country and typical lead time from the vendor&rsquo;s record, so keep vendor records tidy.</li>
+  <li><span class="s-title">Add the line items.</span> Depending on the category you either tick parts off a product&rsquo;s parts list (quantities scale to the number of units), choose units of a finished product, or type lines in by hand. Every line you add shows in a running table with a live subtotal.</li>
+  <li><span class="s-title">Fill the shipping timeline.</span> Ready date, shipping date, mode, forwarder and transit days. Pick a forwarder and Snorkel fills the transit days for the chosen mode, then works out the expected arrival date for you.</li>
+  <li><span class="s-title">Choose the delivery address</span> (which of our company addresses the goods ship to). It defaults to the usual one.</li>
+  <li><span class="s-title">Click Create PO.</span> It is saved as a Draft, ready to be accepted.</li>
+</ol>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; Indian POs need HSN and GST on every line</div>
+  <p>For any PO priced in rupees, each line must carry an <strong>HSN code</strong> and a <strong>GST%</strong> before the PO can be printed. When you pick a part with a known HSN, Snorkel fills the GST rate for you and adds it into the running CGST/SGST or IGST totals. Foreign-currency POs have no GST block at all.</p>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Soft POs are for unnamed China goods</div>
+  <p>In China mode you can <strong>Save as Soft PO</strong> when you are ordering something that is not yet a registered product. The lines can carry free-text descriptions, and the PO is parked as <em>Soft</em> until the product is registered and the PO is promoted. Outside China mode this option does not appear.</p>
+</div>
+
+<div class="callout tip">
+  <div class="c-title">&#10003; Coming from a request or a reorder</div>
+  <p>If you started this PO from a PO request, that request is pinned in a side panel so you can copy the details across; accepting the PO will mark the request approved. If you started it from a reorder request, the new PO is linked back and the reorder is closed when you finish.</p>
+</div>

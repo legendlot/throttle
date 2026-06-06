@@ -1,4 +1,4 @@
-import { LayoutDashboard, ListChecks, ShieldCheck, UserCog, Settings, Hash, Plus, FolderLock, NotebookPen } from 'lucide-react';
+import { LayoutDashboard, ListChecks, ShieldCheck, UserCog, Settings, Hash, Plus, FolderLock, NotebookPen, BookOpen } from 'lucide-react';
 
 export const NAV_GROUPS = [
   {
@@ -14,6 +14,9 @@ export const NAV_GROUPS = [
     ],
   },
   {
+    id: 'manual', label: 'System Manual', flat: true, route: '/manual', icon: BookOpen,
+  },
+  {
     id: 'admin', label: 'ADMIN', icon: Settings,
     items: [
       { id: 'perm-roles', label: 'Roles & Permissions', route: '/admin/roles', icon: ShieldCheck, requires: 'docket_admin' },
@@ -24,11 +27,11 @@ export const NAV_GROUPS = [
 
 export function filterNavByPerms(groups, perms) {
   return groups
-    .map(g => ({
+    .map(g => g.flat ? g : ({
       ...g,
       items: (g.items || []).filter(it => !it.requires || perms?.[it.requires]),
     }))
-    .filter(g => g.items.length > 0);
+    .filter(g => g.flat || (g.items && g.items.length > 0));
 }
 
 // Build the live nav: the static base, plus the caller's accessible private spaces as

@@ -6,6 +6,14 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md`).
 
+## [1.2.0] - 2026-06-06
+### Added
+- Gate Pass and Unit Restock chapters (Store part). Gate Pass covers the
+  factory gate entry/exit log: inbound vs outbound, direction-locked purposes,
+  returnable tracking, hand-signed printing and void-not-delete. Unit Restock
+  covers returning shipped units to sellable stock via the bulk paste flow,
+  skip reasons and the restock report.
+
 ## [1.0.0] - 2026-05-29
 ### Added
 - Complete self-serve manual for Garage: 8 parts, 42 chapters covering every

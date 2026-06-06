@@ -1,0 +1,47 @@
+<p class="lead">Sales Orders is the sell-side of Snorkel: orders to our offline channels, General Trade and Modern Trade shops and distributors. An order is captured as a draft, confirmed (which hands it to the dispatch team), invoiced, and then collected against. This screen is the worklist of all of them.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Offline (GT / MT) sales orders.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read; open an order to act.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role proc">Sales</span> <span class="role fin">Finance</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Tiles</div><div class="g-val">Open, to-dispatch, overdue, FY sales.</div></div>
+</div>
+
+<h2 class="sec">The tiles and list</h2>
+<p>Four tiles head the screen: <strong>Open orders</strong>, the value still <strong>to dispatch</strong>, the <strong>overdue</strong> balance (click it to filter to just overdue), and total sales this financial year. The table below shows each order&rsquo;s number, date, partner, channel, status, fulfilment, total, outstanding balance, due date and payment state. Search and the status / fulfilment / channel filters narrow it; <strong>Export CSV</strong> downloads what you see.</p>
+
+<h2 class="sec">An order&rsquo;s life</h2>
+<table class="tbl">
+  <thead><tr><th>Stage</th><th>What it means</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Draft</strong></td><td>Being built. Freely editable. Not yet seen by dispatch.</td></tr>
+    <tr><td><strong>Confirmed</strong></td><td>Locked and handed to dispatch (a shipment is created for them). Can now be invoiced.</td></tr>
+    <tr><td><strong>Cancelled</strong></td><td>Stopped, with a reason.</td></tr>
+  </tbody>
+</table>
+<p>Separate from that, a <strong>fulfilment</strong> label (Not dispatched, Pending, In progress, Fulfilled) is read straight from the dispatch shipment, and a <strong>payment</strong> label (Unpaid, Partial, Paid) reflects collections.</p>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; Confirming hands the order to dispatch</div>
+  <p>Confirming an order is a one-way handoff: it locks the lines for editing and creates a shipment that the dispatch team works in our production system. After that, the fulfilment status here is <strong>read from</strong> that shipment, you do not set it. Get the order right before you confirm.</p>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Dispatch happens in Redline</div>
+  <p>Once an order is confirmed it appears in the dispatch team&rsquo;s Shipments tab. They pack and ship it there; the dispatch and delivery dates flow back here automatically and drive the payment-due clock. Nothing about boxes or scans lives in Snorkel.</p>
+</div>
+
+<h2 class="sec">Creating and working an order</h2>
+<p><strong>New Order</strong> opens a form: pick the partner and channel, set the order date and credit days (these default from the partner), and add lines (product, model, colour, quantity, rate, discount and GST). It saves as a Draft. Open any order to work it; the buttons follow its stage:</p>
+<ol class="steps">
+  <li><span class="s-title">Edit</span> &mdash; change a Draft&rsquo;s lines or details. Disabled once confirmed or invoiced.</li>
+  <li><span class="s-title">Confirm &rarr; Dispatch</span> &mdash; locks the order and creates the dispatch shipment. You are asked to confirm because it is one-way.</li>
+  <li><span class="s-title">Generate Invoice</span> &mdash; on a confirmed order, mints the GST tax invoice and opens it to print. The number is permanent.</li>
+  <li><span class="s-title">Record receipt</span> &mdash; in the Collections panel, log a payment (amount, date, mode, reference). Partial payments are fine; the balance and payment state update themselves.</li>
+  <li><span class="s-title">Cancel</span> &mdash; stop a draft or confirmed order, with a reason.</li>
+</ol>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; One invoice per order, and it is final</div>
+  <p>Generating the GST invoice requires the order to be confirmed and every line to carry an HSN code. The invoice number is permanent and continuous for the financial year, so it cannot be re-generated and the lines freeze once invoiced. The tax splits into CGST + SGST when the partner is in our own state, or IGST when they are in another, worked out from the partner&rsquo;s and our own registered GST details.</p>
+</div>

@@ -1,0 +1,28 @@
+<p class="lead">A reorder request is a lightweight &ldquo;we&rsquo;re running low on this&rdquo; flag for a specific part or product. It is simpler than a full PO request and feeds straight into the buying pipeline: procurement converts the good ones into purchase orders.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Topping up short-stock items.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Raise requests; convert or reject.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role proc">Procurement</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Result</div><div class="g-val">A reorder request, then a PO.</div></div>
+</div>
+
+<h2 class="sec">Raising one</h2>
+<p>Click <strong>New Request</strong> and choose how to identify what you need:</p>
+<ul>
+  <li><strong>By Part Code</strong> &mdash; start typing to search the parts list; pick one and Snorkel shows its name, unit and <strong>current stock</strong> so you can size the order.</li>
+  <li><strong>By Product</strong> &mdash; choose a finished product and optional variant.</li>
+</ul>
+<p>Then set the <strong>quantity</strong>, unit, an <strong>urgency</strong> (Normal, Urgent, Critical) and any notes, and submit. The request gets an ID and joins the list.</p>
+
+<h2 class="sec">Working the list</h2>
+<p>The table shows every reorder request with its type, item, quantity, urgency, who raised it, date and status (Pending, Converted, Rejected). On a <strong>Pending</strong> request, procurement has two actions:</p>
+<ul>
+  <li><strong>Convert &rarr;</strong> &mdash; starts a new PO linked to this request; finishing the PO marks the reorder Converted and shows the PO number.</li>
+  <li><strong>Reject</strong> &mdash; declines it with a required reason, shown on the row.</li>
+</ul>
+
+<div class="callout tip">
+  <div class="c-title">&#10003; Check the stock figure before you size the order</div>
+  <p>When you pick a part by code, the current stock appears next to it. Use it as a sanity check, ordering against a part that is actually full is an easy mistake to avoid here.</p>
+</div>

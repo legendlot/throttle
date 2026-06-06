@@ -1,6 +1,7 @@
 import {
   Inbox, Users, Flame, Star, ListChecks, BarChart3, Plus,
   Settings, Tag, Layers, FileSpreadsheet, UserCircle, CalendarDays, Wallet, Target,
+  BookOpen,
 } from 'lucide-react';
 
 export const NAV_GROUPS = [
@@ -33,6 +34,9 @@ export const NAV_GROUPS = [
     ],
   },
   {
+    id: 'manual', label: 'System Manual', flat: true, route: '/manual', icon: BookOpen,
+  },
+  {
     id: 'admin', label: 'ADMIN', icon: Settings,
     items: [
       { id: 'users',  label: 'Users',  route: '/admin/users',  icon: UserCircle,      requires: 'ignition_admin' },
@@ -43,9 +47,9 @@ export const NAV_GROUPS = [
 
 export function filterNavByPerms(groups, perms) {
   return groups
-    .map(g => ({
+    .map(g => g.flat ? g : ({
       ...g,
       items: (g.items || []).filter(it => !it.requires || perms?.[it.requires]),
     }))
-    .filter(g => g.items.length > 0);
+    .filter(g => g.flat || (g.items && g.items.length > 0));
 }

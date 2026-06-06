@@ -12,6 +12,7 @@ const NAV_ITEMS = [
   { label: 'Sprints',   href: '/sprints/',    roles: ['lead', 'admin'] },
   { label: 'Dashboard', href: '/dashboard/',  roles: ['lead', 'admin'] },
   { label: 'Social',    href: '/social/',     roles: ['requester', 'member', 'lead', 'admin'] },
+  { label: 'Manual',    href: '/manual/',     roles: ['requester', 'member', 'lead', 'admin'] },
   { label: 'Settings',  href: '/settings/',   roles: ['admin'] },
 ];
 

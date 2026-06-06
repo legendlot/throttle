@@ -1,0 +1,23 @@
+<p class="lead">Channels are the offline sales routes, General Trade, Modern Trade, and any others, and this screen defines them and, crucially, which dispatch channel each one hands off to. It is an admin setup screen you rarely need to touch.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Defining sales channels &amp; their dispatch link.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Setup: add and map channels.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Sets</div><div class="g-val">Where confirmed orders go to dispatch.</div></div>
+</div>
+
+<h2 class="sec">The mapping</h2>
+<p>Each channel has a short key (GT, MT), a label, a <strong>dispatch channel</strong> it maps to, a sort order and an active flag. The dispatch-channel link is the important part: when an order on this channel is confirmed, the shipment that is created for the dispatch team is filed under the mapped dispatch channel.</p>
+
+<h2 class="sec">Adding a channel</h2>
+<ol class="steps">
+  <li><span class="s-title">Fill the Add channel row</span> with a key, a label and the dispatch channel it should hand off to.</li>
+  <li><span class="s-title">Set a sort order</span> to control where it appears in dropdowns.</li>
+  <li><span class="s-title">Add it.</span> You can later change its dispatch mapping or toggle it active from the table.</li>
+</ol>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Map every channel to a dispatch channel</div>
+  <p>A sales channel with no dispatch channel mapped has nowhere to send its shipments when an order is confirmed. Set the mapping before orders start flowing on a new channel.</p>
+</div>

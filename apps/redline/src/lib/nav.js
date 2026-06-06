@@ -8,6 +8,7 @@ import {
   CalendarClock, LayoutGrid, ClipboardList,
   ClipboardCheck, AlertTriangle, FileText,
   ArrowLeftRight,
+  BookOpen,
 } from 'lucide-react';
 
 export const NAV_GROUPS = [
@@ -59,6 +60,9 @@ export const NAV_GROUPS = [
     items: [
       { id: 'reporting', label: 'Reporting', route: '/reporting', icon: BarChart3 },
     ],
+  },
+  {
+    id: 'manual', label: 'System Manual', flat: true, route: '/manual', icon: BookOpen,
   },
   {
     id: 'admin', label: 'ADMIN', icon: Users,

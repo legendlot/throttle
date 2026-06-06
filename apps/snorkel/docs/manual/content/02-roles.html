@@ -1,0 +1,46 @@
+<p class="lead">Snorkel gives each person exactly the access that matches their job in buying. The most important reason is the approval chain: the person who raises a purchase order is not the same person who gives it final sign-off, and a third hand routes the money. This chapter explains the five roles used throughout this manual and what each unlocks.</p>
+
+<h2 class="sec">The five roles</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key"><span class="role req">Requester</span></div><div class="a-val"><p><strong>Anyone at LOT.</strong> Every signed-in person is at least a requester. They can file PO requests for things they need and follow what happens to them. No special access is required, and a person with no Snorkel role assigned is exactly this.</p></div></div>
+  <div class="a-row"><div class="a-key"><span class="role proc">Procurement</span></div><div class="a-val"><p><strong>Procurement team.</strong> Turns requests into purchase orders, raises and amends POs, and <strong>accepts</strong> them (the first sign-off). Also manages vendors, forwarders, reorders and new-product registration. Procurement does <em>not</em> give a PO its final approval.</p></div></div>
+  <div class="a-row"><div class="a-key"><span class="role appr">Approver</span></div><div class="a-val"><p><strong>Approver.</strong> Gives a purchase order its <strong>final sign-off</strong> after procurement has accepted it. This is the senior &ldquo;yes, buy it&rdquo; step.</p></div></div>
+  <div class="a-row"><div class="a-key"><span class="role fin">Finance</span></div><div class="a-val"><p><strong>Finance.</strong> Works the payment queue: routes an approved PO for payment (to Finance or back to the requester) and marks it paid.</p></div></div>
+  <div class="a-row"><div class="a-key"><span class="role adm">Admin</span></div><div class="a-val"><p><strong>Manager / Admin.</strong> Everything above, plus creating Snorkel roles and assigning them to people.</p></div></div>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Roles are bundles of permissions</div>
+  <p>Under the hood, each role is a set of switches: raise POs, accept POs, final-approve, route payment, manage vendors, manage company addresses, handle China POs, run offline sales, manage assets, and so on. The five tags above are plain-language groupings. Your manager can build a custom role with any combination of switches, so someone could (for example) raise POs and manage vendors but never approve. If you cannot do something you think you should, an admin needs to adjust your role on the <strong>Roles &amp; Permissions</strong> screen.</p>
+</div>
+
+<h2 class="sec">The approval chain in plain terms</h2>
+<p>A purchase order moves through four named stages, and a different authority owns each handover:</p>
+<table class="tbl">
+  <thead><tr><th>Stage</th><th>Who moves it</th><th>What it means</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Draft</strong></td><td><span class="role proc">Procurement</span></td><td>Just created. Still being shaped; can be edited or cancelled.</td></tr>
+    <tr><td><strong>Accepted</strong></td><td><span class="role proc">Procurement</span></td><td>Procurement&rsquo;s &ldquo;this is correct.&rdquo; Also marks the original request approved. Now printable and waiting for sign-off.</td></tr>
+    <tr><td><strong>Approved</strong></td><td><span class="role appr">Approver</span></td><td>Final &ldquo;yes&rdquo;. Ready to send to the supplier and to route for payment.</td></tr>
+    <tr><td><strong>Payment</strong></td><td><span class="role fin">Finance</span></td><td>Routed to whoever pays, then marked paid.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; The raiser cannot self-approve a China PO</div>
+  <p>For China purchase orders, the person who gives the final approval must be different from the person who raised it. This is a deliberate four-eyes check on our largest spend. China POs also hide their financial figures (prices, values, invoices) from anyone who is not cleared for China procurement.</p>
+</div>
+
+<h2 class="sec">Who sees what</h2>
+<table class="tbl">
+  <thead><tr><th>Area</th><th style="text-align:center">Req</th><th style="text-align:center">Proc</th><th style="text-align:center">Appr</th><th style="text-align:center">Fin</th><th style="text-align:center">Adm</th></tr></thead>
+  <tbody>
+    <tr><td>File &amp; track PO requests</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>Raise / amend POs, manage vendors</td><td style="text-align:center"></td><td style="text-align:center">&bull;</td><td style="text-align:center"></td><td style="text-align:center"></td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>Accept a PO (first sign-off)</td><td style="text-align:center"></td><td style="text-align:center">&bull;</td><td style="text-align:center"></td><td style="text-align:center"></td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>Final-approve a PO</td><td style="text-align:center"></td><td style="text-align:center"></td><td style="text-align:center">&bull;</td><td style="text-align:center"></td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>Route payment &amp; mark paid</td><td style="text-align:center"></td><td style="text-align:center"></td><td style="text-align:center"></td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>Roles &amp; user assignment</td><td style="text-align:center"></td><td style="text-align:center"></td><td style="text-align:center"></td><td style="text-align:center"></td><td style="text-align:center">&bull;</td></tr>
+  </tbody>
+</table>
+<p>Offline Sales and the Asset Register have their own switches that an admin can add to any role, so the people who run those areas are often a different group from the buying team.</p>

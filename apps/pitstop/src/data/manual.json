@@ -1,0 +1,178 @@
+{
+"title":"Pitstop",
+"title_accent":"Operations Manual",
+"subtitle":"The self-serve guide to customer support tickets, calls and admin at Legend of Toys.",
+"version":"1.0.0",
+"date":"2026-05-29",
+"app_url":"pitstop.legendoftoys.com",
+"owner":"Legend of Toys",
+"pdf":"/manual/Pitstop-Operations-Manual.pdf",
+"roles":{
+"agt":{
+"label":"Agent",
+"name":"CS Agent",
+"desc":"Works the queue and calls: opens, verifies and resolves customer tickets."
+},
+"lead":{
+"label":"Lead",
+"name":"CS Lead",
+"desc":"Reassigns tickets across the team and reads the reports."
+},
+"adm":{
+"label":"Admin",
+"name":"Admin",
+"desc":"Full access: re-triage past triage, departments, MyOperator accounts and WhatsApp templates."
+}
+},
+"parts":[
+{
+"part":"Getting Started",
+"subtitle":"What Pitstop is, how to sign in and get around, and what your role can see.",
+"chapters":[
+{
+"id":"intro",
+"title":"Welcome to Pitstop",
+"route":"",
+"roles":[
+"agt",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">Pitstop is the customer support system for Legend of Toys. Every customer issue, whether it arrives by phone, WhatsApp or a marketplace message, becomes a <strong>ticket</strong> that an agent works from start to finish. This manual is your self-serve guide to every screen in it.</p>\n\n<h2 class=\"sec\">How a ticket flows</h2>\n<p>Almost everything in Pitstop revolves around a ticket moving through clear stages. The shape of that journey is set by one choice: the <strong>disposition</strong>, which is what you have decided to do for the customer.</p>\n<table class=\"tbl\">\n  <thead><tr><th>Disposition</th><th>What happens</th></tr></thead>\n  <tbody>\n    <tr><td><strong>Query</strong> / <strong>No action</strong></td><td>A question or a non-issue: opens and closes quickly (intake to closed).</td></tr>\n    <tr><td><strong>Awaiting info</strong></td><td>Waiting on the customer for evidence before deciding.</td></tr>\n    <tr><td><strong>Replacement</strong> / <strong>Refund</strong> / <strong>Repair</strong> / <strong>Pending</strong></td><td>The full path: verify, schedule a pickup, receive at the warehouse, inspect, then the branch for the chosen outcome, then close.</td></tr>\n  </tbody>\n</table>\n<p>You set the disposition during triage; from there the ticket advances stage by stage, each step asking for the details it needs (an AWB, an inspection note, a refund reference).</p>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; Where the conversation happens</div>\n  <p>Pitstop shows the customer&rsquo;s WhatsApp conversation as a <strong>read-only mirror</strong>. To actually reply to the customer you click through to BiteSpeed; two-way replies inside Pitstop are a later phase. Phone calls flow in from MyOperator and appear in the Calls log, where a missed call can be turned into a ticket.</p>\n</div>\n\n<h2 class=\"sec\">How to use this manual</h2>\n<p>Each chapter covers one screen and follows the same shape: what it is for, how to read it, and what to do. Jump to the screen you are on using the Contents page or your PDF reader&rsquo;s bookmarks. Chapters are tagged with the roles that use them:</p>\n<p style=\"margin-top:3mm\"><span class=\"role agt\">Agent</span> &nbsp; <span class=\"role lead\">Lead</span> &nbsp; <span class=\"role adm\">Admin</span></p>\n\n<h2 class=\"sec\">Callout boxes</h2>\n<div class=\"callout tip\"><div class=\"c-title\">&#10003; Tip</div><p>A faster or smarter way to do something.</p></div>\n<div class=\"callout warn\"><div class=\"c-title\">&#9888; Watch out</div><p>A common mistake or something easy to misread.</p></div>\n<div class=\"callout danger\"><div class=\"c-title\">&#9940; Important</div><p>Something that affects a customer outcome or money: get it right.</p></div>\n"
+},
+{
+"id":"navigation",
+"title":"Signing In & Getting Around",
+"route":"",
+"roles":[
+"agt",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">Pitstop opens with one click using your work Google account, and everything is reachable from a short sidebar. This chapter covers signing in and finding your way around.</p>\n\n<h2 class=\"sec\">Signing in</h2>\n<p>Open <code>pitstop.legendoftoys.com</code> and sign in with your <code>@legendoftoys.com</code> Google account. Personal accounts are refused; if sign-in bounces you back, sign out of any personal Google account first or use a fresh browser profile.</p>\n\n<h2 class=\"sec\">The menu</h2>\n<table class=\"tbl\">\n  <thead><tr><th>Group</th><th>What lives here</th></tr></thead>\n  <tbody>\n    <tr><td class=\"mono\">WORK</td><td>Queue, Calls, New Ticket.</td></tr>\n    <tr><td class=\"mono\">ANALYZE</td><td>Reports (for leads and admins).</td></tr>\n    <tr><td class=\"mono\">ADMIN</td><td>Departments, MyOperator Accounts, WhatsApp Templates (admins only).</td></tr>\n  </tbody>\n</table>\n<p>You only see the groups your role allows. Most screens have a search box you can focus by pressing <span class=\"kbd\">/</span>, and the queue and calls lists support arrow keys with Enter to open a row.</p>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; The department switcher</div>\n  <p>Admins get a <strong>department switcher</strong> in the top bar that scopes every list to one team or &ldquo;All Departments&rdquo;. Everyone else is locked to their own department automatically, so you only see your team&rsquo;s tickets and calls. Customer phone numbers are <strong>masked</strong> by default across the app, with a reveal toggle only on the ticket&rsquo;s customer panel.</p>\n</div>\n"
+},
+{
+"id":"roles",
+"title":"Roles & What You Can See",
+"route":"",
+"roles":[
+"agt",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">Pitstop gives each person the access that matches their job. This chapter explains the three roles used throughout this manual and what each unlocks.</p>\n\n<h2 class=\"sec\">The three roles</h2>\n<div class=\"anatomy\">\n  <div class=\"a-row\"><div class=\"a-key\"><span class=\"role agt\">Agent</span></div><div class=\"a-val\"><p><strong>CS Agent.</strong> Works the queue and calls: opens tickets, verifies issues, advances them through their stages, logs notes and evidence, and claims tickets to themselves.</p></div></div>\n  <div class=\"a-row\"><div class=\"a-key\"><span class=\"role lead\">Lead</span></div><div class=\"a-val\"><p><strong>CS Lead.</strong> Everything an agent does, plus reassigning tickets to other agents and reading the Reports.</p></div></div>\n  <div class=\"a-row\"><div class=\"a-key\"><span class=\"role adm\">Admin</span></div><div class=\"a-val\"><p><strong>Admin.</strong> Full access: changing a ticket&rsquo;s disposition after triage, the department switcher, and the admin screens (Departments, MyOperator accounts, WhatsApp templates).</p></div></div>\n</div>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; How access actually works</div>\n  <p>Your access comes from the permissions on your account (for example <code>cs_ticket_manage</code> to work tickets, <code>cs_ticket_reassign</code> to assign to others, <code>cs_reports_view</code> for reports, <code>cs_ticket_admin</code> for the admin screens). The three tags above are plain-language groupings of those permissions. If you cannot do something you should be able to, an admin needs to adjust your role.</p>\n</div>\n\n<h2 class=\"sec\">Who sees what</h2>\n<table class=\"tbl\">\n  <thead><tr><th>Area</th><th style=\"text-align:center\">Agent</th><th style=\"text-align:center\">Lead</th><th style=\"text-align:center\">Admin</th></tr></thead>\n  <tbody>\n    <tr><td>Queue, Calls, New Ticket, working a ticket</td><td style=\"text-align:center\">&bull;</td><td style=\"text-align:center\">&bull;</td><td style=\"text-align:center\">&bull;</td></tr>\n    <tr><td>Reassign tickets to other agents</td><td style=\"text-align:center\"></td><td style=\"text-align:center\">&bull;</td><td style=\"text-align:center\">&bull;</td></tr>\n    <tr><td>Reports</td><td style=\"text-align:center\"></td><td style=\"text-align:center\">&bull;</td><td style=\"text-align:center\">&bull;</td></tr>\n    <tr><td>Change disposition past triage</td><td style=\"text-align:center\"></td><td style=\"text-align:center\"></td><td style=\"text-align:center\">&bull;</td></tr>\n    <tr><td>Departments, MyOp, WA Templates, dept switcher</td><td style=\"text-align:center\"></td><td style=\"text-align:center\"></td><td style=\"text-align:center\">&bull;</td></tr>\n  </tbody>\n</table>\n"
+}
+]
+},
+{
+"part":"Work",
+"subtitle":"The queue, the ticket workspace, creating tickets, and the call log.",
+"chapters":[
+{
+"id":"queue",
+"title":"The Queue",
+"route":"/queue",
+"roles":[
+"agt",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">The Queue is the CS home screen: the worklist of tickets. Agents live here to see what is assigned to them, what is overdue, and to open or create tickets. It is where a shift starts.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Your ticket worklist.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read; open or create tickets.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role agt\">Agent</span> <span class=\"role lead\">Lead</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Updates</div><div class=\"g-val\">Counts every 60s.</div></div>\n</div>\n\n<h2 class=\"sec\">Reading it</h2>\n<p>Five cards head the screen: <strong>My Open</strong>, <strong>Overdue</strong> (red), <strong>Awaiting Evidence 3+ days</strong> (nudge candidates), <strong>Closed Today</strong>, and <strong>Avg Close</strong> month-to-date. Below them, tabs with live counts: <strong>My Queue</strong> (the default), All Open, Awaiting Evidence, In Logistics, Inspection, Resolution, Closed.</p>\n<p>Each row shows the ticket number, customer (with masked phone), product, the <strong>disposition</strong> badge (an <span class=\"mono\">AUTO</span> tag if it was auto-created), the current stage, platform, assigned agent, and an <strong>Age / SLA</strong> figure: green up to 3 days, orange beyond, and <strong>red and bold when overdue</strong> with a &ldquo;+Nd over&rdquo; note.</p>\n\n<h2 class=\"sec\">Finding and opening tickets</h2>\n<p>Search by name, phone, order, UPC or ticket number (press <span class=\"kbd\">/</span> to jump in). Narrow with the disposition chips and the Category and Platform dropdowns; the filters live in the URL so a view can be bookmarked. Click a row, or use the arrow keys and Enter, to open it. <strong>New Ticket</strong> (red) creates one; <strong>Export CSV</strong> downloads the rows you can currently see.</p>\n\n<div class=\"callout warn\">\n  <div class=\"c-title\">&#9888; Export is the visible list, with masked phones</div>\n  <p>Export CSV downloads only the tickets currently loaded for the tab and filters you are on, not the whole queue, and phone numbers are masked in the file. The <span class=\"mono\">AUTO</span> badge means the ticket was created automatically (for example from a call), not opened by an agent.</p>\n</div>\n"
+},
+{
+"id":"ticket",
+"title":"Working a Ticket",
+"route":"/queue/detail",
+"roles":[
+"agt",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">The ticket detail screen is the full case file for one ticket. This is where you verify the issue, advance it through its lifecycle, read the WhatsApp conversation, log notes and evidence, and assign it. It is the heart of Pitstop.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Working a single ticket end to end.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">The main action screen.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role agt\">Agent</span> <span class=\"role lead\">Lead</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Layout</div><div class=\"g-val\">Identity · Work area · Activity.</div></div>\n</div>\n\n<h2 class=\"sec\">The layout</h2>\n<p>A header carries the customer and product, the disposition, an overdue badge if relevant, and the big red <strong>Advance</strong> button, with a stage <strong>stepper</strong> below. The body has three columns: the <strong>identity rail</strong> (assignment, customer, Shopify, call info, order, past cases), the <strong>work area</strong> (Issue, Return logistics, Resolution), and the <strong>activity feed</strong> (history, notes, attachments).</p>\n\n<h2 class=\"sec\">Advancing a ticket</h2>\n<ol class=\"steps\">\n  <li><span class=\"s-title\">Set the disposition</span> from the header dropdown during triage. This decides the whole path the ticket will take.</li>\n  <li><span class=\"s-title\">Click Advance.</span> The button names the next stage (for example &ldquo;Schedule Pickup&rdquo;). A modal asks for the fields that stage needs: a pickup needs the return AWB and courier; inspection needs an inspection note; a refund needs the amount, then the payment reference.</li>\n  <li><span class=\"s-title\">Fill the required fields and confirm.</span> The ticket moves to the next stage and the stepper updates.</li>\n</ol>\n<p>Three side-exits handle the non-standard endings: <strong>Cancel</strong> (customer dropped), <strong>Reject</strong> (inspection found no fault), and <strong>Escalate</strong> (flag for a manager, staying in the current stage). Assignment is on the left rail: agents <strong>Claim</strong> an unassigned ticket; leads and admins can <strong>Reassign</strong> to anyone.</p>\n\n<div class=\"callout warn\">\n  <div class=\"c-title\">&#9888; Disposition locks after triage</div>\n  <p>You can change the disposition freely only while the ticket is in <strong>intake</strong> or <strong>awaiting evidence</strong>. Once it enters logistics, only an admin can change it. The Issue, Return logistics and Resolution panels also unlock in sequence: a panel that is greyed out now (&ldquo;unlocks once the issue is verified&rdquo;) will open at the right stage. Cancel, Reject and Close are three different endings: do not use one for another.</p>\n</div>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; WhatsApp and attachments</div>\n  <p>The WhatsApp panel is a read-only mirror: to reply, use <strong>Reply in BiteSpeed</strong>. A green pill shows how long the 24-hour reply window is open. Attachments in the activity feed are <strong>links</strong> (to a WhatsApp video, a Drive photo), not uploaded files.</p>\n</div>\n"
+},
+{
+"id":"new",
+"title":"New Ticket",
+"route":"/new",
+"roles":[
+"agt",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">New Ticket logs a customer issue, usually while on a call. It is built so you scan or type the unit&rsquo;s UPC first and the product details fill themselves in.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Creating a customer ticket.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Action: creates a ticket.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role agt\">Agent</span> <span class=\"role lead\">Lead</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Required</div><div class=\"g-val\">Customer name + description.</div></div>\n</div>\n\n<h2 class=\"sec\">Filling it in</h2>\n<ol class=\"steps\">\n  <li><span class=\"s-title\">Order lookup.</span> Scan or type the unit <strong>UPC</strong>; after a few characters it looks the unit up and auto-fills product, model, colour and SKU (without overwriting anything you typed). Pick the platform and enter the external order ID if there is one.</li>\n  <li><span class=\"s-title\">Customer.</span> Enter the name (required), phone, email and address. When you leave the phone field it checks for past cases and warns you with links if this customer has contacted before.</li>\n  <li><span class=\"s-title\">Issue.</span> Pick a category and sub-category (or &ldquo;Other&rdquo; with a description), set the disposition (default <strong>Pending</strong>), choose the intake channel, and write the description (required).</li>\n  <li><span class=\"s-title\">Create Ticket.</span> The ticket is created and opens on its detail page.</li>\n</ol>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; Only two fields are required</div>\n  <p>Only the customer <strong>name</strong> and the issue <strong>description</strong> are mandatory; the UPC and product can be blank if you do not have them. When you open this from a missed call, the phone and name are pre-filled and the description is seeded for you.</p>\n</div>\n"
+},
+{
+"id":"calls",
+"title":"Calls",
+"route":"/calls",
+"roles":[
+"agt",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">Calls is the phone-call log: who called, who answered, what was missed, and which calls still need a callback or a ticket. Agents use it to clear missed calls and turn them into tickets.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">The call log and missed-call follow-up.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read; quick row actions.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role agt\">Agent</span> <span class=\"role lead\">Lead</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Updates</div><div class=\"g-val\">List every 30s.</div></div>\n</div>\n\n<h2 class=\"sec\">Reading it</h2>\n<p>Five cards show Calls today, Answered, Missed, Answer rate and Awaiting callback. Tabs split the list into All Calls, My Calls, Unassigned and Missed. Each row shows the time, direction (incoming or outgoing), phone, customer, agent, duration, a status badge (<strong style=\"color:#1a8f43\">Answered</strong>, <strong style=\"color:#c01f1f\">Missed</strong>, <strong style=\"color:#c2570a\">Abandoned</strong>, or Live), and the linked ticket if there is one.</p>\n\n<h2 class=\"sec\">Acting on a call</h2>\n<p>The row menu (&hellip;) offers the right actions for that call: a missed call with no ticket can be <strong>Marked Called Back</strong> or turned into a ticket with <strong>Create Ticket</strong>; a call with a ticket offers <strong>Open Ticket</strong>. Clicking a row opens its ticket if it has one, otherwise the call detail.</p>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; Phone is shown in full here</div>\n  <p>Unlike the queue, the calls list shows the full phone number so you can call back. Turning a missed call into a ticket carries the call&rsquo;s details into the new ticket and links the two together.</p>\n</div>\n"
+},
+{
+"id":"call-detail",
+"title":"Call Detail",
+"route":"/calls/detail",
+"roles":[
+"agt",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">Call Detail is the full record of one call: its timeline, the agent, and the recording, plus the buttons to turn it into a ticket or mark it called back.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">One call&rsquo;s full record.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read; two actions.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role agt\">Agent</span> <span class=\"role lead\">Lead</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Opened from</div><div class=\"g-val\">The Calls list.</div></div>\n</div>\n\n<h2 class=\"sec\">What it shows</h2>\n<p>A header card with the customer, status and the call&rsquo;s phone, duration, MyOperator account and department. A <strong>timeline</strong> card (created, answered, ended, called back, ticket created). An <strong>agent</strong> card. And, when one exists, a <strong>recording</strong> card with a link to play it.</p>\n\n<h2 class=\"sec\">Acting on it</h2>\n<p><strong>Create Ticket From Call</strong> appears when no ticket is linked and opens a pre-filled New Ticket. <strong>Mark Called Back</strong> appears for a missed call that has not been returned. Once a ticket is linked, both buttons disappear and the ticket shows in the timeline.</p>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; A recording may lag</div>\n  <p>The recording link can take a little while to become playable; until then it shows &ldquo;URL not yet resolved&rdquo;. That is normal, not a fault.</p>\n</div>\n"
+}
+]
+},
+{
+"part":"Analyze",
+"subtitle":"Cross-cutting reports on tickets and calls.",
+"chapters":[
+{
+"id":"reports",
+"title":"Reports",
+"route":"/reports",
+"roles":[
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">Reports is the &ldquo;how are we doing&rdquo; screen: how many cases and calls happened over a date range, what they cost, and how products, platforms, agents and departments compare. Open it to review performance.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Ticket and call analytics.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read; CSV export.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role lead\">Lead</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Range</div><div class=\"g-val\">From / To (defaults year-to-date).</div></div>\n</div>\n\n<h2 class=\"sec\">Two tabs</h2>\n<p><strong>Tickets</strong> shows total cases and the three cost lines (return logistics, replacement units, refund payouts), a monthly trend chart coloured by outcome, and breakdowns by product, platform and agent (with each agent&rsquo;s average days-to-close). <strong>Calls</strong> shows total, answered and missed calls, answer rate and average duration, with breakdowns by department, MyOperator account, direction and agent, plus an hourly distribution.</p>\n<p>Set the From and To dates at the top; changing either refetches immediately.</p>\n\n<div class=\"callout warn\">\n  <div class=\"c-title\">&#9888; Export is tickets only</div>\n  <p>The <strong>Export CSV</strong> button shows on both tabs but always exports the <em>ticket</em> figures (product, platform, agent and a cost summary), even when you are looking at the Calls tab. In the agent call table, &ldquo;missed to returned&rdquo; counts missed calls that were later called back, not still-missed ones. This screen needs the reports permission.</p>\n</div>\n"
+}
+]
+},
+{
+"part":"Admin",
+"subtitle":"Departments, MyOperator call accounts, and WhatsApp templates.",
+"chapters":[
+{
+"id":"departments",
+"title":"Departments",
+"route":"/admin/departments",
+"roles":[
+"adm"
+],
+"html":"<p class=\"lead\">Departments define the CS teams (Inbound, Outbound, Confirmation, Messaging and so on) and which agent belongs to each. Departments control visibility: a non-admin only sees the tickets and calls in their own team.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Teams and who is in them.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Action: create, toggle, assign.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Effect</div><div class=\"g-val\">Scopes everyone&rsquo;s view.</div></div>\n</div>\n\n<h2 class=\"sec\">Using it</h2>\n<p>The <strong>Departments</strong> table lists each team with its slug, name, sort order, agent count and an Active toggle. <strong>Add Department</strong> creates one (a URL-safe slug, a name, a sort order). The <strong>Agents</strong> table lists everyone with a per-row department dropdown: pick a team to move an agent into it (or &ldquo;None&rdquo; to remove them).</p>\n\n<div class=\"callout warn\">\n  <div class=\"c-title\">&#9888; Changes apply instantly, no confirm</div>\n  <p>Toggling a department active and reassigning an agent both take effect the moment you click, with no confirmation, so a misclick is live immediately. Setting an agent to &ldquo;None&rdquo; drops their tickets and calls out of every department view. A slug is fixed once the department is created.</p>\n</div>\n"
+},
+{
+"id":"myop",
+"title":"MyOperator Accounts",
+"route":"/admin/myop",
+"roles":[
+"adm"
+],
+"html":"<p class=\"lead\">MyOperator Accounts registers each calling account that feeds phone calls into Pitstop. Each account gets its own webhook URL and secret; you set it up here, then point MyOperator at the generated URL so its call events flow in.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Connecting calling lines to Pitstop.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Action: create + activate.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">When</div><div class=\"g-val\">Onboarding a new number.</div></div>\n</div>\n\n<h2 class=\"sec\">Adding an account</h2>\n<p><strong>Add Account</strong> captures a slug, a name, and optionally the DID (caller number) and owner email. Each account row shows its generated <strong>webhook URL</strong> and <strong>env-var name</strong>, each with a copy button, and an Active toggle. There is no edit or delete: an account can only be created and then activated or deactivated.</p>\n\n<div class=\"callout danger\">\n  <div class=\"c-title\">&#9940; Creating the account is only half the setup</div>\n  <p>Calls will not authenticate until an engineer sets the matching secret in Cloudflare (the <code>MYOP_WEBHOOK_SECRET_&lt;SLUG&gt;</code> shown on the row), using <code>wrangler secret put</code>. That is a one-time technical step outside Pitstop. Because there is no edit, a typo in the slug, DID or owner can only be fixed by creating a new account.</p>\n</div>\n"
+},
+{
+"id":"wa-templates",
+"title":"WhatsApp Templates",
+"route":"/admin/wa-templates",
+"roles":[
+"adm"
+],
+"html":"<p class=\"lead\">WhatsApp Templates manages the library of pre-approved messages agents use to start a conversation or message a customer outside the 24-hour reply window. Open it to add or edit a template&rsquo;s wording, label, category and language.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">The approved-message library.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Action: create / edit / toggle.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Categories</div><div class=\"g-val\">Utility · Marketing · Authentication.</div></div>\n</div>\n\n<h2 class=\"sec\">Managing templates</h2>\n<p>Each row shows the template <strong>name</strong> (the Meta-approved name), the <strong>label</strong> agents see, its category, language, how many <strong>placeholders</strong> (<span class=\"mono\">&#123;&#123;1&#125;&#125;</span>, <span class=\"mono\">&#123;&#123;2&#125;&#125;</span>&hellip;) the body has, and an Active toggle. <strong>Add Template</strong> or <strong>Edit</strong> opens a form for the name, display label, category, language and body; the placeholder count is counted from the body automatically as you type.</p>\n\n<div class=\"callout danger\">\n  <div class=\"c-title\">&#9940; The name must match Meta exactly</div>\n  <p>A template&rsquo;s <strong>name</strong> must match the name approved in Meta Business Manager, or it will not send; and the name is locked after creation (fix a wrong one by making a new template). Today this screen <em>records</em> templates and composes wording; the actual WhatsApp send is a later phase, so saving a template here does not yet deliver a message on its own.</p>\n</div>\n"
+}
+]
+}
+]
+}

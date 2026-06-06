@@ -1,0 +1,41 @@
+<p class="lead">Gate Pass is the store&rsquo;s entry and exit register at the factory gate. Every load of material that comes in or goes out gets its own numbered pass (<code>GP-NNNN</code>), recording the vehicle, the driver, what was carried and who it was to or from. It is a security log, not a dispatch tool: finished-goods sales to customers still go out on the dispatch challan, never here.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Logging material in and out at the gate.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: creates a printable pass.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sto">Store</span> <span class="role prd">Production</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Prints</div><div class="g-val">Hand-signed gate pass.</div></div>
+</div>
+
+<h2 class="sec">Inbound or outbound</h2>
+<p>Every pass is one movement in one direction, and the direction is fixed when you create it.</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Inbound (entry)</div><div class="a-val">Something arriving: a material delivery, returnable goods coming back, or a sample in.</div></div>
+  <div class="a-row"><div class="a-key">Outbound (exit)</div><div class="a-val">Something leaving for a non-sale reason: a vendor return, goods going out for job-work or repair, a sample out, scrap, or a transfer to another unit.</div></div>
+</div>
+<p>The list of purposes you can choose from changes with the direction, so pick the direction first.</p>
+
+<h2 class="sec">Creating a pass</h2>
+<ol class="steps">
+  <li><span class="s-title">+ New Gate Pass.</span> Choose <strong>Inbound</strong> or <strong>Outbound</strong>, then pick a purpose.</li>
+  <li><span class="s-title">Fill in the movement.</span> Date and time, vehicle number, driver name and phone, transporter or courier, number of boxes, the party it is from or to, a reference (PO, invoice or RMA) and a description of the contents. Enter at least a vehicle number or a person&rsquo;s name.</li>
+  <li><span class="s-title">Mark it returnable if it&rsquo;s coming back.</span> For tools, moulds or job-work that you expect to return, tick <strong>Returnable</strong> and set an expected return date.</li>
+  <li><span class="s-title">Attach documents</span> if you have them (invoices or photos, optional, more than one allowed).</li>
+  <li><span class="s-title">Create Gate Pass.</span> A <code>GP-NNNN</code> number is assigned and you land on its detail page.</li>
+</ol>
+
+<h2 class="sec">Printing and signing</h2>
+<p>Open a pass and press <strong>Print</strong>. The printed copy carries the company&rsquo;s factory address and blank lines for hand signatures (Security, Authorised By, Driver). <strong>This is where approval happens</strong>: a pass is valid the moment it is created, and the only sign-off is the physical signature on the printout. There is no approve button in the app.</p>
+
+<h2 class="sec">Returnables and finding old passes</h2>
+<p>When returnable goods come back, open the pass and press <strong>Mark Returned</strong>. The list has an <strong>Overdue returnables</strong> filter that surfaces anything still out past its expected return date. Use the search box (by <code>GP</code> number, vehicle or party) and the date range to find any past pass.</p>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Void, never delete</div>
+  <p>A pass cannot be deleted. If one is wrong or cancelled, open it and press <strong>Void</strong> with a reason; the record stays and still prints, but with a VOID watermark across it, so a printed pass can never quietly disappear. Direction is locked once created, so to flip inbound to outbound you void and make a new one.</p>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; This is not customer dispatch</div>
+  <p>Gate Pass covers material arrivals and non-sale departures (vendor returns, job-work, samples, scrap, inter-unit transfers). Sending finished products to a customer still goes through the dispatch challan, not here.</p>
+</div>

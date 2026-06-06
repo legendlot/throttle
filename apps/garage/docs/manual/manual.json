@@ -2,7 +2,7 @@
   "title": "Garage",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to store, inventory, production, returns and procurement at Legend of Toys.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "date": "2026-06-06",
   "app_url": "garage.legendoftoys.com",
   "owner": "Legend of Toys",
@@ -54,7 +54,7 @@
     },
     {
       "part": "Store",
-      "subtitle": "Issuing parts, verifying flushes, damage, cycle counts, adjustments, direct issuance and daily logs.",
+      "subtitle": "Issuing parts, verifying flushes, damage, cycle counts, adjustments, direct issuance, gate passes, restocking and daily logs.",
       "chapters": [
         { "id": "issue-queue",       "title": "Issue Queue",       "route": "/issue-queue",        "file": "store-issuequeue.html",  "roles": ["sto","adm"] },
         { "id": "flush-verify",      "title": "Flush Verify",      "route": "/flush-verify",       "file": "store-flushverify.html", "roles": ["sto","adm"] },
@@ -63,6 +63,8 @@
         { "id": "stock-adjustments", "title": "Stock Adjustments", "route": "/stock-adjustments",  "file": "store-adjustments.html", "roles": ["sto","adm"] },
         { "id": "dispatch-counts",   "title": "Dispatch Counts",   "route": "/dispatch/unit-counts","file": "store-dispatchcounts.html","roles": ["sto","adm"] },
         { "id": "direct-issuance",   "title": "Direct Issuance",   "route": "/direct-issuance",    "file": "store-directissue.html", "roles": ["sto","adm"] },
+        { "id": "gate-pass",         "title": "Gate Pass",         "route": "/gate-pass",          "file": "store-gate-pass.html",   "roles": ["sto","prd","adm"] },
+        { "id": "unit-restock",      "title": "Unit Restock",      "route": "/restock",            "file": "store-restock.html",     "roles": ["sto","adm"] },
         { "id": "store-history",     "title": "Store History",     "route": "/store-history",      "file": "store-history.html",     "roles": ["sto","adm"] },
         { "id": "manpower",          "title": "Manpower",          "route": "/manpower",           "file": "store-manpower.html",    "roles": ["sto","adm"] },
         { "id": "dispatch",          "title": "Dispatch Activity", "route": "/dispatch",           "file": "store-dispatch.html",    "roles": ["sto","adm"] }

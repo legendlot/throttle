@@ -1,0 +1,36 @@
+<p class="lead">The Purchase Orders screen is the master list of every PO we have ever raised, across all categories and sources. It is where you find a PO to work, filter the pipeline, and spot anything stuck.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Finding and tracking purchase orders.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read; open a PO to act.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role proc">Procurement</span> <span class="role appr">Approver</span> <span class="role fin">Finance</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Filters</div><div class="g-val">Status, source, type, plus search.</div></div>
+</div>
+
+<h2 class="sec">Reading the table</h2>
+<p>Each row shows the PO number, its revision number, type, source country, vendor, line count, value, expected arrival, who raised it, and its current status. Click any row to open the PO; the <strong>View</strong> button on the right does the same. The status badge tells you where the PO is in its life:</p>
+<table class="tbl">
+  <thead><tr><th>Status</th><th>What it means</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Soft</strong></td><td>A placeholder China PO for goods not yet pinned to a registered product.</td></tr>
+    <tr><td><strong>Draft</strong></td><td>Being built; can still be edited.</td></tr>
+    <tr><td><strong>Accepted</strong></td><td>Procurement has signed off; waiting for final approval.</td></tr>
+    <tr><td><strong>Approved</strong></td><td>Final sign-off given; ready to send and pay.</td></tr>
+    <tr><td><strong>Sent</strong></td><td>Issued to the supplier.</td></tr>
+    <tr><td><strong>Confirmed &amp; Payment Done / Partially Received / Closed</strong></td><td>Later life stages once goods are flowing in.</td></tr>
+    <tr><td><strong>Cancelled</strong></td><td>Stopped, with a reason on the PO.</td></tr>
+  </tbody>
+</table>
+
+<h2 class="sec">Filtering and finding</h2>
+<p>Use the search box to match a PO number, vendor, code, source, type or who raised it (type more than one word to narrow). The three dropdowns filter by status, source country and order type. The header shows how many rows match. <strong>New PO</strong> (top right, for procurement) starts a fresh purchase order.</p>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; The &ldquo;awaiting inward&rdquo; banner</div>
+  <p>If POs have been confirmed but their goods have not yet been counted in, a yellow banner appears with a count and a link to the receiving screen in our store system. That receiving step happens outside Snorkel: Snorkel raises the order, the store counts it in.</p>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; China values may show as &ldquo;Restricted&rdquo;</div>
+  <p>If you are not cleared for China procurement, the <strong>value</strong> of a China-sourced PO shows as <em>Restricted</em> rather than a figure. You can still see the PO exists and track its status, just not its money.</p>
+</div>

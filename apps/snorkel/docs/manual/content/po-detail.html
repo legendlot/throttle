@@ -1,0 +1,40 @@
+<p class="lead">The PO detail screen is the full file for one purchase order: its details, money, lines and history, and crucially the buttons that move it through the approval chain. The buttons you see depend on the PO&rsquo;s current stage and your role, so this screen quietly enforces who can do what.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Working a single purchase order.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">The main action screen for POs.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role proc">Procurement</span> <span class="role appr">Approver</span> <span class="role fin">Finance</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Layout</div><div class="g-val">Details &amp; money &middot; lines &middot; history.</div></div>
+</div>
+
+<h2 class="sec">The layout</h2>
+<p>A header carries the PO number, its revision and status badges, and the action buttons. Below it: a <strong>PO Details</strong> panel (vendor, type, source, who raised and approved it, the shipping timeline) and a <strong>Financial</strong> panel (currency, terms, value, invoice). Then the <strong>Line Items</strong> table with a tax-aware total, and a <strong>Revision History</strong> of every change made. If the PO came from a request, a chip links back to it; if a payment has been routed, a chip shows its state.</p>
+
+<h2 class="sec">Moving the PO along</h2>
+<p>The approval chain is a relay. At each stage only the right button appears, and only for someone with the right role:</p>
+<ol class="steps">
+  <li><span class="s-title">Accept</span> <span class="role proc">Procurement</span> &mdash; on a Draft. Procurement&rsquo;s sign-off: the PO becomes <strong>Accepted</strong>, becomes printable, and the linked request is marked approved.</li>
+  <li><span class="s-title">Final Approve</span> <span class="role appr">Approver</span> &mdash; on an Accepted PO. The senior &ldquo;yes&rdquo;: it becomes <strong>Approved</strong>.</li>
+  <li><span class="s-title">Route payment</span> <span class="role fin">Finance</span> &mdash; on an Approved PO. Request payment from <strong>Finance</strong> or from the <strong>Requester</strong>.</li>
+  <li><span class="s-title">Mark Paid</span> <span class="role fin">Finance</span> &mdash; once payment has been made.</li>
+  <li><span class="s-title">Mark Sent</span> <span class="role proc">Procurement</span> &mdash; records that the PO has gone to the supplier.</li>
+</ol>
+<p>Two more buttons are available while a PO is live: <strong>Amend</strong> (edit the header or shipping details, with a required change note that is logged as a new revision) and <strong>Cancel</strong> (stop the PO, with a required reason). <strong>Print PO</strong> opens a clean, printable copy in a new tab.</p>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; Accept and Approve are two different people&rsquo;s jobs</div>
+  <p>Acceptance is procurement saying the PO is correct; final approval is the senior sign-off to actually commit the spend. They are intentionally separate buttons held by separate roles. On China POs the approver must not be the person who raised the PO, four eyes on our biggest orders.</p>
+</div>
+
+<h2 class="sec">Reading the money</h2>
+<p>The line table totals up a <strong>subtotal</strong>, then the GST (shown as CGST + SGST for a supplier in our own state, or IGST for one in another state), then the <strong>grand total</strong>. If a supplier invoice value has been entered and it disagrees with the PO by more than a rounding amount, a red <strong>MISMATCH</strong> flag appears so it can be checked before paying.</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; China POs hide their money</div>
+  <p>If you are not cleared for China procurement, the financial panel and per-line prices on a China PO show as <em>Restricted</em> (a small padlock). You can still see and track the PO, just not its figures. This applies on this screen, the list, and the payment queue.</p>
+</div>
+
+<div class="callout tip">
+  <div class="c-title">&#10003; Every amendment is on the record</div>
+  <p>You cannot quietly change a live PO. Each amendment bumps the revision number and is logged in Revision History with who changed it, when, and the summary you typed. Use the change note to explain <em>why</em>, not just what.</p>
+</div>

@@ -1,0 +1,77 @@
+<p class="lead">The Tasks list is where you live. It is one screen that captures new work, shows what is on your plate, and lets you edit almost everything inline without opening anything. This chapter is the longest in the manual because it covers the screen you will use most.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Capturing, finding, and updating tasks.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Both: read your list and edit in place.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role mem">Member</span> <span class="role view">Reviewer</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Shows</div><div class="g-val">The tasks you&rsquo;re allowed to see, in one space.</div></div>
+</div>
+
+<h2 class="sec">Capturing a task in one line</h2>
+<p>At the very top is a single box: <em>&ldquo;Add a task. Type a title and press Enter&hellip;&rdquo;</em>. Type a title, press <span class="kbd">Enter</span>, and the task exists. That is the whole capture step, no form, no required fields. The new task lands in <strong>The Grid</strong> so you can finish it off later.</p>
+
+<div class="callout tip">
+  <div class="c-title">&#10003; Capture first, tidy later</div>
+  <p>Do not stop to fill in the owner and deadline while an idea is fresh. Get the title down, hit Enter, and move on. The Grid will remind you what still needs finishing.</p>
+</div>
+
+<h2 class="sec">The Grid: tasks that need setting up</h2>
+<p>Just-captured tasks sit in a tinted tray at the top of the list labelled <strong>THE GRID &middot; NEEDS SETUP</strong>. A task is in the Grid whenever it is missing an <strong>owner</strong> or a <strong>deadline</strong> (or both). The moment it has both, it leaves the Grid on its own and joins the main <strong>Active</strong> board below. Think of the Grid as your inbox of half-formed tasks.</p>
+
+<h2 class="sec">Reading a row</h2>
+<p>Each task is one row. The columns, left to right:</p>
+<table class="tbl">
+  <thead><tr><th>Column</th><th>What it shows</th></tr></thead>
+  <tbody>
+    <tr><td><strong>ID</strong></td><td>The permanent <code>DKT-</code> number. Click it to open the task panel.</td></tr>
+    <tr><td><strong>Title</strong></td><td>The task name. A <span class="mono">revised</span> tag here means the deadline has been changed at least once.</td></tr>
+    <tr><td><strong>Team</strong></td><td>The department it belongs to.</td></tr>
+    <tr><td><strong>Program</strong></td><td>Its program label, if any (see the Programs chapter).</td></tr>
+    <tr><td><strong>Owner</strong></td><td>The accountable person, shown by first name (hover for the full name).</td></tr>
+    <tr><td><strong>People</strong></td><td>Collaborators, as small overlapping initial circles. Hover to see names.</td></tr>
+    <tr><td><strong>Status</strong></td><td>Not started / In progress / Done / Blocked / Abandoned.</td></tr>
+    <tr><td><strong>Pri</strong></td><td>Priority, P0 (immediate) to P3 (low).</td></tr>
+    <tr><td><strong>Deadline</strong></td><td>When it is due. Turns <strong>red and bold</strong> with an &ldquo;overdue&rdquo; flag once the date has passed.</td></tr>
+    <tr><td><strong>(end)</strong></td><td>Small counts of attached documents and comments.</td></tr>
+  </tbody>
+</table>
+
+<h2 class="sec">Editing without opening anything</h2>
+<p>This is the heart of the screen. If you are allowed to edit a task, most cells are <strong>click-to-edit</strong> right in the row:</p>
+<ol class="steps">
+  <li><span class="s-title">Click a property cell</span> (Team, Program, Owner, Status, or Priority) and it turns into a dropdown. Pick a value and it saves instantly.</li>
+  <li><span class="s-title">Press Tab to walk across the row.</span> Once you are editing one cell, Tab moves to the next and commits your choice as it goes, so you can set several fields with the keyboard in a few keystrokes.</li>
+  <li><span class="s-title">Click the Deadline cell</span> to open a calendar. The first time, you just pick a date. After that, changing it asks for a <strong>reason</strong> (see below).</li>
+  <li><span class="s-title">Click the title</span> to rename it; click the <code>DKT-</code> number to open the full panel instead.</li>
+  <li><span class="s-title">Click the People cell</span> to add or remove collaborators from a small popup.</li>
+</ol>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Revising a deadline always needs a reason</div>
+  <p>The <em>first</em> deadline you put on a task is its locked original promise, set with no questions asked. Every change after that asks for a short reason and is recorded on the task's history. This is on purpose: it is how Docket can always answer &ldquo;why did this slip?&rdquo;. See <em>The Task Lifecycle</em> for the full story.</p>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; If a row won&rsquo;t let you edit</div>
+  <p>You can only change the core fields of tasks you <strong>own</strong> or <strong>created</strong> (admins can change any). On tasks you merely collaborate on or can only view, the cells simply will not turn into editors. That is expected, not a glitch.</p>
+</div>
+
+<h2 class="sec">Sub-tasks</h2>
+<p>A task can hold a list of sub-tasks (one level deep, sub-tasks cannot themselves have sub-tasks). When a task has them, a small <strong>chevron</strong> and a done/total count appear next to its title. Click the chevron to expand the children as indented <code>&#8627;</code> rows underneath. To add one, hover the parent row and click the <strong>+</strong>; type a title and press Enter. New sub-tasks <strong>inherit the parent's team and owner</strong>, which you can change afterwards. The <strong>Expand all</strong> / <strong>Collapse all</strong> buttons in the control bar open or close every task's sub-tasks at once.</p>
+
+<h2 class="sec">Finding tasks: search, filter, group, sort</h2>
+<p>Four tools sit above the list:</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Search</div><div class="a-val"><p>The box on the left (press <span class="kbd">/</span> to jump in) filters as you type, instantly. It matches the ID, title, owner, team, creator and collaborator names, and every word you type must match somewhere.</p></div></div>
+  <div class="a-row"><div class="a-key">Manage</div><div class="a-val"><p>The <strong>Manage</strong> button opens a panel of filters: by status, team, owner, priority and program, plus quick toggles for <em>My tasks</em>, <em>Overdue</em> and <em>Revised</em>. A small number on the button tells you how many filters are active; <em>Clear all</em> resets them.</p></div></div>
+  <div class="a-row"><div class="a-key">Group by</div><div class="a-val"><p>Inside the Manage panel, <strong>Group by</strong> reflows the board into sections by Owner, Team or Program. Each section can be collapsed.</p></div></div>
+  <div class="a-row"><div class="a-key">Sort</div><div class="a-val"><p>Click any column header to sort by it. Click again to reverse, and a third time to switch sorting off. Sorting applies to both top-level rows and their sub-tasks.</p></div></div>
+</div>
+
+<h2 class="sec">Which space am I in?</h2>
+<p>The list always shows <strong>one space at a time</strong>. By default that is <strong>General</strong>, the open company-wide space. If you click a private space in the sidebar, the list shows only that space's tasks and a header with the space name appears; anything you capture then lands in that space. Spaces have their own chapter.</p>
+
+<div class="callout floor">
+  <div class="c-title">&#9874; A typical pass through your list</div>
+  <p>Open Tasks. Glance at <strong>The Grid</strong>, set an owner and deadline on anything sitting there. Toggle <strong>My tasks</strong> in Manage to see only your own. Sort by <strong>Deadline</strong> to bring the soonest to the top, and clear anything flagged <span class="mono">overdue</span> in red. Click a title to open it when you need comments or sub-tasks.</p>
+</div>

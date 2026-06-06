@@ -1,0 +1,33 @@
+<p class="lead">The PO Requests screen lists every request that has been filed and where each one stands. It is the shared inbox between the people who ask for things and the procurement team who buys them.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Tracking requests from filed to bought.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read, with actions on each request.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role req">Requester</span> <span class="role proc">Procurement</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Tabs</div><div class="g-val">All, pending, approved, rejected, cancelled.</div></div>
+</div>
+
+<h2 class="sec">Reading the list</h2>
+<p>Tabs across the top split requests by status, each showing a live count. Every row shows the request number, title, category, urgency, estimated cost, who filed it, the date, and the status. When a request has been turned into a purchase order, its number appears under the <strong>approved</strong> badge so you can see what it became.</p>
+<table class="tbl">
+  <thead><tr><th>Status</th><th>What it means</th></tr></thead>
+  <tbody>
+    <tr><td><strong>pending</strong></td><td>Filed, waiting for procurement to act.</td></tr>
+    <tr><td><strong>approved</strong></td><td>Turned into a purchase order and that PO was accepted. The linked PO number is shown.</td></tr>
+    <tr><td><strong>rejected</strong></td><td>Procurement declined it, with a reason.</td></tr>
+    <tr><td><strong>cancelled</strong></td><td>The person who filed it withdrew it.</td></tr>
+  </tbody>
+</table>
+
+<h2 class="sec">Opening a request</h2>
+<p>Click any row to open it. The detail screen shows everything that was filed and what can be done now, which depends on your role and the request&rsquo;s status:</p>
+<ul>
+  <li><strong>Make PO from request</strong> <span class="role proc">Procurement</span> &mdash; starts a new purchase order with the request shown alongside, so you can copy the details across.</li>
+  <li><strong>Reject</strong> <span class="role proc">Procurement</span> &mdash; declines the request; a reason is required and is shown back to the requester.</li>
+  <li><strong>Cancel request</strong> &mdash; only the person who filed it can withdraw their own pending request.</li>
+</ul>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Accepting the PO closes the loop</div>
+  <p>A request is marked <strong>approved</strong> not when the PO is created, but when procurement <em>accepts</em> that PO. Until then the request stays pending and shows the draft PO it is linked to. This means a half-built draft will not falsely tell the requester their thing is on the way.</p>
+</div>

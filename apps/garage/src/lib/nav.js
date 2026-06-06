@@ -91,6 +91,10 @@ const GROUPS = [
     ],
   },
   {
+    id: 'manual', label: 'System Manual', flat: true, route: '/manual',
+    icon: BookOpen,
+  },
+  {
     id: 'users', label: 'USERS', flat: true, route: '/users',
     icon: Users,
     gate: (p) => hasPermission(p, 'users_view') || hasPermission(p, 'users_manage'),

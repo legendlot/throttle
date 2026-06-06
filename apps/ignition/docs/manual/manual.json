@@ -2,8 +2,8 @@
   "title": "Ignition",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to influencer deals, engagements, codes and campaigns at Legend of Toys.",
-  "version": "1.0.0",
-  "date": "2026-05-29",
+  "version": "1.1.0",
+  "date": "2026-06-06",
   "app_url": "ignition.legendoftoys.com",
   "owner": "Legend of Toys",
   "roles": {
@@ -29,7 +29,9 @@
         { "id": "influencers",      "title": "Influencers",       "route": "/influencers",      "file": "work-influencers.html","roles": ["mkt","lead","adm"] },
         { "id": "engagements",      "title": "Engagements",       "route": "/engagements",      "file": "work-engagements.html","roles": ["mkt","lead","adm"] },
         { "id": "new-deal",         "title": "New Deal",          "route": "/engagements/new",  "file": "work-newdeal.html",    "roles": ["mkt","lead","adm"] },
-        { "id": "engagement-detail","title": "Working an Engagement","route": "/engagements/detail","file": "work-engagementdetail.html","roles": ["mkt","lead","adm"] }
+        { "id": "engagement-detail","title": "Working an Engagement","route": "/engagements/detail","file": "work-engagementdetail.html","roles": ["mkt","lead","adm"] },
+        { "id": "payments",         "title": "Payments",          "route": "/payments",         "file": "work-payments.html",   "roles": ["mkt","lead","adm"] },
+        { "id": "schedule",         "title": "Schedule",          "route": "/schedule",         "file": "work-schedule.html",   "roles": ["mkt","lead","adm"] }
       ]
     },
     {
@@ -47,6 +49,7 @@
       "part": "Analyze",
       "subtitle": "Spend and performance reporting.",
       "chapters": [
+        { "id": "targets", "title": "Targets", "route": "/targets", "file": "analyze-targets.html", "roles": ["mkt","lead","adm"] },
         { "id": "reports", "title": "Reports", "route": "/reports", "file": "analyze-reports.html", "roles": ["lead","adm"] }
       ]
     },

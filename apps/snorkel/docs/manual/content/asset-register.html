@@ -1,0 +1,40 @@
+<p class="lead">The Asset Register is a living list of the physical things Legend of Toys owns and rents: laptops, machines, furniture, tools. It tracks where each one is, who has it, what it cost, and its warranty or AMC dates. It is a record of what we have, not an accounting depreciation ledger.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Tracking what we own &amp; rent.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">View; create/edit with permission.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role proc">Procurement</span> <span class="role appr">Approver</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Tiles</div><div class="g-val">Total, in use, in storage, attention, expiring.</div></div>
+</div>
+
+<h2 class="sec">Reading the register</h2>
+<p>KPI tiles count the total assets and how many are in use, in storage, needing attention (damaged or in repair), and expiring (warranty or AMC lapsed or within 60 days, click the tile to filter). The table shows each asset&rsquo;s code, name, category, status, type, location, custodian, cost, warranty/AMC badge and document count. Filter by status, type, category and location; search by code, name or serial; and <strong>Export CSV</strong> the view. Click an asset to open it.</p>
+
+<h2 class="sec">Two things that are not the same</h2>
+<p>Snorkel deliberately keeps two ideas separate, do not confuse them:</p>
+<table class="tbl">
+  <thead><tr><th>Axis</th><th>What it captures</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Status</strong></td><td>Where the asset is in its life: in use, in storage, damaged, in repair, or retired.</td></tr>
+    <tr><td><strong>Acquisition type</strong></td><td>Whether we <em>own</em> it (purchased) or are <em>renting</em> it. A separate tag entirely.</td></tr>
+  </tbody>
+</table>
+<p>An asset can be both &ldquo;in use&rdquo; and &ldquo;rented&rdquo; at once. Renting is never a status.</p>
+
+<h2 class="sec">An asset record</h2>
+<p>Open an asset to see and edit (with permission) its details: name, category, status, location, custodian (a LOT person or a free-text name for floor/contract staff), vendor, serial and model numbers, cost, warranty and AMC dates, and a loose link to the PO it was bought on. Below are a <strong>history timeline</strong> of every change and a <strong>documents</strong> area for invoices and warranty cards. You can also <strong>print a label</strong> with the asset&rsquo;s code as a QR sticker, and <strong>retire</strong> an asset that is no longer in service.</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Codes are permanent and history is automatic</div>
+  <p>Each asset gets a permanent code (like <code>AST-0042</code>) that never changes, the one on its printed sticker. You do not write the history: Snorkel logs every status change, custody transfer, location move and document automatically as you edit. The full record is kept even after an asset is retired.</p>
+</div>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Retire, don&rsquo;t delete</div>
+  <p>When an asset leaves service, <strong>retire</strong> it (with a reason). Retired assets drop out of the active list but stay in the register and its history. Assets are never hard-deleted, so the record of what we once owned is never lost.</p>
+</div>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; Documents are private</div>
+  <p>Files attached to an asset (invoices, warranty cards) are stored privately and only opened through Snorkel via a short-lived secure link. They are never on a public web address, treat them as confidential.</p>
+</div>

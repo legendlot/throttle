@@ -1,0 +1,195 @@
+{
+"title":"Throttle",
+"title_accent":"Operations Manual",
+"subtitle":"The self-serve guide to the brand team's work OS: requests, tasks, sprints and social.",
+"version":"1.0.0",
+"date":"2026-05-29",
+"app_url":"throttle.legendoftoys.com",
+"owner":"Legend of Toys",
+"pdf":"/manual/Throttle-Operations-Manual.pdf",
+"roles":{
+"req":{
+"label":"Requester",
+"name":"Requester",
+"desc":"Non-brand staff who submit work requests and review what comes back."
+},
+"mem":{
+"label":"Member",
+"name":"Brand Team Member",
+"desc":"Designers, copywriters and creators who work tasks on the board."
+},
+"lead":{
+"label":"Lead",
+"name":"Brand Lead",
+"desc":"Approves requests, runs sprints, reviews work, and reads the dashboard."
+},
+"adm":{
+"label":"Admin",
+"name":"Admin",
+"desc":"Full access including Settings (roles, disciplines, ageing thresholds)."
+}
+},
+"parts":[
+{
+"part":"Getting Started",
+"subtitle":"What Throttle is, how to sign in and get around, and what your role can see.",
+"chapters":[
+{
+"id":"intro",
+"title":"Welcome to Throttle",
+"route":"",
+"roles":[
+"req",
+"mem",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">Throttle is the brand team&rsquo;s work operating system. Anyone in the company asks the brand team for creative work through a <strong>request</strong>; once approved, that request becomes one or more <strong>tasks</strong> the brand team works on a board and schedules into sprints. This manual is your self-serve guide to every screen in it.</p>\n\n<h2 class=\"sec\">Request, then task</h2>\n<div class=\"anatomy\">\n  <div class=\"a-row\"><div class=\"a-key\">Request</div><div class=\"a-val\"><p>What someone asks for (a launch pack, a social post, a video). A requester submits it; a lead approves, rejects, or asks for more info. Approving turns it into work.</p></div></div>\n  <div class=\"a-row\"><div class=\"a-key\">Task</div><div class=\"a-val\"><p>A unit of work for the brand team, created when a request is approved. Tasks live on the board and move through stages until delivered and done. A big request (a launch pack) becomes several tasks at once.</p></div></div>\n</div>\n\n<h2 class=\"sec\">How a task flows</h2>\n<p>Every task moves along this path: <strong>Backlog &rarr; In Sprint &rarr; In Progress &rarr; In Review &rarr; Approved &rarr; Delivered &rarr; Done.</strong> A task can be parked at <strong>Ext. Blocked</strong> (waiting on something outside the team) or stopped at <strong>Abandoned</strong>. Two approvals happen along the way, and they are different things:</p>\n<ul>\n  <li><strong>Request approval:</strong> a lead approves the incoming request, which creates the task(s).</li>\n  <li><strong>Work approval:</strong> a lead approves the deliverable a member submitted (In Review), sending it on to be delivered or marked done.</li>\n</ul>\n\n<div class=\"callout warn\">\n  <div class=\"c-title\">&#9888; Delivered is not Done</div>\n  <p><strong>Delivered</strong> means the work is with the requester for feedback; it becomes <strong>Done</strong> when the requester accepts it, when it auto-accepts after a set time, or when a lead marks it done. Keep the two approvals straight too: approving a <em>request</em> creates work; approving the <em>work</em> moves a finished task forward.</p>\n</div>\n\n<h2 class=\"sec\">How to use this manual</h2>\n<p>Each chapter covers one screen: what it is for, how to read it, and what to do. Jump to the screen you are on using the Contents page or your PDF reader&rsquo;s bookmarks. Chapters are tagged with the roles that use them:</p>\n<p style=\"margin-top:3mm\"><span class=\"role req\">Requester</span> &nbsp; <span class=\"role mem\">Member</span> &nbsp; <span class=\"role lead\">Lead</span> &nbsp; <span class=\"role adm\">Admin</span></p>\n\n<h2 class=\"sec\">Callout boxes</h2>\n<div class=\"callout tip\"><div class=\"c-title\">&#10003; Tip</div><p>A faster or smarter way to do something.</p></div>\n<div class=\"callout warn\"><div class=\"c-title\">&#9888; Watch out</div><p>A common mistake or something easy to misread.</p></div>\n"
+},
+{
+"id":"navigation",
+"title":"Signing In & Getting Around",
+"route":"",
+"roles":[
+"req",
+"mem",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">Throttle opens with your work Google account and uses a simple top bar of tabs. This chapter covers signing in and finding your way around.</p>\n\n<h2 class=\"sec\">Signing in</h2>\n<p>Open <code>throttle.legendoftoys.com</code> and sign in with your <code>@legendoftoys.com</code> Google account. Personal accounts are refused. Signed in, you land on <strong>Requests</strong>.</p>\n\n<h2 class=\"sec\">The top bar</h2>\n<p>Throttle uses a horizontal nav across the top (not a sidebar). Which tabs you see depends on your role:</p>\n<table class=\"tbl\">\n  <thead><tr><th>Tab</th><th>Visible to</th></tr></thead>\n  <tbody>\n    <tr><td class=\"mono\">Requests</td><td>Everyone.</td></tr>\n    <tr><td class=\"mono\">Board</td><td>Member, Lead, Admin.</td></tr>\n    <tr><td class=\"mono\">Sprints</td><td>Lead, Admin.</td></tr>\n    <tr><td class=\"mono\">Dashboard</td><td>Lead, Admin.</td></tr>\n    <tr><td class=\"mono\">Social</td><td>Everyone.</td></tr>\n    <tr><td class=\"mono\">Settings</td><td>Admin.</td></tr>\n  </tbody>\n</table>\n<p>On the right of the bar are a <strong>notification bell</strong> (for the brand team), your name and role, and Sign out. On the Board and Sprints, press <span class=\"kbd\">/</span> to open a quick task search.</p>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; The notification bell</div>\n  <p>The bell (brand team only) checks every minute for activity in the last 7 days on tasks you are assigned to, excluding your own actions, and shows an unread count. Requesters do not see it. Most screens otherwise load when you open them and refresh after you act, rather than updating on their own.</p>\n</div>\n"
+},
+{
+"id":"roles",
+"title":"Roles & What You Can See",
+"route":"",
+"roles":[
+"req",
+"mem",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">Throttle has four roles, from the people who ask for work to the people who do and manage it. This chapter explains each one and what it can do.</p>\n\n<h2 class=\"sec\">The four roles</h2>\n<div class=\"anatomy\">\n  <div class=\"a-row\"><div class=\"a-key\"><span class=\"role req\">Requester</span></div><div class=\"a-val\"><p>Non-brand staff who submit work requests and review what comes back. They see only Requests and Social, and only their own requests.</p></div></div>\n  <div class=\"a-row\"><div class=\"a-key\"><span class=\"role mem\">Member</span></div><div class=\"a-val\"><p>Brand team members (designers, copywriters, video, 3D, social). They work tasks on the board: self-assign, move their tasks forward, and submit work for review.</p></div></div>\n  <div class=\"a-row\"><div class=\"a-key\"><span class=\"role lead\">Lead</span></div><div class=\"a-val\"><p>Brand managers. Everything a member does, plus approving requests, running sprints, approving submitted work, setting priority and owners, and the dashboard.</p></div></div>\n  <div class=\"a-row\"><div class=\"a-key\"><span class=\"role adm\">Admin</span></div><div class=\"a-val\"><p>Full control, including Settings (managing roles, disciplines and the ageing thresholds that drive auto-accept).</p></div></div>\n</div>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; Role versus discipline</div>\n  <p>A person also has a <strong>discipline</strong> (designer, 3D, copywriter, photo/video, social, lead), set in Settings, which is separate from their role. The role decides what you can do; the discipline describes what kind of work you do. Both are managed by an admin.</p>\n</div>\n\n<h2 class=\"sec\">Who can move a task</h2>\n<p>The board only lets you make the moves your role allows; an illegal drag quietly snaps back. In short: <strong>members</strong> move their own tasks between In Sprint, In Progress, In Review and Ext. Blocked; <strong>leads and admins</strong> can do everything else (pull from backlog into a sprint, approve work, deliver, mark done, change priority and owners, and abandon).</p>\n"
+}
+]
+},
+{
+"part":"Requests",
+"subtitle":"Submitting work, getting it approved, and reviewing what comes back.",
+"chapters":[
+{
+"id":"requests",
+"title":"Requests",
+"route":"/requests",
+"roles":[
+"req",
+"mem",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">Requests is where work is asked for and tracked. A requester sees their own requests; a lead or admin sees everything coming in. It is the home screen and the starting point for new work.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Tracking work requests.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read; launches new requests.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role req\">Requester</span> <span class=\"role mem\">Member</span> <span class=\"role lead\">Lead</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Heading</div><div class=\"g-val\">&ldquo;My Requests&rdquo; / &ldquo;All Requests&rdquo;.</div></div>\n</div>\n\n<h2 class=\"sec\">Reading it</h2>\n<p>Each request card shows its type, title, status badge, how long it has sat in its current stage, and the created date. Filter with the pills: <strong>Needs Action</strong> (yours that need a response), All, Pending, Approved, Rejected, Info Needed. Status badges: <strong>Pending</strong> (yellow), <strong>Approved</strong> (green), <strong>Rejected</strong> (red), <strong>Info Needed</strong> (blue). The time-in-stage chip turns amber after a day and red after two.</p>\n\n<h2 class=\"sec\">Acting on a request</h2>\n<p><strong>+ New Request</strong> starts a new one. A lead or admin also gets an <strong>Approval Queue</strong> button. On your own cards, contextual buttons appear: <strong>Update &amp; Resubmit</strong> when a request needs more info, <strong>Resubmit</strong> when it was rejected, and <strong>Delivered: Give Feedback</strong> when work is ready for your review.</p>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; You see what your role allows</div>\n  <p>Requesters see only their own requests; leads and admins see the whole incoming queue. The &ldquo;Needs Action&rdquo; pill is the fastest way for a requester to find a request the brand team has bounced back for more information.</p>\n</div>\n"
+},
+{
+"id":"new",
+"title":"New Request",
+"route":"/requests/new",
+"roles":[
+"req",
+"mem",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">New Request is a short wizard for asking the brand team for work. You pick a request type, choose the product if relevant, fill the type&rsquo;s form, review, and submit.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Submitting a work request.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Action: creates a request.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role req\">Requester</span> <span class=\"role mem\">Member</span> <span class=\"role lead\">Lead</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Steps</div><div class=\"g-val\">Type, product, form, review.</div></div>\n</div>\n\n<h2 class=\"sec\">The request types</h2>\n<p>Pick the type that matches what you need; each has its own tailored form. The ten types are: <strong>Launch Pack</strong> (a full asset bundle for a new product), <strong>Product Creative</strong>, <strong>Social Media</strong>, <strong>Advertising</strong>, <strong>Photo &amp; Video</strong>, <strong>Copy &amp; Script</strong>, <strong>Design &amp; Brand</strong>, <strong>3D &amp; Motion</strong>, <strong>Sale Event</strong>, and <strong>Brand Initiative</strong> (internal, brand team only).</p>\n\n<h2 class=\"sec\">Filling it in</h2>\n<ol class=\"steps\">\n  <li><span class=\"s-title\">Choose the type</span> and, where it applies, the product (some types let you pick several).</li>\n  <li><span class=\"s-title\">Complete the form.</span> Fields vary by type; a title is always required, and some fields only appear based on earlier answers.</li>\n  <li><span class=\"s-title\">Review and submit.</span> A success screen confirms it. Leads will then approve, reject or ask for more info.</li>\n</ol>\n\n<div class=\"callout warn\">\n  <div class=\"c-title\">&#9888; Some types create several tasks</div>\n  <p><strong>Launch Pack</strong> and <strong>Sale Event</strong> have a checklist, and each ticked item becomes its own task when the request is approved (the screen shows how many). <strong>Photo &amp; Video</strong> with editing turned on creates two tasks (a shoot and an edit). So one request can spin up a whole batch of work.</p>\n</div>\n"
+},
+{
+"id":"approval",
+"title":"Approval Queue",
+"route":"/requests/approval",
+"roles":[
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">The Approval Queue is where leads and admins review incoming requests and decide what happens. Approving a request is what turns it into actual tasks for the brand team.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Deciding on incoming requests.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Action: approve / reject / info.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role lead\">Lead</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Creates</div><div class=\"g-val\">Tasks, on approval.</div></div>\n</div>\n\n<h2 class=\"sec\">Reviewing a request</h2>\n<p>The queue lists pending requests oldest first, with a time-in-stage chip (grey, then amber after a day, red after two). Click one to see its full detail: type, title, who submitted it, the products and notes, and all the form fields. Then make a decision:</p>\n<table class=\"tbl\">\n  <thead><tr><th>Decision</th><th>What it does</th></tr></thead>\n  <tbody>\n    <tr><td><strong style=\"color:#1a8f43\">Approve</strong></td><td>Creates the task(s) and starts the work. A note is optional.</td></tr>\n    <tr><td><strong style=\"color:#c01f1f\">Reject</strong></td><td>Declines the request. A note is required, and goes back to the requester.</td></tr>\n    <tr><td><strong style=\"color:#2138c0\">Need Info</strong></td><td>Sends it back for more detail. A note is required; the requester can update and resubmit.</td></tr>\n  </tbody>\n</table>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; Approval creates the work</div>\n  <p>This is the &ldquo;request approval&rdquo; step (distinct from approving finished work later on the board). Approving a Launch Pack or Sale Event creates several tasks at once. Reject and Need Info both require a note so the requester knows why.</p>\n</div>\n"
+},
+{
+"id":"feedback",
+"title":"Giving Feedback",
+"route":"/requests/feedback",
+"roles":[
+"req"
+],
+"html":"<p class=\"lead\">Giving Feedback is where a requester reviews work the brand team has delivered and either accepts it or asks for a revision. You reach it from the &ldquo;Delivered: Give Feedback&rdquo; button on your request.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Accepting or revising delivered work.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Action: accept / request revision.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role req\">Requester</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Reached from</div><div class=\"g-val\">A delivered request.</div></div>\n</div>\n\n<h2 class=\"sec\">Reviewing delivered work</h2>\n<p>Each delivered task shows the team&rsquo;s delivery message and the links to the work. For each one you choose <strong>Looks good</strong> (accept it) or <strong>Needs revision</strong> (which opens a box for what should change, plus an optional reference link). Submit your feedback for all the delivered tasks at once; the brand team is notified.</p>\n\n<div class=\"callout warn\">\n  <div class=\"c-title\">&#9888; Work auto-accepts if you do nothing</div>\n  <p>A delivered task shows an &ldquo;Auto-accepts on [date]&rdquo; note: if you do not respond by then, it is accepted automatically and marked done. So if something needs changing, choose <strong>Needs revision</strong> before that date. Asking for a revision sends the task back to the team to rework.</p>\n</div>\n"
+}
+]
+},
+{
+"part":"Tasks & Sprints",
+"subtitle":"The board where work happens, and the sprints that schedule it.",
+"chapters":[
+{
+"id":"board",
+"title":"The Board",
+"route":"/board",
+"roles":[
+"mem",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">The Board is the brand team&rsquo;s live Kanban of active tasks. Members work their tasks here and leads triage the flow. Clicking any task opens a side panel with everything about it and every action you can take.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Working and tracking tasks.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Action: move and work tasks.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role mem\">Member</span> <span class=\"role lead\">Lead</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Views</div><div class=\"g-val\">Kanban or Table.</div></div>\n</div>\n\n<h2 class=\"sec\">The columns</h2>\n<p>The Kanban has a column per stage: <strong>Backlog</strong>, <strong>In Sprint</strong>, <strong>In Progress</strong>, <strong>Ext. Blocked</strong>, <strong>In Review</strong>, <strong>Approved</strong>, <strong>Delivered</strong>, <strong>Done</strong>. Each card shows its ID (for example <span class=\"mono\">T-001</span>), type, title, product, owner and due date (amber when close, red when overdue). Drag a card to move it; you can only make the moves your role allows, and an illegal drop snaps back. A Table view, a person filter, and a <span class=\"kbd\">/</span> search are also there.</p>\n\n<h2 class=\"sec\">Working a task (the side panel)</h2>\n<p>Click a task to open its panel. From here you (depending on role and stage):</p>\n<ul>\n  <li><strong>Assign:</strong> claim a task as owner, add yourself as a collaborator, or (lead/admin) set the owner.</li>\n  <li><strong>Move stage:</strong> pick an allowed next stage; moving to Ext. Blocked or Abandoned needs a typed reason.</li>\n  <li><strong>Submit for Review:</strong> add the deliverable link to send your work to a lead (moves it to In Review).</li>\n  <li><strong>Review work</strong> (lead/admin): Approve it, or request a revision with feedback (sends it back to In Progress).</li>\n  <li><strong>Deliver</strong> to the requester, or <strong>Mark Done</strong>; set priority and due date; add notes, attachments and comments.</li>\n</ul>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; The flow in one line</div>\n  <p>A task goes Backlog &rarr; pulled into a sprint &rarr; a member takes it In Progress &rarr; submits for review &rarr; a lead approves the work &rarr; it&rsquo;s delivered to the requester (who accepts, or it auto-accepts) &rarr; Done. A revision sends it back a step; Ext. Blocked parks it; Abandoned stops it. Big requests appear as sibling tasks like <span class=\"mono\">T-001/2</span>.</p>\n</div>\n"
+},
+{
+"id":"sprints",
+"title":"Sprints",
+"route":"/sprints",
+"roles":[
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">Sprints is where leads plan the week&rsquo;s work: pull tasks from the backlog into the active sprint, give them due dates, watch progress, and close the sprint when it ends. A sprint runs Thursday to Wednesday.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Planning and running the sprint.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Action: build and close sprints.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role lead\">Lead</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Cycle</div><div class=\"g-val\">Thursday to Wednesday (7 days).</div></div>\n</div>\n\n<h2 class=\"sec\">Running a sprint</h2>\n<ol class=\"steps\">\n  <li><span class=\"s-title\">Create the sprint</span> (when none is active). The start date must be a Thursday; only one sprint runs at a time.</li>\n  <li><span class=\"s-title\">Fill it from the backlog.</span> Drag tasks from the Backlog panel into the Current Sprint panel; a prompt lets you set a due date within the sprint week. Drag a task back out to remove it.</li>\n  <li><span class=\"s-title\">Watch progress.</span> A header bar shows percent done and a day countdown; a 7-day timeline lays out tasks by due date.</li>\n  <li><span class=\"s-title\">Close the sprint</span> when the week is over. Any unfinished tasks become <strong>spillovers</strong> and a new sprint is created automatically.</li>\n</ol>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; &ldquo;Overdue: close sprint&rdquo;</div>\n  <p>When the Wednesday end date passes, the header prompts you to close the sprint. Closing rolls the incomplete tasks forward as spillovers (marked on their cards) into the next sprint, so nothing is lost. Use the <span class=\"kbd\">/</span> search to find a task across the sprint and backlog.</p>\n</div>\n"
+}
+]
+},
+{
+"part":"Reporting & Social",
+"subtitle":"The manager dashboard and the social content calendar.",
+"chapters":[
+{
+"id":"dashboard",
+"title":"Dashboard",
+"route":"/dashboard",
+"roles":[
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">The Dashboard is the manager&rsquo;s reporting view: output, workload and sprint health. Leads and admins use it to see what the team is producing and where the pressure is.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Team output and workload reporting.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read; CSV export.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role lead\">Lead</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Scope</div><div class=\"g-val\">By sprint, by person.</div></div>\n</div>\n\n<h2 class=\"sec\">The three sections</h2>\n<ul>\n  <li><strong>Summary cards:</strong> In Review, Overdue, Ext. Blocked, Completion % and Spillovers. Click a card to drill into that bucket of tasks.</li>\n  <li><strong>Deliverables Output:</strong> a table of completed deliverables by type, viewable by date or by person, over a date range, with a CSV export.</li>\n  <li><strong>Team Workload:</strong> each person&rsquo;s tasks across the stages; a person&rsquo;s total turns orange when they are carrying a lot, an overload signal.</li>\n</ul>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; Slice it by sprint and person</div>\n  <p>Use the sprint selector and the person filter at the top to focus the whole dashboard. The summary cards are clickable shortcuts into the exact tasks behind each number, which is the quickest way to act on what the report shows.</p>\n</div>\n"
+},
+{
+"id":"social",
+"title":"Social",
+"route":"/social",
+"roles":[
+"req",
+"mem",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">Social is the team&rsquo;s content calendar: plan posts across channels, group them into campaigns, and watch a health monitor for posts at risk. Everyone can view it; the brand team can create and edit.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Planning and tracking social posts.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">View all; brand team edits.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role req\">Requester</span> <span class=\"role mem\">Member</span> <span class=\"role lead\">Lead</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Tabs</div><div class=\"g-val\">Calendar · Campaigns · Monitor.</div></div>\n</div>\n\n<h2 class=\"sec\">The three tabs</h2>\n<ul>\n  <li><strong>Calendar:</strong> a month grid of posts. A post moves through <strong>idea &rarr; draft &rarr; approved &rarr; published</strong> (or cancelled), and holds one or more channel <strong>variants</strong> (each with its caption and asset, published per channel). Create a post with a title, date and at least one variant.</li>\n  <li><strong>Campaigns:</strong> group posts under a named campaign with a date range and a status (active, completed, archived).</li>\n  <li><strong>Monitor:</strong> an <strong>At Risk</strong> list (overdue posts and ones missing assets within 24 hours) plus an 8-week cadence table per channel.</li>\n</ul>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; Who can change what</div>\n  <p>Anyone can view the calendar, but only the brand team can create or edit posts and campaigns; moving a post to <strong>approved</strong> and deleting a post are lead/admin actions. The Monitor tab&rsquo;s red badge is your early warning that a scheduled post still has no asset.</p>\n</div>\n"
+}
+]
+},
+{
+"part":"Admin",
+"subtitle":"Managing roles, disciplines and ageing thresholds.",
+"chapters":[
+{
+"id":"settings",
+"title":"Settings",
+"route":"/settings",
+"roles":[
+"adm"
+],
+"html":"<p class=\"lead\">Settings is the admin screen for managing the team: who has which role and discipline, and the ageing thresholds that drive the warning dots and the auto-accept of delivered work.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Roles, disciplines and ageing rules.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Action: manage people &amp; thresholds.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Drives</div><div class=\"g-val\">Auto-accept &amp; ageing dots.</div></div>\n</div>\n\n<h2 class=\"sec\">Team</h2>\n<p>The team table, grouped into Lead, Brand Team and Requesters, lists each person with a <strong>Role</strong> dropdown (admin, lead, member, requester) and a <strong>Discipline</strong> dropdown (designer, 3D, copywriter, photo/video, social, lead). Changes save inline.</p>\n\n<h2 class=\"sec\">Ageing thresholds</h2>\n<p>For each stage you set a Warning, Critical and Auto-close time in hours. These drive the colour of the ageing dots on task cards and, importantly, the time after which delivered work <strong>auto-accepts</strong> if the requester has not responded.</p>\n\n<div class=\"callout warn\">\n  <div class=\"c-title\">&#9888; You cannot change your own role</div>\n  <p>Your own role dropdown is disabled, so an admin cannot accidentally lock themselves out; another admin must make that change. Because the ageing thresholds control auto-accept, adjust them deliberately: a short auto-close means delivered work closes itself sooner.</p>\n</div>\n"
+}
+]
+}
+]
+}

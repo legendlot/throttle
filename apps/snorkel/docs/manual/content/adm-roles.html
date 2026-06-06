@@ -1,0 +1,38 @@
+<p class="lead">Roles &amp; Permissions is where the whole access model is defined. A role is a named bundle of switches, and this screen is the matrix where you turn those switches on and off. It is admin-only, because it controls who can buy, approve and pay.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Defining what each role can do.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Create, edit and delete roles.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Pairs with</div><div class="g-val">Users (who gets which role).</div></div>
+</div>
+
+<h2 class="sec">The permission groups</h2>
+<p>The switches are grouped so they are easy to reason about:</p>
+<table class="tbl">
+  <thead><tr><th>Group</th><th>What it controls</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Workspace</strong></td><td>Seeing the procurement area at all (POs, vendors, forwarders).</td></tr>
+    <tr><td><strong>Purchase Orders</strong></td><td>Creating/amending POs, accepting them, final-approving them, routing payment, and handling China POs and new-product registration.</td></tr>
+    <tr><td><strong>Masters</strong></td><td>Managing vendors, forwarders and our company addresses.</td></tr>
+    <tr><td><strong>Offline Sales</strong></td><td>Viewing orders, managing and invoicing them, confirming to dispatch, recording collections, and managing partners and channels.</td></tr>
+    <tr><td><strong>Admin</strong></td><td>Managing roles and assigning them to people, this very screen.</td></tr>
+  </tbody>
+</table>
+
+<h2 class="sec">Creating or editing a role</h2>
+<ol class="steps">
+  <li><span class="s-title">Start a new role</span> (give it a key and a label) or open an existing one to edit.</li>
+  <li><span class="s-title">Toggle the switches</span> it should grant, group by group.</li>
+  <li><span class="s-title">Save.</span> Anyone holding that role picks up the change.</li>
+</ol>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; Keep acceptance, approval and payment in different roles</div>
+  <p>The whole point of the chain is separation: the person who raises and accepts a PO should not be the one who gives final approval, and payment is a third hand. When you build a role, resist bundling <em>accept</em>, <em>final-approve</em> and <em>route payment</em> together, that quietly removes the checks the system is designed to enforce.</p>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; No role still means &ldquo;can file requests&rdquo;</div>
+  <p>A person with no Snorkel role assigned is not locked out, they can still sign in and file PO requests. Roles only add the ability to <em>act</em> on the buying, selling, asset and admin sides.</p>
+</div>

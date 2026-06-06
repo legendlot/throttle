@@ -1,0 +1,27 @@
+<p class="lead">Settings holds the handful of system-wide switches that change how Podium behaves for everyone: the salary vault, the appraisal eligibility rule, and the shortcuts into the permission screens. It's a short page, but a couple of its switches are consequential.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">System-wide settings.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Act: a few global toggles.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Scope</div><div class="g-val">The whole of Podium.</div></div>
+</div>
+
+<h2 class="sec">Salary Vault</h2>
+<p>This switch decides whether Podium stores <strong>absolute salary figures</strong> at all. While it's <strong>off</strong> (the default), Podium records only increment percentages and one-time bonus amounts; full base-salary and CTC figures are never kept. Turning it on lets those figures be stored and shown to people with compensation access.</p>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; Leave the vault off until the security layer is live</div>
+  <p>Company-wide standing pay is the most sensitive data we hold, so the vault is meant to stay off until an extra sign-in wall (a network-level access layer in front of the whole site) is in place. Do not switch it on as a convenience: turning it on early would store full salaries before that protection exists. Until then, percentages and bonuses cover what appraisals need.</p>
+</div>
+
+<h2 class="sec">Appraisal Eligibility</h2>
+<p>A single number: the minimum tenure, in days, before someone counts as eligible for an appraisal. It sets the bar that the enrollment screen uses when it works out who's eligible for a cycle. Edit the number and click away to save.</p>
+
+<h2 class="sec">Permissions</h2>
+<p>A reminder that Podium runs its own permissions, with quick links to <strong>Roles &amp; Permissions</strong> (define roles) and <strong>Users</strong> (assign them). Anyone with no role assigned gets self-only access. See those two chapters for the detail.</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; These settings ripple outward</div>
+  <p>Unlike a personal preference, a switch here changes Podium for everyone. The eligibility number shapes who's offered in the next cycle; the vault setting changes what every compensation screen will store and show. Change them with that reach in mind.</p>
+</div>

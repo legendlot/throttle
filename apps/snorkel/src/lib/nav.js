@@ -52,6 +52,9 @@ export const NAV_GROUPS = [
     ],
   },
   {
+    id: 'manual', label: 'System Manual', flat: true, route: '/manual', icon: BookOpen,
+  },
+  {
     id: 'admin', label: 'ADMIN', icon: Shield,
     items: [
       { id: 'admin-roles', label: 'Roles & Permissions', route: '/admin/roles', icon: Shield, requires: 'snorkel_admin' },
@@ -64,9 +67,9 @@ export const NAV_GROUPS = [
 // then drop now-empty groups. (perms = the user's Snorkel permissions from getMe.)
 export function filterNavByPerms(groups, perms) {
   return groups
-    .map(g => ({
+    .map(g => g.flat ? g : ({
       ...g,
       items: (g.items || []).filter(it => !it.requires || perms?.[it.requires]),
     }))
-    .filter(g => g.items.length > 0);
+    .filter(g => g.flat || (g.items && g.items.length > 0));
 }

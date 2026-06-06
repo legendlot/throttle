@@ -1,0 +1,27 @@
+<p class="lead">Vendors are our supplier records. They are not just an address book: a vendor&rsquo;s details (currency, payment terms, country, lead time, GSTIN) auto-fill onto every PO you raise against them, so good vendor records make raising POs fast and correct.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">The supplier master behind every PO.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">View all; manage with permission.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role proc">Procurement</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Drives</div><div class="g-val">PO auto-fill &amp; GST calculation.</div></div>
+</div>
+
+<h2 class="sec">The list</h2>
+<p>Each vendor row shows its code, name, category, country, contact, default payment terms, typical lead time, and whether it is active. Search matches across code, name, category, country, contact and GSTIN. Anyone in procurement can view the list; the <strong>New Vendor</strong> button and the per-row <strong>Edit</strong> appear only for those who can manage vendors.</p>
+
+<h2 class="sec">A vendor record</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Identity</div><div class="a-val"><p>Name, category, source country, location.</p></div></div>
+  <div class="a-row"><div class="a-key">Terms</div><div class="a-val"><p>Currency, default payment terms and typical lead time &mdash; these pre-fill the PO.</p></div></div>
+  <div class="a-row"><div class="a-key">Contact</div><div class="a-val"><p>Name, phone and email.</p></div></div>
+  <div class="a-row"><div class="a-key">GSTIN &amp; address</div><div class="a-val"><p>The supplier&rsquo;s tax number and address. The GSTIN&rsquo;s state decides whether a PO is taxed as CGST+SGST or IGST.</p></div></div>
+</div>
+
+<h2 class="sec">Supplied items</h2>
+<p>Once a vendor is saved, you can record <strong>what they supply</strong>: by product, by part, or by PO category. This is what lets Snorkel suggest the right vendors when you raise a PO. Add an item by picking the reference and the PO category it belongs to.</p>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; The GSTIN drives the tax split</div>
+  <p>Whether a rupee PO is taxed as CGST + SGST (same state as us) or IGST (different state) is decided by the vendor&rsquo;s GSTIN. A wrong or missing GSTIN means the wrong tax on every PO to that supplier, so get it right when you create the vendor.</p>
+</div>

@@ -1,0 +1,49 @@
+<p class="lead">Roles &amp; Permissions is where admins decide what kinds of access exist in Docket, and, on the same screen, who can see the Dashboard. It is the control room for access.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Defining roles + sharing the Dashboard.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Act: create and edit roles.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role adm">Admin</span> only</div></div>
+  <div class="g-cell"><div class="g-lbl">Pairs with</div><div class="g-val">The Users screen, which assigns roles.</div></div>
+</div>
+
+<h2 class="sec">What a role is built from</h2>
+<p>A Docket role is a name plus up to two switches. That is all there is to it:</p>
+<table class="tbl">
+  <thead><tr><th>Switch</th><th>What it grants</th></tr></thead>
+  <tbody>
+    <tr><td><strong>See all org tasks + the review dashboard</strong></td><td>Org-wide read access and the Dashboard. This is the Reviewer.</td></tr>
+    <tr><td><strong>Manage roles, assign users &amp; edit/abandon any task</strong></td><td>Full management on top. This is the Admin.</td></tr>
+  </tbody>
+</table>
+<p>A role with <strong>neither</strong> switch on is the baseline Member, a real, useful tier (own + team + collaborator tasks), not a locked-out account.</p>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Admin always includes &ldquo;see all&rdquo;</div>
+  <p>You cannot give someone the management switch without the see-all switch, the screen turns it on for you and won't let you turn it off. It makes no sense to manage tasks you can't see, so Docket guards against it.</p>
+</div>
+
+<h2 class="sec">Working with roles</h2>
+<ol class="steps">
+  <li><span class="s-title">Review the role cards.</span> Each shows its name, what it grants, and whether it is a built-in <span class="mono">system</span> role.</li>
+  <li><span class="s-title">New Role</span> creates a custom one: give it a key, a label, an optional description, and flip the switches.</li>
+  <li><span class="s-title">Edit</span> adjusts a role. For a system role you can change only its label and description, its switches are fixed.</li>
+  <li><span class="s-title">Delete</span> removes a custom role. You cannot delete a system role, nor one that still has people assigned to it.</li>
+</ol>
+
+<div class="callout note">
+  <div class="c-title">&#9432; The three built-in roles</div>
+  <p>Docket ships with three system roles: <strong>Admin</strong> (both switches), <strong>Employee</strong> (no switches, the baseline), and <strong>Reviewer</strong> (see-all only). For most companies these are all you need; custom roles are there if you want to name access differently for your own teams.</p>
+</div>
+
+<h2 class="sec">Dashboard sharing</h2>
+<p>At the top of this screen is a <strong>Dashboard sharing</strong> card. It controls who can open the founder Dashboard, separately from any role, so you can give someone the company overview without giving them access to everything. Two controls:</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Visible to everyone</div><div class="a-val"><p>A single toggle. When on, every employee, present and future, can open the Dashboard.</p></div></div>
+  <div class="a-row"><div class="a-key">Specific people</div><div class="a-val"><p>Grant the Dashboard to named individuals. Only people with a Docket login can be added. When &ldquo;visible to everyone&rdquo; is on, this list is dimmed but kept, so flipping the toggle off restores exactly the grants you had.</p></div></div>
+</div>
+
+<div class="callout tip">
+  <div class="c-title">&#10003; Sharing the view, not the tasks</div>
+  <p>People you grant the Dashboard to see the org-wide <em>numbers</em>, but clicking through still shows only their own tasks. It is a safe way to give leads and stakeholders the high-level picture without exposing every task in the company.</p>
+</div>

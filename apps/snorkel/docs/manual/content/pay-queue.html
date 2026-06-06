@@ -1,0 +1,32 @@
+<p class="lead">The Payment Queue is the finance worklist: every approved purchase order, grouped by how far along its payment is. From here you decide who pays a PO and record when it is done. It is the last step in the buying chain.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Getting approved POs paid.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Act: route and mark paid.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role fin">Finance</span> <span class="role proc">Procurement</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Tabs</div><div class="g-val">To Route, Requested, Paid, All.</div></div>
+</div>
+
+<h2 class="sec">Reading the queue</h2>
+<p>Tabs split the approved POs by payment state, each with a count:</p>
+<table class="tbl">
+  <thead><tr><th>Tab</th><th>What it holds</th></tr></thead>
+  <tbody>
+    <tr><td><strong>To Route</strong></td><td>Approved POs whose payment has not been requested from anyone yet.</td></tr>
+    <tr><td><strong>Requested</strong></td><td>Payment has been routed (to Finance or the requester) and is awaiting the money.</td></tr>
+    <tr><td><strong>Paid</strong></td><td>Done, showing who marked it paid and when.</td></tr>
+    <tr><td><strong>All</strong></td><td>Everything together.</td></tr>
+  </tbody>
+</table>
+<p>Each row shows the PO, vendor, value, when it was approved, and the payment state. Click the PO number to open the full PO.</p>
+
+<h2 class="sec">Working a payment</h2>
+<ol class="steps">
+  <li><span class="s-title">On a To-Route PO, choose who pays:</span> <strong>&rarr; Finance</strong> (the finance team pays) or <strong>&rarr; Requester</strong> (the person who asked pays and claims it back). The PO moves to Requested.</li>
+  <li><span class="s-title">When the money has gone out, click Mark Paid.</span> The PO moves to Paid and is stamped with your name and the date.</li>
+</ol>
+
+<div class="callout note">
+  <div class="c-title">&#9432; The same buttons live on the PO too</div>
+  <p>You can route and mark-paid from a PO&rsquo;s own detail screen as well; this queue just gathers them all in one place so finance can work down the list. Only POs that have been fully <strong>Approved</strong> appear here, never drafts or accepted-but-not-approved ones.</p>
+</div>

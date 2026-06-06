@@ -1,6 +1,6 @@
 import {
   Users, Network, Briefcase, Building2, BarChart3, Settings, UserPlus,
-  Star, Activity, ShieldCheck, UserCog, ClipboardCheck,
+  Star, Activity, ShieldCheck, UserCog, ClipboardCheck, BookOpen,
 } from 'lucide-react';
 
 export const NAV_GROUPS = [
@@ -30,6 +30,9 @@ export const NAV_GROUPS = [
     ],
   },
   {
+    id: 'manual', label: 'System Manual', flat: true, route: '/manual', icon: BookOpen,
+  },
+  {
     id: 'admin', label: 'ADMIN', icon: Settings,
     items: [
       { id: 'perm-roles', label: 'Roles & Permissions', route: '/admin/roles',    icon: ShieldCheck, requires: 'podium_admin' },
@@ -41,9 +44,9 @@ export const NAV_GROUPS = [
 
 export function filterNavByPerms(groups, perms) {
   return groups
-    .map(g => ({
+    .map(g => g.flat ? g : ({
       ...g,
       items: (g.items || []).filter(it => !it.requires || perms?.[it.requires]),
     }))
-    .filter(g => g.items.length > 0);
+    .filter(g => g.flat || (g.items && g.items.length > 0));
 }

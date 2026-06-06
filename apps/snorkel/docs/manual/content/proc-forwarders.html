@@ -1,0 +1,24 @@
+<p class="lead">Forwarders are the freight companies that ship our goods. Their main job in Snorkel is the <strong>transit time</strong>: how many days a shipment takes by sea, air or land. That figure is what lets a PO work out its expected arrival date automatically.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">The freight-forwarder master.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">View all; manage with permission.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role proc">Procurement</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Drives</div><div class="g-val">Expected-arrival dates on POs.</div></div>
+</div>
+
+<h2 class="sec">The list</h2>
+<p>Each forwarder shows its company name, country, the shipping <strong>modes</strong> it supports (Sea, Air, Land) and the typical days for each. Anyone in procurement can view; <strong>New Forwarder</strong> and <strong>Edit</strong> appear only for those who can manage masters.</p>
+
+<h2 class="sec">A forwarder record</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Identity</div><div class="a-val"><p>Company name, country, location.</p></div></div>
+  <div class="a-row"><div class="a-key">Modes &amp; transit days</div><div class="a-val"><p>Tick Sea, Air and/or Land, and give the typical number of days for each. These pre-fill onto a PO when you pick this forwarder and a mode.</p></div></div>
+  <div class="a-row"><div class="a-key">Codes &amp; tracking</div><div class="a-val"><p>IATA / SCAC codes and a tracking URL, if relevant.</p></div></div>
+  <div class="a-row"><div class="a-key">Contact</div><div class="a-val"><p>Name, phone, email.</p></div></div>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; How this shows up on a PO</div>
+  <p>When raising a PO you choose a forwarder and a shipping mode; Snorkel fills the transit days from this record, then adds them to the shipping date to predict the arrival date. Keeping these day-counts realistic makes the whole pipeline&rsquo;s &ldquo;arriving soon&rdquo; view trustworthy.</p>
+</div>

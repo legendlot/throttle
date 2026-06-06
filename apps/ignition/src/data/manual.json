@@ -1,0 +1,263 @@
+{
+"title":"Ignition",
+"title_accent":"Operations Manual",
+"subtitle":"The self-serve guide to influencer deals, engagements, codes and campaigns at Legend of Toys.",
+"version":"1.1.0",
+"date":"2026-06-06",
+"app_url":"ignition.legendoftoys.com",
+"owner":"Legend of Toys",
+"pdf":"/manual/Ignition-Operations-Manual.pdf",
+"roles":{
+"mkt":{
+"label":"Marketer",
+"name":"Marketing Team",
+"desc":"Runs influencer deals day to day: finds creators, opens engagements, advances them."
+},
+"lead":{
+"label":"Lead",
+"name":"Lead",
+"desc":"Adds approval to a marketer's access, plus the reports."
+},
+"adm":{
+"label":"Admin",
+"name":"Admin",
+"desc":"Full access including the admin screens (users reference and data import)."
+}
+},
+"parts":[
+{
+"part":"Getting Started",
+"subtitle":"What Ignition is, how to sign in and get around, and what your role can see.",
+"chapters":[
+{
+"id":"intro",
+"title":"Welcome to Ignition",
+"route":"",
+"roles":[
+"mkt",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">Ignition is the influencer-marketing CRM for Legend of Toys. It tracks the creators we work with and every deal we run with them, from first contact through the live post and its results. This manual is your self-serve guide to every screen in it.</p>\n\n<h2 class=\"sec\">The two things Ignition tracks</h2>\n<div class=\"anatomy\">\n  <div class=\"a-row\"><div class=\"a-key\">Influencers</div><div class=\"a-val\"><p>The people and channels we work with: their reach, contact details, quality rating, and which list they sit on (the proven roster, the parked B-List, or archived).</p></div></div>\n  <div class=\"a-row\"><div class=\"a-key\">Engagements</div><div class=\"a-val\"><p>A single deal with one influencer (also called a &ldquo;deal&rdquo;). Each engagement moves through a pipeline of stages and records the terms, costs, logistics and performance.</p></div></div>\n</div>\n\n<h2 class=\"sec\">How a deal flows</h2>\n<p>Every engagement moves along a pipeline. The happy path runs: <strong>Identified &rarr; Invited &rarr; Engaged &rarr; Negotiating &rarr; Agreed &rarr; Shipped &rarr; Delivered &rarr; Script Review &rarr; Script Signed Off &rarr; Scheduled &rarr; Live &rarr; Tracking &rarr; Closed.</strong> A deal that does not work out exits to <strong>Declined</strong>, <strong>Ghosted</strong> or <strong>Dropped</strong>. You advance a deal one step at a time, and you can only move to a permitted next stage, so a deal never skips steps.</p>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; Two badges, two meanings</div>\n  <p>Watch for two colour systems. A <strong>stage</strong> badge shows where a deal is in the pipeline (orange means it is Live or being Tracked, the &ldquo;money on air&rdquo; stages). A <strong>rating</strong> badge (Green, Yellow, Red, Unrated) is your quality judgment of an <em>influencer</em>, not a deal. Do not confuse them.</p>\n</div>\n\n<h2 class=\"sec\">How to use this manual</h2>\n<p>Each chapter covers one screen: what it is for, how to read it, and what to do. Jump to the screen you are on using the Contents page or your PDF reader&rsquo;s bookmarks. Chapters are tagged with the roles that use them:</p>\n<p style=\"margin-top:3mm\"><span class=\"role mkt\">Marketer</span> &nbsp; <span class=\"role lead\">Lead</span> &nbsp; <span class=\"role adm\">Admin</span></p>\n\n<div class=\"callout warn\">\n  <div class=\"c-title\">&#9888; Some screens are still being built</div>\n  <p>Ignition is live but a few screens are deliberately partial today (marked &ldquo;Phase B&rdquo; in the app): Reports, Campaigns and parts of Discount Codes show data but do not yet have full create/edit tools. Each chapter says clearly what works now.</p>\n</div>\n"
+},
+{
+"id":"navigation",
+"title":"Signing In & Getting Around",
+"route":"",
+"roles":[
+"mkt",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">Ignition opens with your work Google account and everything sits in one sidebar. This chapter covers signing in and finding your way around.</p>\n\n<h2 class=\"sec\">Signing in</h2>\n<p>Open <code>ignition.legendoftoys.com</code> and sign in with your <code>@legendoftoys.com</code> Google account. Personal accounts are refused; if sign-in loops, sign out of any personal Google account first or use a fresh browser profile.</p>\n\n<h2 class=\"sec\">The menu</h2>\n<table class=\"tbl\">\n  <thead><tr><th>Group</th><th>What lives here</th></tr></thead>\n  <tbody>\n    <tr><td class=\"mono\">WORK</td><td>Dashboard, Influencers, Engagements, New Deal.</td></tr>\n    <tr><td class=\"mono\">LISTS</td><td>Roster, B-List, UGC, Campaigns, Codes.</td></tr>\n    <tr><td class=\"mono\">ANALYZE</td><td>Reports (for leads and admins).</td></tr>\n    <tr><td class=\"mono\">ADMIN</td><td>Users and Import (admins only).</td></tr>\n  </tbody>\n</table>\n<p>You only see the groups your role allows. Most list screens have a search box, and amounts are shown in rupees (₹).</p>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; Screens load once</div>\n  <p>Ignition screens load their data when you open them and do not refresh on their own. To see new information after something changes, change a filter or reopen the page. Most lists show up to 100 or 200 rows; if a list looks cut off, narrow it with the search box or filters.</p>\n</div>\n"
+},
+{
+"id":"roles",
+"title":"Roles & What You Can See",
+"route":"",
+"roles":[
+"mkt",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">Ignition gives each person the access that matches their job. This chapter explains the three roles used throughout this manual.</p>\n\n<h2 class=\"sec\">The three roles</h2>\n<div class=\"anatomy\">\n  <div class=\"a-row\"><div class=\"a-key\"><span class=\"role mkt\">Marketer</span></div><div class=\"a-val\"><p><strong>Marketing Team.</strong> Runs deals day to day: searches influencers, opens engagements, advances them through the pipeline, sets quality ratings and adds notes.</p></div></div>\n  <div class=\"a-row\"><div class=\"a-key\"><span class=\"role lead\">Lead</span></div><div class=\"a-val\"><p><strong>Lead.</strong> Everything a marketer does, plus approval rights and access to the Reports.</p></div></div>\n  <div class=\"a-row\"><div class=\"a-key\"><span class=\"role adm\">Admin</span></div><div class=\"a-val\"><p><strong>Admin.</strong> Full access, including the admin screens (the user-roles reference and the data-import runbook).</p></div></div>\n</div>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; How access actually works</div>\n  <p>Ignition uses the shared company permission map. The relevant permissions are <code>ignition_view</code>, <code>ignition_manage</code>, <code>ignition_approve</code>, <code>ignition_reports_view</code> and <code>ignition_admin</code>, bundled into the <strong>ignition_manager</strong> and <strong>ignition_lead</strong> roles (admins get everything). Roles are actually <em>assigned in Garage</em> (the store app) at its Users screen, not inside Ignition. If you cannot reach something you should, ask an admin to set your role there.</p>\n</div>\n\n<h2 class=\"sec\">Who sees what</h2>\n<table class=\"tbl\">\n  <thead><tr><th>Area</th><th style=\"text-align:center\">Marketer</th><th style=\"text-align:center\">Lead</th><th style=\"text-align:center\">Admin</th></tr></thead>\n  <tbody>\n    <tr><td>Dashboard, Influencers, Engagements, Lists</td><td style=\"text-align:center\">&bull;</td><td style=\"text-align:center\">&bull;</td><td style=\"text-align:center\">&bull;</td></tr>\n    <tr><td>Create &amp; advance deals, set ratings</td><td style=\"text-align:center\">&bull;</td><td style=\"text-align:center\">&bull;</td><td style=\"text-align:center\">&bull;</td></tr>\n    <tr><td>Approval, Reports</td><td style=\"text-align:center\"></td><td style=\"text-align:center\">&bull;</td><td style=\"text-align:center\">&bull;</td></tr>\n    <tr><td>User Roles, Sheet Import</td><td style=\"text-align:center\"></td><td style=\"text-align:center\"></td><td style=\"text-align:center\">&bull;</td></tr>\n  </tbody>\n</table>\n"
+}
+]
+},
+{
+"part":"Work",
+"subtitle":"The dashboard, the influencer roster, the deal pipeline, and working a single engagement.",
+"chapters":[
+{
+"id":"dashboard",
+"title":"Dashboard",
+"route":"/dashboard",
+"roles":[
+"mkt",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">The Dashboard is Ignition&rsquo;s overview: a quick count of engagements by health. It is the landing screen when you sign in.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Engagements by health, at a glance.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read-only.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role mkt\">Marketer</span> <span class=\"role lead\">Lead</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Shows</div><div class=\"g-val\">Four count cards.</div></div>\n</div>\n\n<h2 class=\"sec\">The four cards</h2>\n<table class=\"tbl\">\n  <thead><tr><th>Card</th><th>Meaning</th></tr></thead>\n  <tbody>\n    <tr><td><strong>Active</strong></td><td>Engagements currently in progress.</td></tr>\n    <tr><td><strong style=\"color:#c2570a\">Live</strong></td><td>Engagements live right now (orange, the &ldquo;on air&rdquo; deals).</td></tr>\n    <tr><td><strong>Closed</strong></td><td>Engagements finished and closed.</td></tr>\n    <tr><td><strong style=\"color:#c01f1f\">Ghosted</strong></td><td>Deals where the influencer went silent (red).</td></tr>\n  </tbody>\n</table>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; Counts only, for now</div>\n  <p>The Dashboard shows these four numbers and nothing more: no charts or trends yet. For the detail behind them, open Engagements and filter by stage.</p>\n</div>\n"
+},
+{
+"id":"influencers",
+"title":"Influencers",
+"route":"/influencers",
+"roles":[
+"mkt",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">Influencers is the searchable roster of every creator and channel we know. From here you open a creator&rsquo;s profile, see their deal history, and set the quality rating that guides whether we work with them again.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Browsing creators and rating them.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read; set the quality rating.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role mkt\">Marketer</span> <span class=\"role lead\">Lead</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Lists</div><div class=\"g-val\">Master · B-List · Archived.</div></div>\n</div>\n\n<h2 class=\"sec\">The list</h2>\n<p>Tabs split influencers into <strong>Master</strong>, <strong>B-List</strong> and <strong>Archived</strong>. Each row shows the code, channel (and person), type (nano, micro, macro, brand, store), category, reach, location, and a <strong>rating</strong> badge. Search by code, handle, name, phone or email, and filter by type and rating. Click a row to open the profile.</p>\n\n<h2 class=\"sec\">The profile, and the rating</h2>\n<p>A creator&rsquo;s detail page shows their identity and contact details, and a table of all their engagements. Its key action is the <strong>quality rating</strong>: four buttons in the header set the creator to <strong style=\"color:#1a8f43\">Green</strong>, <strong style=\"color:#8a6d00\">Yellow</strong>, <strong style=\"color:#c01f1f\">Red</strong> or <strong>Unrated</strong>. This is the team&rsquo;s signal on whether a creator is worth working with again, and it drives the rating filter and the Roster.</p>\n\n<div class=\"callout warn\">\n  <div class=\"c-title\">&#9888; Rating saves instantly</div>\n  <p>Clicking a rating button saves immediately with no confirmation, so a wrong click is live at once: just click the correct one to fix it. &ldquo;First invite: Not sent&rdquo; on the profile means no invite has gone out to that creator yet.</p>\n</div>\n"
+},
+{
+"id":"engagements",
+"title":"Engagements",
+"route":"/engagements",
+"roles":[
+"mkt",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">Engagements is the deal pipeline: every influencer deal we are running, filterable by stage and type. From here you browse deals and start new ones.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Browsing the deal pipeline.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read; start a new deal.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role mkt\">Marketer</span> <span class=\"role lead\">Lead</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Tabs</div><div class=\"g-val\">All · Live · Shipped · Script · Closed.</div></div>\n</div>\n\n<h2 class=\"sec\">Reading it</h2>\n<p>Tabs give quick stage filters (All, Live, Shipped, Script, Closed). Each row shows the engagement number, the influencer (channel + code), type (<strong>Video</strong> or <strong>UGC</strong>), the current <strong>stage</strong> badge, the <strong>deal</strong> type, the product, post date and total cost. Search by engagement number, video link, tracking or order. On the <strong>All</strong> tab a Stage dropdown lets you pick any of the 16 stages; on the other tabs the tab itself sets the stage.</p>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; &ldquo;New Deal&rdquo; makes an engagement</div>\n  <p>The orange <strong>+ New Deal</strong> button creates a new engagement (deal and engagement are the same thing here). Click any row to open that engagement and work it.</p>\n</div>\n"
+},
+{
+"id":"new-deal",
+"title":"New Deal",
+"route":"/engagements/new",
+"roles":[
+"mkt",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">New Deal creates an engagement: pick the influencer and enter the deal terms. The new deal starts at the beginning of the pipeline, ready for you to advance.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Starting a new influencer deal.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Action: creates an engagement.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role mkt\">Marketer</span> <span class=\"role lead\">Lead</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Required</div><div class=\"g-val\">An influencer.</div></div>\n</div>\n\n<h2 class=\"sec\">Creating a deal</h2>\n<ol class=\"steps\">\n  <li><span class=\"s-title\">Find the influencer.</span> Search by code, handle or name (type at least two characters) and pick from the results. Use <strong>Change</strong> to reselect.</li>\n  <li><span class=\"s-title\">Set the deal terms.</span> Engagement type (Video or UGC), deal type (Paid, Barter, Affiliate, Paid + Affiliate), payment terms and amount, the product code and variant, and where the deal drives traffic (Website, Amazon, Flipkart).</li>\n  <li><span class=\"s-title\">Create Engagement.</span> The deal is created at stage <strong>Identified</strong> and opens on its detail page.</li>\n</ol>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; Only the influencer is required</div>\n  <p>You can create a deal with a ₹0 amount and a blank product and fill them in later; the only thing you must pick is the influencer. The search shows nothing until you have typed two characters, which is normal. Every new deal begins at the start of the pipeline and is advanced step by step afterwards.</p>\n</div>\n"
+},
+{
+"id":"engagement-detail",
+"title":"Working an Engagement",
+"route":"/engagements/detail",
+"roles":[
+"mkt",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">The engagement detail screen is the control centre for one deal: its terms, product, costs, logistics and performance, plus the controls to advance the pipeline, add notes, and flag damage to customer support. This is where most of the work happens.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Running one deal end to end.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">The main action screen.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role mkt\">Marketer</span> <span class=\"role lead\">Lead</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Pipeline</div><div class=\"g-val\">13 stages, 3 failure exits.</div></div>\n</div>\n\n<h2 class=\"sec\">The layout</h2>\n<p>The header shows the engagement number, the influencer, the current <strong>stage</strong> and <strong>deal</strong> badges, and two buttons: <strong>Advance</strong> and <strong>Flag Damage to Pitstop</strong>. A pipeline stepper shows progress. Below sit cards for Deal Terms, Product, Costs (with the rolled-up <strong>total</strong> in orange), Logistics, Post-live and Performance (views, orders, ROAS), followed by Notes and a History log.</p>\n\n<h2 class=\"sec\">Advancing the deal</h2>\n<p>Click <strong>Advance</strong> to move the deal to its next stage. A modal offers only the stages you are allowed to move to from where you are, plus an optional note. The happy path is Identified, Invited, Engaged, Negotiating, Agreed, Shipped, Delivered, Script Review, Script Signed Off, Scheduled, Live, Tracking, Closed; a deal that falls through exits to <strong>Declined</strong>, <strong>Ghosted</strong> or <strong>Dropped</strong> (from which the only move is to Closed).</p>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; You cannot skip stages</div>\n  <p>Advance only ever offers the <em>permitted</em> next stages, so a deal moves forward one controlled step at a time and never jumps ahead or back. Once a deal is <strong>Closed</strong> the Advance button is disabled: it is a dead end. Notes you add and every stage move are recorded in the History log.</p>\n</div>\n\n<div class=\"callout danger\">\n  <div class=\"c-title\">&#9940; Flagging damage opens a real support ticket</div>\n  <p><strong>Flag Damage to Pitstop</strong> opens a genuine ticket in the Pitstop customer-support system, prefilled with this deal&rsquo;s influencer info, with a disposition (replacement, refund or repair) and a required description. This is a deliberate manual handoff, used when a product sent to an influencer arrives damaged. Only one Pitstop ticket can be opened per engagement; once raised, its number shows in the Logistics card.</p>\n</div>\n"
+},
+{
+"id":"payments",
+"title":"Payments",
+"route":"/payments",
+"roles":[
+"mkt",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">Payments is the running log of what we have paid influencers, deal by deal. Every advance and final payment goes here, so the totals at the top always show what has gone out today, this week, this month and all time.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Logging influencer payments.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read the log; record payments.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role mkt\">Marketer</span> <span class=\"role lead\">Lead</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Tied to</div><div class=\"g-val\">Always a specific deal.</div></div>\n</div>\n\n<h2 class=\"sec\">The layout</h2>\n<p>Four spend tiles sit across the top: <strong>Today</strong>, <strong>This Week</strong>, <strong>This Month</strong> and <strong>All Time</strong>. Each shows the total paid in that window, the number of payments, and how many different influencers they covered. Below them is the log itself: one row per payment, newest first, showing the date paid, the influencer, the deal, the <strong>kind</strong>, the amount, and any note. The deal in a row links straight to that engagement.</p>\n\n<h2 class=\"sec\">Recording a payment</h2>\n<ol class=\"steps\">\n  <li><span class=\"s-title\">Open the form.</span> Click <strong>Record Payment</strong> in the top right.</li>\n  <li><span class=\"s-title\">Find the influencer.</span> Search by code, handle or name (type at least two characters) and pick from the results. Use <strong>Change</strong> to reselect.</li>\n  <li><span class=\"s-title\">Pick the deal.</span> Choose which of that influencer&rsquo;s deals the payment is for. If they only have one, it is selected for you. If they have none, the form tells you to create a deal first.</li>\n  <li><span class=\"s-title\">Enter the details.</span> Choose the <strong>kind</strong> (Advance, Final or Other), the amount, the date paid, and an optional note such as a transfer reference. Then save.</li>\n</ol>\n\n<h2 class=\"sec\">The three kinds</h2>\n<table class=\"tbl\">\n  <thead><tr><th>Kind</th><th>Use it for</th></tr></thead>\n  <tbody>\n    <tr><td><strong style=\"color:#8a6d00\">Advance</strong></td><td>Money paid up front, before the work is delivered.</td></tr>\n    <tr><td><strong style=\"color:#c2570a\">Final</strong></td><td>The balance paid once the deal is done.</td></tr>\n    <tr><td><strong>Other</strong></td><td>Anything that is neither an advance nor a final balance.</td></tr>\n  </tbody>\n</table>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; A payment always belongs to a deal</div>\n  <p>You cannot log a loose payment against an influencer with no deal: pick the engagement it relates to. Payments recorded here also show up on that engagement&rsquo;s own page, where the Deal Terms card reads &ldquo;&#8377;X paid of &#8377;Y agreed&rdquo;, so the deal always reflects what has actually been sent.</p>\n</div>\n\n<div class=\"callout warn\">\n  <div class=\"c-title\">&#9888; Removing a payment is instant</div>\n  <p>The trash icon at the end of a row deletes that payment straight away, with no undo, and the spend tiles drop to match. Only remove a row if it was logged in error; to correct an amount, delete the wrong row and record the right one.</p>\n</div>\n"
+},
+{
+"id":"schedule",
+"title":"Schedule",
+"route":"/schedule",
+"roles":[
+"mkt",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">Schedule shows when deals are going live across the month: a calendar of every post that is either already up or expected, so you can see the content pipeline at a glance and spot quiet or crowded weeks.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">When deals go live, by month.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read-only.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role mkt\">Marketer</span> <span class=\"role lead\">Lead</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Views</div><div class=\"g-val\">Calendar &middot; List.</div></div>\n</div>\n\n<h2 class=\"sec\">Moving around</h2>\n<p>The header carries the month name with arrows either side to step back and forward a month, and a <strong>Today</strong> button to jump back to the current month. On the right, two toggles switch between the <strong>Calendar</strong> and the <strong>List</strong> view of the same month. A counter shows how many posts fall in the month you are looking at.</p>\n\n<h2 class=\"sec\">Posted vs planned</h2>\n<p>Each deal appears on its <strong>go-live date</strong>. If the post is already up, that date is its real post date; if it is still upcoming, the date is the expected post date. A small dot tells the two apart:</p>\n<table class=\"tbl\">\n  <thead><tr><th>Dot</th><th>Meaning</th></tr></thead>\n  <tbody>\n    <tr><td><strong style=\"color:#c2570a\">Filled (orange)</strong></td><td><strong>Posted</strong> &mdash; the video is live, dated by its real post date.</td></tr>\n    <tr><td><strong>Hollow (outline)</strong></td><td><strong>Planned</strong> &mdash; expected, dated by the date the deal is due to go live.</td></tr>\n  </tbody>\n</table>\n\n<h2 class=\"sec\">The two views</h2>\n<p>In the <strong>Calendar</strong> view, each day cell lists the influencers posting that day; today&rsquo;s cell is tinted. If a day has more than four, it shows the first few and a &ldquo;+N more&rdquo; line. In the <strong>List</strong> view, the same deals appear as rows with date, deal, influencer, product, stage, whether each is posted or planned, and a link to the video where one exists. In either view, clicking a deal opens its engagement.</p>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; Only dated deals show here</div>\n  <p>A deal appears on the Schedule once it has a go-live date, whether expected or actual. Deals that have no date yet simply do not show up until one is set on the engagement. To change when something lands, set its date on the deal itself, not here.</p>\n</div>\n"
+}
+]
+},
+{
+"part":"Lists",
+"subtitle":"The proven roster, parked candidates, UGC pipeline, campaigns and discount codes.",
+"chapters":[
+{
+"id":"roster",
+"title":"Roster",
+"route":"/roster",
+"roles":[
+"mkt",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">The Roster is the proven-influencer list: every creator who has completed at least one engagement. Open it to find vetted creators and check their quality rating before giving them new work.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Finding proven creators.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read; click through to a profile.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role mkt\">Marketer</span> <span class=\"role lead\">Lead</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Includes</div><div class=\"g-val\">1+ completed engagement.</div></div>\n</div>\n\n<h2 class=\"sec\">Using it</h2>\n<p>Each row shows the influencer code, channel, type, reach, how many engagements they have, and their <strong>rating</strong> badge. Filter with the chips: All, Green, Yellow, Red, Unrated. Click a row to open the creator&rsquo;s profile.</p>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; Proven only</div>\n  <p>The Roster lists only creators with at least one <em>completed</em> engagement, so brand-new or in-progress-only creators will not appear here (find those under Influencers or B-List). The list shows up to 200 rows.</p>\n</div>\n"
+},
+{
+"id":"blist",
+"title":"B-List",
+"route":"/blist",
+"roles":[
+"mkt",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">The B-List is the parked-candidates list: creators who are interested but not a current priority, a &ldquo;maybe later&rdquo; bench. Open it to revisit prospects you have talked to but are not actively pursuing.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Parked, lower-priority prospects.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read; click through to a profile.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role mkt\">Marketer</span> <span class=\"role lead\">Lead</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Includes</div><div class=\"g-val\">Influencers on the B-List.</div></div>\n</div>\n\n<h2 class=\"sec\">Using it</h2>\n<p>Each row shows the code, channel, type, reach, and a <strong>Comments</strong> column noting why the creator is parked. Click a row to open the profile, where you can move them onto the Master list when you are ready to pursue them.</p>\n\n<div class=\"callout warn\">\n  <div class=\"c-title\">&#9888; B-List means &ldquo;Plan B&rdquo;, not &ldquo;banned&rdquo;</div>\n  <p>Despite the name, the B-List is a bench of interested-but-not-yet-aligned creators, not a blocklist. It is where you keep leads warm for later, not where you put people you will not work with.</p>\n</div>\n"
+},
+{
+"id":"ugc",
+"title":"UGC Pipeline",
+"route":"/ugc",
+"roles":[
+"mkt",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">The UGC Pipeline tracks commission-based user-generated-content deals, where the creator is paid by results. It shows ad spend, commission and return on ad spend (ROAS) alongside each deal&rsquo;s stage.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Watching UGC deals and their ROAS.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read; click through to a deal.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role mkt\">Marketer</span> <span class=\"role lead\">Lead</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Shows</div><div class=\"g-val\">UGC engagements only.</div></div>\n</div>\n\n<h2 class=\"sec\">Using it</h2>\n<p>Each row shows the engagement number, influencer, the current <strong>stage</strong> badge, the product, ad spend, commission, and <strong>ROAS</strong> (return on ad spend, to two decimals). The list is filtered to UGC deals automatically. Click a row to open the engagement and edit its numbers.</p>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; &ldquo;₹0&rdquo; usually means not entered yet</div>\n  <p>Ad spend and commission default to ₹0 and ROAS shows a dash until measured, so an empty-looking row usually means the figures have not been entered yet, not that performance was zero. You enter those numbers on the engagement&rsquo;s detail page, not here. The list shows up to 200 rows.</p>\n</div>\n"
+},
+{
+"id":"campaigns",
+"title":"Campaigns",
+"route":"/campaigns",
+"roles":[
+"mkt",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">Campaigns lists multi-video deal groupings: a single influencer deal that bundles several videos under one campaign number. Open it to see all campaigns and their agreed value at a glance.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Multi-video deal groupings.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read-only.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role mkt\">Marketer</span> <span class=\"role lead\">Lead</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Status</div><div class=\"g-val\">Phase B (view-only today).</div></div>\n</div>\n\n<h2 class=\"sec\">Reading it</h2>\n<p>Each row shows the campaign number, the influencer, how many videos it bundles, the agreed total (₹) and a status. That is the whole screen: a read-only list.</p>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; Still being built</div>\n  <p>Campaigns is view-only today; the tools to create and edit campaigns are a later phase (the screen says so). Rows here do not click through. For now, treat it as a reference list of the multi-video deals on record.</p>\n</div>\n"
+},
+{
+"id":"discount-codes",
+"title":"Discount Codes",
+"route":"/discount-codes",
+"roles":[
+"mkt",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">Discount Codes shows the pre-minted code pool and which codes have been used, on which order, and against which engagement. Open it to check code usage.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Seeing the code pool and usage.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read-only.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role mkt\">Marketer</span> <span class=\"role lead\">Lead</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Tabs</div><div class=\"g-val\">All · Unused · Used.</div></div>\n</div>\n\n<h2 class=\"sec\">Reading it</h2>\n<p>Each row shows the code, its pool, whether it has been <strong>Used</strong> (green YES, else a dash), the order it was redeemed on, the order value, when it was used, and whether it is tied to an engagement. Filter with the All / Unused / Used tabs.</p>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; Pre-minted, and view-only today</div>\n  <p>Codes are minted into the pool in advance, not created here; a code becomes &ldquo;used&rdquo; when a customer redeems it on an order, which fills in the order, value and engagement link. Bulk generation of codes is a later phase, so this screen is read-only for now. The list shows up to 200 codes.</p>\n</div>\n"
+}
+]
+},
+{
+"part":"Analyze",
+"subtitle":"Spend and performance reporting.",
+"chapters":[
+{
+"id":"targets",
+"title":"Targets",
+"route":"/targets",
+"roles":[
+"mkt",
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">Targets is where you set a views goal and a spend budget for each month, then watch how the real numbers track against them. It turns the month into a simple scorecard: are we on pace for views, and are we inside budget?</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Monthly views &amp; budget goals.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read tracking; set targets.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role mkt\">Marketer</span> <span class=\"role lead\">Lead</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Set by</div><div class=\"g-val\">Manage access.</div></div>\n</div>\n\n<h2 class=\"sec\">Setting a month</h2>\n<ol class=\"steps\">\n  <li><span class=\"s-title\">Pick the month.</span> In the top panel, choose the month you are setting a goal for.</li>\n  <li><span class=\"s-title\">Enter the goals.</span> Type a <strong>target views</strong> number and a <strong>budget</strong> in rupees, plus an optional note.</li>\n  <li><span class=\"s-title\">Save.</span> The month appears in the tracking table below, and re-saving the same month overwrites it.</li>\n</ol>\n\n<h2 class=\"sec\">Reading the tracking table</h2>\n<p>One row per month shows the target views beside the <strong>actual views</strong> achieved, and the budget beside the actual <strong>spend</strong>, each with a progress bar. The current month is marked in orange. The actuals are not typed in: they add themselves up from the live deals and payments for that month, so the table always reflects reality without anyone updating it.</p>\n\n<h2 class=\"sec\">What the colours mean</h2>\n<table class=\"tbl\">\n  <thead><tr><th>Bar</th><th>Reading it</th></tr></thead>\n  <tbody>\n    <tr><td><strong>Views</strong></td><td>Fills toward the goal and turns <strong style=\"color:#1a8f43\">green</strong> once it reaches it. More is better.</td></tr>\n    <tr><td><strong>Spend</strong></td><td>Stays calm while there is room, shifts <strong style=\"color:#8a6d00\">amber</strong> as it nears the budget and <strong style=\"color:#c01f1f\">red</strong> once over. Less is better.</td></tr>\n  </tbody>\n</table>\n\n<div class=\"callout tip\">\n  <div class=\"c-title\">&#9733; Click a row to edit it</div>\n  <p>Clicking any month in the tracking table loads its numbers back into the panel at the top, ready to adjust and save again. It is the quick way to nudge a goal without retyping the month.</p>\n</div>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; Targets are per month, for the whole team</div>\n  <p>A target covers the month as a whole, not a single influencer or product, and there is one set of numbers per month. Everyone can see the tracking; setting and changing the goals needs manage access. If you only see the table and not the set-a-month panel, your access is view-only, which is normal.</p>\n</div>\n"
+},
+{
+"id":"reports",
+"title":"Reports",
+"route":"/reports",
+"roles":[
+"lead",
+"adm"
+],
+"html":"<p class=\"lead\">Reports is the planned home for spend and performance analytics. Today it is a placeholder while the reports are built.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Spend &amp; performance analytics.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read-only (placeholder).</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role lead\">Lead</span> <span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Status</div><div class=\"g-val\">Phase B (coming).</div></div>\n</div>\n\n<h2 class=\"sec\">What&rsquo;s coming</h2>\n<p>The screen previews the reports planned for a later phase: spend by month, ROAS by product, a CPM distribution, and top performers. Until then it shows a placeholder card rather than live charts.</p>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; Empty is expected here</div>\n  <p>Two different messages can appear: if you lack the reports permission you see &ldquo;You don&rsquo;t have permission to view reports&rdquo;; if you have it, you still see only the placeholder, because the reports themselves are not built yet. Both are normal today.</p>\n</div>\n"
+}
+]
+},
+{
+"part":"Admin",
+"subtitle":"Where user roles are managed, and how the legacy sheet is imported.",
+"chapters":[
+{
+"id":"users",
+"title":"User Roles",
+"route":"/admin/users",
+"roles":[
+"adm"
+],
+"html":"<p class=\"lead\">User Roles explains how Ignition&rsquo;s permissions work and where to manage them. Ignition does not manage accounts itself: it reuses the shared company roles, and assignment happens in Garage.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Explaining where roles are set.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read-only (reference).</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role adm\">Admin</span></div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Manage in</div><div class=\"g-val\">Garage &rarr; Users.</div></div>\n</div>\n\n<h2 class=\"sec\">What it tells you</h2>\n<p>The page explains that Ignition uses the shared permission map, lists the five Ignition permissions (<code>ignition_view</code>, <code>ignition_manage</code>, <code>ignition_approve</code>, <code>ignition_admin</code>, <code>ignition_reports_view</code>), and notes the two bundled roles: <strong>ignition_manager</strong> (view, manage, reports) and <strong>ignition_lead</strong> (adds approve). Admins and super admins get everything automatically.</p>\n\n<div class=\"callout note\">\n  <div class=\"c-title\">&#9432; There is no user table here</div>\n  <p>Despite the name, this screen has no &ldquo;add user&rdquo; controls. To actually change someone&rsquo;s access, go to <strong>Garage &rarr; Users</strong> and set their role there; it then takes effect across Ignition.</p>\n</div>\n"
+},
+{
+"id":"import",
+"title":"Sheet Import",
+"route":"/admin/import",
+"roles":[
+"adm"
+],
+"html":"<p class=\"lead\">Sheet Import documents how the legacy &ldquo;Omnipresent&rdquo; influencer spreadsheet is loaded into Ignition. It is a reference runbook for the technical team, not a button you click.</p>\n\n<div class=\"glance\">\n  <div class=\"g-cell\"><div class=\"g-lbl\">What it&rsquo;s for</div><div class=\"g-val\">Documenting the data import.</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Read or act?</div><div class=\"g-val\">Read-only (instructions).</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">Who</div><div class=\"g-val\"><span class=\"role adm\">Admin</span> (technical)</div></div>\n  <div class=\"g-cell\"><div class=\"g-lbl\">How</div><div class=\"g-val\">A command-line script.</div></div>\n</div>\n\n<h2 class=\"sec\">What it explains</h2>\n<p>The page lays out the one-time migration steps: place the latest <code>Omnipresent - Influencer.xlsx</code> in Downloads, run the import script from the workspace, which posts the rows into the database through one-shot import routines. The import is idempotent (re-running it will not create duplicates), and the routines are removed afterward.</p>\n\n<div class=\"callout warn\">\n  <div class=\"c-title\">&#9888; No upload button here</div>\n  <p>Despite the name, there is nothing to click on this screen: it is a runbook for an engineer doing a data migration from the command line. For day-to-day work you will never need it; influencers and engagements are added through the normal screens.</p>\n</div>\n"
+}
+]
+}
+]
+}

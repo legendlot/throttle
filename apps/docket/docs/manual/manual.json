@@ -1,0 +1,65 @@
+{
+  "title": "Docket",
+  "title_accent": "Operations Manual",
+  "subtitle": "The self-serve guide to Legend of Toys' org-wide task manager: capturing, owning and tracking work across every department.",
+  "version": "1.0.0",
+  "date": "2026-06-06",
+  "app_url": "docket.legendoftoys.com",
+  "owner": "Legend of Toys",
+  "roles": {
+    "mem":  { "label": "Member",   "name": "Member (everyone)",   "desc": "Any signed-in LOT person. Creates tasks, and sees their own work, anything they collaborate on, and their own department's tasks. Edits the tasks they own or created." },
+    "view": { "label": "Reviewer", "name": "Reviewer",            "desc": "Sees every task across the whole organisation, read-only, plus the review Dashboard. A reviewer watches but does not change other people's tasks." },
+    "adm":  { "label": "Admin",    "name": "Admin",               "desc": "Full control: sees and edits any task, manages who has which role, and runs the admin screens (roles, users, spaces, dashboard sharing)." }
+  },
+  "parts": [
+    {
+      "part": "Getting Started",
+      "subtitle": "What Docket is, how to sign in, find your way around, and what your role lets you see.",
+      "chapters": [
+        { "id": "intro",      "title": "Welcome to Docket",         "file": "00-introduction.html", "roles": ["mem","view","adm"] },
+        { "id": "navigation", "title": "Signing In & Getting Around","file": "01-navigation.html",   "roles": ["mem","view","adm"] },
+        { "id": "roles",      "title": "Roles & What You Can See",    "file": "02-roles.html",        "roles": ["mem","view","adm"] }
+      ]
+    },
+    {
+      "part": "Working with Tasks",
+      "subtitle": "Capturing work, the task list, the detail panel, and how a task lives from first idea to done.",
+      "chapters": [
+        { "id": "tasks",  "title": "The Tasks List", "route": "/tasks",        "file": "task-list.html",   "roles": ["mem","view","adm"] },
+        { "id": "detail", "title": "Inside a Task",  "route": "/tasks/detail", "file": "task-detail.html", "roles": ["mem","view","adm"] },
+        { "id": "lifecycle", "title": "The Task Lifecycle", "file": "task-lifecycle.html", "roles": ["mem","view","adm"] }
+      ]
+    },
+    {
+      "part": "Organising Work",
+      "subtitle": "The two ways to group tasks: Programs (a soft label) and Spaces (a private, walled-off area).",
+      "chapters": [
+        { "id": "programs", "title": "Programs", "file": "org-programs.html", "roles": ["mem","view","adm"] },
+        { "id": "spaces",   "title": "Spaces",   "route": "/tasks?space=",   "file": "org-spaces.html",   "roles": ["mem","view","adm"] }
+      ]
+    },
+    {
+      "part": "Scratchpad",
+      "subtitle": "Your own private notebook with a built-in calculator.",
+      "chapters": [
+        { "id": "scratchpad", "title": "Scratchpad", "route": "/scratchpad", "file": "scratchpad.html", "roles": ["mem","view","adm"] }
+      ]
+    },
+    {
+      "part": "Dashboard & Reporting",
+      "subtitle": "The org-wide review surface, and how to share it.",
+      "chapters": [
+        { "id": "dashboard", "title": "The Dashboard", "route": "/dashboard", "file": "dashboard.html", "roles": ["view","adm"] }
+      ]
+    },
+    {
+      "part": "Administration",
+      "subtitle": "Roles, who has which role, dashboard sharing, and the space registry. Admins only.",
+      "chapters": [
+        { "id": "admin-roles",  "title": "Roles & Permissions", "route": "/admin/roles",  "file": "admin-roles.html",  "roles": ["adm"] },
+        { "id": "admin-users",  "title": "Users",               "route": "/admin/users",  "file": "admin-users.html",  "roles": ["adm"] },
+        { "id": "admin-spaces", "title": "Spaces (Admin)",      "route": "/admin/spaces", "file": "admin-spaces.html", "roles": ["adm"] }
+      ]
+    }
+  ]
+}

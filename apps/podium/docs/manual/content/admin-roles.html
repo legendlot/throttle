@@ -1,0 +1,39 @@
+<p class="lead">Roles &amp; Permissions is where an admin defines what people can do in Podium. Podium runs its own set of roles, separate from every other LOT system, built from four simple permissions. You create as many named roles as you like from those permissions, then hand them out on the Users screen.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Defining Podium access roles.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Act: create &amp; edit roles.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Scope</div><div class="g-val">Podium only, not other systems.</div></div>
+</div>
+
+<h2 class="sec">The four permissions</h2>
+<table class="tbl">
+  <thead><tr><th>Permission</th><th>What it unlocks</th></tr></thead>
+  <tbody>
+    <tr><td><strong>View</strong></td><td>The directory, org chart and dashboards. The baseline for seeing anyone beyond yourself.</td></tr>
+    <tr><td><strong>People (HR)</strong></td><td>Manage people, departments, roles, documents and org snapshots, and run appraisal cycles.</td></tr>
+    <tr><td><strong>Compensation</strong></td><td>See and edit pay: increments, bonuses and salary bands. Kept separate so it can be granted on its own.</td></tr>
+    <tr><td><strong>Admin</strong></td><td>Manage these roles, assign people to them, and change settings.</td></tr>
+  </tbody>
+</table>
+
+<h2 class="sec">Creating a role</h2>
+<ol class="steps">
+  <li><span class="s-title">New Role.</span> Give it a key (a short code like <code>hr_lead</code>), a readable label and an optional description.</li>
+  <li><span class="s-title">Flip on the permissions</span> it should carry. A role with none of them is a perfectly valid &ldquo;self-only&rdquo; role.</li>
+  <li><span class="s-title">Save</span>, then assign people to it on the Users screen.</li>
+</ol>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Any higher permission switches View on for you</div>
+  <p>If you turn on People, Compensation or Admin, the <strong>View</strong> permission is switched on and locked automatically. That's deliberate: those jobs all need to see people in the first place, so a role can't accidentally be created that locks itself out of the screens it's meant to use.</p>
+</div>
+
+<h2 class="sec">System roles</h2>
+<p>Two roles come built in and can't be reshaped: <strong>Admin</strong> (everything) and <strong>Employee</strong> (the empty, self-only default). You can rename their label and description, but not their permissions, and you can't delete them. A handful of ready-made roles (an HR preset, a compensation preset, a people-manager preset) are also provided to copy or use as-is.</p>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; Podium roles don't touch other systems</div>
+  <p>Giving someone the HR or Admin role here changes only their People &amp; Performance access. It does <strong>not</strong> change anything they can do in Garage, Redline or any other LOT system; those are governed separately. This isolation is the whole reason Podium has its own roles. A role with people assigned to it also can't be deleted, so reassign first.</p>
+</div>

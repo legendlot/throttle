@@ -1,0 +1,32 @@
+<p class="lead">New Product registration is how a never-before-seen product gets into our systems so it can be ordered, built and sold. You register a whole <strong>family</strong> (a product and its colour/model variants) in one go, and each variant is handed a fresh barcode. This is a specialist screen, limited to people cleared for China procurement and new products.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Registering a new product family.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Act: you create product records.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role proc">Procurement</span> <span class="role adm">Admin</span> (China-cleared)</div></div>
+  <div class="g-cell"><div class="g-lbl">Result</div><div class="g-val">A product family + barcodes.</div></div>
+</div>
+
+<h2 class="sec">Two modes</h2>
+<ul>
+  <li><strong>New family</strong> &mdash; register a brand-new product from scratch: its name, a code prefix, what kind of thing it is (car, drone, accessory), how it is received (built-up, knocked-down, or either), and whether it comes with a remote.</li>
+  <li><strong>Extend</strong> &mdash; add new variants (a new colour, say) to a product family that already exists. Pick the family and the base details fill in to keep everything consistent.</li>
+</ul>
+
+<h2 class="sec">Adding variants</h2>
+<ol class="steps">
+  <li><span class="s-title">Set the base details</span> (name, type, receive format, has-remote).</li>
+  <li><span class="s-title">Add a row per variant</span> with its model, colour, SKU and product code. Codes and SKUs must be unique within the batch.</li>
+  <li><span class="s-title">Add the remote</span> (its own SKU and code) if the product has one, on a new family.</li>
+  <li><span class="s-title">Submit.</span> Each variant is assigned a barcode from the pool and the family is created.</li>
+</ol>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Watch the barcode pool</div>
+  <p>A counter at the top right shows how many barcodes are available. Each new variant consumes one. If the pool is too low for the number of variants you are registering, the form blocks you and asks for more to be loaded first. It turns amber when it is getting low.</p>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Where the &ldquo;Soft PO&rdquo; loop closes</div>
+  <p>Registering a product here is what lets a placeholder <strong>Soft</strong> China PO be promoted to a real one: once the goods have a registered product to point at, the PO can stop being a placeholder.</p>
+</div>

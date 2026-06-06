@@ -1,0 +1,36 @@
+<p class="lead">Unit Restock returns finished units that have already left the store back into sellable stock, so they can be dispatched again. When an order is cancelled, inventory comes back unsold, or a sample is returned, you paste the unit codes here and the system puts each one back on the shelf ready to re-pack and re-send.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Putting shipped units back into stock.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: returns units to stock.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sto">Store</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Tabs</div><div class="g-val">Bulk Restock and Report.</div></div>
+</div>
+
+<h2 class="sec">Bulk Restock</h2>
+<ol class="steps">
+  <li><span class="s-title">Pick a reason.</span> Orders Cancelled, Unsold Inventory, Sample Return or Other. For <strong>Other</strong> a short note is required.</li>
+  <li><span class="s-title">Paste the unit codes.</span> One per line, or comma or space separated. Duplicates are removed automatically. Up to 300 in one batch.</li>
+  <li><span class="s-title">Restock.</span> Confirm the count. Each unit is put back into sellable stock, and any remote paired with a car comes back with it.</li>
+  <li><span class="s-title">Read the result.</span> A table lists every code as <strong>restocked</strong> (with the status it came from) or <strong>skipped</strong> (with the reason).</li>
+</ol>
+
+<h2 class="sec">Why a unit might be skipped</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Unknown</div><div class="a-val">The code isn&rsquo;t recognised, usually a typo. Check it and try again.</div></div>
+  <div class="a-row"><div class="a-key">Already in stock</div><div class="a-val">The unit is already back on the shelf, so there is nothing to do.</div></div>
+  <div class="a-row"><div class="a-key">Use the returns or repair flow</div><div class="a-val">The unit is in a state that restock won&rsquo;t touch (for example a return being inspected, or in repair). Handle it through Returns instead.</div></div>
+</div>
+
+<h2 class="sec">Report</h2>
+<p>The <strong>Report</strong> tab is a read-only history of every restock. Filter by reason and date range, search by unit code, and see totals broken down by reason and by sales channel. <strong>CSV</strong> exports whatever the current filter shows.</p>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Restock clears the unit&rsquo;s packing</div>
+  <p>Restocking puts a unit back to a fresh, sellable state and removes it from any box it was packed in, so it must be packed again before it goes out. This is the desk equivalent of the scanner&rsquo;s restock station and has the same effect, just done from a pasted list rather than scanning unit by unit.</p>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Restock is for re-sellable units</div>
+  <p>Use Restock only for good units coming back to be sold again. Anything damaged, faulty or genuinely returned for inspection belongs in the Returns process, which decides whether each unit is re-dispatched, repaired or written off.</p>
+</div>

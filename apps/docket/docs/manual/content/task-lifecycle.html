@@ -1,0 +1,56 @@
+<p class="lead">A task in Docket follows the same arc whatever the work is. Understanding that arc, and the few rules Docket enforces along the way, is the key to using it well. This chapter is the &ldquo;why&rdquo; behind the buttons.</p>
+
+<h2 class="sec">The five statuses</h2>
+<p>Every task is in exactly one of five states. The first four you set yourself; the fifth has its own door.</p>
+<table class="tbl">
+  <thead><tr><th>Status</th><th>Means</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Not started</strong></td><td>Captured, but work hasn't begun.</td></tr>
+    <tr><td><strong>In progress</strong></td><td>Someone is actively working on it.</td></tr>
+    <tr><td><strong>Done</strong></td><td>Finished. Docket stamps the completion time.</td></tr>
+    <tr><td><strong>Blocked</strong></td><td>Stuck on something outside the owner's control, waiting on someone or something else.</td></tr>
+    <tr><td><strong>Abandoned</strong></td><td>Deliberately stopped, with a reason. The only terminal end besides Done.</td></tr>
+  </tbody>
+</table>
+
+<h2 class="sec">The arc of a task</h2>
+<ol class="steps">
+  <li><span class="s-title">Captured.</span> A title is typed and the task exists, sitting in <strong>The Grid</strong> as <em>Not started</em>.</li>
+  <li><span class="s-title">Set up.</span> An owner and a deadline are added; it leaves the Grid for the Active board.</li>
+  <li><span class="s-title">Worked.</span> The owner moves it to <em>In progress</em>, adds collaborators, comments, documents and sub-tasks as needed.</li>
+  <li><span class="s-title">Finished or stopped.</span> It becomes <em>Done</em>, or, if it should not be done at all, it is <em>Abandoned</em> with a reason. If it gets stuck, it sits at <em>Blocked</em> until it can move again.</li>
+</ol>
+
+<h2 class="sec">The three things Docket will not let you fudge</h2>
+<p>Docket is intentionally strict about a few things, so the record stays trustworthy.</p>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; 1. The original deadline is locked</div>
+  <p>The <strong>first</strong> deadline put on a task becomes its locked original promise, and it never changes. To move the deadline afterwards you must <strong>revise</strong> it, which always asks for a short reason and records the change (old date &rarr; new date, with your reason) on the task's History. You can revise as many times as you need, but every slip is on the record. This is how Docket can always show whether work landed when it was first promised.</p>
+</div>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; 2. Tasks are never deleted</div>
+  <p>There is no delete. A task you decide against is <strong>Abandoned</strong>, with a required reason, and stays visible marked as such. Nothing vanishes from the company's record, and an abandoned task can be reactivated if things change.</p>
+</div>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; 3. The created date and creator are permanent</div>
+  <p>When a task was created, and by whom, can never be edited. So can the task's <code>DKT-</code> ID. These are anchors you can always trust.</p>
+</div>
+
+<h2 class="sec">Owner, creator, collaborators</h2>
+<p>Three kinds of people relate to a task, and they are not the same:</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Owner</div><div class="a-val"><p>The single accountable person. There is exactly one. The owner can change every field and move the status.</p></div></div>
+  <div class="a-row"><div class="a-key">Creator</div><div class="a-val"><p>Whoever first captured it, set automatically and never changed. The creator can also edit the task.</p></div></div>
+  <div class="a-row"><div class="a-key">Collaborators</div><div class="a-val"><p>Helpers. They can comment, attach documents and add sub-tasks, but they do not change the owner, deadline or status. Many people can collaborate.</p></div></div>
+</div>
+
+<div class="callout tip">
+  <div class="c-title">&#10003; One owner, on purpose</div>
+  <p>Docket gives every task exactly one owner so accountability is never split. If two people are doing the work, one owns it and the other is a collaborator. &ldquo;Whose is this?&rdquo; always has a one-name answer.</p>
+</div>
+
+<h2 class="sec">Sub-tasks</h2>
+<p>A task can be broken into sub-tasks, but only <strong>one level deep</strong>: a sub-task cannot have its own sub-tasks. New sub-tasks start by inheriting their parent's team and owner, which you can then change. Each is a full task in its own right with its own status and deadline; the parent shows a done/total count so you can see progress at a glance.</p>

@@ -1,0 +1,64 @@
+{
+  "title": "Podium",
+  "title_accent": "Operations Manual",
+  "subtitle": "The self-serve guide to Legend of Toys' people & performance system: profiles, the org chart, observations, wins, 1:1s, appraisals and the people-data that stays private by design.",
+  "version": "1.0.0",
+  "date": "2026-06-06",
+  "app_url": "podium.legendoftoys.com",
+  "owner": "Legend of Toys",
+  "roles": {
+    "emp": { "label": "Employee", "name": "Employee (self-serve)", "desc": "Everyone with a login. Sees their own profile and records their own wins; takes part in their own appraisal. No view of anyone else by default." },
+    "mgr": { "label": "Manager",  "name": "People Manager",       "desc": "Anyone with people reporting to them (directly or down the line). Sees the full profiles of their reporting chain, logs observations and 1:1s, and reviews their team's appraisals. Manager powers come from the org chart, not a role." },
+    "hr":  { "label": "HR",       "name": "HR / People Team",     "desc": "Manages people, departments, roles, documents and org snapshots, and runs appraisal cycles. Sees everyone's full profile, including bank, ID and PAN that managers cannot." },
+    "adm": { "label": "Admin",    "name": "Administrator",        "desc": "Everything HR can do, plus Podium's own roles & permissions, the user assignments, and system settings (including the salary vault)." }
+  },
+  "parts": [
+    {
+      "part": "Getting Started",
+      "subtitle": "What Podium is, how to sign in, find your way around, and exactly what your access lets you see.",
+      "chapters": [
+        { "id": "intro",      "title": "Welcome to Podium",          "file": "00-introduction.html", "roles": ["emp","mgr","hr","adm"] },
+        { "id": "navigation", "title": "Signing In & Getting Around", "file": "01-navigation.html",   "roles": ["emp","mgr","hr","adm"] },
+        { "id": "roles",      "title": "Roles & What You Can See",     "file": "02-roles.html",        "roles": ["emp","mgr","hr","adm"] }
+      ]
+    },
+    {
+      "part": "People",
+      "subtitle": "The headcount dashboard, the directory, individual profiles, the org chart and adding someone new.",
+      "chapters": [
+        { "id": "dashboard", "title": "Dashboard",        "route": "/dashboard",     "file": "people-dashboard.html", "roles": ["mgr","hr","adm"] },
+        { "id": "directory", "title": "Directory",        "route": "/people",        "file": "people-directory.html", "roles": ["mgr","hr","adm"] },
+        { "id": "profile",   "title": "A Person's Profile","route": "/people/detail","file": "people-profile.html",   "roles": ["emp","mgr","hr","adm"] },
+        { "id": "org",       "title": "Org Chart",        "route": "/org",           "file": "people-org.html",       "roles": ["mgr","hr","adm"] },
+        { "id": "new",       "title": "New Person",       "route": "/people/new",    "file": "people-new.html",       "roles": ["hr","adm"] }
+      ]
+    },
+    {
+      "part": "Performance",
+      "subtitle": "Your own performance page, the team feed, and the twice-yearly appraisal cycle from self-review to acknowledgement.",
+      "chapters": [
+        { "id": "me",          "title": "My Performance",       "route": "/me",          "file": "perf-me.html",          "roles": ["emp","mgr","hr","adm"] },
+        { "id": "team",        "title": "Team",                 "route": "/team",        "file": "perf-team.html",        "roles": ["mgr","hr","adm"] },
+        { "id": "appraisals",  "title": "Appraisals (HR)",      "route": "/appraisals",  "file": "perf-appraisals.html",  "roles": ["hr","adm"] },
+        { "id": "appraisal-detail", "title": "Filling In an Appraisal", "route": "/appraisals/detail", "file": "perf-appraisal-detail.html", "roles": ["emp","mgr","hr","adm"] }
+      ]
+    },
+    {
+      "part": "Org Design",
+      "subtitle": "The role and KPI registry and the department structure that the org chart and appraisals are built on.",
+      "chapters": [
+        { "id": "roles-kpis",  "title": "Roles & KPIs",  "route": "/roles",       "file": "org-roles.html",       "roles": ["mgr","hr","adm"] },
+        { "id": "departments", "title": "Departments",   "route": "/departments", "file": "org-departments.html", "roles": ["mgr","hr","adm"] }
+      ]
+    },
+    {
+      "part": "Administration",
+      "subtitle": "Who can see and do what in Podium, and the system-wide settings.",
+      "chapters": [
+        { "id": "perm-roles", "title": "Roles & Permissions", "route": "/admin/roles",    "file": "admin-roles.html",    "roles": ["adm"] },
+        { "id": "perm-users", "title": "Users",               "route": "/admin/users",    "file": "admin-users.html",    "roles": ["adm"] },
+        { "id": "settings",   "title": "Settings",            "route": "/admin/settings", "file": "admin-settings.html", "roles": ["adm"] }
+      ]
+    }
+  ]
+}
