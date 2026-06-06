@@ -2,7 +2,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, EmptyState, Panel, KpiCard, useToast } from '@throttle/ui';
+import { Spinner, EmptyState, Panel, KpiCard, useToast, useEscapeClose } from '@throttle/ui';
 
 function formatAge(ts) {
   if (!ts) return '—';
@@ -64,6 +64,8 @@ export default function ReturnsPage() {
   const [reqLine, setReqLine] = useState('L1');
   const [reqSel, setReqSel] = useState({});
   const [submitting, setSubmitting] = useState(false);
+
+  useEscapeClose(reqOpen, () => { if (!submitting) setReqOpen(false); });
 
   const load = useCallback(async () => {
     if (!session) return;

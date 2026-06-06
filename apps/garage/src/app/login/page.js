@@ -1,5 +1,6 @@
 'use client';
 import { useEffect } from 'react';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { GarageIcon } from '../../components/GarageIcon.js';
@@ -39,9 +40,11 @@ export default function LoginPage() {
         padding: '0 20px',
       }}>
         {/* LOT logo */}
-        <img
+        <Image
           src="/lot-logo.png"
           alt="Legend of Toys"
+          width={56}
+          height={56}
           style={{ height: 56, width: 'auto', marginBottom: 36 }}
         />
 
