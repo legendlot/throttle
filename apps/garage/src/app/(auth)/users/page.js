@@ -171,7 +171,7 @@ const levelBtnStyle = (active, level) => ({
 });
 
 export default function UsersPage() {
-  const { session, perms } = useAuth();
+  const { session, perms, role: myRole } = useAuth();
   const { showToast } = useToast();
 
   const [activeTab, setActiveTab] = useState('users');
@@ -404,6 +404,9 @@ export default function UsersPage() {
       <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', marginBottom: 16 }}>
         <button type="button" style={tabBtnStyle(activeTab === 'users')} onClick={() => setActiveTab('users')}>Users</button>
         <button type="button" style={tabBtnStyle(activeTab === 'roles')} onClick={() => setActiveTab('roles')}>Roles & Permissions</button>
+        {myRole === 'super_admin' && (
+          <button type="button" style={tabBtnStyle(activeTab === 'scannerpins')} onClick={() => setActiveTab('scannerpins')}>Scanner PINs</button>
+        )}
       </div>
 
       {activeTab === 'users' && (
@@ -435,6 +438,10 @@ export default function UsersPage() {
             canManage={canManage}
           />
         )
+      )}
+
+      {activeTab === 'scannerpins' && myRole === 'super_admin' && (
+        <ScannerPins session={session} showToast={showToast} />
       )}
 
       {activeTab === 'roles' && (
@@ -485,6 +492,83 @@ export default function UsersPage() {
           onConfirm={confirmDeleteRole}
         />
       )}
+    </div>
+  );
+}
+
+// Scanner department PINs (S106) — super-admin-only. Write-only: shows
+// set/last-updated metadata, never the stored PIN. Sets via the worker
+// (hashed server-side into store.scanner_department_pins).
+function ScannerPins({ session, showToast }) {
+  const DEPTS = [
+    { key: 'production', label: 'Production' },
+    { key: 'store',      label: 'Store' },
+    { key: 'dispatch',   label: 'Dispatch' },
+  ];
+  const [status, setStatus] = useState({});
+  const [pins, setPins]     = useState({ production: '', store: '', dispatch: '' });
+  const [saving, setSaving] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    if (!session) return;
+    setLoading(true);
+    try {
+      const res = await workerFetch('getDepartmentPinStatus', {}, session);
+      const map = {};
+      for (const d of (res?.data?.departments || [])) map[d.department] = d;
+      setStatus(map);
+    } catch (e) { showToast(e.message || 'Failed to load PIN status', 'error'); }
+    finally { setLoading(false); }
+  }, [session, showToast]);
+  useEffect(() => { load(); }, [load]);
+
+  async function save(dept) {
+    const pin = (pins[dept] || '').trim();
+    if (!/^\d{6}$/.test(pin)) { showToast('PIN must be exactly 6 digits', 'error'); return; }
+    setSaving(dept);
+    try {
+      await workerFetch('setDepartmentPin', { data: { department: dept, pin } }, session);
+      showToast(`${dept[0].toUpperCase() + dept.slice(1)} PIN updated`, 'success');
+      setPins(p => ({ ...p, [dept]: '' }));
+      load();
+    } catch (e) { showToast(e.message || 'Save failed', 'error'); }
+    finally { setSaving(''); }
+  }
+
+  const fmtWhen = (iso) => { if (!iso) return ''; try { return new Date(iso).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }); } catch { return iso; } };
+
+  return (
+    <div style={panelStyle}>
+      <div style={panelHeaderStyle}><span>Scanner Department PINs</span></div>
+      <div style={panelBodyStyle}>
+        <p style={{ color: 'var(--t3)', fontSize: 11, fontFamily: 'var(--mono)', marginTop: 0, marginBottom: 16, lineHeight: 1.5 }}>
+          6-digit PINs that gate the floor scanner&apos;s Production / Store / Dispatch departments.
+          Stored hashed; the current value is never shown. Enter a new PIN to rotate it — it takes effect immediately.
+        </p>
+        {loading ? <Spinner /> : DEPTS.map(({ key, label }) => {
+          const s = status[key] || {};
+          return (
+            <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderBottom: '1px solid rgba(42,42,42,.6)' }}>
+              <div style={{ width: 110 }}>
+                <div style={{ fontFamily: 'var(--cond)', fontSize: 14, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase' }}>{label}</div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', marginTop: 2 }}>
+                  {s.set ? `set · ${s.updated_by || '—'} · ${fmtWhen(s.updated_at)}` : 'not set'}
+                </div>
+              </div>
+              <input
+                type="password" inputMode="numeric" pattern="\d{6}" maxLength={6} placeholder="• • • • • •"
+                value={pins[key]}
+                onChange={(e) => setPins(p => ({ ...p, [key]: e.target.value.replace(/\D/g, '').slice(0, 6) }))}
+                style={{ ...inputStyle, width: 120, letterSpacing: '0.3em', textAlign: 'center', fontFamily: 'var(--mono)' }}
+              />
+              <button type="button" style={{ ...btnPrimary, opacity: saving === key ? 0.6 : 1 }} disabled={saving === key} onClick={() => save(key)}>
+                {saving === key ? 'Saving…' : 'Set PIN'}
+              </button>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
