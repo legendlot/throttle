@@ -8,12 +8,14 @@
 </div>
 
 <h2 class="sec">The layout</h2>
-<p>A header carries the customer and product, the disposition, an overdue badge if relevant, and the big red <strong>Advance</strong> button, with a stage <strong>stepper</strong> below. The body has three columns: the <strong>identity rail</strong> (assignment, customer, Shopify, call info, order, past cases), the <strong>work area</strong> (Issue, Return logistics, Resolution), and the <strong>activity feed</strong> (history, notes, attachments).</p>
+<p>A header carries the customer and product (with its colour where known), the disposition, an overdue badge if relevant, the creation date and time in Indian time, and the big red <strong>Advance</strong> button, with a stage <strong>stepper</strong> below. The body has three columns: the <strong>identity rail</strong> (assignment, customer, Shopify, call info, order, past cases), the <strong>work area</strong> (Issue, Return logistics, Resolution), and the <strong>activity feed</strong> (history, notes, attachments).</p>
+
+<p>The <strong>Shopify panel</strong> on the identity rail pulls the customer&rsquo;s full order history: each recent order lists its line items (product, quantity, variant and price), the order total, where it shipped, and the courier tracking number with a <strong>track</strong> link, so you can confirm what was bought and where it is without leaving the ticket.</p>
 
 <h2 class="sec">Advancing a ticket</h2>
 <ol class="steps">
   <li><span class="s-title">Set the disposition</span> from the header dropdown during triage. This decides the whole path the ticket will take.</li>
-  <li><span class="s-title">Click Advance.</span> The button names the next stage (for example &ldquo;Schedule Pickup&rdquo;). A modal asks for the fields that stage needs: a pickup needs the return AWB and courier; inspection needs an inspection note; a refund needs the amount, then the payment reference.</li>
+  <li><span class="s-title">Click Advance.</span> The button names the next stage (for example &ldquo;Schedule Pickup&rdquo;). A modal asks for the fields that stage needs: a pickup needs the return AWB and courier; inspection needs an inspection note; a refund needs the amount, then the payment reference. <strong>Verifying the issue is the exception:</strong> it has no fields, but it needs at least one evidence attachment first &mdash; the modal tells you so and how to add one.</li>
   <li><span class="s-title">Fill the required fields and confirm.</span> The ticket moves to the next stage and the stepper updates.</li>
 </ol>
 <p>Three side-exits handle the non-standard endings: <strong>Cancel</strong> (customer dropped), <strong>Reject</strong> (inspection found no fault), and <strong>Escalate</strong> (flag for a manager, staying in the current stage). Assignment is on the left rail: agents <strong>Claim</strong> an unassigned ticket; leads and admins can <strong>Reassign</strong> to anyone.</p>

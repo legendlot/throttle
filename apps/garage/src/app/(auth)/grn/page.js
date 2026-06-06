@@ -618,6 +618,8 @@ function FbuGrnPanel({ session, onSuccess }) {
         data: { product, variant: variant || null, color: color || null, qty_received: qty, grn_date: grnDate, supplier, po_ref: poRef }
       }, session);
       showToast(`FBU GRN ${res.data.grn_no} created — ${qty} units`, 'success');
+      // Non-blocking nudge: open outsourced (job-work) run for this product → use EXT Inwarding.
+      if (res.data.warning) showToast(res.data.warning, 'warning');
       clearForm();
       onSuccess();
     } catch (e) {
