@@ -47,6 +47,12 @@ const ACT_COLORS = {
   RTD_RETURN: '#14b8a6',
   RTE:        '#60a5fa',
   RTR:        '#60a5fa',
+  ALLOC:      '#38bdf8',
+  PACK:       '#22d3ee',
+  DTK:        '#0ea5e9',
+  DOUT:       '#3b82f6',
+  REP_START:  '#fbbf24',
+  REP_PASS:   '#f59e0b',
 };
 
 const ACTIVITY_FILTERS = [
@@ -57,6 +63,12 @@ const ACTIVITY_FILTERS = [
   { value: 'WKS_IN',     label: 'WKS In' },
   { value: 'WKS_OUT',    label: 'WKS Out' },
   { value: 'PKG',        label: 'PKG' },
+  { value: 'ALLOC',      label: 'Alloc' },
+  { value: 'PACK',       label: 'Pack' },
+  { value: 'DTK',        label: 'DTK' },
+  { value: 'DOUT',       label: 'DOut' },
+  { value: 'REP_START',  label: 'Rep Start' },
+  { value: 'REP_PASS',   label: 'Rep Pass' },
   { value: 'RTE',        label: 'RTE' },
   { value: 'RTR',        label: 'RTR' },
   { value: 'RTO_IN',     label: 'RTO In' },
