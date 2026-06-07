@@ -2,124 +2,585 @@
   "title": "Garage",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to store, inventory, production, returns and procurement at Legend of Toys.",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "date": "2026-06-07",
   "app_url": "garage.legendoftoys.com",
   "owner": "Legend of Toys",
   "roles": {
-    "sto": { "label": "Store",       "name": "Store Team",        "desc": "Receiving, stock, issuing, counts and returns. The core warehouse persona." },
-    "prd": { "label": "Production",   "name": "Production Team",   "desc": "Plans and runs production: runs, ad hoc requests, line flush, producibility." },
-    "prc": { "label": "Procurement",  "name": "Procurement",       "desc": "Purchase orders, vendors, reorders, forwarders and new-product registration." },
-    "adm": { "label": "Admin",        "name": "Manager / Admin",   "desc": "Full access: users and roles, reports, configuration and everything else." }
+    "sto": {
+      "label": "Store",
+      "name": "Store Team",
+      "desc": "Receiving, stock, issuing, counts and returns. The core warehouse persona."
+    },
+    "prd": {
+      "label": "Production",
+      "name": "Production Team",
+      "desc": "Plans and runs production: runs, ad hoc requests, line flush, producibility."
+    },
+    "prc": {
+      "label": "Procurement",
+      "name": "Procurement",
+      "desc": "Purchase orders, vendors, reorders, forwarders and new-product registration."
+    },
+    "adm": {
+      "label": "Admin",
+      "name": "Manager / Admin",
+      "desc": "Full access: users and roles, reports, configuration and everything else."
+    }
   },
   "parts": [
     {
       "part": "Getting Started",
       "subtitle": "What Garage is, how to sign in, find your way around, and what your role can see.",
       "chapters": [
-        { "id": "intro",      "title": "Welcome to Garage",           "file": "00-introduction.html", "roles": ["sto","prd","prc","adm"] },
-        { "id": "navigation", "title": "Signing In & Getting Around", "file": "01-navigation.html",   "roles": ["sto","prd","prc","adm"] },
-        { "id": "roles",      "title": "Roles & What You Can See",     "file": "02-roles.html",        "roles": ["sto","prd","prc","adm"] }
+        {
+          "id": "intro",
+          "title": "Welcome to Garage",
+          "file": "00-introduction.html",
+          "roles": [
+            "sto",
+            "prd",
+            "prc",
+            "adm"
+          ]
+        },
+        {
+          "id": "navigation",
+          "title": "Signing In & Getting Around",
+          "file": "01-navigation.html",
+          "roles": [
+            "sto",
+            "prd",
+            "prc",
+            "adm"
+          ]
+        },
+        {
+          "id": "roles",
+          "title": "Roles & What You Can See",
+          "file": "02-roles.html",
+          "roles": [
+            "sto",
+            "prd",
+            "prc",
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Overview",
       "subtitle": "The morning dashboard, alerts, the system-wide activity log, reports and producibility.",
       "chapters": [
-        { "id": "dashboard",     "title": "Dashboard",     "route": "/dashboard",     "file": "ov-dashboard.html",     "roles": ["sto","prd","prc","adm"] },
-        { "id": "alerts",        "title": "Alerts",        "route": "/alerts",        "file": "ov-alerts.html",        "roles": ["sto","prd","prc","adm"] },
-        { "id": "activity",      "title": "Activity Log",  "route": "/activity",      "file": "ov-activity.html",      "roles": ["adm"] },
-        { "id": "reports",       "title": "Reports",       "route": "/reports",       "file": "ov-reports.html",       "roles": ["adm"] },
-        { "id": "producibility", "title": "Producibility", "route": "/producibility", "file": "ov-producibility.html", "roles": ["prd","sto","adm"] }
+        {
+          "id": "dashboard",
+          "title": "Dashboard",
+          "route": "/dashboard",
+          "file": "ov-dashboard.html",
+          "roles": [
+            "sto",
+            "prd",
+            "prc",
+            "adm"
+          ]
+        },
+        {
+          "id": "alerts",
+          "title": "Alerts",
+          "route": "/alerts",
+          "file": "ov-alerts.html",
+          "roles": [
+            "sto",
+            "prd",
+            "prc",
+            "adm"
+          ]
+        },
+        {
+          "id": "activity",
+          "title": "Activity Log",
+          "route": "/activity",
+          "file": "ov-activity.html",
+          "roles": [
+            "adm"
+          ]
+        },
+        {
+          "id": "reports",
+          "title": "Reports",
+          "route": "/reports",
+          "file": "ov-reports.html",
+          "roles": [
+            "adm"
+          ]
+        },
+        {
+          "id": "producibility",
+          "title": "Producibility",
+          "route": "/producibility",
+          "file": "ov-producibility.html",
+          "roles": [
+            "prd",
+            "sto",
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Inventory",
       "subtitle": "The stock ledger, recording goods received, and receiving against shipments.",
       "chapters": [
-        { "id": "stock",     "title": "Stock Ledger", "route": "/stock",     "file": "inv-stock.html",     "roles": ["sto","prc","adm"] },
-        { "id": "grn",       "title": "GRN Entry",    "route": "/grn",       "file": "inv-grn.html",       "roles": ["sto","adm"] },
-        { "id": "receiving", "title": "Receiving",    "route": "/receiving", "file": "inv-receiving.html", "roles": ["sto","adm"] }
+        {
+          "id": "stock",
+          "title": "Stock Ledger",
+          "route": "/stock",
+          "file": "inv-stock.html",
+          "roles": [
+            "sto",
+            "prc",
+            "adm"
+          ]
+        },
+        {
+          "id": "grn",
+          "title": "GRN Entry",
+          "route": "/grn",
+          "file": "inv-grn.html",
+          "roles": [
+            "sto",
+            "adm"
+          ]
+        },
+        {
+          "id": "receiving",
+          "title": "Receiving",
+          "route": "/receiving",
+          "file": "inv-receiving.html",
+          "roles": [
+            "sto",
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Production",
       "subtitle": "Planning production runs, ad hoc part requests, returning leftovers, and process deviations.",
       "chapters": [
-        { "id": "production-runs",  "title": "Production Runs",    "route": "/production-runs",    "file": "prod-runs.html",       "roles": ["prd","adm"] },
-        { "id": "work-orders",      "title": "Ad Hoc Requests",    "route": "/work-orders",        "file": "prod-workorders.html", "roles": ["prd","adm"] },
-        { "id": "line-flush",       "title": "Line Flush",         "route": "/line-flush",         "file": "prod-lineflush.html",  "roles": ["prd","sto","adm"] },
-        { "id": "deviations",       "title": "Process Deviations", "route": "/process-deviations", "file": "prod-deviations.html", "roles": ["prd","adm"] }
+        {
+          "id": "production-runs",
+          "title": "Production Runs",
+          "route": "/production-runs",
+          "file": "prod-runs.html",
+          "roles": [
+            "prd",
+            "adm"
+          ]
+        },
+        {
+          "id": "work-orders",
+          "title": "Ad Hoc Requests",
+          "route": "/work-orders",
+          "file": "prod-workorders.html",
+          "roles": [
+            "prd",
+            "adm"
+          ]
+        },
+        {
+          "id": "line-flush",
+          "title": "Line Flush",
+          "route": "/line-flush",
+          "file": "prod-lineflush.html",
+          "roles": [
+            "prd",
+            "sto",
+            "adm"
+          ]
+        },
+        {
+          "id": "deviations",
+          "title": "Process Deviations",
+          "route": "/process-deviations",
+          "file": "prod-deviations.html",
+          "roles": [
+            "prd",
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Store",
       "subtitle": "Issuing parts, verifying flushes, damage, cycle counts, adjustments, direct issuance, gate passes, restocking and daily logs.",
       "chapters": [
-        { "id": "issue-queue",       "title": "Issue Queue",       "route": "/issue-queue",        "file": "store-issuequeue.html",  "roles": ["sto","adm"] },
-        { "id": "flush-verify",      "title": "Flush Verify",      "route": "/flush-verify",       "file": "store-flushverify.html", "roles": ["sto","adm"] },
-        { "id": "damage-ledger",     "title": "Damage / Scrap Ledger", "route": "/damage-ledger",  "file": "store-damage.html",      "roles": ["sto","adm"] },
-        { "id": "cycle-counts",      "title": "Cycle Counts",      "route": "/cycle-counts",       "file": "store-cyclecounts.html", "roles": ["sto","adm"] },
-        { "id": "stock-adjustments", "title": "Stock Adjustments", "route": "/stock-adjustments",  "file": "store-adjustments.html", "roles": ["sto","adm"] },
-        { "id": "dispatch-counts",   "title": "Dispatch Counts",   "route": "/dispatch/unit-counts","file": "store-dispatchcounts.html","roles": ["sto","adm"] },
-        { "id": "direct-issuance",   "title": "Direct Issuance",   "route": "/direct-issuance",    "file": "store-directissue.html", "roles": ["sto","adm"] },
-        { "id": "gate-pass",         "title": "Gate Pass",         "route": "/gate-pass",          "file": "store-gate-pass.html",   "roles": ["sto","prd","adm"] },
-        { "id": "unit-restock",      "title": "Unit Restock",      "route": "/restock",            "file": "store-restock.html",     "roles": ["sto","adm"] },
-        { "id": "store-history",     "title": "Store History",     "route": "/store-history",      "file": "store-history.html",     "roles": ["sto","adm"] },
-        { "id": "manpower",          "title": "Manpower",          "route": "/manpower",           "file": "store-manpower.html",    "roles": ["sto","adm"] },
-        { "id": "dispatch",          "title": "Dispatch Activity", "route": "/dispatch",           "file": "store-dispatch.html",    "roles": ["sto","adm"] }
+        {
+          "id": "issue-queue",
+          "title": "Issue Queue",
+          "route": "/issue-queue",
+          "file": "store-issuequeue.html",
+          "roles": [
+            "sto",
+            "adm"
+          ]
+        },
+        {
+          "id": "flush-verify",
+          "title": "Flush Verify",
+          "route": "/flush-verify",
+          "file": "store-flushverify.html",
+          "roles": [
+            "sto",
+            "adm"
+          ]
+        },
+        {
+          "id": "damage-ledger",
+          "title": "Damage / Scrap Ledger",
+          "route": "/damage-ledger",
+          "file": "store-damage.html",
+          "roles": [
+            "sto",
+            "adm"
+          ]
+        },
+        {
+          "id": "cycle-counts",
+          "title": "Cycle Counts",
+          "route": "/cycle-counts",
+          "file": "store-cyclecounts.html",
+          "roles": [
+            "sto",
+            "adm"
+          ]
+        },
+        {
+          "id": "stock-adjustments",
+          "title": "Stock Adjustments",
+          "route": "/stock-adjustments",
+          "file": "store-adjustments.html",
+          "roles": [
+            "sto",
+            "adm"
+          ]
+        },
+        {
+          "id": "dispatch-counts",
+          "title": "Dispatch Counts",
+          "route": "/dispatch/unit-counts",
+          "file": "store-dispatchcounts.html",
+          "roles": [
+            "sto",
+            "adm"
+          ]
+        },
+        {
+          "id": "direct-issuance",
+          "title": "Direct Issuance",
+          "route": "/direct-issuance",
+          "file": "store-directissue.html",
+          "roles": [
+            "sto",
+            "adm"
+          ]
+        },
+        {
+          "id": "gate-pass",
+          "title": "Gate Pass",
+          "route": "/gate-pass",
+          "file": "store-gate-pass.html",
+          "roles": [
+            "sto",
+            "prd",
+            "adm"
+          ]
+        },
+        {
+          "id": "unit-restock",
+          "title": "Unit Restock",
+          "route": "/restock",
+          "file": "store-restock.html",
+          "roles": [
+            "sto",
+            "adm"
+          ]
+        },
+        {
+          "id": "store-history",
+          "title": "Store History",
+          "route": "/store-history",
+          "file": "store-history.html",
+          "roles": [
+            "sto",
+            "adm"
+          ]
+        },
+        {
+          "id": "manpower",
+          "title": "Manpower",
+          "route": "/manpower",
+          "file": "store-manpower.html",
+          "roles": [
+            "sto",
+            "adm"
+          ]
+        },
+        {
+          "id": "dispatch",
+          "title": "Dispatch Activity",
+          "route": "/dispatch",
+          "file": "store-dispatch.html",
+          "roles": [
+            "sto",
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Returns",
       "subtitle": "The journey of a returned unit: receive, triage, then route to re-dispatch, repair or write-off.",
       "chapters": [
-        { "id": "ret-shipments", "title": "Open Return Shipments",    "route": "/returns/shipments", "file": "ret-shipments.html", "roles": ["sto","adm"] },
-        { "id": "ret-process",   "title": "Process / Disposition",    "route": "/returns/process",   "file": "ret-process.html",   "roles": ["sto","adm"] },
-        { "id": "ret-udr",       "title": "Issue UDR",                "route": "/returns/udr-pool",  "file": "ret-udr.html",       "roles": ["sto","adm"] },
-        { "id": "ret-repair",    "title": "Issue Repair",             "route": "/returns/repair-pool","file": "ret-repair.html",   "roles": ["sto","adm"] },
-        { "id": "ret-losses",    "title": "Losses",                   "route": "/returns/losses",    "file": "ret-losses.html",    "roles": ["sto","adm"] },
-        { "id": "ret-channels",  "title": "Return Channels",          "route": "/returns/channels",  "file": "ret-channels.html",  "roles": ["adm"] }
+        {
+          "id": "ret-shipments",
+          "title": "Open Return Shipments",
+          "route": "/returns/shipments",
+          "file": "ret-shipments.html",
+          "roles": [
+            "sto",
+            "adm"
+          ]
+        },
+        {
+          "id": "ret-process",
+          "title": "Process / Disposition",
+          "route": "/returns/process",
+          "file": "ret-process.html",
+          "roles": [
+            "sto",
+            "adm"
+          ]
+        },
+        {
+          "id": "ret-udr",
+          "title": "Issue UDR",
+          "route": "/returns/udr-pool",
+          "file": "ret-udr.html",
+          "roles": [
+            "sto",
+            "adm"
+          ]
+        },
+        {
+          "id": "ret-repair",
+          "title": "Issue Repair",
+          "route": "/returns/repair-pool",
+          "file": "ret-repair.html",
+          "roles": [
+            "sto",
+            "adm"
+          ]
+        },
+        {
+          "id": "ret-losses",
+          "title": "Losses",
+          "route": "/returns/losses",
+          "file": "ret-losses.html",
+          "roles": [
+            "sto",
+            "adm"
+          ]
+        },
+        {
+          "id": "ret-channels",
+          "title": "Return Channels",
+          "route": "/returns/channels",
+          "file": "ret-channels.html",
+          "roles": [
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Scanner",
       "subtitle": "The Store department's stations on the floor scanner: how to get in, and what each station does.",
       "chapters": [
-        { "id": "scan-basics",         "title": "The Floor Scanner",  "file": "scan-basics.html",         "roles": ["sto","adm"] },
-        { "id": "scan-store-issue",    "title": "Store Issue",        "file": "scan-store-issue.html",    "roles": ["sto"] },
-        { "id": "scan-returns-intake", "title": "Returns Intake",     "file": "scan-returns-intake.html", "roles": ["sto"] },
-        { "id": "scan-direct-issue",   "title": "Direct Issue",       "file": "scan-direct-issue.html",   "roles": ["sto"] },
-        { "id": "scan-utilities",      "title": "Legacy Reg & Lookup","file": "scan-utilities.html",      "roles": ["sto","adm"] }
+        {
+          "id": "scan-basics",
+          "title": "The Floor Scanner",
+          "file": "scan-basics.html",
+          "roles": [
+            "sto",
+            "adm"
+          ]
+        },
+        {
+          "id": "scan-store-issue",
+          "title": "Store Issue",
+          "file": "scan-store-issue.html",
+          "roles": [
+            "sto"
+          ]
+        },
+        {
+          "id": "scan-returns-intake",
+          "title": "Returns Intake",
+          "file": "scan-returns-intake.html",
+          "roles": [
+            "sto"
+          ]
+        },
+        {
+          "id": "scan-direct-issue",
+          "title": "Direct Issue",
+          "file": "scan-direct-issue.html",
+          "roles": [
+            "sto"
+          ]
+        },
+        {
+          "id": "scan-utilities",
+          "title": "Legacy Reg & Lookup",
+          "file": "scan-utilities.html",
+          "roles": [
+            "sto",
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Library",
       "subtitle": "BOM downloads, the cross-product parts database, a part's full history, and bag sizes.",
       "chapters": [
-        { "id": "lib-downloads", "title": "BOM Downloads",  "route": "/library/downloads", "file": "lib-downloads.html", "roles": ["sto","prd","prc","adm"] },
-        { "id": "lib-parts",     "title": "Parts Database", "route": "/library/parts",     "file": "lib-parts.html",     "roles": ["sto","prd","prc","adm"] },
-        { "id": "lib-journey",   "title": "Part Journey",   "route": "/library/journey",   "file": "lib-journey.html",   "roles": ["sto","adm"] },
-        { "id": "lib-bagsizes",  "title": "Bag Sizes",      "route": "/library/bag-sizes", "file": "lib-bagsizes.html",  "roles": ["prc","adm"] }
+        {
+          "id": "lib-downloads",
+          "title": "BOM Downloads",
+          "route": "/library/downloads",
+          "file": "lib-downloads.html",
+          "roles": [
+            "sto",
+            "prd",
+            "prc",
+            "adm"
+          ]
+        },
+        {
+          "id": "lib-parts",
+          "title": "Parts Database",
+          "route": "/library/parts",
+          "file": "lib-parts.html",
+          "roles": [
+            "sto",
+            "prd",
+            "prc",
+            "adm"
+          ]
+        },
+        {
+          "id": "lib-journey",
+          "title": "Part Journey",
+          "route": "/library/journey",
+          "file": "lib-journey.html",
+          "roles": [
+            "sto",
+            "adm"
+          ]
+        },
+        {
+          "id": "lib-bagsizes",
+          "title": "Bag Sizes",
+          "route": "/library/bag-sizes",
+          "file": "lib-bagsizes.html",
+          "roles": [
+            "prc",
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Procurement",
       "subtitle": "From reorder requests through purchase orders, vendors, forwarders and new-product registration.",
       "chapters": [
-        { "id": "proc-overview",  "title": "Procurement Overview",  "route": "/procurement",            "file": "proc-overview.html",  "roles": ["prc","adm"] },
-        { "id": "proc-pos",       "title": "Purchase Orders",       "route": "/procurement/pos",        "file": "proc-pos.html",       "roles": ["prc","adm"] },
-        { "id": "proc-reorders",  "title": "Reorder Requests",      "route": "/procurement/reorders",   "file": "proc-reorders.html",  "roles": ["sto","prc","adm"] },
-        { "id": "proc-vendors",   "title": "Vendors",               "route": "/procurement/vendors",    "file": "proc-vendors.html",   "roles": ["prc","adm"] },
-        { "id": "proc-forwarders","title": "Forwarders",            "route": "/procurement/forwarders", "file": "proc-forwarders.html","roles": ["prc","adm"] },
-        { "id": "proc-register",  "title": "New Product Registration","route": "/products/register",    "file": "proc-register.html",  "roles": ["prc","adm"] }
+        {
+          "id": "proc-overview",
+          "title": "Procurement Overview",
+          "route": "/procurement",
+          "file": "proc-overview.html",
+          "roles": [
+            "prc",
+            "adm"
+          ]
+        },
+        {
+          "id": "proc-pos",
+          "title": "Purchase Orders",
+          "route": "/procurement/pos",
+          "file": "proc-pos.html",
+          "roles": [
+            "prc",
+            "adm"
+          ]
+        },
+        {
+          "id": "proc-reorders",
+          "title": "Reorder Requests",
+          "route": "/procurement/reorders",
+          "file": "proc-reorders.html",
+          "roles": [
+            "sto",
+            "prc",
+            "adm"
+          ]
+        },
+        {
+          "id": "proc-vendors",
+          "title": "Vendors",
+          "route": "/procurement/vendors",
+          "file": "proc-vendors.html",
+          "roles": [
+            "prc",
+            "adm"
+          ]
+        },
+        {
+          "id": "proc-forwarders",
+          "title": "Forwarders",
+          "route": "/procurement/forwarders",
+          "file": "proc-forwarders.html",
+          "roles": [
+            "prc",
+            "adm"
+          ]
+        },
+        {
+          "id": "proc-register",
+          "title": "New Product Registration",
+          "route": "/products/register",
+          "file": "proc-register.html",
+          "roles": [
+            "prc",
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Users",
       "subtitle": "Managing staff accounts and the role-based permission matrix.",
       "chapters": [
-        { "id": "users", "title": "Users & Roles", "route": "/users", "file": "usr-users.html", "roles": ["adm"] }
+        {
+          "id": "users",
+          "title": "Users & Roles",
+          "route": "/users",
+          "file": "usr-users.html",
+          "roles": [
+            "adm"
+          ]
+        }
       ]
     }
   ]

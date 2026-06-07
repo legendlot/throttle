@@ -8,18 +8,18 @@
 </div>
 
 <h2 class="sec">How a channel swap works</h2>
-<p>The run on this screen is a counter; the physical work happens on the floor:</p>
+<p>Request the run from <strong>New Run / Request &rarr; Repack</strong> (product, from &rarr; to channel, quantity). That raises two requests automatically: the store issues the <strong>to-channel packaging</strong> (box and tray) into the Issue Queue, and dispatch gets a <strong>release list</strong>. Then the physical work happens on the floor:</p>
 <ol class="steps">
-  <li><span class="s-title">Scan the old box/unit at Repack In.</span> Every unit in it rolls back to QC&nbsp;Pass; everything downstream is wiped because it&rsquo;s about to be re-packed for a new channel.</li>
-  <li><span class="s-title">Re-pair and pick the new channel at Repack Out.</span> The operator re-confirms the car + remote pair, chooses Ecom or Retail, and a fresh sticker prints.</li>
-  <li><span class="s-title">The unit rejoins dispatch.</span> From there it flows through the normal pipeline (PKG&nbsp;Out → allocate → pack → dispatch) unchanged.</li>
+  <li><span class="s-title">Dispatch releases the units at Repack Release.</span> A dispatch operator scans each box to hand it over to the run. Units still on the production side (just out of PKG Out) skip this.</li>
+  <li><span class="s-title">Scan the old box at Repack In.</span> Only released (or PKG-Out) units are accepted; the unit rolls back to QC&nbsp;Pass and everything downstream is wiped, ready to re-box for the new channel.</li>
+  <li><span class="s-title">Re-pair at Repack Out.</span> The operator re-confirms the car + remote pair; the new channel comes from the request and a fresh sticker prints.</li>
+  <li><span class="s-title">The unit rejoins dispatch.</span> From there it flows through the normal pipeline (PKG&nbsp;Out → allocate → pack → dispatch) unchanged. The old packaging goes back to the store via line flush.</li>
 </ol>
 
-<h2 class="sec">Running it from this screen</h2>
-<p><strong>+ New Run</strong> just needs a <strong>target quantity</strong> (how many units the floor plans to repack today) and optional notes, e.g. &ldquo;Flare retail → ecom&rdquo;. The list shows each run&rsquo;s progress (<span class="mono">repacked / target</span> + %) and status: <strong>Open</strong>, <strong>In Progress</strong>, <strong>Completed</strong> (green), <strong>Cancelled</strong>.</p>
-<p>A run&rsquo;s detail page tracks each swap as it happens: car UPC, paired remote, the <span class="mono">from → to</span> channel direction, old and new labels, and in/out times. Units scanned in but not yet re-packed out show as <strong>in-flight</strong>. <strong>Complete</strong> closes the run; <strong>Cancel</strong> stops it (units already repacked stay repacked).</p>
+<h2 class="sec">Tracking it from this screen</h2>
+<p>This screen tracks the runs requested from New Run / Request. The list shows each run&rsquo;s progress (<span class="mono">repacked / target</span> + %) and status: <strong>Open</strong>, <strong>In Progress</strong>, <strong>Completed</strong> (green), <strong>Cancelled</strong>. A run&rsquo;s detail page tracks each swap as it happens: car UPC, paired remote, the <span class="mono">from → to</span> channel, old and new labels, and in/out times. Units scanned in but not yet re-packed out show as <strong>in-flight</strong>. <strong>Complete</strong> closes the run; <strong>Cancel</strong> stops it (units already repacked stay repacked).</p>
 
 <div class="callout note">
-  <div class="c-title">&#9432; The run is just a counter</div>
-  <p>The target is for daily visibility; the system doesn&rsquo;t force scanned units to match the run&rsquo;s product or channel. The operator opens whatever box came back; the per-unit swap history is the real record of what changed.</p>
+  <div class="c-title">&#9432; Requests come from New Run / Request</div>
+  <p>Repack runs are now requested with a product, channel direction and quantity (not just a bare count), which is what lets the store auto-receive the right packaging and dispatch know which units to release. This screen is where you watch and close them.</p>
 </div>

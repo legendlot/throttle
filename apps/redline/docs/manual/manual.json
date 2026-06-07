@@ -2,98 +2,449 @@
   "title": "Redline",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to the production floor, QC, dispatch and admin screens that run Legend of Toys.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "date": "2026-06-07",
   "app_url": "redline.legendoftoys.com",
   "owner": "Legend of Toys",
   "roles": {
-    "op":  { "label": "Operator",   "name": "Operator / Floor Team",  "desc": "Assembly, QC and packing staff who read live screens and work from the scanner." },
-    "sup": { "label": "Supervisor", "name": "Supervisor / Line Lead", "desc": "Sets up lines, assigns people, watches output, handles returns and repairs." },
-    "dis": { "label": "Dispatch",   "name": "Dispatch Team",          "desc": "Builds shipments, packs boxes, manages channels, challans and repacks." },
-    "adm": { "label": "Admin",      "name": "Manager / Admin",        "desc": "Full access: line design, operators, UPC/print, reporting and configuration." }
+    "op": {
+      "label": "Operator",
+      "name": "Operator / Floor Team",
+      "desc": "Assembly, QC and packing staff who read live screens and work from the scanner."
+    },
+    "sup": {
+      "label": "Supervisor",
+      "name": "Supervisor / Line Lead",
+      "desc": "Sets up lines, assigns people, watches output, handles returns and repairs."
+    },
+    "dis": {
+      "label": "Dispatch",
+      "name": "Dispatch Team",
+      "desc": "Builds shipments, packs boxes, manages channels, challans and repacks."
+    },
+    "adm": {
+      "label": "Admin",
+      "name": "Manager / Admin",
+      "desc": "Full access: line design, operators, UPC/print, reporting and configuration."
+    }
   },
   "parts": [
     {
       "part": "Getting Started",
       "subtitle": "What Redline is, how to sign in, find your way around, and what your role can see.",
       "chapters": [
-        { "id": "intro",      "title": "Welcome to Redline",          "file": "00-introduction.html", "roles": ["op","sup","dis","adm"] },
-        { "id": "navigation", "title": "Signing In & Getting Around", "file": "01-navigation.html",   "roles": ["op","sup","dis","adm"] },
-        { "id": "roles",      "title": "Roles & What You Can See",     "file": "02-roles.html",        "roles": ["op","sup","dis","adm"] }
+        {
+          "id": "intro",
+          "title": "Welcome to Redline",
+          "file": "00-introduction.html",
+          "roles": [
+            "op",
+            "sup",
+            "dis",
+            "adm"
+          ]
+        },
+        {
+          "id": "navigation",
+          "title": "Signing In & Getting Around",
+          "file": "01-navigation.html",
+          "roles": [
+            "op",
+            "sup",
+            "dis",
+            "adm"
+          ]
+        },
+        {
+          "id": "roles",
+          "title": "Roles & What You Can See",
+          "file": "02-roles.html",
+          "roles": [
+            "op",
+            "sup",
+            "dis",
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Production",
       "subtitle": "Planning runs, designing and setting up lines, watching output, and quality control.",
       "chapters": [
-        { "id": "exec",       "title": "Dashboard",         "route": "/exec",               "file": "prod-exec.html",        "roles": ["op","sup","dis","adm"] },
-        { "id": "planner",    "title": "Planner",           "route": "/planner",            "file": "prod-planner.html",     "roles": ["sup","adm"] },
-        { "id": "line-design","title": "Line Design",       "route": "/line-design",        "file": "prod-line-design.html", "roles": ["adm"] },
-        { "id": "line-setup", "title": "Line Setup",        "route": "/line-setup",         "file": "prod-line-setup.html",  "roles": ["sup","adm"] },
-        { "id": "lines",      "title": "Lines (Live View)", "route": "/lines",              "file": "prod-lines.html",       "roles": ["op","sup","dis","adm"] },
-        { "id": "manpower",   "title": "Manpower",          "route": "/manpower",           "file": "prod-manpower.html",    "roles": ["sup","adm"] },
-        { "id": "hourly",     "title": "Hourly",            "route": "/hourly",             "file": "prod-hourly.html",      "roles": ["op","sup","dis","adm"] },
-        { "id": "qc",         "title": "QC",                "route": "/qc",                 "file": "prod-qc.html",          "roles": ["op","sup","adm"] },
-        { "id": "audit",      "title": "QC Audit",          "route": "/audit",              "file": "prod-audit.html",       "roles": ["sup","adm"] },
-        { "id": "deviations", "title": "Process Deviations","route": "/process-deviations", "file": "prod-deviations.html",  "roles": ["sup","adm"] }
+        {
+          "id": "new-run",
+          "title": "New Run / Request",
+          "route": "/new-run",
+          "roles": [
+            "op",
+            "sup",
+            "adm"
+          ],
+          "file": "prod-new-run.html"
+        },
+        {
+          "id": "exec",
+          "title": "Dashboard",
+          "route": "/exec",
+          "file": "prod-exec.html",
+          "roles": [
+            "op",
+            "sup",
+            "dis",
+            "adm"
+          ]
+        },
+        {
+          "id": "planner",
+          "title": "Planner",
+          "route": "/planner",
+          "file": "prod-planner.html",
+          "roles": [
+            "sup",
+            "adm"
+          ]
+        },
+        {
+          "id": "line-design",
+          "title": "Line Design",
+          "route": "/line-design",
+          "file": "prod-line-design.html",
+          "roles": [
+            "adm"
+          ]
+        },
+        {
+          "id": "line-setup",
+          "title": "Line Setup",
+          "route": "/line-setup",
+          "file": "prod-line-setup.html",
+          "roles": [
+            "sup",
+            "adm"
+          ]
+        },
+        {
+          "id": "lines",
+          "title": "Lines (Live View)",
+          "route": "/lines",
+          "file": "prod-lines.html",
+          "roles": [
+            "op",
+            "sup",
+            "dis",
+            "adm"
+          ]
+        },
+        {
+          "id": "manpower",
+          "title": "Manpower",
+          "route": "/manpower",
+          "file": "prod-manpower.html",
+          "roles": [
+            "sup",
+            "adm"
+          ]
+        },
+        {
+          "id": "hourly",
+          "title": "Hourly",
+          "route": "/hourly",
+          "file": "prod-hourly.html",
+          "roles": [
+            "op",
+            "sup",
+            "dis",
+            "adm"
+          ]
+        },
+        {
+          "id": "qc",
+          "title": "QC",
+          "route": "/qc",
+          "file": "prod-qc.html",
+          "roles": [
+            "op",
+            "sup",
+            "adm"
+          ]
+        },
+        {
+          "id": "audit",
+          "title": "QC Audit",
+          "route": "/audit",
+          "file": "prod-audit.html",
+          "roles": [
+            "sup",
+            "adm"
+          ]
+        },
+        {
+          "id": "deviations",
+          "title": "Process Deviations",
+          "route": "/process-deviations",
+          "file": "prod-deviations.html",
+          "roles": [
+            "sup",
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Activity",
       "subtitle": "Live alerts, returns intake, the raw scan log, and fixing mistaken scans.",
       "chapters": [
-        { "id": "alerts",     "title": "Alerts",      "route": "/alerts",      "file": "act-alerts.html",      "roles": ["op","sup","dis","adm"] },
-        { "id": "returns",    "title": "Returns",     "route": "/returns",     "file": "act-returns.html",     "roles": ["sup","dis","adm"] },
-        { "id": "scans",      "title": "Scans",       "route": "/scans",       "file": "act-scans.html",       "roles": ["op","sup","dis","adm"] },
-        { "id": "corrections","title": "Corrections", "route": "/corrections", "file": "act-corrections.html", "roles": ["sup","adm"] }
+        {
+          "id": "alerts",
+          "title": "Alerts",
+          "route": "/alerts",
+          "file": "act-alerts.html",
+          "roles": [
+            "op",
+            "sup",
+            "dis",
+            "adm"
+          ]
+        },
+        {
+          "id": "returns",
+          "title": "Returns",
+          "route": "/returns",
+          "file": "act-returns.html",
+          "roles": [
+            "sup",
+            "dis",
+            "adm"
+          ]
+        },
+        {
+          "id": "scans",
+          "title": "Scans",
+          "route": "/scans",
+          "file": "act-scans.html",
+          "roles": [
+            "op",
+            "sup",
+            "dis",
+            "adm"
+          ]
+        },
+        {
+          "id": "corrections",
+          "title": "Corrections",
+          "route": "/corrections",
+          "file": "act-corrections.html",
+          "roles": [
+            "sup",
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Scanner",
       "subtitle": "The production and dispatch stations on the floor scanner: how to get in, and what each station does.",
       "chapters": [
-        { "id": "scan-basics",       "title": "The Floor Scanner",          "file": "scan-basics.html",        "roles": ["op","sup","dis","adm"] },
-        { "id": "scan-production",   "title": "Production Stations",        "file": "scan-production.html",    "roles": ["op","sup"] },
-        { "id": "scan-repair-repack","title": "Repair, Outsourced & Repack","file": "scan-repair-repack.html", "roles": ["op","sup"] },
-        { "id": "scan-dispatch",     "title": "Dispatch Stations",          "file": "scan-dispatch.html",      "roles": ["dis","sup"] },
-        { "id": "scan-utilities",    "title": "Attendance & Lookup",        "file": "scan-utilities.html",     "roles": ["op","sup","dis"] }
+        {
+          "id": "scan-basics",
+          "title": "The Floor Scanner",
+          "file": "scan-basics.html",
+          "roles": [
+            "op",
+            "sup",
+            "dis",
+            "adm"
+          ]
+        },
+        {
+          "id": "scan-production",
+          "title": "Production Stations",
+          "file": "scan-production.html",
+          "roles": [
+            "op",
+            "sup"
+          ]
+        },
+        {
+          "id": "scan-repair-repack",
+          "title": "Repair, Outsourced & Repack",
+          "file": "scan-repair-repack.html",
+          "roles": [
+            "op",
+            "sup"
+          ]
+        },
+        {
+          "id": "scan-dispatch",
+          "title": "Dispatch Stations",
+          "file": "scan-dispatch.html",
+          "roles": [
+            "dis",
+            "sup"
+          ]
+        },
+        {
+          "id": "scan-utilities",
+          "title": "Attendance & Lookup",
+          "file": "scan-utilities.html",
+          "roles": [
+            "op",
+            "sup",
+            "dis"
+          ]
+        }
       ]
     },
     {
       "part": "Dispatch",
       "subtitle": "From open inventory through shipments, channels, challans and channel-swap repacks.",
       "chapters": [
-        { "id": "dispatch",          "title": "Dispatch Overview", "route": "/dispatch",           "file": "disp-overview.html",  "roles": ["dis","adm"] },
-        { "id": "dispatch-lines",    "title": "Dispatch Lines",    "route": "/dispatch/lines",     "file": "disp-lines.html",     "roles": ["dis","adm"] },
-        { "id": "dispatch-pipeline", "title": "Dispatch Pipeline", "route": "/dispatch-pipeline",  "file": "disp-pipeline.html",  "roles": ["dis","sup","adm"] },
-        { "id": "dispatch-shipments","title": "Shipments",         "route": "/dispatch-shipments", "file": "disp-shipments.html", "roles": ["dis","adm"] },
-        { "id": "dispatch-challans", "title": "Delivery Challans", "route": "/dispatch-challans",  "file": "disp-challans.html",  "roles": ["dis","adm"] },
-        { "id": "dispatch-channels", "title": "Channel Master",    "route": "/dispatch-channels",  "file": "disp-channels.html",  "roles": ["adm"] },
-        { "id": "repack-runs",       "title": "Repack Runs",       "route": "/repack-runs",        "file": "disp-repack.html",    "roles": ["dis","sup","adm"] }
+        {
+          "id": "dispatch",
+          "title": "Dispatch Overview",
+          "route": "/dispatch",
+          "file": "disp-overview.html",
+          "roles": [
+            "dis",
+            "adm"
+          ]
+        },
+        {
+          "id": "dispatch-lines",
+          "title": "Dispatch Lines",
+          "route": "/dispatch/lines",
+          "file": "disp-lines.html",
+          "roles": [
+            "dis",
+            "adm"
+          ]
+        },
+        {
+          "id": "dispatch-pipeline",
+          "title": "Dispatch Pipeline",
+          "route": "/dispatch-pipeline",
+          "file": "disp-pipeline.html",
+          "roles": [
+            "dis",
+            "sup",
+            "adm"
+          ]
+        },
+        {
+          "id": "dispatch-shipments",
+          "title": "Shipments",
+          "route": "/dispatch-shipments",
+          "file": "disp-shipments.html",
+          "roles": [
+            "dis",
+            "adm"
+          ]
+        },
+        {
+          "id": "dispatch-challans",
+          "title": "Delivery Challans",
+          "route": "/dispatch-challans",
+          "file": "disp-challans.html",
+          "roles": [
+            "dis",
+            "adm"
+          ]
+        },
+        {
+          "id": "dispatch-channels",
+          "title": "Channel Master",
+          "route": "/dispatch-channels",
+          "file": "disp-channels.html",
+          "roles": [
+            "adm"
+          ]
+        },
+        {
+          "id": "repack-runs",
+          "title": "Repack Runs",
+          "route": "/repack-runs",
+          "file": "disp-repack.html",
+          "roles": [
+            "dis",
+            "sup",
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Repair",
       "subtitle": "Tracking customer repairs and the floor repair queue.",
       "chapters": [
-        { "id": "customer-repairs","title": "Customer Repairs", "route": "/customer-repairs", "file": "rep-customer.html", "roles": ["sup","adm"] },
-        { "id": "repair-queue",    "title": "Repair Queue",     "route": "/repair-queue",     "file": "rep-queue.html",    "roles": ["sup","adm"] }
+        {
+          "id": "customer-repairs",
+          "title": "Customer Repairs",
+          "route": "/customer-repairs",
+          "file": "rep-customer.html",
+          "roles": [
+            "sup",
+            "adm"
+          ]
+        },
+        {
+          "id": "repair-queue",
+          "title": "Repair Queue",
+          "route": "/repair-queue",
+          "file": "rep-queue.html",
+          "roles": [
+            "sup",
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Reporting",
       "subtitle": "Cross-cutting production and dispatch reports.",
       "chapters": [
-        { "id": "reporting", "title": "Reporting", "route": "/reporting", "file": "report-hub.html", "roles": ["adm"] }
+        {
+          "id": "reporting",
+          "title": "Reporting",
+          "route": "/reporting",
+          "file": "report-hub.html",
+          "roles": [
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Admin",
       "subtitle": "UPC generation, operator management and printing.",
       "chapters": [
-        { "id": "upc",       "title": "UPC Generator", "route": "/upc",       "file": "adm-upc.html",       "roles": ["adm"] },
-        { "id": "operators", "title": "Operators",     "route": "/operators", "file": "adm-operators.html", "roles": ["adm"] },
-        { "id": "print",     "title": "Print Center",  "route": "/print",     "file": "adm-print.html",     "roles": ["adm"] }
+        {
+          "id": "upc",
+          "title": "UPC Generator",
+          "route": "/upc",
+          "file": "adm-upc.html",
+          "roles": [
+            "adm"
+          ]
+        },
+        {
+          "id": "operators",
+          "title": "Operators",
+          "route": "/operators",
+          "file": "adm-operators.html",
+          "roles": [
+            "adm"
+          ]
+        },
+        {
+          "id": "print",
+          "title": "Print Center",
+          "route": "/print",
+          "file": "adm-print.html",
+          "roles": [
+            "adm"
+          ]
+        }
       ]
     }
   ]

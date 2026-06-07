@@ -11,9 +11,15 @@
 <ol class="steps">
   <li><span class="s-title">+ New Ad Hoc Request.</span> Choose <strong>BOM-Based</strong> (pick a product and category, and it adds all that category&rsquo;s parts) or <strong>Manual</strong> (type each part code; the name fills from the parts master).</li>
   <li><span class="s-title">Set quantities, line, shift and date.</span> Edit the quantity on each part line.</li>
+  <li><span class="s-title">Link a repair run (optional).</span> If these parts are for a repair run, pick it from the <strong>Repair Run</strong> dropdown (open runs are listed). The request is then tagged to that run, so we can see which parts repairs actually consume.</li>
   <li><span class="s-title">Create Request.</span> A WO number is generated and the request appears in the store&rsquo;s Issue Queue.</li>
 </ol>
 <p>The <strong>Open Ad Hoc Requests</strong> table lists each request with its status: <strong>Open</strong> (yellow), <strong>Pending Rework</strong> (blue), <strong>Cancelled</strong> / <strong>Rejected</strong> (red), <strong>Complete</strong> (green). Open or pending-rework requests can be cancelled.</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Repair parts build a useful record</div>
+  <p>Linking a request to a repair run (and choosing the product in BOM mode) attributes those parts to the run. Over time this shows which parts repairs really need, so we can stock extra and eventually plan repair runs properly. The linked parts appear on the repair run&rsquo;s detail in Redline.</p>
+</div>
 
 <div class="callout warn">
   <div class="c-title">&#9888; Switching modes clears your lines</div>

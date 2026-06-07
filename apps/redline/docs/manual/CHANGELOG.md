@@ -6,6 +6,14 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md` → Versioning).
 
+## [1.2.0] - 2026-06-07
+
+### Changed
+- New "New Run / Request" chapter: the unified Fresh/Outsourced/Repair/Repack request surface, with the step-by-step inventory flow for each run type.
+- Scanner: new Repack Release station (Dispatch) documented; Repack In now requires a release for dispatch-held units; Repack Out channel set from the request.
+- Scanner: outsourced runs documented as two-phase (Ext Inwarding is the finish step); Repair Start now marks repair lineage and stickers loose pile units.
+- Repack Runs page: requests now start in New Run / Request (structured product/channel/qty) and raise the packaging + dispatch-release pulls.
+
 ## [1.1.0] - 2026-06-07
 ### Added
 - New **Scanner** part documenting the production and dispatch floor-scanner

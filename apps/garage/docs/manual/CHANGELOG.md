@@ -6,6 +6,13 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md`).
 
+## [1.4.0] - 2026-06-07
+
+### Changed
+- Production Runs: two-phase outsourced runs documented (build pick only, Receive built units into the pool, Issue Finish Parts) with the inventory flow; note that run requests now start in Redline.
+- Ad Hoc Requests: can now be linked to a repair run (and product), building the repair parts-consumption record.
+- Issue Queue: added the REPACK PKG and UDR request types and which are scan-only vs desk-issued.
+
 ## [1.3.0] - 2026-06-07
 ### Added
 - New **Scanner** part documenting the Store department's floor-scanner stations

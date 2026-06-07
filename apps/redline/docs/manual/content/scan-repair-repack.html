@@ -8,17 +8,21 @@
 </div>
 
 <h2 class="sec">Repair Run</h2>
-<p>A repair run (<code>REP-NNN</code>) is a batch of returned units to be reworked. You select the run, then scan each unit in at the <strong>Repair</strong> station to start it. A returned unit is accepted only if the <strong>Store has issued it to this exact repair run</strong> (issued from the Returns Issue Repair pool). A unit issued to a different run, or not issued at all, is rejected. From there the unit goes through Workshop and QC like any other; on a QC Pass the car and remote are re-paired exactly as in fresh production.</p>
+<p>A repair run (<code>REP-NNN</code>) is a batch of returned or pile units to be reworked. You select the run, then scan each unit in at the <strong>Repair</strong> station to start it. A returned unit issued from the Store&rsquo;s Issue Repair pool is accepted only if it was issued to this exact run. A loose pile unit with no valid label gets a <strong>fresh sticker</strong> applied first, then scanned in. The Repair scan also marks the unit as having been repaired, so anyone downstream can tell a repaired unit from a fresh one by its history. From there the unit goes through Workshop and QC like any other; on a QC Pass the car and remote are re-paired exactly as in fresh production. Parts the repairer needs are requested off the floor as an Ad-Hoc Request linked to the run (see Garage).</p>
 
 <h2 class="sec">Outsourced Run</h2>
-<p>An outsourced run (<code>EXT-NNN</code>) is one where raw materials were sent to a vendor who built and returned finished units. As the units come back, scan each one in at <strong>Ext Inwarding</strong> to bring it into the system against that run; it then flows through QC, Packaging and PKG Out like a fresh unit. Ext Inwarding checks that the scanned unit&rsquo;s product matches the run, so a unit cannot be tagged to the wrong job.</p>
+<p>An outsourced run (<code>EXT-NNN</code>) sends raw materials to a vendor who builds and returns finished units. New outsourced runs are <strong>two-phase</strong>: only car, remote and fastener go out; packaging and accessories are issued in-house when the units return. <strong>Ext Inwarding is the finish step</strong>: once the store has issued the finish parts, scan each returned unit in here to sticker it and bring it into the system against the run; it then flows through QC, Packaging and PKG Out like a fresh unit. Ext Inwarding checks that the scanned unit&rsquo;s product matches the run, so a unit cannot be tagged to the wrong job. (Older outsourced runs created before this change keep their original one-step receive.)</p>
 
 <h2 class="sec">Repack Run</h2>
 <p>A repack run swaps a packed unit from one channel to another. It is two stations:</p>
 <ul>
-  <li><strong>Repack In.</strong> Select the run, then scan the unit&rsquo;s <strong>box label</strong> (<code>LOT-XXXXXXXX-E/R</code>). It accepts a box label only, and only for a unit sitting at <strong>Dispatch In</strong> or <strong>Allocate</strong> (never a unit already shipped, and never a bare car or remote). Scanning it in releases the unit from any allocation and rolls it back so it can be re-boxed for the new channel.</li>
-  <li><strong>Repack Out.</strong> Scan the unit and its destination box. Only a unit that was actually scanned in at Repack In is accepted, so a fresh unit cannot slip through here.</li>
+  <li><strong>Repack In.</strong> Select the run, then scan the unit&rsquo;s <strong>box label</strong> (<code>LOT-XXXXXXXX-E/R</code>). It accepts a box label only, and only a unit that is either just out of <strong>PKG Out</strong> (still on the production side) or one that dispatch has <strong>released at Repack Release</strong>. A dispatch-held unit (Dispatch In or Allocated) that was not released is rejected, and a shipped unit or a bare car / remote is always rejected. Scanning it in releases any allocation and rolls it back so it can be re-boxed for the new channel.</li>
+  <li><strong>Repack Out.</strong> Scan the unit and its destination box. Only a unit actually scanned in at Repack In is accepted, so a fresh unit cannot slip through. The new channel is set automatically from the repack run&rsquo;s request, so you do not pick it by hand.</li>
 </ul>
+<div class="callout warn">
+  <div class="c-title">&#9888; Dispatch units must be released first</div>
+  <p>If the units are with dispatch, a dispatch operator hands them over at <strong>Repack Release</strong> (Dispatch department) before Repack In will take them. Units fresh from PKG Out skip that step. The store also issues the new channel&rsquo;s packaging (box and tray) into the Issue Queue when the run is created.</p>
+</div>
 <div class="callout note">
   <div class="c-title">&#9432; Same handlers, different doorways</div>
   <p>Repaired and outsourced units flow through the <em>same</em> QC, Packaging and PKG Out stations as fresh units; the categories are just separate doorways into one line. So a repaired or vendor-built unit is dispatched exactly like a freshly built one once it passes QC.</p>

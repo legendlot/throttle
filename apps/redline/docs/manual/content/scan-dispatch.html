@@ -19,6 +19,13 @@
 <h2 class="sec">Dispatch Out (DOUT)</h2>
 <p>The final out-the-door scan. Scan the box label (<code>BOX-XXXXX</code>) or a batch label to ship it. After this the unit is shipped.</p>
 
+<h2 class="sec">Repack Release</h2>
+<p>Hands a unit back to a <strong>repack run</strong> so it can be re-boxed for a different channel. When production raises a repack run, the units it needs show up as a release list. Select the run, then scan each unit&rsquo;s <strong>box label</strong> (<code>LOT-XXXXXXXX-E/R</code>) to release it. Releasing locks the unit out of the normal dispatch flow and lets it be scanned at Repack In. Only units sitting at <strong>Dispatch In</strong> or <strong>Allocated</strong> need releasing here; a unit still on the production side does not.</p>
+<div class="callout warn">
+  <div class="c-title">&#9888; This is the controlled hand-over</div>
+  <p>Nobody should walk into the dispatch area, grab a unit and start repacking it. Repack In will reject any dispatch-held unit that was not released here first. Scanning it out at Repack Release is the proper, signed hand-over, one box at a time.</p>
+</div>
+
 <h2 class="sec">Restock</h2>
 <p>Returns an <strong>unused</strong> unit to stock (for example, a unit pulled from a box that was over-packed). Pick a reason, then scan the unit&rsquo;s LOT UPC. Only unused units are accepted; this is not the path for a customer return.</p>
 <div class="callout warn">

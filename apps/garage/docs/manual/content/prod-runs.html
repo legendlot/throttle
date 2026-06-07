@@ -31,3 +31,20 @@
   <div class="c-title">&#9888; Fresh runs submit immediately</div>
   <p>There is no separate &ldquo;submit&rdquo; click: creating a fresh run sends it straight to the store. The run date defaults to <em>tomorrow</em>, not today, and colour is mandatory whenever the variant offers colour options. Confirming receipt with shortfalls automatically raises a Short Supply work order so the store re-issues the gap.</p>
 </div>
+
+<h2 class="sec">Outsourced runs (two-phase)</h2>
+<p>An outsourced run sends raw materials to a vendor who builds and returns the units. New outsourced runs split into a <strong>build</strong> half (done outside) and a <strong>finish</strong> half (done in-house), so only the parts the vendor needs go out and the packaging stays in until the units return. The run detail (View) carries the buttons for each step:</p>
+<pre class="flow" style="font-family:var(--mono);font-size:11px;line-height:1.5;background:rgba(0,0,0,.04);border:1px solid var(--rule);border-radius:4px;padding:12px;overflow-x:auto;white-space:pre">BUILD    Store issues the build pick (Car / Remote / Fastener only)
+         -> Send to Vendor (run goes In Progress)
+
+RECEIVE  Vendor returns units (instalments OK)
+         -> Receive built units (count) into the pool        [run detail]
+
+FINISH   -> Issue Finish Parts (packaging / accessories / battery / sticker)
+         -> sticker each unit at Ext Inwarding (scanner) -> QC -> PKG Out</pre>
+<p>The pick list for a new outsourced run shows the <strong>build parts only</strong>, so the store issues just those; the finish parts are issued later with <strong>Issue Finish Parts</strong>, once the units are back. Use <strong>Receive built units</strong> on the run detail to count returns into the pool as they arrive. Outsourced runs created before this change keep their original one-step receive (assign a line, scan each unit at Ext Inwarding).</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Requests now start in Redline</div>
+  <p>Production raises every run, including outsourced and repair, from Redline&rsquo;s <strong>New Run / Request</strong> screen. This Garage screen still shows and manages the runs, and is where the outsourced send-out, receive and finish steps live.</p>
+</div>

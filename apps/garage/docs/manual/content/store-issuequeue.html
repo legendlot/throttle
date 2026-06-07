@@ -8,7 +8,8 @@
 </div>
 
 <h2 class="sec">Reading the queue</h2>
-<p>Each request shows a colour-coded <strong>type</strong>: <span class="mono">PROD RUN</span> (blue), <span class="mono">PICKING</span> (amber, a run being scan-picked on the floor), <span class="mono">OUTSOURCED</span> (amber), <span class="mono">SHORT ISSUE</span> (orange), <span class="mono">REWORK</span> (red) or <span class="mono">AD HOC</span> (yellow). Filter by All / In-House / Outsourced.</p>
+<p>Each request shows a colour-coded <strong>type</strong>: <span class="mono">PROD RUN</span> (blue), <span class="mono">PICKING</span> (amber, a run being scan-picked on the floor), <span class="mono">OUTSOURCED</span> (amber), <span class="mono">SHORT ISSUE</span> (orange), <span class="mono">REWORK</span> (red), <span class="mono">AD HOC</span> (yellow), <span class="mono">REPACK PKG</span> (blue, packaging for a repack run) or <span class="mono">UDR</span> (green, a return to re-dispatch). Filter by All / In-House / Outsourced.</p>
+<p>Most types are issued the same way (below). Two are <strong>scan-only</strong> and have no desk issue button: <span class="mono">UDR</span> is fulfilled by scanning at the Issue UDR station, and a repack&rsquo;s units are released and re-boxed on the floor. <span class="mono">REPACK PKG</span> is a normal parts issue: you issue the to-channel packaging (box and tray) for the repack.</p>
 
 <h2 class="sec">Issuing a request</h2>
 <ol class="steps">
