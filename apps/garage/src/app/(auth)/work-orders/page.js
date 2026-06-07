@@ -2,9 +2,12 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { ConfirmModal, EmptyState, Modal, useToast } from '@throttle/ui';
-import { WorkOrderForm } from '../../../components/work-orders/WorkOrderForm.js';
+import { ConfirmModal, EmptyState, useToast } from '@throttle/ui';
 import { WorkOrdersTable } from '../../../components/work-orders/WorkOrdersTable.js';
+
+// Ad-hoc parts requests are now RAISED in Redline (New Run / Request → Ad Hoc Parts) —
+// it's a production job. This Garage screen tracks open ad-hoc requests and lets them be
+// cancelled; the store issues them from the Issue Queue. No create path lives here.
 
 export default function WorkOrdersPage() {
   const { session } = useAuth();
@@ -14,7 +17,6 @@ export default function WorkOrdersPage() {
   const [error, setError] = useState(null);
   const [cancelTarget, setCancelTarget] = useState(null);
   const [cancelling, setCancelling] = useState(false);
-  const [showCreate, setShowCreate] = useState(false);
 
   async function loadOrders() {
     if (!session) return;
@@ -60,17 +62,8 @@ export default function WorkOrdersPage() {
           Ad Hoc Requests
         </h1>
         <p style={{ color: 'var(--t3)', fontSize: 11, marginTop: 4, fontFamily: 'var(--mono)' }}>
-          Production raises ad hoc part requests here — store issues from the Issue Queue.
+          Track open ad hoc parts requests and cancel them. Requests are raised by production in Redline (New Run / Request); the store issues them from the Issue Queue.
         </p>
-      </div>
-
-      <div style={{ marginBottom: 16 }}>
-        <button
-          style={{ background: 'var(--yellow)', color: '#000', border: 'none', borderRadius: 4, padding: '7px 16px', fontFamily: 'var(--mono)', fontSize: 12, textTransform: 'uppercase', letterSpacing: 1, cursor: 'pointer', fontWeight: 700 }}
-          onClick={() => setShowCreate(true)}
-        >
-          + New Ad Hoc Request
-        </button>
       </div>
 
       {error && (
@@ -84,17 +77,6 @@ export default function WorkOrdersPage() {
         loading={loading}
         onCancel={(wo) => setCancelTarget(wo)}
       />
-
-      <Modal
-        open={showCreate}
-        onClose={() => setShowCreate(false)}
-        size="lg"
-      >
-        <WorkOrderForm
-          session={session}
-          onSuccess={() => { loadOrders(); setShowCreate(false); }}
-        />
-      </Modal>
 
       <ConfirmModal
         open={!!cancelTarget}
