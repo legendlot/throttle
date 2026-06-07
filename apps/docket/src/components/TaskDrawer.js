@@ -2,7 +2,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
-import { X, Maximize2, Plus, Check } from 'lucide-react';
+import { X, Maximize2, Plus, Check, Users, Layers, Hash, User, Flag, Calendar, Clock } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../lib/docketopsFetch.js';
 import { useHotkey } from '../lib/hotkeys.js';
 import { StatusBadge } from './StatusBadge.js';
@@ -12,12 +12,13 @@ import { HistoryPanel } from './HistoryPanel.js';
 import { SubtaskPanel } from './SubtaskPanel.js';
 import { DocLinksPanel } from './DocLinksPanel.js';
 import { DatePicker } from './DatePicker.js';
-import { SETTABLE_STATUSES, PRIORITIES, effectiveDeadline, isOverdue } from '../lib/tasks.js';
+import { Avatar, Popover, OptionList, firstName, personColor, relDeadline, deadlineState } from './primitives.js';
+import { SETTABLE_STATUSES, STATUS_MAP, PRIORITIES, effectiveDeadline } from '../lib/tasks.js';
 import { fmtDateTime } from '../lib/format.js';
 
-// Notion-style slide-over "peek" for a task. Opens on row/title click in the list;
-// quick-edits the common fields inline and reuses the full detail panels. The
-// "Open full page" button routes to /tasks/detail for the expanded view.
+// Notion-style slide-over "peek" for a task. Restyled to the redesign; the data
+// layer (docketops reads/writes, wired panels) is unchanged. "Open full page"
+// routes to /tasks/detail for the expanded view.
 export function TaskDrawer({ id, session, departments = [], employees = [], onClose, onMutated }) {
   const { showToast } = useToast();
   const router = useRouter();
@@ -27,6 +28,7 @@ export function TaskDrawer({ id, session, departments = [], employees = [], onCl
   const [tab, setTab] = useState('comments');
   const [titleDraft, setTitleDraft] = useState('');
   const [descDraft, setDescDraft] = useState('');
+  const [edit, setEdit] = useState(null);          // which property popover is open
   const [ddOpen, setDdOpen] = useState(false);
   const [ddDraft, setDdDraft] = useState(null);
   const [reviseReason, setReviseReason] = useState('');
@@ -52,14 +54,12 @@ export function TaskDrawer({ id, session, departments = [], employees = [], onCl
   }, [session, id, showToast]);
   useEffect(() => { setLoading(true); load(); }, [load]);
 
-  // Esc closes the drawer (unless a sub-popover is open).
   useEffect(() => {
-    function onKey(e) { if (e.key === 'Escape') { if (ddOpen) setDdOpen(false); else if (abandoning) setAbandoning(false); else onClose?.(); } }
+    function onKey(e) { if (e.key === 'Escape') { if (ddOpen) setDdOpen(false); else if (edit) setEdit(null); else if (abandoning) setAbandoning(false); else onClose?.(); } }
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [onClose, ddOpen, abandoning]);
+  }, [onClose, ddOpen, edit, abandoning]);
 
-  // Click outside the deadline popover (calendar) closes it — matches the table cell.
   const ddRef = useRef(null);
   useEffect(() => {
     if (!ddOpen) return;
@@ -69,13 +69,8 @@ export function TaskDrawer({ id, session, departments = [], employees = [], onCl
   }, [ddOpen]);
 
   const canEdit = !!task?._can_edit && task?.status !== 'abandoned';
-  // A sub-task can't take children (one level deep), so `s` only applies to a parent.
   const canAddSub = canEdit && task && !task.parent_task_id;
-
-  // `s` → add a sub-task to the open task (same as the Sub-tasks "Add" button).
-  // Suspended while the deadline/abandon sub-popovers are open.
-  useHotkey('s', () => { if (canAddSub) router.push(`/tasks/new?parent=${task.id}`); },
-    { enabled: !!task && !ddOpen && !abandoning });
+  useHotkey('s', () => { if (canAddSub) router.push(`/tasks/new?parent=${task.id}`); }, { enabled: !!task && !ddOpen && !abandoning && !edit });
 
   const mutated = useCallback(async () => { await load(true); onMutated?.(); }, [load, onMutated]);
 
@@ -87,7 +82,7 @@ export function TaskDrawer({ id, session, departments = [], employees = [], onCl
   }
   async function setStatus(status) {
     setBusy(true);
-    try { await docketopsPost('changeStatus', { id: task.id, status }, session); await mutated(); }
+    try { await docketopsPost('changeStatus', { id: task.id, status }, session); if (status === 'done') showToast('Marked done', 'success'); await mutated(); }
     catch (e) { showToast(e.message || 'Failed', 'error'); }
     finally { setBusy(false); }
   }
@@ -123,11 +118,6 @@ export function TaskDrawer({ id, session, departments = [], employees = [], onCl
     try { await docketopsPost('removeCollaborator', { id: task.id, employee_id: employeeId }, session); await mutated(); }
     catch (e) { showToast(e.message || 'Failed', 'error'); }
   }
-  async function assignProgram(v, opt) {
-    if (!opt) return;                               // ignore mid-type clears
-    if (!opt.value) { saveField('program_id', null); return; }
-    saveField('program_id', opt.value);
-  }
   async function createProgramInline(name) {
     setBusy(true);
     try {
@@ -145,193 +135,184 @@ export function TaskDrawer({ id, session, departments = [], employees = [], onCl
     finally { setBusy(false); }
   }
 
-  const deptOpts = departments.map(d => ({ value: d.id, label: d.name }));
-  const empOpts = employees.map(e => ({ value: e.id, label: e.full_name }));
+  const teamOpts = [{ value: '', label: '— No team —' }, ...departments.map(d => ({ value: d.id, label: d.name, dot: personColor(d.id) }))];
+  const ownerOpts = [{ value: '', label: '— Unassigned —' }, ...employees.map(e => ({ value: e.id, label: e.full_name }))];
   const prioOpts = PRIORITIES.map(p => ({ value: p.key, label: p.label }));
   const programCellOpts = [{ value: '', label: '— No program —' }, ...programs.map(p => ({ value: p.id, label: p.name }))];
-  const spaceOpts = spaces.map(s => ({ value: s.id, label: s.name + (s.is_private ? '' : ' (open)') }));
-  const collabOpts = task ? employees.filter(e => !(task.collaborators || []).some(c => c.employee_id === e.id)).map(e => ({ value: e.id, label: e.full_name })) : [];
-  const od = task && isOverdue(task);
+  const spaceOpts = spaces.map(s => ({ value: s.id, label: s.name + (s.is_private ? '' : ' · open') }));
+  const collabOpts = task ? employees.filter(e => !(task.collaborators || []).some(c => c.employee_id === e.id) && e.id !== task.owner_employee_id).map(e => ({ value: e.id, label: e.full_name })) : [];
+
+  const dl = task && effectiveDeadline(task);
+  const dstate = task && deadlineState(task);
+
+  const Prop = ({ icon: Ic, label, children }) => (
+    <div className="dr-prop">
+      <span className="k"><Ic size={14} /> {label}</span>
+      <span className="v">{children}</span>
+    </div>
+  );
+  const EditTrigger = ({ field, children, empty, width = 220, render }) => (
+    <span style={{ position: 'relative', display: 'inline-flex', maxWidth: '100%' }}>
+      <span className={'editable' + (empty ? ' empty' : '')} onClick={() => canEdit && setEdit(edit === field ? null : field)} style={{ cursor: canEdit ? 'pointer' : 'default' }}>
+        <span className="tx">{children}</span>
+      </span>
+      {canEdit && <Popover open={edit === field} onClose={() => setEdit(null)} width={width}>{render}</Popover>}
+    </span>
+  );
 
   return (
-    <div style={backdrop} className="dk-backdrop" onMouseDown={onClose}>
-      <aside style={drawer} className="dk-drawer" onMouseDown={e => e.stopPropagation()}>
+    <div className="backdrop" onMouseDown={onClose}>
+      <aside className="drawer" onMouseDown={e => e.stopPropagation()}>
         {loading || !task ? <div style={{ padding: 40 }}><Spinner /></div> : (
           <>
-            <div style={topbar}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-3)' }}>{task.task_no}</span>
+            <div className="dr-top">
+              <div className="left">
+                <span className="id">{task.task_no}</span>
                 <StatusBadge status={task.status} />
                 <PriorityBadge priority={task.priority} />
               </div>
-              <div style={{ display: 'flex', gap: 4 }}>
-                <button className="dk-press" style={iconBtn} title="Open full page" onClick={() => router.push(`/tasks/detail/?id=${task.id}`)}><Maximize2 size={15} /></button>
-                <button className="dk-press" style={iconBtn} title="Close (Esc)" onClick={onClose}><X size={16} /></button>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button className="dr-icon" title="Open full page" onClick={() => router.push(`/tasks/detail/?id=${task.id}`)}><Maximize2 size={16} /></button>
+                <button className="dr-icon" title="Close (Esc)" onClick={onClose}><X size={16} /></button>
               </div>
             </div>
 
-            <div style={body}>
-              {/* Title */}
+            <div className="dr-body">
               {canEdit ? (
-                <input value={titleDraft} onChange={e => setTitleDraft(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-                  onBlur={() => { const v = titleDraft.trim(); if (v && v !== task.title) saveField('title', v); }}
-                  style={titleInput} />
-              ) : <h2 style={titleH}>{task.title}</h2>}
+                <textarea className="dr-title" value={titleDraft} rows={1}
+                  onChange={e => { setTitleDraft(e.target.value); e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; }}
+                  onBlur={() => { const v = titleDraft.trim(); if (v && v !== task.title) saveField('title', v); }} />
+              ) : <div className="dr-title">{task.title}</div>}
 
-              {/* Status row */}
               {canEdit && (
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
-                  {SETTABLE_STATUSES.map(s => (
-                    <button key={s.key} className="dk-press" onClick={() => setStatus(s.key)} disabled={busy || task.status === s.key} style={statusBtn(task.status === s.key)}>{s.label}</button>
-                  ))}
-                  <button className="dk-press" onClick={() => { setAbandoning(true); setAbandonReason(''); }} style={{ ...statusBtn(false), color: 'var(--state-error-fg)', borderColor: 'var(--state-error)' }}>Abandon</button>
+                <div className="dr-statusrow">
+                  {SETTABLE_STATUSES.map(s => {
+                    const on = task.status === s.key;
+                    return (
+                      <button key={s.key} className={'st-btn' + (on ? ' on' : '')} onClick={() => setStatus(s.key)} disabled={busy}
+                        style={on ? { background: s.bg, borderColor: s.color, color: s.color } : {}}>
+                        <span className="si" style={{ background: s.color }} />{s.label}
+                      </button>
+                    );
+                  })}
+                  <button className="st-btn" style={{ color: 'var(--st-abandon)', borderColor: 'var(--st-abandon)' }} onClick={() => { setAbandoning(true); setAbandonReason(''); }}>Abandon</button>
                 </div>
               )}
               {abandoning && (
                 <div style={{ marginTop: 8 }}>
-                  <input autoFocus value={abandonReason} onChange={e => setAbandonReason(e.target.value)} placeholder="Reason for abandoning (required, logged)" style={field}
+                  <input className="reason-input" autoFocus value={abandonReason} onChange={e => setAbandonReason(e.target.value)} placeholder="Reason for abandoning (required, logged)"
                     onKeyDown={e => { if (e.key === 'Enter' && abandonReason.trim()) doAbandon(); }} />
-                  <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 6 }}>
-                    <button style={ghostBtn} onClick={() => setAbandoning(false)}>Cancel</button>
-                    <button className="dk-press" style={{ ...dangerBtn, opacity: abandonReason.trim() ? 1 : 0.5 }} disabled={!abandonReason.trim() || busy} onClick={doAbandon}>Abandon</button>
+                  <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 8 }}>
+                    <button className="btn btn-ghost" onClick={() => setAbandoning(false)}>Cancel</button>
+                    <button className="btn btn-danger" disabled={!abandonReason.trim() || busy} onClick={doAbandon}>Abandon</button>
                   </div>
                 </div>
               )}
               {task.status === 'abandoned' && (
-                <div style={abandonedNote}>Abandoned{task.abandon_reason ? `: “${task.abandon_reason}”` : ''}.{task._can_edit && <button style={{ ...ghostBtn, marginLeft: 10 }} onClick={() => setStatus('not_started')}>Reactivate</button>}</div>
+                <div style={{ marginTop: 12, background: 'var(--st-abandon-bg)', border: '1px solid var(--st-abandon)', borderRadius: 'var(--r-sm)', padding: '8px 12px', fontSize: 12, color: 'var(--text-2)' }}>
+                  Abandoned{task.abandon_reason ? `: “${task.abandon_reason}”` : ''}.{task._can_edit && <button className="btn btn-ghost" style={{ marginLeft: 10 }} onClick={() => setStatus('not_started')}>Reactivate</button>}
+                </div>
               )}
 
-              {/* Properties */}
-              <div style={props}>
-                <Prop label="Team">
-                  {canEdit ? <Combobox value={task.department_id || ''} options={deptOpts} placeholder="Set team…" allowClear commitOnTab style={field} onChange={(v) => saveField('department_id', v)} />
-                    : (task.department_name || '—')}
+              <div className="dr-props">
+                <Prop icon={Users} label="Team">
+                  <EditTrigger field="team" empty={!task.department_name}
+                    render={<OptionList options={teamOpts} value={task.department_id || ''} searchable onPick={(v) => { saveField('department_id', v); setEdit(null); }} />}>
+                    {task.department_name ? <span className="chip"><span className="dot" style={{ background: personColor(task.department_id) }} />{task.department_name}</span> : (canEdit ? 'Set team' : '—')}
+                  </EditTrigger>
                 </Prop>
-                <Prop label="Program">
-                  {canEdit ? <Combobox value={task.program_id || ''} options={programCellOpts} placeholder="Set program…" allowClear={false} commitOnTab style={field}
-                      onChange={assignProgram}
-                      onKeyDown={(e) => { if (e.key === 'Enter') { const text = (e.target.value || '').trim(); if (text && !programCellOpts.some(o => o.label.toLowerCase() === text.toLowerCase())) { e.preventDefault(); createProgramInline(text); } } }} />
-                    : (task.program?.name || '—')}
+                <Prop icon={Layers} label="Program">
+                  <EditTrigger field="program" empty={!task.program}
+                    render={
+                      <div style={{ padding: 8 }}>
+                        <Combobox value={task.program_id || ''} options={programCellOpts} placeholder="Pick or type to create…" allowClear={false} style={{ width: 220 }}
+                          onChange={(v, opt) => { if (!opt) return; saveField('program_id', opt.value || null); setEdit(null); }}
+                          onKeyDown={(e) => { if (e.key === 'Enter') { const text = (e.target.value || '').trim(); if (text && !programCellOpts.some(o => o.label.toLowerCase() === text.toLowerCase())) { e.preventDefault(); createProgramInline(text); setEdit(null); } } }} />
+                      </div>}>
+                    {task.program ? <span className="chip">{task.program.name}</span> : (canEdit ? 'Set program' : '—')}
+                  </EditTrigger>
                 </Prop>
-                <Prop label="Space">
-                  {canEdit && spaceOpts.length > 1
-                    ? <Combobox value={task.space_id || ''} options={spaceOpts} placeholder="Move to space…" allowClear={false} commitOnTab style={field} onChange={moveToSpace} />
-                    : (task.space?.name || 'General')}
+                <Prop icon={Hash} label="Space">
+                  <EditTrigger field="space"
+                    render={<OptionList options={spaceOpts} value={task.space_id || ''} searchable onPick={(v) => { moveToSpace(v); setEdit(null); }} />}>
+                    {task.space?.name || 'General'}
+                  </EditTrigger>
                 </Prop>
-                <Prop label="Owner">
-                  {canEdit ? <Combobox value={task.owner_employee_id || ''} options={empOpts} placeholder="Set owner…" allowClear commitOnTab style={field} onChange={(v) => saveField('owner_employee_id', v)} />
-                    : (task.owner_name || '—')}
+                <Prop icon={User} label="Owner">
+                  <EditTrigger field="owner" empty={!task.owner_name} width={240}
+                    render={<OptionList options={ownerOpts} value={task.owner_employee_id || ''} searchable onPick={(v) => { saveField('owner_employee_id', v); setEdit(null); }} />}>
+                    {task.owner_name ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Avatar name={task.owner_name} size={20} />{task.owner_name}</span> : (canEdit ? 'Assign owner' : '—')}
+                  </EditTrigger>
                 </Prop>
-                <Prop label="Priority">
-                  {canEdit ? <Combobox value={task.priority} options={prioOpts} placeholder="Priority…" allowClear={false} commitOnTab style={field} onChange={(v) => v && saveField('priority', v)} />
-                    : <PriorityBadge priority={task.priority} />}
+                <Prop icon={Flag} label="Priority">
+                  <EditTrigger field="priority" width={180}
+                    render={<OptionList options={prioOpts} value={task.priority} onPick={(v) => { saveField('priority', v); setEdit(null); }} />}>
+                    <PriorityBadge priority={task.priority} />
+                  </EditTrigger>
                 </Prop>
-                <Prop label="Deadline">
-                  <span ref={ddRef} style={{ position: 'relative' }}>
-                    <span onClick={canEdit ? () => { setDdDraft(effectiveDeadline(task)); setReviseReason(''); setDdOpen(true); } : undefined}
-                      style={{ cursor: canEdit ? 'pointer' : 'default', color: od ? 'var(--state-error-fg)' : 'var(--text-1)', fontWeight: od ? 600 : 400 }}>
-                      {effectiveDeadline(task) ? fmtDateTime(effectiveDeadline(task)) : (canEdit ? <em style={{ color: 'var(--text-4)' }}>set deadline</em> : '—')}
+                <Prop icon={Calendar} label="Deadline">
+                  <span ref={ddRef} style={{ position: 'relative', display: 'inline-flex' }}>
+                    <span className={'editable' + (!dl ? ' empty' : '')} onClick={canEdit ? () => { setDdDraft(dl); setReviseReason(''); setDdOpen(true); } : undefined} style={{ cursor: canEdit ? 'pointer' : 'default' }}>
+                      <span className="tx" style={dstate === 'over' ? { color: 'var(--overdue)', fontWeight: 600 } : {}}>{dl ? `${fmtDateTime(dl)} · ${relDeadline(dl)}` : (canEdit ? 'Set deadline' : '—')}</span>
+                      {task.revised_deadline && <span className="rev-flag" style={{ marginLeft: 8 }}>revised</span>}
                     </span>
-                    {task.revised_deadline && <span style={revFlag}>revised</span>}
                     {ddOpen && (
-                      <div style={ddPopover} onMouseDown={e => e.stopPropagation()}>
+                      <div className="pop" style={{ top: 'calc(100% + 5px)', left: 0, width: 'auto', padding: 12 }} onMouseDown={e => e.stopPropagation()}>
                         <DatePicker value={ddDraft} onChange={setDdDraft} autoFocus />
-                        {task.deadline && <input value={reviseReason} onChange={e => setReviseReason(e.target.value)} placeholder="Reason (required, logged)" style={{ ...field, marginTop: 8 }} />}
-                        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 8 }}>
-                          <button style={ghostBtn} onClick={() => setDdOpen(false)}>Cancel</button>
-                          <button className="dk-press" style={primaryBtn} disabled={busy || !ddDraft || (!!task.deadline && !reviseReason.trim())} onClick={commitDeadline}><Check size={13} /> {task.deadline ? 'Revise' : 'Set'}</button>
+                        {task.deadline && <input className="reason-input" placeholder="Reason (required, logged)" value={reviseReason} onChange={e => setReviseReason(e.target.value)} />}
+                        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 10 }}>
+                          <button className="btn btn-ghost" onClick={() => setDdOpen(false)}>Cancel</button>
+                          <button className="btn btn-primary" disabled={busy || !ddDraft || (!!task.deadline && !reviseReason.trim())} onClick={commitDeadline}><Check size={13} /> {task.deadline ? 'Revise' : 'Set'}</button>
                         </div>
                       </div>
                     )}
                   </span>
                 </Prop>
-                <Prop label="Created">{fmtDateTime(task.created_at)}{task.creator_name ? ` · ${task.creator_name}` : ''}</Prop>
+                <Prop icon={Clock} label="Created"><span style={{ fontSize: 13, color: 'var(--text-2)' }}>{fmtDateTime(task.created_at)}{task.creator_name ? ` · ${task.creator_name}` : ''}</span></Prop>
               </div>
 
               {/* Collaborators */}
-              <Section title="Collaborators">
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: canEdit ? 8 : 0 }}>
-                  {(task.collaborators || []).length === 0 && <span style={{ fontSize: 12, color: 'var(--text-3)' }}>None</span>}
+              <div className="dr-section">
+                <div className="sh">Collaborators</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, alignItems: 'center' }}>
+                  {(task.collaborators || []).length === 0 && <span style={{ fontSize: 12.5, color: 'var(--text-4)' }}>None yet</span>}
                   {(task.collaborators || []).map(c => (
-                    <span key={c.employee_id} style={chip}>{c.full_name || c.employee_id}{canEdit && <X size={12} style={{ cursor: 'pointer' }} onClick={() => removeCollab(c.employee_id)} />}</span>
+                    <span key={c.employee_id} className="chip-rm"><Avatar name={c.full_name} size={18} />{firstName(c.full_name)}
+                      {canEdit && <span className="x" onClick={() => removeCollab(c.employee_id)}><X size={12} /></span>}
+                    </span>
                   ))}
+                  {canEdit && (
+                    <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                      <span style={{ width: 200 }}><Combobox value={collabPick} options={collabOpts} onChange={setCollabPick} placeholder="Add collaborator…" allowClear style={{ width: '100%' }} /></span>
+                      <button className="btn btn-primary" onClick={addCollab} disabled={busy || !collabPick}><Plus size={13} /></button>
+                    </span>
+                  )}
                 </div>
-                {canEdit && (
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                    <div style={{ flex: 1 }}><Combobox value={collabPick} options={collabOpts} onChange={setCollabPick} placeholder="Add collaborator…" allowClear style={field} /></div>
-                    <button className="dk-press" style={secondaryBtn} onClick={addCollab} disabled={busy || !collabPick}><Plus size={13} /></button>
-                  </div>
-                )}
-              </Section>
+              </div>
 
               {/* Description */}
-              <Section title="Description">
+              <div className="dr-section">
+                <div className="sh">Description</div>
                 {canEdit ? (
-                  <textarea value={descDraft} onChange={e => setDescDraft(e.target.value)} rows={3} placeholder="Add a description…"
-                    onBlur={() => { if (descDraft !== (task.description || '')) saveField('description', descDraft); }}
-                    style={{ ...field, resize: 'vertical' }} />
-                ) : (task.description ? <p style={{ fontSize: 13, color: 'var(--text-2)', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{task.description}</p> : <span style={{ fontSize: 12, color: 'var(--text-3)' }}>—</span>)}
-              </Section>
-
-              <Section title="Sub-tasks"><SubtaskPanel task={task} session={session} /></Section>
-              <Section title="Documents"><DocLinksPanel task={task} session={session} canEdit={canEdit} onChange={mutated} /></Section>
-
-              <div style={{ marginTop: 14 }}>
-                <div style={{ display: 'flex', gap: 4, marginBottom: 12, borderBottom: '1px solid var(--border)' }}>
-                  {['comments', 'history'].map(t => <button key={t} onClick={() => setTab(t)} style={tabBtn(tab === t)}>{t === 'comments' ? 'Comments' : 'History'}</button>)}
-                </div>
-                {tab === 'comments' ? <CommentsPanel task={task} session={session} onChange={mutated} /> : <HistoryPanel task={task} />}
+                  <textarea className="reason-input" style={{ minHeight: 80, marginTop: 0, resize: 'vertical', lineHeight: 1.6 }} placeholder="Add a description…"
+                    value={descDraft} onChange={e => setDescDraft(e.target.value)} onBlur={() => { if (descDraft !== (task.description || '')) saveField('description', descDraft); }} />
+                ) : (task.description ? <div className="dr-desc">{task.description}</div> : <span style={{ fontSize: 12.5, color: 'var(--text-4)' }}>—</span>)}
               </div>
+
+              <div className="dr-section"><div className="sh">Sub-tasks</div><SubtaskPanel task={task} session={session} /></div>
+              <div className="dr-section"><div className="sh">Documents</div><DocLinksPanel task={task} session={session} canEdit={canEdit} onChange={mutated} /></div>
+
+              <div className="dr-tabs">
+                <button className={'dr-tab' + (tab === 'comments' ? ' on' : '')} onClick={() => setTab('comments')}>Comments · {(task.comments || []).length}</button>
+                <button className={'dr-tab' + (tab === 'history' ? ' on' : '')} onClick={() => setTab('history')}>History</button>
+              </div>
+              {tab === 'comments' ? <CommentsPanel task={task} session={session} onChange={mutated} /> : <HistoryPanel task={task} />}
             </div>
           </>
         )}
       </aside>
     </div>
   );
-}
-
-function Prop({ label, children }) {
-  return (
-    <div style={{ display: 'flex', gap: 10, alignItems: 'center', minHeight: 30 }}>
-      <span style={{ width: 92, flexShrink: 0, fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</span>
-      <span style={{ flex: 1, fontSize: 13, color: 'var(--text-1)' }}>{children}</span>
-    </div>
-  );
-}
-function Section({ title, children }) {
-  return (
-    <section style={{ marginTop: 16 }}>
-      <div style={sectionTitle}>{title}</div>
-      {children}
-    </section>
-  );
-}
-
-const backdrop = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 70, display: 'flex', justifyContent: 'flex-end' };
-const drawer = { width: 'min(560px, 100%)', height: '100%', background: 'var(--bg)', borderLeft: '1px solid var(--border-2)', boxShadow: '-12px 0 40px rgba(0,0,0,0.45)', display: 'flex', flexDirection: 'column', overflow: 'hidden' };
-const topbar = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid var(--border)', flexShrink: 0 };
-const body = { padding: '16px 18px 40px', overflowY: 'auto', flex: 1 };
-const iconBtn = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, background: 'var(--surface-2)', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', cursor: 'pointer' };
-const titleInput = { width: '100%', background: 'transparent', color: 'var(--text-1)', border: '1px solid transparent', borderRadius: 'var(--radius-sm)', padding: '4px 6px', marginLeft: -6, fontFamily: 'var(--font-cond)', fontSize: 20, fontWeight: 700, outline: 'none' };
-const titleH = { fontFamily: 'var(--font-cond)', fontSize: 20, fontWeight: 700, color: 'var(--text-1)' };
-const props = { marginTop: 16, display: 'flex', flexDirection: 'column', gap: 4, paddingTop: 14, borderTop: '1px solid var(--border)' };
-const field = { width: '100%', background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 9px', fontSize: 13, outline: 'none', fontFamily: 'inherit' };
-const sectionTitle = { fontFamily: 'var(--font-cond)', fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-2)', marginBottom: 8 };
-const chip = { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-full)', padding: '3px 10px', fontSize: 12, color: 'var(--text-1)' };
-const revFlag = { marginLeft: 8, fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--state-warning-fg)', background: 'var(--state-warning-bg)', borderRadius: 3, padding: '1px 5px', textTransform: 'uppercase' };
-const abandonedNote = { marginTop: 12, background: 'var(--state-error-bg)', border: '1px solid var(--state-error)', borderRadius: 'var(--radius-sm)', padding: '8px 12px', fontSize: 12, color: 'var(--text-2)' };
-const ddPopover = { position: 'absolute', top: '100%', left: 0, zIndex: 20, marginTop: 4, background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-md)', padding: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.4)' };
-const btnBase = { display: 'inline-flex', alignItems: 'center', gap: 5, borderRadius: 'var(--radius-sm)', padding: '6px 12px', fontFamily: 'var(--font-cond)', fontSize: 11, fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.04em' };
-const primaryBtn = { ...btnBase, background: 'var(--docket-accent)', color: 'var(--accent-fg)', border: '1px solid var(--docket-accent)' };
-const secondaryBtn = { ...btnBase, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)' };
-const ghostBtn = { ...btnBase, background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border)' };
-const dangerBtn = { ...btnBase, background: 'var(--state-error)', color: '#fff', border: '1px solid var(--state-error)' };
-function statusBtn(on) {
-  return { background: on ? 'var(--docket-accent)' : 'var(--surface-2)', color: on ? 'var(--accent-fg)' : 'var(--text-2)', border: `1px solid ${on ? 'var(--docket-accent)' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', padding: '5px 11px', fontFamily: 'var(--font-cond)', fontSize: 11, fontWeight: 700, cursor: on ? 'default' : 'pointer', textTransform: 'uppercase', letterSpacing: '0.04em' };
-}
-function tabBtn(on) {
-  return { background: 'none', border: 'none', borderBottom: `2px solid ${on ? 'var(--docket-accent)' : 'transparent'}`, color: on ? 'var(--text-1)' : 'var(--text-3)', padding: '8px 14px', fontFamily: 'var(--font-cond)', fontSize: 12, fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.05em' };
 }
 
 export default TaskDrawer;

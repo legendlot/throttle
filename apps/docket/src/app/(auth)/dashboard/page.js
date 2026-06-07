@@ -3,16 +3,17 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import { AlertTriangle, Clock, List, Check, RefreshCw } from 'lucide-react';
 import { docketopsGet } from '../../../lib/docketopsFetch.js';
-import { STATUS_MAP, STATUSES } from '../../../lib/tasks.js';
+import { STATUSES } from '../../../lib/tasks.js';
+import { Avatar, personColor } from '../../../components/primitives.js';
 
 export default function DashboardPage() {
   const { session } = useAuth();
   const { showToast } = useToast();
   const router = useRouter();
   const search = useSearchParams();
-  const spaceId = search.get('space') || '';   // '' = General (org-wide)
+  const spaceId = search.get('space') || '';
   const [stats, setStats] = useState(null);
   const [spaceName, setSpaceName] = useState('');
   const [loading, setLoading] = useState(true);
@@ -23,127 +24,101 @@ export default function DashboardPage() {
     setLoading(true); setDenied(false);
     try { setStats(await docketopsGet('getDashboard', { space_id: spaceId }, session)); }
     catch (e) {
-      // Dashboard visibility is shareable (RULE-DOCKET-006) and enforced server-side;
-      // a 403 here just means this user hasn't been granted it — show a quiet message.
       if (/forbidden/i.test(e.message || '')) setDenied(true);
       else showToast(e.message || 'Failed to load dashboard', 'error');
     }
     finally { setLoading(false); }
   }, [session, spaceId, showToast]);
   useEffect(() => { load(); }, [load]);
-  // Resolve the space name for the heading (membership already enforced server-side).
   useEffect(() => {
     if (!session || !spaceId) { setSpaceName(''); return; }
     docketopsGet('getSpaces', {}, session).then(s => setSpaceName((s || []).find(x => x.id === spaceId)?.name || '')).catch(() => {});
   }, [session, spaceId]);
 
-  // Visibility (org dashboard sharing + private-space membership) is enforced server-side
-  // by getDashboard — a 403 sets `denied`. No client-side perm gate, so a granted viewer
-  // (dashboard_public or per-person grant, without docket_view_all) loads fine.
-  if (denied)
-    return <div style={{ color: 'var(--text-3)' }}>You don’t have access to this dashboard.</div>;
+  if (denied) return <div style={{ color: 'var(--text-3)' }}>You don’t have access to this dashboard.</div>;
   if (loading) return <Spinner />;
   if (!stats) return null;
   const linkSuffix = spaceId ? `&space=${spaceId}` : '';
 
-  const byStatus = STATUSES.map(s => ({ name: s.label, key: s.key, value: Number(stats.by_status?.[s.key] || 0), color: s.color }));
-  const openTotal = byStatus.filter(s => s.key !== 'done' && s.key !== 'abandoned').reduce((a, b) => a + b.value, 0);
+  const byStatus = STATUSES.map(s => ({ key: s.key, label: s.label, color: s.color, n: Number(stats.by_status?.[s.key] || 0) }));
+  const maxStatus = Math.max(1, ...byStatus.map(s => s.n));
+  const openTotal = byStatus.filter(s => s.key !== 'done' && s.key !== 'abandoned').reduce((a, b) => a + b.n, 0);
+  const byTeam = (stats.by_department || []).map(r => ({ name: r.dept_name, id: r.dept_id, open: Number(r.open || 0), done: Number(r.done || 0), overdue: Number(r.overdue || 0) }));
+  const byPerson = (stats.by_person || []).map(r => ({ name: r.emp_name, id: r.emp_id, open: Number(r.open || 0), done: Number(r.done || 0), overdue: Number(r.overdue || 0) }));
 
   return (
-    <div>
-      <h1 style={h1}>{spaceName ? `${spaceName} · Dashboard` : 'Dashboard'}</h1>
-      <p style={sub}>{spaceName ? 'Space task review.' : 'Org-wide task review.'}</p>
+    <div className="screen">
+      <div className="screen-head"><p>{spaceName ? `${spaceName} · space task review.` : 'Org-wide task review. General space.'}</p></div>
 
-      <div style={tileRow}>
-        <Tile label="Overdue" value={stats.overdue} accent="var(--state-error-fg)" onClick={() => router.push(`/tasks?overdue=1${linkSuffix}`)} />
-        <Tile label="Due ≤ 7 days" value={stats.due_soon} accent="var(--state-warning-fg)" />
-        <Tile label="Open" value={openTotal} />
-        <Tile label="Done (30d)" value={stats.completed_30d} accent="var(--state-success-fg)" />
-        <Tile label="Deadline revised" value={stats.revised} accent="var(--state-warning-fg)" onClick={() => router.push(`/tasks?revised=1${linkSuffix}`)} />
+      <div className="kpi-row">
+        <Kpi icon={AlertTriangle} label="Overdue" value={stats.overdue} accent="var(--overdue)" onClick={() => router.push(`/tasks?overdue=1${linkSuffix}`)} />
+        <Kpi icon={Clock} label="Due ≤ 7 days" value={stats.due_soon} accent="var(--st-blocked)" />
+        <Kpi icon={List} label="Open" value={openTotal} />
+        <Kpi icon={Check} label="Done (30d)" value={stats.completed_30d} accent="var(--st-done)" />
+        <Kpi icon={RefreshCw} label="Revised" value={stats.revised} accent="var(--st-blocked)" onClick={() => router.push(`/tasks?revised=1${linkSuffix}`)} />
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 16 }}>
-        <section style={card}>
-          <div style={sectionTitle}>Status distribution</div>
-          <div style={{ height: 220 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={byStatus} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
-                <XAxis dataKey="name" tick={{ fill: '#888', fontSize: 11 }} axisLine={{ stroke: '#404040' }} tickLine={false} />
-                <YAxis allowDecimals={false} tick={{ fill: '#888', fontSize: 11 }} axisLine={{ stroke: '#404040' }} tickLine={false} />
-                <Tooltip contentStyle={{ background: '#2a2a2a', border: '1px solid #404040', borderRadius: 4, fontSize: 12 }} cursor={{ fill: 'rgba(255,255,255,0.04)' }} />
-                <Bar dataKey="value" radius={[3, 3, 0, 0]}>
-                  {byStatus.map((s, i) => <Cell key={i} fill={s.color.startsWith('var') ? '#888' : s.color} />)}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 8 }}>
+      <div className="dash-grid">
+        <section className="panel">
+          <div className="panel-h">Status distribution</div>
+          <div className="bars">
             {byStatus.map(s => (
-              <span key={s.key} style={{ fontSize: 11, color: 'var(--text-3)' }}>
-                <span style={{ color: s.color, fontWeight: 700 }}>{s.value}</span> {STATUS_MAP[s.key].label}
-              </span>
+              <div key={s.key} className="bar-row">
+                <span className="bar-label">{s.label}</span>
+                <div className="bar-track"><div className="bar-fill" style={{ width: (s.n / maxStatus * 100) + '%', background: s.color }} /></div>
+                <span className="bar-n">{s.n}</span>
+              </div>
             ))}
           </div>
         </section>
 
-        <section style={card}>
-          <div style={sectionTitle}>By team</div>
-          <Table rows={stats.by_department || []} nameKey="dept_name"
-            onRow={(r) => router.push(`/tasks?department_id=${r.dept_id}${linkSuffix}`)} />
+        <section className="panel">
+          <div className="panel-h">By team</div>
+          <table className="dtable">
+            <thead><tr><th>Team</th><th className="num">Open</th><th className="num">Done</th><th className="num">Overdue</th></tr></thead>
+            <tbody>
+              {byTeam.length === 0 && <tr><td colSpan={4} style={{ color: 'var(--text-3)' }}>No tasks yet.</td></tr>}
+              {byTeam.map(r => (
+                <tr key={r.id || r.name} className="clickable" onClick={() => router.push(`/tasks?department_id=${r.id}${linkSuffix}`)}>
+                  <td><span className="chip soft"><span className="dot" style={{ background: personColor(r.id || r.name) }} />{r.name || '—'}</span></td>
+                  <td className="num">{r.open}</td><td className="num">{r.done}</td>
+                  <td className="num" style={{ color: r.overdue ? 'var(--overdue)' : 'var(--text-2)', fontWeight: r.overdue ? 600 : 400 }}>{r.overdue}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </section>
       </div>
 
-      <section style={{ ...card, marginTop: 14 }}>
-        <div style={sectionTitle}>By person (owner)</div>
-        <Table rows={stats.by_person || []} nameKey="emp_name"
-          onRow={(r) => router.push(`/tasks?employee_id=${r.emp_id}${linkSuffix}`)} showBlocked={false} />
+      <section className="panel" style={{ marginTop: 14 }}>
+        <div className="panel-h">By person · owner workload</div>
+        <table className="dtable">
+          <thead><tr><th>Person</th><th className="num">Open</th><th className="num">Done</th><th className="num">Overdue</th><th style={{ width: '34%' }}>Load</th></tr></thead>
+          <tbody>
+            {byPerson.length === 0 && <tr><td colSpan={5} style={{ color: 'var(--text-3)' }}>No tasks yet.</td></tr>}
+            {byPerson.map(r => {
+              const total = Math.max(1, r.open + r.done);
+              return (
+                <tr key={r.id || r.name} className="clickable" onClick={() => router.push(`/tasks?employee_id=${r.id}${linkSuffix}`)}>
+                  <td><span style={{ display: 'inline-flex', alignItems: 'center', gap: 9 }}><Avatar name={r.name} size={24} />{r.name || '—'}</span></td>
+                  <td className="num">{r.open}</td><td className="num">{r.done}</td>
+                  <td className="num" style={{ color: r.overdue ? 'var(--overdue)' : 'var(--text-2)', fontWeight: r.overdue ? 600 : 400 }}>{r.overdue}</td>
+                  <td><div className="load"><div className="load-done" style={{ width: (r.done / total * 100) + '%' }} /><div className="load-open" style={{ width: (r.open / total * 100) + '%' }} /></div></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </section>
     </div>
   );
 }
 
-function Tile({ label, value, accent, onClick }) {
+function Kpi({ icon: Ic, label, value, accent, onClick }) {
   return (
-    <div style={{ ...tile, cursor: onClick ? 'pointer' : 'default' }} onClick={onClick}>
-      <div style={{ fontFamily: 'var(--font-cond)', fontSize: 30, fontWeight: 700, color: accent || 'var(--text-1)', lineHeight: 1 }}>{Number(value || 0)}</div>
-      <div style={{ fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginTop: 6 }}>{label}</div>
+    <div className={'kpi' + (onClick ? ' clickable' : '')} onClick={onClick}>
+      <div className="kpi-top"><Ic className="ic" />{label}</div>
+      <div className="kpi-val" style={{ color: accent || 'var(--text-1)' }}>{Number(value || 0)}</div>
     </div>
   );
 }
-
-function Table({ rows, nameKey, onRow, showBlocked = true }) {
-  if (!rows.length) return <div style={{ fontSize: 12, color: 'var(--text-3)' }}>No tasks yet.</div>;
-  return (
-    <div style={{ overflowX: 'auto' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-        <thead><tr>
-          <th style={th}>{nameKey === 'dept_name' ? 'Team' : 'Person'}</th>
-          <th style={thNum}>Open</th><th style={thNum}>Done</th>
-          {showBlocked && <th style={thNum}>Blocked</th>}<th style={thNum}>Overdue</th>
-        </tr></thead>
-        <tbody>
-          {rows.map((r, i) => (
-            <tr key={i} style={{ cursor: 'pointer' }} onClick={() => onRow(r)}>
-              <td style={td}>{r[nameKey] || '—'}</td>
-              <td style={tdNum}>{Number(r.open || 0)}</td>
-              <td style={tdNum}>{Number(r.done || 0)}</td>
-              {showBlocked && <td style={tdNum}>{Number(r.blocked || 0)}</td>}
-              <td style={{ ...tdNum, color: Number(r.overdue) > 0 ? 'var(--state-error-fg)' : 'var(--text-2)', fontWeight: Number(r.overdue) > 0 ? 700 : 400 }}>{Number(r.overdue || 0)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-const h1 = { fontFamily: 'var(--font-cond)', fontSize: 22, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' };
-const sub = { fontSize: 13, color: 'var(--text-3)', marginTop: 4, marginBottom: 16 };
-const tileRow = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 };
-const tile = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '16px 18px' };
-const card = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '16px 18px' };
-const sectionTitle = { fontFamily: 'var(--font-cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-2)', marginBottom: 12 };
-const th = { textAlign: 'left', padding: '7px 10px', fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', borderBottom: '1px solid var(--border)', fontWeight: 700 };
-const thNum = { ...th, textAlign: 'right', width: 70 };
-const td = { padding: '8px 10px', fontSize: 13, color: 'var(--text-1)', borderBottom: '1px solid var(--border)' };
-const tdNum = { ...td, textAlign: 'right', fontFamily: 'var(--font-mono)', color: 'var(--text-2)' };

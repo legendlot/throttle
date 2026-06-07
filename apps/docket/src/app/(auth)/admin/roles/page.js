@@ -4,6 +4,7 @@ import { useAuth } from '@throttle/auth';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { Plus, ArrowLeft, ShieldCheck, LayoutDashboard, X, Globe } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../../../../lib/docketopsFetch.js';
+import { AdminTabs } from '../../../../components/AdminTabs.js';
 
 // Docket permission matrix — 2 boolean keys. Define unlimited custom roles from
 // these toggles. docket_admin implies docket_view_all (enforced here + server-side).
@@ -78,11 +79,9 @@ export default function RolesPage() {
 
   return (
     <div style={{ maxWidth: 900 }}>
+      <AdminTabs />
       <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap' }}>
-        <div>
-          <h1 style={h1}>Roles &amp; Permissions</h1>
-          <p style={sub}>Docket-only permission roles. Assign people on the Users page. No role = baseline (own + collaborator + own-team tasks).</p>
-        </div>
+        <p style={sub}>Docket-only permission roles. Assign people on the Users page. No role = baseline (own + collaborator + own-team tasks).</p>
         {view === 'list'
           ? <button style={btnPrimary} onClick={startNew}><Plus size={14} /> New Role</button>
           : <button style={btnSecondary} onClick={() => setView('list')}><ArrowLeft size={14} /> Back to roles</button>}

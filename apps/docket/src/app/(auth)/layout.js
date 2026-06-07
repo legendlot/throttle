@@ -2,9 +2,12 @@
 import { useMemo, useState, useEffect, useCallback } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { RequireAuth, useAuth } from '@throttle/auth';
-import { Sidebar, Spinner, Topbar, useSearchShortcut } from '@throttle/ui';
-import { buildNavGroups } from '../../lib/nav.js';
+import { Spinner, useSearchShortcut } from '@throttle/ui';
 import { docketopsGet } from '../../lib/docketopsFetch.js';
+import { ChromeContext } from '../../lib/chrome.js';
+import { DocketSidebar } from '../../components/DocketSidebar.js';
+import { DocketTopbar } from '../../components/DocketTopbar.js';
+import { ShortcutsSheet } from '../../components/ShortcutsSheet.js';
 
 export default function AuthLayout({ children }) {
   return (
@@ -16,17 +19,27 @@ export default function AuthLayout({ children }) {
 
 function AuthLayoutInner({ children }) {
   const { user, role, perms, session, signOut, loading } = useAuth();
-  const pathname  = usePathname();
-  const search    = useSearchParams();
-  const router    = useRouter();
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
+  const pathname = usePathname();
+  const search   = useSearchParams();
+  const router   = useRouter();
+
+  const [collapsed, setCollapsed] = useState(false);
   const [spaces, setSpaces] = useState([]);
   const [canViewDashboard, setCanViewDashboard] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [count, setCount] = useState(null);   // board task count, published by the tasks page
 
-  useSearchShortcut();
+  useSearchShortcut(); // `/` focuses [data-search-primary]
 
-  // Accessible spaces drive the sidebar (General + owned/member private spaces).
-  // getMe also returns can_view_dashboard (RULE-DOCKET-006) → gates the Dashboard nav item.
+  // Sticky sidebar collapse.
+  useEffect(() => {
+    try { const v = localStorage.getItem('docket.sidebarCollapsed'); if (v != null) setCollapsed(v === '1'); } catch { /* ignore */ }
+  }, []);
+  const toggleSidebar = useCallback(() => {
+    setCollapsed(c => { const n = !c; try { localStorage.setItem('docket.sidebarCollapsed', n ? '1' : '0'); } catch { /* ignore */ } return n; });
+  }, []);
+
+  // Accessible spaces drive the sidebar; getMe also returns can_view_dashboard (RULE-DOCKET-006).
   const loadSpaces = useCallback(() => {
     if (!session) return;
     docketopsGet('getMe', {}, session).then(me => {
@@ -35,54 +48,90 @@ function AuthLayoutInner({ children }) {
     }).catch(() => {});
   }, [session]);
   useEffect(() => { loadSpaces(); }, [loadSpaces]);
-  // Re-fetch when a space is created/renamed/archived (signalled via a window event).
   useEffect(() => {
     const h = () => loadSpaces();
     window.addEventListener('docket:spaces-changed', h);
     return () => window.removeEventListener('docket:spaces-changed', h);
   }, [loadSpaces]);
 
-  const navGroups = useMemo(
-    () => buildNavGroups({ ...(perms || {}), _dashboard: canViewDashboard }, spaces),
-    [perms, spaces, canViewDashboard]);
+  // App-chrome keyboard shortcuts: `[` toggles the sidebar, `?` toggles the help
+  // sheet, Esc closes it. Ignored while typing (same guard as useHotkey).
+  useEffect(() => {
+    function onKey(e) {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const ae = document.activeElement;
+      const typing = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT' || ae.isContentEditable);
+      if (e.key === 'Escape' && helpOpen) { setHelpOpen(false); return; }
+      if (typing) return;
+      if (e.key === '[') { e.preventDefault(); toggleSidebar(); }
+      else if (e.key === '?') { e.preventDefault(); setHelpOpen(o => !o); }
+    }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [helpOpen, toggleSidebar]);
 
-  // The Sidebar matches active by route string. Space items carry the ?space= query,
-  // so the active key must include it when we're on the Tasks list inside a space.
+  // Active sidebar key + topbar title/context, derived from the route.
   const spaceParam = search.get('space');
-  const activeKey = pathname === '/tasks' && spaceParam && spaceParam !== 'new'
-    ? `/tasks?space=${spaceParam}` : pathname;
+  const lens = search.get('lens');
+  const spaceId = spaceParam && spaceParam !== 'new' ? spaceParam : '';
+  const activeKey = pathname === '/tasks'
+    ? (spaceId ? `/tasks?space=${spaceId}` : lens === 'mine' ? '/tasks?lens=mine' : '/tasks')
+    : pathname;
+
+  const chrome = useMemo(() => {
+    if (pathname === '/dashboard') return { title: 'Dashboard' };
+    if (pathname === '/scratchpad') return { title: 'Scratchpad' };
+    if (pathname === '/manual') return { title: 'Manual' };
+    if (pathname.startsWith('/admin')) return { title: 'Admin' };
+    if (pathname === '/tasks') {
+      if (spaceId) {
+        const s = spaces.find(x => x.id === spaceId);
+        return { title: s?.name || 'Space', context: 'private space', isSpace: true, showCount: true };
+      }
+      if (lens === 'mine') return { title: 'My Tasks', context: 'owned + collaborating', showCount: true };
+      return { title: 'All Tasks', context: 'general', showCount: true };
+    }
+    if (pathname.startsWith('/tasks/detail')) return { title: 'Task' };
+    if (pathname.startsWith('/tasks/new')) return { title: 'New Task' };
+    return { title: 'Docket' };
+  }, [pathname, spaceId, lens, spaces]);
 
   if (loading && !user) return <Spinner />;
 
   const displayName = user?.full_name || user?.email || '';
-  const initial     = displayName ? displayName[0].toUpperCase() : '?';
+  const ctxValue = { collapsed, setCollapsed, helpOpen, setHelpOpen, setCount };
 
   return (
-    <div style={{ display:'flex', height:'100dvh', overflow:'hidden' }}>
-      <Sidebar
-        groups={navGroups}
-        activeTab={activeKey}
-        onTabSelect={(item) => router.push(item.route)}
-        userLabel={displayName}
-        userInitial={initial}
-        userRole={role || ''}
-        onLogout={signOut}
-        collapsed={sidebarCollapsed}
-        onToggle={() => setSidebarCollapsed(c => !c)}
-        appLabel="DOCKET"
-        appShortLabel="DK"
-        appIcon={<img src="/favicon.svg" alt="Docket" style={{ height: 20, width: 'auto', display: 'block' }} />}
-      />
-      <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
-        <Topbar
-          navGroups={navGroups}
-          pathname={pathname}
-          onTabSelect={(item) => router.push(item.route)}
+    <ChromeContext.Provider value={ctxValue}>
+      <div className="dk-app">
+        <DocketSidebar
+          activeKey={activeKey}
+          spaces={spaces}
+          canViewDashboard={canViewDashboard}
+          isAdmin={!!perms?.docket_admin}
+          collapsed={collapsed}
+          onToggle={toggleSidebar}
+          onSelect={(route) => router.push(route)}
+          onNewTask={() => { router.push('/tasks'); setTimeout(() => { try { const el = document.querySelector('[data-create-primary]'); el?.focus(); } catch { /* ignore */ } }, 60); }}
+          userLabel={displayName}
+          userRole={role || ''}
+          onSignOut={signOut}
         />
-        <main style={{ flex:1, overflowY:'auto', padding:'16px 24px' }}>
-          {children}
-        </main>
+        <div className="dk-main">
+          <DocketTopbar
+            title={chrome.title}
+            context={chrome.context}
+            isSpace={chrome.isSpace}
+            count={chrome.showCount ? count : null}
+            onToggleSidebar={toggleSidebar}
+            onHelp={() => setHelpOpen(true)}
+          />
+          <div className="dk-scroll">
+            <div className="dk-canvas">{children}</div>
+          </div>
+        </div>
+        {helpOpen && <ShortcutsSheet onClose={() => setHelpOpen(false)} />}
       </div>
-    </div>
+    </ChromeContext.Provider>
   );
 }

@@ -3,6 +3,8 @@ import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
 import { docketopsGet, docketopsPost } from '../../../../lib/docketopsFetch.js';
+import { AdminTabs } from '../../../../components/AdminTabs.js';
+import { Avatar } from '../../../../components/primitives.js';
 
 export default function UsersPage() {
   const { session, perms } = useAuth();
@@ -44,33 +46,30 @@ export default function UsersPage() {
     : users;
 
   return (
-    <div>
-      <div style={{ marginBottom: 16 }}>
-        <h1 style={h1}>Users</h1>
-        <p style={sub}>Assign a Docket role to each LOT user. Accounts are created in Garage; this only sets task-manager access. No role = baseline (own + collaborator + own-team tasks).</p>
-      </div>
+    <div className="screen">
+      <AdminTabs />
+      <div className="screen-head"><p>Assign a Docket role to each LOT user. Accounts are created in Garage; this only sets task-manager access. No role = baseline (own + collaborator + own-team tasks).</p></div>
 
-      <div style={card}>
-        <div style={cardHead}>
-          <span>LOT Users {users.length > 0 && <span style={{ color: 'var(--text-3)', fontSize: 11 }}>({users.length})</span>}</span>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name / email…" style={search} />
+      <div className="panel" style={{ padding: 0 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '12px 18px', borderBottom: '1px solid var(--border)' }}>
+          <span style={{ fontFamily: 'var(--f-display)', fontWeight: 600, fontSize: 11, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--text-3)' }}>
+            LOT Users {users.length > 0 && <span style={{ color: 'var(--text-4)' }}>· {users.length}</span>}
+          </span>
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name / email…" className="date-input" style={{ width: 240 }} />
         </div>
-        <div style={{ overflowX: 'auto' }}>
+        <div style={{ padding: '8px 18px 14px' }}>
           {loading ? <div style={{ padding: 24 }}><Spinner /></div> : (
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead><tr>
-                <th style={th}>Name</th><th style={th}>Email</th><th style={th}>Docket Role</th><th style={th}>Assign</th>
-              </tr></thead>
+            <table className="dtable">
+              <thead><tr><th>Person</th><th>Email</th><th>Role</th><th className="ctr">Status</th><th style={{ width: 210 }}>Assign</th></tr></thead>
               <tbody>
                 {filtered.map((u) => (
                   <tr key={u.id} style={{ opacity: u.active === false ? 0.5 : 1 }}>
-                    <td style={td}>{u.full_name || '—'}</td>
-                    <td style={{ ...td, fontFamily: 'var(--font-mono)', color: 'var(--text-2)' }}>{u.email || '—'}</td>
-                    <td style={td}>
-                      {u.docket_role ? <span style={badgeKey}>{u.docket_role}</span> : <span style={{ fontSize: 11, color: 'var(--text-3)' }}>baseline (default)</span>}
-                    </td>
-                    <td style={td}>
-                      <select value={u.docket_role || ''} disabled={savingId === u.id} onChange={(e) => assign(u.id, e.target.value)} style={select}>
+                    <td><span style={{ display: 'inline-flex', alignItems: 'center', gap: 9, color: 'var(--text-1)' }}><Avatar name={u.full_name} size={24} />{u.full_name || '—'}</span></td>
+                    <td style={{ fontFamily: 'var(--f-mono)', fontSize: 12, color: 'var(--text-3)' }}>{u.email || '—'}</td>
+                    <td>{u.docket_role ? <span style={badgeKey}>{u.docket_role}</span> : <span style={{ fontSize: 11, color: 'var(--text-3)' }}>baseline</span>}</td>
+                    <td className="ctr"><span className="pill-on">Active</span></td>
+                    <td>
+                      <select value={u.docket_role || ''} disabled={savingId === u.id} onChange={(e) => assign(u.id, e.target.value)} className="date-input" style={{ cursor: 'pointer' }}>
                         <option value="">— none (baseline) —</option>
                         {roles.map((r) => <option key={r.role_key} value={r.role_key}>{r.label}</option>)}
                       </select>
@@ -86,12 +85,4 @@ export default function UsersPage() {
   );
 }
 
-const h1 = { fontFamily: 'var(--font-cond)', fontSize: 22, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' };
-const sub = { fontSize: 13, color: 'var(--text-3)', marginTop: 4, maxWidth: 640, lineHeight: 1.5 };
-const card = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' };
-const cardHead = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid var(--border)', fontSize: 13, fontWeight: 700, color: 'var(--text-1)' };
-const search = { background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '5px 10px', fontSize: 12, color: 'var(--text-1)', outline: 'none', width: 240 };
-const th = { textAlign: 'left', padding: '9px 14px', fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', borderBottom: '1px solid var(--border)', fontWeight: 700 };
-const td = { padding: '9px 14px', fontSize: 13, color: 'var(--text-1)', borderBottom: '1px solid var(--border)' };
-const select = { minWidth: 190, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 8px', fontSize: 12, outline: 'none' };
-const badgeKey = { fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--state-info-fg)', background: 'var(--state-info-bg)', borderRadius: 'var(--radius-sm)', padding: '2px 7px' };
+const badgeKey = { fontFamily: 'var(--f-mono)', fontSize: 10, color: 'var(--st-progress)', background: 'var(--st-progress-bg)', borderRadius: 'var(--r-sm)', padding: '2px 7px' };
