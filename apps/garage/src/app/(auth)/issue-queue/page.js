@@ -189,12 +189,14 @@ export default function IssueQueuePage() {
         const isRework     = wo.status === 'Pending Rework';
         const isShortIssue = !!wo.receipt_id;
         const isUdr        = wo.wo_type === 'UDR';
-        if (!isShortIssue && !isRework && !['Parts Request', 'adhoc', 'standalone', 'UDR'].includes(wo.wo_type)) return;
+        const isRepackPkg  = wo.wo_type === 'repack_pkg';
+        if (!isShortIssue && !isRework && !['Parts Request', 'adhoc', 'standalone', 'UDR', 'repack_pkg'].includes(wo.wo_type)) return;
         let badge, badgeTone, type;
-        if (isShortIssue)  { badge = 'SHORT ISSUE'; badgeTone = 'orange'; type = 'short-issue'; }
-        else if (isRework) { badge = 'REWORK';      badgeTone = 'red';    type = 'wo'; }
-        else if (isUdr)    { badge = 'UDR';         badgeTone = 'green';  type = 'udr'; }
-        else               { badge = 'AD HOC';      badgeTone = 'yellow'; type = 'wo'; }
+        if (isShortIssue)     { badge = 'SHORT ISSUE'; badgeTone = 'orange'; type = 'short-issue'; }
+        else if (isRework)    { badge = 'REWORK';      badgeTone = 'red';    type = 'wo'; }
+        else if (isUdr)       { badge = 'UDR';         badgeTone = 'green';  type = 'udr'; }
+        else if (isRepackPkg) { badge = 'REPACK PKG';  badgeTone = 'blue';   type = 'wo'; }
+        else                  { badge = 'AD HOC';      badgeTone = 'yellow'; type = 'wo'; }
         rows.push({
           type,
           ref:      wo.wo_no,
@@ -316,7 +318,7 @@ export default function IssueQueuePage() {
         setSelectedItem({ ...row, wo: row.raw, lines });
       } else if (row.type === 'wo') {
         const wo = row.raw;
-        if (wo.wo_type === 'Parts Request') {
+        if (wo.wo_type === 'Parts Request' || wo.wo_type === 'repack_pkg') {
           const [woParts, , stock] = await Promise.all([
             garageFetch('getWOParts', { wo_no: row.ref }, session),
             ensureMaterialCache(),
