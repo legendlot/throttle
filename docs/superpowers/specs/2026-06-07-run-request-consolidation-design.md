@@ -299,7 +299,13 @@ worker/scanner/app land coherently per step.
   `store.line_flushes.repack_run_id`. `wo_type` is free text (no enum migration). `repack_runs` already
   has product/variant_model/colour/from_channel/to_channel. RLS-on + no policy = service_role-only
   (advisor INFO lint only, intended). Dedicated job-work-return object deferred to Step 4.
-- **Step 1 — Permissions.** Add `run_request` (verify vs `store.roles`); dispatch `repack_release`.
+- **Step 1 — Permissions.** Add `run_request` — its OWN explicit key (NOT a `users_manage` fallback;
+  `admin.users_manage=false`). **Granted to: admin, super_admin, production_manager, production_team,
+  store_head** (Afshaan 2026-06-07 — "production requesters"; procurement deliberately excluded). The
+  dispatch **Release-to-Repack** stays a separate dispatch key (`repack_release` or `dispatch_restock`).
+  Existing per-type create gates (`canScheduleRun`/`canManageFloor`/`canManageRepackRuns`) stay for
+  back-compat; the unified Redline surface (Step 2) gates on `run_request`. Add to Garage `/users`
+  PERM_DEFS so it's manageable; verify each granted role passes before deploy.
 - **Step 2 — Unified request surface (Redline).** New-Run/Request entry → type-specific forms
   (Fresh/Outsourced/Repair/Repack); migrate the request origination out of Garage.
 - **Step 3 — Repack** (smallest backend delta atop existing REPACK_IN/OUT): structured request + 2
