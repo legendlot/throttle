@@ -266,19 +266,55 @@ OLD PACKAGING
 - **`apps/garage`:** Issue Queue (new rows: repack_pkg, outsourced build/finish, ad-hoc run-linked);
   receiving (job-work return shipment); line flush (repack-linked).
 
-## 8. Open decisions for review (umbrella, not yet locked)
+## 8. Umbrella decisions — RESOLVED (Afshaan, 2026-06-07)
 
-1. **Permissions model** for the unified requester (merge `canScheduleRun` / `canManageFloor` /
-   `repack_run_manage`, or keep type-specific under one UI).
-2. **Job-work return shipment representation** — flagged shipment vs minimal new table (avoid PO).
-3. **`ext_return` pool location** — `store` vs `public`; exact keying.
-4. **Repair Issue-Queue consolidation timing** — bringing repair-run *requests* fully into the same
-   queue treatment (vs leaving repair as-is for now) — Afshaan flagged repair/repack queue
-   consolidation as a possibly-separate exercise.
-5. **Build sequence** — recommended: (i) unified Redline request surface + permissions, (ii) Repack
-   (smallest delta — request structure + 2 pulls + release scan + flush), (iii) Outsourced
-   (build/finish split + pool + finish-time EXT_INW), (iv) Repair (Repair Start station + ad-hoc
-   link + instrumentation). Confirm order.
+1. **Permissions — MERGE the requester side.** ONE production key **`run_request`** gates the unified
+   Redline surface for all four run types (production owns every request). The dispatch
+   **Release-to-Repack** stays a SEPARATE dispatch-side permission (`dispatch_restock` or new
+   `repack_release`) — a different party's authority; intentional separation, not redundancy. Verify
+   `run_request` against live `store.roles` before enforcing.
+2. **Job-work return = DEDICATED object** (own table, reusing receiving_lines + GRN mechanics, linked
+   to the EXT run + gate pass) — NOT a flag on purchase shipments/POs. Chosen for long-term stability:
+   a flag forces every purchase/payment/GST/GRN consumer to branch on it forever and risks job-work
+   leaking into purchase reporting (the EXT-003↔GRN-203 class). Dedicated keeps the domains cleanly
+   separated, consistent with the dedicated `ext_return` pool.
+3. **`ext_return` pool → `store` schema** (store owns it), keyed `product|variant|colour`.
+4. **Fold in EVERYTHING** — all four run types fully consolidated this round, including repair AND
+   repack requests into the one request surface + Issue Queue. No deferral.
+5. **Build it all, one effort, step by step** — sequence chosen below (§10).
+
+## 9. (was §8.5) — n/a
+
+## 10. Build sequence (locked — additive-foundation-first, smallest-delta-up)
+
+Each step: edit → build → commit → push → (worker) deploy. Confirmation gates at DDL + every deploy.
+A bad `lotopsproxy` deploy takes down Garage+Redline+Scanner — sequence is dependency-ordered so the
+worker/scanner/app land coherently per step.
+
+- **Step 0 — DB foundation (additive migrations). ✅ DONE 2026-06-07** (migration
+  `run_consolidation_step0_foundation`). Created `store.outsource_bom_split` (14 rows; build =
+  Car/Remote/Fastener/Drone/Train, rest finish), `store.ext_return_pool` (count-only, untagged,
+  keyed product|variant|colour), `public.repack_releases` (per-unit release sign-off, one-open-per-car
+  partial unique index), + additive columns `store.work_orders.repack_run_id`, `store.work_orders.phase`,
+  `store.line_flushes.repack_run_id`. `wo_type` is free text (no enum migration). `repack_runs` already
+  has product/variant_model/colour/from_channel/to_channel. RLS-on + no policy = service_role-only
+  (advisor INFO lint only, intended). Dedicated job-work-return object deferred to Step 4.
+- **Step 1 — Permissions.** Add `run_request` (verify vs `store.roles`); dispatch `repack_release`.
+- **Step 2 — Unified request surface (Redline).** New-Run/Request entry → type-specific forms
+  (Fresh/Outsourced/Repair/Repack); migrate the request origination out of Garage.
+- **Step 3 — Repack** (smallest backend delta atop existing REPACK_IN/OUT): structured request + 2
+  pulls (store packaging WO + dispatch release list) + Release-to-Repack scanner station + REPACK_IN
+  release-validation + widened stages (+`rtd`) + Repack Out channel default + auto run-linked flush.
+- **Step 4 — Outsourced:** build/finish split (read `outsource_bom_split` in `getProductionRun`) +
+  gate-pass send-out + auto dedicated job-work-return shipment + `ext_return` GRN + finish pull +
+  `postExtInw` moved to finish-time.
+- **Step 5 — Repair:** Repair Start station (inspect folded in, scrap system-free, lineage marker) +
+  manual run-linked (+product) ad-hoc request + instrumentation; standard QC/WKS tail unchanged.
+- **Step 6 — Consolidated Issue Queue (Garage):** surface all new rows (repack_pkg, outsourced
+  build/finish, ad-hoc run-linked) as one bounded list.
+- **Step 7 — Manuals fold** (Garage/Redline/scanner) per S105 in-system upkeep + the inventory-flow
+  diagram format for each flow.
+- **Step 8 — Live floor smoke** across all four flows.
 
 ## 9. Out of scope / parked
 
