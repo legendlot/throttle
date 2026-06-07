@@ -317,6 +317,23 @@ worker/scanner/app land coherently per step.
 - **Step 3 — Repack** (smallest backend delta atop existing REPACK_IN/OUT): structured request + 2
   pulls (store packaging WO + dispatch release list) + Release-to-Repack scanner station + REPACK_IN
   release-validation + widened stages (+`rtd`) + Repack Out channel default + auto run-linked flush.
+  **RESUME NOTES (investigation needed before deploy):**
+  - **Packaging pull:** `createRepackRun` should also insert a `work_orders` row `wo_type='repack_pkg'`,
+    `repack_run_id=run.id`, qty=target, `qty_ecomm`/`qty_retail` per `to_channel` (RULE-012 channel pkg),
+    product/variant=model/colour. BUT first TRACE: (a) Garage **issue-queue page rendering** — it branches
+    on `wo_type` (worker line ~1647 excludes `planned`/`Parts Request`); confirm a new `repack_pkg` type
+    renders + doesn't break the page; (b) the **non-run WO issue path** — how `standalone`/`Parts Request`
+    WOs book stock + complete (worker ~9968 createWorkOrder; find the issue/fulfil handler). The picklist
+    for repack_pkg must be **Primary Packaging only (box+tray)**, NOT the full BOM.
+  - **Release-to-Repack:** new SCANNER_ACTION `postRepackRelease` (dispatch scans box `LOT-…-E/R`; unit must
+    be `handed_over`/`allocated`; insert `public.repack_releases` row + flip unit → new free-text status
+    **`released_repack`** to lock it from dispatch; one-open-per-car index already enforces it). New scanner
+    station `REPACK_RELEASE` (dispatch dept) — needs HTML station + device provisioning + OPERATOR_GATE.
+  - **REPACK_IN:** accept `rtd` (production-held, no release) OR `released_repack` (dispatch-released);
+    HARD-REJECT raw `handed_over`/`allocated` ("release at Repack Release first"). Keep packed/shipped blocked.
+  - **REPACK_OUT:** default the channel from `repack_runs.to_channel` (don't trust operator toggle).
+  - **Line flush:** on repack run completion (or per REPACK_IN), auto-raise a `line_flushes` row
+    `repack_run_id=run.id` for the from-channel primary packaging, qty=repacked; verify splits reusable/damaged.
 - **Step 4 — Outsourced:** build/finish split (read `outsource_bom_split` in `getProductionRun`) +
   gate-pass send-out + auto dedicated job-work-return shipment + `ext_return` GRN + finish pull +
   `postExtInw` moved to finish-time.
