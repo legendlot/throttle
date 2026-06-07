@@ -6,6 +6,11 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md`).
 
+## [1.4.2] - 2026-06-07
+
+### Changed
+- Ad Hoc Requests reframed to track + cancel; create moved to Redline (production-only New Run / Request).
+
 ## [1.4.1] - 2026-06-07
 
 ### Changed

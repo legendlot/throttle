@@ -1,4 +1,4 @@
-<p class="lead">New Run / Request is the single place production asks for any kind of run. One screen, four tabs: <strong>Fresh</strong>, <strong>Outsourced</strong>, <strong>Repair</strong> and <strong>Repack</strong>. Whatever you request lands in the store&rsquo;s Issue Queue as something to issue, so there is one consistent &ldquo;what does the store owe right now&rdquo; list across every run type.</p>
+<p class="lead">New Run / Request is the single place production asks the store for anything. Tabs for the four run types, <strong>Fresh</strong>, <strong>Outsourced</strong>, <strong>Repair</strong> and <strong>Repack</strong>, plus an <strong>Ad Hoc Parts</strong> request for one-off part needs. Whatever you request lands in the store&rsquo;s Issue Queue, so there is one consistent &ldquo;what does the store owe right now&rdquo; list. (The Ad Hoc Parts tab shows only for production roles; store roles do not raise ad-hoc requests.)</p>
 
 <div class="glance">
   <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Requesting any run: Fresh, Outsourced, Repair, Repack.</div></div>
@@ -57,4 +57,16 @@ FINISH  (in-house, when a line is free)
 <div class="callout warn">
   <div class="c-title">&#9888; Units must be released by dispatch first</div>
   <p>This is the only place material moves backwards in the factory, so it is tightly controlled. A unit sitting with dispatch (Dispatch In or Allocated) cannot be repacked until a dispatch operator releases it at the new <strong>Repack Release</strong> station. Repack In hard-rejects anything that was not released. Units still on the production side (just out of PKG Out) do not need a release.</p>
+</div>
+
+<h2 class="sec">Ad Hoc Parts</h2>
+<p>A one-off parts request to the store, outside any run, for when the floor runs short. It is not a run (no units are produced); it just pulls parts. Build the request two ways:</p>
+<ul>
+  <li><strong>BOM-based.</strong> Pick a product and a part category; every part in that category is added, then you set quantities.</li>
+  <li><strong>Manual.</strong> Type each part code; the name fills in from the parts master.</li>
+</ul>
+<p>Set line, shift and date, and optionally <strong>link a repair run</strong> so the parts are attributed to it (the repair feedback record). The request lands in the store&rsquo;s Issue Queue like everything else.</p>
+<div class="callout note">
+  <div class="c-title">&#9432; Production only</div>
+  <p>Raising ad hoc parts is a production job, so the Ad Hoc Parts tab appears only for production roles. It moved here from Garage so production asks the store for everything, runs and parts, in one place.</p>
 </div>

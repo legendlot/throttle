@@ -6,6 +6,11 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md` → Versioning).
 
+## [1.2.1] - 2026-06-07
+
+### Changed
+- Added Ad Hoc Parts to the New Run / Request chapter (production-only one-off parts request; moved from Garage).
+
 ## [1.2.0] - 2026-06-07
 
 ### Changed
