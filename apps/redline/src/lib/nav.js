@@ -9,12 +9,14 @@ import {
   ClipboardCheck, AlertTriangle, FileText,
   ArrowLeftRight,
   BookOpen,
+  FilePlus2,
 } from 'lucide-react';
 
 export const NAV_GROUPS = [
   {
     id: 'production', label: 'PRODUCTION', icon: Factory,
     items: [
+      { id: 'new-run',  label: 'New Run / Request', route: '/new-run', icon: FilePlus2 },
       { id: 'exec',     label: 'Dashboard', route: '/exec',     icon: BarChart3 },
       { id: 'planner',     label: 'Planner',     route: '/planner',     icon: CalendarClock },
       { id: 'line-design', label: 'Line Design', route: '/line-design', icon: LayoutGrid },

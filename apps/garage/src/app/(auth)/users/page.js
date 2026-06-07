@@ -16,6 +16,7 @@ const PERM_DEFS = [
   ] },
   { group: 'Production Floor', items: [
     { key: 'production_view', label: 'View Production & Floor Tools', type: 'bool' },
+    { key: 'run_request',     label: 'Request Runs (Redline — Fresh/Outsourced/Repair/Repack)', type: 'bool' },
   ] },
   { group: 'Line Flush', items: [
     { key: 'line_flush_create', label: 'Create Flushes (Production)', type: 'bool' },

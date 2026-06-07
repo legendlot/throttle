@@ -306,8 +306,14 @@ worker/scanner/app land coherently per step.
   Existing per-type create gates (`canScheduleRun`/`canManageFloor`/`canManageRepackRuns`) stay for
   back-compat; the unified Redline surface (Step 2) gates on `run_request`. Add to Garage `/users`
   PERM_DEFS so it's manageable; verify each granted role passes before deploy.
-- **Step 2 — Unified request surface (Redline).** New-Run/Request entry → type-specific forms
-  (Fresh/Outsourced/Repair/Repack); migrate the request origination out of Garage.
+- **Step 2 — Unified request surface (Redline). ✅ DONE 2026-06-07.** New page
+  `apps/redline/(auth)/new-run/page.js` (gated `canRequestRun` = run_request) with tabs
+  Fresh / Outsourced / Repair / Repack → routes to `createProductionRun` (in-house & outsourced+vendor),
+  `createRepairRun` (target-less ok), `createRepackRun` (structured: product/model/colour + from→to + qty).
+  Nav entry added to PRODUCTION group. Worker `createRepairRun`/`createRepackRun` now accept
+  `run_request` alongside their legacy gates (lotopsproxy `ba561c45`). Garage `/users` PERM_DEFS gained
+  `run_request`. Both apps build clean. NOTE: backends still route to existing handlers — the deep
+  per-type enhancements (2 pulls, build/finish split, instrumentation, scanner stations) are Steps 3–5.
 - **Step 3 — Repack** (smallest backend delta atop existing REPACK_IN/OUT): structured request + 2
   pulls (store packaging WO + dispatch release list) + Release-to-Repack scanner station + REPACK_IN
   release-validation + widened stages (+`rtd`) + Repack Out channel default + auto run-linked flush.
