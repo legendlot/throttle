@@ -350,9 +350,25 @@ worker/scanner/app land coherently per step.
   - **REPACK_OUT:** default the channel from `repack_runs.to_channel` (don't trust operator toggle).
   - **Line flush:** on repack run completion (or per REPACK_IN), auto-raise a `line_flushes` row
     `repack_run_id=run.id` for the from-channel primary packaging, qty=repacked; verify splits reusable/damaged.
-- **Step 4 — Outsourced:** build/finish split (read `outsource_bom_split` in `getProductionRun`) +
-  gate-pass send-out + auto dedicated job-work-return shipment + `ext_return` GRN + finish pull +
-  `postExtInw` moved to finish-time.
+- **Step 4 — Outsourced.** ⚠️ HIGHEST-RISK SLICE — a REWORK of a LIVE flow, not a clean layer.
+  **Findings (2026-06-07):**
+  - **Legacy blast radius:** 3 open outsourced runs **EXT-001/002/003** (Shadow, status `Issued`,
+    `sent_out_at` NULL) used the OLD model (full-BOM issue + per-unit `EXT_INW` at receive, RULE-EXT-001).
+    Data plan: leave them on the old path (don't retro-split) — gate new behavior on a per-run marker.
+  - **`getProductionRun` phase split MUST be opt-in:** read `?phase=build|finish`; only filter when phase
+    is explicitly passed AND `run.run_type==='outsourced'`. Load `store.outsource_bom_split` → skip bom rows
+    whose category-phase ≠ requested phase. No phase param ⇒ unchanged (legacy EXT + in-house/FBU/SKD safe).
+    Insertion point verified: after the `fbuSkipCategories` block (~worker 2680), skip inside the
+    `for (const bom of woBom)` loop (~2705).
+  - **Existing UI already present:** Garage `components/production-runs/RunDetailPanel.js` (657 lines) has
+    Send-to-Vendor (`markRunSentOut`), Receive-from-Vendor (`assignOutsourcedLine` + per-unit `EXT_INW`),
+    `ext_summary`. The build/finish two-phase issue + pool-GRN-receive + finish-pull + `postExtInw`→finish
+    REWORK this — and touch `issueAgainstRun` (worker 15367, the stock-issue path).
+  - **Build order when resumed:** (1) opt-in phase split in getProductionRun [safe]; (2) `issueAgainstRun`
+    phase-aware; (3) RunDetailPanel two-phase pick + issue (Build pick → send → receive → Finish pick);
+    (4) receive-model: `receiveExtUnits` count→`ext_return_pool` + finish pull `requestExtFinish` +
+    `postExtInw`→finish-time drain pool; (5) gate-pass send-out (additive, low-risk). Gate new behavior on a
+    per-run marker so EXT-001/002/003 stay on the old path.
 - **Step 5 — Repair:** Repair Start station (inspect folded in, scrap system-free, lineage marker) +
   manual run-linked (+product) ad-hoc request + instrumentation; standard QC/WKS tail unchanged.
 - **Step 6 — Consolidated Issue Queue (Garage):** surface all new rows (repack_pkg, outsourced
