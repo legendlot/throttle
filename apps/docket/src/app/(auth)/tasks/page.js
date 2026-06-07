@@ -97,10 +97,13 @@ export default function TasksPage() {
   useEffect(() => { setNewSpaceOpen(spaceParam === 'new'); }, [spaceParam]);
 
   // `c` → focus Quick Capture (the new-task input), mirroring `/` → focus search.
-  // Suspended while a drawer/modal covers the page so it can't steal focus behind it.
-  useHotkey('c', () => {
+  // preventDefault FIRST, else the same keystroke types "c" into the input we just
+  // focused. Suspended while a drawer/modal covers the page so it can't steal focus.
+  useHotkey('c', (e) => {
     const el = document.querySelector('[data-create-primary]');
-    if (el) { try { el.focus(); el.select?.(); } catch { /* ignore */ } }
+    if (!el) return;
+    e.preventDefault();
+    try { el.focus(); el.select?.(); } catch { /* ignore */ }
   }, { enabled: !drawerId && !newSpaceOpen && !spaceSettingsOpen });
 
   const load = useCallback(async () => {
@@ -507,6 +510,8 @@ function TaskTable({ rows, childrenByParent, saveField, abandonInline, reviseInl
           // Keyboard nav only when the row itself (not an inner field) is focused.
           if (e.target !== e.currentTarget) return;
           if (ed && !isEdit && e.key === 'Enter') { e.preventDefault(); startEdit(t, 'title'); return; }
+          // `s` → add a sub-task to the focused row (parents only; one level deep).
+          if (ed && !isEdit && !isChild && (e.key === 's' || e.key === 'S')) { e.preventDefault(); startAddSub(t); return; }
           if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
             e.preventDefault();
             const list = Array.from(document.querySelectorAll('tr.dk-task-row[tabindex="0"]'));
