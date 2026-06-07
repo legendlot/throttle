@@ -19,11 +19,6 @@ const sel = {
   background: 'var(--surface2)', color: 'var(--t1)', border: '1px solid var(--border)',
   borderRadius: 4, padding: '4px 8px', fontFamily: 'var(--mono)', fontSize: 11,
 };
-const btnSec = {
-  background: 'var(--surface2)', color: 'var(--t2)', border: '1px solid var(--border)',
-  borderRadius: 3, padding: '3px 10px', fontFamily: 'var(--mono)', fontSize: 10,
-  textTransform: 'uppercase', letterSpacing: 0.5, cursor: 'pointer',
-};
 const iconBtn = {
   background: 'var(--surface2)', color: 'var(--t2)', border: '1px solid var(--border)',
   borderRadius: 4, padding: '3px 8px', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer',
@@ -124,6 +119,7 @@ export function RunsTable({
 
   return (
     <div style={panel}>
+      <style>{`.runs-row{cursor:pointer}.runs-row:hover td{background:rgba(255,255,255,.035)}`}</style>
       <div style={panelHdr}>
         <span>Recent Runs</span>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -159,13 +155,12 @@ export function RunsTable({
               <th style={th}>Line</th>
               <th style={th}>Type</th>
               <th style={th}>Status</th>
-              <th style={th} />
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={10} style={{ padding: 24, textAlign: 'center' }}>
+                <td colSpan={9} style={{ padding: 24, textAlign: 'center' }}>
                   <Spinner size="sm" />
                 </td>
               </tr>
@@ -180,7 +175,7 @@ export function RunsTable({
                 if (row._type === 'fresh') {
                   const variantStr = formatVariants(row);
                   return (
-                    <tr key={`f-${row.run_no}`}>
+                    <tr className="runs-row" key={`f-${row.run_no}`} onClick={() => onSelectRun(row)}>
                       <td style={{ ...td, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>
                         {row.run_no}
                       </td>
@@ -227,9 +222,6 @@ export function RunsTable({
                       <td style={{ ...td, fontFamily: 'var(--mono)', color: FRESH_STATUS_COLOR[row.status] || 'var(--t2)' }}>
                         {row.status || '—'}
                       </td>
-                      <td style={td}>
-                        <button style={btnSec} onClick={() => onSelectRun(row)}>View</button>
-                      </td>
                     </tr>
                   );
                 }
@@ -240,7 +232,7 @@ export function RunsTable({
                   : `${counts.in_repair ?? 0} in repair · ${counts.repaired ?? 0} done · ${counts.scrapped ?? 0} scrapped`;
                 const repairStatus = (row.status || '').toLowerCase();
                 return (
-                  <tr key={`r-${row.id || row.run_no}`}>
+                  <tr className="runs-row" key={`r-${row.id || row.run_no}`} onClick={() => onSelectRepairRun(row)}>
                     <td style={{ ...td, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>
                       {row.run_no}
                       <span
@@ -275,9 +267,6 @@ export function RunsTable({
                       }}
                     >
                       {(row.status || '').toUpperCase() || '—'}
-                    </td>
-                    <td style={td}>
-                      <button style={btnSec} onClick={() => onSelectRepairRun(row)}>View</button>
                     </td>
                   </tr>
                 );
