@@ -1,6 +1,5 @@
 'use client';
 import { Fragment, useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast, printWindow, Modal } from '@throttle/ui';
@@ -78,7 +77,6 @@ function pickSortKey(p, materialCache) {
 export default function IssueQueuePage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
-  const router = useRouter();
 
   const [queue, setQueue] = useState([]);
   const [history, setHistory] = useState([]);
@@ -104,6 +102,10 @@ export default function IssueQueuePage() {
   const [voidModal, setVoidModal]             = useState(null); // line being voided, or null
   const [voidReason, setVoidReason]           = useState('');
   const [voidSubmitting, setVoidSubmitting]   = useState(false);
+  // Outsourced vendor round-trip — store steps folded into the queue (run-request consolidation)
+  const [vendorRuns, setVendorRuns] = useState({ issued: [], progress: [] });
+  const [vendorBusy, setVendorBusy] = useState(null);
+  const [rcvQty, setRcvQty]         = useState({});
 
   // Refs to read uncontrolled inputs at submit time
   const detailFormRef = useRef(null);
@@ -145,12 +147,17 @@ export default function IssueQueuePage() {
     try {
       await ensureMaterialCache();
       // FEAT-020: getProductionRuns uses status=eq.X (no IN-list support), so call twice and merge.
-      const [submittedRuns, pickingRuns, wos] = await Promise.all([
+      const [submittedRuns, pickingRuns, wos, extIssued, extProgress] = await Promise.all([
         garageFetch('getProductionRuns', { status: 'Submitted' }, session),
         garageFetch('getProductionRuns', { status: 'Picking' }, session),
         garageFetch('getWorkOrders', {}, session),
+        garageFetch('getProductionRuns', { run_type: 'outsourced', status: 'Issued' }, session),
+        garageFetch('getProductionRuns', { run_type: 'outsourced', status: 'In Progress' }, session),
       ]);
       const runs = [ ...(submittedRuns || []), ...(pickingRuns || []) ];
+      const extIssuedRuns   = Array.isArray(extIssued)   ? extIssued   : [];
+      const extProgressRuns = Array.isArray(extProgress) ? extProgress : [];
+      setVendorRuns({ issued: extIssuedRuns, progress: extProgressRuns });
       const rows = [];
       (runs || []).forEach((run) => {
         const isOutsourced = run.run_type === 'outsourced';
@@ -212,6 +219,24 @@ export default function IssueQueuePage() {
           receipt_id: wo.receipt_id || null,
           raw: wo,
         });
+      });
+      // FINISH pulls — production-requested finish phase of a two-phase (ext_v2) outsourced run.
+      // Issued like any pick (CONFIRM ISSUE → issueAgainstRun phase=finish); the worker clears the
+      // marker on issue so it drops off the queue.
+      extProgressRuns.forEach((run) => {
+        if (run.ext_v2 === true && run.finish_requested_at) {
+          rows.push({
+            type: 'run', finishPhase: true,
+            ref: run.run_no, badge: 'FINISH', badgeTone: 'amber',
+            run_type: 'outsourced', run_status: run.status,
+            product: run.product,
+            details: `Finish parts — ${run.vendor?.vendor_name || 'vendor'} build returning`,
+            units: run.total_units || 0,
+            run_date: run.run_date, submitted: run.finish_requested_at,
+            line_no: run.line_no || '—',
+            raw: run,
+          });
+        }
       });
       setQueue(rows);
     } catch (e) {
@@ -281,7 +306,8 @@ export default function IssueQueuePage() {
     setDetailLoading(true);
     try {
       if (row.type === 'run') {
-        const data = await garageFetch('getProductionRun', { run_no: row.ref }, session);
+        const data = await garageFetch('getProductionRun',
+          row.finishPhase ? { run_no: row.ref, phase: 'finish' } : { run_no: row.ref }, session);
         setSelectedItem({
           ...row,
           run: data.run,
@@ -421,7 +447,9 @@ export default function IssueQueuePage() {
       let res;
       if (selectedItem.type === 'run') {
         res = await workerFetch('issueAgainstRun', {
-          data: { run_no: selectedItem.ref, lines, fbu_lines: fbuLines },
+          data: selectedItem.finishPhase
+            ? { run_no: selectedItem.ref, phase: 'finish', lines, fbu_lines: fbuLines }
+            : { run_no: selectedItem.ref, lines, fbu_lines: fbuLines },
         }, session);
       } else if (selectedItem.type === 'short-issue') {
         res = await workerFetch('postShortIssue', {
@@ -508,6 +536,32 @@ export default function IssueQueuePage() {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  // Outsourced vendor round-trip — store steps (build issued → send to vendor → receive built units).
+  async function handleSendToVendor(run) {
+    if (!window.confirm(`Send ${run.run_no} to ${run.vendor?.vendor_name || 'the vendor'}? The issued build materials are handed off and the run moves to In Progress.`)) return;
+    setVendorBusy(run.run_no);
+    try {
+      await workerFetch('markRunSentOut', { data: { run_no: run.run_no } }, session);
+      showToast(`${run.run_no} sent to vendor`, 'success');
+      loadQueue();
+    } catch (e) {
+      showToast(e.message || 'Send to vendor failed', 'error');
+    } finally { setVendorBusy(null); }
+  }
+  async function handleReceiveUnits(run) {
+    const qty = parseInt(rcvQty[run.run_no], 10);
+    if (!qty || qty < 1) { showToast('Enter a quantity to receive', 'error'); return; }
+    setVendorBusy(run.run_no);
+    try {
+      await workerFetch('receiveExtUnits', { data: { run_no: run.run_no, qty } }, session);
+      showToast(`Received ${qty} built ${run.product} into the pool`, 'success');
+      setRcvQty((m) => ({ ...m, [run.run_no]: '' }));
+      loadQueue();
+    } catch (e) {
+      showToast(e.message || 'Receive failed', 'error');
+    } finally { setVendorBusy(null); }
   }
 
   async function handleVoidLine() {
@@ -891,6 +945,70 @@ export default function IssueQueuePage() {
         </div>
       </div>
 
+      {/* OUTSOURCED — VENDOR STEPS (store side of the EXT round-trip) */}
+      {(vendorRuns.issued.length > 0 || vendorRuns.progress.length > 0) && (
+        <div style={panelStyle}>
+          <div style={panelHeaderStyle}>
+            <span>Outsourced — Vendor Steps {(vendorRuns.issued.length + vendorRuns.progress.length) > 0 && <span style={{ color: 'var(--t3)', marginLeft: 6, fontSize: 11 }}>({vendorRuns.issued.length + vendorRuns.progress.length})</span>}</span>
+            <button style={btnSecondary} onClick={loadQueue} disabled={loading}>↻ Refresh</button>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th style={tableThStyle}>Run</th>
+                  <th style={tableThStyle}>Vendor</th>
+                  <th style={tableThStyle}>Product</th>
+                  <th style={tableThStyle}>Stage</th>
+                  <th style={{ ...tableThStyle, textAlign: 'right' }}>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {vendorRuns.issued.map((run) => (
+                  <tr key={run.run_no}>
+                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{run.run_no}</td>
+                    <td style={tableTdStyle}>{run.vendor?.vendor_name || '—'}</td>
+                    <td style={tableTdStyle}>{run.product}</td>
+                    <td style={tableTdStyle}><StatusBadge label="Build issued" tone="blue" /></td>
+                    <td style={{ ...tableTdStyle, textAlign: 'right' }}>
+                      <button style={btnPrimary} disabled={vendorBusy === run.run_no} onClick={() => handleSendToVendor(run)}>
+                        {vendorBusy === run.run_no ? '…' : '→ Send to Vendor'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {vendorRuns.progress.map((run) => (
+                  <tr key={run.run_no}>
+                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{run.run_no}</td>
+                    <td style={tableTdStyle}>{run.vendor?.vendor_name || '—'}</td>
+                    <td style={tableTdStyle}>{run.product}</td>
+                    <td style={tableTdStyle}><StatusBadge label={run.finish_requested_at ? 'Finish requested' : 'At vendor'} tone="amber" /></td>
+                    <td style={{ ...tableTdStyle, textAlign: 'right' }}>
+                      {run.ext_v2 ? (
+                        <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', justifyContent: 'flex-end' }}>
+                          <input
+                            type="number" min="1" placeholder="qty"
+                            value={rcvQty[run.run_no] || ''}
+                            onChange={(e) => setRcvQty((m) => ({ ...m, [run.run_no]: e.target.value }))}
+                            style={{ ...inputStyle, width: 70, fontFamily: 'var(--mono)' }}
+                          />
+                          <button style={btnSecondary} disabled={vendorBusy === run.run_no} onClick={() => handleReceiveUnits(run)}>
+                            {vendorBusy === run.run_no ? '…' : '+ Receive units'}
+                          </button>
+                        </span>
+                      ) : <span style={{ fontSize: 11, color: 'var(--t3)' }}>Scan returns at Ext Inwarding</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ padding: '8px 14px', fontSize: 11, color: 'var(--t3)' }}>
+            Send the issued build materials to the vendor, then count returned built units into the pool (instalments OK). Production requests the finish parts — they appear above as a <strong style={{ color: 'var(--yellow)' }}>FINISH</strong> request; issue those, then units are stickered at Ext Inwarding.
+          </div>
+        </div>
+      )}
+
       {/* ISSUED SUCCESS OVERLAY */}
       {issuedState && (
         <div style={{
@@ -970,7 +1088,7 @@ export default function IssueQueuePage() {
             {!detailLoading && (
               <div style={{ marginTop: 12, display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
                 <div style={{ display: 'flex', gap: 6 }}>
-                  {selectedItem.type === 'run' && (
+                  {selectedItem.type === 'run' && !selectedItem.finishPhase && (
                     <button style={btnDanger} onClick={() => setRejectModalOpen(true)} disabled={submitting}>REJECT</button>
                   )}
                   {selectedItem.type === 'wo' && selectedItem.wo?.wo_type !== 'Short Supply' && (
@@ -1095,15 +1213,9 @@ export default function IssueQueuePage() {
                     </td>
                     <td style={tableTdStyle}><StatusBadge label={h.issue_type || '—'} tone={issueTypeTone(h.issue_type)} /></td>
                     <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontSize: 11 }}>
-                      {h.run_no ? (
-                        <span
-                          onClick={() => router.push(`/production-runs?run=${encodeURIComponent(h.run_no)}`)}
-                          title={`View run ${h.run_no}`}
-                          style={{ color: 'var(--yellow)', cursor: 'pointer', textDecoration: 'underline dotted' }}
-                        >
-                          {h.run_no}
-                        </span>
-                      ) : <span style={{ color: 'var(--t3)' }}>—</span>}
+                      {h.run_no
+                        ? <span style={{ color: 'var(--yellow)' }}>{h.run_no}</span>
+                        : <span style={{ color: 'var(--t3)' }}>—</span>}
                     </td>
                     <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontSize: 11 }}>{h.wo_no || '—'}</td>
                     <td style={tableTdStyle}>{h.product || '—'}</td>

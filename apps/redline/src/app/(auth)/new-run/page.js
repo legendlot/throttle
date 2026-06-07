@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth, hasPermission } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { EmptyState, Panel, Combobox, useToast } from '@throttle/ui';
+import { RecentRuns } from '../../../components/production-runs/RecentRuns.js';
 
 // Unified run-request surface (run-request consolidation, 2026-06-07).
 // One place for production to request ANY run: Fresh · Outsourced · Repair · Repack.
@@ -59,15 +60,18 @@ export default function NewRunPage() {
   }
 
   return (
-    <div style={{ padding: 16, maxWidth: 760 }}>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-        {tabs.map(t => <button key={t.id} style={tabBtn(tab === t.id)} onClick={() => setTab(t.id)}>{t.label}</button>)}
+    <div style={{ padding: 16 }}>
+      <div style={{ maxWidth: 760 }}>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+          {tabs.map(t => <button key={t.id} style={tabBtn(tab === t.id)} onClick={() => setTab(t.id)}>{t.label}</button>)}
+        </div>
+        {tab === 'fresh'      && <ProductionForm key="fresh" runType="in-house" cat={cat} products={products} session={session} toast={toast} busy={busy} setBusy={setBusy} router={router} />}
+        {tab === 'outsourced' && <ProductionForm key="ext" runType="outsourced" cat={cat} products={products} vendors={vendors} session={session} toast={toast} busy={busy} setBusy={setBusy} router={router} />}
+        {tab === 'repair'     && <RepairForm cat={cat} products={products} session={session} toast={toast} busy={busy} setBusy={setBusy} router={router} />}
+        {tab === 'repack'     && <RepackForm cat={cat} products={products} session={session} toast={toast} busy={busy} setBusy={setBusy} router={router} />}
+        {tab === 'adhoc' && showAdhoc && <AdHocPartsForm products={products} session={session} toast={toast} busy={busy} setBusy={setBusy} />}
       </div>
-      {tab === 'fresh'      && <ProductionForm key="fresh" runType="in-house" cat={cat} products={products} session={session} toast={toast} busy={busy} setBusy={setBusy} router={router} />}
-      {tab === 'outsourced' && <ProductionForm key="ext" runType="outsourced" cat={cat} products={products} vendors={vendors} session={session} toast={toast} busy={busy} setBusy={setBusy} router={router} />}
-      {tab === 'repair'     && <RepairForm cat={cat} products={products} session={session} toast={toast} busy={busy} setBusy={setBusy} router={router} />}
-      {tab === 'repack'     && <RepackForm cat={cat} products={products} session={session} toast={toast} busy={busy} setBusy={setBusy} router={router} />}
-      {tab === 'adhoc' && showAdhoc && <AdHocPartsForm products={products} session={session} toast={toast} busy={busy} setBusy={setBusy} />}
+      <RecentRuns session={session} perms={perms} />
     </div>
   );
 }

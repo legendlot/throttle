@@ -1,9 +1,8 @@
 'use client';
 import { Fragment, useEffect, useState } from 'react';
-import { ConfirmModal, EmptyState, Modal, Spinner, useToast } from '@throttle/ui';
+import { ConfirmModal, EmptyState, Spinner, useToast } from '@throttle/ui';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { ReceiptPanel } from './ReceiptPanel.js';
-import { RejectRunModal } from './RejectRunModal.js';
 
 // Picklist category/type ordering — must match issue-queue/page.js (PICK_CAT_ORDER / PICK_TYPE_ORDER)
 const PICK_CAT_ORDER  = ['Car', 'Remote', 'Accessories', 'Packaging', 'Para', 'Batteries', 'License'];
@@ -94,21 +93,10 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
 
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelling, setCancelling] = useState(false);
-  const [rejectOpen, setRejectOpen] = useState(false);
   const [completing, setCompleting] = useState(false);
   const [receiptPanelMode, setReceiptPanelMode] = useState(null);
-  // FEAT-016 Phase 2 — outsourced controls
-  const [sendingOut, setSendingOut] = useState(false);
-  const [returnLineSelect, setReturnLineSelect] = useState('L1');
-  const [assigningLine, setAssigningLine] = useState(false);
-  // Step 4 — two-phase outsourced (ext_v2) controls
-  const [extRcvQty, setExtRcvQty] = useState('');
-  const [extBusy, setExtBusy] = useState(false);
-
-  const [forceResolveOpen, setForceResolveOpen] = useState(false);
-  const [forceResolveReason, setForceResolveReason] = useState('');
-  const [forceResolveError, setForceResolveError] = useState(null);
-  const [forceResolveSubmitting, setForceResolveSubmitting] = useState(false);
+  // Production-requested FINISH pull for two-phase outsourced (ext_v2) runs.
+  const [requestingFinish, setRequestingFinish] = useState(false);
 
   async function load() {
     if (!runNo || !session) return;
@@ -162,14 +150,15 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
 
   const showCancel = ['Draft', 'Submitted'].includes(run.status);
   const showConfirmReceipt = run.status === 'Issued' && !receipt;
-  const showReject = run.status === 'Issued' && !receipt;
   const showReappeal = receipt && receipt.status === 'Contested';
-  const showForceResolve = receipt && receipt.status === 'Locked' && !!perms?.procurement_approve;
   const showMarkComplete = ['Issued', 'In Progress'].includes(run.status);
-  // FEAT-016 Phase 2 — outsourced flow
+  // Outsourced (ext_v2) two-phase: production requests the FINISH phase once the vendor
+  // returns units. Greyed until the store has inwarded units into the pool (returned_qty > 0).
   const isOutsourced = run.run_type === 'outsourced';
-  const showMarkSentOut = isOutsourced && run.status === 'Issued';
-  const showAssignReturnLine = isOutsourced && run.status === 'In Progress' && !run.line_no;
+  const extReturned = run.ext_summary ? (Number(run.ext_summary.returned_qty) || 0) : 0;
+  const showRequestFinish = isOutsourced && run.ext_v2 === true && run.status === 'In Progress';
+  const finishAlreadyRequested = !!run.finish_requested_at;
+  const finishEnabled = extReturned > 0 && !finishAlreadyRequested;
 
   const totalUnits = pickList.reduce((s, p) => s + (Number(p.total_qty) || 0), 0);
   const shortCount = pickList.filter((p) => (Number(p.shortfall) || 0) > 0).length;
@@ -228,85 +217,17 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
     }
   }
 
-  async function handleMarkSentOut() {
-    if (!window.confirm(`Send ${run.run_no} to vendor? The issued materials are handed off; the run moves to In Progress and waits for the built units to be returned.`)) return;
-    setSendingOut(true);
+  async function handleRequestFinish() {
+    if (!window.confirm(`Request finish parts for ${run.run_no}? This raises a FINISH pull in the store's Issue Queue; the store issues the finish parts, then you sticker the built units at Ext Inwarding.`)) return;
+    setRequestingFinish(true);
     try {
-      await workerFetch('markRunSentOut', { data: { run_no: run.run_no } }, session);
-      showToast(`Run ${run.run_no} sent to vendor`, 'success');
+      await workerFetch('requestExtFinish', { data: { run_no: run.run_no } }, session);
+      showToast(`Finish requested for ${run.run_no} — the store will issue the finish parts`, 'success');
       onRunChange(run.run_no);
     } catch (e) {
-      showToast(e.message || 'Mark sent out failed', 'error');
+      showToast(e.message || 'Request finish failed', 'error');
     } finally {
-      setSendingOut(false);
-    }
-  }
-
-  async function handleAssignLine() {
-    if (!returnLineSelect) return;
-    setAssigningLine(true);
-    try {
-      await workerFetch('assignOutsourcedLine',
-        { data: { run_no: run.run_no, line_no: returnLineSelect } }, session);
-      showToast(`Return line set to ${returnLineSelect}`, 'success');
-      onRunChange(run.run_no);
-    } catch (e) {
-      showToast(e.message || 'Assign line failed', 'error');
-    } finally {
-      setAssigningLine(false);
-    }
-  }
-
-  async function handleReceiveExt() {
-    const qty = parseInt(extRcvQty, 10);
-    if (!qty || qty < 1) { showToast('Enter a quantity to receive', 'error'); return; }
-    setExtBusy(true);
-    try {
-      await workerFetch('receiveExtUnits', { data: { run_no: run.run_no, qty } }, session);
-      showToast(`Received ${qty} built ${run.product} into the return pool`, 'success');
-      setExtRcvQty('');
-      onRunChange(run.run_no);
-    } catch (e) {
-      showToast(e.message || 'Receive failed', 'error');
-    } finally { setExtBusy(false); }
-  }
-
-  async function handleIssueFinish() {
-    setExtBusy(true);
-    try {
-      const finishRun = await garageFetch('getProductionRun', { run_no: run.run_no, phase: 'finish' }, session);
-      const lines = (finishRun?.pick_list || []).map((p) => ({
-        part_code: p.part_code, part_name: p.part_name, actual_issued: p.total_qty,
-      }));
-      if (!lines.length) { showToast('No finish-BOM parts to issue', 'info'); setExtBusy(false); return; }
-      await workerFetch('issueAgainstRun', { data: { run_no: run.run_no, phase: 'finish', lines } }, session);
-      showToast(`Finish parts issued for ${run.run_no} — sticker the built units at Ext Inwarding`, 'success');
-      onRunChange(run.run_no);
-    } catch (e) {
-      showToast(e.message || 'Issue finish failed', 'error');
-    } finally { setExtBusy(false); }
-  }
-
-  async function handleForceResolve() {
-    if (!forceResolveReason.trim()) {
-      setForceResolveError('Reason is required');
-      return;
-    }
-    setForceResolveSubmitting(true);
-    setForceResolveError(null);
-    try {
-      await workerFetch(
-        'forceResolveReceipt',
-        { data: { receipt_id: receipt.receipt_id, reason: forceResolveReason.trim() } },
-        session,
-      );
-      showToast('Receipt force-resolved', 'success');
-      setForceResolveOpen(false);
-      setForceResolveReason('');
-      onRunChange(run.run_no);
-    } catch (e) {
-      setForceResolveError(e.message || 'Force resolve failed');
-      setForceResolveSubmitting(false);
+      setRequestingFinish(false);
     }
   }
 
@@ -327,41 +248,21 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
           {showCancel && (
             <button style={btnSec} onClick={() => setCancelOpen(true)}>Cancel Run</button>
           )}
-          {showReject && (
-            <button style={btnSec} onClick={() => setRejectOpen(true)}>Reject Run</button>
-          )}
           {showConfirmReceipt && (
             <button style={btnPri} onClick={() => setReceiptPanelMode('confirm')}>Confirm Receipt</button>
           )}
           {showReappeal && (
             <button style={btnSec} onClick={() => setReceiptPanelMode('reappeal')}>Re-Appeal</button>
           )}
-          {showForceResolve && (
-            <button style={btnDanger} onClick={() => setForceResolveOpen(true)}>Force Resolve</button>
-          )}
-          {showMarkSentOut && (
-            <button style={btnPri} disabled={sendingOut} onClick={handleMarkSentOut}>
-              {sendingOut ? 'SENDING…' : '→ Send to Vendor'}
+          {showRequestFinish && (
+            <button
+              style={{ ...btnPri, opacity: finishEnabled ? 1 : 0.5, cursor: finishEnabled ? 'pointer' : 'not-allowed' }}
+              disabled={!finishEnabled || requestingFinish}
+              title={finishAlreadyRequested ? 'Finish already requested — the store is issuing the finish parts' : (finishEnabled ? '' : 'Unlocks once the store inwards built units')}
+              onClick={handleRequestFinish}
+            >
+              {requestingFinish ? 'REQUESTING…' : finishAlreadyRequested ? 'Finish Requested ✓' : 'Request Finish'}
             </button>
-          )}
-          {showAssignReturnLine && (
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-              <span style={{ fontSize: 11, color: 'var(--t3)' }}>Receive returns on</span>
-              <select
-                value={returnLineSelect}
-                onChange={(e) => setReturnLineSelect(e.target.value)}
-                style={{
-                  padding: '4px 8px', fontSize: 12,
-                  background: 'var(--surface2)', color: 'var(--text)',
-                  border: '1px solid var(--border)', borderRadius: 4,
-                }}
-              >
-                {['L1','L2','L3','L4','L5'].map(L => <option key={L} value={L}>{L}</option>)}
-              </select>
-              <button style={btnPri} disabled={assigningLine} onClick={handleAssignLine}>
-                {assigningLine ? 'ASSIGNING…' : '← Receive from Vendor'}
-              </button>
-            </div>
           )}
           {showMarkComplete && (
             <button style={btnPri} disabled={completing} onClick={handleMarkComplete}>
@@ -422,31 +323,15 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
             {run.status === 'Issued' && (
               <div style={{ fontSize: 11, color: 'var(--t3)', marginTop: 6 }}>
                 {run.ext_v2
-                  ? <>Build materials (car/remote/fastener) are issued. Hand them to the vendor, then <strong>Send to Vendor</strong>. Finish parts (packaging/accessories) are issued later, when the units come back.</>
-                  : <>Materials are issued. Hand them to the vendor, then click <strong>Send to Vendor</strong>. When the built units come back, use <strong>Receive from Vendor</strong> to assign a line and scan each unit (Ext Inwarding station).</>}
+                  ? <>Build materials (car/remote/fastener) are issued. The store hands them to the vendor and marks the run sent out — then it shows here as <strong>Upcoming</strong>.</>
+                  : <>Materials are issued. The store hands them to the vendor and receives the built units back at Ext Inwarding.</>}
               </div>
             )}
-            {/* Step 4 — two-phase (ext_v2) receive + finish controls */}
             {run.ext_v2 && run.status === 'In Progress' && (
-              <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px dashed rgba(245,158,11,.3)', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
-                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ fontSize: 11, color: 'var(--t3)' }}>Receive built units (count)</span>
-                  <input
-                    type="number" min="1" value={extRcvQty}
-                    onChange={(e) => setExtRcvQty(e.target.value)}
-                    placeholder="qty" disabled={extBusy}
-                    style={{ width: 80, padding: '4px 8px', fontSize: 12, fontFamily: 'var(--mono)', background: 'var(--surface2)', color: 'var(--t1)', border: '1px solid var(--border)', borderRadius: 4 }}
-                  />
-                  <button style={btnSec} disabled={extBusy} onClick={handleReceiveExt}>
-                    {extBusy ? '…' : '+ Into pool'}
-                  </button>
-                </div>
-                <button style={btnPri} disabled={extBusy} onClick={handleIssueFinish}>
-                  {extBusy ? 'WORKING…' : 'Issue Finish Parts'}
-                </button>
-                <span style={{ fontSize: 11, color: 'var(--t3)' }}>
-                  Count returns into the pool (installments OK), then issue finish parts + sticker each unit at Ext Inwarding.
-                </span>
+              <div style={{ fontSize: 11, color: 'var(--t3)', marginTop: 8, paddingTop: 8, borderTop: '1px dashed rgba(245,158,11,.3)' }}>
+                {extReturned > 0
+                  ? <>The store has inwarded <strong style={{ color: 'var(--t1)' }}>{extReturned}</strong> built unit{extReturned === 1 ? '' : 's'} — use <strong>Request Finish</strong> above to pull the finish parts.</>
+                  : <>Waiting for the store to receive built units from the vendor. <strong>Request Finish</strong> unlocks once units are inwarded.</>}
               </div>
             )}
           </div>
@@ -665,51 +550,6 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
         onConfirm={handleCancel}
         loading={cancelling}
       />
-
-      <RejectRunModal
-        open={rejectOpen}
-        runNo={run.run_no}
-        session={session}
-        onClose={() => setRejectOpen(false)}
-        onSuccess={() => {
-          setRejectOpen(false);
-          onRunChange(run.run_no);
-        }}
-      />
-
-      <Modal
-        open={forceResolveOpen}
-        onClose={() => !forceResolveSubmitting && setForceResolveOpen(false)}
-        title={`Force Resolve — ${receipt?.receipt_id || ''}`}
-        confirmLabel={forceResolveSubmitting ? 'RESOLVING…' : 'Force Resolve'}
-        confirmColor="red"
-        onConfirm={handleForceResolve}
-        loading={forceResolveSubmitting}
-        error={forceResolveError}
-      >
-        <div>
-          <label
-            style={{
-              display: 'block', fontFamily: 'var(--mono)', fontSize: 10,
-              color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6,
-            }}
-          >
-            Reason *
-          </label>
-          <textarea
-            value={forceResolveReason}
-            onChange={(e) => setForceResolveReason(e.target.value)}
-            rows={4}
-            placeholder="Why is this receipt being force-resolved?"
-            style={{
-              width: '100%', background: 'var(--surface)', color: 'var(--t1)',
-              border: '1px solid var(--border)', borderRadius: 4, padding: '8px 10px',
-              fontFamily: 'var(--mono)', fontSize: 12, resize: 'vertical',
-            }}
-            disabled={forceResolveSubmitting}
-          />
-        </div>
-      </Modal>
     </div>
   );
 }

@@ -2,14 +2,13 @@ import { hasPermission } from '@throttle/auth';
 import {
   LayoutDashboard, Activity, BarChart3, Target,
   Boxes, Inbox, PackageOpen,
-  Cog, ClipboardList, Workflow,
   ListChecks, CheckSquare, History, UserCog,
   Undo2,
   BookOpen, Download, Wrench, Scale, Route,
   RefreshCw,
   ShoppingCart, FileText,
   Users,
-  Package, Factory, Store,
+  Package, Store,
   Send,
   Bell,
   AlertTriangle,
@@ -17,8 +16,10 @@ import {
   Gift, Truck,
 } from 'lucide-react';
 
-// Mirrors legacy 04_stores/index.html nav structure (lines 1018–1080):
-// OVERVIEW · INVENTORY · PRODUCTION · STORE · RETURNS · LIBRARY · PROCUREMENT · USERS
+// Garage = store / fulfilment. Production-owned screens (Production Runs, Ad Hoc Requests,
+// Line Flush, Process Deviations) moved to Redline (run-request consolidation, 2026-06-08);
+// the store services runs via the Issue Queue. Groups:
+// OVERVIEW · INVENTORY · STORE · RETURNS · LIBRARY · PROCUREMENT · USERS
 
 const GROUPS = [
   {
@@ -37,13 +38,6 @@ const GROUPS = [
       { id: 'stock',     label: 'Stock Ledger', route: '/stock',     icon: Boxes,       gate: (p) => hasPermission(p, 'stock') },
       { id: 'grn',       label: 'GRN Entry',    route: '/grn',       icon: Inbox,       gate: (p) => hasPermission(p, 'grn') },
       { id: 'receiving', label: 'Receiving',    route: '/receiving', icon: PackageOpen, gate: (p) => hasPermission(p, 'receiving') },
-    ],
-  },
-  {
-    id: 'production', label: 'PRODUCTION', icon: Factory,
-    items: [
-      { id: 'production-runs',    label: 'Production Runs',    route: '/production-runs',    icon: Cog },
-      { id: 'work-orders',        label: 'Ad Hoc Requests',    route: '/work-orders',        icon: ClipboardList, gate: (p) => hasPermission(p, 'work_order') },
     ],
   },
   {
