@@ -350,7 +350,16 @@ worker/scanner/app land coherently per step.
   - **REPACK_OUT:** default the channel from `repack_runs.to_channel` (don't trust operator toggle).
   - **Line flush:** on repack run completion (or per REPACK_IN), auto-raise a `line_flushes` row
     `repack_run_id=run.id` for the from-channel primary packaging, qty=repacked; verify splits reusable/damaged.
-- **Step 4 — Outsourced.** ⚠️ HIGHEST-RISK SLICE — a REWORK of a LIVE flow, not a clean layer.
+- **Step 4 — Outsourced. ✅ DONE + LIVE 2026-06-07** (lotopsproxy `65f712b5`; garage pushed). Two-phase
+  build/finish model gated on `production_runs.ext_v2`: getProductionRun defaults ext_v2 outsourced runs
+  to the BUILD pick (car/remote/fastener via `outsource_bom_split`) so the existing Issue Queue auto-issues
+  build-only — no shared-page rework; `?phase=finish` gives the finish pick. `issueAgainstRun` allows the
+  finish issue on an In-Progress ext_v2 run. NEW `receiveExtUnits` counts returns into `ext_return_pool`
+  (installments OK); `postExtInw` drains the pool at finish-time stickering (best-effort). RunDetailPanel
+  gained Receive-into-pool + Issue-Finish-Parts controls for ext_v2 runs. **Legacy EXT-001/002/003
+  (ext_v2=false) verified untouched — old full-BOM + per-unit-EXT_INW path.** Gate-pass send-out =
+  optional fast-follow (additive, not built). · ORIGINAL FINDINGS BELOW (kept for history):
+  ⚠️ HIGHEST-RISK SLICE — a REWORK of a LIVE flow, not a clean layer.
   **Findings (2026-06-07):**
   - **Legacy blast radius:** 3 open outsourced runs **EXT-001/002/003** (Shadow, status `Issued`,
     `sent_out_at` NULL) used the OLD model (full-BOM issue + per-unit `EXT_INW` at receive, RULE-EXT-001).
@@ -384,7 +393,10 @@ worker/scanner/app land coherently per step.
   (open runs via `getRepairRunsDash`); `getRepairRunDetail` now returns `adhoc_wos` + aggregated
   `parts_consumed`. Standalone form path done; a "Request parts" button on the repair-run detail
   (auto-linked) is an optional fast-follow.
-- **Step 6 — Consolidated Issue Queue (Garage):** surface all new rows (repack_pkg, outsourced
+- **Step 6 — Consolidated Issue Queue. ✅ DONE (across steps).** Every pull type now surfaces in the one
+  Garage Issue Queue: `repack_pkg` (Step 3, badge), repair ad-hoc `Parts Request` (run-linked, Step 5),
+  UDR (S109), outsourced build WOs auto-issue build-only (Step 4). No separate work needed.
+- (orig) **Step 6 — Consolidated Issue Queue (Garage):** surface all new rows (repack_pkg, outsourced
   build/finish, ad-hoc run-linked) as one bounded list.
 - **Step 7 — Manuals fold** (Garage/Redline/scanner) per S105 in-system upkeep + the inventory-flow
   diagram format for each flow.
