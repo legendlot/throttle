@@ -375,8 +375,15 @@ worker/scanner/app land coherently per step.
     (4) receive-model: `receiveExtUnits` count→`ext_return_pool` + finish pull `requestExtFinish` +
     `postExtInw`→finish-time drain pool; (5) gate-pass send-out (additive, low-risk). Gate new behavior on a
     per-run marker so EXT-001/002/003 stay on the old path.
-- **Step 5 — Repair:** Repair Start station (inspect folded in, scrap system-free, lineage marker) +
-  manual run-linked (+product) ad-hoc request + instrumentation; standard QC/WKS tail unchanged.
+- **Step 5 — Repair. ✅ DONE + LIVE 2026-06-07** (lotopsproxy `7dda7808`; garage pushed).
+  Repair Start lineage station (REP_START), target-less runs (createRepairRun accepts no lines), scrap
+  (REP_SCRAP/system-free pile), and the standard QC/WKS tail ALREADY existed (S104/S108) — so this step
+  closed the consolidation gap: **ad-hoc parts now attribute to a repair run + product** (the buy-extra /
+  future-repair-BOM feedback dataset). `store.work_orders.repair_run_id` (uuid, additive); `postWorkOrder`
+  carries `repair_run_id` (+product); Garage `WorkOrderForm` gained an optional **Repair Run** picker
+  (open runs via `getRepairRunsDash`); `getRepairRunDetail` now returns `adhoc_wos` + aggregated
+  `parts_consumed`. Standalone form path done; a "Request parts" button on the repair-run detail
+  (auto-linked) is an optional fast-follow.
 - **Step 6 — Consolidated Issue Queue (Garage):** surface all new rows (repack_pkg, outsourced
   build/finish, ad-hoc run-linked) as one bounded list.
 - **Step 7 — Manuals fold** (Garage/Redline/scanner) per S105 in-system upkeep + the inventory-flow

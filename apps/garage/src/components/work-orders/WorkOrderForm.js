@@ -71,6 +71,17 @@ export function WorkOrderForm({ onSuccess, session }) {
   const [errors, setErrors] = useState({});
   const [matCache, setMatCache] = useState(null);
   const [matLoading, setMatLoading] = useState(false);
+  // Run-request consolidation (Step 5): optionally attribute this ad-hoc request to a
+  // repair run (REP-NNN) — builds the parts-per-product feedback dataset.
+  const [repairRuns, setRepairRuns] = useState([]);
+  const [repairRunId, setRepairRunId] = useState('');
+
+  useEffect(() => {
+    if (!session) return;
+    garageFetch('getRepairRunsDash', { status: 'planned,active' }, session)
+      .then((rows) => setRepairRuns(Array.isArray(rows) ? rows : []))
+      .catch(() => {});
+  }, [session]);
 
   // When switching modes: clear partLines and BOM-side selections to avoid stale state.
   useEffect(() => {
@@ -201,7 +212,12 @@ export function WorkOrderForm({ onSuccess, session }) {
     try {
       const res = await workerFetch(
         'postWorkOrder',
-        { data: { wo_type: 'Parts Request', line_no: line, shift, date, parts } },
+        { data: {
+          wo_type: 'Parts Request', line_no: line, shift, date, parts,
+          // Attribute to a repair run + carry product for the feedback dataset.
+          repair_run_id: repairRunId || null,
+          product: mode === 'bom' ? (bomProduct || null) : null,
+        } },
         session,
       );
       const woNo = res?.data?.wo_no || '?';
@@ -209,6 +225,7 @@ export function WorkOrderForm({ onSuccess, session }) {
       setPartLines([]);
       setBomProduct('');
       setBomCategory('');
+      setRepairRunId('');
       setErrors({});
       onSuccess();
     } catch (e) {
@@ -384,6 +401,17 @@ export function WorkOrderForm({ onSuccess, session }) {
           )}
         </div>
         {errors.parts && <div style={fieldErr}>{errors.parts}</div>}
+
+        <div style={{ marginBottom: 10 }}>
+          <span style={lbl}>Repair Run · optional</span>
+          <Combobox
+            value={repairRunId}
+            options={repairRuns.map((r) => ({ value: r.id, label: `${r.run_no} · ${r.line || '—'} · ${r._counts?.total || 0} units` }))}
+            onChange={setRepairRunId}
+            placeholder="Link to a repair run (for parts tracking)…"
+            disabled={submitting}
+          />
+        </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
           <div>
