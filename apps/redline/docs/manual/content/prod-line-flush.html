@@ -1,0 +1,23 @@
+<p class="lead">A line flush is how production returns leftover material to the store at the end of a run: the unused, damaged, QC-rejected or partly-assembled parts that did not go into a unit. You raise the flush here; the store receives, dispositions and verifies it in Garage.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Returning leftover material to the store.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: raises a flush.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role op">Operator</span> <span class="role sup">Supervisor</span> <span class="role adm">Admin</span> with flush access.</div></div>
+  <div class="g-cell"><div class="g-lbl">Then</div><div class="g-val">Store verifies it in Garage.</div></div>
+</div>
+
+<h2 class="sec">Raising a flush</h2>
+<ol class="steps">
+  <li><span class="s-title">Click New Flush.</span> Set the date, line, shift, and pick the flush type: against a <strong>Production Run</strong> or <strong>Standalone</strong>.</li>
+  <li><span class="s-title">Add the parts being returned.</span> For a run flush, use <strong>Load From Run</strong> to pull the run&rsquo;s pick list, or add parts by code. Each part can be split across return types (Unused, Damaged, QC Rejected, Partial Assembly, Wrong Issue) with a quantity per split.</li>
+  <li><span class="s-title">Submit Flush.</span> It is sent to the store with a flush id, marked Pending Verification.</li>
+</ol>
+
+<h2 class="sec">Tracking flushes</h2>
+<p>The list shows every flush with its status: <strong>Pending Verification</strong> (waiting for the store), <strong>Verified</strong> (the store counted and accepted it) or <strong>Disputed</strong>. Open one to see the parts you returned and, once verified, the store&rsquo;s counted quantities, any variance, and the dispositions they applied.</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Verification happens in Garage</div>
+  <p>Raising a flush is production&rsquo;s job and lives here. Counting the returned material, setting dispositions (back to stock, quarantine, scrap, rework) and accepting it into inventory is the store&rsquo;s job, on Garage&rsquo;s <strong>Flush Verify</strong> screen. The store&rsquo;s physical count is the figure that actually moves stock, so the detail you see here is read-only.</p>
+</div>

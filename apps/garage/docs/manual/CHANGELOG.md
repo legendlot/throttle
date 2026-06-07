@@ -6,6 +6,14 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md`).
 
+## [1.5.0] - 2026-06-08
+
+### Removed
+- Removed the entire **Production** part (Production Runs, Ad Hoc Requests, Line Flush, Process Deviations). Those production-owned screens moved to Redline (run-request consolidation); the store now services runs through the Issue Queue. Garage is store / fulfilment only.
+
+### Changed
+- **Flush Verify** chapter: noted production raises flushes in Redline, and documented the new **Quarantine Register** tab (read-only list of quarantined parts).
+
 ## [1.4.2] - 2026-06-07
 
 ### Changed

@@ -1,4 +1,4 @@
-<p class="lead">Flush Verify is where the store physically counts the materials production returned in a line flush and decides where each part goes: back to stock, quarantine, scrap or rework. The store&rsquo;s count is the figure that actually moves stock.</p>
+<p class="lead">Flush Verify is where the store physically counts the materials production returned in a line flush and decides where each part goes: back to stock, quarantine, scrap or rework. The store&rsquo;s count is the figure that actually moves stock. Production raises line flushes in Redline; this is the store&rsquo;s side of that handover. The screen has two tabs: <strong>Verify Queue</strong> and <strong>Quarantine Register</strong>.</p>
 
 <div class="glance">
   <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Counting and dispositioning flush returns.</div></div>
@@ -28,3 +28,6 @@
   <div class="c-title">&#9888; The store&rsquo;s count wins, but it is logged</div>
   <p>Each part shows a balance line against what production raised: Balanced, over, or under. If your total differs from production&rsquo;s number, a <strong>Confirm qty override</strong> step asks for a reason before saving. Your physical count becomes the count of record; the difference is saved and logged. Set a split&rsquo;s bag size to 0 to skip printing its labels.</p>
 </div>
+
+<h2 class="sec">Quarantine Register</h2>
+<p>The second tab, <strong>Quarantine Register</strong>, is a read-only list of every part currently held in quarantine from a flush disposition: the disposition id and date, the flush and work order it came from, the part code and name, return type, quantity and bin. Use it to see what is set aside and where, when deciding what to rework or write off.</p>

@@ -6,6 +6,15 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md` → Versioning).
 
+## [1.3.0] - 2026-06-08
+
+### Added
+- New **Line Flush** chapter: production raises a flush to return leftover material; the store verifies it in Garage.
+- **New Run / Request** chapter gained a **Recent Runs** section (Requested / Issued / Upcoming groups, plus ad-hoc tracking) covering Cancel, Confirm Receipt, Mark Complete and Request Finish.
+
+### Changed
+- **Process Deviations** rewritten from the floor view to the full management console (all status tabs, the full approve/reject/escalate/acknowledge/close/retro detail, full propose) now that the complete queue lives in Redline. Approval permissions are still set in Garage Users.
+
 ## [1.2.1] - 2026-06-07
 
 ### Changed

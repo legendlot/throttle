@@ -1,21 +1,27 @@
-<p class="lead">Process Deviations is the floor view of approved process changes that are in force right now: the things operators must do differently today. You can also propose a new deviation here, and (if you&rsquo;re an approver) sign off on reactive ones that were applied while you were away.</p>
+<p class="lead">Process Deviations is the full record of process changes, temporary or permanent, and their supervisor review. It is where someone documents a change to how a step is done, routes it for the right level of sign-off, and acts on it through its whole life: propose, approve or reject, acknowledge, and close. This is purely a production tool; the store has no process deviations.</p>
 
 <div class="glance">
-  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Seeing &amp; raising in-force process changes.</div></div>
-  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Reads; propose + quick-ack actions.</div></div>
-  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sup">Supervisor</span> <span class="role adm">Admin</span></div></div>
-  <div class="g-cell"><div class="g-lbl">Full queue</div><div class="g-val">Lives in Garage.</div></div>
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Documenting &amp; approving process changes.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Full management: propose, approve, close.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role op">Operator</span> proposes; <span class="role sup">Supervisor</span> <span class="role adm">Admin</span> approve.</div></div>
+  <div class="g-cell"><div class="g-lbl">Tiers</div><div class="g-val">L1 / L2 / L3 by severity.</div></div>
 </div>
 
-<h2 class="sec">The three sections</h2>
-<div class="anatomy">
-  <div class="a-row"><div class="a-key">Active on Floor</div><div class="a-val"><p>Deviations in force right now, grouped by line. Each shows its number, severity, title, the station/type, and when it expires (<em>&ldquo;until {date}&rdquo;</em>) or that it&rsquo;s open-ended. <strong>Operators must follow these.</strong></p></div></div>
-  <div class="a-row"><div class="a-key">Pending Approval</div><div class="a-val"><p>Proposed deviations waiting for sign-off, with the approval tier (L1/L2/L3) and who proposed them.</p></div></div>
-  <div class="a-row"><div class="a-key">Awaiting Your Sign-Off</div><div class="a-val"><p>Only shown to approvers: reactive deviations applied while you were out. Each has a <strong>👁 Ack</strong> button to confirm the after-the-fact sign-off.</p></div></div>
-</div>
+<h2 class="sec">The status tabs</h2>
+<p>Tabs across the top filter the list: <strong>Pending Approval</strong>, <strong>Active on Floor</strong>, <strong>Retro Sign-off</strong>, <strong>Rejected</strong>, <strong>Closed</strong>, and <strong>All</strong>. The <strong>Active on Floor</strong> tab is laid out as cards grouped by line, so anyone can see at a glance what is in force on each line right now: each card shows the deviation number, severity, title, station or type, and when it expires or that it is open-ended. <strong>Operators must follow active deviations.</strong> Every other tab is a table you can click into.</p>
+
+<h2 class="sec">Working a deviation</h2>
+<p>Click any row to open its full detail: the description, reason and rollback plan, line/run/product/station, the approval window, and a complete history of every action taken on it. From here, depending on your permission and the deviation&rsquo;s current tier, you can:</p>
+<ul>
+  <li><strong>Approve</strong> or <strong>Reject</strong> (reject needs a reason) when it is pending at your tier.</li>
+  <li><strong>Escalate</strong> a pending deviation to the next tier.</li>
+  <li><strong>Acknowledge</strong> an approved, rejected or closed deviation, so there is a record you have seen it.</li>
+  <li><strong>Confirm or reject a retroactive sign-off</strong> for a reactive deviation applied while you were out.</li>
+  <li><strong>Close</strong> an approved deviation (reason required) once it no longer applies.</li>
+</ul>
 
 <h2 class="sec">Proposing a deviation</h2>
-<p><strong>+ Propose Deviation</strong> opens a form: pick a <strong>type</strong> (Material Substitution, Step Skip, Quality Criteria Relaxed, Process Workaround&hellip;), a <strong>severity</strong>, the line and station, a title and description, and an optional &ldquo;effective until&rdquo; time. The selected severity shows its approval rule:</p>
+<p><strong>+ Propose Deviation</strong> opens a form: pick a <strong>type</strong> (Material Substitution, Step Skip, Quality Criteria Relaxed, Process Workaround&hellip;), a <strong>severity</strong>, the line and station, a title and description, an optional reason and rollback plan, and an optional &ldquo;effective from / until&rdquo; window. The selected severity shows its approval rule:</p>
 <table class="tbl">
   <thead><tr><th>Severity</th><th>Who approves</th></tr></thead>
   <tbody>
@@ -25,9 +31,9 @@
     <tr><td><strong style="color:#c01f1f">Critical</strong></td><td>L3 admin only; reactive auto-approval blocked.</td></tr>
   </tbody>
 </table>
-<p>Tick <strong>⚡ Reactive</strong> if the change is already in effect and you&rsquo;re logging it after the fact. But High and Critical deviations still wait for L3 sign-off regardless.</p>
+<p>Tick <strong>⚡ Reactive</strong> if the change is already in effect and you are logging it after the fact. Low and medium reactive deviations are created as approved immediately but flagged for a supervisor&rsquo;s retro sign-off; High and Critical still wait for L3 sign-off regardless.</p>
 
 <div class="callout note">
-  <div class="c-title">&#9432; This is the floor view</div>
-  <p>It deliberately shows only what&rsquo;s in force and what&rsquo;s pending, not the full approval queue, rejections or history. Those live in <strong>Garage → Process Deviations</strong>. If you don&rsquo;t have approver permission, the &ldquo;Awaiting Your Sign-Off&rdquo; section simply won&rsquo;t appear; its absence doesn&rsquo;t mean nothing is pending.</p>
+  <div class="c-title">&#9432; The full record lives here</div>
+  <p>This screen is the complete deviations queue and history, moved into Redline so production owns it end to end. The permissions that decide who can approve at each tier are still set in Garage&rsquo;s Users screen (the company-wide role matrix); this screen simply reads them.</p>
 </div>

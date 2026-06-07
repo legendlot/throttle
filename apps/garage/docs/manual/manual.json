@@ -1,9 +1,9 @@
 {
   "title": "Garage",
   "title_accent": "Operations Manual",
-  "subtitle": "The self-serve guide to store, inventory, production, returns and procurement at Legend of Toys.",
-  "version": "1.4.2",
-  "date": "2026-06-07",
+  "subtitle": "The self-serve guide to store, inventory, fulfilment, returns and procurement at Legend of Toys.",
+  "version": "1.5.0",
+  "date": "2026-06-08",
   "app_url": "garage.legendoftoys.com",
   "owner": "Legend of Toys",
   "roles": {
@@ -159,53 +159,6 @@
           "file": "inv-receiving.html",
           "roles": [
             "sto",
-            "adm"
-          ]
-        }
-      ]
-    },
-    {
-      "part": "Production",
-      "subtitle": "Planning production runs, ad hoc part requests, returning leftovers, and process deviations.",
-      "chapters": [
-        {
-          "id": "production-runs",
-          "title": "Production Runs",
-          "route": "/production-runs",
-          "file": "prod-runs.html",
-          "roles": [
-            "prd",
-            "adm"
-          ]
-        },
-        {
-          "id": "work-orders",
-          "title": "Ad Hoc Requests",
-          "route": "/work-orders",
-          "file": "prod-workorders.html",
-          "roles": [
-            "prd",
-            "adm"
-          ]
-        },
-        {
-          "id": "line-flush",
-          "title": "Line Flush",
-          "route": "/line-flush",
-          "file": "prod-lineflush.html",
-          "roles": [
-            "prd",
-            "sto",
-            "adm"
-          ]
-        },
-        {
-          "id": "deviations",
-          "title": "Process Deviations",
-          "route": "/process-deviations",
-          "file": "prod-deviations.html",
-          "roles": [
-            "prd",
             "adm"
           ]
         }
