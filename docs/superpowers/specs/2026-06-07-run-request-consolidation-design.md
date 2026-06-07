@@ -314,9 +314,22 @@ worker/scanner/app land coherently per step.
   `run_request` alongside their legacy gates (lotopsproxy `ba561c45`). Garage `/users` PERM_DEFS gained
   `run_request`. Both apps build clean. NOTE: backends still route to existing handlers — the deep
   per-type enhancements (2 pulls, build/finish split, instrumentation, scanner stations) are Steps 3–5.
-- **Step 3 — Repack** (smallest backend delta atop existing REPACK_IN/OUT): structured request + 2
-  pulls (store packaging WO + dispatch release list) + Release-to-Repack scanner station + REPACK_IN
-  release-validation + widened stages (+`rtd`) + Repack Out channel default + auto run-linked flush.
+- **Step 3 — Repack. ✅ DONE + LIVE 2026-06-07** (lotopsproxy `858e0cf4`; scanner + garage pushed).
+  - Structured request already flowed via the new-run Repack tab; `createRepackRun` now **fans out the
+    store packaging pull** — a `wo_type='repack_pkg'` WO (`repack_run_id` linked) carrying the to-channel
+    **Primary Packaging** (box+tray, computed from `bom_register` qty_ecomm/qty_retail), with `wo_parts_request`
+    rows; surfaces in the Garage Issue Queue (REPACK PKG badge) and issues via `postIssue`.
+  - **Release-to-Repack** = NEW scanner station `REPACK_RELEASE` (Dispatch dept, SHARED, device
+    `REPACK_RELEASE-SHARED`) → worker `postRepackRelease`: per-unit custody scan flips car+paired remote to
+    free-text status **`released_repack`** (locks them out of dispatch) + opens `public.repack_releases`.
+  - **REPACK_IN** now accepts only `rtd` (production-held) or `released_repack`; hard-rejects raw
+    `handed_over`/`allocated` ("release at Repack Release first") — the anti-walk-in-and-grab control;
+    consumes the release row on repack-in. **REPACK_OUT** defaults channel from `run.to_channel`.
+  - **DEFERRED (fast-follow, low floor-impact):** the auto run-linked **line flush** for the old
+    from-channel packaging — `createFlush` is store-perm/JWT-gated and batch-shaped, awkward to fire from a
+    scanner action; do it as a store-side per-run flush. **Edge case to watch:** a unit released but never
+    repacked-in stays `released_repack` (out of dispatch, not in repack) — recoverable via the open
+    `repack_releases` row; a "released-not-repacked" report is a later nicety.
   **RESUME NOTES (investigation needed before deploy):**
   - **Packaging pull (TRACED 2026-06-07):** model it as a **Parts Request-style WO** with `repack_run_id`
     set and `parts` = the product's **to-channel Primary Packaging** (box + tray) computed from
