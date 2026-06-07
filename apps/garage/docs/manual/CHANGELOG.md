@@ -6,6 +6,11 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md`).
 
+## [1.4.1] - 2026-06-07
+
+### Changed
+- Production Runs: create path retired (runs are now requested in Redline / New Run); chapter reframed as view + manage (receipts, outsourced send/receive/finish).
+
 ## [1.4.0] - 2026-06-07
 
 ### Changed
