@@ -4,7 +4,7 @@ import { usePathname, useRouter } from 'next/navigation';
 const TABS = [
   { id: 'shipments',   label: 'Shipments',       route: '/returns/shipments' },
   { id: 'process',     label: 'Process / Disposition', route: '/returns/process' },
-  { id: 'udr-pool',    label: 'Issue UDR',       route: '/returns/udr-pool' },
+  { id: 'udr-pool',    label: 'UDR Pool',        route: '/returns/udr-pool' },
   { id: 'repair-pool', label: 'Issue Repair',    route: '/returns/repair-pool' },
   { id: 'losses',      label: 'Loss Notes',      route: '/returns/losses' },
   { id: 'channels',    label: 'Channels',        route: '/returns/channels' },

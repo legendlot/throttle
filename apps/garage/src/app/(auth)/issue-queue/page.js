@@ -188,17 +188,21 @@ export default function IssueQueuePage() {
       (wos || []).forEach((wo) => {
         const isRework     = wo.status === 'Pending Rework';
         const isShortIssue = !!wo.receipt_id;
-        if (!isShortIssue && !isRework && !['Parts Request', 'adhoc', 'standalone'].includes(wo.wo_type)) return;
+        const isUdr        = wo.wo_type === 'UDR';
+        if (!isShortIssue && !isRework && !['Parts Request', 'adhoc', 'standalone', 'UDR'].includes(wo.wo_type)) return;
         let badge, badgeTone, type;
         if (isShortIssue)  { badge = 'SHORT ISSUE'; badgeTone = 'orange'; type = 'short-issue'; }
         else if (isRework) { badge = 'REWORK';      badgeTone = 'red';    type = 'wo'; }
+        else if (isUdr)    { badge = 'UDR';         badgeTone = 'green';  type = 'udr'; }
         else               { badge = 'AD HOC';      badgeTone = 'yellow'; type = 'wo'; }
         rows.push({
           type,
           ref:      wo.wo_no,
           badge, badgeTone,
           product:  wo.product || '—',
-          details:  isShortIssue ? `Short re-issue — ${wo.notes || ''}` : `${wo.variant || ''} ${wo.colour || ''}`.trim() || '—',
+          details:  isShortIssue ? `Short re-issue — ${wo.notes || ''}`
+                    : isUdr ? `UDR re-dispatch — issue by scanning at Issue UDR (${`${wo.variant || ''} ${wo.colour || ''}`.trim() || 'any'})`
+                    : `${wo.variant || ''} ${wo.colour || ''}`.trim() || '—',
           units:    wo.qty || '—',
           run_date: wo.date,
           submitted: wo.created_at,
@@ -873,7 +877,9 @@ export default function IssueQueuePage() {
                     <td style={tableTdStyle}>{formatDate(r.run_date)}</td>
                     <td style={tableTdStyle}>{formatDateTime(r.submitted)}</td>
                     <td style={{ ...tableTdStyle, textAlign: 'right' }}>
-                      <button style={btnPrimary} onClick={() => openItem(r)}>ISSUE →</button>
+                      {r.type === 'udr'
+                        ? <span style={{ fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>scan at Issue UDR</span>
+                        : <button style={btnPrimary} onClick={() => openItem(r)}>ISSUE →</button>}
                     </td>
                   </tr>
                 ))}

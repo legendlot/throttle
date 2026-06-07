@@ -64,8 +64,12 @@ export default function ReturnsPage() {
   const [reqLine, setReqLine] = useState('L1');
   const [reqSel, setReqSel] = useState({});
   const [submitting, setSubmitting] = useState(false);
+  const [udrOpen, setUdrOpen] = useState(false);
+  const [udrSel, setUdrSel] = useState({});
+  const [udrSubmitting, setUdrSubmitting] = useState(false);
 
   useEscapeClose(reqOpen, () => { if (!submitting) setReqOpen(false); });
+  useEscapeClose(udrOpen, () => { if (!udrSubmitting) setUdrOpen(false); });
 
   const load = useCallback(async () => {
     if (!session) return;
@@ -116,6 +120,32 @@ export default function ReturnsPage() {
     } finally { setSubmitting(false); }
   }
 
+  // ── UDR issue request (notional; production-owned, RULE-RET-002) ──
+  function toggleUdr(b) {
+    const key = `${b.product}|${b.model}|${b.color}`;
+    setUdrSel((prev) => {
+      const n = { ...prev };
+      if (n[key]) delete n[key]; else n[key] = { product: b.product, model: b.model, color: b.color, qty: b.count || 0 };
+      return n;
+    });
+  }
+  function setUdrQty(key, qty) {
+    setUdrSel((prev) => (prev[key] ? { ...prev, [key]: { ...prev[key], qty: Math.max(0, parseInt(qty, 10) || 0) } } : prev));
+  }
+  async function submitUdr() {
+    const lines = Object.values(udrSel).filter((l) => l.qty > 0);
+    if (!lines.length) { showToast('Select at least one UDR bucket with a qty', 'error'); return; }
+    setUdrSubmitting(true);
+    try {
+      const res = await workerFetch('createUdrRequest', { data: { lines, notes: 'UDR issue request from Redline returns' } }, session);
+      const r = res.data || res;
+      showToast(`UDR request raised (${r.created} line${r.created === 1 ? '' : 's'}) — now in the Store Issue Queue`, 'success');
+      setUdrOpen(false); setUdrSel({});
+    } catch (e) {
+      showToast(e.message || 'Failed to request UDR issue', 'error');
+    } finally { setUdrSubmitting(false); }
+  }
+
   if (error) return <EmptyState message={`Failed to load: ${error}`} />;
 
   return (
@@ -125,6 +155,7 @@ export default function ReturnsPage() {
           <h2 style={{ margin: 0, fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t2)' }}>Return Piles</h2>
           <div style={{ display: 'flex', gap: 6 }}>
             <button style={btnSecondary} onClick={load} disabled={loading}>↻ Refresh</button>
+            <button style={{ ...btnPrimary, background: 'var(--green)', borderColor: 'var(--green)' }} onClick={() => setUdrOpen(true)} disabled={!piles.UDR.length}>Request UDR Issue →</button>
             <button style={btnPrimary} onClick={() => setReqOpen(true)} disabled={!repairBuckets.length}>Request Repair Run →</button>
           </div>
         </div>
@@ -192,6 +223,46 @@ export default function ReturnsPage() {
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 14 }}>
               <button style={btnSecondary} onClick={() => setReqOpen(false)} disabled={submitting}>Cancel</button>
               <button style={{ ...btnPrimary, opacity: submitting ? 0.6 : 1 }} onClick={submitRequest} disabled={submitting}>{submitting ? 'Requesting…' : 'Create Run'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {udrOpen && (
+        <div onClick={() => !udrSubmitting && setUdrOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 9000, padding: 24, overflowY: 'auto' }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: '#111', border: '1px solid #333', borderRadius: 6, padding: 20, color: '#eee', minWidth: 520, maxWidth: 620, width: '100%' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+              <h3 style={{ margin: 0, fontFamily: 'var(--cond)', fontSize: 16, color: 'var(--green)', textTransform: 'uppercase', letterSpacing: '.06em' }}>Request UDR Issue</h3>
+              <button style={btnSecondary} onClick={() => setUdrOpen(false)} disabled={udrSubmitting}>✕</button>
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 12 }}>Raises a notional UDR issue request (one work order per line). It appears in the <strong>Store Issue Queue</strong>; the Store then scans each unit out at the <strong>Issue UDR</strong> station — no desk issuing.</div>
+            <div style={{ maxHeight: 300, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 4 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead><tr><th style={thStyle}></th><th style={thStyle}>Product</th><th style={thStyle}>Colour</th><th style={{ ...thStyle, textAlign: 'right' }}>In pool</th><th style={{ ...thStyle, textAlign: 'right' }}>Request qty</th></tr></thead>
+                <tbody>
+                  {piles.UDR.map((b, i) => {
+                    const key = `${b.product}|${b.model}|${b.color}`;
+                    const sel = udrSel[key];
+                    return (
+                      <tr key={`${key}-${i}`} style={{ background: sel ? 'rgba(34,197,94,.12)' : 'transparent' }}>
+                        <td style={tdStyle}><input type="checkbox" readOnly checked={!!sel} onClick={() => toggleUdr(b)} /></td>
+                        <td style={{ ...tdStyle, fontFamily: 'var(--cond)', fontWeight: 700, cursor: 'pointer' }} onClick={() => toggleUdr(b)}>{[b.product, b.model].filter(Boolean).join(' ')}</td>
+                        <td style={{ ...tdStyle, cursor: 'pointer' }} onClick={() => toggleUdr(b)}>{b.color || '—'}</td>
+                        <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--t3)' }}>{b.count}</td>
+                        <td style={{ ...tdStyle, textAlign: 'right' }}>
+                          {sel
+                            ? <input type="number" min="0" value={sel.qty} onChange={(e) => setUdrQty(key, e.target.value)} style={{ ...selectStyle, width: 70, textAlign: 'right' }} />
+                            : <span style={{ color: 'var(--t3)' }}>—</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 14 }}>
+              <button style={btnSecondary} onClick={() => setUdrOpen(false)} disabled={udrSubmitting}>Cancel</button>
+              <button style={{ ...btnPrimary, background: 'var(--green)', borderColor: 'var(--green)', opacity: udrSubmitting ? 0.6 : 1 }} onClick={submitUdr} disabled={udrSubmitting}>{udrSubmitting ? 'Requesting…' : 'Raise Request'}</button>
             </div>
           </div>
         </div>
