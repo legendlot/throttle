@@ -318,13 +318,16 @@ worker/scanner/app land coherently per step.
   pulls (store packaging WO + dispatch release list) + Release-to-Repack scanner station + REPACK_IN
   release-validation + widened stages (+`rtd`) + Repack Out channel default + auto run-linked flush.
   **RESUME NOTES (investigation needed before deploy):**
-  - **Packaging pull:** `createRepackRun` should also insert a `work_orders` row `wo_type='repack_pkg'`,
-    `repack_run_id=run.id`, qty=target, `qty_ecomm`/`qty_retail` per `to_channel` (RULE-012 channel pkg),
-    product/variant=model/colour. BUT first TRACE: (a) Garage **issue-queue page rendering** — it branches
-    on `wo_type` (worker line ~1647 excludes `planned`/`Parts Request`); confirm a new `repack_pkg` type
-    renders + doesn't break the page; (b) the **non-run WO issue path** — how `standalone`/`Parts Request`
-    WOs book stock + complete (worker ~9968 createWorkOrder; find the issue/fulfil handler). The picklist
-    for repack_pkg must be **Primary Packaging only (box+tray)**, NOT the full BOM.
+  - **Packaging pull (TRACED 2026-06-07):** model it as a **Parts Request-style WO** with `repack_run_id`
+    set and `parts` = the product's **to-channel Primary Packaging** (box + tray) computed from
+    `bom_register` (part_category='Primary Packaging', channel qty>0 per RULE-012). `getWorkOrders`
+    (worker 1633) returns it (only `planned` excluded). **MUST add `repack_pkg` (or reuse 'Parts Request')
+    to the Garage issue-queue allow-list at `apps/garage/(auth)/issue-queue/page.js:192`** — a new
+    `wo_type` is silently filtered out (hidden, not crashed). Store fulfils via the existing **`postIssue`**
+    path (line ~431, issueType 'Planned') which books `stock_ledger` — same as a Parts Request. Old
+    packaging returns via the line flush (net reconciles). createWorkOrder (`Parts Request` + `parts[]`)
+    is at worker ~9968. Decision: use `wo_type='repack_pkg'` + add to allow-list + an issue-queue badge,
+    OR reuse `'Parts Request'` with a repack note (less new surface). Lean: `repack_pkg` for clear labeling.
   - **Release-to-Repack:** new SCANNER_ACTION `postRepackRelease` (dispatch scans box `LOT-…-E/R`; unit must
     be `handed_over`/`allocated`; insert `public.repack_releases` row + flip unit → new free-text status
     **`released_repack`** to lock it from dispatch; one-open-per-car index already enforces it). New scanner
