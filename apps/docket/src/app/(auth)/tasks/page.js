@@ -161,12 +161,17 @@ export default function TasksPage() {
     } catch (e) { showToast(e.message || 'Save failed', 'error'); load(); }
   }
   // Inline "create on type": a Program name not in the list is created, then assigned.
+  // NB: patch the row with the freshly-created `prog` object directly — NOT via
+  // saveField, whose `programs.find()` runs against the render-time closure that does
+  // not yet contain `prog` (setPrograms is async), so it would null the cell and the
+  // new program name wouldn't show until a reload.
   async function createAndAssignProgram(task, name) {
     try {
       const prog = await docketopsPost('createProgram', { name }, session);
       setPrograms(ps => ps.some(p => p.id === prog.id) ? ps : [...ps, prog].sort((a, b) => a.name.localeCompare(b.name)));
-      await saveField(task, 'program_id', prog.id);
-    } catch (e) { showToast(e.message || 'Failed to add program', 'error'); }
+      await docketopsPost('updateTask', { id: task.id, program_id: prog.id }, session);
+      patchRow(task.id, { program_id: prog.id, program: prog });
+    } catch (e) { showToast(e.message || 'Failed to add program', 'error'); load(); }
   }
   async function abandonInline(task, reason) {
     if (!reason || !reason.trim()) return;
