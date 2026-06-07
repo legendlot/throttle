@@ -14,6 +14,7 @@ import { DocLinksPanel } from '../../../../components/DocLinksPanel.js';
 import { DatePicker } from '../../../../components/DatePicker.js';
 import { SETTABLE_STATUSES, PRIORITIES, effectiveDeadline, isOverdue } from '../../../../lib/tasks.js';
 import { fmtDate, fmtDateTime } from '../../../../lib/format.js';
+import { useHotkey } from '../../../../lib/hotkeys.js';
 
 function DetailInner() {
   const { session } = useAuth();
@@ -57,6 +58,12 @@ function DetailInner() {
   useEffect(() => { load(); }, [load]);
 
   const canEdit = !!task?._can_edit;
+
+  // `s` → add a sub-task to this task (same as the Sub-tasks "Add" button). Only on a
+  // parent (one level deep), editable + not abandoned; suspended while a modal/edit is open.
+  useHotkey('s', () => {
+    if (canEdit && task && !task.parent_task_id && task.status !== 'abandoned') router.push(`/tasks/new?parent=${task.id}`);
+  }, { enabled: !!task && !modal && !editing });
 
   function startEdit() {
     setForm({

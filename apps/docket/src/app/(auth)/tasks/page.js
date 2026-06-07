@@ -12,6 +12,7 @@ import { TaskDrawer } from '../../../components/TaskDrawer.js';
 import { SpaceSettings } from '../../../components/SpaceSettings.js';
 import { STATUSES, SETTABLE_STATUSES, PRIORITIES, effectiveDeadline, isOverdue } from '../../../lib/tasks.js';
 import { fmtDate } from '../../../lib/format.js';
+import { useHotkey } from '../../../lib/hotkeys.js';
 
 // Shared column widths so the Grid (tinted tray) and the active board line up exactly.
 // Title has no width → it absorbs the remaining space (table-layout: fixed).
@@ -94,6 +95,13 @@ export default function TasksPage() {
 
   // The sidebar "New space" item routes to ?space=new — open the create modal for it.
   useEffect(() => { setNewSpaceOpen(spaceParam === 'new'); }, [spaceParam]);
+
+  // `c` → focus Quick Capture (the new-task input), mirroring `/` → focus search.
+  // Suspended while a drawer/modal covers the page so it can't steal focus behind it.
+  useHotkey('c', () => {
+    const el = document.querySelector('[data-create-primary]');
+    if (el) { try { el.focus(); el.select?.(); } catch { /* ignore */ } }
+  }, { enabled: !drawerId && !newSpaceOpen && !spaceSettingsOpen });
 
   const load = useCallback(async () => {
     if (!session) return;
@@ -769,9 +777,9 @@ function QuickCapture({ session, spaceId, onCreated, showToast }) {
   return (
     <div style={addRow}>
       <Plus size={16} style={{ color: 'var(--docket-accent)', flexShrink: 0 }} />
-      <input ref={ref} value={title} onChange={e => setTitle(e.target.value)}
+      <input ref={ref} data-create-primary value={title} onChange={e => setTitle(e.target.value)}
         onKeyDown={e => { if (e.key === 'Enter') add(); }}
-        placeholder="Add a task. Type a title and press Enter; it lands in The Grid to finish later…"
+        placeholder="Add a task. Type a title and press Enter; it lands in The Grid to finish later…  ( c )"
         style={{ ...ainput, flex: 1 }} disabled={saving} />
       <button className="dk-press" style={{ ...addBtn, opacity: title.trim() && !saving ? 1 : 0.5 }} onClick={add} disabled={!title.trim() || saving}>
         {saving ? '…' : 'Add'}

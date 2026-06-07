@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { X, Maximize2, Plus, Check } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../lib/docketopsFetch.js';
+import { useHotkey } from '../lib/hotkeys.js';
 import { StatusBadge } from './StatusBadge.js';
 import { PriorityBadge } from './PriorityBadge.js';
 import { CommentsPanel } from './CommentsPanel.js';
@@ -68,6 +69,13 @@ export function TaskDrawer({ id, session, departments = [], employees = [], onCl
   }, [ddOpen]);
 
   const canEdit = !!task?._can_edit && task?.status !== 'abandoned';
+  // A sub-task can't take children (one level deep), so `s` only applies to a parent.
+  const canAddSub = canEdit && task && !task.parent_task_id;
+
+  // `s` → add a sub-task to the open task (same as the Sub-tasks "Add" button).
+  // Suspended while the deadline/abandon sub-popovers are open.
+  useHotkey('s', () => { if (canAddSub) router.push(`/tasks/new?parent=${task.id}`); },
+    { enabled: !!task && !ddOpen && !abandoning });
 
   const mutated = useCallback(async () => { await load(true); onMutated?.(); }, [load, onMutated]);
 
