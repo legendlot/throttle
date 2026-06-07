@@ -364,8 +364,14 @@ worker/scanner/app land coherently per step.
     Send-to-Vendor (`markRunSentOut`), Receive-from-Vendor (`assignOutsourcedLine` + per-unit `EXT_INW`),
     `ext_summary`. The build/finish two-phase issue + pool-GRN-receive + finish-pull + `postExtInw`→finish
     REWORK this — and touch `issueAgainstRun` (worker 15367, the stock-issue path).
-  - **Build order when resumed:** (1) opt-in phase split in getProductionRun [safe]; (2) `issueAgainstRun`
-    phase-aware; (3) RunDetailPanel two-phase pick + issue (Build pick → send → receive → Finish pick);
+  - **KEY (2026-06-07):** `issueAgainstRun` (15367) issues whatever `d.lines` the UI passes — so the
+    phase filter lives ONLY in `getProductionRun` (issue path unchanged). BUT it guards
+    `status IN (Submitted,Picking)`, so the FINISH issue (a 2nd issue, post-send) needs that guard
+    relaxed for `phase=finish` outsourced — i.e. build/finish split is COUPLED to a finish mechanism +
+    the run status machine. This is why Step 4 is a rework, not an isolated add.
+  - **Build order when resumed:** (1) opt-in phase split in getProductionRun [safe]; (2) finish-issue:
+    relax `issueAgainstRun` status guard for outsourced phase=finish (or a `requestExtFinish` that re-opens
+    to Picking); (3) RunDetailPanel two-phase pick + issue (Build pick → send → receive → Finish pick);
     (4) receive-model: `receiveExtUnits` count→`ext_return_pool` + finish pull `requestExtFinish` +
     `postExtInw`→finish-time drain pool; (5) gate-pass send-out (additive, low-risk). Gate new behavior on a
     per-run marker so EXT-001/002/003 stay on the old path.
