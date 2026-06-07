@@ -275,7 +275,7 @@ export default function IssueQueuePage() {
       });
       const sorted = Object.values(map)
         .sort((a, b) => (b.issue_date || '').localeCompare(a.issue_date || ''))
-        .slice(0, 20);
+        .slice(0, 50);
       setHistory(sorted);
     } catch (e) {
       // noop — history is informational
@@ -923,19 +923,23 @@ export default function IssueQueuePage() {
               </thead>
               <tbody>
                 {visibleQueue.map((r) => (
-                  <tr key={`${r.type}-${r.ref}`}>
+                  <tr
+                    key={`${r.type}-${r.ref}`}
+                    onClick={() => r.type !== 'udr' && openItem(r)}
+                    style={{ cursor: r.type !== 'udr' ? 'pointer' : 'default' }}
+                  >
                     <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{r.ref}</td>
                     <td style={tableTdStyle}><StatusBadge label={r.badge} tone={r.badgeTone} /></td>
                     <td style={tableTdStyle}>{r.line_no}</td>
                     <td style={tableTdStyle}>{r.product}</td>
-                    <td style={tableTdStyle}>{r.details}</td>
+                    <td style={{ ...tableTdStyle, maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.details}>{r.details}</td>
                     <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.units}</td>
                     <td style={tableTdStyle}>{formatDate(r.run_date)}</td>
                     <td style={tableTdStyle}>{formatDateTime(r.submitted)}</td>
                     <td style={{ ...tableTdStyle, textAlign: 'right' }}>
                       {r.type === 'udr'
                         ? <span style={{ fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>scan at Issue UDR</span>
-                        : <button style={btnPrimary} onClick={() => openItem(r)}>ISSUE →</button>}
+                        : <button style={btnPrimary} onClick={(e) => { e.stopPropagation(); openItem(r); }}>ISSUE →</button>}
                     </td>
                   </tr>
                 ))}
@@ -965,25 +969,28 @@ export default function IssueQueuePage() {
               </thead>
               <tbody>
                 {vendorRuns.issued.map((run) => (
-                  <tr key={run.run_no}>
+                  <tr key={run.run_no} onClick={() => openItem({ type: 'run', ref: run.run_no, product: run.product })} style={{ cursor: 'pointer' }}>
                     <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{run.run_no}</td>
                     <td style={tableTdStyle}>{run.vendor?.vendor_name || '—'}</td>
                     <td style={tableTdStyle}>{run.product}</td>
-                    <td style={tableTdStyle}><StatusBadge label="Build issued" tone="blue" /></td>
+                    <td style={tableTdStyle}>
+                      <StatusBadge label={run.ext_v2 ? 'Build issued' : 'Issued'} tone="blue" />
+                      {!run.ext_v2 && <span style={{ marginLeft: 6, fontSize: 9, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>legacy</span>}
+                    </td>
                     <td style={{ ...tableTdStyle, textAlign: 'right' }}>
-                      <button style={btnPrimary} disabled={vendorBusy === run.run_no} onClick={() => handleSendToVendor(run)}>
+                      <button style={btnPrimary} disabled={vendorBusy === run.run_no} onClick={(e) => { e.stopPropagation(); handleSendToVendor(run); }}>
                         {vendorBusy === run.run_no ? '…' : '→ Send to Vendor'}
                       </button>
                     </td>
                   </tr>
                 ))}
                 {vendorRuns.progress.map((run) => (
-                  <tr key={run.run_no}>
+                  <tr key={run.run_no} onClick={() => openItem({ type: 'run', ref: run.run_no, product: run.product })} style={{ cursor: 'pointer' }}>
                     <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{run.run_no}</td>
                     <td style={tableTdStyle}>{run.vendor?.vendor_name || '—'}</td>
                     <td style={tableTdStyle}>{run.product}</td>
                     <td style={tableTdStyle}><StatusBadge label={run.finish_requested_at ? 'Finish requested' : 'At vendor'} tone="amber" /></td>
-                    <td style={{ ...tableTdStyle, textAlign: 'right' }}>
+                    <td style={{ ...tableTdStyle, textAlign: 'right' }} onClick={(e) => e.stopPropagation()}>
                       {run.ext_v2 ? (
                         <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', justifyContent: 'flex-end' }}>
                           <input
@@ -1071,7 +1078,13 @@ export default function IssueQueuePage() {
               />
             )}
 
-            {!detailLoading && (
+            {!detailLoading && !(selectedItem.type !== 'run' || selectedItem.finishPhase || ['Submitted', 'Picking'].includes(selectedItem.run?.status)) && (
+              <div style={{ marginTop: 14, padding: 10, background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
+                Read-only — this run has already been issued ({selectedItem.run?.status}). Vendor steps (Send to Vendor / Receive units) are in the Outsourced panel above.
+              </div>
+            )}
+
+            {!detailLoading && (selectedItem.type !== 'run' || selectedItem.finishPhase || ['Submitted', 'Picking'].includes(selectedItem.run?.status)) && (
               <div style={{ marginTop: 14, padding: 12, background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3 }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, cursor: 'pointer' }}>
                   <input
@@ -1085,7 +1098,7 @@ export default function IssueQueuePage() {
               </div>
             )}
 
-            {!detailLoading && (
+            {!detailLoading && (selectedItem.type !== 'run' || selectedItem.finishPhase || ['Submitted', 'Picking'].includes(selectedItem.run?.status)) && (
               <div style={{ marginTop: 12, display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
                 <div style={{ display: 'flex', gap: 6 }}>
                   {selectedItem.type === 'run' && !selectedItem.finishPhase && (
@@ -1179,7 +1192,7 @@ export default function IssueQueuePage() {
       <div style={panelStyle}>
         <div style={panelHeaderStyle}>
           <span>Recent Issues</span>
-          <button style={btnSecondary} onClick={loadHistory}>↻</button>
+          <button style={btnSecondary} onClick={loadHistory}>↻ Refresh</button>
         </div>
         <div style={{ overflowX: 'auto' }}>
           {history.length === 0 ? (
@@ -1202,7 +1215,7 @@ export default function IssueQueuePage() {
               </thead>
               <tbody>
                 {history.map((h) => (
-                  <tr key={h.issue_no}>
+                  <tr key={h.issue_no} onClick={() => reprintHistoryItem(h)} style={{ cursor: 'pointer' }}>
                     <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>
                       {h.issue_no}
                       {h.ref_issue_no && (
@@ -1224,7 +1237,7 @@ export default function IssueQueuePage() {
                     <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{h.units || '—'}</td>
                     <td style={tableTdStyle}>{formatDate(h.issue_date)}</td>
                     <td style={{ ...tableTdStyle, textAlign: 'right' }}>
-                      <button style={btnSecondary} onClick={() => reprintHistoryItem(h)}>🖨</button>
+                      <button style={btnSecondary} onClick={(e) => { e.stopPropagation(); reprintHistoryItem(h); }}>🖨</button>
                     </td>
                   </tr>
                 ))}
