@@ -19,8 +19,8 @@ import { STATUSES, STATUS_MAP, SETTABLE_STATUSES, PRIORITIES, effectiveDeadline 
 import { useHotkey } from '../../../lib/hotkeys.js';
 import { useChrome } from '../../../lib/chrome.js';
 
-// Task(flex) · Owner(150) · Status(132) · Pri(66) · Deadline(140) · meta(46)
-const GRID_COLS = 'minmax(230px,1fr) 150px 132px 66px 140px 46px';
+// Task(flex) · Owner(150) · Status(132) · Pri(76) · Deadline(140) · meta(46)
+const GRID_COLS = 'minmax(230px,1fr) 150px 132px 76px 140px 46px';
 
 export default function TasksPage() {
   const { session } = useAuth();

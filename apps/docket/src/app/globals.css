@@ -50,8 +50,8 @@
   /* ---- priority ---- */
   --p0: #ff5c5c;
   --p1: #f9923a;
-  --p2: #8a8a88;
-  --p3: #5f5f5d;
+  --p2: #b3b3b1;
+  --p3: #8d8d8b;
 
   /* ---- type — three roles ---- */
   --f-display: 'Tomorrow', system-ui, sans-serif;
@@ -66,9 +66,10 @@
   --r-full: 999px;
 
   /* ---- density (driven by [data-density]) ---- */
-  --row-h:   52px;
-  --row-pad: 14px;
-  --gap:     20px;
+  --row-h:     52px;
+  --row-h-sub: 38px;
+  --row-pad:   14px;
+  --gap:       20px;
 
   /* ---- motion ---- */
   --fast: 110ms;
@@ -148,8 +149,8 @@
   --mono: var(--f-mono); --cond: var(--f-display);
 }
 
-[data-density="compact"] { --row-h: 40px; --row-pad: 10px; --gap: 14px; }
-[data-density="roomy"]   { --row-h: 56px; --row-pad: 16px; --gap: 24px; }
+[data-density="compact"] { --row-h: 40px; --row-h-sub: 32px; --row-pad: 10px; --gap: 14px; }
+[data-density="roomy"]   { --row-h: 56px; --row-h-sub: 40px; --row-pad: 16px; --gap: 24px; }
 
 html, body {
   height: 100%;
@@ -333,7 +334,11 @@ button { cursor: pointer; background: none; border: none; }
 /* ============================================================
    BOARD
    ============================================================ */
-.board-scroll { overflow-x: auto; overflow-y: visible; margin: 0 -2px; padding: 0 2px; }
+/* overflow:visible so in-cell popovers + the deadline calendar can escape the
+   board box. (overflow-x:auto would force overflow-y to auto and clip them.)
+   Horizontal scroll is restored only on narrow screens where the board can't fit. */
+.board-scroll { overflow: visible; margin: 0 -2px; padding: 0 2px; }
+@media (max-width: 1180px) { .board-scroll { overflow-x: auto; } }
 .board-scroll::-webkit-scrollbar { height: 8px; }
 .board { display: flex; flex-direction: column; min-width: 880px; }
 .group { margin-bottom: 6px; }
@@ -356,7 +361,7 @@ button { cursor: pointer; background: none; border: none; }
 .row { display: grid; align-items: center; grid-template-columns: var(--grid-cols); min-height: var(--row-h); padding: 0 var(--row-pad); border-bottom: 1px solid var(--border); position: relative; transition: background var(--fast) var(--ease); }
 .row:hover { background: var(--surface); }
 .row:focus-visible { outline: none; background: var(--surface); box-shadow: inset 2px 0 0 var(--accent), inset 0 0 0 1px var(--border-2); }
-.row.sub { background: rgba(255,255,255,0.012); }
+.row.sub { background: rgba(255,255,255,0.012); min-height: var(--row-h-sub); }
 .row.done .cell-title .ttl { color: var(--text-3); text-decoration: line-through; text-decoration-color: var(--text-4); }
 .row::before { content:''; position:absolute; left:0; top:0; bottom:0; width:2px; background:transparent; transition: background var(--fast); }
 .row.p0::before { background: var(--p0); }
@@ -384,7 +389,7 @@ button { cursor: pointer; background: none; border: none; }
 .cell-title .ttl { font-family: var(--f-body); font-size: 14px; font-weight: 500; color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; transition: color var(--fast); flex: 1 1 auto; min-width: 60px; }
 .cell-title .ttl:hover { color: var(--accent); }
 .inline-meta { display: inline-flex; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 0; }
-.chip .lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip .lbl { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip.add { background: transparent; border: 1px dashed var(--border-2); color: var(--text-4); opacity: 0; transition: opacity var(--fast); }
 .row:hover .chip.add { opacity: 1; }
 .chip.add:hover { color: var(--accent); border-color: var(--accent-line); }
@@ -404,7 +409,7 @@ button { cursor: pointer; background: none; border: none; }
 .editable .ic { width: 13px; height: 13px; flex-shrink: 0; }
 .editable .tx { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; border-radius: var(--r-sm); padding: 3px 9px; white-space: nowrap; background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border); }
+.chip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; border-radius: var(--r-sm); padding: 3px 9px; white-space: nowrap; background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border); }
 .chip .dot { width: 7px; height: 7px; border-radius: 2px; flex-shrink: 0; }
 .chip.soft { background: transparent; border-color: var(--border); color: var(--text-3); }
 
@@ -412,8 +417,8 @@ button { cursor: pointer; background: none; border: none; }
 .status .si { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .status:hover { filter: brightness(1.12); }
 
-.pri { display: inline-flex; align-items: center; gap: 6px; font-family: var(--f-mono); font-size: 11px; font-weight: 600; cursor: pointer; }
-.pri .bars { display: inline-flex; align-items: flex-end; gap: 1.5px; height: 12px; }
+.pri { display: inline-flex; align-items: center; gap: 6px; font-family: var(--f-mono); font-size: 11.5px; font-weight: 700; letter-spacing: .02em; white-space: nowrap; cursor: pointer; }
+.pri .bars { display: inline-flex; align-items: flex-end; gap: 1.5px; height: 12px; flex-shrink: 0; }
 .pri .bars i { width: 3px; border-radius: 1px; background: var(--text-4); }
 .pri .bars i:nth-child(1){ height: 5px; } .pri .bars i:nth-child(2){ height: 8px; } .pri .bars i:nth-child(3){ height: 11px; }
 
