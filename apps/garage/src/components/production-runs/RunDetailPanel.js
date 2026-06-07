@@ -101,6 +101,9 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
   const [sendingOut, setSendingOut] = useState(false);
   const [returnLineSelect, setReturnLineSelect] = useState('L1');
   const [assigningLine, setAssigningLine] = useState(false);
+  // Step 4 — two-phase outsourced (ext_v2) controls
+  const [extRcvQty, setExtRcvQty] = useState('');
+  const [extBusy, setExtBusy] = useState(false);
 
   const [forceResolveOpen, setForceResolveOpen] = useState(false);
   const [forceResolveReason, setForceResolveReason] = useState('');
@@ -254,6 +257,36 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
     }
   }
 
+  async function handleReceiveExt() {
+    const qty = parseInt(extRcvQty, 10);
+    if (!qty || qty < 1) { showToast('Enter a quantity to receive', 'error'); return; }
+    setExtBusy(true);
+    try {
+      await workerFetch('receiveExtUnits', { data: { run_no: run.run_no, qty } }, session);
+      showToast(`Received ${qty} built ${run.product} into the return pool`, 'success');
+      setExtRcvQty('');
+      onRunChange(run.run_no);
+    } catch (e) {
+      showToast(e.message || 'Receive failed', 'error');
+    } finally { setExtBusy(false); }
+  }
+
+  async function handleIssueFinish() {
+    setExtBusy(true);
+    try {
+      const finishRun = await garageFetch('getProductionRun', { run_no: run.run_no, phase: 'finish' }, session);
+      const lines = (finishRun?.pick_list || []).map((p) => ({
+        part_code: p.part_code, part_name: p.part_name, actual_issued: p.total_qty,
+      }));
+      if (!lines.length) { showToast('No finish-BOM parts to issue', 'info'); setExtBusy(false); return; }
+      await workerFetch('issueAgainstRun', { data: { run_no: run.run_no, phase: 'finish', lines } }, session);
+      showToast(`Finish parts issued for ${run.run_no} — sticker the built units at Ext Inwarding`, 'success');
+      onRunChange(run.run_no);
+    } catch (e) {
+      showToast(e.message || 'Issue finish failed', 'error');
+    } finally { setExtBusy(false); }
+  }
+
   async function handleForceResolve() {
     if (!forceResolveReason.trim()) {
       setForceResolveError('Reason is required');
@@ -388,7 +421,32 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
             </div>
             {run.status === 'Issued' && (
               <div style={{ fontSize: 11, color: 'var(--t3)', marginTop: 6 }}>
-                Materials are issued. Hand them to the vendor, then click <strong>Send to Vendor</strong>. When the built units come back, use <strong>Receive from Vendor</strong> to assign a line and scan each unit (Ext Inwarding station).
+                {run.ext_v2
+                  ? <>Build materials (car/remote/fastener) are issued. Hand them to the vendor, then <strong>Send to Vendor</strong>. Finish parts (packaging/accessories) are issued later, when the units come back.</>
+                  : <>Materials are issued. Hand them to the vendor, then click <strong>Send to Vendor</strong>. When the built units come back, use <strong>Receive from Vendor</strong> to assign a line and scan each unit (Ext Inwarding station).</>}
+              </div>
+            )}
+            {/* Step 4 — two-phase (ext_v2) receive + finish controls */}
+            {run.ext_v2 && run.status === 'In Progress' && (
+              <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px dashed rgba(245,158,11,.3)', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 11, color: 'var(--t3)' }}>Receive built units (count)</span>
+                  <input
+                    type="number" min="1" value={extRcvQty}
+                    onChange={(e) => setExtRcvQty(e.target.value)}
+                    placeholder="qty" disabled={extBusy}
+                    style={{ width: 80, padding: '4px 8px', fontSize: 12, fontFamily: 'var(--mono)', background: 'var(--surface2)', color: 'var(--t1)', border: '1px solid var(--border)', borderRadius: 4 }}
+                  />
+                  <button style={btnSec} disabled={extBusy} onClick={handleReceiveExt}>
+                    {extBusy ? '…' : '+ Into pool'}
+                  </button>
+                </div>
+                <button style={btnPri} disabled={extBusy} onClick={handleIssueFinish}>
+                  {extBusy ? 'WORKING…' : 'Issue Finish Parts'}
+                </button>
+                <span style={{ fontSize: 11, color: 'var(--t3)' }}>
+                  Count returns into the pool (installments OK), then issue finish parts + sticker each unit at Ext Inwarding.
+                </span>
               </div>
             )}
           </div>
