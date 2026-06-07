@@ -6,7 +6,7 @@ import { Sidebar, Spinner, Topbar, QuickCreate, useSearchShortcut } from '@throt
 import { useNavGroups } from '../../lib/nav.js';
 import { GarageIcon } from '../../components/GarageIcon.js';
 import { useGarageAlerts } from '../../hooks/useGarageAlerts.js';
-import { Cog, ClipboardList, Workflow, Inbox } from 'lucide-react';
+import { ClipboardList, Workflow, Inbox } from 'lucide-react';
 
 const RefreshContext = createContext({ refreshing: false, setRefreshing: () => {} });
 
@@ -76,8 +76,7 @@ function AuthLayoutInner({ children }) {
     {
       label: 'Production',
       actions: [
-        { label: 'New Production Run', icon: Cog,           onClick: () => router.push('/production-runs?new=fresh') },
-        { label: 'New Repair Run',     icon: Cog,           onClick: () => router.push('/production-runs?new=repair') },
+        // Run requests (fresh / repair / outsourced / repack) now live in Redline → New Run / Request.
         { label: 'Ad Hoc Issue',       icon: ClipboardList, onClick: () => router.push('/work-orders') },
         { label: 'Line Flush',         icon: Workflow,      onClick: () => router.push('/line-flush') },
       ],

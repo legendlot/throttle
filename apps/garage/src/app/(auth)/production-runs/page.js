@@ -4,46 +4,27 @@ import { useEffect, useState } from 'react';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
-import { EmptyState, Modal } from '@throttle/ui';
-import { FreshRunForm } from '../../../components/production-runs/FreshRunForm.js';
-import { RepairRunForm } from '../../../components/production-runs/RepairRunForm.js';
+import { EmptyState } from '@throttle/ui';
 import { RunsTable } from '../../../components/production-runs/RunsTable.js';
 import { RunDetailPanel } from '../../../components/production-runs/RunDetailPanel.js';
 import { RepairRunDetailPanel } from '../../../components/production-runs/RepairRunDetailPanel.js';
 
-const panel = { backgroundColor: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4 };
-const panelHdr = {
-  padding: '10px 16px', borderBottom: '1px solid var(--border)',
-  fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 13,
-  textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--t2)',
-  display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
-};
-
-function modeBtnStyle(active) {
-  return {
-    background: active ? 'var(--yellow)' : 'var(--surface2)',
-    color: active ? '#000' : 'var(--t3)',
-    border: active ? '1px solid var(--yellow)' : '1px solid var(--border)',
-    borderRadius: 4, padding: '5px 12px',
-    fontFamily: 'var(--mono)', fontSize: 11,
-    textTransform: 'uppercase', letterSpacing: 1,
-    cursor: 'pointer', fontWeight: active ? 700 : 500,
-  };
-}
+// Runs are now REQUESTED in Redline (New Run / Request). This Garage screen is the
+// store-side VIEW + MANAGE surface: pick lists, receipt confirmation, reject/complete,
+// and the outsourced Send-to-Vendor / Receive / Issue Finish Parts steps. No create path
+// lives here any more (run-request consolidation, RULE-RUN-001).
 
 export default function ProductionRunsPage() {
   const { session, perms } = useAuth();
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
-  const [runMode, setRunMode] = useState('fresh');
   const [runs, setRuns] = useState([]);
   const [repairRuns, setRepairRuns] = useState([]);
   const [listLoading, setListLoading] = useState(false);
   const [listError, setListError] = useState(null);
   const [filterStatus, setFilterStatus] = useState('');
   const [activePanel, setActivePanel] = useState(null);
-  const [showNewRunModal, setShowNewRunModal] = useState(false);
 
   async function loadRuns() {
     if (!session) return;
@@ -79,14 +60,6 @@ export default function ProductionRunsPage() {
   }, [searchParams, pathname, router]);
 
   useEffect(() => {
-    const newParam = searchParams?.get('new');
-    if (!newParam) return;
-    if (newParam === 'repair') setRunMode('repair'); else setRunMode('fresh');
-    setShowNewRunModal(true);
-    router.replace(pathname, { scroll: false });
-  }, [searchParams, pathname, router]);
-
-  useEffect(() => {
     if (!activePanel) return;
     const t = setTimeout(() => {
       document.getElementById('pr-detail-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -116,7 +89,7 @@ export default function ProductionRunsPage() {
           Production Runs
         </h1>
         <p style={{ color: 'var(--t3)', fontSize: 11, marginTop: 4, fontFamily: 'var(--mono)' }}>
-          Plan and submit multi-variant production runs — store issues against the consolidated pick list.
+          View and manage runs, confirm receipts, and run the outsourced send / receive / finish steps. Runs are requested in Redline (New Run / Request).
         </p>
       </div>
 
@@ -125,21 +98,6 @@ export default function ProductionRunsPage() {
           <EmptyState message={listError} />
         </div>
       )}
-
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 12 }}>
-        <button
-          style={modeBtnStyle(false)}
-          onClick={() => { setRunMode('repair'); setShowNewRunModal(true); }}
-        >
-          + Repair Run
-        </button>
-        <button
-          style={modeBtnStyle(true)}
-          onClick={() => { setRunMode('fresh'); setShowNewRunModal(true); }}
-        >
-          + New Run
-        </button>
-      </div>
 
       <RunsTable
         runs={runs}
@@ -170,21 +128,6 @@ export default function ProductionRunsPage() {
           session={session}
         />
       )}
-
-      <Modal
-        open={showNewRunModal}
-        onClose={() => setShowNewRunModal(false)}
-        size="lg"
-        title={runMode === 'fresh' ? 'New Production Run' : 'New Repair Run'}
-      >
-        <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
-          <button style={modeBtnStyle(runMode === 'fresh')} onClick={() => setRunMode('fresh')}>Fresh</button>
-          <button style={modeBtnStyle(runMode === 'repair')} onClick={() => setRunMode('repair')}>Repair</button>
-        </div>
-        {runMode === 'fresh'
-          ? <FreshRunForm session={session} onSuccess={() => { loadRuns(); setShowNewRunModal(false); }} />
-          : <RepairRunForm session={session} onSuccess={() => { loadRuns(); setShowNewRunModal(false); }} />}
-      </Modal>
     </div>
   );
 }
