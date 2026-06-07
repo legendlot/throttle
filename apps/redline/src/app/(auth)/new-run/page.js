@@ -17,9 +17,9 @@ export function canRequestRun(perms) {
 
 const input = { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: '8px 12px', fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--t1)', outline: 'none', width: '100%' };
 const lbl   = { fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6, display: 'block' };
-const btnP  = { background: 'var(--orange)', border: '1px solid var(--orange)', borderRadius: 3, padding: '10px 18px', fontFamily: 'var(--cond)', fontSize: 13, color: '#0a0a0a', cursor: 'pointer', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' };
+const btnP  = { background: 'var(--yellow)', border: '1px solid var(--yellow)', borderRadius: 3, padding: '10px 18px', fontFamily: 'var(--cond)', fontSize: 13, color: '#0a0a0a', cursor: 'pointer', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' };
 const btnS  = { background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, padding: '8px 14px', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t2)', cursor: 'pointer' };
-const tabBtn = (active) => ({ background: active ? 'var(--orange)' : 'transparent', border: `1px solid ${active ? 'var(--orange)' : 'var(--border)'}`, borderRadius: 3, padding: '8px 16px', fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: active ? '#0a0a0a' : 'var(--t2)', cursor: 'pointer' });
+const tabBtn = (active) => ({ background: active ? 'var(--yellow)' : 'transparent', border: `1px solid ${active ? 'var(--yellow)' : 'var(--border)'}`, borderRadius: 3, padding: '8px 16px', fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: active ? '#0a0a0a' : 'var(--t2)', cursor: 'pointer' });
 const th = { padding: '7px 10px', fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--t3)', textAlign: 'left', borderBottom: '1px solid var(--border)' };
 const td = { padding: '5px 8px', borderBottom: '1px solid rgba(64,64,64,.4)' };
 
