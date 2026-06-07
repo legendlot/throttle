@@ -25,6 +25,10 @@ export default function FlushVerifyPage() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [verifyFlushId, setVerifyFlushId] = useState(null);
+  const [activeTab, setActiveTab] = useState('verify'); // verify | quarantine
+  const [quarantine, setQuarantine] = useState([]);
+  const [quarantineLoaded, setQuarantineLoaded] = useState(false);
+  const [quarantineLoading, setQuarantineLoading] = useState(false);
 
   const loadQueue = useCallback(async () => {
     if (!session) return;
@@ -42,6 +46,24 @@ export default function FlushVerifyPage() {
 
   useEffect(() => { loadQueue(); }, [loadQueue]);
 
+  const loadQuarantine = useCallback(async () => {
+    if (!session) return;
+    setQuarantineLoading(true);
+    try {
+      const data = await garageFetch('getQuarantine', {}, session);
+      setQuarantine(Array.isArray(data) ? data : []);
+      setQuarantineLoaded(true);
+    } catch (e) {
+      showToast(e.message || 'Failed to load quarantine', 'error');
+    } finally {
+      setQuarantineLoading(false);
+    }
+  }, [session, showToast]);
+
+  useEffect(() => {
+    if (activeTab === 'quarantine' && !quarantineLoaded) loadQuarantine();
+  }, [activeTab, quarantineLoaded, loadQuarantine]);
+
   function handleVerified() {
     setVerifyFlushId(null);
     loadQueue();
@@ -54,10 +76,26 @@ export default function FlushVerifyPage() {
           Flush Verify
         </h1>
         <p style={{ color: 'var(--t3)', fontSize: 11, marginTop: 4, fontFamily: 'var(--mono)' }}>
-          Store verifies line flushes raised by production.
+          Store verifies line flushes raised by production, and tracks quarantined material.
         </p>
       </div>
 
+      <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
+        {[{ id: 'verify', label: 'Verify Queue' }, { id: 'quarantine', label: 'Quarantine Register' }].map((t) => {
+          const active = activeTab === t.id;
+          return (
+            <button key={t.id} onClick={() => setActiveTab(t.id)} style={{
+              background: active ? 'var(--yellow)' : 'var(--surface2)',
+              color: active ? '#000' : 'var(--t3)',
+              border: active ? '1px solid var(--yellow)' : '1px solid var(--border)',
+              borderRadius: 4, padding: '5px 12px', fontFamily: 'var(--mono)', fontSize: 11,
+              textTransform: 'uppercase', letterSpacing: 1, cursor: 'pointer', fontWeight: active ? 700 : 500,
+            }}>{t.label}</button>
+          );
+        })}
+      </div>
+
+      {activeTab === 'verify' && (<>
       <div style={panelStyle}>
         <div style={panelHeaderStyle}>
           <span>Pending Flushes {rows.length > 0 && <span style={{ color: 'var(--yellow)', marginLeft: 6 }}>({rows.length})</span>}</span>
@@ -126,6 +164,54 @@ export default function FlushVerifyPage() {
             onClose={() => setVerifyFlushId(null)}
             onVerified={handleVerified}
           />
+        </div>
+      )}
+      </>)}
+
+      {activeTab === 'quarantine' && (
+        <div style={panelStyle}>
+          <div style={panelHeaderStyle}>
+            <span>Quarantine Register {quarantine.length > 0 && <span style={{ color: '#ff7070', marginLeft: 6 }}>({quarantine.length})</span>}</span>
+            <button style={btnSecondary} onClick={loadQuarantine} disabled={quarantineLoading}>↻ Refresh</button>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            {quarantineLoading ? (
+              <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+            ) : quarantine.length === 0 ? (
+              <div style={{ padding: 24, textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>Quarantine register is empty</div>
+            ) : (
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr>
+                    <th style={tableThStyle}>Disp ID</th>
+                    <th style={tableThStyle}>Date</th>
+                    <th style={tableThStyle}>Flush</th>
+                    <th style={tableThStyle}>WO</th>
+                    <th style={tableThStyle}>Part Code</th>
+                    <th style={tableThStyle}>Part Name</th>
+                    <th style={tableThStyle}>Return Type</th>
+                    <th style={tableThStyle}>Qty</th>
+                    <th style={tableThStyle}>Bin</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {quarantine.map((q) => (
+                    <tr key={q.disp_id}>
+                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{q.disp_id}</td>
+                      <td style={tableTdStyle}>{(q.created_at || '').slice(0, 10) || '—'}</td>
+                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontSize: 11 }}>{q.flush_id || '—'}</td>
+                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontSize: 11 }}>{q.wo_no || '—'}</td>
+                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{q.part_code}</td>
+                      <td style={tableTdStyle}>{q.part_name || '—'}</td>
+                      <td style={tableTdStyle}>{q.return_type || '—'}</td>
+                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{q.qty}</td>
+                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{q.bin_code || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
         </div>
       )}
     </div>

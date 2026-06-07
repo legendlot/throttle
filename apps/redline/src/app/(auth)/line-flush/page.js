@@ -4,7 +4,6 @@ import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Modal, Spinner, useToast } from '@throttle/ui';
 import { todayStr } from '@throttle/domain';
-import { FlushVerifyPanel } from '../../../components/flush/FlushVerifyPanel.js';
 
 const LF_RETURN_TYPES = ['Unused', 'Damaged', 'QC Rejected', 'Partial Assembly', 'Wrong Issue'];
 const LF_STATUS_TONES = { 'Pending Verification': 'yellow', Verified: 'green', Disputed: 'red' };
@@ -62,7 +61,6 @@ function newCard(seed = {}) {
 export default function LineFlushPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
-  const [activeTab, setActiveTab] = useState('flushes');
   const [view, setView] = useState('list'); // list | detail
   const [showNewFlush, setShowNewFlush] = useState(false);
 
@@ -74,7 +72,6 @@ export default function LineFlushPage() {
   // Detail state
   const [currentFlush, setCurrentFlush] = useState(null); // { flush, lines, dispositions }
   const [detailLoading, setDetailLoading] = useState(false);
-  const [verifyOpen, setVerifyOpen] = useState(false);
 
   // New flush form state
   const [flushType, setFlushType] = useState('run');
@@ -89,11 +86,6 @@ export default function LineFlushPage() {
   const [partCards, setPartCards] = useState([]);
   const [materialCache, setMaterialCache] = useState({});
   const [submitting, setSubmitting] = useState(false);
-
-  // Quarantine
-  const [quarantine, setQuarantine] = useState([]);
-  const [quarantineLoaded, setQuarantineLoaded] = useState(false);
-  const [quarantineLoading, setQuarantineLoading] = useState(false);
 
   const loadFlushes = useCallback(async () => {
     if (!session) return;
@@ -110,24 +102,6 @@ export default function LineFlushPage() {
   }, [session, statusFilter, showToast]);
 
   useEffect(() => { loadFlushes(); }, [loadFlushes]);
-
-  const loadQuarantine = useCallback(async () => {
-    if (!session) return;
-    setQuarantineLoading(true);
-    try {
-      const data = await garageFetch('getQuarantine', {}, session);
-      setQuarantine(Array.isArray(data) ? data : []);
-      setQuarantineLoaded(true);
-    } catch (e) {
-      showToast(e.message || 'Failed to load quarantine', 'error');
-    } finally {
-      setQuarantineLoading(false);
-    }
-  }, [session, showToast]);
-
-  useEffect(() => {
-    if (activeTab === 'quarantine' && !quarantineLoaded) loadQuarantine();
-  }, [activeTab, quarantineLoaded, loadQuarantine]);
 
   // ── New-flush form ──────────────────────────────────────────────
   const ensureMaterialCache = useCallback(async () => {
@@ -342,19 +316,12 @@ export default function LineFlushPage() {
     }
   }
 
-  function handleVerified() {
-    setVerifyOpen(false);
-    setView('list');
-    loadFlushes();
-  }
-
   const pendingCount = useMemo(
     () => flushRows.filter((r) => r.status === 'Pending Verification').length,
     [flushRows]
   );
 
   const canCreate = !!perms?.line_flush_create;
-  const canVerify = !!perms?.line_flush_verify;
 
   return (
     <div style={{ color: 'var(--t1)' }}>
@@ -363,16 +330,11 @@ export default function LineFlushPage() {
           Line Flush
         </h1>
         <p style={{ color: 'var(--t3)', fontSize: 11, marginTop: 4, fontFamily: 'var(--mono)' }}>
-          Production raises line flushes; store verifies them.
+          Raise a line flush to return leftover material to the store. The store receives, dispositions and verifies it in Garage (Flush Verify).
         </p>
       </div>
 
-      <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
-        <button style={tabBtn(activeTab === 'flushes')} onClick={() => setActiveTab('flushes')}>Flushes</button>
-        <button style={tabBtn(activeTab === 'quarantine')} onClick={() => setActiveTab('quarantine')}>Quarantine Register</button>
-      </div>
-
-      {activeTab === 'flushes' && view === 'list' && (
+      {view === 'list' && (
         <>
           {pendingCount > 0 && (
             <div style={{ background: 'rgba(222,42,42,.1)', border: '1px solid rgba(222,42,42,.3)', borderRadius: 4, padding: '8px 12px', marginBottom: 12, color: '#ff7070', fontSize: 12 }}>
@@ -455,15 +417,11 @@ export default function LineFlushPage() {
         </>
       )}
 
-      {activeTab === 'flushes' && view === 'detail' && (
+      {view === 'detail' && (
         <FlushDetailView
           loading={detailLoading}
           data={currentFlush}
-          canVerify={canVerify}
-          verifyOpen={verifyOpen}
-          openVerify={() => setVerifyOpen(true)}
-          onVerified={handleVerified}
-          onClose={() => { setView('list'); setCurrentFlush(null); setVerifyOpen(false); }}
+          onClose={() => { setView('list'); setCurrentFlush(null); }}
         />
       )}
 
@@ -496,53 +454,6 @@ export default function LineFlushPage() {
           onCancel={() => { resetNewForm(); setShowNewFlush(false); }}
         />
       </Modal>
-
-      {activeTab === 'quarantine' && (
-        <div style={panelStyle}>
-          <div style={panelHeaderStyle}>
-            <span>Quarantine Register {quarantine.length > 0 && <span style={{ color: '#ff7070', marginLeft: 6 }}>({quarantine.length})</span>}</span>
-            <button style={btnSecondary} onClick={loadQuarantine} disabled={quarantineLoading}>↻ Refresh</button>
-          </div>
-          <div style={{ overflowX: 'auto' }}>
-            {quarantineLoading ? (
-              <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
-            ) : quarantine.length === 0 ? (
-              <div style={{ padding: 24, textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>Quarantine register is empty</div>
-            ) : (
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr>
-                    <th style={tableThStyle}>Disp ID</th>
-                    <th style={tableThStyle}>Date</th>
-                    <th style={tableThStyle}>Flush</th>
-                    <th style={tableThStyle}>WO</th>
-                    <th style={tableThStyle}>Part Code</th>
-                    <th style={tableThStyle}>Part Name</th>
-                    <th style={tableThStyle}>Return Type</th>
-                    <th style={tableThStyle}>Qty</th>
-                    <th style={tableThStyle}>Bin</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {quarantine.map((q) => (
-                    <tr key={q.disp_id}>
-                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{q.disp_id}</td>
-                      <td style={tableTdStyle}>{(q.created_at || '').slice(0, 10) || '—'}</td>
-                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontSize: 11 }}>{q.flush_id || '—'}</td>
-                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontSize: 11 }}>{q.wo_no || '—'}</td>
-                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{q.part_code}</td>
-                      <td style={tableTdStyle}>{q.part_name || '—'}</td>
-                      <td style={tableTdStyle}>{q.return_type || '—'}</td>
-                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{q.qty}</td>
-                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{q.bin_code || '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -719,7 +630,7 @@ function NewFlushForm(props) {
   );
 }
 
-function FlushDetailView({ loading, data, canVerify, verifyOpen, openVerify, onVerified, onClose }) {
+function FlushDetailView({ loading, data, onClose }) {
   const grouped = useMemoLineGroups(data?.lines);
   if (loading) {
     return (
@@ -741,7 +652,6 @@ function FlushDetailView({ loading, data, canVerify, verifyOpen, openVerify, onV
     );
   }
   const { flush, dispositions } = data;
-  const isPending = flush.status === 'Pending Verification';
 
   return (
     <>
@@ -750,9 +660,6 @@ function FlushDetailView({ loading, data, canVerify, verifyOpen, openVerify, onV
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <span style={{ fontFamily: 'var(--mono)', color: 'var(--yellow)', fontSize: 13 }}>{flush.flush_id}</span>
           <StatusBadge label={flush.status || '—'} tone={LF_STATUS_TONES[flush.status] || 'gray'} />
-          {isPending && canVerify && !verifyOpen && (
-            <button onClick={openVerify} style={btnPrimary}>VERIFY THIS FLUSH</button>
-          )}
         </div>
       </div>
 
@@ -798,16 +705,6 @@ function FlushDetailView({ loading, data, canVerify, verifyOpen, openVerify, onV
         </div>
       </div>
 
-      {isPending && canVerify && verifyOpen && (
-        <div style={panelStyle}>
-          <div style={panelHeaderStyle}><span>Store Verification</span></div>
-          <FlushVerifyPanel
-            flushId={flush.flush_id}
-            onClose={() => onVerified()}
-            onVerified={onVerified}
-          />
-        </div>
-      )}
 
       {Array.isArray(dispositions) && dispositions.length > 0 && (
         <div style={panelStyle}>

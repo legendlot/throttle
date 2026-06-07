@@ -44,7 +44,6 @@ const GROUPS = [
     items: [
       { id: 'production-runs',    label: 'Production Runs',    route: '/production-runs',    icon: Cog },
       { id: 'work-orders',        label: 'Ad Hoc Requests',    route: '/work-orders',        icon: ClipboardList, gate: (p) => hasPermission(p, 'work_order') },
-      { id: 'line-flush',         label: 'Line Flush',         route: '/line-flush',         icon: Workflow,      gate: (p) => hasPermission(p, 'line_flush_create') || hasPermission(p, 'line_flush_verify') },
     ],
   },
   {

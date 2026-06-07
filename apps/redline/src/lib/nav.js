@@ -9,7 +9,7 @@ import {
   ClipboardCheck, AlertTriangle, FileText,
   ArrowLeftRight,
   BookOpen,
-  FilePlus2,
+  FilePlus2, Workflow,
 } from 'lucide-react';
 
 export const NAV_GROUPS = [
@@ -26,6 +26,7 @@ export const NAV_GROUPS = [
       { id: 'hourly',   label: 'Hourly',    route: '/hourly',   icon: Clock },
       { id: 'qc',       label: 'QC',        route: '/qc',       icon: ShieldCheck },
       { id: 'audit',    label: 'Audit',     route: '/audit',    icon: ClipboardCheck },
+      { id: 'line-flush', label: 'Line Flush', route: '/line-flush', icon: Workflow },
       { id: 'process-deviations', label: 'Deviations', route: '/process-deviations', icon: AlertTriangle },
     ],
   },
