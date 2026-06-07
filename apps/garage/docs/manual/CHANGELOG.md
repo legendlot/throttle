@@ -6,6 +6,20 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md`).
 
+## [1.3.0] - 2026-06-07
+### Added
+- New **Scanner** part documenting the Store department's floor-scanner stations
+  after the department-gated redesign: The Floor Scanner (department PINs, the
+  on-screen keypad, operator QR sign-in, the guided category/station flow, the
+  auto-derived shift, logout-to-landing, and the red-screen reject behaviour),
+  Store Issue, Returns Intake (bind an open RS-NNN, capture-only), Direct Issue
+  (scan-to-issue), and Legacy Reg & Lookup.
+### Changed
+- Users & Roles: added the super-admin **Scanner Department PINs** card (write-only,
+  hashed, set/rotate the three department PINs).
+- Open Return Shipments: the PWA now binds by scanning the **QR code** on the
+  Process screen.
+
 ## [1.2.0] - 2026-06-06
 ### Added
 - Gate Pass and Unit Restock chapters (Store part). Gate Pass covers the

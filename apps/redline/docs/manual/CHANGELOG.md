@@ -6,6 +6,17 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md` → Versioning).
 
+## [1.1.0] - 2026-06-07
+### Added
+- New **Scanner** part documenting the production and dispatch floor-scanner
+  stations after the department-gated redesign: The Floor Scanner (department
+  PINs, the on-screen keypad, operator QR sign-in now required on Production too,
+  the guided line/station flow, the auto-derived shift windows, logout-to-landing,
+  and the red-screen reject behaviour), Production Stations (Assembly, QC Pass/Fail,
+  Workshop, Packaging, PKG Out with the tightened acceptance rules), Repair,
+  Outsourced & Repack, Dispatch Stations (Dispatch In, Allocate, Pack, Dispatch
+  Out, Restock), and Attendance & Lookup.
+
 ## [1.0.2] - 2026-05-29
 ### Changed
 - Copy convention: removed em dashes throughout (house style), replacing each with

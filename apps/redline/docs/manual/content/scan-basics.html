@@ -1,0 +1,35 @@
+<p class="lead">The floor scanner is the handheld PWA your team uses at every physical station. The whole production line and the whole dispatch line run through it. This chapter covers how the scanner is now organised: how you get into your department, sign in, and reach the station you need. The station chapters that follow cover each scan in detail.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Where</div><div class="g-val"><span class="mono">scanner.legendoftoys.com</span>, on the floor tablets.</div></div>
+  <div class="g-cell"><div class="g-lbl">Your areas</div><div class="g-val"><strong>Production</strong> and <strong>Dispatch</strong>.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role op">Operator</span> <span class="role sup">Supervisor</span> <span class="role dis">Dispatch</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Gets you in</div><div class="g-val">Department PIN, then your QR badge.</div></div>
+</div>
+
+<h2 class="sec">Departments, not a free-for-all</h2>
+<p>The scanner opens on a <strong>Department Select</strong> screen with four tiles: <strong>Production</strong>, <strong>Store</strong>, <strong>Dispatch</strong> and <strong>Attendance</strong>. Each tile leads only to its own stations. A Production device can no longer be switched to a Store or Dispatch station by mistake, and the reverse. This walling-off is deliberate: it removes the wrong-station mis-scans that used to cause real damage, like fresh cars being scanned through a returns station.</p>
+
+<ol class="steps">
+  <li><span class="s-title">Tap your department.</span> Production or Dispatch. A 6-digit PIN keypad appears on screen (not the phone keyboard, so the PIN is never remembered by the device).</li>
+  <li><span class="s-title">Enter the department PIN.</span> A wrong PIN just says &ldquo;try again&rdquo;; there is no lockout. The unlock then sticks until <strong>1 AM</strong>, even if the app is closed and reopened.</li>
+  <li><span class="s-title">Sign in with your QR badge.</span> Scan your operator card (or tap <strong>Type ID</strong> and enter your employee ID). This runs once per device per shift and also expires at 1 AM.</li>
+  <li><span class="s-title">Pick a category, then line and station.</span> Categories show stations in floor order. Choose your line (<strong>L1&ndash;L5</strong> for production, <strong>D1/D2</strong> for dispatch) and station, then tap <strong>Launch Scanner</strong>.</li>
+</ol>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Production now needs a sign-in too</div>
+  <p>Every working station, including all Production stations, now asks for your operator QR badge once per device per shift, the same as Dispatch always has. Scan your card after setup. Only the device-free utilities (Lookup and Attendance) skip this.</p>
+</div>
+
+<h2 class="sec">On the scanner screen</h2>
+<p>Once launched, the top bar shows your <strong>line and station</strong> (and operator name) on the left and <strong>Logout</strong> on the right. The camera fills the middle; your recent scans run along the bottom. There is <strong>no settings button and no way to switch station in-app</strong>. To change line or station, tap <strong>Logout</strong>, which takes you back to Department Select, then come in again through the guided flow. That friction is intentional.</p>
+
+<h2 class="sec">Shift is automatic</h2>
+<p>There are no Regular / OT buttons any more. The scanner reads the device clock and tags each scan&rsquo;s shift for you: Packaging counts Regular from 10:00 to 19:00, every other station from 09:00 to 18:00, and anything outside that window as OT. You never set it.</p>
+
+<h2 class="sec">When a scan is rejected</h2>
+<div class="callout danger">
+  <div class="c-title">&#9940; A wrong scan stops you with a full red screen and a buzz</div>
+  <p>If a unit is at the wrong stage, belongs to a different run, or the code is the wrong kind, the scanner shows a <strong>full red reject screen with a distinct buzz</strong> and states the exact reason (for example &ldquo;wrong run, unit belongs to REP-123&rdquo;). Nothing is recorded. Read the reason, fix it, and rescan. Every station below has been tightened to reject the wrong scan rather than let it through quietly.</p>
+</div>

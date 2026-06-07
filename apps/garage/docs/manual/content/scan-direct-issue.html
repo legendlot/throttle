@@ -1,0 +1,22 @@
+<p class="lead">Direct Issue is the scanner station that physically issues a Direct Issuance out of stock. The DI is authorised in Garage (which prints a <code>DI-NNN</code> sticker but moves no stock); scanning that sticker here is the moment stock actually moves.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Station</div><div class="g-val"><span class="mono">Direct Issue</span> &middot; Store.</div></div>
+  <div class="g-cell"><div class="g-lbl">You scan</div><div class="g-val">The <code>DI-NNN</code> sticker.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sto">Store</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Effect</div><div class="g-val">Stock moves on this scan.</div></div>
+</div>
+
+<h2 class="sec">Why a scan, not a button</h2>
+<p>Authorising a Direct Issuance in Garage records the intent and approver and prints the sticker, but deliberately moves <strong>no stock</strong>. The stock only leaves when someone physically scans the sticker at this station. A scan cannot be invented; a desk click can. So the scan is the ground truth of what actually went out.</p>
+
+<ol class="steps">
+  <li><span class="s-title">Approve the DI in Garage.</span> On <strong>Direct Issuance</strong>, approve it (this prints the <code>DI-NNN</code> sticker).</li>
+  <li><span class="s-title">Scan the sticker here.</span> The hint reads &ldquo;scan DI-NNN sticker to issue out&rdquo;. The units are re-checked at scan time (a unit may have moved since approval), then issued.</li>
+  <li><span class="s-title">Done.</span> Stock is debited and the units flip to direct-issued.</li>
+</ol>
+
+<div class="callout note">
+  <div class="c-title">&#9432; The deskside exception</div>
+  <p>For a hand-off that genuinely cannot reach a scanner, Garage has a <strong>Force Issue</strong> option (reason required). It moves stock immediately but is flagged as force-issued and writes no scan, so it stays rare and visible. The scan is the default; force is the exception.</p>
+</div>

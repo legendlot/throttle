@@ -1,0 +1,25 @@
+<p class="lead">Store Issue is the scanner station for picking parts against a production run. You select the run, then scan each bag of parts as you pick it; the scans feed the pick status that shows on the Issue Queue in Garage.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Station</div><div class="g-val"><span class="mono">Store Issue</span> &middot; no line.</div></div>
+  <div class="g-cell"><div class="g-lbl">You scan</div><div class="g-val">Each part <strong>bag QR</strong> (BAG- code).</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sto">Store</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Feeds</div><div class="g-val">Issue Queue pick status.</div></div>
+</div>
+
+<h2 class="sec">The flow</h2>
+<ol class="steps">
+  <li><span class="s-title">Select the run.</span> A dropdown on the scanner screen lists runs that are ready to pick. Choosing one seeds its pick list.</li>
+  <li><span class="s-title">Scan each bag.</span> The hint reads &ldquo;scan bag QR&rdquo;. A green flash counts the bag against its part line.</li>
+  <li><span class="s-title">Watch the tally.</span> Garage&rsquo;s Issue Queue shows a live pick panel; a count in amber means the picked quantity differs from the BOM.</li>
+</ol>
+
+<div class="callout note">
+  <div class="c-title">&#9432; The scanner is optional for picking</div>
+  <p>Store Issue speeds up and double-checks picking, but it is not mandatory. A supervisor can skip the station entirely and issue straight from the Issue Queue in Garage. The station exists to give you a scan-by-scan check while you pick.</p>
+</div>
+
+<div class="callout floor">
+  <div class="c-title">&#9874; Over-target is allowed here on purpose</div>
+  <p>If you pick more bags than the BOM calls for, the scanner <strong>counts and flags</strong> the overage rather than blocking you. This is intentional: the line flush reconciles any extra downstream, so the floor is never stopped mid-pick. The overage simply shows up in the log and on the Issue Queue.</p>
+</div>

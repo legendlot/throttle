@@ -1,0 +1,27 @@
+<p class="lead">The Dispatch department&rsquo;s <strong>Dispatch Flow</strong> category moves a finished unit out the door in floor order: Dispatch In, Allocate, Pack, then Dispatch Out. A separate <strong>Restock</strong> station pulls an unused unit back into stock. Dispatch stations bind to a dispatch line, D1 or D2.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Category</div><div class="g-val">Dispatch Flow &middot; lines D1/D2.</div></div>
+  <div class="g-cell"><div class="g-lbl">Stations</div><div class="g-val">Dispatch In &rarr; Allocate &rarr; Pack &rarr; Dispatch Out.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role dis">Dispatch</span> <span class="role sup">Supervisor</span></div></div>
+  <div class="g-cell"><div class="g-lbl">You scan</div><div class="g-val">Box labels (<code>LOT-&hellip;-E/R</code>) and box refs.</div></div>
+</div>
+
+<h2 class="sec">Dispatch In (DTK)</h2>
+<p>Takes a packed unit into the dispatch area. Scan the box label (<code>LOT-XXXXXXXX-E/R</code>). It accepts only a unit that has come through <strong>PKG Out</strong> (ready to dispatch); anything else is rejected.</p>
+
+<h2 class="sec">Allocate (ALLOC)</h2>
+<p>Assigns a unit to a channel or shipment. Select the channel, then scan the box label. It accepts a unit at <strong>Dispatch In</strong> (first allocation) or one already <strong>Allocated</strong> (re-allocation is free), so you can move a unit between channels without a detour.</p>
+
+<h2 class="sec">Pack (PACK)</h2>
+<p>Builds the physical shipment box. Select the shipment, then scan each unit&rsquo;s batch label into it. The shipment dropdown shows <strong>all open shipments</strong>, not just today&rsquo;s, so you can pack ahead for a future-dated shipment.</p>
+
+<h2 class="sec">Dispatch Out (DOUT)</h2>
+<p>The final out-the-door scan. Scan the box label (<code>BOX-XXXXX</code>) or a batch label to ship it. After this the unit is shipped.</p>
+
+<h2 class="sec">Restock</h2>
+<p>Returns an <strong>unused</strong> unit to stock (for example, a unit pulled from a box that was over-packed). Pick a reason, then scan the unit&rsquo;s LOT UPC. Only unused units are accepted; this is not the path for a customer return.</p>
+<div class="callout warn">
+  <div class="c-title">&#9888; A courier-touched return never goes through Restock</div>
+  <p>If a unit has been out to a customer and come back, it is a return, not a restock. Send it through <strong>Returns Intake</strong> in the Store department. Restock is only for unused units that never left.</p>
+</div>

@@ -1,0 +1,35 @@
+<p class="lead">The floor scanner is the handheld PWA your team uses at every physical station. Store work happens through three of its stations (Store Issue, Returns Intake and Direct Issue), plus the Legacy Reg and Lookup utilities. This chapter covers how the scanner is now organised: how you get into the Store area, sign in, and reach the station you need.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Where</div><div class="g-val"><span class="mono">scanner.legendoftoys.com</span>, on the floor tablets.</div></div>
+  <div class="g-cell"><div class="g-lbl">Your area</div><div class="g-val">The <strong>Store</strong> department.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sto">Store</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Gets you in</div><div class="g-val">Store PIN, then your QR badge.</div></div>
+</div>
+
+<h2 class="sec">Departments, not a free-for-all</h2>
+<p>The scanner now opens on a <strong>Department Select</strong> screen with four tiles: <strong>Production</strong>, <strong>Store</strong>, <strong>Dispatch</strong> and <strong>Attendance</strong>. Each tile leads only to its own stations. A device set up for Store can no longer be switched to a Production or Dispatch station by mistake. This walling-off is deliberate: it removes the wrong-station mis-scans that used to cause real damage on the floor.</p>
+
+<ol class="steps">
+  <li><span class="s-title">Tap Store.</span> A 6-digit PIN keypad appears on screen (not the phone keyboard, so the PIN is never remembered by the device).</li>
+  <li><span class="s-title">Enter the Store PIN.</span> A wrong PIN just says &ldquo;try again&rdquo;; there is no lockout. The unlock then sticks until <strong>1 AM</strong>, even if the app is closed and reopened.</li>
+  <li><span class="s-title">Sign in with your QR badge.</span> Scan your operator card (or tap <strong>Type ID</strong> and enter your employee ID). This runs once per device per shift and also expires at 1 AM.</li>
+  <li><span class="s-title">Pick a category, then a station.</span> Store shows <strong>Store Issue</strong>, <strong>Returns</strong>, <strong>Direct Issue</strong> and <strong>Utilities</strong> (Lookup and Legacy Reg). Tap <strong>Launch Scanner</strong>.</li>
+</ol>
+
+<div class="callout note">
+  <div class="c-title">&#9432; The PINs are set in Garage</div>
+  <p>The three department PINs live on a super-admin-only <strong>Scanner Department PINs</strong> card on the Garage <strong>Users &amp; Roles</strong> page. They are stored hashed (never shown back), and the keypad checks them on the server. See the Users &amp; Roles chapter to set or rotate them.</p>
+</div>
+
+<h2 class="sec">On the scanner screen</h2>
+<p>Once launched, the top bar shows your <strong>station</strong> (and operator name) on the left and <strong>Logout</strong> on the right. The camera fills the middle; your recent scans run along the bottom. There is <strong>no settings button and no way to switch station in-app</strong>. To change station, tap <strong>Logout</strong>, which takes you all the way back to Department Select, then come in again through the guided flow. That friction is intentional.</p>
+
+<h2 class="sec">Shift is automatic</h2>
+<p>There are no Regular / OT buttons any more. The scanner reads the device clock and tags each scan&rsquo;s shift for you (Regular inside the station&rsquo;s working window, OT outside it). You never set it.</p>
+
+<h2 class="sec">When a scan is rejected</h2>
+<div class="callout danger">
+  <div class="c-title">&#9940; A wrong scan stops you with a full red screen and a buzz</div>
+  <p>If a unit is at the wrong stage, belongs to a different run, or the code is the wrong kind, the scanner shows a <strong>full red reject screen with a distinct buzz</strong> and states the exact reason (for example &ldquo;wrong run&rdquo; or &ldquo;already issued&rdquo;). Nothing is recorded. Read the reason, fix it, and rescan. This is how the floor stays clean: a bad scan cannot slip through quietly.</p>
+</div>

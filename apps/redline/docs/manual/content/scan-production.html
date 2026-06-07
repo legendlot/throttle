@@ -1,0 +1,36 @@
+<p class="lead">The Production department&rsquo;s <strong>Fresh Production</strong> category walks a unit along the line in floor order: Assembly, QC Pass, QC Fail, Workshop, Packaging, then PKG Out. Each station accepts only a unit that is genuinely at the right stage; anything else is rejected with a red screen.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Category</div><div class="g-val">Fresh Production &middot; lines L1&ndash;L5.</div></div>
+  <div class="g-cell"><div class="g-lbl">Stations</div><div class="g-val">Assembly &rarr; QC &rarr; Workshop &rarr; Packaging &rarr; PKG Out.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role op">Operator</span> <span class="role sup">Supervisor</span></div></div>
+  <div class="g-cell"><div class="g-lbl">You scan</div><div class="g-val">The LOT UPC, or a box label at PKG Out.</div></div>
+</div>
+
+<h2 class="sec">Assembly (INW)</h2>
+<p>Brings a freshly built unit into the system. Scan the unit&rsquo;s <code>LOT-XXXXXXXX</code> UPC; a green tick confirms it is inwarded. Assembly checks the unit&rsquo;s product against the line&rsquo;s active run, and that check now applies to <strong>remotes as well as cars</strong>, so a remote from the wrong product is caught the same way a wrong car is. A code that is not a LOT UPC, or a unit already inwarded, is rejected.</p>
+
+<h2 class="sec">QC Pass and QC Fail</h2>
+<p>The quality check. Scan the unit&rsquo;s UPC only. A unit can be checked only if it has been <strong>inwarded</strong> (fresh) or <strong>repaired</strong> (back from a repair run); anything else is rejected. QC Pass marks it good; QC Fail then asks you to pick the defect codes. On a passing car-plus-remote, the pair is recorded here.</p>
+
+<h2 class="sec">Workshop (WKS)</h2>
+<p>Where a failed unit is worked on. Scan the unit&rsquo;s UPC. After workshop, a unit goes back through QC.</p>
+
+<h2 class="sec">Packaging (PKG)</h2>
+<p>Boxes a finished unit. Scan the <strong>car UPC first</strong>, then its remote. Two rules are enforced:</p>
+<ul>
+  <li><strong>QC Pass only.</strong> Only a unit that has passed QC can be packed. A unit at any other stage is rejected.</li>
+  <li><strong>The right pair.</strong> The remote you scan must be <em>this car&rsquo;s</em> actual paired remote, not just any remote.</li>
+</ul>
+<div class="callout warn">
+  <div class="c-title">&#9888; Re-packing is not done at Packaging</div>
+  <p>Packaging is for fresh units only. To re-pack a unit that has already been boxed or dispatched (for example to swap its channel), use the <strong>Repack</strong> stations, not Packaging. Packaging will reject an already-dispatched unit.</p>
+</div>
+
+<h2 class="sec">PKG Out</h2>
+<p>The hand-off from production to dispatch. Scan the box label (<code>LOT-XXXXXXXX-E/R</code>). PKG Out accepts exactly two things:</p>
+<ul>
+  <li>a <strong>fresh</strong> unit just boxed at Packaging (awaiting dispatch), or</li>
+  <li>a <strong>UDR return</strong> that the Store has issued back out for re-dispatch.</li>
+</ul>
+<p>A UDR return keeps its original sealed box, so PKG Out re-dispatches it on that same label without re-boxing. Anything that is neither is rejected.</p>

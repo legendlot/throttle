@@ -1,0 +1,26 @@
+<p class="lead">Returns Intake is the single door every returned unit comes through. You first bind the scanner to one open return shipment, then scan each unit into it. The station only <strong>captures</strong> what arrived; you set the disposition (UDR, CXR, BRV or Loss) afterwards in Garage on the Process / Disposition page.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Station</div><div class="g-val"><span class="mono">Returns Intake</span> &middot; Store.</div></div>
+  <div class="g-cell"><div class="g-lbl">You scan</div><div class="g-val">A box label, unit UPC, or legacy code.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sto">Store</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Replaces</div><div class="g-val">The old RTO IN station.</div></div>
+</div>
+
+<h2 class="sec">The flow</h2>
+<ol class="steps">
+  <li><span class="s-title">Open a shipment in Garage.</span> On <strong>Returns &rarr; Open Return Shipments</strong>, open a shipment with its courier. It gets a number (<code>RS-NNN</code>) and a <strong>scannable QR</strong> you can point the PWA at.</li>
+  <li><span class="s-title">Bind the scanner.</span> On the Returns Intake station, pick the open <code>RS-NNN</code> from the list or scan its QR. Every unit you scan now attaches to that shipment.</li>
+  <li><span class="s-title">Scan each unit.</span> A modern box label, a loose car or remote UPC, or a legacy barcode all work; the station resolves what it can. The unit is logged as <strong>Pending</strong> for inspection.</li>
+  <li><span class="s-title">Disposition in Garage.</span> The units appear live on the Process / Disposition page, where you set UDR / CXR / BRV / Loss and relabel any legacy units.</li>
+</ol>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; RTO IN is gone, use Returns Intake</div>
+  <p>The old <strong>RTO IN</strong> station has been removed. All returns, including legacy and loose car/remote units, now come through <strong>Returns Intake</strong>. If a floor instruction still mentions RTO IN, it means this station. Courier-touched returns must come through here, never through Restock.</p>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Capture only, no decisions at the scanner</div>
+  <p>You do not choose a disposition while scanning. The scanner just records that the unit arrived and binds it to the shipment. Re-scanning the same unit is harmless. All the triage choices happen back in Garage, so the floor stays fast and the decisions stay auditable.</p>
+</div>

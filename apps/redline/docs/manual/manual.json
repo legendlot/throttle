@@ -2,8 +2,8 @@
   "title": "Redline",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to the production floor, QC, dispatch and admin screens that run Legend of Toys.",
-  "version": "1.0.3",
-  "date": "2026-06-06",
+  "version": "1.1.0",
+  "date": "2026-06-07",
   "app_url": "redline.legendoftoys.com",
   "owner": "Legend of Toys",
   "roles": {
@@ -46,6 +46,17 @@
         { "id": "returns",    "title": "Returns",     "route": "/returns",     "file": "act-returns.html",     "roles": ["sup","dis","adm"] },
         { "id": "scans",      "title": "Scans",       "route": "/scans",       "file": "act-scans.html",       "roles": ["op","sup","dis","adm"] },
         { "id": "corrections","title": "Corrections", "route": "/corrections", "file": "act-corrections.html", "roles": ["sup","adm"] }
+      ]
+    },
+    {
+      "part": "Scanner",
+      "subtitle": "The production and dispatch stations on the floor scanner: how to get in, and what each station does.",
+      "chapters": [
+        { "id": "scan-basics",       "title": "The Floor Scanner",          "file": "scan-basics.html",        "roles": ["op","sup","dis","adm"] },
+        { "id": "scan-production",   "title": "Production Stations",        "file": "scan-production.html",    "roles": ["op","sup"] },
+        { "id": "scan-repair-repack","title": "Repair, Outsourced & Repack","file": "scan-repair-repack.html", "roles": ["op","sup"] },
+        { "id": "scan-dispatch",     "title": "Dispatch Stations",          "file": "scan-dispatch.html",      "roles": ["dis","sup"] },
+        { "id": "scan-utilities",    "title": "Attendance & Lookup",        "file": "scan-utilities.html",     "roles": ["op","sup","dis"] }
       ]
     },
     {

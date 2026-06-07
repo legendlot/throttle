@@ -2,8 +2,8 @@
   "title": "Garage",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to store, inventory, production, returns and procurement at Legend of Toys.",
-  "version": "1.2.0",
-  "date": "2026-06-06",
+  "version": "1.3.0",
+  "date": "2026-06-07",
   "app_url": "garage.legendoftoys.com",
   "owner": "Legend of Toys",
   "roles": {
@@ -80,6 +80,17 @@
         { "id": "ret-repair",    "title": "Issue Repair",             "route": "/returns/repair-pool","file": "ret-repair.html",   "roles": ["sto","adm"] },
         { "id": "ret-losses",    "title": "Losses",                   "route": "/returns/losses",    "file": "ret-losses.html",    "roles": ["sto","adm"] },
         { "id": "ret-channels",  "title": "Return Channels",          "route": "/returns/channels",  "file": "ret-channels.html",  "roles": ["adm"] }
+      ]
+    },
+    {
+      "part": "Scanner",
+      "subtitle": "The Store department's stations on the floor scanner: how to get in, and what each station does.",
+      "chapters": [
+        { "id": "scan-basics",         "title": "The Floor Scanner",  "file": "scan-basics.html",         "roles": ["sto","adm"] },
+        { "id": "scan-store-issue",    "title": "Store Issue",        "file": "scan-store-issue.html",    "roles": ["sto"] },
+        { "id": "scan-returns-intake", "title": "Returns Intake",     "file": "scan-returns-intake.html", "roles": ["sto"] },
+        { "id": "scan-direct-issue",   "title": "Direct Issue",       "file": "scan-direct-issue.html",   "roles": ["sto"] },
+        { "id": "scan-utilities",      "title": "Legacy Reg & Lookup","file": "scan-utilities.html",      "roles": ["sto","adm"] }
       ]
     },
     {

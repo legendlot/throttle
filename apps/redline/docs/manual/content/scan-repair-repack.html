@@ -1,0 +1,25 @@
+<p class="lead">Three more Production categories handle units that are not fresh builds: <strong>Repair Run</strong> for units coming back for rework, <strong>Outsourced Run</strong> for finished units returned by a vendor, and <strong>Repack Run</strong> for swapping a packed unit&rsquo;s channel. Each starts at its own first station and then rejoins the normal QC-to-PKG-Out line.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Categories</div><div class="g-val">Repair Run &middot; Outsourced Run &middot; Repack Run.</div></div>
+  <div class="g-cell"><div class="g-lbl">First stations</div><div class="g-val">Repair &middot; Ext Inwarding &middot; Repack In.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role op">Operator</span> <span class="role sup">Supervisor</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Then</div><div class="g-val">Rejoin QC &rarr; Packaging &rarr; PKG Out.</div></div>
+</div>
+
+<h2 class="sec">Repair Run</h2>
+<p>A repair run (<code>REP-NNN</code>) is a batch of returned units to be reworked. You select the run, then scan each unit in at the <strong>Repair</strong> station to start it. A returned unit is accepted only if the <strong>Store has issued it to this exact repair run</strong> (issued from the Returns Issue Repair pool). A unit issued to a different run, or not issued at all, is rejected. From there the unit goes through Workshop and QC like any other; on a QC Pass the car and remote are re-paired exactly as in fresh production.</p>
+
+<h2 class="sec">Outsourced Run</h2>
+<p>An outsourced run (<code>EXT-NNN</code>) is one where raw materials were sent to a vendor who built and returned finished units. As the units come back, scan each one in at <strong>Ext Inwarding</strong> to bring it into the system against that run; it then flows through QC, Packaging and PKG Out like a fresh unit. Ext Inwarding checks that the scanned unit&rsquo;s product matches the run, so a unit cannot be tagged to the wrong job.</p>
+
+<h2 class="sec">Repack Run</h2>
+<p>A repack run swaps a packed unit from one channel to another. It is two stations:</p>
+<ul>
+  <li><strong>Repack In.</strong> Select the run, then scan the unit&rsquo;s <strong>box label</strong> (<code>LOT-XXXXXXXX-E/R</code>). It accepts a box label only, and only for a unit sitting at <strong>Dispatch In</strong> or <strong>Allocate</strong> (never a unit already shipped, and never a bare car or remote). Scanning it in releases the unit from any allocation and rolls it back so it can be re-boxed for the new channel.</li>
+  <li><strong>Repack Out.</strong> Scan the unit and its destination box. Only a unit that was actually scanned in at Repack In is accepted, so a fresh unit cannot slip through here.</li>
+</ul>
+<div class="callout note">
+  <div class="c-title">&#9432; Same handlers, different doorways</div>
+  <p>Repaired and outsourced units flow through the <em>same</em> QC, Packaging and PKG Out stations as fresh units; the categories are just separate doorways into one line. So a repaired or vendor-built unit is dispatched exactly like a freshly built one once it passes QC.</p>
+</div>
