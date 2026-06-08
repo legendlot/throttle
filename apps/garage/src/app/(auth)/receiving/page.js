@@ -298,6 +298,29 @@ export default function ReceivingPage() {
     }
   }
 
+  // Edit / delete a shipping mark — allowed only while nothing has been counted
+  // against it (the worker re-checks: rejects if any receiving_entries exist).
+  async function renameMark(m) {
+    const next = window.prompt('Edit mark code', m.mark_code);
+    if (next == null) return;
+    const code = next.trim();
+    if (!code || code === m.mark_code) return;
+    try {
+      await workerFetch('updateShippingMark', { data: { mark_id: m.mark_id, mark_code: code } }, session);
+      showToast('Mark renamed', 'success');
+      await refreshDetail();
+    } catch (e) { showToast(e.message || 'Rename failed', 'error'); }
+  }
+  async function deleteMark(m) {
+    if (!window.confirm(`Delete mark ${m.mark_code}? Only works if nothing has been counted into it.`)) return;
+    try {
+      await workerFetch('deleteShippingMark', { data: { mark_id: m.mark_id } }, session);
+      showToast('Mark deleted', 'success');
+      if (activeMarkId === m.mark_id) closeBoxIntake();
+      await refreshDetail();
+    } catch (e) { showToast(e.message || 'Delete failed', 'error'); }
+  }
+
   // ── Box intake ────────────────────────────────────────────────────────────────
   function openBoxIntake(markId) {
     // Pre-fill from already-loaded line entries (refreshDetail loads them per line).
@@ -1016,12 +1039,20 @@ export default function ReceivingPage() {
                           <StatusBadge label={m.status || '—'} tone={m.status === 'Received' ? 'green' : m.status === 'Missing' || m.status === 'Damaged' ? 'red' : 'gray'} />
                         </td>
                         <td style={td}>
-                          <button
-                            style={isActive ? { ...btnBlue, padding: '2px 8px', fontSize: 10 } : { ...btnSec, padding: '2px 8px', fontSize: 10 }}
-                            onClick={() => isActive ? closeBoxIntake() : openBoxIntake(m.mark_id)}
-                          >
-                            {isActive ? '✎ Editing' : (okQty + dmgQty) > 0 ? '✎ Edit' : 'Open Box'}
-                          </button>
+                          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
+                            <button
+                              style={isActive ? { ...btnBlue, padding: '2px 8px', fontSize: 10 } : { ...btnSec, padding: '2px 8px', fontSize: 10 }}
+                              onClick={() => isActive ? closeBoxIntake() : openBoxIntake(m.mark_id)}
+                            >
+                              {isActive ? '✎ Editing' : (okQty + dmgQty) > 0 ? '✎ Edit' : 'Open Box'}
+                            </button>
+                            {(okQty + dmgQty) === 0 && !isActive && (
+                              <>
+                                <button style={{ ...btnSec, padding: '2px 8px', fontSize: 10 }} title="Edit mark code" onClick={() => renameMark(m)}>✎ Code</button>
+                                <button style={{ ...btnSec, padding: '2px 8px', fontSize: 10, color: '#ff7070', borderColor: 'rgba(222,42,42,.3)' }} title="Delete this empty mark" onClick={() => deleteMark(m)}>🗑</button>
+                              </>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );
