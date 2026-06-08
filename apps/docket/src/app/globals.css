@@ -389,10 +389,6 @@ button { cursor: pointer; background: none; border: none; }
 .cell-title .ttl { font-family: var(--f-body); font-size: 14px; font-weight: 500; color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; transition: color var(--fast); flex: 1 1 auto; min-width: 60px; }
 .cell-title .ttl:hover { color: var(--accent); }
 .inline-meta { display: inline-flex; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 0; }
-/* the team chip carries its own max-width (inline 120px) + .lbl ellipsis; the generic
-   .editable .tx (overflow:hidden + 8px padding) was hard-clipping the chip by ~16px.
-   Selector must out-specify `.editable .tx` (same 0,2,0 but later in source). */
-.inline-meta .editable .tx { overflow: visible; }
 .chip .lbl { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip.add { background: transparent; border: 1px dashed var(--border-2); color: var(--text-4); opacity: 0; transition: opacity var(--fast); }
 .row:hover .chip.add { opacity: 1; }
@@ -412,6 +408,11 @@ button { cursor: pointer; background: none; border: none; }
 .editable.empty { color: var(--text-placeholder); font-style: italic; }
 .editable .ic { width: 13px; height: 13px; flex-shrink: 0; }
 .editable .tx { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* On the board, .tx must NOT clip: it sits in tight cells and its 8px padding
+   leaves a content box ~16px narrower than the inline content (team chip, priority
+   badge), hard-clipping them. Each inner element (.chip .lbl, .cell-owner .name)
+   carries its own ellipsis, so dropping .tx clipping here is safe. (0,3,0 > 0,2,0.) */
+.board .editable .tx { overflow: visible; }
 
 .chip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; border-radius: var(--r-sm); padding: 3px 9px; white-space: nowrap; background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border); }
 .chip .dot { width: 7px; height: 7px; border-radius: 2px; flex-shrink: 0; }
