@@ -120,6 +120,16 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
     load();
   }, [runNo, session]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // The panel renders INLINE below the (potentially tall) Recent Runs table, so on
+  // open it can mount below the fold — clicking a row then looks like "nothing
+  // happens". Scroll it into view whenever a run is opened. The id is present on
+  // every render branch (spinner / error / main), so the element exists on mount.
+  useEffect(() => {
+    if (!runNo) return;
+    const el = document.getElementById('pr-detail-panel');
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [runNo]);
+
   if (loading && !runData) {
     return (
       <div id="pr-detail-panel" style={{ ...panel, marginTop: 16, padding: 32, textAlign: 'center' }}>
