@@ -572,7 +572,7 @@ function TaskRow({ task, ctx, isChild, hasKids, expanded }) {
           <EditableSelect editable={ed} value={task.owner_employee_id || ''} options={ownerCellOpts} searchable empty={!task.owner_name} width={220}
             onPick={(v) => saveField(task, 'owner_employee_id', v)}>
             {task.owner_name
-              ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, minWidth: 0 }}><Avatar name={task.owner_name} size={22} /><span className="name">{firstName(task.owner_name)}</span></span>
+              ? <Avatar name={task.owner_name} size={22} title={task.owner_name} />
               : (ed ? 'assign' : '—')}
           </EditableSelect>
           {collabs.length > 0 && (
