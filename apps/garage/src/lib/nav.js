@@ -1,4 +1,4 @@
-import { hasPermission } from '@throttle/auth';
+import { hasPermission, hasWritePermission } from '@throttle/auth';
 import {
   LayoutDashboard, Activity, BarChart3, Target,
   Boxes, Inbox, PackageOpen,
@@ -69,7 +69,7 @@ const GROUPS = [
       { id: 'library-downloads', label: 'Downloads',      route: '/library/downloads', icon: Download },
       { id: 'library-parts',     label: 'Parts Database', route: '/library/parts',     icon: Wrench },
       { id: 'library-journey',   label: 'Part Journey',   route: '/library/journey',   icon: Route },
-      { id: 'library-bag-sizes', label: 'Bag Sizes',      route: '/library/bag-sizes', icon: Scale,   gate: (p) => hasPermission(p, 'users_manage') },
+      { id: 'library-bag-sizes', label: 'Bag Sizes',      route: '/library/bag-sizes', icon: Scale,   gate: (p) => hasWritePermission(p, 'grn') },
     ],
   },
   // PROCUREMENT moved to Snorkel (snorkel.legendoftoys.com) — Session 94. All actionable

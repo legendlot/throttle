@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
-import { useAuth, hasPermission } from '@throttle/auth';
+import { useAuth, hasWritePermission } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Modal, Spinner, useToast, EmptyState } from '@throttle/ui';
 
@@ -23,7 +23,7 @@ function fmtTs(ts) {
 export default function BagSizesPage() {
   const { session, perms } = useAuth();
   const { showToast: toast } = useToast();
-  const canEdit = hasPermission(perms, 'users_manage');
+  const canEdit = hasWritePermission(perms, 'grn'); // S114: was users_manage (super_admin only) — locked out the BOM team (admins)
 
   const [defaults, setDefaults] = useState([]);   // store.part_bag_sizes rows
   const [partsCat, setPartsCat] = useState([]);   // procurement parts (enrichment)
