@@ -390,8 +390,9 @@ button { cursor: pointer; background: none; border: none; }
 .cell-title .ttl:hover { color: var(--accent); }
 .inline-meta { display: inline-flex; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 0; }
 /* the team chip carries its own max-width (inline 120px) + .lbl ellipsis; the generic
-   .editable .tx (overflow:hidden + 8px padding) was hard-clipping the chip by ~16px. */
-.inline-meta .tx { overflow: visible; }
+   .editable .tx (overflow:hidden + 8px padding) was hard-clipping the chip by ~16px.
+   Selector must out-specify `.editable .tx` (same 0,2,0 but later in source). */
+.inline-meta .editable .tx { overflow: visible; }
 .chip .lbl { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip.add { background: transparent; border: 1px dashed var(--border-2); color: var(--text-4); opacity: 0; transition: opacity var(--fast); }
 .row:hover .chip.add { opacity: 1; }
