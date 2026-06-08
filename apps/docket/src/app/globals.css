@@ -306,7 +306,10 @@ button { cursor: pointer; background: none; border: none; }
 /* ============================================================
    THE GRID — triage zone
    ============================================================ */
-.grid-zone { border: 1px solid var(--accent-line); border-radius: var(--r-lg); background: linear-gradient(180deg, rgba(242,205,26,0.045), rgba(242,205,26,0.015)); margin-bottom: var(--gap); overflow: hidden; }
+/* overflow:visible (was hidden) so the in-card Owner/Deadline popovers can escape
+   the rounded container instead of being clipped/folded inside it. The last card's
+   bottom corners are rounded to keep the rounded-container look without clipping. */
+.grid-zone { border: 1px solid var(--accent-line); border-radius: var(--r-lg); background: linear-gradient(180deg, rgba(242,205,26,0.045), rgba(242,205,26,0.015)); margin-bottom: var(--gap); overflow: visible; }
 .grid-head { display: flex; align-items: center; gap: 11px; padding: 13px 18px; cursor: pointer; }
 .grid-head .flag { width: 30px; height: 30px; border-radius: 8px; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; flex-shrink: 0; }
 .grid-head .flag .ic { width: 16px; height: 16px; }
@@ -319,7 +322,7 @@ button { cursor: pointer; background: none; border: none; }
 .grid-zone.collapsed .grid-body { display: none; }
 
 .gcard { display: flex; align-items: center; gap: 14px; padding: 13px 18px; border-bottom: 1px solid rgba(242,205,26,0.10); transition: background var(--fast) var(--ease); }
-.gcard:last-child { border-bottom: none; }
+.gcard:last-child { border-bottom: none; border-radius: 0 0 var(--r-lg) var(--r-lg); }
 .gcard:hover { background: rgba(242,205,26,0.05); }
 .gcard .gtitle { flex: 1; min-width: 0; }
 .gcard .gtitle .t { font-size: 14px; color: var(--text-1); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
