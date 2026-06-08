@@ -316,7 +316,7 @@ export default function TasksPage() {
 
       {loading && tasks.length === 0 ? <Spinner /> : (
         topLevel.length === 0 ? (
-          <div className="empty">
+          <div className="empty-state">
             <div className="ei"><ListChecks size={24} /></div>
             <h3>{(q || activeFilterCount) ? 'No tasks match' : 'All clear'}</h3>
             <p>{(q || activeFilterCount) ? 'Try a different search or widen the filters.' : 'Capture a task above to get started.'}</p>
