@@ -2,7 +2,7 @@
 import { Fragment, useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { EmptyState, Modal, Spinner, useToast, buildBagLabelsHtml, printWindow, Combobox, useEscapeClose } from '@throttle/ui';
+import { EmptyState, Modal, Spinner, useToast, buildBagLabelsHtml, printWindow, Combobox, useEscapeClose, useSearchShortcut } from '@throttle/ui';
 import { useProducts } from '../../../hooks/useProducts.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -1054,17 +1054,37 @@ function PartsGrnPanel({ session, onSuccess }) {
 }
 
 // ── Recent GRNs Panel ─────────────────────────────────────────────────────────
-function RecentGrnsPanel({ grns, loading, onOpenDetail }) {
+function RecentGrnsPanel({ grns, loading, onOpenDetail, search, setSearch }) {
+  const searching = search.trim().length > 0;
   return (
     <div style={panel}>
       <div style={panelHdr}>
-        <span>Recent GRNs</span>
-        <span style={{ color: 'var(--t3)' }}>{grns.length}</span>
+        <span>{searching ? 'GRN Search' : 'Recent GRNs'}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <input
+            data-search-primary
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search GRN no, supplier or product…  ( / )"
+            style={{
+              background: 'var(--surface2, #1a1a1a)', border: '1px solid var(--border)', borderRadius: 4,
+              padding: '6px 10px', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t1)',
+              outline: 'none', width: 320, maxWidth: '46vw',
+            }}
+          />
+          {searching && (
+            <button
+              onClick={() => setSearch('')}
+              style={{ background: 'transparent', border: '1px solid var(--border)', borderRadius: 4, padding: '5px 9px', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)', cursor: 'pointer' }}
+            >✕ Clear</button>
+          )}
+          <span style={{ color: 'var(--t3)' }}>{grns.length}</span>
+        </div>
       </div>
       {loading ? (
         <div style={{ padding: 24, textAlign: 'center' }}><Spinner size="sm" /></div>
       ) : grns.length === 0 ? (
-        <EmptyState message="No GRNs yet" />
+        <EmptyState message={searching ? 'No GRNs match your search' : 'No GRNs yet'} />
       ) : (
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
@@ -1110,21 +1130,30 @@ export default function GrnPage() {
   const [grns, setGrns]           = useState([]);
   const [grnsLoading, setGrnsLoading] = useState(true);
   const [detailGrnNo, setDetailGrnNo] = useState(null);
+  const [search, setSearch]       = useState('');
 
-  async function loadGrns() {
+  useSearchShortcut(); // `/` focuses the [data-search-primary] search box
+
+  const loadGrns = useCallback(async (term = '') => {
     if (!session) return;
     setGrnsLoading(true);
     try {
-      const data = await garageFetch('getGRNSummary', {}, session);
+      const q = term.trim() ? { search: term.trim() } : {};
+      const data = await garageFetch('getGRNSummary', q, session);
       setGrns(data || []);
     } catch (e) {
       setGrns([]);
     } finally {
       setGrnsLoading(false);
     }
-  }
+  }, [session]);
 
-  useEffect(() => { loadGrns(); }, [session]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Debounced: empty search → recent 30; typed search → whole-history search.
+  useEffect(() => {
+    if (!session) return;
+    const t = setTimeout(() => loadGrns(search), 250);
+    return () => clearTimeout(t);
+  }, [session, search, loadGrns]);
 
   if (!perms || !perms.grn || perms.grn === 'none') {
     return (
@@ -1156,7 +1185,7 @@ export default function GrnPage() {
       </div>
 
       {/* Full-width history table */}
-      <RecentGrnsPanel grns={grns} loading={grnsLoading} onOpenDetail={no => setDetailGrnNo(no)} />
+      <RecentGrnsPanel grns={grns} loading={grnsLoading} onOpenDetail={no => setDetailGrnNo(no)} search={search} setSearch={setSearch} />
 
       {/* Create Modal */}
       <Modal
@@ -1184,9 +1213,9 @@ export default function GrnPage() {
             <span>{mode === 'bulk' ? 'Bulk GRN — BOM Driven' : mode === 'fbu' ? 'FBU GRN — Units Only' : 'Parts GRN — Manual Entry'}</span>
           </div>
           <div style={{ padding: 16 }}>
-            {mode === 'bulk'  && <BulkGrnPanel  session={session} onSuccess={() => { loadGrns(); setShowCreate(false); }} />}
-            {mode === 'fbu'   && <FbuGrnPanel   session={session} onSuccess={() => { loadGrns(); setShowCreate(false); }} />}
-            {mode === 'parts' && <PartsGrnPanel session={session} onSuccess={() => { loadGrns(); setShowCreate(false); }} />}
+            {mode === 'bulk'  && <BulkGrnPanel  session={session} onSuccess={() => { setSearch(''); loadGrns(); setShowCreate(false); }} />}
+            {mode === 'fbu'   && <FbuGrnPanel   session={session} onSuccess={() => { setSearch(''); loadGrns(); setShowCreate(false); }} />}
+            {mode === 'parts' && <PartsGrnPanel session={session} onSuccess={() => { setSearch(''); loadGrns(); setShowCreate(false); }} />}
           </div>
         </div>
       </Modal>
