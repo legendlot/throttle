@@ -129,6 +129,16 @@ export default function ReturnsPage() {
       return n;
     });
   }
+  function toggleAllUdr() {
+    setUdrSel((prev) => {
+      const allSel = piles.UDR.length > 0 && piles.UDR.every((b) => prev[`${b.product}|${b.model}|${b.color}`]);
+      if (allSel) return {};
+      const n = {};
+      for (const b of piles.UDR) n[`${b.product}|${b.model}|${b.color}`] = { product: b.product, model: b.model, color: b.color, qty: b.count || 0 };
+      return n;
+    });
+  }
+  const allUdrSelected = piles.UDR.length > 0 && piles.UDR.every((b) => udrSel[`${b.product}|${b.model}|${b.color}`]);
   function setUdrQty(key, qty) {
     setUdrSel((prev) => (prev[key] ? { ...prev, [key]: { ...prev[key], qty: Math.max(0, parseInt(qty, 10) || 0) } } : prev));
   }
@@ -238,7 +248,7 @@ export default function ReturnsPage() {
             <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 12 }}>Raises a notional UDR issue request (one work order per line). It appears in the <strong>Store Issue Queue</strong>; the Store then scans each unit out at the <strong>Issue UDR</strong> station — no desk issuing.</div>
             <div style={{ maxHeight: 300, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 4 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead><tr><th style={thStyle}></th><th style={thStyle}>Product</th><th style={thStyle}>Colour</th><th style={{ ...thStyle, textAlign: 'right' }}>In pool</th><th style={{ ...thStyle, textAlign: 'right' }}>Request qty</th></tr></thead>
+                <thead><tr><th style={thStyle}><input type="checkbox" readOnly checked={allUdrSelected} onClick={toggleAllUdr} title="Select all" style={{ cursor: 'pointer' }} /></th><th style={thStyle}>Product</th><th style={thStyle}>Colour</th><th style={{ ...thStyle, textAlign: 'right' }}>In pool</th><th style={{ ...thStyle, textAlign: 'right' }}>Request qty</th></tr></thead>
                 <tbody>
                   {piles.UDR.map((b, i) => {
                     const key = `${b.product}|${b.model}|${b.color}`;
