@@ -136,6 +136,19 @@ export default function ShipmentsPage() {
     }
   }
 
+  // Delete an EMPTY return shipment (no scans). The worker re-checks and rejects
+  // a non-empty shipment, so this stays safe even if the row count is stale.
+  async function handleDelete(shipmentId) {
+    if (!window.confirm(`Delete return shipment ${shipmentId}? This can't be undone. (Only allowed because it has no scanned units.)`)) return;
+    try {
+      await workerFetch('deleteReturnShipment', { data: { shipment_id: shipmentId } }, session);
+      showToast(`Shipment ${shipmentId} deleted`, 'success');
+      loadShipments();
+    } catch (e) {
+      showToast(e.message || 'Failed to delete shipment', 'error');
+    }
+  }
+
   if (perms && !perms.returns) {
     return <div style={{ padding: 24, color: 'var(--t3)' }}>Access restricted.</div>;
   }
@@ -244,7 +257,16 @@ export default function ShipmentsPage() {
                         <td style={{ ...tableTdStyle, color: statusColor, fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 700 }}>
                           {statusLabel(s.status)}
                         </td>
-                        <td style={{ ...tableTdStyle, textAlign: 'right' }}>
+                        <td style={{ ...tableTdStyle, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                          {(s.unit_count ?? 0) === 0 && (
+                            <button
+                              style={{ ...btnSecondary, color: '#f87171', borderColor: 'rgba(248,113,113,0.4)', marginRight: 6 }}
+                              onClick={(e) => { e.stopPropagation(); handleDelete(s.shipment_id); }}
+                              title="Delete this empty shipment"
+                            >
+                              Delete
+                            </button>
+                          )}
                           <button
                             style={btnPrimary}
                             onClick={(e) => { e.stopPropagation(); router.push(`/returns/process?id=${encodeURIComponent(s.shipment_id)}`); }}
