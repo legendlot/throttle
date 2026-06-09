@@ -7,6 +7,7 @@ import { Modal, Spinner, useToast } from '@throttle/ui';
 import { ChevronLeft, AlertCircle, Plus, Link2, MessageSquare, ChevronRight } from 'lucide-react';
 import { csopsGet, csopsPost } from '../../../../lib/csopsFetch.js';
 import { ShopifyPanel } from '../../../../components/ShopifyPanel.js';
+import { IssuePicker } from '../../../../components/IssuePicker.js';
 import WhatsAppPanel from '../../../../components/WhatsAppPanel.js';
 import AssignmentControl from '../../../../components/AssignmentControl.js';
 import { DISPOSITION_VALUES, DISPOSITION_LABELS } from '../../../../lib/dispositions.js';
@@ -831,7 +832,7 @@ function EditPanelModal({ ticket, field, session, onClose, onSaved }) {
   // Minimal V1: a free-form panel for editing fields in the current section.
   // Locked-field rules already enforced by the backend.
   const sectionFields = {
-    issue:      ['issue_category','issue_subcategory','issue_subcategory_custom','issue_description'],
+    issue:      ['issue_category','issue_subcategory','issue_subcategory_custom','disposition','issue_description'],
     return:     ['return_awb','return_courier','return_tracking_url','return_cost_inr','inspection_note'],
     resolution: ticket.disposition === 'replacement'
                   ? ['replacement_order_id','replacement_awb','replacement_unit_upc','replacement_cost_inr']
@@ -873,7 +874,17 @@ function EditPanelModal({ ticket, field, session, onClose, onSaved }) {
       size="lg"
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {fields.map(f => (
+        {field === 'issue' ? (
+          <>
+            {/* Issue Category / Sub-category use the same dropdown picker as new-ticket
+               creation (Pruthvi 06-09) — call-auto-created tickets were stuck on free-text. */}
+            <IssuePicker session={session} value={form} onChange={(patch) => setForm((s) => ({ ...s, ...patch }))} />
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span style={{ color: 'var(--t3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.08em', fontFamily: 'var(--font-mono)' }}>issue_description</span>
+              <textarea value={form.issue_description || ''} onChange={(e) => setForm((s) => ({ ...s, issue_description: e.target.value }))} rows={3} style={inputStyle} />
+            </label>
+          </>
+        ) : fields.map(f => (
           <label key={f} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={{ color: 'var(--t3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.08em', fontFamily: 'var(--font-mono)' }}>{f}</span>
             {f === 'issue_description' || f === 'inspection_note' ? (
