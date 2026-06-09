@@ -32,6 +32,15 @@ function formatDate(raw) {
   return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
+// Default the Recent Shipments range to the last N days so an in-progress
+// shipment created earlier doesn't vanish from a today-only default view.
+function daysAgoStr(n) {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 function statusLabel(s) {
   return (s || '').replace(/_/g, ' ').toUpperCase();
 }
@@ -53,7 +62,7 @@ export default function ShipmentsPage() {
   const [channels, setChannels] = useState([]);
   const [channelsAvailable, setChannelsAvailable] = useState(true);
   const [shipments, setShipments] = useState([]);
-  const [fromDate, setFromDate] = useState(todayStr());
+  const [fromDate, setFromDate] = useState(daysAgoStr(30));
   const [toDate, setToDate] = useState(todayStr());
   const [loading, setLoading] = useState(true);
 
