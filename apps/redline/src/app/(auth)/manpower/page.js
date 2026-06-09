@@ -95,12 +95,9 @@ function flattenRoster(nested) {
     const sections = nested?.[line];
     if (!sections) continue;
     if (Array.isArray(sections)) { out[line] = sections; continue; } // legacy shape
-    out[line] = [
-      ...(sections.Assembly   || []),
-      ...(sections.QC         || []),
-      ...(sections.Packaging  || []),
-      ...(sections.Unassigned || []),
-    ];
+    // Include EVERY station section (Assembly/QC/Packaging/Unassigned + any custom
+    // station such as "Prep") so operators on non-standard stations aren't dropped.
+    out[line] = Object.values(sections).flat();
   }
   for (const line of DISPATCH_LINE_ORDER) {
     if (Array.isArray(nested?.[line])) out[line] = nested[line];
@@ -1167,8 +1164,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
           {['L1', 'L2', 'L3'].map((line) => {
             const sections = grouped[line] || {};
             const accent = ROSTER_LINE_COLORS[line];
-            const lineCount = ROSTER_SECTIONS.reduce((s, sec) => s + ((sections[sec] || []).length), 0)
-                            + ((sections.Unassigned || []).length);
+            const lineCount = Object.values(sections).reduce((s, arr) => s + (Array.isArray(arr) ? arr.length : 0), 0);
             return (
               <div key={line} style={{ ...panelStyle, marginBottom: 0, minHeight: 220 }}>
                 <div style={panelHeaderStyle}>
@@ -1181,7 +1177,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                   </span>
                 </div>
                 <div style={{ padding: 6 }}>
-                  {ROSTER_SECTIONS.map((station, idx) => {
+                  {[...ROSTER_SECTIONS, ...Object.keys(sections).filter((k) => !ROSTER_SECTIONS.includes(k) && k !== 'Unassigned')].map((station, idx) => {
                     const rows = sections[station] || [];
                     const key = `${line}-${station}`;
                     const open = !!pickerOpen[key];
