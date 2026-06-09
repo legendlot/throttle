@@ -327,8 +327,10 @@ function gateRequirements(current, target, disposition, ticket, attachments_coun
       }
       return null;
     case 'replacement_dispatched':
-      if (!ticket.replacement_unit_upc || !ticket.replacement_awb) {
-        return 'replacement_unit_upc and replacement_awb required.';
+      // replacement_unit_upc is now OPTIONAL (the replacement process doesn't require
+      // entering the new unit's UPC at creation). replacement_order_id is mandatory.
+      if (!ticket.replacement_order_id || !ticket.replacement_awb) {
+        return 'replacement_order_id and replacement_awb required.';
       }
       return null;
     case 'refund_initiated':

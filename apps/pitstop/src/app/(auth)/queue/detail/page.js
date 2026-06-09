@@ -336,8 +336,9 @@ function AdvanceModal({ open, onClose, ticket, targetStage, session, onAdvanced 
         { name: 'return_cost_inr', label: 'Return cost (₹)', type: 'number' },
       ];
       case 'replacement_dispatched': return [
-        { name: 'replacement_unit_upc', label: 'New unit UPC', required: true },
+        { name: 'replacement_order_id', label: 'Replacement order ID', required: true },
         { name: 'replacement_awb', label: 'Replacement AWB', required: true },
+        { name: 'replacement_unit_upc', label: 'New unit UPC (optional)' },
         { name: 'replacement_cost_inr', label: 'Replacement cost (₹)', type: 'number' },
       ];
       case 'refund_initiated':       return [
@@ -703,6 +704,7 @@ function WorkArea({ ticket: t, dispatch, repairRun, session, perms, onRefresh, s
       >
         {t.disposition === 'replacement' && (
           <PanelGrid>
+            <PanelField label="Replacement order ID" value={t.replacement_order_id || '—'} mono />
             <PanelField label="New unit UPC" value={t.replacement_unit_upc || '—'} mono />
             <PanelField label="Replacement AWB" value={t.replacement_awb || '—'} mono />
             <PanelField label="Replacement cost" value={t.replacement_cost_inr ? `₹${t.replacement_cost_inr}` : '—'} mono />
@@ -832,7 +834,7 @@ function EditPanelModal({ ticket, field, session, onClose, onSaved }) {
     issue:      ['issue_category','issue_subcategory','issue_subcategory_custom','issue_description'],
     return:     ['return_awb','return_courier','return_tracking_url','return_cost_inr','inspection_note'],
     resolution: ticket.disposition === 'replacement'
-                  ? ['replacement_unit_upc','replacement_awb','replacement_cost_inr']
+                  ? ['replacement_order_id','replacement_awb','replacement_unit_upc','replacement_cost_inr']
                   : ticket.disposition === 'refund'
                   ? ['refund_amount_inr','refund_reference']
                   : ['repair_run_id'],
