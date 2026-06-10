@@ -535,6 +535,19 @@ function EmptySlot({ session, stationId, line, department, date, operators, onAs
       .slice(0, 8);
   }, [search, operators]);
 
+  // Default (no search) list: show EVERY clocked-in, not-yet-assigned operator —
+  // not just the ≤8 history-ranked suggestions. The frequency-ranked suggestions
+  // (with usage dots) sit on top; the rest of the roster follows alphabetically so
+  // every name in the manpower roster is selectable without having to type.
+  const defaultList = useMemo(() => {
+    const suggIds = new Set(suggestions.map(s => s.id));
+    const rest = operators
+      .filter(o => !o.already_assigned && !suggIds.has(o.id))
+      .map(o => ({ ...o, has_history: false, frequency: 0 }))
+      .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    return [...suggestions, ...rest];
+  }, [suggestions, operators]);
+
   const handlePick = async (op) => {
     setOpen(false);
     await onAssign({
@@ -585,12 +598,12 @@ function EmptySlot({ session, stationId, line, department, date, operators, onAs
                 <SuggestionRow key={op.id} op={op} onPick={() => handlePick(op)} />
               ))
             )
-          ) : suggestions.length === 0 ? (
+          ) : defaultList.length === 0 ? (
             <div style={{ fontSize: 10, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
               No clocked-in operators available.
             </div>
           ) : (
-            suggestions.map(op => (
+            defaultList.map(op => (
               <SuggestionRow key={op.id} op={op} onPick={() => handlePick(op)} />
             ))
           )}
