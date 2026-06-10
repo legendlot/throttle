@@ -6,7 +6,7 @@ import { Spinner, useToast } from '@throttle/ui';
 import {
   Search, X, Plus, Check, Ban, ListFilter, Layers, List, Rows3, Inbox,
   ChevronRight, ChevronDown, Calendar, AlertTriangle, Link2, MessageSquare,
-  Lock, Settings2, LayoutDashboard, ListChecks,
+  Lock, Settings2, LayoutDashboard, ListChecks, Archive, ArchiveRestore,
 } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../../../lib/docketopsFetch.js';
 import { StatusBadge } from '../../../components/StatusBadge.js';
@@ -179,11 +179,19 @@ export default function TasksPage() {
     try { await docketopsPost('addCollaborator', { id: task.id, employee_id: employeeIdToAdd }, session); await load(); }
     catch (e) { showToast(e.message || 'Failed', 'error'); }
   }
+  async function setArchived(task, archived) {
+    try {
+      await docketopsPost('archiveTask', { id: task.id, archived }, session);
+      patchRow(task.id, { archived_at: archived ? new Date().toISOString() : null });
+      showToast(archived ? 'Archived' : 'Restored', 'success');
+    } catch (e) { showToast(e.message || 'Failed', 'error'); }
+  }
 
   // Children grouped by parent (off the full set), so a parent can expand inline.
+  // Archived children are hidden from the active expand.
   const childrenByParent = useMemo(() => {
     const m = {};
-    for (const t of tasks) { if (t.parent_task_id) (m[t.parent_task_id] = m[t.parent_task_id] || []).push(t); }
+    for (const t of tasks) { if (t.parent_task_id && !t.archived_at) (m[t.parent_task_id] = m[t.parent_task_id] || []).push(t); }
     return m;
   }, [tasks]);
 
@@ -212,12 +220,14 @@ export default function TasksPage() {
   }
 
   const topLevel = useMemo(() => tasks.filter(t => !t.parent_task_id && matchesQuery(t)), [tasks, matchesQuery]);
+  const activeTop = useMemo(() => topLevel.filter(t => !t.archived_at), [topLevel]);
+  const archivedRows = useMemo(() => topLevel.filter(t => t.archived_at).sort(sortFn), [topLevel, sortFn]);
   const needsSetup = (t) => t.status !== 'abandoned' && (!t.deadline || !t.owner_employee_id);
-  const gridRows = useMemo(() => topLevel.filter(needsSetup).sort(sortFn), [topLevel, sortFn]);
-  const boardRows = useMemo(() => topLevel.filter(t => !needsSetup(t)).sort(sortFn), [topLevel, sortFn]);
+  const gridRows = useMemo(() => activeTop.filter(needsSetup).sort(sortFn), [activeTop, sortFn]);
+  const boardRows = useMemo(() => activeTop.filter(t => !needsSetup(t)).sort(sortFn), [activeTop, sortFn]);
 
-  // Publish the visible count to the topbar; clear it when leaving the board.
-  useEffect(() => { setCount?.(topLevel.length); return () => setCount?.(null); }, [topLevel.length, setCount]);
+  // Publish the active (non-archived) count to the topbar; clear it when leaving the board.
+  useEffect(() => { setCount?.(activeTop.length); return () => setCount?.(null); }, [activeTop.length, setCount]);
 
   const groups = useMemo(() => {
     if (groupBy === 'none') return [{ key: 'all', label: null, rows: boardRows }];
@@ -257,7 +267,7 @@ export default function TasksPage() {
   }, [drawerId]);
 
   const rowCtx = {
-    saveField, abandonInline, reviseInline, addSubtask, addCollab, childrenByParent,
+    saveField, abandonInline, reviseInline, addSubtask, addCollab, setArchived, childrenByParent,
     openDrawer: setDrawerId, teamCellOpts, ownerCellOpts, prioOpts, empOpts, expanded, setExpanded, sortFn,
   };
 
@@ -362,6 +372,8 @@ export default function TasksPage() {
                 ))}
               </div></div>
             )}
+
+            <ArchivedZone rows={archivedRows} ctx={rowCtx} />
           </div>
         )
       )}
@@ -412,7 +424,7 @@ function EditableSelect({ editable, value, options, searchable, onPick, children
 }
 
 /* ---------------- Status cell (settable + abandon) ---------------- */
-function StatusCell({ task, editable, onSet, onAbandon }) {
+function StatusCell({ task, editable, onSet, onAbandon, canArchive, onArchive }) {
   const [open, setOpen] = useState(false);
   const [abandon, setAbandon] = useState(false);
   const [reason, setReason] = useState('');
@@ -437,6 +449,11 @@ function StatusCell({ task, editable, onSet, onAbandon }) {
             </button>
           ))}
           <div style={{ height: 1, background: 'var(--border)', margin: '5px 4px' }} />
+          {canArchive && (
+            <button className="menu-item" onClick={() => { onArchive(); setOpen(false); }}>
+              <Archive size={14} /> Archive
+            </button>
+          )}
           <button className="menu-item" style={{ color: 'var(--st-abandon)' }} onClick={() => { setAbandon(true); setReason(''); }}>
             <Ban size={14} /> Abandon…
           </button>
@@ -493,7 +510,7 @@ function DeadlineCell({ task, editable, onFirstSet, onRevise }) {
 
 /* ---------------- Task row ---------------- */
 function TaskRow({ task, ctx, isChild, hasKids, expanded }) {
-  const { saveField, abandonInline, reviseInline, addSubtask, addCollab, openDrawer, teamCellOpts, ownerCellOpts, prioOpts, empOpts, setExpanded } = ctx;
+  const { saveField, abandonInline, reviseInline, addSubtask, addCollab, setArchived, openDrawer, teamCellOpts, ownerCellOpts, prioOpts, empOpts, setExpanded } = ctx;
   const ed = !!task._can_edit && task.status !== 'abandoned';
   const done = task.status === 'done';
   const collabs = (task.collaborators || []).map(c => c.full_name).filter(Boolean);
@@ -583,7 +600,8 @@ function TaskRow({ task, ctx, isChild, hasKids, expanded }) {
 
         {/* Status */}
         <span className="cell">
-          <StatusCell task={task} editable={ed} onSet={(s) => saveField(task, 'status', s)} onAbandon={(r) => abandonInline(task, r)} />
+          <StatusCell task={task} editable={ed} onSet={(s) => saveField(task, 'status', s)} onAbandon={(r) => abandonInline(task, r)}
+            canArchive={ed && task.status === 'done'} onArchive={() => setArchived(task, true)} />
         </span>
 
         {/* Priority */}
@@ -690,6 +708,46 @@ function NeedChip({ task, kind, ed, ownerOpts, saveField }) {
         </AnchoredPopover>
       )}
     </span>
+  );
+}
+
+/* ---------------- Archived (collapsed bottom section) ---------------- */
+function ArchivedZone({ rows, ctx }) {
+  const [open, setOpen] = useState(false);
+  if (!rows.length) return null;
+  return (
+    <div className={'archived-zone' + (open ? ' open' : '')}>
+      <div className="archived-head" onClick={() => setOpen(o => !o)}>
+        <span className="chev"><ChevronRight size={15} /></span>
+        <Archive size={14} />
+        <span className="ttl">Archived</span>
+        <span className="cnt">{rows.length}</span>
+      </div>
+      {open && (
+        <div className="archived-body">
+          {rows.map(t => <ArchivedRow key={t.id} task={t} ctx={ctx} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ArchivedRow({ task, ctx }) {
+  const { openDrawer, setArchived } = ctx;
+  const ed = !!task._can_edit;
+  return (
+    <div className="archived-row">
+      {task.status === 'done' && <span className="ar-check"><Check size={11} /></span>}
+      <span className="ar-id" onClick={() => openDrawer(task.id)}>{task.task_no}</span>
+      <span className="ar-ttl" onClick={() => openDrawer(task.id)}>{task.title}</span>
+      {task.owner_name && <Avatar name={task.owner_name} size={18} title={task.owner_name} />}
+      <StatusBadge status={task.status} />
+      {ed && (
+        <button className="ar-restore" title="Restore to the board" onClick={() => setArchived(task, false)}>
+          <ArchiveRestore size={13} /> Restore
+        </button>
+      )}
+    </div>
   );
 }
 
