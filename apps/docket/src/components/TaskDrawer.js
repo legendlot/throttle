@@ -2,7 +2,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
-import { X, Maximize2, Plus, Check, Users, Layers, Hash, User, Flag, Calendar, Clock, Archive, ArchiveRestore } from 'lucide-react';
+import { X, Maximize2, Plus, Check, Users, Layers, Hash, User, Flag, Calendar, Clock } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../lib/docketopsFetch.js';
 import { useHotkey } from '../lib/hotkeys.js';
 import { StatusBadge } from './StatusBadge.js';
@@ -105,12 +105,6 @@ export function TaskDrawer({ id, session, departments = [], employees = [], onCl
     catch (e) { showToast(e.message || 'Failed', 'error'); }
     finally { setBusy(false); }
   }
-  async function doArchive(archived) {
-    setBusy(true);
-    try { await docketopsPost('archiveTask', { id: task.id, archived }, session); showToast(archived ? 'Archived' : 'Restored', 'success'); await mutated(); }
-    catch (e) { showToast(e.message || 'Failed', 'error'); }
-    finally { setBusy(false); }
-  }
   async function addCollab() {
     if (!collabPick) return;
     setBusy(true);
@@ -199,15 +193,7 @@ export function TaskDrawer({ id, session, departments = [], employees = [], onCl
                       </button>
                     );
                   })}
-                  {task.status === 'done' && !task.archived_at && (
-                    <button className="st-btn" onClick={() => doArchive(true)} disabled={busy}><Archive size={13} /> Archive</button>
-                  )}
                   <button className="st-btn" style={{ color: 'var(--st-abandon)', borderColor: 'var(--st-abandon)' }} onClick={() => { setAbandoning(true); setAbandonReason(''); }}>Abandon</button>
-                </div>
-              )}
-              {task.archived_at && (
-                <div style={{ marginTop: 12, background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-sm)', padding: '8px 12px', fontSize: 12, color: 'var(--text-2)', display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <Archive size={13} /> Archived.{canEdit && <button className="btn btn-ghost" style={{ marginLeft: 'auto' }} onClick={() => doArchive(false)} disabled={busy}><ArchiveRestore size={13} /> Restore</button>}
                 </div>
               )}
               {abandoning && (

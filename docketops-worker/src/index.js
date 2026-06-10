@@ -659,22 +659,6 @@ async function moveTask(body, auth, env) {
   return ok({ id: task.id, space_id: d.space_id });
 }
 
-// Archive / unarchive a task. Archiving is reversible and orthogonal to status —
-// it only tucks the task into the collapsed "Archived" section (NOT deletion).
-async function archiveTask(body, auth, env) {
-  const d = body.data || body;
-  if (!d.id) return err('id required', 400);
-  const task = await loadTask(d.id, env);
-  if (!task) return err('not_found', 404);
-  if (!canEditTask(auth, task)) return err('forbidden', 403);
-  const archive = d.archived !== false; // default true; pass archived:false to restore
-  const r = await sbDocket(`/rest/v1/tasks?id=eq.${enc(d.id)}`, env, { method: 'PATCH', prefer: 'return=minimal',
-    body: JSON.stringify({ archived_at: archive ? nowIso() : null, updated_by: auth.userId, updated_at: nowIso() }) });
-  if (!r.ok) return err('archive_failed: ' + JSON.stringify(r.data), 400);
-  await logHistory(env, task.id, auth.userId, archive ? 'archived' : 'unarchived', {});
-  return ok({ id: task.id, archived: archive });
-}
-
 async function addCollaborator(body, auth, env) {
   const d = body.data || body;
   if (!d.id || !d.employee_id) return err('id and employee_id required', 400);
@@ -991,7 +975,7 @@ const GET_ACTIONS = {
   getDocketRoles, getDocketUsers, getDashboardSharing,
 };
 const POST_ACTIONS = {
-  createTask, createSubtask, updateTask, changeStatus, reviseDeadline, abandonTask, setParent, moveTask, archiveTask,
+  createTask, createSubtask, updateTask, changeStatus, reviseDeadline, abandonTask, setParent, moveTask,
   addCollaborator, removeCollaborator,
   addDocument, removeDocument,
   addComment, editComment, deleteComment,
