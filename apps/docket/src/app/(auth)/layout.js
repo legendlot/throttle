@@ -112,7 +112,7 @@ function AuthLayoutInner({ children }) {
           collapsed={collapsed}
           onToggle={toggleSidebar}
           onSelect={(route) => router.push(route)}
-          onNewTask={() => { router.push('/tasks'); setTimeout(() => { try { const el = document.querySelector('[data-create-primary]'); el?.focus(); } catch { /* ignore */ } }, 60); }}
+          onNewTask={() => { router.push(spaceId ? `/tasks?space=${spaceId}` : '/tasks'); setTimeout(() => { try { const el = document.querySelector('[data-create-primary]'); el?.focus(); } catch { /* ignore */ } }, 60); }}
           userLabel={displayName}
           userRole={role || ''}
           onSignOut={signOut}

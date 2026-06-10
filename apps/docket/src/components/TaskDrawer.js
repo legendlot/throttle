@@ -12,7 +12,7 @@ import { HistoryPanel } from './HistoryPanel.js';
 import { SubtaskPanel } from './SubtaskPanel.js';
 import { DocLinksPanel } from './DocLinksPanel.js';
 import { DatePicker } from './DatePicker.js';
-import { Avatar, Popover, OptionList, firstName, personColor, relDeadline, deadlineState } from './primitives.js';
+import { Avatar, Popover, AnchoredPopover, OptionList, firstName, personColor, relDeadline, deadlineState } from './primitives.js';
 import { SETTABLE_STATUSES, STATUS_MAP, PRIORITIES, effectiveDeadline } from '../lib/tasks.js';
 import { fmtDateTime } from '../lib/format.js';
 
@@ -60,17 +60,15 @@ export function TaskDrawer({ id, session, departments = [], employees = [], onCl
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose, ddOpen, edit, abandoning]);
 
-  const ddRef = useRef(null);
-  useEffect(() => {
-    if (!ddOpen) return;
-    function onDown(e) { if (ddRef.current && !ddRef.current.contains(e.target)) setDdOpen(false); }
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [ddOpen]);
+  const ddRef = useRef(null); // anchor for the deadline calendar (AnchoredPopover handles outside-click)
 
   const canEdit = !!task?._can_edit && task?.status !== 'abandoned';
   const canAddSub = canEdit && task && !task.parent_task_id;
-  useHotkey('s', () => { if (canAddSub) router.push(`/tasks/new?parent=${task.id}`); }, { enabled: !!task && !ddOpen && !abandoning && !edit });
+  useHotkey('s', () => {
+    if (!canAddSub) return;
+    const el = document.querySelector('[data-subtask-add]');
+    if (el) { el.focus(); el.scrollIntoView({ block: 'nearest' }); }
+  }, { enabled: !!task && !ddOpen && !abandoning && !edit });
 
   const mutated = useCallback(async () => { await load(true); onMutated?.(); }, [load, onMutated]);
 
@@ -256,16 +254,14 @@ export function TaskDrawer({ id, session, departments = [], employees = [], onCl
                       <span className="tx" style={dstate === 'over' ? { color: 'var(--overdue)', fontWeight: 600 } : {}}>{dl ? `${fmtDateTime(dl)} · ${relDeadline(dl)}` : (canEdit ? 'Set deadline' : '—')}</span>
                       {task.revised_deadline && <span className="rev-flag" style={{ marginLeft: 8 }}>revised</span>}
                     </span>
-                    {ddOpen && (
-                      <div className="pop" style={{ top: 'calc(100% + 5px)', left: 0, width: 'auto', padding: 12 }} onMouseDown={e => e.stopPropagation()}>
-                        <DatePicker value={ddDraft} onChange={setDdDraft} autoFocus />
-                        {task.deadline && <input className="reason-input" placeholder="Reason (required, logged)" value={reviseReason} onChange={e => setReviseReason(e.target.value)} />}
-                        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 10 }}>
-                          <button className="btn btn-ghost" onClick={() => setDdOpen(false)}>Cancel</button>
-                          <button className="btn btn-primary" disabled={busy || !ddDraft || (!!task.deadline && !reviseReason.trim())} onClick={commitDeadline}><Check size={13} /> {task.deadline ? 'Revise' : 'Set'}</button>
-                        </div>
+                    <AnchoredPopover anchorRef={ddRef} open={ddOpen} onClose={() => setDdOpen(false)}>
+                      <DatePicker value={ddDraft} onChange={setDdDraft} autoFocus />
+                      {task.deadline && <input className="reason-input" placeholder="Reason (required, logged)" value={reviseReason} onChange={e => setReviseReason(e.target.value)} />}
+                      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 10 }}>
+                        <button className="btn btn-ghost" onClick={() => setDdOpen(false)}>Cancel</button>
+                        <button className="btn btn-primary" disabled={busy || !ddDraft || (!!task.deadline && !reviseReason.trim())} onClick={commitDeadline}><Check size={13} /> {task.deadline ? 'Revise' : 'Set'}</button>
                       </div>
-                    )}
+                    </AnchoredPopover>
                   </span>
                 </Prop>
                 <Prop icon={Clock} label="Created"><span style={{ fontSize: 13, color: 'var(--text-2)' }}>{fmtDateTime(task.created_at)}{task.creator_name ? ` · ${task.creator_name}` : ''}</span></Prop>
@@ -299,7 +295,7 @@ export function TaskDrawer({ id, session, departments = [], employees = [], onCl
                 ) : (task.description ? <div className="dr-desc">{task.description}</div> : <span style={{ fontSize: 12.5, color: 'var(--text-4)' }}>—</span>)}
               </div>
 
-              <div className="dr-section"><div className="sh">Sub-tasks</div><SubtaskPanel task={task} session={session} /></div>
+              <div className="dr-section"><div className="sh">Sub-tasks</div><SubtaskPanel task={task} session={session} canEdit={canEdit} onChange={mutated} /></div>
               <div className="dr-section"><div className="sh">Documents</div><DocLinksPanel task={task} session={session} canEdit={canEdit} onChange={mutated} /></div>
 
               <div className="dr-tabs">

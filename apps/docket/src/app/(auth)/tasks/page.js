@@ -14,7 +14,7 @@ import { PriorityBadge } from '../../../components/PriorityBadge.js';
 import { DatePicker } from '../../../components/DatePicker.js';
 import { TaskDrawer } from '../../../components/TaskDrawer.js';
 import { SpaceSettings } from '../../../components/SpaceSettings.js';
-import { Avatar, AvatarRow, Popover, OptionList, firstName, personColor, deadlineState, relDeadline, fmtShortDate } from '../../../components/primitives.js';
+import { Avatar, AvatarRow, Popover, AnchoredPopover, OptionList, firstName, personColor, deadlineState, relDeadline, fmtShortDate } from '../../../components/primitives.js';
 import { STATUSES, STATUS_MAP, SETTABLE_STATUSES, PRIORITIES, effectiveDeadline } from '../../../lib/tasks.js';
 import { useHotkey } from '../../../lib/hotkeys.js';
 import { useChrome } from '../../../lib/chrome.js';
@@ -465,13 +465,6 @@ function DeadlineCell({ task, editable, onFirstSet, onRevise }) {
   const ref = useRef(null);
   const eff = effectiveDeadline(task);
   const st = deadlineState(task);
-  useEffect(() => {
-    if (!open) return;
-    function down(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
-    function key(e) { if (e.key === 'Escape') setOpen(false); }
-    document.addEventListener('mousedown', down); document.addEventListener('keydown', key, true);
-    return () => { document.removeEventListener('mousedown', down); document.removeEventListener('keydown', key, true); };
-  }, [open]);
   function start(e) { e.stopPropagation(); setDraft(eff); setReason(''); setOpen(true); }
   async function commit() {
     if (!draft) return;
@@ -486,16 +479,14 @@ function DeadlineCell({ task, editable, onFirstSet, onRevise }) {
         {eff ? relDeadline(eff) : (editable ? 'set date' : '—')}
       </span>
       {task.revised_deadline && <span className="rev-flag">rev</span>}
-      {open && (
-        <div className="pop" style={{ top: 'calc(100% + 5px)', right: 0, width: 'auto', padding: 12 }} onMouseDown={e => e.stopPropagation()}>
-          <DatePicker value={draft} onChange={setDraft} autoFocus />
-          {task.deadline && <input className="reason-input" placeholder="Reason (required, logged)" value={reason} onChange={e => setReason(e.target.value)} />}
-          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 10 }}>
-            <button className="btn btn-ghost" onClick={() => setOpen(false)}>Cancel</button>
-            <button className="btn btn-primary" disabled={!draft || (!!task.deadline && !reason.trim())} onClick={commit}><Check size={13} /> {task.deadline ? 'Revise' : 'Set'}</button>
-          </div>
+      <AnchoredPopover anchorRef={ref} open={open} onClose={() => setOpen(false)} align="right">
+        <DatePicker value={draft} onChange={setDraft} autoFocus />
+        {task.deadline && <input className="reason-input" placeholder="Reason (required, logged)" value={reason} onChange={e => setReason(e.target.value)} />}
+        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 10 }}>
+          <button className="btn btn-ghost" onClick={() => setOpen(false)}>Cancel</button>
+          <button className="btn btn-primary" disabled={!draft || (!!task.deadline && !reason.trim())} onClick={commit}><Check size={13} /> {task.deadline ? 'Revise' : 'Set'}</button>
         </div>
-      )}
+      </AnchoredPopover>
     </span>
   );
 }
@@ -676,13 +667,6 @@ function NeedChip({ task, kind, ed, ownerOpts, saveField }) {
   const [draft, setDraft] = useState(null);
   const ref = useRef(null);
   const set = kind === 'owner' ? !!task.owner_employee_id : !!task.deadline;
-  useEffect(() => {
-    if (!open) return;
-    function down(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
-    function key(e) { if (e.key === 'Escape') setOpen(false); }
-    document.addEventListener('mousedown', down); document.addEventListener('keydown', key, true);
-    return () => { document.removeEventListener('mousedown', down); document.removeEventListener('keydown', key, true); };
-  }, [open]);
   const label = kind === 'owner'
     ? (set ? firstName(task.owner_name) : 'Owner')
     : (set ? fmtShortDate(task.deadline) : 'Deadline');
@@ -691,19 +675,19 @@ function NeedChip({ task, kind, ed, ownerOpts, saveField }) {
       <button className={'need-chip' + (set ? ' set' : '')} disabled={!ed} onClick={() => ed && setOpen(o => !o)}>
         {set ? <Check /> : <Plus />}{label}
       </button>
-      {open && kind === 'owner' && (
-        <div className="pop" style={{ top: 'calc(100% + 5px)', left: 0, width: 210 }} onMouseDown={e => e.stopPropagation()}>
+      {kind === 'owner' && (
+        <Popover open={open} onClose={() => setOpen(false)} width={210}>
           <OptionList options={ownerOpts} value={task.owner_employee_id || ''} searchable onPick={(v) => { saveField(task, 'owner_employee_id', v); setOpen(false); }} />
-        </div>
+        </Popover>
       )}
-      {open && kind === 'deadline' && (
-        <div className="pop" style={{ top: 'calc(100% + 5px)', left: 0, width: 'auto', padding: 12 }} onMouseDown={e => e.stopPropagation()}>
+      {kind === 'deadline' && (
+        <AnchoredPopover anchorRef={ref} open={open} onClose={() => setOpen(false)}>
           <DatePicker value={draft} onChange={setDraft} autoFocus />
           <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 10 }}>
             <button className="btn btn-ghost" onClick={() => setOpen(false)}>Cancel</button>
             <button className="btn btn-primary" disabled={!draft} onClick={() => { saveField(task, 'deadline', draft); setOpen(false); }}><Check size={13} /> Set</button>
           </div>
-        </div>
+        </AnchoredPopover>
       )}
     </span>
   );

@@ -62,7 +62,9 @@ function DetailInner() {
   // `s` → add a sub-task to this task (same as the Sub-tasks "Add" button). Only on a
   // parent (one level deep), editable + not abandoned; suspended while a modal/edit is open.
   useHotkey('s', () => {
-    if (canEdit && task && !task.parent_task_id && task.status !== 'abandoned') router.push(`/tasks/new?parent=${task.id}`);
+    if (!(canEdit && task && !task.parent_task_id && task.status !== 'abandoned')) return;
+    const el = document.querySelector('[data-subtask-add]');
+    if (el) { el.focus(); el.scrollIntoView({ block: 'nearest' }); }
   }, { enabled: !!task && !modal && !editing });
 
   function startEdit() {
@@ -277,7 +279,7 @@ function DetailInner() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <section style={card}>
             <div style={sectionTitle}>Sub-tasks</div>
-            <SubtaskPanel task={task} session={session} />
+            <SubtaskPanel task={task} session={session} canEdit={canEdit} onChange={load} />
           </section>
           <section style={card}>
             <div style={sectionTitle}>Documents</div>

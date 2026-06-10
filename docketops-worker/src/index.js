@@ -486,6 +486,11 @@ async function createTaskCore(d, auth, env) {
     if (!parent) return err('parent_not_found', 404);
     if (parent.parent_task_id) return err('one_level_only: parent is already a sub-task', 422);
     spaceId = parent.space_id; // a sub-task always lives in its parent's space
+    // A sub-task inherits owner / program / team from its parent unless the caller
+    // explicitly set them (speed-create passes title only — these fill in from the parent).
+    if (d.owner_employee_id == null) d.owner_employee_id = parent.owner_employee_id || null;
+    if (d.program_id == null)        d.program_id        = parent.program_id || null;
+    if (d.department_id == null)     d.department_id     = parent.department_id || null;
   }
   if (!spaceId) spaceId = await defaultSpaceId(env);
   const space = await loadSpace(spaceId, env);

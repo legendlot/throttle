@@ -3,6 +3,7 @@
 // (board + drawer): avatars, an anchored popover, a searchable option list,
 // and small date/name helpers. Pure presentation — no data wiring lives here.
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Check } from 'lucide-react';
 
 /* ---- name helpers ---- */
@@ -97,6 +98,55 @@ export function Popover({ open, onClose, children, align = 'left', width }) {
     <div ref={ref} className="pop" style={{ top: 'calc(100% + 5px)', [align]: 0, width, minWidth: width }} onMouseDown={e => e.stopPropagation()}>
       {children}
     </div>
+  );
+}
+
+/* ---- Anchored popover: portals to <body> and positions `fixed` against a
+   trigger, so it escapes scroll/overflow-clipping ancestors (e.g. the board's
+   horizontal scroll on small screens) and clamps into the viewport. Used for the
+   deadline calendar, which is wide enough to get cut otherwise. ---- */
+export function AnchoredPopover({ anchorRef, open, onClose, width = 272, align = 'left', children }) {
+  const ref = useRef(null);
+  const [pos, setPos] = useState(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    function place() {
+      const a = anchorRef?.current;
+      if (!a) return;
+      const r = a.getBoundingClientRect();
+      const m = 8;                                    // viewport margin
+      const w = Math.min(width, window.innerWidth - m * 2);
+      let left = align === 'right' ? r.right - w : r.left;
+      left = Math.max(m, Math.min(left, window.innerWidth - w - m));
+      const estH = 360;                               // calendar + reason + actions
+      let top = r.bottom + 5;
+      if (top + estH > window.innerHeight - m && r.top - estH - 5 > m) top = r.top - estH - 5;
+      top = Math.max(m, top);
+      setPos({ top, left, w });
+    }
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true); };
+  }, [open, anchorRef, width, align]);
+  useEffect(() => {
+    if (!open) return undefined;
+    function down(e) {
+      if (ref.current && ref.current.contains(e.target)) return;
+      if (anchorRef?.current && anchorRef.current.contains(e.target)) return;
+      onClose();
+    }
+    function key(e) { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } }
+    document.addEventListener('mousedown', down);
+    document.addEventListener('keydown', key, true);
+    return () => { document.removeEventListener('mousedown', down); document.removeEventListener('keydown', key, true); };
+  }, [open, anchorRef, onClose]);
+  if (!open || !pos || typeof document === 'undefined') return null;
+  return createPortal(
+    <div ref={ref} className="pop" style={{ position: 'fixed', top: pos.top, left: pos.left, width: 'auto', maxWidth: pos.w, padding: 12 }} onMouseDown={e => e.stopPropagation()}>
+      {children}
+    </div>,
+    document.body,
   );
 }
 
