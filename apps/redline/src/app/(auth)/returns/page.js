@@ -149,7 +149,8 @@ export default function ReturnsPage() {
     try {
       const res = await workerFetch('createUdrRequest', { data: { lines, notes: 'UDR issue request from Redline returns' } }, session);
       const r = res.data || res;
-      showToast(`UDR request raised (${r.created} line${r.created === 1 ? '' : 's'}) — now in the Store Issue Queue`, 'success');
+      const nLines = r.lines != null ? r.lines : lines.length;
+      showToast(`UDR request ${r.wo_no || ''} raised (${nLines} line${nLines === 1 ? '' : 's'}) — one item in the Store Issue Queue`, 'success');
       setUdrOpen(false); setUdrSel({});
     } catch (e) {
       showToast(e.message || 'Failed to request UDR issue', 'error');

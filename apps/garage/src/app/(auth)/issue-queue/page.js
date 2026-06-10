@@ -204,15 +204,17 @@ export default function IssueQueuePage() {
         else if (isUdr)       { badge = 'UDR';         badgeTone = 'green';  type = 'udr'; }
         else if (isRepackPkg) { badge = 'REPACK PKG';  badgeTone = 'blue';   type = 'wo'; }
         else                  { badge = 'AD HOC';      badgeTone = 'yellow'; type = 'wo'; }
+        const udrLines = isUdr ? (Array.isArray(wo.lines) ? wo.lines : []) : null;
         rows.push({
           type,
           ref:      wo.wo_no,
           badge, badgeTone,
-          product:  wo.product || '—',
+          product:  isUdr ? (wo.product || (udrLines.length ? `${udrLines.length} variant${udrLines.length === 1 ? '' : 's'}` : '—')) : (wo.product || '—'),
           details:  isShortIssue ? `Short re-issue — ${wo.notes || ''}`
-                    : isUdr ? `UDR re-dispatch — issue by scanning at Issue UDR (${`${wo.variant || ''} ${wo.colour || ''}`.trim() || 'any'})`
+                    : isUdr ? `UDR re-dispatch — issue by scanning at Issue UDR`
                     : `${wo.variant || ''} ${wo.colour || ''}`.trim() || '—',
-          units:    wo.qty || '—',
+          udrLines,
+          units:    isUdr ? `${wo.fulfilled_total || 0}/${(wo.qty_total != null ? wo.qty_total : wo.qty) || 0}` : (wo.qty || '—'),
           run_date: wo.date,
           submitted: wo.created_at,
           line_no:  wo.line_no || '—',
@@ -932,7 +934,21 @@ export default function IssueQueuePage() {
                     <td style={tableTdStyle}><StatusBadge label={r.badge} tone={r.badgeTone} /></td>
                     <td style={tableTdStyle}>{r.line_no}</td>
                     <td style={tableTdStyle}>{r.product}</td>
-                    <td style={{ ...tableTdStyle, maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.details}>{r.details}</td>
+                    {r.type === 'udr' && r.udrLines?.length ? (
+                      <td style={{ ...tableTdStyle }}>
+                        <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 3 }}>UDR re-dispatch — scan at Issue UDR</div>
+                        {r.udrLines.map((l) => {
+                          const done = l.status === 'Complete' || (Number(l.fulfilled_qty) || 0) >= (Number(l.qty) || 0);
+                          return (
+                            <div key={l.id} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: done ? '#22c55e' : 'var(--t1)' }}>
+                              {done ? '✓' : '▸'} {[l.product, l.variant, l.colour].filter(Boolean).join(' ') || '—'} — {Number(l.fulfilled_qty) || 0}/{l.qty}
+                            </div>
+                          );
+                        })}
+                      </td>
+                    ) : (
+                      <td style={{ ...tableTdStyle, maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.details}>{r.details}</td>
+                    )}
                     <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.units}</td>
                     <td style={tableTdStyle}>{formatDate(r.run_date)}</td>
                     <td style={tableTdStyle}>{formatDateTime(r.submitted)}</td>
