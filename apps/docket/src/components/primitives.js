@@ -150,19 +150,36 @@ export function AnchoredPopover({ anchorRef, open, onClose, width = 272, align =
   );
 }
 
-/* ---- searchable option list ---- */
+/* ---- searchable option list (arrow-key + Enter navigable) ---- */
 export function OptionList({ options, value, onPick, searchable, label }) {
   const [q, setQ] = useState('');
+  const [active, setActive] = useState(0);
   const ref = useRef(null);
+  const listRef = useRef(null);
   useEffect(() => { if (searchable) ref.current?.focus(); }, [searchable]);
   const filtered = q ? options.filter(o => (o.label || '').toLowerCase().includes(q.toLowerCase())) : options;
+  // Reset the highlight to the top whenever the filter changes; keep it in range.
+  useEffect(() => { setActive(0); }, [q]);
+  const cur = Math.min(active, Math.max(0, filtered.length - 1));
+  // Keep the highlighted row scrolled into view as it moves.
+  useEffect(() => { listRef.current?.querySelector('[data-active="true"]')?.scrollIntoView({ block: 'nearest' }); }, [cur, filtered.length]);
+
+  function onKey(e) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); setActive(a => Math.min(a + 1, filtered.length - 1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(a => Math.max(a - 1, 0)); }
+    else if (e.key === 'Enter') { e.preventDefault(); const o = filtered[cur]; if (o) onPick(o.value, o); }
+  }
+
   return (
     <>
       {label && <div className="menu-label">{label}</div>}
-      {searchable && <input ref={ref} className="menu-search" value={q} onChange={e => setQ(e.target.value)} placeholder="Search…" />}
-      <div style={{ maxHeight: 240, overflowY: 'auto' }}>
-        {filtered.map(o => (
-          <button key={o.value ?? '∅'} className={'menu-item' + (o.value === value ? ' active' : '')} onClick={() => onPick(o.value, o)}>
+      {searchable && <input ref={ref} className="menu-search" value={q} onChange={e => setQ(e.target.value)} onKeyDown={onKey} placeholder="Search…" />}
+      <div ref={listRef} style={{ maxHeight: 240, overflowY: 'auto' }} tabIndex={searchable ? undefined : 0} onKeyDown={searchable ? undefined : onKey}>
+        {filtered.map((o, i) => (
+          <button key={o.value ?? '∅'} data-active={i === cur} onMouseEnter={() => setActive(i)}
+            className={'menu-item' + (o.value === value ? ' active' : '')}
+            style={i === cur ? { background: 'var(--surface-3)', color: 'var(--text-1)' } : undefined}
+            onClick={() => onPick(o.value, o)}>
             {o.dot && <span className="si" style={{ background: o.dot }} />}
             {o.node || o.label}
             {o.value === value && <span className="ck"><Check size={14} /></span>}
