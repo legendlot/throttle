@@ -49,6 +49,8 @@ const inputStyle       = { background: 'var(--surface2)', border: '1px solid var
 const btnPrimary       = { background: 'var(--yellow)', border: '1px solid var(--yellow)', borderRadius: 3, padding: '7px 16px', fontSize: 12, fontWeight: 700, color: '#000', cursor: 'pointer', fontFamily: 'var(--cond)', letterSpacing: '0.04em' };
 const btnSecondary     = { background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, padding: '6px 12px', fontSize: 11, color: 'var(--t2)', cursor: 'pointer', fontFamily: 'var(--cond)' };
 const btnDanger        = { ...btnPrimary, background: 'var(--red, #ef4444)', border: '1px solid var(--red, #ef4444)', color: '#fff' };
+const modeToggleBtn    = { background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, padding: '4px 12px', fontSize: 11, color: 'var(--t2)', cursor: 'pointer', fontFamily: 'var(--cond)', letterSpacing: '0.03em' };
+const modeToggleActive = { background: 'var(--yellow)', border: '1px solid var(--yellow)', color: '#000', fontWeight: 700 };
 
 function formatDate(raw) {
   if (!raw) return '—';
@@ -83,6 +85,7 @@ export default function IssueQueuePage() {
   const [selectedItem, setSelectedItem] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [modeSwitching, setModeSwitching] = useState(false);
   const [confirmChecked, setConfirmChecked] = useState(false);
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
   const [rejectWOModalOpen, setRejectWOModalOpen] = useState(false);
@@ -316,6 +319,7 @@ export default function IssueQueuePage() {
           wos: data.wos || [],
           lines: data.pick_list || [],
           fbu_lines: data.fbu_lines || [],
+          fbu_available: !!data.fbu_available,
         });
         // FEAT-020 — fetch pick status if the run is in Picking state
         if (data.run?.status === 'Picking') {
@@ -489,6 +493,25 @@ export default function IssueQueuePage() {
       showToast(e.message || 'Issue submission failed', 'error');
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  // Store-side FBU toggle: flip a fresh run between CKD parts and FBU built units at
+  // issue time (RULE-FBU-001). Re-fetches the run so the pick list switches accordingly.
+  async function setIssueMode(mode) {
+    if (!selectedItem || selectedItem.type !== 'run' || modeSwitching || submitting) return;
+    setModeSwitching(true);
+    try {
+      await workerFetch('setRunIssueMode', { data: { run_no: selectedItem.ref, mode } }, session);
+      setConfirmChecked(false);
+      await openItem(selectedItem);
+      showToast(mode === 'fbu'
+        ? 'Switched to FBU — issue built units from FBU stock'
+        : 'Switched to CKD — issue the parts pick list', 'success');
+    } catch (e) {
+      showToast(e.message || 'Failed to switch issue mode', 'error');
+    } finally {
+      setModeSwitching(false);
     }
   }
 
@@ -1080,6 +1103,36 @@ export default function IssueQueuePage() {
                 onVoid={(line) => { setVoidModal(line); setVoidReason(''); }}
               />
             )}
+            {/* Store-side FBU toggle — only for a fresh in-house run whose product has
+                built (FBU) units in stock. Lets the store issue the run as FBU units
+                instead of CKD parts (RULE-FBU-001), without a run-creation selector. */}
+            {!detailLoading && selectedItem.type === 'run' && selectedItem.fbu_available
+              && selectedItem.run?.run_type !== 'outsourced' && !selectedItem.finishPhase
+              && ['Submitted', 'Picking'].includes(selectedItem.run?.status) && (() => {
+                const isFbuRun = (selectedItem.wos || []).some((w) => w.issue_mode === 'fbu');
+                return (
+                  <div style={{ marginBottom: 12, padding: 10, background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 11, color: 'var(--t3)' }}>Issue as:</span>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <button
+                        onClick={() => setIssueMode('components')}
+                        disabled={modeSwitching || submitting || !isFbuRun}
+                        style={{ ...modeToggleBtn, ...(!isFbuRun ? modeToggleActive : {}) }}
+                      >CKD parts</button>
+                      <button
+                        onClick={() => setIssueMode('fbu')}
+                        disabled={modeSwitching || submitting || isFbuRun}
+                        style={{ ...modeToggleBtn, ...(isFbuRun ? modeToggleActive : {}) }}
+                      >FBU units</button>
+                    </div>
+                    <span style={{ fontSize: 10, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
+                      {modeSwitching ? 'switching…' : isFbuRun
+                        ? 'issuing built units from FBU stock'
+                        : 'issuing the parts pick list'}
+                    </span>
+                  </div>
+                );
+              })()}
             {detailLoading ? (
               <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
             ) : (
