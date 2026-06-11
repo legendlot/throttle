@@ -116,17 +116,17 @@ export default function DashboardPage() {
   );
 }
 
-// "Last seen" label + colour, by IST calendar day. green=today, normal=recent, muted=stale, faint=never.
+// "Last seen" label + colour by ELAPSED time: minutes → hours → days (rolls over at 60m / 24h).
+// green = within a day, normal ≤ a week, muted beyond, faint = never.
 function lastSeen(iso) {
   if (!iso) return { label: 'never', color: 'var(--text-4)' };
-  const istDay = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(d);
-  const today = istDay(new Date());
-  const seen = istDay(new Date(iso));
-  const diff = Math.round((new Date(today + 'T00:00:00Z') - new Date(seen + 'T00:00:00Z')) / 86400000);
-  if (diff <= 0) return { label: 'today', color: 'var(--st-done)' };
-  if (diff === 1) return { label: 'yesterday', color: 'var(--text-2)' };
-  if (diff <= 7) return { label: `${diff}d ago`, color: 'var(--text-2)' };
-  return { label: `${diff}d ago`, color: 'var(--text-4)' };
+  const mins = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000));
+  if (mins < 1) return { label: 'just now', color: 'var(--st-done)' };
+  if (mins < 60) return { label: `${mins}m ago`, color: 'var(--st-done)' };
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return { label: `${hrs}h ago`, color: 'var(--st-done)' };
+  const days = Math.floor(hrs / 24);
+  return { label: `${days}d ago`, color: days <= 7 ? 'var(--text-2)' : 'var(--text-4)' };
 }
 
 function Kpi({ icon: Ic, label, value, accent, onClick }) {
