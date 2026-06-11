@@ -52,8 +52,9 @@ code**, on demand, **without changing stock**.
   active parts; searchable by code or name; renders `PART-CODE — Part Name (Product)`.
   Selecting a part prefills the default bag size from its `bag_size`.
 - **Two number fields** — *Bag size* (pieces per bag, prefilled, editable) and
-  *Number of bags*.
-- **Live preview** — "N bags × M = N·M pieces".
+  *Total quantity*. The number of bags is **auto-derived** (`ceil(total/bag_size)`, last
+  bag = remainder) — never asked.
+- **Live preview** — "N bags — (N-1)×size + 1×remainder = total pcs".
 - **Generate & Print** button → `workerFetch('generateManualBags', { data })` →
   `buildBagLabelsHtml(res.data.bags, 'MANUAL') + printWindow()`.
 - **Reprint last batch** button (reprints the just-created bags held in state — so a failed
@@ -63,9 +64,12 @@ code**, on demand, **without changing stock**.
 
 ### Worker — `generateManualBags` (JWT POST, lotopsproxy)
 - `if (!canBagSticker(P)) return err('No permission', 403);` as first line (RULE-011).
-- Input: `part_code`, `bag_size`, `num_bags`.
+- Input: `part_code`, `bag_size`, `total_qty`. Splits `total_qty` into bags of `bag_size`
+  + a remainder bag (derived `num_bags = ceil(total/bag_size)`); the last bag carries the
+  remainder. (Same split convention as `generateBagsForGrn`.)
 - Validate: part exists AND is active in `material_master` (reject unknown/inactive — the
-  "legitimate part codes" requirement); `bag_size` ≥ 1; `num_bags` 1–500 (runaway cap).
+  "legitimate part codes" requirement); `bag_size` ≥ 1; `total_qty` ≥ 1; derived bag count
+  ≤ 500 (runaway cap).
 - Resolve `part_name` + `product` from `material_master`.
 - Insert `num_bags` rows into `store.bags`:
   - `bag_id = BAG-<part_code>-MAN-<base36(Date.now())>-<seq3>` (globally unique),
