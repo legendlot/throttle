@@ -61,9 +61,14 @@ count/return tasks. So recurring tasks never show on `/tasks` or `/dashboard`.
   "freq": "daily" | "weekly" | "monthly",
   "days_of_week": [0,1,2,3,4,5,6],   // weekly only — 0=Sun..6=Sat (JS getDay). 1 day = classic weekly; many = "specific weekdays"
   "day_of_month": 1..31,             // monthly only — clamped to the month's last day
-  "time": "HH:MM"                    // 24h, IST — the set time of day
+  "time": "HH:MM",                   // 24h, IST — the set time of day
+  "until": "YYYY-MM-DD"              // optional expiry (IST). After this date the task auto-drops off the checklist. Omitted = never expires.
 }
 ```
+
+**Expiry (added S124-cont):** `until` is an optional IST end date. Lazy expiry — `getChecklist` filters out
+tasks whose `until < today`, so after that date they vanish from BOTH the Today card and the manage list and
+no longer clog the checklist. The row stays in the DB (completion history intact); no auto-abandon, no cron.
 - **daily** → every day at `time`.
 - **weekly** → on each weekday in `days_of_week`, every week, at `time`.
 - **monthly** → on `day_of_month` each month (clamped), at `time`.
