@@ -172,6 +172,18 @@ async function loadTask(id, env) {
 }
 function isHttpUrl(u) { return typeof u === 'string' && /^https?:\/\//i.test(u.trim()); }
 
+// ── Presence: stamp last_seen_at (app load via getMe + every mutation). ───────
+// No login log exists otherwise; this drives the Dashboard's "last seen" column.
+async function touchActivity(auth, env) {
+  if (!auth?.userId) return;
+  try {
+    await sbDocket(`/rest/v1/user_activity?on_conflict=user_id`, env, {
+      method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates',
+      body: JSON.stringify({ user_id: auth.userId, last_seen_at: nowIso() }),
+    });
+  } catch { /* presence is best-effort — never block the request */ }
+}
+
 // ── Checklists / recurring tasks (RULE-DOCKET-008) ───────────────────────────
 // A recurring task is a docket.tasks row (is_recurring=true + recurrence jsonb); per-day
 // completion lives in docket.checklist_completions. All date math is IST (Asia/Kolkata).
@@ -280,6 +292,7 @@ async function getMe(url, auth, env) {
   const [spaces, can_view_dashboard] = await Promise.all([
     accessibleSpaces(auth, env),
     canViewDashboard(auth, env),
+    touchActivity(auth, env),   // app-load presence ping (RULE-DOCKET-008 / last-seen)
   ]);
   return ok({
     id: auth.userId, email: auth.email, role: auth.role, full_name: auth.fullName,
@@ -483,7 +496,20 @@ async function getDashboard(url, auth, env) {
   else { if (!(await canAccessSpace(auth, space, env))) return err('forbidden_space', 403); }
   const r = await sbDocket(`/rest/v1/rpc/dashboard_stats`, env, { method: 'POST', body: JSON.stringify({ p_space_id: spaceId }) });
   if (!r.ok) return err('db_error: ' + JSON.stringify(r.data), 500);
-  return ok(r.data || {});
+  const stats = r.data || {};
+  // Attach each person's "last seen" (presence) to the by_person rows: emp → auth user → last_seen_at.
+  const people = Array.isArray(stats.by_person) ? stats.by_person : [];
+  if (people.length) {
+    const empIds = uniq(people.map(p => p.emp_id));
+    const [empRes, actRes] = await Promise.all([
+      empIds.length ? sbPodium(`/rest/v1/employees?id=in.${inList(empIds)}&select=id,auth_user_id`, env) : { data: [] },
+      sbDocket(`/rest/v1/user_activity?select=user_id,last_seen_at`, env),
+    ]);
+    const empAuth = {}; (empRes.data || []).forEach(e => { empAuth[e.id] = e.auth_user_id; });
+    const seen = {}; (actRes.data || []).forEach(a => { seen[a.user_id] = a.last_seen_at; });
+    stats.by_person = people.map(p => ({ ...p, last_seen: empAuth[p.emp_id] ? (seen[empAuth[p.emp_id]] || null) : null }));
+  }
+  return ok(stats);
 }
 
 // Per-person checklist of recurring tasks. ?employee_id= optional (default = caller). RULE-DOCKET-008.
@@ -1158,6 +1184,7 @@ async function handlePost(request, env) {
   let body; try { body = await request.json(); } catch { return err('bad_json', 400); }
   const action = body?.action;
   if (!action) return err('action_required', 400);
+  await touchActivity(auth, env);   // mutation presence ping (best-effort, swallows its own errors)
   const handler = POST_ACTIONS[action];
   if (!handler) return err(`unknown_action: ${action}`, 400);
   try { return await handler(body, auth, env); }

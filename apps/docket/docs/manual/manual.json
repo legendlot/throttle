@@ -2,8 +2,8 @@
   "title": "Docket",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to Legend of Toys' org-wide task manager: capturing, owning and tracking work across every department.",
-  "version": "1.0.1",
-  "date": "2026-06-06",
+  "version": "1.1.0",
+  "date": "2026-06-12",
   "app_url": "docket.legendoftoys.com",
   "owner": "Legend of Toys",
   "roles": {
@@ -36,6 +36,13 @@
       "chapters": [
         { "id": "programs", "title": "Programs", "file": "org-programs.html", "roles": ["mem","view","adm"] },
         { "id": "spaces",   "title": "Spaces",   "route": "/tasks?space=",   "file": "org-spaces.html",   "roles": ["mem","view","adm"] }
+      ]
+    },
+    {
+      "part": "Checklists",
+      "subtitle": "Your recurring work: routines you tick off on a repeat schedule, kept separate from the task board.",
+      "chapters": [
+        { "id": "checklists", "title": "Checklists", "route": "/checklist", "file": "checklists.html", "roles": ["mem","view","adm"] }
       ]
     },
     {

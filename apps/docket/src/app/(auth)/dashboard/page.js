@@ -44,7 +44,7 @@ export default function DashboardPage() {
   const maxStatus = Math.max(1, ...byStatus.map(s => s.n));
   const openTotal = byStatus.filter(s => s.key !== 'done' && s.key !== 'abandoned').reduce((a, b) => a + b.n, 0);
   const byTeam = (stats.by_department || []).map(r => ({ name: r.dept_name, id: r.dept_id, open: Number(r.open || 0), done: Number(r.done || 0), overdue: Number(r.overdue || 0) }));
-  const byPerson = (stats.by_person || []).map(r => ({ name: r.emp_name, id: r.emp_id, open: Number(r.open || 0), done: Number(r.done || 0), overdue: Number(r.overdue || 0) }));
+  const byPerson = (stats.by_person || []).map(r => ({ name: r.emp_name, id: r.emp_id, open: Number(r.open || 0), done: Number(r.done || 0), overdue: Number(r.overdue || 0), last_seen: r.last_seen || null }));
 
   return (
     <div className="screen">
@@ -93,16 +93,18 @@ export default function DashboardPage() {
       <section className="panel" style={{ marginTop: 14 }}>
         <div className="panel-h">By person · owner workload</div>
         <table className="dtable">
-          <thead><tr><th>Person</th><th className="num">Open</th><th className="num">Done</th><th className="num">Overdue</th><th style={{ width: '34%' }}>Load</th></tr></thead>
+          <thead><tr><th>Person</th><th className="num">Open</th><th className="num">Done</th><th className="num">Overdue</th><th>Last seen</th><th style={{ width: '28%' }}>Load</th></tr></thead>
           <tbody>
-            {byPerson.length === 0 && <tr><td colSpan={5} style={{ color: 'var(--text-3)' }}>No tasks yet.</td></tr>}
+            {byPerson.length === 0 && <tr><td colSpan={6} style={{ color: 'var(--text-3)' }}>No tasks yet.</td></tr>}
             {byPerson.map(r => {
               const total = Math.max(1, r.open + r.done);
+              const ls = lastSeen(r.last_seen);
               return (
                 <tr key={r.id || r.name} className="clickable" onClick={() => router.push(`/tasks?employee_id=${r.id}${linkSuffix}`)}>
                   <td><span style={{ display: 'inline-flex', alignItems: 'center', gap: 9 }}><Avatar name={r.name} size={24} />{r.name || '—'}</span></td>
                   <td className="num">{r.open}</td><td className="num">{r.done}</td>
                   <td className="num" style={{ color: r.overdue ? 'var(--overdue)' : 'var(--text-2)', fontWeight: r.overdue ? 600 : 400 }}>{r.overdue}</td>
+                  <td title={r.last_seen ? new Date(r.last_seen).toLocaleString('en-IN') : 'No activity recorded'} style={{ fontSize: 12.5, color: ls.color }}>{ls.label}</td>
                   <td><div className="load"><div className="load-done" style={{ width: (r.done / total * 100) + '%' }} /><div className="load-open" style={{ width: (r.open / total * 100) + '%' }} /></div></td>
                 </tr>
               );
@@ -112,6 +114,19 @@ export default function DashboardPage() {
       </section>
     </div>
   );
+}
+
+// "Last seen" label + colour, by IST calendar day. green=today, normal=recent, muted=stale, faint=never.
+function lastSeen(iso) {
+  if (!iso) return { label: 'never', color: 'var(--text-4)' };
+  const istDay = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(d);
+  const today = istDay(new Date());
+  const seen = istDay(new Date(iso));
+  const diff = Math.round((new Date(today + 'T00:00:00Z') - new Date(seen + 'T00:00:00Z')) / 86400000);
+  if (diff <= 0) return { label: 'today', color: 'var(--st-done)' };
+  if (diff === 1) return { label: 'yesterday', color: 'var(--text-2)' };
+  if (diff <= 7) return { label: `${diff}d ago`, color: 'var(--text-2)' };
+  return { label: `${diff}d ago`, color: 'var(--text-4)' };
 }
 
 function Kpi({ icon: Ic, label, value, accent, onClick }) {

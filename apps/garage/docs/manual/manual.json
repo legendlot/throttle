@@ -2,8 +2,8 @@
   "title": "Garage",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to store, inventory, fulfilment, returns and procurement at Legend of Toys.",
-  "version": "1.5.0",
-  "date": "2026-06-08",
+  "version": "1.6.0",
+  "date": "2026-06-12",
   "app_url": "garage.legendoftoys.com",
   "owner": "Legend of Toys",
   "roles": {
@@ -159,6 +159,16 @@
           "file": "inv-receiving.html",
           "roles": [
             "sto",
+            "adm"
+          ]
+        },
+        {
+          "id": "bag-sticker",
+          "title": "Bag Stickers",
+          "file": "inv-bagsticker.html",
+          "roles": [
+            "sto",
+            "prd",
             "adm"
           ]
         }

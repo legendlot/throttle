@@ -20,6 +20,17 @@
 </ol>
 <p><strong>Print</strong> produces a pick sheet for the floor. <strong>Reject</strong> (runs and non-short work orders) needs a reason and removes the request. For a scan-picked run, the <strong>Pick Status</strong> panel shows each part as Complete, Partial, Pending or Not needed.</p>
 
+<h2 class="sec">Issue as CKD parts or FBU units</h2>
+<p>For a fresh in-house run whose product also has <strong>built (FBU) units in stock</strong>, the detail shows an <strong>Issue as</strong> toggle: <span class="mono">CKD parts</span> or <span class="mono">FBU units</span>. The store decides at issue time which to give the floor:</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">CKD parts</div><div class="a-val"><p>The default. The pick list is the full component BOM, the floor assembles the car.</p></div></div>
+  <div class="a-row"><div class="a-key">FBU units</div><div class="a-val"><p>Flip to this when you&rsquo;re issuing ready-built units. The list switches to the <strong>FBU units</strong> on hand plus the outward kit only (packaging, battery, para), the car itself is issued whole, not as parts. Issuing draws down FBU stock.</p></div></div>
+</div>
+<div class="callout note">
+  <div class="c-title">&#9432; The toggle only shows when there&rsquo;s a choice</div>
+  <p>If the product has no FBU stock, there&rsquo;s nothing to flip to and the toggle doesn&rsquo;t appear, the run issues as CKD. Flipping back and forth before you issue is safe; the choice is locked in only when you confirm the issue.</p>
+</div>
+
 <div class="callout warn">
   <div class="c-title">&#9888; Short stock does not block issuing</div>
   <p>A red <strong>In Stock</strong> figure means the part is short, but you can still issue (the system records what you actually gave). Issuing a scan-picked run before every bag is scanned is also allowed; the &ldquo;pick incomplete&rdquo; message is informational, not a stop. Quantities are rounded to whole units on submit.</p>
