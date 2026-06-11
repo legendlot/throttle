@@ -2,7 +2,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
-import { X, Maximize2, Plus, Check, Users, Layers, Hash, User, Flag, Calendar, Clock } from 'lucide-react';
+import { X, Maximize2, Plus, Check, Users, Layers, Hash, User, Flag, Calendar, Clock, Repeat } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../lib/docketopsFetch.js';
 import { useHotkey } from '../lib/hotkeys.js';
 import { StatusBadge } from './StatusBadge.js';
@@ -15,6 +15,7 @@ import { DatePicker } from './DatePicker.js';
 import { Avatar, Popover, AnchoredPopover, OptionList, firstName, personColor, relDeadline, deadlineState } from './primitives.js';
 import { SETTABLE_STATUSES, STATUS_MAP, PRIORITIES, effectiveDeadline } from '../lib/tasks.js';
 import { fmtDateTime } from '../lib/format.js';
+import { recurrenceSummary } from '../lib/recurrence.js';
 
 // Notion-style slide-over "peek" for a task. Restyled to the redesign; the data
 // layer (docketops reads/writes, wired panels) is unchanged. "Open full page"
@@ -248,6 +249,12 @@ export function TaskDrawer({ id, session, departments = [], employees = [], onCl
                     <PriorityBadge priority={task.priority} />
                   </EditTrigger>
                 </Prop>
+                {task.is_recurring ? (
+                  <Prop icon={Repeat} label="Repeats">
+                    <span style={{ fontSize: 13, color: 'var(--text-1)' }}>{recurrenceSummary(task.recurrence)}</span>
+                    <span className="rev-flag" style={{ marginLeft: 8 }}>checklist</span>
+                  </Prop>
+                ) : (
                 <Prop icon={Calendar} label="Deadline">
                   <span ref={ddRef} style={{ position: 'relative', display: 'inline-flex' }}>
                     <span className={'editable' + (!dl ? ' empty' : '')} onClick={canEdit ? () => { setDdDraft(dl); setReviseReason(''); setDdOpen(true); } : undefined} style={{ cursor: canEdit ? 'pointer' : 'default' }}>
@@ -264,6 +271,7 @@ export function TaskDrawer({ id, session, departments = [], employees = [], onCl
                     </AnchoredPopover>
                   </span>
                 </Prop>
+                )}
                 <Prop icon={Clock} label="Created"><span style={{ fontSize: 13, color: 'var(--text-2)' }}>{fmtDateTime(task.created_at)}{task.creator_name ? ` · ${task.creator_name}` : ''}</span></Prop>
               </div>
 
@@ -295,7 +303,7 @@ export function TaskDrawer({ id, session, departments = [], employees = [], onCl
                 ) : (task.description ? <div className="dr-desc">{task.description}</div> : <span style={{ fontSize: 12.5, color: 'var(--text-4)' }}>—</span>)}
               </div>
 
-              <div className="dr-section"><div className="sh">Sub-tasks</div><SubtaskPanel task={task} session={session} canEdit={canEdit} onChange={mutated} /></div>
+              {!task.is_recurring && <div className="dr-section"><div className="sh">Sub-tasks</div><SubtaskPanel task={task} session={session} canEdit={canEdit} onChange={mutated} /></div>}
               <div className="dr-section"><div className="sh">Documents</div><DocLinksPanel task={task} session={session} canEdit={canEdit} onChange={mutated} /></div>
 
               <div className="dr-tabs">

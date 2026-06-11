@@ -80,6 +80,7 @@ function AuthLayoutInner({ children }) {
 
   const chrome = useMemo(() => {
     if (pathname === '/dashboard') return { title: 'Dashboard' };
+    if (pathname === '/checklist') return { title: 'Checklist' };
     if (pathname === '/scratchpad') return { title: 'Scratchpad' };
     if (pathname === '/manual') return { title: 'Manual' };
     if (pathname.startsWith('/admin')) return { title: 'Admin' };

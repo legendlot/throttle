@@ -1,4 +1,4 @@
-import { LayoutDashboard, ListChecks, ShieldCheck, UserCog, Settings, Hash, Plus, FolderLock, NotebookPen, BookOpen } from 'lucide-react';
+import { LayoutDashboard, ListChecks, ShieldCheck, UserCog, Settings, Hash, Plus, FolderLock, NotebookPen, BookOpen, ListTodo } from 'lucide-react';
 
 export const NAV_GROUPS = [
   {
@@ -45,9 +45,11 @@ export function buildNavGroups(perms, spaces = []) {
       // Spaces + New space are indented so they read as children of Tasks (RULE-DOCKET-003).
       const spaceItems = privates.map(s => ({ id: 'space-' + s.id, label: s.name, route: '/tasks?space=' + s.id, icon: Hash, indent: true }));
       const newSpace = { id: 'space-new', label: 'New space', route: '/tasks?space=new', icon: Plus, indent: true };
-      // Scratchpad lives BELOW all tasks/spaces, at the same level as Tasks (no perm gate). RULE-DOCKET-005.
+      // Checklist (per-person recurring tasks, RULE-DOCKET-008) + Scratchpad live BELOW
+      // all tasks/spaces, at the same level as Tasks (no perm gate — everyone has their own).
+      const checklist = { id: 'checklist', label: 'Checklist', route: '/checklist', icon: ListTodo };
       const scratchpad = { id: 'scratchpad', label: 'Scratchpad', route: '/scratchpad', icon: NotebookPen };
-      return { ...g, items: [...g.items, ...spaceItems, newSpace, scratchpad] };
+      return { ...g, items: [...g.items, ...spaceItems, newSpace, checklist, scratchpad] };
     }
     if (g.id === 'admin' && perms?.docket_admin) {
       return { ...g, items: [...g.items, { id: 'admin-spaces', label: 'Spaces', route: '/admin/spaces', icon: FolderLock }] };

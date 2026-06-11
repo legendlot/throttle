@@ -45,6 +45,7 @@ export const EVENT_LABEL = {
   title_changed: 'Title changed',
   description_changed: 'Description changed',
   parent_changed: 'Parent changed',
+  recurrence_changed: 'Schedule changed',
   collaborator_added: 'Collaborator added',
   collaborator_removed: 'Collaborator removed',
   document_added: 'Document added',

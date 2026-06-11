@@ -172,6 +172,59 @@ async function loadTask(id, env) {
 }
 function isHttpUrl(u) { return typeof u === 'string' && /^https?:\/\//i.test(u.trim()); }
 
+// ── Checklists / recurring tasks (RULE-DOCKET-008) ───────────────────────────
+// A recurring task is a docket.tasks row (is_recurring=true + recurrence jsonb); per-day
+// completion lives in docket.checklist_completions. All date math is IST (Asia/Kolkata).
+function istDateStr(d = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(d); // 'YYYY-MM-DD'
+}
+const TIME_RE = /^([01]?\d|2[0-3]):[0-5]\d$/;
+function validateRecurrence(rec) {
+  if (!rec || typeof rec !== 'object') return 'recurrence required';
+  if (!['daily', 'weekly', 'monthly'].includes(rec.freq)) return 'invalid freq';
+  if (!TIME_RE.test(rec.time || '')) return 'invalid time (HH:MM)';
+  if (rec.freq === 'weekly') {
+    if (!Array.isArray(rec.days_of_week) || !rec.days_of_week.length) return 'weekly needs days_of_week';
+    if (rec.days_of_week.some(x => !Number.isInteger(Number(x)) || x < 0 || x > 6)) return 'days_of_week must be 0..6';
+  }
+  if (rec.freq === 'monthly') {
+    const dom = Number(rec.day_of_month);
+    if (!Number.isInteger(dom) || dom < 1 || dom > 31) return 'day_of_month must be 1..31';
+  }
+  return null;
+}
+function normalizeRecurrence(rec) {
+  const out = { freq: rec.freq, time: rec.time };
+  if (rec.freq === 'weekly') out.days_of_week = uniq(rec.days_of_week.map(Number)).sort((a, b) => a - b);
+  if (rec.freq === 'monthly') out.day_of_month = Number(rec.day_of_month);
+  return out;
+}
+// Is a recurrence due on the given IST calendar date ('YYYY-MM-DD')?
+function isDueOn(rec, dateStr) {
+  if (!rec || !rec.freq) return false;
+  if (rec.freq === 'daily') return true;
+  if (rec.freq === 'weekly') {
+    const wd = new Date(`${dateStr}T12:00:00Z`).getUTCDay(); // 0=Sun..6=Sat for that calendar date
+    return Array.isArray(rec.days_of_week) && rec.days_of_week.map(Number).includes(wd);
+  }
+  if (rec.freq === 'monthly') {
+    const y = +dateStr.slice(0, 4), m = +dateStr.slice(5, 7), day = +dateStr.slice(8, 10);
+    const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate(); // last day of month m (1-based)
+    const dom = Number(rec.day_of_month);
+    return day === dom || (day === lastDay && dom > lastDay); // clamp short months
+  }
+  return false;
+}
+// Person-level checklist visibility: view_all, self, or same department (mirrors task baseline).
+function canViewChecklistOf(auth, targetEmp) {
+  if (canViewAll(auth)) return true;
+  if (auth.employeeId && targetEmp.id === auth.employeeId) return true;
+  if (auth.departmentId && targetEmp.department_id && targetEmp.department_id === auth.departmentId) return true;
+  return false;
+}
+
 // ── Space helpers (RULE-DOCKET-003) ─────────────────────────────────────────
 async function loadSpace(id, env) {
   const r = await sbDocket(`/rest/v1/spaces?id=eq.${enc(id)}&select=*&limit=1`, env);
@@ -427,6 +480,41 @@ async function getDashboard(url, auth, env) {
   return ok(r.data || {});
 }
 
+// Per-person checklist of recurring tasks. ?employee_id= optional (default = caller). RULE-DOCKET-008.
+async function getChecklist(url, auth, env) {
+  const targetId = url.searchParams.get('employee_id') || auth.employeeId;
+  if (!targetId) return err('no_employee', 400);
+  const empRes = await sbPodium(
+    `/rest/v1/employees?id=eq.${enc(targetId)}&select=id,full_name,department_id&limit=1`, env);
+  const target = empRes.ok && empRes.data?.[0];
+  if (!target) return err('employee_not_found', 404);
+  if (!canViewChecklistOf(auth, target)) return err('forbidden', 403);
+
+  const tRes = await sbDocket(
+    `/rest/v1/tasks?is_recurring=eq.true&owner_employee_id=eq.${enc(targetId)}&status=neq.abandoned&select=*&order=created_at.asc`, env);
+  if (!tRes.ok) return err('db_error', 500);
+  const rows = await hydrateTasks(tRes.data || [], auth, env);
+
+  const today = istDateStr();
+  const ids = rows.map(t => t.id);
+  const doneSet = new Set();
+  if (ids.length) {
+    const cRes = await sbDocket(
+      `/rest/v1/checklist_completions?task_id=in.${inList(ids)}&occurrence_date=eq.${today}&select=task_id`, env);
+    (cRes.ok ? cRes.data : []).forEach(c => doneSet.add(c.task_id));
+  }
+  const items = rows.map(t => ({
+    ...t,
+    due_today: isDueOn(t.recurrence, today),
+    completed_today: doneSet.has(t.id),
+    _can_complete: canEditTask(auth, t),
+  }));
+  return ok({
+    owner: { id: target.id, full_name: target.full_name, department_id: target.department_id },
+    today, items,
+  });
+}
+
 async function getDocketRoles(url, auth, env) {
   const r = await sbStore(`/rest/v1/docket_roles?select=*&order=is_system.desc,label.asc`, env);
   if (!r.ok) return err('db_error', 500);
@@ -479,6 +567,16 @@ async function createTaskCore(d, auth, env) {
   // has both an owner and a deadline. (RULE-DOCKET-001, V2.)
   if (!d.title || !String(d.title).trim()) return err('title required', 400);
 
+  // Recurring (checklist) task: validate the rule, force top-level, default owner = caller.
+  const isRecurring = !!d.is_recurring;
+  if (isRecurring) {
+    const e = validateRecurrence(d.recurrence);
+    if (e) return err(e, 400);
+    d.recurrence = normalizeRecurrence(d.recurrence);
+    d.parent_task_id = null;                                  // recurring tasks are top-level (v1)
+    if (d.owner_employee_id == null) d.owner_employee_id = auth.employeeId || null; // "create for myself"
+  }
+
   let parentId = d.parent_task_id || null;
   let spaceId = d.space_id || null;
   if (parentId) {
@@ -502,10 +600,11 @@ async function createTaskCore(d, auth, env) {
     body: JSON.stringify([{
       task_no, title: String(d.title).trim(), description: d.description || null,
       department_id: d.department_id || null, owner_employee_id: d.owner_employee_id || null,
-      status: 'not_started', priority: d.priority || 'P2',
+      status: isRecurring ? 'in_progress' : 'not_started', priority: d.priority || 'P2',
       parent_task_id: parentId, created_by_user_id: auth.userId,
       deadline: d.deadline || null, custom_fields: d.custom_fields || {},
       space_id: spaceId, program_id: d.program_id || null,
+      is_recurring: isRecurring, recurrence: isRecurring ? d.recurrence : null,
     }]),
   });
   if (!ins.ok || !ins.data?.[0]) return err('create_failed: ' + JSON.stringify(ins.data), 400);
@@ -529,6 +628,51 @@ async function createSubtask(body, auth, env) {
   const d = body.data || body;
   if (!d.parent_task_id) return err('parent_task_id required', 400);
   return createTaskCore(d, auth, env);
+}
+// A recurring (checklist) task — owner = the assignee (defaults to the caller). RULE-DOCKET-008.
+async function createRecurringTask(body, auth, env) {
+  const d = body.data || body;
+  d.is_recurring = true;
+  return createTaskCore(d, auth, env);
+}
+async function updateRecurrence(body, auth, env) {
+  const d = body.data || body;
+  if (!d.id) return err('id required', 400);
+  const e = validateRecurrence(d.recurrence); if (e) return err(e, 400);
+  const task = await loadTask(d.id, env);
+  if (!task) return err('not_found', 404);
+  if (!task.is_recurring) return err('not_a_recurring_task', 422);
+  if (!canEditTask(auth, task)) return err('forbidden', 403);
+  const rec = normalizeRecurrence(d.recurrence);
+  const r = await sbDocket(`/rest/v1/tasks?id=eq.${enc(d.id)}`, env, {
+    method: 'PATCH', prefer: 'return=minimal',
+    body: JSON.stringify({ recurrence: rec, updated_by: auth.userId, updated_at: nowIso() }) });
+  if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
+  await logHistory(env, task.id, auth.userId, 'recurrence_changed',
+    { field: 'recurrence', old: JSON.stringify(task.recurrence), new: JSON.stringify(rec) });
+  return ok({ id: task.id, recurrence: rec });
+}
+// Check/uncheck one occurrence (date defaults to IST today). The completion row IS the audit.
+async function toggleChecklistOccurrence(body, auth, env) {
+  const d = body.data || body;
+  if (!d.id) return err('id required', 400);
+  const task = await loadTask(d.id, env);
+  if (!task) return err('not_found', 404);
+  if (!task.is_recurring) return err('not_a_recurring_task', 422);
+  if (!canEditTask(auth, task)) return err('forbidden', 403);
+  const date = d.date || istDateStr();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return err('invalid date', 400);
+  const completed = d.completed === true || d.completed === 'true';
+  if (completed) {
+    const r = await sbDocket(`/rest/v1/checklist_completions?on_conflict=task_id,occurrence_date`, env, {
+      method: 'POST', prefer: 'return=minimal,resolution=ignore-duplicates',
+      body: JSON.stringify({ task_id: d.id, occurrence_date: date, completed_by_user_id: auth.userId }) });
+    if (!r.ok) return err('complete_failed: ' + JSON.stringify(r.data), 400);
+  } else {
+    await sbDocket(`/rest/v1/checklist_completions?task_id=eq.${enc(d.id)}&occurrence_date=eq.${date}`, env,
+      { method: 'DELETE', prefer: 'return=minimal' });
+  }
+  return ok({ id: d.id, date, completed });
 }
 
 const PROTECTED = new Set(['id','task_no','created_at','created_by_user_id','deadline','status','action','data']);
@@ -970,12 +1114,14 @@ async function deleteScratchNote(body, auth, env) {
 const GET_ACTIONS = {
   getMe, getDepartments, getEmployees,
   getTasks, getTask, getDashboard,
+  getChecklist,
   getPrograms, getSpaces, getSpaceMembers, getAllSpaces,
   getScratchNotes,
   getDocketRoles, getDocketUsers, getDashboardSharing,
 };
 const POST_ACTIONS = {
   createTask, createSubtask, updateTask, changeStatus, reviseDeadline, abandonTask, setParent, moveTask,
+  createRecurringTask, updateRecurrence, toggleChecklistOccurrence,
   addCollaborator, removeCollaborator,
   addDocument, removeDocument,
   addComment, editComment, deleteComment,
