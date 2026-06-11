@@ -21,7 +21,7 @@ export default function BagStickersPage() {
   const [loading, setLoading]   = useState(true);
   const [partCode, setPartCode] = useState('');
   const [bagSize, setBagSize]   = useState('');
-  const [numBags, setNumBags]   = useState('');
+  const [totalQty, setTotalQty] = useState('');
   const [busy, setBusy]         = useState(false);
   const [lastBatch, setLastBatch] = useState(null); // { bags, label }
 
@@ -60,21 +60,22 @@ export default function BagStickersPage() {
   }
 
   const sz = parseInt(bagSize) || 0;
-  const nb = parseInt(numBags) || 0;
-  const total = sz > 0 && nb > 0 ? sz * nb : 0;
-  const canPrint = !!partCode && sz >= 1 && nb >= 1 && nb <= 500 && !busy;
+  const tq = parseInt(totalQty) || 0;
+  const nb = sz >= 1 && tq >= 1 ? Math.ceil(tq / sz) : 0; // auto-derived bag count
+  const remainder = sz >= 1 && tq >= 1 ? (tq % sz) : 0;
+  const canPrint = !!partCode && sz >= 1 && tq >= 1 && nb <= 500 && !busy;
 
   async function generate() {
     if (!canPrint) return;
     setBusy(true);
     try {
       const res = await workerFetch('generateManualBags', {
-        data: { part_code: partCode, bag_size: sz, num_bags: nb },
+        data: { part_code: partCode, bag_size: sz, total_qty: tq },
       }, session);
       const bags = res?.data?.bags || [];
       if (!bags.length) { showToast('No bags generated', 'info'); return; }
       printWindow(buildBagLabelsHtml(bags, 'MANUAL'));
-      setLastBatch({ bags, label: `${partCode} — ${bags.length} bag${bags.length === 1 ? '' : 's'} × ${sz}` });
+      setLastBatch({ bags, label: `${partCode} — ${bags.length} bag${bags.length === 1 ? '' : 's'} for ${tq} pcs` });
       showToast(`${bags.length} bag label${bags.length === 1 ? '' : 's'} generated for ${partCode}`, 'success');
     } catch (e) {
       showToast(e.message || 'Bag generation failed', 'error');
@@ -117,15 +118,15 @@ export default function BagStickersPage() {
                 <input style={input} type="number" min="1" value={bagSize} onChange={e => setBagSize(e.target.value)} placeholder="e.g. 50" />
               </div>
               <div>
-                <span style={lbl}>Number of bags *</span>
-                <input style={input} type="number" min="1" max="500" value={numBags} onChange={e => setNumBags(e.target.value)} placeholder="e.g. 10" />
+                <span style={lbl}>Total quantity *</span>
+                <input style={input} type="number" min="1" value={totalQty} onChange={e => setTotalQty(e.target.value)} placeholder="e.g. 1000" />
               </div>
             </div>
             <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginBottom: 14 }}>
-              {total > 0
-                ? <>Will print <strong style={{ color: 'var(--t1)' }}>{nb}</strong> bag{nb === 1 ? '' : 's'} × <strong style={{ color: 'var(--t1)' }}>{sz}</strong> = <strong style={{ color: 'var(--t1)' }}>{total}</strong> pieces</>
-                : 'Pick a part and enter bag size + count.'}
-              {nb > 500 && <span style={{ color: '#ff7070' }}> — max 500 bags per print.</span>}
+              {nb > 0
+                ? <>Will print <strong style={{ color: 'var(--t1)' }}>{nb}</strong> bag{nb === 1 ? '' : 's'} — {remainder > 0 ? <>{nb - 1} × {sz} + 1 × {remainder}</> : <>{nb} × {sz}</>} = <strong style={{ color: 'var(--t1)' }}>{tq}</strong> pcs</>
+                : 'Pick a part, enter bag size + total quantity.'}
+              {nb > 500 && <span style={{ color: '#ff7070' }}> — that exceeds 500 bags; raise bag size or lower quantity.</span>}
             </div>
             <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
               <button style={{ ...btnP, opacity: canPrint ? 1 : 0.5, cursor: canPrint ? 'pointer' : 'not-allowed' }} disabled={!canPrint} onClick={generate}>
