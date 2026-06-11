@@ -29,17 +29,16 @@ export function ordinal(n) {
 export function recurrenceSummary(rec) {
   if (!rec || !rec.freq) return '—';
   const at = rec.time ? ` at ${fmtTime(rec.time)}` : '';
-  if (rec.freq === 'daily') return `Daily${at}`;
-  if (rec.freq === 'weekly') {
+  const until = rec.until ? ` · until ${fmtISTDateShort(rec.until)}` : '';
+  let base = '—';
+  if (rec.freq === 'daily') base = `Daily${at}`;
+  else if (rec.freq === 'weekly') {
     const days = (rec.days_of_week || []).slice().map(Number).sort((a, b) => a - b);
-    if (days.length === 7) return `Every day${at}`;
-    // Mon–Fri shorthand
-    if (days.length === 5 && [1, 2, 3, 4, 5].every(d => days.includes(d))) return `Weekdays${at}`;
-    const labels = days.map(d => WEEKDAYS[d]?.label).filter(Boolean).join(', ');
-    return `Weekly · ${labels}${at}`;
-  }
-  if (rec.freq === 'monthly') return `Monthly on the ${ordinal(Number(rec.day_of_month))}${at}`;
-  return '—';
+    if (days.length === 7) base = `Every day${at}`;
+    else if (days.length === 5 && [1, 2, 3, 4, 5].every(d => days.includes(d))) base = `Weekdays${at}`;
+    else base = `Weekly · ${days.map(d => WEEKDAYS[d]?.label).filter(Boolean).join(', ')}${at}`;
+  } else if (rec.freq === 'monthly') base = `Monthly on the ${ordinal(Number(rec.day_of_month))}${at}`;
+  return base + until;
 }
 
 // IST 'YYYY-MM-DD' today (matches the worker's istDateStr).
@@ -56,11 +55,19 @@ export function fmtISTDate(dateStr) {
     weekday: 'long', day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC',
   });
 }
+// Compact 'DD Mon YYYY' (for the recurrence summary's "until …").
+export function fmtISTDateShort(dateStr) {
+  if (!dateStr) return '';
+  return new Date(`${dateStr}T12:00:00Z`).toLocaleDateString('en-IN', {
+    day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC',
+  });
+}
 
 // Client-side validity check (worker re-validates).
 export function isValidRecurrence(rec) {
   if (!rec || !['daily', 'weekly', 'monthly'].includes(rec.freq)) return false;
   if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(rec.time || '')) return false;
+  if (rec.until && !/^\d{4}-\d{2}-\d{2}$/.test(rec.until)) return false;
   if (rec.freq === 'weekly') return Array.isArray(rec.days_of_week) && rec.days_of_week.length > 0;
   if (rec.freq === 'monthly') { const d = Number(rec.day_of_month); return Number.isInteger(d) && d >= 1 && d <= 31; }
   return true;

@@ -59,6 +59,15 @@ export function RecurrenceEditor({ value, onChange }) {
         <input type="time" className="rec-time" value={rec.time || '09:00'}
           onChange={e => onChange({ ...rec, time: e.target.value })} />
       </div>
+
+      <div className="rec-row">
+        <label className="rec-lbl">Ends</label>
+        <input type="date" className="rec-date" value={rec.until || ''}
+          onChange={e => onChange({ ...rec, until: e.target.value || undefined })} />
+        {rec.until
+          ? <button type="button" className="rec-clear" onClick={() => { const { until, ...rest } = rec; onChange(rest); }}>Clear · no end date</button>
+          : <span className="rec-hint">optional — the task disappears from the checklist after this date</span>}
+      </div>
     </div>
   );
 }

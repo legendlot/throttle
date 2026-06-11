@@ -193,14 +193,20 @@ function validateRecurrence(rec) {
     const dom = Number(rec.day_of_month);
     if (!Number.isInteger(dom) || dom < 1 || dom > 31) return 'day_of_month must be 1..31';
   }
+  if (rec.until != null && rec.until !== '') {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(rec.until) || isNaN(new Date(`${rec.until}T00:00:00Z`))) return 'invalid until (YYYY-MM-DD)';
+  }
   return null;
 }
 function normalizeRecurrence(rec) {
   const out = { freq: rec.freq, time: rec.time };
   if (rec.freq === 'weekly') out.days_of_week = uniq(rec.days_of_week.map(Number)).sort((a, b) => a - b);
   if (rec.freq === 'monthly') out.day_of_month = Number(rec.day_of_month);
+  if (rec.until) out.until = rec.until;                   // optional expiry (IST date); omitted = never expires
   return out;
 }
+// A recurring task is expired (and drops off the checklist) once today is past its `until` date.
+function isExpired(rec, dateStr) { return !!(rec && rec.until && rec.until < dateStr); }
 // Is a recurrence due on the given IST calendar date ('YYYY-MM-DD')?
 function isDueOn(rec, dateStr) {
   if (!rec || !rec.freq) return false;
@@ -493,9 +499,12 @@ async function getChecklist(url, auth, env) {
   const tRes = await sbDocket(
     `/rest/v1/tasks?is_recurring=eq.true&owner_employee_id=eq.${enc(targetId)}&status=neq.abandoned&select=*&order=created_at.asc`, env);
   if (!tRes.ok) return err('db_error', 500);
-  const rows = await hydrateTasks(tRes.data || [], auth, env);
 
   const today = istDateStr();
+  // Expired recurring tasks (today past their `until`) auto-drop off the checklist (lazy expiry —
+  // kept in the DB with their completion history, just no longer surfaced).
+  const live = (tRes.data || []).filter(t => !isExpired(t.recurrence, today));
+  const rows = await hydrateTasks(live, auth, env);
   const ids = rows.map(t => t.id);
   const doneSet = new Set();
   if (ids.length) {

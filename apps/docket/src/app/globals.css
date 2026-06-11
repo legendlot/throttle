@@ -711,9 +711,11 @@ button { cursor: pointer; background: none; border: none; }
 .rec-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .rec-lbl { font-size: 12.5px; color: var(--text-3); }
 .rec-num { width: 64px; background: var(--surface); border: 1px solid var(--border-2); border-radius: var(--r-sm); padding: 7px 9px; font-size: 13px; color: var(--text-1); outline: none; }
-.rec-time { background: var(--surface); border: 1px solid var(--border-2); border-radius: var(--r-sm); padding: 7px 9px; font-size: 13px; color: var(--text-1); outline: none; color-scheme: dark; }
-.rec-num:focus, .rec-time:focus { border-color: var(--accent-line); }
+.rec-time, .rec-date { background: var(--surface); border: 1px solid var(--border-2); border-radius: var(--r-sm); padding: 7px 9px; font-size: 13px; color: var(--text-1); outline: none; color-scheme: dark; }
+.rec-num:focus, .rec-time:focus, .rec-date:focus { border-color: var(--accent-line); }
 .rec-hint { font-size: 11px; color: var(--text-4); }
+.rec-clear { font-size: 11.5px; color: var(--text-3); text-decoration: underline; }
+.rec-clear:hover { color: var(--accent); }
 
 @media (max-width: 720px) {
   .cl-create-grid { grid-template-columns: 1fr; }
