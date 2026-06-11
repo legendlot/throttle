@@ -3,7 +3,7 @@
 // (the shared one stays byte-for-byte for Garage/Redline). New visual language:
 // 248/64px collapse, soft-pill active state, grouped nav, space colour-dots, a
 // primary "New task" button, and a user footer with sign-out.
-import { LayoutDashboard, ListChecks, Plus, NotebookPen, BookOpen, Settings, ChevronLeft, LogOut } from 'lucide-react';
+import { LayoutDashboard, ListChecks, ListTodo, Plus, NotebookPen, BookOpen, Settings, ChevronLeft, LogOut } from 'lucide-react';
 import { Avatar, personColor } from './primitives.js';
 
 function NavItem({ icon: Ic, label, active, collapsed, onClick, sub, dot, dashed }) {
@@ -24,6 +24,8 @@ export function DocketSidebar({
   collapsed, onToggle, onSelect, onNewTask, userLabel = '', userRole = '', onSignOut,
 }) {
   const privates = (spaces || []).filter(s => s.is_private);
+  const mySpaces = privates.filter(s => s.is_owner);
+  const otherSpaces = privates.filter(s => !s.is_owner);
   const go = (route) => () => onSelect(route);
   const isAdminActive = activeKey.startsWith('/admin');
   const startsWith = (p) => activeKey === p || activeKey.startsWith(p + '/');
@@ -47,17 +49,29 @@ export function DocketSidebar({
         {canViewDashboard && <NavItem icon={LayoutDashboard} label="Dashboard" collapsed={collapsed} active={startsWith('/dashboard')} onClick={go('/dashboard')} />}
         <NavItem icon={ListChecks} label="My tasks" collapsed={collapsed} active={activeKey === '/tasks?lens=mine'} onClick={go('/tasks?lens=mine')} />
 
-        <div className="sb-group-label">Spaces</div>
-        {/* General is the org-wide / "all tasks" board — the worker returns the General
-            space when no space_id is set, so it IS the all-tasks view (no separate item). */}
+        {/* Spaces, grouped for clarity: Common (General = the org-wide all-tasks board,
+            returned by the worker when no space_id is set), then the caller's own private
+            spaces, then private spaces others added them to. */}
+        <div className="sb-group-label">Common</div>
         <NavItem sub dot="var(--text-4)" label="General" collapsed={collapsed} active={activeKey === '/tasks'} onClick={go('/tasks')} />
-        {privates.map(s => (
+
+        <div className="sb-group-label">My spaces</div>
+        {mySpaces.map(s => (
           <NavItem key={s.id} sub dot={personColor(s.id)} label={s.name} collapsed={collapsed}
             active={activeKey === '/tasks?space=' + s.id} onClick={go('/tasks?space=' + s.id)} />
         ))}
         <NavItem sub dashed label="New space" collapsed={collapsed} active={false} onClick={go('/tasks?space=new')} />
 
+        {otherSpaces.length > 0 && <>
+          <div className="sb-group-label">By others</div>
+          {otherSpaces.map(s => (
+            <NavItem key={s.id} sub dot={personColor(s.id)} label={s.name} collapsed={collapsed}
+              active={activeKey === '/tasks?space=' + s.id} onClick={go('/tasks?space=' + s.id)} />
+          ))}
+        </>}
+
         <div className="sb-group-label">Personal</div>
+        <NavItem icon={ListTodo} label="Checklist" collapsed={collapsed} active={startsWith('/checklist')} onClick={go('/checklist')} />
         <NavItem icon={NotebookPen} label="Scratchpad" collapsed={collapsed} active={startsWith('/scratchpad')} onClick={go('/scratchpad')} />
 
         <div className="sb-group-label">System</div>
