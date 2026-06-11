@@ -13,7 +13,7 @@ import {
   Bell,
   AlertTriangle,
   ClipboardCheck, ArrowUpDown, PackageCheck,
-  Gift, Truck,
+  Gift, Truck, Tags,
 } from 'lucide-react';
 
 // Garage = store / fulfilment. Production-owned screens (Production Runs, Ad Hoc Requests,
@@ -38,6 +38,7 @@ const GROUPS = [
       { id: 'stock',     label: 'Stock Ledger', route: '/stock',     icon: Boxes,       gate: (p) => hasPermission(p, 'stock') },
       { id: 'grn',       label: 'GRN Entry',    route: '/grn',       icon: Inbox,       gate: (p) => hasPermission(p, 'grn') },
       { id: 'receiving', label: 'Receiving',    route: '/receiving', icon: PackageOpen, gate: (p) => hasPermission(p, 'receiving') },
+      { id: 'bag-stickers', label: 'Bag Stickers', route: '/bag-stickers', icon: Tags, gate: (p) => hasPermission(p, 'bag_sticker') },
     ],
   },
   {

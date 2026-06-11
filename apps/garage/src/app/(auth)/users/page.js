@@ -52,6 +52,9 @@ const PERM_DEFS = [
   { group: 'Gate Pass', items: [
     { key: 'gate_pass', label: 'Gate Pass (store entry/exit log)', type: 'bool' },
   ] },
+  { group: 'Bag Stickers', items: [
+    { key: 'bag_sticker', label: 'Print Bag Stickers (on-demand, no stock effect)', type: 'bool' },
+  ] },
   { group: 'Dispatch', items: [
     { key: 'dispatch_pack',    label: 'Pack Shipments (Add / Delete Boxes)', type: 'bool' },
     { key: 'dispatch_restock', label: 'Unit Restock (Scanner)',  type: 'bool' },
