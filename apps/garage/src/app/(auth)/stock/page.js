@@ -2,42 +2,20 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useAuth, hasPermission } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
-import { EmptyState, Spinner, Combobox } from '@throttle/ui';
+import { EmptyState, Spinner, Combobox, Panel, Chip, StatusBadge, ProductTag } from '@throttle/ui';
+import { Search, Download } from 'lucide-react';
 import { useProducts } from '../../../hooks/useProducts.js';
 
-const btnBase = {
-  padding: '6px 14px', borderRadius: 4, cursor: 'pointer',
-  fontFamily: 'var(--mono)', fontSize: 12, textTransform: 'uppercase', letterSpacing: 1,
-  border: '1px solid var(--border)',
-};
-const btnPrimary   = { ...btnBase, background: 'var(--yellow)', color: '#000', borderColor: 'var(--yellow)' };
-const btnSecondary = { ...btnBase, background: 'var(--surface)', color: 'var(--t2)' };
+// Stock Ledger — restyled to the S128 visual system. All filter / tab / CSV /
+// common-parts logic is unchanged; only the chrome (type roles, chips, panel,
+// status badges, product tags, mono-only numbers) changed.
 
-const inputStyle = {
-  background: 'var(--surface)', color: 'var(--t1)', border: '1px solid var(--border)',
-  borderRadius: 4, padding: '6px 10px', fontFamily: 'var(--mono)', fontSize: 12, minWidth: 140,
-};
-
-const tableTdStyle = { padding: '9px 10px', fontSize: 12, borderBottom: '1px solid rgba(42,42,42,.6)', whiteSpace: 'nowrap' };
-const tableThStyle = {
-  padding: '8px 10px', fontSize: 10, textAlign: 'left', color: 'var(--t3)',
-  textTransform: 'uppercase', letterSpacing: '0.08em', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap',
-};
-
-function Badge({ label, tone }) {
-  // Use state-bg + state-fg (PATTERN-054). Previous `${color}22` interpolation
-  // was broken — it produced `var(--red)22`, not a valid color, so the background
-  // never rendered. Now uses pre-defined state-bg / state-fg pairs.
-  const bg = tone === 'red' ? 'var(--state-error-bg)' : 'var(--state-success-bg)';
-  const fg = tone === 'red' ? 'var(--state-error-fg)' : 'var(--state-success-fg)';
-  return (
-    <span style={{
-      padding: '2px 6px', borderRadius: 3, fontFamily: 'var(--mono)',
-      fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.5,
-      background: bg, color: fg,
-    }}>{label}</span>
-  );
-}
+const th = { padding: '9px 12px', fontFamily: 'var(--font-display)', fontSize: 10, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', textAlign: 'left' };
+const td = { padding: '10px 12px', fontSize: 13, color: 'var(--t2)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontFamily: 'var(--font-ui)' };
+const tdNum = { ...td, fontFamily: 'var(--font-mono)', fontVariantNumeric: 'tabular-nums', textAlign: 'right' };
+const selectStyle = { background: 'var(--surface)', color: 'var(--t1)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '8px 11px', fontFamily: 'var(--font-ui)', fontSize: 13, minWidth: 140 };
+const searchInput = { background: 'transparent', border: 'none', outline: 'none', color: 'var(--t1)', fontFamily: 'var(--font-ui)', fontSize: 13, width: '100%' };
+const btnSec = { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface-2)', color: 'var(--t2)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '8px 13px', fontFamily: 'var(--font-display)', fontSize: 12, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', cursor: 'pointer', whiteSpace: 'nowrap' };
 
 function downloadCsv(rows, filename, showCost) {
   const headers = [
@@ -124,24 +102,14 @@ export default function StockPage() {
     loadFbu();
   }, [session]);
 
-  // Categories + types are still derived from stockData (only what exists in
-  // the ledger today is filterable). Products are pulled from the canonical
-  // product_master catalogue so all registered products show — including ones
-  // that don't yet have any BOM / stock rows. Falls back to stockData-derived
-  // list while the catalogue is loading.
   const stockProducts = useMemo(() => [...new Set(stockData.map(r => r.product).filter(Boolean))].sort(), [stockData]);
-  const products      = useMemo(() => {
+  const products = useMemo(() => {
     const fromCatalogue = (CATALOGUE_PRODUCTS && CATALOGUE_PRODUCTS.length) ? CATALOGUE_PRODUCTS : stockProducts;
-    // Union with anything in stockData that isn't in the catalogue (defensive — never lose visibility).
     return [...new Set([...fromCatalogue, ...stockProducts])].sort();
   }, [CATALOGUE_PRODUCTS, stockProducts]);
   const categories = useMemo(() => [...new Set(stockData.map(r => r.category).filter(Boolean))].sort(), [stockData]);
-  const types      = useMemo(() => [...new Set(stockData.map(r => r.part_type).filter(Boolean))].sort(), [stockData]);
+  const types = useMemo(() => [...new Set(stockData.map(r => r.part_type).filter(Boolean))].sort(), [stockData]);
 
-  // Multi-token search: split the query on whitespace, treat each token as a
-  // sub-filter that must match at least one of part_code / part_name / product
-  // / category / part_type. Lets users type "Flare metal" or "Shadow packaging"
-  // and get the intuitive result. Single-token queries match the same fields.
   const filteredStock = useMemo(() => {
     const tokens = (search || '').toLowerCase().trim().split(/\s+/).filter(Boolean);
     return stockData.filter(r => {
@@ -153,13 +121,12 @@ export default function StockPage() {
         }
       }
       if (productFilter === COMMON_PRODUCT_KEY) {
-        // Common (UNV/HW) — RULE-003 says product='' for cross-product parts.
         if (r.product && r.product !== '') return false;
       } else if (productFilter && r.product !== productFilter) {
         return false;
       }
       if (categoryFilter && r.category !== categoryFilter) return false;
-      if (typeFilter     && r.part_type !== typeFilter)    return false;
+      if (typeFilter && r.part_type !== typeFilter) return false;
       if (statusFilter === 'low') {
         const closing = Number(r.closing_stock) || 0;
         const reorder = Number(r.reorder_level) || 0;
@@ -180,16 +147,12 @@ export default function StockPage() {
     return fbuData.filter(r =>
       (r.product || '').toLowerCase().includes(f) ||
       (r.variant || '').toLowerCase().includes(f) ||
-      (r.color   || '').toLowerCase().includes(f)
+      (r.color || '').toLowerCase().includes(f)
     );
   }, [fbuData, fbuSearch]);
 
   function clearFilters() {
-    setSearch('');
-    setProductFilter('');
-    setCategoryFilter('');
-    setTypeFilter('');
-    setStatusFilter('');
+    setSearch(''); setProductFilter(''); setCategoryFilter(''); setTypeFilter(''); setStatusFilter('');
   }
 
   function handleDownloadCsv() {
@@ -200,36 +163,36 @@ export default function StockPage() {
     downloadCsv(filteredStock, `stock-ledger-${slug}-${today}.csv`, showCost);
   }
 
+  const lowCount = useMemo(() => stockData.filter(r => {
+    const c = Number(r.closing_stock) || 0, ro = Number(r.reorder_level) || 0;
+    return ro > 0 && c <= ro;
+  }).length, [stockData]);
+
   return (
-    <div style={{ padding: '16px 24px', color: 'var(--t1)' }}>
-      <div style={{ marginBottom: 16 }}>
-        <h1 style={{ fontFamily: 'var(--cond)', fontSize: 28, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.03em', margin: 0 }}>
-          Stock Ledger
-        </h1>
-        <p style={{ color: 'var(--t3)', fontSize: 12, margin: '4px 0 0', fontFamily: 'var(--mono)' }}>
-          Live inventory position per part code
-        </p>
+    <div>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, marginBottom: 18, flexWrap: 'wrap' }}>
+        <div>
+          <div className="eyebrow" style={{ marginBottom: 5 }}>Inventory</div>
+          <h1 className="title" style={{ fontSize: 27, lineHeight: 1, margin: 0 }}>Stock Ledger</h1>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <span className="num" style={{ fontSize: 12, color: 'var(--t3)' }}>{stockData.length} parts · {lowCount} at reorder</span>
+          {tab === 'components' && <button style={btnSec} onClick={handleDownloadCsv} disabled={filteredStock.length === 0}><Download size={14} strokeWidth={1.75} />Export</button>}
+        </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        <button style={tab === 'components' ? btnPrimary : btnSecondary} onClick={() => setTab('components')}>
-          Components
-        </button>
-        <button style={tab === 'fbu' ? btnPrimary : btnSecondary} onClick={() => setTab('fbu')}>
-          FBU Units
-        </button>
+      <div style={{ display: 'flex', gap: 7, marginBottom: 14 }}>
+        <Chip active={tab === 'components'} onClick={() => setTab('components')}>Components</Chip>
+        <Chip active={tab === 'fbu'} onClick={() => setTab('fbu')}>FBU Units</Chip>
       </div>
 
       {tab === 'components' ? (
         <>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-            <input
-              data-search-primary
-              style={{ ...inputStyle, minWidth: 260 }}
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="Search — try “Flare metal” or “Shadow packaging”  · /"
-            />
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12, alignItems: 'center' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '7px 11px', minWidth: 280 }}>
+              <Search size={15} strokeWidth={1.75} style={{ color: 'var(--t4)' }} />
+              <input data-search-primary style={searchInput} value={search} onChange={e => setSearch(e.target.value)} placeholder="Search — try “Flare metal” or “Shadow packaging” · /" />
+            </div>
             <div style={{ minWidth: 200 }}>
               <Combobox
                 value={productFilter}
@@ -241,132 +204,126 @@ export default function StockPage() {
                 placeholder="All products"
               />
             </div>
-            <select style={inputStyle} value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)}>
-              <option value="">All Categories</option>
-              {categories.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-            <select style={inputStyle} value={typeFilter} onChange={e => setTypeFilter(e.target.value)}>
+            <select style={selectStyle} value={typeFilter} onChange={e => setTypeFilter(e.target.value)}>
               <option value="">All Types</option>
               {types.map(t => <option key={t} value={t}>{t}</option>)}
             </select>
-            <select style={inputStyle} value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+            <select style={selectStyle} value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
               <option value="">All Status</option>
               <option value="low">Low / Reorder</option>
               <option value="ok">OK</option>
             </select>
-            <button style={btnSecondary} onClick={clearFilters}>Clear</button>
-            <button style={btnSecondary} onClick={handleDownloadCsv} disabled={filteredStock.length === 0}>Download CSV</button>
+            <button style={btnSec} onClick={clearFilters}>Clear</button>
           </div>
 
+          {/* category filter chips */}
+          {categories.length > 0 && (
+            <div style={{ display: 'flex', gap: 7, marginBottom: 14, flexWrap: 'wrap' }}>
+              <Chip active={!categoryFilter} onClick={() => setCategoryFilter('')} count={stockData.length}>All</Chip>
+              {categories.map(c => (
+                <Chip key={c} active={categoryFilter === c} onClick={() => setCategoryFilter(c)} count={stockData.filter(r => r.category === c).length}>{c}</Chip>
+              ))}
+            </div>
+          )}
+
           {stockLoading ? (
-            <div style={{ padding: 32, textAlign: 'center' }}><Spinner /></div>
+            <div style={{ padding: 40, textAlign: 'center' }}><Spinner /></div>
           ) : stockError ? (
             <EmptyState message={stockError} />
           ) : filteredStock.length === 0 ? (
             <EmptyState message="No stock rows match the current filters" />
           ) : (
-            <div style={{ overflowX: 'auto', background: 'var(--surface)', borderRadius: 6 }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr>
-                    <th style={tableThStyle}>Part Code</th>
-                    <th style={tableThStyle}>Product</th>
-                    <th style={tableThStyle}>Part Name</th>
-                    <th style={tableThStyle}>Category</th>
-                    <th style={tableThStyle}>Type</th>
-                    <th style={tableThStyle}>Opening</th>
-                    <th style={tableThStyle}>Received</th>
-                    <th style={tableThStyle}>Issued</th>
-                    <th style={tableThStyle}>Returned</th>
-                    <th style={tableThStyle}>Closing</th>
-                    {showCost && <th style={tableThStyle}>Unit Cost</th>}
-                    <th style={tableThStyle}>Reorder</th>
-                    <th style={tableThStyle}>Location</th>
-                    <th style={tableThStyle}>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredStock.map((r, i) => {
-                    const closing = Number(r.closing_stock) || 0;
-                    const reorder = Number(r.reorder_level) || 0;
-                    const isLow = reorder > 0 && closing <= reorder;
-                    return (
-                      <tr key={r.part_code || i}>
-                        <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontSize: 11 }}>{r.part_code || '—'}</td>
-                        <td style={tableTdStyle}>{r.product || '—'}</td>
-                        <td style={tableTdStyle}>{r.part_name || '—'}</td>
-                        <td style={tableTdStyle}>{r.category || '—'}</td>
-                        <td style={tableTdStyle}>{r.part_type || '—'}</td>
-                        <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.opening_stock ?? 0}</td>
-                        <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--state-success-fg)' }}>{r.total_received ?? 0}</td>
-                        <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: '#f87171' }}>{r.total_issued ?? 0}</td>
-                        <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--state-info-fg)' }}>{r.returned ?? 0}</td>
-                        <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontWeight: 700, color: isLow ? 'var(--red)' : undefined }}>
-                          {closing}
-                        </td>
-                        {showCost && (
-                          <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>
-                            {r.unit_cost !== undefined && r.unit_cost !== null
-                              ? '₹' + Number(r.unit_cost).toLocaleString('en-IN')
-                              : '—'}
+            <Panel padding={0}>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr>
+                      <th style={th}>Part</th>
+                      <th style={th}>Product</th>
+                      <th style={th}>Category</th>
+                      <th style={{ ...th, textAlign: 'right' }}>Open</th>
+                      <th style={{ ...th, textAlign: 'right' }}>Recv</th>
+                      <th style={{ ...th, textAlign: 'right' }}>Iss</th>
+                      <th style={{ ...th, textAlign: 'right' }}>Ret</th>
+                      <th style={{ ...th, textAlign: 'right' }}>Close</th>
+                      {showCost && <th style={{ ...th, textAlign: 'right' }}>Cost</th>}
+                      <th style={{ ...th, textAlign: 'right' }}>Reorder</th>
+                      <th style={th}>Loc</th>
+                      <th style={th}>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredStock.map((r, i) => {
+                      const closing = Number(r.closing_stock) || 0;
+                      const reorder = Number(r.reorder_level) || 0;
+                      const recv = Number(r.total_received) || 0;
+                      const ret = Number(r.returned) || 0;
+                      const isLow = reorder > 0 && closing <= reorder;
+                      return (
+                        <tr key={r.part_code || i} className="g-row">
+                          <td style={td}>
+                            <div style={{ fontWeight: 600, color: 'var(--t1)' }}>{r.part_name || '—'}</div>
+                            <div className="num" style={{ fontSize: 11, color: 'var(--t4)' }}>{r.part_code || '—'}</div>
                           </td>
-                        )}
-                        <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{r.reorder_level ?? 0}</td>
-                        <td style={{ ...tableTdStyle, fontSize: 11, color: 'var(--t3)' }}>{r.location || '—'}</td>
-                        <td style={tableTdStyle}>
-                          {isLow ? <Badge label="Reorder" tone="red" /> : <Badge label="OK" tone="green" />}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                          <td style={td}>{r.product ? <ProductTag name={r.product} /> : <span style={{ color: 'var(--t4)', fontSize: 12 }}>Common</span>}</td>
+                          <td style={td}><span style={{ fontSize: 12, color: 'var(--t3)' }}>{r.category || '—'}</span></td>
+                          <td style={tdNum}>{r.opening_stock ?? 0}</td>
+                          <td style={{ ...tdNum, color: recv ? 'var(--ok-fg)' : 'var(--t4)' }}>{recv ? '+' + recv : '—'}</td>
+                          <td style={{ ...tdNum, color: 'var(--t2)' }}>{r.total_issued ?? 0}</td>
+                          <td style={{ ...tdNum, color: ret ? 'var(--info-fg)' : 'var(--t4)' }}>{ret || '—'}</td>
+                          <td style={{ ...tdNum, fontWeight: 600, color: isLow ? 'var(--bad-fg)' : 'var(--t1)' }}>{closing}</td>
+                          {showCost && <td style={tdNum}>{r.unit_cost != null ? '₹' + Number(r.unit_cost).toLocaleString('en-IN') : '—'}</td>}
+                          <td style={{ ...tdNum, color: 'var(--t4)' }}>{r.reorder_level ?? 0}</td>
+                          <td style={td}><span className="num" style={{ fontSize: 11.5, color: 'var(--t3)' }}>{r.location || '—'}</span></td>
+                          <td style={td}>{isLow ? <StatusBadge variant="error">Reorder</StatusBadge> : <StatusBadge variant="success">OK</StatusBadge>}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </Panel>
           )}
         </>
       ) : (
         <>
-          <div style={{ marginBottom: 12 }}>
-            <input
-              style={inputStyle}
-              value={fbuSearch}
-              onChange={e => setFbuSearch(e.target.value)}
-              placeholder="Filter..."
-            />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '7px 11px', minWidth: 240, maxWidth: 320, marginBottom: 14 }}>
+            <Search size={15} strokeWidth={1.75} style={{ color: 'var(--t4)' }} />
+            <input style={searchInput} value={fbuSearch} onChange={e => setFbuSearch(e.target.value)} placeholder="Filter FBU units…" />
           </div>
 
           {fbuLoading ? (
-            <div style={{ padding: 32, textAlign: 'center' }}><Spinner /></div>
+            <div style={{ padding: 40, textAlign: 'center' }}><Spinner /></div>
           ) : filteredFbu.length === 0 ? (
             <EmptyState message="No FBU stock on hand" />
           ) : (
-            <div style={{ overflowX: 'auto', background: 'var(--surface)', borderRadius: 6 }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr>
-                    <th style={tableThStyle}>Product</th>
-                    <th style={tableThStyle}>Variant</th>
-                    <th style={tableThStyle}>Colour</th>
-                    <th style={tableThStyle}>On Hand</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredFbu.map((r, i) => {
-                    const qty = Number(r.qty_on_hand) || 0;
-                    return (
-                      <tr key={i}>
-                        <td style={tableTdStyle}>{r.product || '—'}</td>
-                        <td style={tableTdStyle}>{r.variant || '—'}</td>
-                        <td style={tableTdStyle}>{r.color || '—'}</td>
-                        <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontWeight: 700, color: qty > 0 ? 'var(--green)' : 'var(--t3)' }}>
-                          {qty}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <Panel padding={0}>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr>
+                      <th style={th}>Product</th>
+                      <th style={th}>Variant</th>
+                      <th style={th}>Colour</th>
+                      <th style={{ ...th, textAlign: 'right' }}>On Hand</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredFbu.map((r, i) => {
+                      const qty = Number(r.qty_on_hand) || 0;
+                      return (
+                        <tr key={i} className="g-row">
+                          <td style={td}>{r.product ? <ProductTag name={r.product} /> : '—'}</td>
+                          <td style={td}>{r.variant || '—'}</td>
+                          <td style={td}>{r.color || '—'}</td>
+                          <td style={{ ...tdNum, fontWeight: 600, color: qty > 0 ? 'var(--ok-fg)' : 'var(--t4)' }}>{qty}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </Panel>
           )}
         </>
       )}

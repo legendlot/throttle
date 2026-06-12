@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Tomorrow:wght@400;500;600;700;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Tomorrow:wght@400;500;600;700;900&display=swap');
 
 *, *::before, *::after {
   margin: 0;
@@ -89,15 +89,57 @@
   --radius-lg:   8px;
   --radius-full: 9999px;
 
-  /* ── Fonts ───────────────────────────────────────────── */
-  --font-mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
-  --font-cond: 'Tomorrow', system-ui, sans-serif;
+  /* ── Fonts — three roles (redesign S128) ─────────────── */
+  --font-mono:    'JetBrains Mono', ui-monospace, Menlo, monospace;  /* numbers/codes/times/IDs only */
+  --font-cond:    'Tomorrow', system-ui, sans-serif;                 /* display / labels / heads (UPPERCASE) */
+  --font-display: var(--font-cond);                                  /* alias — section heads, eyebrows, badges */
+  --font-ui:      'Hanken Grotesk', system-ui, sans-serif;           /* UI text, nav, body, descriptions */
 
   /* ── Motion ──────────────────────────────────────────── */
   --duration-fast:    120ms;
   --duration-default: 180ms;
   --duration-slow:    260ms;
   --ease-out:         cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* ════════════════════════════════════════════════════════
+     REDESIGN TOKENS (S128) — additive. The surface + text ramps
+     above are unchanged (already WCAG-tuned); these add the
+     missing steps, semantic fg/bg/bd triplets, product accents,
+     and shorthand radius/shadow/motion the redesign kit expects.
+     ════════════════════════════════════════════════════════ */
+  --bg-2:       #161616;   /* sunken rails / wells (below --bg) */
+  --border-3:   #565656;   /* focus / active edge */
+
+  /* Semantic fills — subtle bg + BRIGHT fg (AA on dark) + border */
+  --ok-bg:   rgba(34,197,94,0.12);   --ok-fg:   #4ade80;  --ok-bd:   rgba(34,197,94,0.28);
+  --warn-bg: rgba(251,191,36,0.12);  --warn-fg: #fbbf24;  --warn-bd: rgba(251,191,36,0.28);
+  --bad-bg:  rgba(222,42,42,0.15);   --bad-fg:  #ff7a7a;  --bad-bd:  rgba(222,42,42,0.32);
+  --info-bg: rgba(33,60,226,0.22);   --info-fg: #8fa2ff;  --info-bd: rgba(109,131,255,0.32);
+  --brand-bg:rgba(242,205,26,0.12);  --brand-fg:#f2cd1a;  --brand-bd:rgba(242,205,26,0.28);
+  --yellow-dim: rgba(242,205,26,0.12);
+  --blue-bright:#6d83ff;
+
+  /* Product accent colors (vehicle characters) — drive the ProductTag dot */
+  --p-flare:  #F2CD1A;
+  --p-wolf:   #6d83ff;
+  --p-ghost:  #8a8c95;
+  --p-iris:   #4ade80;
+  --p-titan:  #f97316;
+  --p-shadow: #b46bff;
+  --p-knox:   #fbbf24;
+
+  /* Shorthand radius / elevation / motion used by the redesign kit */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 9px;
+  --r-lg: 13px;
+  --r-full: 9999px;
+  --shadow-card: 0 1px 0 rgba(255,255,255,0.03) inset, 0 8px 24px -14px rgba(0,0,0,0.7);
+  --shadow-pop:  0 16px 44px -10px rgba(0,0,0,0.82), 0 0 0 1px var(--border-2);
+  --glow-yellow: 0 0 0 1px rgba(242,205,26,0.4), 0 6px 24px -6px rgba(242,205,26,0.25);
+  --ease: var(--ease-out);
+  --fast: 130ms;
+  --base: 200ms;
 
   /* ════════════════════════════════════════════════════════
      LEGACY ALIASES — Existing pages reference these names.
@@ -110,6 +152,7 @@
   --t1:       var(--text-1);
   --t2:       var(--text-2);
   --t3:       var(--text-3);
+  --t4:       var(--text-4);   /* micro labels only — bold/large, never normal prose */
   --yellow:   var(--brand-yellow);
   --yellow2:  var(--brand-yellow-deep);
   --blue:     var(--brand-blue);
@@ -127,9 +170,9 @@
 html, body {
   background: var(--bg);
   color: var(--text-1);
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);   /* redesign S128: body is Hanken Grotesk, not mono */
   font-size: var(--text-base);
-  line-height: 1.45;
+  line-height: 1.5;
   height: 100%;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
@@ -138,6 +181,41 @@ html, body {
 
 a { color: inherit; text-decoration: none; }
 button { font-family: inherit; }
+
+/* ══════════════════════════════════════════════════════════
+   TYPE ATOMS (S128) — restore the typographic hierarchy.
+   Tomorrow → display/labels (UPPERCASE). JetBrains Mono → numbers
+   only. Hanken Grotesk → everything else (the body default above).
+   ══════════════════════════════════════════════════════════ */
+.eyebrow {
+  font-family: var(--font-display);
+  font-size: 10px; font-weight: 600;
+  letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--t3);
+}
+.label {
+  font-family: var(--font-display);
+  font-size: 11px; font-weight: 600;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--t2);
+}
+.title {
+  font-family: var(--font-display);
+  font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase;
+  color: var(--t1);
+}
+.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+
+/* ── Shell helper animations / hover affordances (S128) ──── */
+@keyframes g-spin  { to { transform: rotate(360deg); } }
+@keyframes g-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+.g-pulse { animation: g-pulse 1.8s ease-in-out infinite; }
+/* Pin affordance: hidden until the nav row is hovered, unless already pinned. */
+.g-navrow .g-pinbtn { opacity: 0; transition: opacity var(--fast) var(--ease); color: var(--t4); }
+.g-navrow:hover .g-pinbtn { opacity: 1; }
+.g-navrow .g-pinbtn[data-pinned="true"] { opacity: 1; color: var(--yellow); }
+.g-navrow .g-pinbtn:hover { color: var(--yellow); background: var(--surface-3); }
+.g-row:hover { background: var(--surface-2); }
 
 /* ── Focus ring — keyboard only ──────────────────────────── */
 :focus { outline: none; }

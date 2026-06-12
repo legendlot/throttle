@@ -1,4 +1,12 @@
 'use client';
+import { createElement, isValidElement } from 'react';
+
+function renderIcon(icon, size) {
+  if (!icon) return null;
+  if (isValidElement(icon)) return icon;
+  if (typeof icon === 'function') return createElement(icon, { size, strokeWidth: 1.75 });
+  return null;
+}
 
 /**
  * Panel — the canonical card / panel container.
@@ -19,7 +27,10 @@
  *   padding       — overrides body padding entirely. `0` removes padding.
  *   style         — merged into outer div style.
  */
-export function Panel({ header, headerAction, compact, padding, children, style }) {
+export function Panel({ header, title, headerAction, action, icon, compact, padding, children, style }) {
+  // `title`/`action` are redesign-friendly aliases for `header`/`headerAction`.
+  const head = header !== undefined ? header : title;
+  const headAction = headerAction !== undefined ? headerAction : action;
   const bodyPad = padding !== undefined ? padding : (compact ? '12px 14px' : 16);
 
   return (
@@ -29,7 +40,7 @@ export function Panel({ header, headerAction, compact, padding, children, style 
       borderRadius: 4,
       ...style,
     }}>
-      {header && (
+      {head && (
         <div style={{
           display: 'flex',
           alignItems: 'center',
@@ -44,10 +55,11 @@ export function Panel({ header, headerAction, compact, padding, children, style 
           textTransform: 'uppercase',
           color: 'var(--t2)',
         }}>
-          <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {header}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9, overflow: 'hidden', minWidth: 0 }}>
+            {icon && <span style={{ color: 'var(--t3)', display: 'flex', flexShrink: 0 }}>{renderIcon(icon, 15)}</span>}
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{head}</span>
           </div>
-          {headerAction && (
+          {headAction && (
             <div style={{
               fontFamily: 'var(--mono)',
               fontSize: 12,
@@ -57,7 +69,7 @@ export function Panel({ header, headerAction, compact, padding, children, style 
               color: 'var(--t2)',
               flexShrink: 0,
             }}>
-              {headerAction}
+              {headAction}
             </div>
           )}
         </div>

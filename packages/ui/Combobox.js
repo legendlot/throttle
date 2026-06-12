@@ -42,6 +42,7 @@ export function Combobox({
   name,
   onBlur: onBlurExternal,
   commitOnTab = false,
+  renderOption,
 }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
@@ -295,16 +296,22 @@ export function Combobox({
                     gap: 8,
                   }}
                 >
-                  <span style={{ flex: 1 }}>{o.label}</span>
-                  {o.hint && (
-                    <span style={{
-                      color: 'var(--t3)',
-                      fontSize: 10,
-                      fontFamily: 'var(--mono)',
-                    }}>{o.hint}</span>
-                  )}
-                  {isSelected && (
-                    <span style={{ color: '#f2cd1a', fontSize: 10 }}>✓</span>
+                  {renderOption ? (
+                    renderOption(o, { highlighted, selected: isSelected })
+                  ) : (
+                    <>
+                      <span style={{ flex: 1 }}>{o.label}</span>
+                      {o.hint && (
+                        <span style={{
+                          color: 'var(--t3)',
+                          fontSize: 10,
+                          fontFamily: 'var(--mono)',
+                        }}>{o.hint}</span>
+                      )}
+                      {isSelected && (
+                        <span style={{ color: '#f2cd1a', fontSize: 10 }}>✓</span>
+                      )}
+                    </>
                   )}
                 </div>
               );

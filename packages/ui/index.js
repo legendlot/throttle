@@ -22,4 +22,6 @@ export { Combobox } from './Combobox.js';
 export { Panel } from './Panel.js';
 export { Chip } from './Chip.js';
 export { StatusBadge } from './StatusBadge.js';
+export { ProgressBar } from './ProgressBar.js';
+export { ProductTag } from './ProductTag.js';
 export { useEscapeClose, useSearchShortcut, useListNav } from './hooks.js';

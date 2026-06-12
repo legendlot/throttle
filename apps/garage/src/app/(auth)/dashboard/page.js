@@ -1,43 +1,28 @@
 'use client';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuth, hasPermission } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
-import { KpiCard, EmptyState, Spinner } from '@throttle/ui';
+import { Panel, KpiCard, ProductTag, ProgressBar, StatusBadge, EmptyState, Spinner } from '@throttle/ui';
 import {
-  Inbox, PackageOpen, ClipboardList, PackageMinus,
-  Undo2, Truck, Workflow, CheckSquare,
-  FileText, CheckCircle2, RefreshCw, XCircle, Dot,
+  ListChecks, Inbox, Send, Undo2, AlertTriangle, Boxes,
+  Zap, Target, Activity as ActivityIcon, ArrowRight, Route, TrendingUp,
 } from 'lucide-react';
 import { useAutoRefresh } from '../../../hooks/useAutoRefresh.js';
 import { useRefreshState } from '../layout.js';
 import { useProducts } from '../../../hooks/useProducts.js';
 
-// Tone keys match legacy .badge-* classes — used by StatusBadge
-const ACT_TONES = {
-  GRN:      'green',
-  WO:       'blue',
-  Issue:    'yellow',
-  Return:   'red',
-  Shipment: 'blue',
-  Flush:    'yellow',
-  PO:       'gray',
-  Run:      'gray',
-};
+// ════════════════════════════════════════════════════════════════════
+// OVERVIEW (redesign S128) — the triage screen. "What needs me now."
+// KPI rail (each tile links to its screen) + a prioritized "Needs Attention
+// Now" feed that FOLDS the old standalone Alerts page (reorder flags +
+// submitted runs awaiting issue) + Producibility + Recent Activity +
+// Returns-by-channel. All wired to the EXISTING Garage endpoints
+// (getDashboard, getGRNSummary, getIssues, getReturns, getShipments,
+// getProductionRuns, calcKit, getActivityLog) — no new backend.
+// ════════════════════════════════════════════════════════════════════
 
-// Reuses nav icon choices for the matching operations (Inbox = GRN Entry,
-// PackageOpen = Receiving, ClipboardList = Ad Hoc Requests, Undo2 = Returns,
-// Workflow = Line Flush, CheckSquare = Flush Verify, FileText = Purchase Orders,
-// RefreshCw = Reorders, Truck = Forwarders). PackageMinus, CheckCircle2, and
-// XCircle are added for issue-out / approved / cancelled — closest available
-// lucide-react matches with no nav equivalent.
-const ACT_ICONS = {
-  GRN_CREATED:       Inbox,         GRN_FROM_RECEIVING: PackageOpen,
-  WO_CREATED:        ClipboardList, STOCK_ISSUED:       PackageMinus,
-  RETURN_LOGGED:     Undo2,         SHIPMENT_CREATED:   Truck,
-  FLUSH_CREATED:     Workflow,      FLUSH_VERIFIED:     CheckSquare,
-  PO_CREATED:        FileText,      PO_APPROVED:        CheckCircle2,
-  PO_STATUS_UPDATED: RefreshCw,     PO_CANCELLED:       XCircle,
-};
+const fmt = (n) => (n == null || isNaN(n)) ? '—' : Number(n).toLocaleString('en-IN');
 
 function formatActivityTime(ts) {
   if (!ts) return '—';
@@ -47,781 +32,270 @@ function formatActivityTime(ts) {
   if (diff < 60)    return `${diff}s ago`;
   if (diff < 3600)  return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) + ' ' +
-         d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
 }
 
-function daysAgo(n) {
-  // Match legacy 04_stores/index.html line 5389: cutoff is "now minus N days"
-  // at the current time-of-day — NOT zeroed to midnight. A row dated exactly
-  // N days ago will fall outside the window unless its timestamp is later
-  // than the current time-of-day.
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d;
-}
-
-async function loadMain(session, setKpis, setSections, setMainLoading, setMainError, setRefreshing) {
-  setMainLoading(true);
-  setRefreshing(true);
-  setMainError(null);
-  try {
-    const [kpisRes, grnsRes, issuesRes, returnsRes, shipmentsRes] = await Promise.all([
-      garageFetch('getDashboard',  {}, session),
-      garageFetch('getGRNSummary', {}, session),
-      garageFetch('getIssues',     {}, session),
-      garageFetch('getReturns',    {}, session),
-      garageFetch('getShipments',  {}, session),
-    ]);
-    setKpis(kpisRes);
-    setSections({ grns: grnsRes, issues: issuesRes, returns: returnsRes, shipments: shipmentsRes });
-  } catch (e) {
-    setMainError(e.message);
-  } finally {
-    setMainLoading(false);
-    setRefreshing(false);
-  }
-}
-
-async function loadProducible(session, products, setProducible, setProdLoading) {
-  setProdLoading(true);
-  try {
-    const results = await Promise.all(
-      products.map(product =>
-        garageFetch('calcKit', { product, variant: '', colour: '', qty: 1 }, session)
-          .then(data => ({ product, ok: true, kit: data.kit || [] }))
-          .catch(() => ({ product, ok: false, kit: [] }))
-      )
-    );
-    const rows = results
-      .filter(r => r.ok && r.kit.length > 0)
-      .map(({ product, kit }) => {
-        const producible = kit.map(r => ({
-          part_code: r.part_code,
-          part_name: r.part_name,
-          bom_qty:   r.bom_qty || 1,
-          available: r.available || 0,
-          max_units: r.bom_qty > 0 ? Math.floor((r.available || 0) / r.bom_qty) : 0,
-        }));
-        const maxPossible = Math.max(0, ...producible.map(r => r.max_units));
-        const bottleneck  = producible.reduce((min, r) => r.max_units < min.max_units ? r : min, producible[0]);
-        const shorts      = producible.filter(r => r.max_units < maxPossible);
-        return { product, bottleneck, maxPossible, shorts };
-      });
-    setProducible(rows);
-  } catch (e) {
-    setProducible([]);
-  } finally {
-    setProdLoading(false);
-  }
-}
-
-async function loadUnits(session, setUnits, setUnitsLoading) {
-  setUnitsLoading(true);
-  try {
-    const data = await garageFetch('getDashboardUnits', {}, session);
-    setUnits({ pcb: data?.pcb || [], units: data?.units || [] });
-  } catch (e) {
-    setUnits({ pcb: [], units: [] });
-  } finally {
-    setUnitsLoading(false);
-  }
-}
-
-async function loadActivity(session, setActivity, setActLoading) {
-  setActLoading(true);
-  try {
-    const data = await garageFetch('getActivityLog', { limit: 10 }, session);
-    setActivity(data || []);
-  } catch (e) {
-    setActivity([]);
-  } finally {
-    setActLoading(false);
-  }
-}
-
-const panelStyle = { backgroundColor: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden', marginBottom: 16 };
-const panelHeaderStyle = {
-  padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-  borderBottom: '1px solid var(--border)',
-  fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 13, textTransform: 'uppercase', letterSpacing: '0.06em',
-  color: 'var(--t2)',
+const ACT_TONE = {
+  GRN: 'ok', WO: 'info', Issue: 'brand', Return: 'bad', Shipment: 'info',
+  Flush: 'ok', PO: 'gray', Run: 'gray',
 };
-// Auto-stack when content < 560px wide. With the sidebar expanded the
-// previous fixed 1fr 1fr grid was truncating long supplier names + Lines/Qty
-// in the Recent GRNs / Planned Issues panels on standard laptop screens.
-const twoColStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(560px, 1fr))', gap: 16, marginBottom: 16 };
-const tableTdStyle = { padding: '9px 10px', fontSize: 12, borderBottom: '1px solid rgba(42,42,42,.6)', whiteSpace: 'nowrap' };
-const tableThStyle = { padding: '8px 10px', fontSize: 10, textAlign: 'left', color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' };
+const SEV_FG = { bad: 'var(--bad-fg)', warn: 'var(--warn-fg)', info: 'var(--info-fg)', ok: 'var(--ok-fg)' };
+const SEV_BADGE = { bad: 'error', warn: 'warning', info: 'info', ok: 'success' };
 
-// Matches legacy .badge + .badge-* rgba values exactly
-const BADGE_STYLES = {
-  yellow: { background: 'rgba(242,205,26,.12)', color: '#f2cd1a', border: '1px solid rgba(242,205,26,.2)' },
-  green:  { background: 'rgba(34,197,94,.12)',  color: '#4ade80', border: '1px solid rgba(34,197,94,.2)'  },
-  red:    { background: 'rgba(222,42,42,.15)',  color: '#ff7070', border: '1px solid rgba(222,42,42,.25)' },
-  blue:   { background: 'rgba(33,60,226,.2)',   color: '#7b93ff', border: '1px solid rgba(33,60,226,.3)'  },
-  orange: { background: 'rgba(255,140,0,.15)',  color: '#ffaa33', border: '1px solid rgba(255,140,0,.25)' },
-  gray:   { background: 'rgba(80,80,80,.2)',    color: '#888',    border: '1px solid rgba(80,80,80,.3)'   },
-};
-function StatusBadge({ label, tone = 'gray' }) {
-  const s = BADGE_STYLES[tone] || BADGE_STYLES.gray;
-  return (
-    <span style={{
-      display: 'inline-block', padding: '2px 6px', borderRadius: 2,
-      fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '.04em',
-      textTransform: 'uppercase', ...s,
-    }}>{label}</span>
-  );
-}
-
-// Wraps a KPI card in a link to the page that metric represents, with a subtle hover outline.
-function CardLink({ href, children }) {
-  const [hover, setHover] = useState(false);
-  return (
-    <a
-      href={href}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{
-        textDecoration: 'none', color: 'inherit', display: 'block',
-        borderRadius: 4, cursor: 'pointer',
-        outline: hover ? '1px solid var(--t2)' : '1px solid transparent',
-        transition: 'outline-color 0.12s ease',
-      }}
-    >
-      {children}
-    </a>
-  );
-}
-
-// Compact car/remote stat: caption + mono number. null => em-dash; negative => red.
-function UnitStat({ label, value, small = false }) {
-  const isNull = value === null || value === undefined;
-  const display = isNull ? '—' : Number(value).toLocaleString();
-  const color = isNull
-    ? 'var(--t3)'
-    : (Number(value) < 0 ? 'var(--state-error-fg)' : 'var(--t1)');
-  return (
-    <div style={{ minWidth: 56 }}>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: small ? 13 : 15, color }}>{display}</div>
-      <div style={{ fontSize: 9, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</div>
-    </div>
-  );
-}
-
-function shipmentStatusTone(status) {
-  const s = (status || '').toLowerCase();
-  if (s.includes('arriv') && !s.includes('complete')) return 'yellow';
-  if (s.includes('progress')) return 'blue';
-  if (s.includes('complete')) return 'green';
-  return 'gray';
-}
-
-function formatDisplayDate(raw) {
-  if (!raw) return '—';
-  const str = String(raw);
-  if (/^\d{2}-[A-Za-z]{3}-\d{4}/.test(str)) return str.slice(0, 11);
-  if (/^\d{4}-\d{2}-\d{2}/.test(str)) {
-    const d = new Date(str);
-    if (!isNaN(d)) {
-      const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-      return String(d.getDate()).padStart(2, '0') + '-' + months[d.getMonth()] + '-' + d.getFullYear();
-    }
-  }
-  return str.slice(0, 10);
-}
-
-export default function DashboardPage() {
+export default function OverviewPage() {
   const { session, perms } = useAuth();
+  const router = useRouter();
   const { setRefreshing } = useRefreshState();
   const { PRODUCTS, loading: productsLoading } = useProducts();
+
   const [kpis, setKpis] = useState(null);
   const [sections, setSections] = useState({ grns: [], issues: [], returns: [], shipments: [] });
+  const [submittedRuns, setSubmittedRuns] = useState([]);
+  const [producible, setProducible] = useState([]);
+  const [activity, setActivity] = useState([]);
   const [mainLoading, setMainLoading] = useState(true);
   const [mainError, setMainError] = useState(null);
-  const [producible, setProducible] = useState([]);
-  const [prodLoading, setProdLoading] = useState(true);
-  const [units, setUnits] = useState({ pcb: [], units: [] });
-  const [unitsLoading, setUnitsLoading] = useState(true);
-  const [expandedUnitIndex, setExpandedUnitIndex] = useState(null);
-  const [activity, setActivity] = useState([]);
-  const [actLoading, setActLoading] = useState(true);
-  const [expandedIndex, setExpandedIndex] = useState(null);
+
+  async function loadMain() {
+    setRefreshing(true); setMainError(null);
+    try {
+      const [kpisRes, grnsRes, issuesRes, returnsRes, shipRes, subRuns] = await Promise.all([
+        garageFetch('getDashboard',  {}, session),
+        garageFetch('getGRNSummary', {}, session),
+        garageFetch('getIssues',     {}, session),
+        garageFetch('getReturns',    {}, session),
+        garageFetch('getShipments',  {}, session),
+        garageFetch('getProductionRuns', { status: 'Submitted' }, session).then(d => Array.isArray(d) ? d : []).catch(() => []),
+      ]);
+      setKpis(kpisRes);
+      setSections({ grns: grnsRes, issues: issuesRes, returns: returnsRes, shipments: shipRes });
+      setSubmittedRuns(subRuns);
+    } catch (e) {
+      setMainError(e.message);
+    } finally {
+      setMainLoading(false); setRefreshing(false);
+    }
+  }
+
+  async function loadProducible() {
+    try {
+      const results = await Promise.all(
+        PRODUCTS.map(product =>
+          garageFetch('calcKit', { product, variant: '', colour: '', qty: 1 }, session)
+            .then(data => ({ product, kit: data.kit || [] }))
+            .catch(() => ({ product, kit: [] }))
+        )
+      );
+      const rows = results.filter(r => r.kit.length > 0).map(({ product, kit }) => {
+        const items = kit.map(r => ({
+          part_name: r.part_name,
+          max_units: r.bom_qty > 0 ? Math.floor((r.available || 0) / r.bom_qty) : 0,
+        }));
+        const max = Math.max(0, ...items.map(r => r.max_units));
+        const bottleneck = items.reduce((m, r) => r.max_units < m.max_units ? r : m, items[0]);
+        return { product, max, bottleneck: bottleneck?.part_name || '—' };
+      }).sort((a, b) => a.max - b.max);
+      setProducible(rows);
+    } catch { setProducible([]); }
+  }
+
+  async function loadActivity() {
+    try {
+      const data = await garageFetch('getActivityLog', { limit: 8 }, session);
+      setActivity(Array.isArray(data) ? data : []);
+    } catch { setActivity([]); }
+  }
 
   function loadAll() {
     if (!session || productsLoading) return;
-    loadMain(session, setKpis, setSections, setMainLoading, setMainError, setRefreshing);
-    loadProducible(session, PRODUCTS, setProducible, setProdLoading);
-    loadUnits(session, setUnits, setUnitsLoading);
-    loadActivity(session, setActivity, setActLoading);
+    loadMain(); loadProducible(); loadActivity();
   }
 
   useAutoRefresh(loadAll, 60000, !session || productsLoading);
 
-  const cutoff7  = useMemo(() => daysAgo(7),  []);
-  const cutoff3  = useMemo(() => daysAgo(3),  []);
-  const cutoff30 = useMemo(() => daysAgo(30), []);
-
-  const recentShipments = useMemo(() => {
-    return (sections.shipments || []).filter(s => {
-      const d = new Date(s.arrival_date || s.created_at || '');
-      return !isNaN(d) && d >= cutoff7;
-    });
-  }, [sections.shipments, cutoff7]);
-
-  const recentGRNs = useMemo(() => {
-    return (sections.grns || []).filter(r => {
-      const d = new Date(r.grn_date || '');
-      return !isNaN(d) && d >= cutoff7;
-    });
-  }, [sections.grns, cutoff7]);
-
-  const { plannedIssues, adhocIssues } = useMemo(() => {
-    const all = sections.issues || [];
-    const seen = new Set();
-    const planned = all.filter(r => {
-      const d = new Date(r.issue_date || '');
-      const isPlanned = (r.issue_type || '').toLowerCase() !== 'ad hoc';
-      if (isPlanned && !isNaN(d) && d >= cutoff7 && !seen.has(r.issue_no)) {
-        seen.add(r.issue_no);
-        return true;
-      }
-      return false;
-    });
-    const adhoc = all.filter(r => {
-      const d = new Date(r.issue_date || '');
-      return (r.issue_type || '').toLowerCase() === 'ad hoc' && !isNaN(d) && d >= cutoff3;
-    });
-    return { plannedIssues: planned, adhocIssues: adhoc };
-  }, [sections.issues, cutoff7, cutoff3]);
-
-  const returnsByChannel = useMemo(() => {
-    const all = (sections.returns || []).filter(r => {
-      const d = new Date(r.return_date || r.created_at || '');
-      return !isNaN(d) && d >= cutoff30;
-    });
-    const map = {};
-    all.forEach(r => {
-      const ch = r.channel || 'Other';
-      map[ch] = (map[ch] || 0) + (r.qty || 1);
-    });
-    return Object.entries(map).sort((a, b) => b[1] - a[1]);
-  }, [sections.returns, cutoff30]);
+  // Manual refresh from the topbar refresh button.
+  useEffect(() => {
+    const h = () => loadAll();
+    window.addEventListener('garage:refresh', h);
+    return () => window.removeEventListener('garage:refresh', h);
+  }); // eslint-disable-line
 
   const reorderFlags = Array.isArray(kpis?.reorder_flags) ? kpis.reorder_flags : [];
   const reorderCount = kpis?.reorder_count ?? reorderFlags.length;
-  const returnsTotal = returnsByChannel.reduce((acc, [, qty]) => acc + qty, 0);
+  const showFinance = hasPermission(perms, 'reports_finance');
+
+  // ── Needs Attention Now — folds the old Alerts page ──────────────────
+  const attention = useMemo(() => {
+    const out = [];
+    reorderFlags.forEach((r, i) => out.push({
+      id: 'ro-' + i, sev: 'bad', kind: 'Reorder',
+      title: `${r.part_name || r.part_code} below reorder`,
+      meta: `${fmt(r.closing_stock ?? 0)} on hand · reorder at ${fmt(r.reorder_level ?? 0)}${r.product ? ' · ' + r.product : ''}`,
+      action: 'Review', route: '/stock',
+    }));
+    submittedRuns.forEach((r, i) => out.push({
+      id: 'sr-' + i, sev: 'warn', kind: 'Issue',
+      title: `${r.run_no} awaiting issue — ${fmt(r.units)} units`,
+      meta: `${r.product || '—'}${r.run_date ? ' · ' + r.run_date : ''}`,
+      action: 'Start pick', route: '/issue-queue',
+    }));
+    const order = { bad: 0, warn: 1, info: 2, ok: 3 };
+    return out.sort((a, b) => order[a.sev] - order[b.sev]);
+  }, [reorderFlags, submittedRuns]);
+
+  const urgentCount = attention.filter(a => a.sev === 'bad').length;
+  const visibleAttention = attention.slice(0, 8);
+
+  // ── Returns by channel (last 30d) ────────────────────────────────────
+  const returnsByChannel = useMemo(() => {
+    const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 30);
+    const map = {};
+    (sections.returns || []).forEach(r => {
+      const d = new Date(r.return_date || r.created_at || '');
+      if (isNaN(d) || d < cutoff) return;
+      const ch = r.channel || 'Other';
+      map[ch] = (map[ch] || 0) + (Number(r.qty) || 1);
+    });
+    return Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 6);
+  }, [sections.returns]);
   const returnsMax = returnsByChannel.length ? Math.max(...returnsByChannel.map(([, q]) => q)) : 0;
 
   return (
-    <div style={{ padding: '16px 24px', color: 'var(--t1)' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 16 }}>
-        <h1 style={{ fontFamily: 'var(--cond)', fontSize: 28, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.03em', margin: 0 }}>
-          Dashboard
-        </h1>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>
-          {kpis?.as_of || '—'}
-        </span>
+    <div>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, marginBottom: 18, flexWrap: 'wrap' }}>
+        <div>
+          <div className="eyebrow" style={{ marginBottom: 5 }}>Garage · Triage</div>
+          <h1 className="title" style={{ fontSize: 27, lineHeight: 1, margin: 0 }}>Overview</h1>
+        </div>
+        <span className="num" style={{ fontSize: 12, color: 'var(--t3)' }}>{kpis?.as_of || ''}</span>
       </div>
 
       {mainError && (
-        <div style={panelStyle}>
+        <Panel style={{ marginBottom: 16 }}>
           <EmptyState message={mainError} />
-          <div style={{ textAlign: 'center', paddingBottom: 16 }}>
-            <button
-              onClick={loadAll}
-              style={{ background: 'var(--surface2)', color: 'var(--t1)', border: '1px solid var(--surface2)',
-                padding: '6px 14px', borderRadius: 4, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: 12 }}
-            >Retry</button>
+          <div style={{ textAlign: 'center', paddingTop: 12 }}>
+            <button onClick={loadAll} style={{ background: 'var(--surface-2)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '6px 14px', borderRadius: 'var(--r-sm)', cursor: 'pointer', fontFamily: 'var(--font-display)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Retry</button>
           </div>
-        </div>
+        </Panel>
       )}
 
       {mainLoading && !kpis && !mainError ? (
-        <div style={{ padding: 32, textAlign: 'center' }}><Spinner /></div>
+        <div style={{ padding: 48, textAlign: 'center' }}><Spinner /></div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 16 }}>
-          <CardLink href="/issue-queue">
-            <KpiCard label="Open Work Orders" value={kpis?.open_work_orders ?? '—'} color="yellow" />
-          </CardLink>
-          <CardLink href="/grn">
-            <KpiCard label="Today's GRNs"     value={kpis?.today_grn_count   ?? '—'} color="green"  />
-          </CardLink>
-          <CardLink href="/store-history">
-            <KpiCard label="WOs Issued Today" value={kpis?.today_wo_count    ?? '—'} color="blue"   />
-          </CardLink>
-          <CardLink href="/stock">
-            <KpiCard
-              label="Reorder Flags"
-              value={reorderCount ?? '—'}
-              color={reorderCount > 0 ? 'red' : 'green'}
-            />
-          </CardLink>
-          {hasPermission(perms, 'reports_finance') && (
-            <CardLink href="/stock">
-              <KpiCard
-                label="Stock Value (₹)"
-                value={kpis?.total_stock_value !== undefined
-                  ? '₹' + Number(kpis.total_stock_value).toLocaleString('en-IN')
-                  : '—'}
-                color="yellow"
-              />
-            </CardLink>
-          )}
-          <CardLink href="/returns/shipments">
-            <KpiCard label="Pending Returns" value={kpis?.pending_returns ?? '—'} color="green" />
-          </CardLink>
-        </div>
-      )}
-
-      <div style={twoColStyle}>
-        {/* ---- PCBs ---- */}
-        <section style={panelStyle}>
-          <header style={panelHeaderStyle}>
-            <span>PCBs — Car &amp; Remote</span>
-            <span style={{ color: 'var(--t3)' }}>{units.pcb.length} products</span>
-          </header>
-          <div>
-            {unitsLoading ? (
-              <div style={{ padding: 16, textAlign: 'center' }}><Spinner size="sm" /></div>
-            ) : units.pcb.length === 0 ? (
-              <EmptyState message="No PCB parts found" />
-            ) : (() => {
-              const nz = (v) => v !== null && v !== undefined && v !== 0;
-              const active = units.pcb.filter(r => nz(r.car_stock) || nz(r.remote_stock));
-              const zero   = units.pcb.filter(r => !(nz(r.car_stock) || nz(r.remote_stock)));
-              const renderRow = (r, i, arr) => (
-                <div key={r.product} style={{
-                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                  padding: '5px 16px',
-                  borderBottom: i === arr.length - 1 ? 'none' : '1px solid var(--border)',
-                }}>
-                  <div style={{ fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 13 }}>{r.product}</div>
-                  <div style={{ display: 'flex', gap: 24, textAlign: 'right' }}>
-                    <UnitStat label="Car" value={r.car_stock} small />
-                    <UnitStat label="Remote" value={r.remote_stock} small />
-                  </div>
-                </div>
-              );
-              return (
-                <>
-                  {active.map((r, i) => renderRow(r, i, active))}
-                  {zero.length > 0 && (
-                    <div style={{
-                      padding: '3px 16px', background: 'var(--surface2)',
-                      fontFamily: 'var(--mono)', fontSize: 9, textTransform: 'uppercase',
-                      letterSpacing: '0.08em', color: 'var(--t3)',
-                      borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)',
-                    }}>No stock ({zero.length})</div>
-                  )}
-                  {zero.map((r, i) => renderRow(r, i, zero))}
-                </>
-              );
-            })()}
-          </div>
-        </section>
-
-        {/* ---- FBU & SKD units ---- */}
-        <section style={panelStyle}>
-          <header style={panelHeaderStyle}>
-            <span>FBU &amp; SKD Units</span>
-            <span style={{ color: 'var(--t3)' }}>{units.units.length} products</span>
-          </header>
-          <div>
-            {unitsLoading ? (
-              <div style={{ padding: 16, textAlign: 'center' }}><Spinner size="sm" /></div>
-            ) : units.units.length === 0 ? (
-              <EmptyState message="No FBU or SKD stock" />
-            ) : (
-              units.units.map((r, i) => {
-                const isOpen = expandedUnitIndex === i;
-                const isLast = i === units.units.length - 1;
-                const hasVariants = (r.variants || []).length > 1;
-                return (
-                  <div key={r.product} style={{
-                    padding: '5px 16px',
-                    borderBottom: isLast ? 'none' : '1px solid var(--border)',
-                  }}>
-                    <div
-                      style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: hasVariants ? 'pointer' : 'default' }}
-                      onClick={() => hasVariants && setExpandedUnitIndex(isOpen ? null : i)}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span style={{ fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 13 }}>{r.product}</span>
-                        {(r.formats || []).map(f => (
-                          <StatusBadge key={f} label={f} tone={f === 'SKD' ? 'orange' : 'blue'} />
-                        ))}
-                        {hasVariants && (
-                          <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>
-                            {isOpen ? '▼' : '▶'}
-                          </span>
-                        )}
-                      </div>
-                      <div style={{ display: 'flex', gap: 28, textAlign: 'right' }}>
-                        <UnitStat label="Car" value={r.car_total} />
-                        <UnitStat label="Remote" value={r.remote_total} />
-                      </div>
-                    </div>
-                    {isOpen && hasVariants && (
-                      <div style={{ marginTop: 8, padding: '8px 10px', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3 }}>
-                        {r.variants.map((v, j) => (
-                          <div key={j} style={{
-                            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                            padding: '3px 0', fontSize: 12,
-                            borderBottom: j < r.variants.length - 1 ? '1px solid rgba(42,42,42,.4)' : 'none',
-                          }}>
-                            <span style={{ color: 'var(--t2)' }}>{v.label}</span>
-                            <div style={{ display: 'flex', gap: 24, textAlign: 'right' }}>
-                              <UnitStat label="Car" value={v.car} small />
-                              <UnitStat label="Remote" value={v.remote} small />
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })
+        <>
+          {/* KPI rail */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(168px, 1fr))', gap: 12, marginBottom: 18 }}>
+            <KpiCard eyebrow="Open Work Orders" value={kpis?.open_work_orders ?? '—'} tone="brand" icon={ListChecks} sub={`${fmt(submittedRuns.length)} awaiting issue`} onClick={() => router.push('/issue-queue')} />
+            <KpiCard eyebrow="Today's GRNs" value={kpis?.today_grn_count ?? '—'} tone="info" icon={Inbox} sub="received today" onClick={() => router.push('/grn')} />
+            <KpiCard eyebrow="WOs Issued Today" value={kpis?.today_wo_count ?? '—'} tone="ok" icon={Send} sub="store issues" onClick={() => router.push('/store-history')} />
+            <KpiCard eyebrow="Pending Returns" value={kpis?.pending_returns ?? '—'} tone="warn" icon={Undo2} sub="to process" onClick={() => router.push('/returns/shipments')} />
+            <KpiCard eyebrow="Reorder Flags" value={reorderCount ?? '—'} tone={reorderCount > 0 ? 'bad' : 'ok'} icon={AlertTriangle} sub="parts at reorder" onClick={() => router.push('/stock')} />
+            {showFinance && (
+              <KpiCard eyebrow="Stock Value" value={kpis?.total_stock_value !== undefined ? '₹' + Number(kpis.total_stock_value).toLocaleString('en-IN') : '—'} tone="brand" icon={Boxes} onClick={() => router.push('/stock')} />
             )}
           </div>
-        </section>
-      </div>
 
-      <div style={twoColStyle}>
-        <section style={panelStyle}>
-          <header style={panelHeaderStyle}>
-            <span>🔴 Reorder Flags</span>
-            <span style={{ color: reorderCount > 0 ? 'var(--red)' : 'var(--green)' }}>{reorderCount || 0}</span>
-          </header>
-          <div style={{ padding: '12px 16px' }}>
-            {reorderFlags.length === 0 ? (
-              <div style={{ textAlign: 'center', color: 'var(--state-success-fg)', fontSize: 12 }}>
-                ✅ No reorder flags
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {reorderFlags.slice(0, 10).map((r, i) => (
-                  <div key={i} style={{
-                    padding: '10px 12px',
-                    background: 'rgba(222,42,42,.06)',
-                    border: '1px solid rgba(222,42,42,.15)',
-                    borderRadius: 3,
-                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                  }}>
-                    <div>
-                      <div style={{ fontSize: 12, color: 'var(--t1)' }}>{r.part_name}</div>
-                      <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>
-                        {r.part_code} · {r.product || '—'}
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.7fr) minmax(0,1fr)', gap: 16, alignItems: 'start' }}>
+            {/* LEFT — attention + producibility */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <Panel title="Needs Attention Now" icon={Zap} padding={0}
+                action={urgentCount > 0 ? <StatusBadge variant="error">{urgentCount} urgent</StatusBadge> : <StatusBadge variant="success">All clear</StatusBadge>}>
+                {visibleAttention.length === 0 ? (
+                  <div style={{ padding: '28px 16px', textAlign: 'center', color: 'var(--t3)', fontSize: 13.5 }}>Nothing needs you right now — reorder levels and the issue queue are clear.</div>
+                ) : visibleAttention.map((a, i) => (
+                  <button key={a.id} onClick={() => router.push(a.route)} style={{
+                    width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 13,
+                    padding: '12px 14px', cursor: 'pointer', background: 'transparent', border: 'none',
+                    borderBottom: i < visibleAttention.length - 1 ? '1px solid var(--border)' : 'none',
+                  }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-2)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                    <span style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: SEV_FG[a.sev] }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
+                        <StatusBadge variant={SEV_BADGE[a.sev]}>{a.kind}</StatusBadge>
+                        <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--t1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.title}</span>
                       </div>
+                      <div className="num" style={{ fontSize: 11.5, color: 'var(--t3)' }}>{a.meta}</div>
                     </div>
-                    <div style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--state-error-fg)' }}>
-                      {r.closing_stock ?? 0} / {r.reorder_level ?? 0}
-                    </div>
-                  </div>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-display)', fontSize: 11, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--t2)', flexShrink: 0, whiteSpace: 'nowrap' }}>
+                      {a.action}<ArrowRight size={13} strokeWidth={1.75} />
+                    </span>
+                  </button>
                 ))}
-                {reorderFlags.length > 10 && (
-                  <div style={{ fontSize: 11, color: 'var(--t3)', textAlign: 'center', paddingTop: 4 }}>
-                    + {reorderFlags.length - 10} more parts need reordering
+                {attention.length > visibleAttention.length && (
+                  <div style={{ padding: '10px 14px', fontSize: 12, color: 'var(--t3)', borderTop: '1px solid var(--border)' }}>+ {attention.length - visibleAttention.length} more need attention</div>
+                )}
+              </Panel>
+
+              <Panel title="Producibility" icon={Target}
+                action={<button onClick={() => router.push('/producibility')} style={linkBtn}>View all<ArrowRight size={12} strokeWidth={1.75} /></button>}>
+                {producible.length === 0 ? (
+                  <div style={{ fontSize: 13, color: 'var(--t3)', padding: '6px 2px' }}>Calculating producible units…</div>
+                ) : (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px,1fr))', gap: 10 }}>
+                    {producible.slice(0, 6).map(p => {
+                      const tone = p.max <= 50 ? 'bad' : p.max <= 150 ? 'warn' : 'ok';
+                      return (
+                        <div key={p.product} style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '11px 12px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 7 }}>
+                            <ProductTag name={p.product} />
+                            <span className="num" style={{ fontSize: 17, fontWeight: 600, color: SEV_FG[tone] }}>{fmt(p.max)}</span>
+                          </div>
+                          <div style={{ fontSize: 11.5, color: 'var(--t3)' }}>Limited by <span style={{ color: 'var(--t2)' }}>{p.bottleneck}</span></div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
-              </div>
-            )}
-          </div>
-        </section>
-
-        <section style={panelStyle}>
-          <header style={panelHeaderStyle}>
-            <span>Producible Units by Product</span>
-            <span style={{ color: 'var(--t3)' }}>{PRODUCTS.length} products</span>
-          </header>
-          <div>
-            {prodLoading ? (
-              <div style={{ padding: 16, textAlign: 'center' }}><Spinner size="sm" /></div>
-            ) : producible.length === 0 ? (
-              <EmptyState message="No producible data" />
-            ) : (
-              producible.map((row, i) => {
-                const bottleneckUnits = row.bottleneck?.max_units ?? 0;
-                const constrained = bottleneckUnits < row.maxPossible;
-                // Brand red/green for the progress-bar fill (background usage is fine).
-                // state-fg variants for the units number (text usage — PATTERN-054).
-                const barColor  = constrained ? 'var(--red)' : 'var(--green)';
-                const textColor = constrained ? 'var(--state-error-fg)' : 'var(--state-success-fg)';
-                const pct = row.maxPossible > 0
-                  ? Math.round((bottleneckUnits / row.maxPossible) * 100)
-                  : 100;
-                const isOpen = expandedIndex === i;
-                const isLast = i === producible.length - 1;
-                return (
-                  <div key={row.product} style={{
-                    padding: '9px 16px',
-                    borderBottom: isLast ? 'none' : '1px solid var(--border)',
-                  }}>
-                    <div
-                      style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}
-                      onClick={() => setExpandedIndex(isOpen ? null : i)}
-                    >
-                      <div>
-                        <div style={{ fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 14 }}>{row.product}</div>
-                        <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>
-                          Bottleneck: {row.bottleneck?.part_name || '—'}
-                        </div>
-                      </div>
-                      <div style={{ textAlign: 'right' }}>
-                        <div style={{ fontFamily: 'var(--mono)', fontSize: 20, color: textColor }}>
-                          {bottleneckUnits.toLocaleString()}
-                        </div>
-                        <div style={{ fontSize: 10, color: 'var(--t3)' }}>units producible</div>
-                      </div>
-                    </div>
-                    {constrained && (
-                      <div style={{ marginTop: 5 }}>
-                        <div style={{ height: 4, background: 'var(--surface2)', borderRadius: 2, overflow: 'hidden' }}>
-                          <div style={{ width: `${pct}%`, height: 4, background: barColor, borderRadius: 2 }} />
-                        </div>
-                        <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 2, fontFamily: 'var(--mono)' }}>
-                          {pct}% of max potential ({row.maxPossible.toLocaleString()} units)
-                        </div>
-                      </div>
-                    )}
-                    {isOpen && constrained && row.shorts.length > 0 && (
-                      <div style={{ marginTop: 6, padding: '8px 10px', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, fontSize: 11 }}>
-                        <div style={{ fontSize: 10, color: 'var(--t3)', marginBottom: 6, fontFamily: 'var(--mono)' }}>
-                          WHAT&apos;S NEEDED TO REACH {row.maxPossible.toLocaleString()} UNITS
-                        </div>
-                        {row.shorts.slice(0, 3).map((s, j) => {
-                          const needed = (row.maxPossible - s.max_units) * s.bom_qty;
-                          return (
-                            <div key={j} style={{
-                              display: 'flex', justifyContent: 'space-between', padding: '3px 0',
-                              borderBottom: j < Math.min(row.shorts.length, 3) - 1 ? '1px solid rgba(42,42,42,.4)' : 'none',
-                            }}>
-                              <span style={{ color: 'var(--t2)' }}>
-                                {s.part_name} <span style={{ color: 'var(--t3)', fontSize: 10 }}>({s.part_code})</span>
-                              </span>
-                              <span style={{ color: 'var(--yellow)', fontFamily: 'var(--mono)' }}>
-                                need {needed} more → {row.maxPossible} units
-                              </span>
-                            </div>
-                          );
-                        })}
-                        {row.shorts.length > 3 && (
-                          <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 4 }}>
-                            + {row.shorts.length - 3} more parts short
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </section>
-      </div>
-
-      <section style={panelStyle}>
-        <header style={panelHeaderStyle}>
-          <span>Recent Shipments — Last 7 Days</span>
-          <StatusBadge
-            label={`${recentShipments.length} shipment${recentShipments.length === 1 ? '' : 's'}`}
-            tone="yellow"
-          />
-        </header>
-        {recentShipments.length === 0 ? (
-          <EmptyState message="No shipments in the last 7 days" />
-        ) : (
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr>
-              <th style={tableThStyle}>Shipment</th>
-              <th style={tableThStyle}>Supplier</th>
-              <th style={tableThStyle}>Arrival</th>
-              <th style={tableThStyle}>Boxes</th>
-              <th style={tableThStyle}>Parts</th>
-              <th style={tableThStyle}>Status</th>
-            </tr></thead>
-            <tbody>
-              {recentShipments.map((s, i) => (
-                <tr key={i}>
-                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{s.shipment_id || '—'}</td>
-                  <td style={tableTdStyle}>{s.supplier || '—'}</td>
-                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{formatDisplayDate(s.arrival_date)}</td>
-                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>
-                    {(s.total_boxes_received ?? 0)} / {(s.total_boxes_expected ?? 0)}
-                  </td>
-                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>
-                    {(s.parts_counted ?? 0)} / {(s.total_parts ?? 0)}
-                  </td>
-                  <td style={tableTdStyle}>
-                    <StatusBadge label={s.status || '—'} tone={shipmentStatusTone(s.status)} />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
-
-      <div style={twoColStyle}>
-        <section style={panelStyle}>
-          <header style={panelHeaderStyle}>
-            <span>Recent GRNs — Last 7 Days</span>
-            <span style={{ color: 'var(--t3)' }}>{recentGRNs.length}</span>
-          </header>
-          {recentGRNs.length === 0 ? (
-            <EmptyState message="No GRNs in the last 7 days" />
-          ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead><tr>
-                <th style={tableThStyle}>GRN No</th>
-                <th style={tableThStyle}>Date</th>
-                <th style={tableThStyle}>Supplier</th>
-                <th style={tableThStyle}>Product</th>
-                <th style={tableThStyle}>Lines · Qty</th>
-              </tr></thead>
-              <tbody>
-                {recentGRNs.map((r, i) => (
-                  <tr key={i}>
-                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{r.grn_no || '—'}</td>
-                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{formatDisplayDate(r.grn_date)}</td>
-                    <td style={tableTdStyle}>{r.supplier || '—'}</td>
-                    <td style={tableTdStyle}>{r.product || '—'}</td>
-                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{(r.lines ?? '—')} · {(r.total_qty ?? 0).toLocaleString()} pcs</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </section>
-
-        <section style={panelStyle}>
-          <header style={panelHeaderStyle}>
-            <span>Planned Issues — Last 7 Days</span>
-            <StatusBadge label="PLANNED" tone="blue" />
-          </header>
-          {plannedIssues.length === 0 ? (
-            <EmptyState message="No planned issues in 7 days" />
-          ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead><tr>
-                <th style={tableThStyle}>Issue No</th>
-                <th style={tableThStyle}>WO</th>
-                <th style={tableThStyle}>Product</th>
-                <th style={tableThStyle}>Units</th>
-                <th style={tableThStyle}>Date</th>
-              </tr></thead>
-              <tbody>
-                {plannedIssues.map((r, i) => (
-                  <tr key={i}>
-                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.issue_no || '—'}</td>
-                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.wo_no || r.work_order_no || '—'}</td>
-                    <td style={tableTdStyle}>{r.product || '—'}</td>
-                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.units_planned ?? '—'}</td>
-                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{formatDisplayDate(r.issue_date)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </section>
-      </div>
-
-      <div style={twoColStyle}>
-        <section style={panelStyle}>
-          <header style={panelHeaderStyle}>
-            <span>Ad Hoc Issues — Last 3 Days</span>
-            <StatusBadge label="AD HOC" tone="red" />
-          </header>
-          {adhocIssues.length === 0 ? (
-            <EmptyState message="No ad hoc issues in 3 days" />
-          ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead><tr>
-                <th style={tableThStyle}>Issue No</th>
-                <th style={tableThStyle}>Product</th>
-                <th style={tableThStyle}>Part</th>
-                <th style={tableThStyle}>Qty</th>
-                <th style={tableThStyle}>Date</th>
-              </tr></thead>
-              <tbody>
-                {adhocIssues.map((r, i) => (
-                  <tr key={i}>
-                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.issue_no || '—'}</td>
-                    <td style={tableTdStyle}>{r.product || '—'}</td>
-                    <td style={tableTdStyle}>{r.part_name || r.part_code || '—'}</td>
-                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.qty ?? '—'}</td>
-                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.issue_date || '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </section>
-
-        <section style={panelStyle}>
-          <header style={panelHeaderStyle}>
-            <span>Returns by Channel — Last 30 Days</span>
-          </header>
-          {returnsByChannel.length === 0 ? (
-            <EmptyState message="No returns in the last 30 days" />
-          ) : (
-            <div style={{ padding: '8px 16px' }}>
-              {returnsByChannel.map(([channel, qty]) => {
-                const pct = returnsMax > 0 ? (qty / returnsMax) * 100 : 0;
-                return (
-                  <div key={channel} style={{ display: 'grid', gridTemplateColumns: '120px 1fr 60px', gap: 8, alignItems: 'center', padding: '4px 0', fontSize: 12 }}>
-                    <span>{channel}</span>
-                    <div style={{ background: 'var(--surface2)', borderRadius: 3, height: 10, overflow: 'hidden' }}>
-                      <div style={{ width: `${pct}%`, background: 'var(--red)', height: '100%' }} />
-                    </div>
-                    <span style={{ fontFamily: 'var(--mono)', textAlign: 'right' }}>{qty}</span>
-                  </div>
-                );
-              })}
-              <div style={{ fontSize: 11, color: 'var(--t3)', paddingTop: 8 }}>
-                {returnsTotal} total · last 30 days
-              </div>
+              </Panel>
             </div>
-          )}
-        </section>
-      </div>
 
-      <section style={panelStyle}>
-        <header style={panelHeaderStyle}>
-          <span>Recent Activity</span>
-          <a href="/activity" style={{ color: 'var(--t3)', fontSize: 11, textDecoration: 'none' }}>View all →</a>
-        </header>
-        {actLoading ? (
-          <div style={{ padding: 16, textAlign: 'center' }}><Spinner size="sm" /></div>
-        ) : activity.length === 0 ? (
-          <EmptyState message="No activity yet" />
-        ) : (
-          <div>
-            {activity.map((a, i) => {
-              const tone = ACT_TONES[a.entity_type] || 'gray';
-              const Icon = ACT_ICONS[a.action] || Dot;
-              return (
-                <div key={i} style={{
-                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                  padding: '6px 16px', borderBottom: '1px solid var(--border)',
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-                    <StatusBadge label={a.entity_type || '—'} tone={tone} />
-                    <span style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                      <Icon size={14} strokeWidth={1.75} style={{ flexShrink: 0, color: 'var(--t3)' }} />
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.summary || a.message || '—'}</span>
-                    </span>
+            {/* RIGHT — returns mini + recent activity */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <Panel title="Returns by Channel" icon={TrendingUp}
+                action={<button onClick={() => router.push('/returns/shipments')} style={linkBtn}>Open<ArrowRight size={12} strokeWidth={1.75} /></button>}>
+                {returnsByChannel.length === 0 ? (
+                  <div style={{ fontSize: 13, color: 'var(--t3)' }}>No returns in the last 30 days.</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
+                    {returnsByChannel.map(([ch, qty]) => (
+                      <div key={ch}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 5 }}>
+                          <Route size={14} strokeWidth={1.75} style={{ color: 'var(--info-fg)' }} />
+                          <span style={{ flex: 1, fontSize: 13, color: 'var(--t2)' }}>{ch}</span>
+                          <span className="num" style={{ fontSize: 14, fontWeight: 600, color: 'var(--t1)' }}>{fmt(qty)}</span>
+                        </div>
+                        <ProgressBar value={qty} target={returnsMax} tone="bad" height={6} />
+                      </div>
+                    ))}
                   </div>
-                  <div style={{ flexShrink: 0, marginLeft: 12, textAlign: 'right' }}>
-                    <div style={{ fontSize: 10, fontWeight: 600 }}>{a.actor || '—'}</div>
-                    <div style={{ fontSize: 10, color: 'var(--t3)' }}>{formatActivityTime(a.logged_at || a.created_at)}</div>
-                  </div>
-                </div>
-              );
-            })}
+                )}
+              </Panel>
+
+              <Panel title="Recent Activity" icon={ActivityIcon} padding={0}
+                action={<button onClick={() => router.push('/activity')} style={linkBtn}>All<ArrowRight size={12} strokeWidth={1.75} /></button>}>
+                {activity.length === 0 ? (
+                  <div style={{ padding: '20px 14px', fontSize: 13, color: 'var(--t3)' }}>No recent activity.</div>
+                ) : activity.map((e, i) => {
+                  const tone = ACT_TONE[e.entity_type] || 'gray';
+                  return (
+                    <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 11, padding: '11px 14px', borderBottom: i < activity.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                      <span style={{ width: 7, height: 7, borderRadius: '50%', marginTop: 6, flexShrink: 0, background: SEV_FG[tone] || 'var(--t4)' }} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, color: 'var(--t1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.summary || e.message || '—'}</div>
+                        <div className="num" style={{ fontSize: 11, color: 'var(--t4)', marginTop: 2 }}>{e.actor || 'System'} · {formatActivityTime(e.logged_at || e.created_at)}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </Panel>
+            </div>
           </div>
-        )}
-      </section>
+        </>
+      )}
     </div>
   );
 }
+
+const linkBtn = { display: 'inline-flex', alignItems: 'center', gap: 4, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-display)', fontSize: 10.5, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)' };
