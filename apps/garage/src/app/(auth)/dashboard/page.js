@@ -284,7 +284,7 @@ export default function OverviewPage() {
                       <span style={{ width: 7, height: 7, borderRadius: '50%', marginTop: 6, flexShrink: 0, background: SEV_FG[tone] || 'var(--t4)' }} />
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 13, color: 'var(--t1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.summary || e.message || '—'}</div>
-                        <div className="num" style={{ fontSize: 11, color: 'var(--t4)', marginTop: 2 }}>{e.actor || 'System'} · {formatActivityTime(e.logged_at || e.created_at)}</div>
+                        <div className="num" style={{ fontSize: 11.5, color: 'var(--t3)', marginTop: 2 }}>{e.actor || 'System'} · {formatActivityTime(e.logged_at || e.created_at)}</div>
                       </div>
                     </div>
                   );

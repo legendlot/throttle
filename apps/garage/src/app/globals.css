@@ -65,7 +65,7 @@
   --text-2xs:  11px;
   --text-xs:   12px;
   --text-sm:   13px;
-  --text-base: 14px;
+  --text-base: 15px;   /* S128: lifted 14→15 — Hanken reads smaller than the old mono at the same px */
   --text-md:   16px;
   --text-lg:   18px;
   --text-xl:   22px;

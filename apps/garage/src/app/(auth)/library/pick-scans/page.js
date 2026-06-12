@@ -19,8 +19,8 @@ function fmtTs(ts) {
 const STATUS_VARIANT = { Picking: 'info', Issued: 'success', 'Awaiting pick': 'warning', Submitted: 'neutral', Pending: 'warning' };
 const STATUS_FG = { Picking: 'var(--info-fg)', Issued: 'var(--ok-fg)', 'Awaiting pick': 'var(--warn-fg)', Submitted: 'var(--t3)', Pending: 'var(--warn-fg)' };
 
-const th = { padding: '9px 12px', fontFamily: 'var(--font-display)', fontSize: 10, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', textAlign: 'left' };
-const td = { padding: '10px 12px', fontSize: 13, color: 'var(--t2)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontFamily: 'var(--font-ui)' };
+const th = { padding: '9px 12px', fontFamily: 'var(--font-display)', fontSize: 10.5, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', textAlign: 'left' };
+const td = { padding: '11px 12px', fontSize: 13.5, color: 'var(--t2)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontFamily: 'var(--font-ui)' };
 const tdNum = { ...td, fontFamily: 'var(--font-mono)', fontVariantNumeric: 'tabular-nums', textAlign: 'right' };
 const btnPri = { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--yellow)', color: '#161616', border: '1px solid var(--yellow)', borderRadius: 'var(--r-sm)', padding: '8px 14px', fontFamily: 'var(--font-display)', fontSize: 12, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', cursor: 'pointer', whiteSpace: 'nowrap' };
 const btnSec = { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface-2)', color: 'var(--t2)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '8px 14px', fontFamily: 'var(--font-display)', fontSize: 12, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', cursor: 'pointer', whiteSpace: 'nowrap' };

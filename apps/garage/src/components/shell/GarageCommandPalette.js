@@ -95,7 +95,7 @@ export function GarageCommandPalette({ open, onClose, nav, onNavigate }) {
               </span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--t1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.label}</div>
-                {r.hint && <div style={{ fontSize: 11.5, color: 'var(--t4)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.hint}</div>}
+                {r.hint && <div style={{ fontSize: 12, color: 'var(--t3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.hint}</div>}
               </div>
               <StatusBadge variant={KIND_TONE[r.kind] || 'neutral'}>{r.kind}</StatusBadge>
               {active === i && <span style={{ color: 'var(--t4)', display: 'flex' }}><ArrowRight size={15} strokeWidth={1.75} /></span>}

@@ -23,7 +23,7 @@ const kbdStyle = { fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(-
 const aGroupHdr = { width: '100%', display: 'flex', alignItems: 'center', gap: 11, padding: '11px 14px', background: 'none', border: 'none', cursor: 'pointer' };
 const countPill = { fontFamily: 'var(--font-mono)', fontSize: 10.5, fontWeight: 600, color: '#fff', background: 'var(--brand-red, #de2a2a)', borderRadius: 'var(--r-full)', padding: '1px 7px', minWidth: 18, textAlign: 'center' };
 const railToggle = { width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'none', border: '1px solid var(--border-2)', borderRadius: 'var(--r-xs)', color: 'var(--t3)', cursor: 'pointer' };
-const drawerItem = { width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', background: 'none', border: 'none', cursor: 'pointer', borderRadius: 'var(--r-xs)', fontSize: 13, fontFamily: 'var(--font-ui)', fontWeight: 500, textAlign: 'left' };
+const drawerItem = { width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', background: 'none', border: 'none', cursor: 'pointer', borderRadius: 'var(--r-xs)', fontSize: 13.5, fontFamily: 'var(--font-ui)', fontWeight: 500, textAlign: 'left' };
 
 function Brand({ short }) {
   return (
@@ -57,8 +57,8 @@ function TopRow({ icon, label, on, collapsed, onClick, badge }) {
     }}
       onMouseEnter={e => { if (!on) e.currentTarget.style.background = 'var(--surface-2)'; }}
       onMouseLeave={e => { if (!on) e.currentTarget.style.background = 'transparent'; }}>
-      <span style={{ color: on ? 'var(--yellow)' : 'var(--t3)', display: 'flex' }}><Ico icon={icon} size={18} /></span>
-      {!collapsed && <span style={{ flex: 1, textAlign: 'left', fontSize: 13.5, fontFamily: 'var(--font-display)', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>{label}</span>}
+      <span style={{ color: on ? 'var(--yellow)' : 'var(--t3)', display: 'flex' }}><Ico icon={icon} size={19} /></span>
+      {!collapsed && <span style={{ flex: 1, textAlign: 'left', fontSize: 14.5, fontFamily: 'var(--font-display)', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>{label}</span>}
       {!collapsed && badge != null && badge > 0 && <span style={countPill}>{badge > 99 ? '99+' : badge}</span>}
       {collapsed && badge != null && badge > 0 && <span style={{ position: 'absolute', top: 8, right: 12, width: 6, height: 6, borderRadius: '50%', background: 'var(--bad-fg)' }} />}
     </button>
@@ -78,8 +78,8 @@ function SubRow({ item, on, onNavigate, pinned, onTogglePin, flush, badge }) {
     }}
       onMouseEnter={e => { if (!on) e.currentTarget.style.background = 'var(--surface-2)'; }}
       onMouseLeave={e => { if (!on) e.currentTarget.style.background = 'transparent'; }}>
-      <span style={{ color: on ? 'var(--yellow)' : 'var(--t3)', display: 'flex' }}><Ico icon={item.icon} size={15} /></span>
-      <span style={{ flex: 1, textAlign: 'left', fontSize: 13, fontFamily: 'var(--font-ui)', fontWeight: on ? 600 : 500 }}>{item.label}</span>
+      <span style={{ color: on ? 'var(--yellow)' : 'var(--t3)', display: 'flex' }}><Ico icon={item.icon} size={16} /></span>
+      <span style={{ flex: 1, textAlign: 'left', fontSize: 14, fontFamily: 'var(--font-ui)', fontWeight: on ? 600 : 500 }}>{item.label}</span>
       {badge != null && badge > 0 && <span style={countPill}>{badge > 99 ? '99+' : badge}</span>}
       <span className="g-pinbtn" data-pinned={isPinned ? 'true' : 'false'}
         onClick={e => { e.stopPropagation(); onTogglePin(item.route); }}
@@ -151,7 +151,7 @@ export function GarageSidebar({
         ) : (
           <button onClick={onOpenPalette} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 9, background: 'var(--bg-2)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-sm)', padding: '9px 12px', cursor: 'pointer', color: 'var(--t3)' }}>
             <Search size={15} strokeWidth={1.75} />
-            <span style={{ flex: 1, textAlign: 'left', fontSize: 13, fontFamily: 'var(--font-ui)' }}>Search Garage…</span>
+            <span style={{ flex: 1, textAlign: 'left', fontSize: 14, fontFamily: 'var(--font-ui)' }}>Search Garage…</span>
             <kbd style={kbdStyle}>⌘K</kbd>
           </button>
         )}
@@ -182,7 +182,7 @@ export function GarageSidebar({
                 style={{ ...aGroupHdr, position: 'relative', justifyContent: collapsed ? 'center' : 'flex-start', color: hasActive ? 'var(--t1)' : 'var(--t2)' }}>
                 <span style={{ color: hasActive ? 'var(--yellow)' : 'var(--t3)', display: 'flex' }}><Ico icon={g.icon} size={18} /></span>
                 {!collapsed && <>
-                  <span style={{ flex: 1, textAlign: 'left', fontFamily: 'var(--font-display)', fontSize: 12, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase' }}>{g.label}</span>
+                  <span style={{ flex: 1, textAlign: 'left', fontFamily: 'var(--font-display)', fontSize: 13, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase' }}>{g.label}</span>
                   <ChevronDown size={13} strokeWidth={1.75} style={{ color: 'var(--t4)', transform: isExp ? 'none' : 'rotate(-90deg)', transition: 'transform var(--fast)' }} />
                 </>}
               </button>
@@ -217,7 +217,7 @@ export function GarageSidebar({
           style={{ ...aGroupHdr, justifyContent: collapsed ? 'center' : 'flex-start', color: inDrawer ? 'var(--t1)' : 'var(--t2)' }}>
           <span style={{ color: inDrawer ? 'var(--yellow)' : 'var(--t3)', display: 'flex' }}>{collapsed ? <ChevronRight size={18} strokeWidth={1.75} /> : <Settings size={18} strokeWidth={1.75} />}</span>
           {!collapsed && <>
-            <span style={{ flex: 1, textAlign: 'left', fontFamily: 'var(--font-display)', fontSize: 12, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Setup &amp; More</span>
+            <span style={{ flex: 1, textAlign: 'left', fontFamily: 'var(--font-display)', fontSize: 13, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Setup &amp; More</span>
             <ChevronDown size={13} strokeWidth={1.75} style={{ color: 'var(--t4)', transform: drawerOpen ? 'none' : 'rotate(-90deg)', transition: 'transform var(--fast)' }} />
           </>}
         </button>
@@ -228,7 +228,7 @@ export function GarageSidebar({
         <span style={{ width: 30, height: 30, borderRadius: '50%', background: 'var(--surface-3)', border: '1px solid var(--border-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 12.5, color: 'var(--t2)', flexShrink: 0 }}>{userInitial}</span>
         {!collapsed && <>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--t1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{userLabel}</div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--t1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{userLabel}</div>
             <div className="eyebrow" style={{ fontSize: 9.5 }}>{userRole}</div>
           </div>
           {onLogout && <button onClick={onLogout} title="Sign out" style={{ background: 'none', border: 'none', color: 'var(--t3)', fontSize: 11, cursor: 'pointer', fontFamily: 'var(--font-display)', letterSpacing: '0.08em', textTransform: 'uppercase', padding: '4px 8px', borderRadius: 4, flexShrink: 0 }}>Out</button>}

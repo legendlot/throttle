@@ -31,7 +31,7 @@ export function GarageTopbar({ nav, pathname, onOpenPalette, pins, onTogglePin, 
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 9, minWidth: 0 }}>
         <span className="eyebrow" style={{ whiteSpace: 'nowrap' }}>{group}</span>
         <ChevronRight size={12} strokeWidth={1.75} style={{ color: 'var(--t4)', alignSelf: 'center' }} />
-        <span className="title" style={{ fontSize: 15, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</span>
+        <span className="title" style={{ fontSize: 16.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</span>
       </div>
 
       {canPin && (
@@ -49,7 +49,7 @@ export function GarageTopbar({ nav, pathname, onOpenPalette, pins, onTogglePin, 
         onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--border-3)'}
         onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border)'}>
         <Search size={15} strokeWidth={1.75} />
-        <span style={{ flex: 1, textAlign: 'left', fontSize: 13, fontFamily: 'var(--font-ui)' }}>Search Garage…</span>
+        <span style={{ flex: 1, textAlign: 'left', fontSize: 13.5, fontFamily: 'var(--font-ui)' }}>Search Garage…</span>
         <kbd style={kbdStyle}>⌘K</kbd>
       </button>
 

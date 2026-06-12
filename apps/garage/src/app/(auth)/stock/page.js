@@ -10,8 +10,8 @@ import { useProducts } from '../../../hooks/useProducts.js';
 // common-parts logic is unchanged; only the chrome (type roles, chips, panel,
 // status badges, product tags, mono-only numbers) changed.
 
-const th = { padding: '9px 12px', fontFamily: 'var(--font-display)', fontSize: 10, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', textAlign: 'left' };
-const td = { padding: '10px 12px', fontSize: 13, color: 'var(--t2)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontFamily: 'var(--font-ui)' };
+const th = { padding: '9px 12px', fontFamily: 'var(--font-display)', fontSize: 10.5, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', textAlign: 'left' };
+const td = { padding: '11px 12px', fontSize: 13.5, color: 'var(--t2)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontFamily: 'var(--font-ui)' };
 const tdNum = { ...td, fontFamily: 'var(--font-mono)', fontVariantNumeric: 'tabular-nums', textAlign: 'right' };
 const selectStyle = { background: 'var(--surface)', color: 'var(--t1)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '8px 11px', fontFamily: 'var(--font-ui)', fontSize: 13, minWidth: 140 };
 const searchInput = { background: 'transparent', border: 'none', outline: 'none', color: 'var(--t1)', fontFamily: 'var(--font-ui)', fontSize: 13, width: '100%' };
@@ -263,7 +263,7 @@ export default function StockPage() {
                         <tr key={r.part_code || i} className="g-row">
                           <td style={td}>
                             <div style={{ fontWeight: 600, color: 'var(--t1)' }}>{r.part_name || '—'}</div>
-                            <div className="num" style={{ fontSize: 11, color: 'var(--t4)' }}>{r.part_code || '—'}</div>
+                            <div className="num" style={{ fontSize: 11.5, color: 'var(--t3)' }}>{r.part_code || '—'}</div>
                           </td>
                           <td style={td}>{r.product ? <ProductTag name={r.product} /> : <span style={{ color: 'var(--t4)', fontSize: 12 }}>Common</span>}</td>
                           <td style={td}><span style={{ fontSize: 12, color: 'var(--t3)' }}>{r.category || '—'}</span></td>
@@ -273,7 +273,7 @@ export default function StockPage() {
                           <td style={{ ...tdNum, color: ret ? 'var(--info-fg)' : 'var(--t4)' }}>{ret || '—'}</td>
                           <td style={{ ...tdNum, fontWeight: 600, color: isLow ? 'var(--bad-fg)' : 'var(--t1)' }}>{closing}</td>
                           {showCost && <td style={tdNum}>{r.unit_cost != null ? '₹' + Number(r.unit_cost).toLocaleString('en-IN') : '—'}</td>}
-                          <td style={{ ...tdNum, color: 'var(--t4)' }}>{r.reorder_level ?? 0}</td>
+                          <td style={{ ...tdNum, color: 'var(--t3)' }}>{r.reorder_level ?? 0}</td>
                           <td style={td}><span className="num" style={{ fontSize: 11.5, color: 'var(--t3)' }}>{r.location || '—'}</span></td>
                           <td style={td}>{isLow ? <StatusBadge variant="error">Reorder</StatusBadge> : <StatusBadge variant="success">OK</StatusBadge>}</td>
                         </tr>
