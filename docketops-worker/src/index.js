@@ -625,6 +625,69 @@ async function getChecklist(url, auth, env) {
   });
 }
 
+// Templates the caller can see for the Manage tab: active, non-archived. (Authoring is open;
+// edit is gated per-template via _can_edit.) Returns counts, not full nested structure.
+async function getChecklistTemplates(url, auth, env) {
+  const tRes = await sbDocket(
+    `/rest/v1/checklist_templates?archived_at=is.null&select=*&order=name.asc`, env);
+  if (!tRes.ok) return err('db_error', 500);
+  const tmpls = tRes.data || [];
+  if (!tmpls.length) return ok([]);
+  const ids = tmpls.map(t => t.id);
+  const [secRes, asgRes, deptRes] = await Promise.all([
+    sbDocket(`/rest/v1/checklist_template_sections?template_id=in.${inList(ids)}&select=id,template_id`, env),
+    sbDocket(`/rest/v1/checklist_assignments?template_id=in.${inList(ids)}&unassigned_at=is.null&select=template_id,employee_id`, env),
+    sbPodium(`/rest/v1/departments?select=id,name`, env),
+  ]);
+  const secByT = {}; (secRes.data || []).forEach(s => { (secByT[s.template_id] ||= []).push(s.id); });
+  const secIds = (secRes.data || []).map(s => s.id);
+  const itemRes = secIds.length
+    ? await sbDocket(`/rest/v1/checklist_template_items?section_id=in.${inList(secIds)}&select=section_id`, env)
+    : { data: [] };
+  const itemBySec = {}; (itemRes.data || []).forEach(i => { itemBySec[i.section_id] = (itemBySec[i.section_id] || 0) + 1; });
+  const asgCount = {}; (asgRes.data || []).forEach(a => { asgCount[a.template_id] = (asgCount[a.template_id] || 0) + 1; });
+  const deptName = {}; (deptRes.data || []).forEach(d => { deptName[d.id] = d.name; });
+  return ok(tmpls.map(t => {
+    const sIds = secByT[t.id] || [];
+    return {
+      ...t,
+      department_name: deptName[t.department_id] || null,
+      section_count: sIds.length,
+      item_count: sIds.reduce((n, sid) => n + (itemBySec[sid] || 0), 0),
+      assignee_count: asgCount[t.id] || 0,
+      _can_edit: canEditTemplate(auth, t),
+    };
+  }));
+}
+
+// Full nested template (sections → items) + active assignees, for the editor.
+async function getChecklistTemplate(url, auth, env) {
+  const id = url.searchParams.get('id');
+  if (!id) return err('id required', 400);
+  const tmpl = await loadTemplate(id, env);
+  if (!tmpl) return err('not_found', 404);
+  const secRes = await sbDocket(
+    `/rest/v1/checklist_template_sections?template_id=eq.${enc(id)}&select=*&order=sort_order.asc`, env);
+  const sections = secRes.data || [];
+  const secIds = sections.map(s => s.id);
+  const itemRes = secIds.length
+    ? await sbDocket(`/rest/v1/checklist_template_items?section_id=in.${inList(secIds)}&select=*&order=sort_order.asc`, env)
+    : { data: [] };
+  const itemsBySec = {}; (itemRes.data || []).forEach(i => { (itemsBySec[i.section_id] ||= []).push(i); });
+  const asgRes = await sbDocket(
+    `/rest/v1/checklist_assignments?template_id=eq.${enc(id)}&unassigned_at=is.null&select=employee_id&order=assigned_at.asc`, env);
+  const empIds = uniq((asgRes.data || []).map(a => a.employee_id));
+  const empRes = empIds.length
+    ? await sbPodium(`/rest/v1/employees?id=in.${inList(empIds)}&select=id,full_name`, env) : { data: [] };
+  const empName = {}; (empRes.data || []).forEach(e => { empName[e.id] = e.full_name; });
+  return ok({
+    ...tmpl,
+    sections: sections.map(s => ({ ...s, items: itemsBySec[s.id] || [] })),
+    assignees: empIds.map(eid => ({ employee_id: eid, full_name: empName[eid] || null })),
+    _can_edit: canEditTemplate(auth, tmpl),
+  });
+}
+
 async function getDocketRoles(url, auth, env) {
   const r = await sbStore(`/rest/v1/docket_roles?select=*&order=is_system.desc,label.asc`, env);
   if (!r.ok) return err('db_error', 500);
@@ -783,6 +846,118 @@ async function toggleChecklistOccurrence(body, auth, env) {
       { method: 'DELETE', prefer: 'return=minimal' });
   }
   return ok({ id: d.id, date, completed });
+}
+
+// ── Checklist template CRUD (RULE-DOCKET-009) ───────────────────────────────
+// Create or update a template + its sections/items in one call (diff-upsert).
+// Author = any authenticated user; edit of an existing template = creator or admin.
+async function saveChecklistTemplate(body, auth, env) {
+  const d = body.data || body;
+  if (!d.name || !String(d.name).trim()) return err('name required', 400);
+  const recErr = validateTemplateRecurrence(d.recurrence); if (recErr) return err(recErr, 400);
+  const rec = normalizeTemplateRecurrence(d.recurrence);
+  const sectionsIn = Array.isArray(d.sections) ? d.sections : [];
+
+  let template;
+  if (d.id) {
+    template = await loadTemplate(d.id, env);
+    if (!template) return err('not_found', 404);
+    if (!canEditTemplate(auth, template)) return err('forbidden', 403);
+    const upd = {
+      name: String(d.name).trim(), role_label: d.role_label || null,
+      department_id: d.department_id || null, description: d.description || null,
+      recurrence: rec, is_active: d.is_active !== false,
+      updated_at: nowIso(), updated_by_user_id: auth.userId,
+    };
+    const r = await sbDocket(`/rest/v1/checklist_templates?id=eq.${enc(d.id)}`, env, {
+      method: 'PATCH', prefer: 'return=representation', body: JSON.stringify(upd) });
+    if (!r.ok || !r.data?.[0]) return err('update_failed: ' + JSON.stringify(r.data), 400);
+    template = r.data[0];
+  } else {
+    const r = await sbDocket(`/rest/v1/checklist_templates`, env, {
+      method: 'POST', body: JSON.stringify([{
+        name: String(d.name).trim(), role_label: d.role_label || null,
+        department_id: d.department_id || null, description: d.description || null,
+        recurrence: rec, created_by_user_id: auth.userId,
+      }]) });
+    if (!r.ok || !r.data?.[0]) return err('create_failed: ' + JSON.stringify(r.data), 400);
+    template = r.data[0];
+  }
+
+  // Diff-upsert sections + items. Delete sections/items not present in the payload
+  // (CASCADE drops their items + any completions/comments — acceptable: editing structure).
+  // Bounded fan-out (a template has ~7 sections × ~8 items, well under the 50-subrequest limit).
+  const existSecRes = await sbDocket(
+    `/rest/v1/checklist_template_sections?template_id=eq.${enc(template.id)}&select=id`, env);
+  const existSecIds = (existSecRes.data || []).map(s => s.id);
+  const keepSecIds = sectionsIn.map(s => s.id).filter(Boolean);
+  const dropSecIds = existSecIds.filter(id => !keepSecIds.includes(id));
+  if (dropSecIds.length) {
+    await sbDocket(`/rest/v1/checklist_template_sections?id=in.${inList(dropSecIds)}`, env,
+      { method: 'DELETE', prefer: 'return=minimal' });
+  }
+
+  for (let si = 0; si < sectionsIn.length; si++) {
+    const s = sectionsIn[si];
+    const secRow = {
+      template_id: template.id, title: String(s.title || '').trim() || 'Section',
+      subtitle: s.subtitle || null,
+      due_time: (s.due_time && /^([01]?\d|2[0-3]):[0-5]\d$/.test(s.due_time)) ? s.due_time : null,
+      sort_order: si,
+    };
+    let sectionId = s.id;
+    if (sectionId) {
+      await sbDocket(`/rest/v1/checklist_template_sections?id=eq.${enc(sectionId)}`, env,
+        { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify(secRow) });
+    } else {
+      const sr = await sbDocket(`/rest/v1/checklist_template_sections`, env,
+        { method: 'POST', body: JSON.stringify([secRow]) });
+      if (!sr.ok || !sr.data?.[0]) return err('section_failed: ' + JSON.stringify(sr.data), 400);
+      sectionId = sr.data[0].id;
+    }
+    const itemsIn = Array.isArray(s.items) ? s.items : [];
+    const existItemRes = await sbDocket(
+      `/rest/v1/checklist_template_items?section_id=eq.${enc(sectionId)}&select=id`, env);
+    const existItemIds = (existItemRes.data || []).map(i => i.id);
+    const keepItemIds = itemsIn.map(i => i.id).filter(Boolean);
+    const dropItemIds = existItemIds.filter(id => !keepItemIds.includes(id));
+    if (dropItemIds.length) {
+      await sbDocket(`/rest/v1/checklist_template_items?id=in.${inList(dropItemIds)}`, env,
+        { method: 'DELETE', prefer: 'return=minimal' });
+    }
+    const toInsert = [];
+    for (let ii = 0; ii < itemsIn.length; ii++) {
+      const it = itemsIn[ii];
+      const itemRow = {
+        section_id: sectionId, title: String(it.title || '').trim() || 'Item',
+        help_text: it.help_text || null, tags: sanitizeTags(it.tags), sort_order: ii,
+      };
+      if (it.id) {
+        await sbDocket(`/rest/v1/checklist_template_items?id=eq.${enc(it.id)}`, env,
+          { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify(itemRow) });
+      } else {
+        toInsert.push(itemRow);
+      }
+    }
+    if (toInsert.length) {
+      await sbDocket(`/rest/v1/checklist_template_items`, env,
+        { method: 'POST', prefer: 'return=minimal', body: JSON.stringify(toInsert) });
+    }
+  }
+  return ok({ id: template.id });
+}
+
+async function archiveChecklistTemplate(body, auth, env) {
+  const d = body.data || body;
+  if (!d.id) return err('id required', 400);
+  const tmpl = await loadTemplate(d.id, env);
+  if (!tmpl) return err('not_found', 404);
+  if (!canEditTemplate(auth, tmpl)) return err('forbidden', 403);
+  const r = await sbDocket(`/rest/v1/checklist_templates?id=eq.${enc(d.id)}`, env, {
+    method: 'PATCH', prefer: 'return=minimal',
+    body: JSON.stringify({ archived_at: nowIso(), is_active: false, updated_at: nowIso(), updated_by_user_id: auth.userId }) });
+  if (!r.ok) return err('archive_failed: ' + JSON.stringify(r.data), 400);
+  return ok({ archived: d.id });
 }
 
 const PROTECTED = new Set(['id','task_no','created_at','created_by_user_id','deadline','status','action','data']);
