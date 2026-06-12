@@ -200,7 +200,7 @@ function AddFindingModal({ roundId, roundNumber, session, onClose, onSaved }) {
           </select>
         </div>
 
-        {formErr && <p style={{ color: 'var(--red)', fontSize: 11, marginBottom: 12 }}>{formErr}</p>}
+        {formErr && <p style={{ color: 'var(--bad-fg)', fontSize: 11, marginBottom: 12 }}>{formErr}</p>}
 
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <button onClick={onClose} style={S.btnGhost}>Cancel</button>

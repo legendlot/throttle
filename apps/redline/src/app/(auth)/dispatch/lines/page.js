@@ -77,7 +77,7 @@ function DispatchLineCards({ lines }) {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', paddingTop: 10, borderTop: '1px solid var(--border)', letterSpacing: '0.04em' }}>
               <span>{fmt(l.active_operators)} operators</span>
               <span>
-                {firstScan && <>⏱ {firstScan}</>}
+                {firstScan && <>{firstScan}</>}
                 {lastScan && lastScan !== firstScan && <> → {lastScan}</>}
               </span>
             </div>

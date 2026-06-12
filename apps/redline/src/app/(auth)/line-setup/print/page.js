@@ -169,8 +169,8 @@ function StationPrint({ station }) {
         <span style={{ fontFamily: 'monospace', fontSize: 11, fontWeight: 800 }}>
           {station.display_code}
         </span>
-        <span style={{ fontSize: 10 }}>
-          {station.capacity === 2 ? '👤👤' : '👤'}
+        <span style={{ fontSize: 10, fontFamily: 'monospace' }}>
+          {station.capacity === 2 ? 'x2' : 'x1'}
         </span>
       </div>
       {slots.map((op, idx) => (

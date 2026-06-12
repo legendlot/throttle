@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Badge, EmptyState, Spinner, useToast, Panel, Chip, StatusBadge } from '@throttle/ui';
+import { Icon as KitIcon } from '../../../components/kit/index.js';
 
 const LINES = ['L1', 'L2', 'L3'];
 const DEPT_ORDER = ['Prep', 'Assembly', 'QC', 'Packaging'];
@@ -135,30 +136,24 @@ export default function LineSetupPage() {
         display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between',
         gap: 16, marginBottom: 16,
       }}>
-        <div>
-          <h1 style={{
-            margin: 0, fontFamily: 'var(--cond)', fontSize: 28, fontWeight: 900,
-            textTransform: 'uppercase', letterSpacing: '0.03em',
-          }}>Line Setup</h1>
-          <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', margin: '4px 0 0' }}>
-            Assign clocked-in operators to physical stations · {fmtIstDate(date)}
-          </p>
-        </div>
+        <p style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t3)', margin: 0 }}>
+          Assign clocked-in operators to physical stations · <span className="num">{fmtIstDate(date)}</span>
+        </p>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)' }}>
-            {operators.length} clocked in
+          <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--t2)' }}>
+            <span className="num">{operators.length}</span> clocked in
             {refreshing && <span style={{ marginLeft: 8, color: 'var(--t3)' }}>· refreshing…</span>}
           </span>
-          <label style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>
-            Date
+          <label style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--t3)', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span className="eyebrow">Date</span>
             <input
               type="date"
               value={date}
               onChange={(e) => setDate(e.target.value)}
               style={{
-                marginLeft: 6, background: 'var(--surface)', color: 'var(--t1)',
-                border: '1px solid var(--border)', borderRadius: 3,
-                padding: '4px 6px', fontFamily: 'var(--mono)', fontSize: 12,
+                background: 'var(--surface-2)', color: 'var(--t1)',
+                border: '1px solid var(--border-2)', borderRadius: 'var(--r-sm)',
+                padding: '6px 8px', fontFamily: 'var(--font-mono)', fontSize: 12,
               }}
             />
           </label>
@@ -439,8 +434,10 @@ function StationCard({ station, line, department, date, session, operators, onAs
         <span style={{
           fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 700, color: 'var(--t2)',
         }}>{station.display_code}</span>
-        <span style={{ fontSize: 14 }} title={station.capacity === 2 ? 'Two-worker' : 'Single-worker'}>
-          {station.capacity === 2 ? '👤👤' : '👤'}
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: 'var(--t3)' }}
+          title={station.capacity === 2 ? 'Two-worker' : 'Single-worker'}>
+          <KitIcon name="users" size={14} />
+          <span className="num" style={{ fontSize: 11, color: 'var(--t3)' }}>×{station.capacity === 2 ? 2 : 1}</span>
         </span>
       </div>
       {slots.map((op, idx) => (

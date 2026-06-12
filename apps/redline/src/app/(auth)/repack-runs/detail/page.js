@@ -9,7 +9,7 @@ import { RpkStatusBadge, fmtDate } from '../page';
 
 const btnP = { background: 'var(--yellow)', border: '1px solid var(--yellow)', borderRadius: 3, padding: '8px 14px', fontSize: 13, color: '#0a0a0a', cursor: 'pointer', fontFamily: 'var(--cond)', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' };
 const btnS = { background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, padding: '8px 14px', fontSize: 13, color: 'var(--t2)', cursor: 'pointer', fontFamily: 'var(--mono)' };
-const btnD = { ...btnS, color: 'var(--red)', borderColor: 'var(--red)' };
+const btnD = { ...btnS, color: 'var(--bad-fg)', borderColor: 'var(--bad-bd)' };
 const th   = { padding: '8px 12px', fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', textAlign: 'left' };
 const td   = { padding: '8px 12px', borderBottom: '1px solid rgba(64,64,64,.5)', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t1)', verticalAlign: 'top' };
 const meta = { fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em' };
@@ -59,9 +59,9 @@ function RepackRunDetailInner() {
     finally { setBusy(false); }
   }
 
-  if (!allowed) return <div style={{ padding: 16 }}><EmptyState icon="🔒" message="Access denied." /></div>;
+  if (!allowed) return <div style={{ padding: 16 }}><EmptyState message="Access denied." /></div>;
   if (loading)  return <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>;
-  if (!run)     return <div style={{ padding: 16 }}><EmptyState icon="🔍" message="Repack run not found." /></div>;
+  if (!run)     return <div style={{ padding: 16 }}><EmptyState message="Repack run not found." /></div>;
 
   const repacked  = run.repacked || 0;
   const pct       = run.target_qty > 0 ? Math.round((repacked / run.target_qty) * 100) : 0;
@@ -111,7 +111,7 @@ function RepackRunDetailInner() {
           Units · {swaps.length}
         </h3>
         {swaps.length === 0 ? (
-          <EmptyState icon="📦" message="No units repacked yet — scan the old box at Repack In to start." />
+          <EmptyState message="No units repacked yet — scan the old box at Repack In to start." />
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>

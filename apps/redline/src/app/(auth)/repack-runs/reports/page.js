@@ -77,7 +77,7 @@ function Table({ title, rows, columns, csvName }) {
       header={title}
       headerAction={rows.length ? <button style={btnS} onClick={() => downloadCsv(csvName, rows, columns)}>CSV</button> : null}
     >
-      {rows.length === 0 ? <EmptyState icon="—" message="No data in range." /> : (
+      {rows.length === 0 ? <EmptyState message="No data in range." /> : (
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead><tr>{columns.map(c => <th key={c.key} style={c.num ? { ...th, textAlign: 'right' } : th}>{c.label}</th>)}</tr></thead>
@@ -134,7 +134,7 @@ export default function RepackReportsPage() {
   })), [data]);
 
   if (!allowed) {
-    return <div style={{ padding: 16 }}><EmptyState icon="🔒" message="Access denied — you need repack_run_manage (or dispatch) permission." /></div>;
+    return <div style={{ padding: 16 }}><EmptyState message="Access denied — you need repack_run_manage (or dispatch) permission." /></div>;
   }
 
   const t = data?.totals || {};
@@ -162,7 +162,7 @@ export default function RepackReportsPage() {
       {loading ? (
         <div style={{ padding: 40, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
       ) : !data || t.swaps === 0 ? (
-        <EmptyState icon="🔁" message="No completed channel swaps in this range." />
+        <EmptyState message="No completed channel swaps in this range." />
       ) : (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>

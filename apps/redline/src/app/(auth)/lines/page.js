@@ -98,7 +98,7 @@ function LineCard({ l, crMap }) {
               FPY <ToneBadge tone={fpyTone(passRate)}>{passRate}%</ToneBadge>
             </span>
           )}
-          {firstScan && <span className="num" style={{ marginLeft: 'auto', color: 'var(--t4)' }}>⏱ {firstScan}</span>}
+          {firstScan && <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4, color: 'var(--t4)' }}><Icon name="clock" size={12} /><span className="num">{firstScan}</span></span>}
         </div>
       </div>
     </div>

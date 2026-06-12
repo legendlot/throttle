@@ -47,7 +47,7 @@ export default function RepackRunNewPage() {
   if (!allowed) {
     return (
       <div style={{ padding: 16 }}>
-        <EmptyState icon="🔒" message="Access denied — you need repack_run_manage (or dispatch) permission." />
+        <EmptyState message="Access denied — you need repack_run_manage (or dispatch) permission." />
       </div>
     );
   }
@@ -61,7 +61,7 @@ export default function RepackRunNewPage() {
         </div>
 
         <div style={{ marginBottom: 14 }}>
-          <label style={lbl}>Target quantity <span style={{ color: 'var(--red)' }}>*</span></label>
+          <label style={lbl}>Target quantity <span style={{ color: 'var(--bad-fg)' }}>*</span></label>
           <input
             type="number" min="1" autoFocus
             value={f.target_qty}

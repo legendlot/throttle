@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { EmptyState, Modal, Spinner, useToast, Panel, Chip, StatusBadge } from '@throttle/ui';
+import { Icon as KitIcon } from '../../../components/kit/index.js';
 
 const DEPT_ORDER  = ['Prep', 'Assembly', 'QC', 'Packaging'];
 const DEPT_PREFIX = { Prep: 'PR', Assembly: 'AS', QC: 'QC', Packaging: 'PK' };
@@ -771,11 +772,12 @@ function StationCard({ department, position, capacity, unitType, onDragStart, on
           flex: 1, width: '100%', background: capacity === 2 ? 'var(--yellow-tint, #2a2415)' : '#1d1d1d',
           border: '1px solid ' + (capacity === 2 ? 'var(--yellow)' : 'var(--border)'),
           borderRadius: 3, cursor: 'pointer', color: 'var(--t1)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3,
           fontSize: 18,
         }}
       >
-        {capacity === 2 ? '👤👤' : '👤'}
+        <KitIcon name="users" size={16} />
+        <span className="num" style={{ fontSize: 12 }}>×{capacity === 2 ? 2 : 1}</span>
       </button>
       <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)' }}>
         cap {capacity}
