@@ -987,6 +987,63 @@ async function unassignChecklistTemplate(body, auth, env) {
   return ok({ template_id: d.template_id, employee_id: d.employee_id, unassigned: true });
 }
 
+// ── Checklist run completion (RULE-DOCKET-009) ──────────────────────────────
+// You may complete / comment on a template run only if you are its assignee (or admin).
+async function isAssignee(auth, templateId, env) {
+  if (isAdmin(auth)) return true;
+  if (!auth.employeeId) return false;
+  const r = await sbDocket(
+    `/rest/v1/checklist_assignments?template_id=eq.${enc(templateId)}&employee_id=eq.${enc(auth.employeeId)}&unassigned_at=is.null&select=id&limit=1`, env);
+  return !!(r.ok && r.data?.length);
+}
+// Resolve an item → its template_id (via section) for the assignee check.
+async function templateIdOfItem(itemId, env) {
+  const ir = await sbDocket(`/rest/v1/checklist_template_items?id=eq.${enc(itemId)}&select=section_id&limit=1`, env);
+  const sectionId = ir.ok && ir.data?.[0]?.section_id;
+  if (!sectionId) return null;
+  const sr = await sbDocket(`/rest/v1/checklist_template_sections?id=eq.${enc(sectionId)}&select=template_id&limit=1`, env);
+  return (sr.ok && sr.data?.[0]?.template_id) || null;
+}
+// Check/uncheck one item for the caller's own run on a date (default IST today).
+async function toggleChecklistItem(body, auth, env) {
+  const d = body.data || body;
+  if (!d.template_item_id) return err('template_item_id required', 400);
+  if (!auth.employeeId) return err('no_employee', 400);
+  const templateId = await templateIdOfItem(d.template_item_id, env);
+  if (!templateId) return err('item_not_found', 404);
+  if (!(await isAssignee(auth, templateId, env))) return err('forbidden', 403);
+  const date = d.date || istDateStr();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return err('invalid date', 400);
+  const completed = d.completed === true || d.completed === 'true';
+  if (completed) {
+    const r = await sbDocket(`/rest/v1/checklist_item_completions?on_conflict=template_item_id,employee_id,occurrence_date`, env, {
+      method: 'POST', prefer: 'return=minimal,resolution=ignore-duplicates',
+      body: JSON.stringify({ template_item_id: d.template_item_id, employee_id: auth.employeeId, occurrence_date: date, completed_by_user_id: auth.userId }) });
+    if (!r.ok) return err('complete_failed: ' + JSON.stringify(r.data), 400);
+  } else {
+    await sbDocket(`/rest/v1/checklist_item_completions?template_item_id=eq.${enc(d.template_item_id)}&employee_id=eq.${enc(auth.employeeId)}&occurrence_date=eq.${date}`, env,
+      { method: 'DELETE', prefer: 'return=minimal' });
+  }
+  return ok({ template_item_id: d.template_item_id, date, completed });
+}
+// Save (upsert) the caller's per-section comment for a date.
+async function saveSectionComment(body, auth, env) {
+  const d = body.data || body;
+  if (!d.section_id) return err('section_id required', 400);
+  if (!auth.employeeId) return err('no_employee', 400);
+  const sr = await sbDocket(`/rest/v1/checklist_template_sections?id=eq.${enc(d.section_id)}&select=template_id&limit=1`, env);
+  const templateId = sr.ok && sr.data?.[0]?.template_id;
+  if (!templateId) return err('section_not_found', 404);
+  if (!(await isAssignee(auth, templateId, env))) return err('forbidden', 403);
+  const date = d.date || istDateStr();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return err('invalid date', 400);
+  const r = await sbDocket(`/rest/v1/checklist_section_comments?on_conflict=section_id,employee_id,occurrence_date`, env, {
+    method: 'POST', prefer: 'return=representation,resolution=merge-duplicates',
+    body: JSON.stringify({ section_id: d.section_id, employee_id: auth.employeeId, occurrence_date: date, body: d.body || '', author_user_id: auth.userId, updated_at: nowIso() }) });
+  if (!r.ok) return err('comment_failed: ' + JSON.stringify(r.data), 400);
+  return ok({ section_id: d.section_id, date });
+}
+
 const PROTECTED = new Set(['id','task_no','created_at','created_by_user_id','deadline','status','action','data']);
 const EDITABLE  = ['title','description','department_id','owner_employee_id','priority','program_id'];
 async function updateTask(body, auth, env) {
