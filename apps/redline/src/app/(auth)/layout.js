@@ -1,11 +1,9 @@
 'use client';
-import { createContext, useContext, useMemo, useState } from 'react';
-import { usePathname, useRouter } from 'next/navigation';
+import { createContext, useContext, useEffect, useState } from 'react';
 import { RequireAuth, useAuth } from '@throttle/auth';
-import { Sidebar, Spinner, Topbar, useSearchShortcut } from '@throttle/ui';
-import { NAV_GROUPS } from '../../lib/nav.js';
+import { Spinner, useSearchShortcut } from '@throttle/ui';
 import { usePendingCounts } from '../../hooks/usePendingCounts.js';
-import { RedlineIcon } from '../../components/RedlineIcon.js';
+import { RedlineSidebar, RedlineTopbar, CommandPalette } from '../../components/kit/index.js';
 
 const RefreshContext = createContext({
   refreshing: false,    setRefreshing:    () => {},
@@ -36,82 +34,50 @@ export default function AuthLayout({ children }) {
   );
 }
 
-function NavBadge({ count, color }) {
-  if (!count || count < 1) return null;
-  const bg = color === 'red' ? 'var(--brand-red)' : 'var(--brand-orange)';
-  const fg = color === 'red' ? '#fff' : 'var(--accent-fg)';
-  return (
-    <span style={{
-      display: 'inline-block', background: bg, color: fg,
-      fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700,
-      letterSpacing: '0.04em',
-      padding: '2px 7px', borderRadius: 9999, marginLeft: 6,
-      minWidth: 18, textAlign: 'center', lineHeight: 1.2,
-    }}>
-      {count > 99 ? '99+' : count}
-    </span>
-  );
-}
-
 function AuthLayoutInner({ children }) {
   const { user, session, role, signOut, loading } = useAuth();
-  const pathname  = usePathname();
-  const router    = useRouter();
   const { refreshing, lastRefreshed } = useRefreshState();
   const { alertCount, returnCount }   = usePendingCounts(session);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
+  const [cmdkOpen, setCmdkOpen] = useState(false);
 
   // Global "/" → focus the primary search input on the active page.
   useSearchShortcut();
 
-  const navGroupsWithBadges = useMemo(() => {
-    return NAV_GROUPS.map(group => ({
-      ...group,
-      items: (group.items || []).map(item => {
-        if (item.id === 'alerts' && item.badgeColor) {
-          return { ...item, badge: <NavBadge count={alertCount}  color={item.badgeColor} /> };
-        }
-        if (item.id === 'returns' && item.badgeColor) {
-          return { ...item, badge: <NavBadge count={returnCount} color={item.badgeColor} /> };
-        }
-        return item;
-      }),
-    }));
-  }, [alertCount, returnCount]);
+  // Global ⌘K / Ctrl+K → command palette.
+  useEffect(() => {
+    const h = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setCmdkOpen(o => !o);
+      } else if (e.key === 'Escape') {
+        setCmdkOpen(false);
+      }
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, []);
 
   if (loading && !user) return <Spinner />;
 
   const displayName = user?.full_name || user?.email || '';
-  const initial     = displayName ? displayName[0].toUpperCase() : '?';
 
   return (
-    <div style={{ display:'flex', height:'100dvh', overflow:'hidden' }}>
-      <Sidebar
-        groups={navGroupsWithBadges}
-        activeTab={pathname}
-        onTabSelect={(item) => router.push(item.route)}
+    <div style={{ display: 'flex', height: '100dvh', overflow: 'hidden', background: 'var(--bg)',
+      fontFamily: 'var(--font-ui)', position: 'relative' }}>
+      <RedlineSidebar
+        onCmdK={() => setCmdkOpen(true)}
+        badges={{ alerts: alertCount, returns: returnCount }}
         userLabel={displayName}
-        userInitial={initial}
         userRole={role || ''}
         onLogout={signOut}
-        collapsed={sidebarCollapsed}
-        onToggle={() => setSidebarCollapsed(c => !c)}
-        appLabel="REDLINE"
-        appShortLabel="RL"
-        appIcon={<RedlineIcon bar={2} gap={2} />}
       />
-      <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
-        <Topbar
-          navGroups={navGroupsWithBadges}
-          pathname={pathname}
-          onTabSelect={(item) => router.push(item.route)}
-          refreshing={refreshing}
-          lastRefreshed={lastRefreshed}
-        />
-        <main style={{ flex:1, overflowY:'auto', padding:'16px 24px' }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <RedlineTopbar refreshing={refreshing} lastRefreshed={lastRefreshed} />
+        <main style={{ flex: 1, overflowY: 'auto', padding: '22px 26px' }}>
           {children}
         </main>
       </div>
+      <CommandPalette open={cmdkOpen} onClose={() => setCmdkOpen(false)} />
     </div>
   );
 }
