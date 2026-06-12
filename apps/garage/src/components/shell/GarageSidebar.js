@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, createElement } from 'react';
+import { useState, useEffect, useRef, createElement } from 'react';
 import {
   Search, Pin, ChevronDown, ChevronRight, ChevronsLeft, Settings,
 } from 'lucide-react';
@@ -110,7 +110,18 @@ export function GarageSidebar({
 
   const [expanded, setExpanded] = useState(activeGroupId);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const drawerRef = useRef(null);
   useEffect(() => { setExpanded(activeGroupId); }, [pathname]); // eslint-disable-line
+
+  // Close the Setup & More drawer on an outside click or Escape.
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const onDown = (e) => { if (drawerRef.current && !drawerRef.current.contains(e.target)) setDrawerOpen(false); };
+    const onKey = (e) => { if (e.key === 'Escape') setDrawerOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey); };
+  }, [drawerOpen]);
 
   const W = collapsed ? 56 : 248;
   const itemByRoute = (() => {
@@ -195,7 +206,7 @@ export function GarageSidebar({
       </nav>
 
       {/* Setup & More drawer */}
-      <div style={{ position: 'relative', borderTop: '1px solid var(--border)', flexShrink: 0 }}>
+      <div ref={drawerRef} style={{ position: 'relative', borderTop: '1px solid var(--border)', flexShrink: 0 }}>
         {drawerOpen && !collapsed && (
           <div style={{ position: 'absolute', bottom: 'calc(100% + 1px)', left: 8, right: 8, background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-md)', boxShadow: 'var(--shadow-pop)', padding: 6, maxHeight: 360, overflowY: 'auto', zIndex: 50 }}>
             {nav.drawer.items.map((i) => {

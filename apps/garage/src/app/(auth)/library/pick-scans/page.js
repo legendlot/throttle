@@ -65,8 +65,8 @@ export default function PickScansPage() {
 
   function exportCsv() {
     if (!data?.lines?.length) return;
-    const head = ['Part Code', 'Part Name', 'Bags', 'Total Qty', 'First Scan', 'Last Scan'];
-    const rows = data.lines.map(l => [l.part_code, l.part_name, l.bags, l.total_qty, l.first_scan || '', l.last_scan || '']);
+    const head = ['Part Code', 'Part Name', 'Bags', 'Total Qty', 'Scan Time'];
+    const rows = data.lines.map(l => [l.part_code, l.part_name, l.bags, l.total_qty, l.last_scan || l.first_scan || '']);
     const csv = [head, ...rows].map(r => r.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
     const a = document.createElement('a');
@@ -130,7 +130,7 @@ export default function PickScansPage() {
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead><tr>
-                  {['Part', 'Name', 'Bags', 'Total Qty', 'First Scan', 'Last Scan'].map((h, i) =>
+                  {['Part', 'Name', 'Bags', 'Total Qty', 'Scanned'].map((h, i) =>
                     <th key={h} style={{ ...th, textAlign: i === 2 || i === 3 ? 'right' : 'left' }}>{h}</th>)}
                 </tr></thead>
                 <tbody>
@@ -140,8 +140,7 @@ export default function PickScansPage() {
                       <td style={td}>{l.part_name}</td>
                       <td style={{ ...tdNum, color: 'var(--t1)', fontWeight: 600 }}>{fmtQty(l.bags)}</td>
                       <td style={{ ...tdNum }}>{fmtQty(l.total_qty)}</td>
-                      <td style={td}><span className="num" style={{ fontSize: 11.5, color: 'var(--t3)' }}>{fmtTs(l.first_scan)}</span></td>
-                      <td style={td}><span className="num" style={{ fontSize: 11.5, color: 'var(--t3)' }}>{fmtTs(l.last_scan)}</span></td>
+                      <td style={td}><span className="num" style={{ fontSize: 12, color: 'var(--t3)' }}>{fmtTs(l.last_scan || l.first_scan)}</span></td>
                     </tr>
                   ))}
                 </tbody>

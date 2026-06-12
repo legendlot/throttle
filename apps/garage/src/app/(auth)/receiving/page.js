@@ -25,9 +25,9 @@ function formatDisplayDate(raw) {
 
 // ── Style constants ────────────────────────────────────────────────────────────
 const panel    = { backgroundColor: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4 };
-const panelHdr = { padding: '10px 16px', borderBottom: '1px solid var(--border)', fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--t2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' };
-const th       = { padding: '7px 10px', fontSize: 10, textAlign: 'left', color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' };
-const td       = { padding: '8px 10px', fontSize: 12, borderBottom: '1px solid rgba(42,42,42,.6)', whiteSpace: 'nowrap' };
+const panelHdr = { padding: '11px 16px', borderBottom: '1px solid var(--border)', fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 13, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--t2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' };
+const th       = { padding: '9px 12px', fontSize: 10.5, textAlign: 'left', color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' };
+const td       = { padding: '11px 12px', fontSize: 13.5, borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' };
 const inp      = { background: 'var(--surface)', color: 'var(--t1)', border: '1px solid var(--border)', borderRadius: 4, padding: '6px 10px', fontFamily: 'var(--mono)', fontSize: 12, width: '100%' };
 const sel      = { background: 'var(--surface)', color: 'var(--t1)', border: '1px solid var(--border)', borderRadius: 4, padding: '6px 10px', fontFamily: 'var(--mono)', fontSize: 12 };
 const btnPri   = { background: 'var(--yellow)', color: '#000', border: 'none', borderRadius: 4, padding: '7px 16px', fontFamily: 'var(--mono)', fontSize: 12, textTransform: 'uppercase', letterSpacing: 1, cursor: 'pointer', fontWeight: 700 };
@@ -658,18 +658,18 @@ export default function ReceivingPage() {
   // ── RENDER: list view ─────────────────────────────────────────────────────────
   if (view === 'list') {
     return (
-      <div style={{ padding: '16px 24px', color: 'var(--t1)' }}>
+      <div style={{ padding: '16px 24px', color: 'var(--t1)', display: 'flex', flexDirection: 'column' }}>
         <div style={{ marginBottom: 16 }}>
           <h1 style={{ fontFamily: 'var(--cond)', fontSize: 28, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.03em', margin: 0 }}>
             Receiving
           </h1>
-          <p style={{ color: 'var(--t3)', fontSize: 11, marginTop: 4, fontFamily: 'var(--mono)' }}>
+          <p style={{ color: 'var(--t3)', fontSize: 13, marginTop: 5, fontFamily: 'var(--mono)' }}>
             Inbound shipment management — log arrivals, record box contents, raise GRNs.
           </p>
         </div>
 
-        {/* Active shipments */}
-        <div style={{ ...panel, marginBottom: 16 }}>
+        {/* Active shipments — ordered below Upcoming (§5: Upcoming first) */}
+        <div style={{ ...panel, marginBottom: 16, order: 2 }}>
           <div style={panelHdr}>
             <span>Active Shipments</span>
             <div style={{ display: 'flex', gap: 8 }}>
@@ -760,6 +760,16 @@ export default function ReceivingPage() {
                       ? `${s.parts_grn_raised || 0}/${s.parts_total} GRN'd`
                       : `${s.marks_received || 0}/${s.marks_total || 0} boxes`;
                     const pct = s.parts_total > 0 ? Math.round(((s.parts_grn_raised || 0) / s.parts_total) * 100) : 0;
+                    // §3: a fully-GRN'd (or fully-received-box) shipment shouldn't keep
+                    // reading "Arriving" — surface that it's done. Falls back to the
+                    // raw status while still in progress.
+                    const partsDone = s.parts_total > 0 && (s.parts_grn_raised || 0) >= s.parts_total;
+                    const boxesDone = !s.parts_total && (s.marks_total || 0) > 0 && (s.marks_received || 0) >= s.marks_total;
+                    const isDone = (s.status || '').toLowerCase() !== 'complete' && (partsDone || boxesDone);
+                    const dispLabel = (s.status || '').toLowerCase() === 'complete'
+                      ? s.status
+                      : (partsDone ? "GRN'd" : (boxesDone ? 'Received' : (s.status || '—')));
+                    const dispTone = (isDone || (s.status || '').toLowerCase() === 'complete') ? 'green' : shipmentTone(s.status);
                     return (
                       <tr key={i} style={{ cursor: 'pointer' }} onClick={() => openShipment(s.shipment_id)}>
                         <td style={{ ...td, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{s.shipment_id}</td>
@@ -779,7 +789,7 @@ export default function ReceivingPage() {
                             </div>
                           )}
                         </td>
-                        <td style={td}><StatusBadge label={s.status || '—'} tone={shipmentTone(s.status)} /></td>
+                        <td style={td}><StatusBadge label={dispLabel} tone={dispTone} /></td>
                         <td style={td}>
                           <button
                             style={{ ...btnSec, padding: '2px 8px', fontSize: 10 }}
@@ -797,9 +807,9 @@ export default function ReceivingPage() {
           )}
         </div>
 
-        {/* Upcoming POs */}
+        {/* Upcoming POs — moved to the TOP (§5) */}
         {upcoming.length > 0 && (
-          <div style={panel}>
+          <div style={{ ...panel, marginBottom: 16, order: 1 }}>
             <div style={panelHdr}>
               <span>Upcoming Shipments — Pending POs</span>
               <span style={{ color: 'var(--t3)' }}>{upcoming.length}</span>
