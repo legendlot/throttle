@@ -587,41 +587,116 @@ async function getDashboard(url, auth, env) {
   return ok(stats);
 }
 
-// Per-person checklist of recurring tasks. ?employee_id= optional (default = caller). RULE-DOCKET-008.
+// Per-person checklist for a date: flat personal recurring items + assigned template runs.
+// ?employee_id= optional (default = caller). ?date= optional (default IST today). RULE-DOCKET-008/009.
 async function getChecklist(url, auth, env) {
   const targetId = url.searchParams.get('employee_id') || auth.employeeId;
   if (!targetId) return err('no_employee', 400);
+  const date = url.searchParams.get('date') || istDateStr();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return err('invalid date', 400);
   const empRes = await sbPodium(
     `/rest/v1/employees?id=eq.${enc(targetId)}&select=id,full_name,department_id&limit=1`, env);
   const target = empRes.ok && empRes.data?.[0];
   if (!target) return err('employee_not_found', 404);
-  if (!canViewChecklistOf(auth, target)) return err('forbidden', 403);
+  // View gate: the existing rule, OR (R1) the caller monitors this person.
+  let allowed = canViewChecklistOf(auth, target);
+  if (!allowed) allowed = (await peopleInScope(auth, env)).has(targetId);
+  if (!allowed) return err('forbidden', 403);
+  const isOwn = auth.employeeId && targetId === auth.employeeId;
 
+  // ── Flat personal recurring tasks (RULE-DOCKET-008), now with completion timestamps. ──
   const tRes = await sbDocket(
     `/rest/v1/tasks?is_recurring=eq.true&owner_employee_id=eq.${enc(targetId)}&status=neq.abandoned&select=*&order=created_at.asc`, env);
   if (!tRes.ok) return err('db_error', 500);
-
-  const today = istDateStr();
-  // Expired recurring tasks (today past their `until`) auto-drop off the checklist (lazy expiry —
-  // kept in the DB with their completion history, just no longer surfaced).
-  const live = (tRes.data || []).filter(t => !isExpired(t.recurrence, today));
-  const rows = await hydrateTasks(live, auth, env);
-  const ids = rows.map(t => t.id);
-  const doneSet = new Set();
-  if (ids.length) {
+  const live = (tRes.data || []).filter(t => !isExpired(t.recurrence, date));
+  const recRows = await hydrateTasks(live, auth, env);
+  const recIds = recRows.map(t => t.id);
+  const complMap = {};
+  if (recIds.length) {
     const cRes = await sbDocket(
-      `/rest/v1/checklist_completions?task_id=in.${inList(ids)}&occurrence_date=eq.${today}&select=task_id`, env);
-    (cRes.ok ? cRes.data : []).forEach(c => doneSet.add(c.task_id));
+      `/rest/v1/checklist_completions?task_id=in.${inList(recIds)}&occurrence_date=eq.${date}&select=task_id,completed_at,completed_by_user_id`, env);
+    (cRes.ok ? cRes.data : []).forEach(c => { complMap[c.task_id] = c; });
   }
-  const items = rows.map(t => ({
-    ...t,
-    due_today: isDueOn(t.recurrence, today),
-    completed_today: doneSet.has(t.id),
-    _can_complete: canEditTask(auth, t),
-  }));
+  let allCompleterIds = uniq(Object.values(complMap).map(c => c.completed_by_user_id));
+  const recurring_items = recRows.map(t => {
+    const c = complMap[t.id];
+    return {
+      ...t,
+      due_today: isDueOn(t.recurrence, date),
+      completed_today: !!c,
+      completed_at: c?.completed_at || null,
+      completed_by_user_id: c?.completed_by_user_id || null,
+      late: c ? lateFlag(c.completed_at, t.recurrence?.time) : false,
+      _can_complete: isOwn,   // you complete your own checklist only
+    };
+  });
+
+  // ── Assigned template runs due on `date`. ──
+  const asgRes = await sbDocket(
+    `/rest/v1/checklist_assignments?employee_id=eq.${enc(targetId)}&unassigned_at=is.null&select=template_id`, env);
+  const tmplIds = uniq((asgRes.data || []).map(a => a.template_id));
+  let template_runs = [];
+  if (tmplIds.length) {
+    const tmplRes = await sbDocket(
+      `/rest/v1/checklist_templates?id=in.${inList(tmplIds)}&archived_at=is.null&is_active=eq.true&select=*`, env);
+    const dueTmpls = (tmplRes.data || []).filter(t => isDueOn(t.recurrence, date) && !isExpired(t.recurrence, date));
+    if (dueTmpls.length) {
+      const dueIds = dueTmpls.map(t => t.id);
+      const [secRes, deptRes] = await Promise.all([
+        sbDocket(`/rest/v1/checklist_template_sections?template_id=in.${inList(dueIds)}&select=*&order=sort_order.asc`, env),
+        sbPodium(`/rest/v1/departments?select=id,name`, env),
+      ]);
+      const sections = secRes.data || [];
+      const secIds = sections.map(s => s.id);
+      const [itemRes, secCommRes] = await Promise.all([
+        secIds.length ? sbDocket(`/rest/v1/checklist_template_items?section_id=in.${inList(secIds)}&select=*&order=sort_order.asc`, env) : Promise.resolve({ data: [] }),
+        secIds.length ? sbDocket(`/rest/v1/checklist_section_comments?section_id=in.${inList(secIds)}&employee_id=eq.${enc(targetId)}&occurrence_date=eq.${date}&select=section_id,body`, env) : Promise.resolve({ data: [] }),
+      ]);
+      const items = itemRes.data || [];
+      const itemIds = items.map(i => i.id);
+      const itemComplRes = itemIds.length
+        ? await sbDocket(`/rest/v1/checklist_item_completions?template_item_id=in.${inList(itemIds)}&employee_id=eq.${enc(targetId)}&occurrence_date=eq.${date}&select=template_item_id,completed_at,completed_by_user_id`, env)
+        : { data: [] };
+      const itemCompl = {}; (itemComplRes.data || []).forEach(c => { itemCompl[c.template_item_id] = c; });
+      allCompleterIds = uniq([...allCompleterIds, ...Object.values(itemCompl).map(c => c.completed_by_user_id)]);
+      const commBySec = {}; (secCommRes.data || []).forEach(c => { commBySec[c.section_id] = c.body || ''; });
+      const itemsBySec = {}; items.forEach(i => { (itemsBySec[i.section_id] ||= []).push(i); });
+      const deptName = {}; (deptRes.data || []).forEach(d => { deptName[d.id] = d.name; });
+      const secByT = {}; sections.forEach(s => { (secByT[s.template_id] ||= []).push(s); });
+      template_runs = dueTmpls.map(t => ({
+        template: { id: t.id, name: t.name, role_label: t.role_label, department_name: deptName[t.department_id] || null },
+        _can_complete: isOwn,
+        sections: (secByT[t.id] || []).map(s => ({
+          id: s.id, title: s.title, subtitle: s.subtitle, due_time: s.due_time,
+          comment: commBySec[s.id] || '',
+          items: (itemsBySec[s.id] || []).map(it => {
+            const c = itemCompl[it.id];
+            return {
+              id: it.id, title: it.title, help_text: it.help_text, tags: it.tags || [],
+              completed: !!c, completed_at: c?.completed_at || null,
+              completed_by_user_id: c?.completed_by_user_id || null,
+              late: c ? lateFlag(c.completed_at, s.due_time) : false,
+            };
+          }),
+        })),
+      }));
+    }
+  }
+
+  // Completer names (both models).
+  let completerName = {};
+  if (allCompleterIds.length) {
+    const up = await sbStore(`/rest/v1/users_profile?id=in.${inList(allCompleterIds)}&select=id,full_name`, env);
+    (up.ok ? up.data : []).forEach(u => { completerName[u.id] = u.full_name; });
+  }
+  recurring_items.forEach(r => { r.completed_by = r.completed_by_user_id ? (completerName[r.completed_by_user_id] || null) : null; });
+  template_runs.forEach(run => run.sections.forEach(s => s.items.forEach(it => {
+    it.completed_by = it.completed_by_user_id ? (completerName[it.completed_by_user_id] || null) : null;
+  })));
+
   return ok({
     owner: { id: target.id, full_name: target.full_name, department_id: target.department_id },
-    today, items,
+    date, recurring_items, template_runs,
   });
 }
 
