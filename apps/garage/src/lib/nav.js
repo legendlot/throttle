@@ -65,9 +65,8 @@ export const GARAGE_NAV_PRIMARY = [
       { id: 'library-pick-scans', label: 'Pick Scans',      route: '/library/pick-scans', icon: ScanLine,    desc: 'Bags scanned per run at store issue' },
       { id: 'flush-verify',       label: 'Flush Verify',    route: '/flush-verify',       icon: CheckSquare, desc: 'Verify line-flush returns', gate: (p) => hasPermission(p, 'line_flush_verify') },
       { id: 'direct-issuance',    label: 'Direct Issuance', route: '/direct-issuance',    icon: Gift,        desc: 'Issue outside a run', gate: (p) => hasPermission(p, 'direct_issuance_request') || hasPermission(p, 'direct_issuance_approve') || hasPermission(p, 'users_manage') },
-      { id: 'restock',            label: 'Unit Restock',    route: '/restock',            icon: RefreshCw,   desc: 'Replenish dispatch stock', gate: (p) => hasPermission(p, 'dispatch_restock') || hasPermission(p, 'users_manage') },
-      { id: 'dispatch',           label: 'Dispatch',        route: '/dispatch',           icon: Send,        desc: 'Outbound unit dispatch', gate: (p) => hasPermission(p, 'dashboard') },
-      { id: 'unit-counts',        label: 'Dispatch Counts', route: '/dispatch/unit-counts', icon: PackageCheck, desc: 'Count finished units', gate: (p) => hasPermission(p, 'cycle_count_record') || hasPermission(p, 'cycle_count_admin') },
+      // Unit Restock · Dispatch (roster) · Dispatch Counts moved to Redline → Dispatch
+      // (S128, Afshaan — dispatch-team tooling). Garage routes redirect there.
       { id: 'gate-pass',          label: 'Gate Pass',       route: '/gate-pass',          icon: Truck,       desc: 'Outward gate passes', gate: (p) => hasPermission(p, 'gate_pass') },
       { id: 'store-history',      label: 'Store History',   route: '/store-history',      icon: History,     desc: 'All store transactions' },
     ],

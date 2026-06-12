@@ -2,7 +2,7 @@ import {
   Gauge, Factory, Truck, Bell,
   Clock, ShieldCheck, GitBranch, ClipboardCheck, AlertTriangle, Users,
   FilePlus2, Workflow, BarChart3,
-  Network, Send, ArrowLeftRight, FileText,
+  Network, Send, ArrowLeftRight, FileText, RefreshCw, PackageCheck,
   Undo2, ScanLine, Edit3, Wrench,
   CalendarClock, LayoutGrid, ClipboardList, Tag, QrCode, Printer,
   BookOpen,
@@ -40,6 +40,10 @@ export const NAV_PRIMARY = [
       { id: 'repack',         label: 'Repack',         route: '/repack-runs',        icon: ArrowLeftRight },
       { id: 'repack-reports', label: 'Repack Reports', route: '/repack-runs/reports', icon: BarChart3 },
       { id: 'challans',       label: 'Challans',       route: '/dispatch-challans',  icon: FileText },
+      // Dispatch-team ops moved out of Garage (S128, Afshaan): these belong with the dispatch team.
+      { id: 'restock',         label: 'Unit Restock',    route: '/restock',          icon: RefreshCw },
+      { id: 'dispatch-roster', label: 'Dispatch Roster', route: '/dispatch-roster',  icon: Users },
+      { id: 'dispatch-counts', label: 'Dispatch Counts', route: '/dispatch-counts',  icon: PackageCheck },
     ],
   },
   {
