@@ -1,15 +1,19 @@
 'use client';
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { Lock, Download } from 'lucide-react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
-import { KpiCard, Spinner, EmptyState, useToast, Panel, Chip, StatusBadge } from '@throttle/ui';
+import { Spinner, useToast } from '@throttle/ui';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer,
   PieChart, Pie, Cell,
 } from 'recharts';
+import { useRefreshState } from '../layout.js';
+import { Icon, Panel, KpiTile, FilterChip, ToneBadge, fmt, lineColor, lineRgb } from '../../../components/kit/index.js';
+
+// Pit Wall v2 reskin — data calls, aggregations and exports unchanged.
 
 // ── Helpers ───────────────────────────────────────────────────
-function fmt(n) { return n != null ? Number(n).toLocaleString('en-IN') : '0'; }
 function pad(n) { return String(n).padStart(2, '0'); }
 function fmtISO(d) { return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
 
@@ -19,11 +23,16 @@ function fmtMins(v) {
   return n < 60 ? Math.round(n) + ' min' : (n / 60).toFixed(1) + ' hr';
 }
 
+// Cycle-time tone (text uses semantic fg vars; tiles use tone keys)
+function ctTone(mins) {
+  if (mins == null) return undefined;
+  if (mins <= 30) return 'ok';
+  if (mins <= 60) return 'warn';
+  return 'bad';
+}
+const TONE_FG = { ok: 'var(--ok-fg)', warn: 'var(--warn-fg)', bad: 'var(--bad-fg)' };
 function ctColor(mins) {
-  if (mins == null) return 'var(--t3)';
-  if (mins <= 30) return 'var(--green)';
-  if (mins <= 60) return 'var(--yellow)';
-  return 'var(--red)';
+  return TONE_FG[ctTone(mins)] || 'var(--t3)';
 }
 
 function fmtMonthDay(s) {
@@ -33,22 +42,33 @@ function fmtMonthDay(s) {
 }
 
 // ── Severity colour ──────────────────────────────────────────
-const SEVERITY_COLOR = {
+const SEVERITY_COLOR = {   // chart fills
   critical: '#ef4444',
   major:    '#f59e0b',
   minor:    '#888',
 };
+const SEVERITY_FG = {      // WCAG-safe text colors
+  critical: 'var(--bad-fg)',
+  major:    'var(--warn-fg)',
+  minor:    'var(--t3)',
+};
 
 // ── Common styles ────────────────────────────────────────────
-const dateInputStyle = { background: 'var(--surface2)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '6px 10px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 13, outline: 'none' };
-const dateLabelStyle = { fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase' };
-const sectionLabel = { margin: 0, fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t2)' };
-const cardStyle = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: 14, fontFamily: 'var(--mono)' };
-const cardLbl = { fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 6 };
-const cardVal = (color) => ({ fontSize: 22, color: color || 'var(--t1)', lineHeight: 1, fontWeight: 700 });
-const cardSub = { fontSize: 11, color: 'var(--t3)', marginTop: 4 };
-const thStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
-const tdStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 13, borderBottom: '1px solid rgba(64,64,64,.5)', whiteSpace: 'nowrap', color: 'var(--t1)' };
+const dateInputStyle = { background: 'var(--surface-2)', color: 'var(--t1)', border: '1px solid var(--border-2)', padding: '6px 10px', borderRadius: 'var(--r-sm)', fontFamily: 'var(--font-mono)', fontVariantNumeric: 'tabular-nums', fontSize: 12.5, outline: 'none' };
+const thStyle = { padding: '10px 14px', fontFamily: 'var(--font-display)', fontSize: 10, fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', textAlign: 'left' };
+const tdStyle = { padding: '10px 14px', fontFamily: 'var(--font-ui)', fontSize: 13, borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', color: 'var(--t1)' };
+const numTd = { ...tdStyle, fontFamily: 'var(--font-mono)', fontVariantNumeric: 'tabular-nums' };
+const tooltipStyle = { background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 6, fontSize: 12, fontFamily: 'var(--font-ui)' };
+const tickStyle = { fontSize: 11, fontFamily: 'var(--font-mono)' };
+
+function EmptyMsg({ icon, text }) {
+  return (
+    <div style={{ padding: 36, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, color: 'var(--t3)' }}>
+      <Icon name={icon} size={22} />
+      <span style={{ fontFamily: 'var(--font-ui)', fontSize: 13 }}>{text}</span>
+    </div>
+  );
+}
 
 // ── CSV download helper ──────────────────────────────────────
 function downloadCsv(filename, rows, headers) {
@@ -71,6 +91,7 @@ function downloadCsv(filename, rows, headers) {
 export default function ReportingPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
+  const { setRefreshing, setLastRefreshed } = useRefreshState();
 
   // Page gate — mirror canDownload/canViewProd on the server side.
   // Anyone with reports, production_view, or users_manage can view.
@@ -129,6 +150,7 @@ export default function ReportingPage() {
   const loadReporting = useCallback(async () => {
     if (!session || !dateFrom || !dateTo) return;
     setLoading(true);
+    setRefreshing(true);
     try {
       const [pva, ct, qc] = await Promise.allSettled([
         garageFetch('getPlanVsActual',     { from: dateFrom, to: dateTo }, session),
@@ -141,8 +163,10 @@ export default function ReportingPage() {
       setTaktData(null);
     } finally {
       setLoading(false);
+      setRefreshing(false);
+      setLastRefreshed(new Date());
     }
-  }, [session, dateFrom, dateTo]);
+  }, [session, dateFrom, dateTo, setRefreshing, setLastRefreshed]);
 
   useEffect(() => { loadReporting(); }, [loadReporting]);
 
@@ -262,11 +286,11 @@ export default function ReportingPage() {
 
   const fpy = qcData?.fpy?.[0];
   const fpyPct = fpy?.fpy_pct != null ? Number(fpy.fpy_pct) : null;
-  const fpyColor = fpyPct == null ? 'var(--t3)' : fpyPct >= 95 ? 'var(--green)' : fpyPct >= 85 ? 'var(--yellow)' : 'var(--red)';
-  const vsTargetColor = prodAggs.totals.vsTarget == null ? 'var(--t3)'
-    : prodAggs.totals.vsTarget >= 95 ? 'var(--green)'
-    : prodAggs.totals.vsTarget >= 75 ? 'var(--yellow)'
-    : 'var(--red)';
+  const fpyTone = fpyPct == null ? undefined : fpyPct >= 95 ? 'ok' : fpyPct >= 85 ? 'warn' : 'bad';
+  const vsTargetTone = prodAggs.totals.vsTarget == null ? undefined
+    : prodAggs.totals.vsTarget >= 95 ? 'ok'
+    : prodAggs.totals.vsTarget >= 75 ? 'warn'
+    : 'bad';
 
   // ── Throughput aggs ──────────────────────────────────────
   const taktAggs = useMemo(() => {
@@ -340,9 +364,16 @@ export default function ReportingPage() {
 
   if (perms && !canViewReporting) {
     return (
-      <div style={{ padding: 32, textAlign: 'center', color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12 }}>
-        🔒 Access restricted — reporting view requires <strong>reports</strong>, <strong>production_view</strong>, or <strong>users_manage</strong>.
-      </div>
+      <Panel pad={32} style={{ maxWidth: 560 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, textAlign: 'center' }}>
+          <Lock size={22} strokeWidth={1.75} style={{ color: 'var(--t3)' }} />
+          <div style={{ fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--t2)', lineHeight: 1.6 }}>
+            Access restricted — reporting view requires <span className="num" style={{ color: 'var(--t1)' }}>reports</span>,{' '}
+            <span className="num" style={{ color: 'var(--t1)' }}>production_view</span>, or{' '}
+            <span className="num" style={{ color: 'var(--t1)' }}>users_manage</span>.
+          </div>
+        </div>
+      </Panel>
     );
   }
 
@@ -351,27 +382,27 @@ export default function ReportingPage() {
       {/* Section selector */}
       <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
         {SECTIONS.map(s => (
-          <Chip key={s.id} active={section === s.id} onClick={() => setSection(s.id)}>{s.label}</Chip>
+          <FilterChip key={s.id} active={section === s.id} onClick={() => setSection(s.id)}>{s.label}</FilterChip>
         ))}
       </div>
 
       {/* Time bar (hidden on Downloads) */}
       {section !== 'downloads' && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
-          <Chip active={preset === '10days'}    onClick={() => applyPreset('10days')}>10 Days</Chip>
-          <Chip active={preset === 'thisweek'}  onClick={() => applyPreset('thisweek')}>This Week</Chip>
-          <Chip active={preset === 'thismonth'} onClick={() => applyPreset('thismonth')}>This Month</Chip>
-          <Chip active={preset === 'custom'}    onClick={() => applyPreset('custom')}>Custom</Chip>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+          <FilterChip active={preset === '10days'}    onClick={() => applyPreset('10days')}>10 Days</FilterChip>
+          <FilterChip active={preset === 'thisweek'}  onClick={() => applyPreset('thisweek')}>This Week</FilterChip>
+          <FilterChip active={preset === 'thismonth'} onClick={() => applyPreset('thismonth')}>This Month</FilterChip>
+          <FilterChip active={preset === 'custom'}    onClick={() => applyPreset('custom')}>Custom</FilterChip>
           {preset === 'custom' && (
             <>
-              <span style={dateLabelStyle}>From</span>
+              <span className="eyebrow">From</span>
               <input type="date" style={dateInputStyle} value={customFrom} onChange={e => { setCustomFrom(e.target.value); setDateFrom(e.target.value); }} />
-              <span style={dateLabelStyle}>To</span>
+              <span className="eyebrow">To</span>
               <input type="date" style={dateInputStyle} value={customTo}   onChange={e => { setCustomTo(e.target.value); setDateTo(e.target.value); }} />
             </>
           )}
           <div style={{ flex: 1 }} />
-          <span style={{ fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>{periodLabel}</span>
+          <span className="num" style={{ fontSize: 11.5, color: 'var(--t3)' }}>{periodLabel}</span>
         </div>
       )}
 
@@ -380,13 +411,13 @@ export default function ReportingPage() {
       )}
 
       {!loading && section === 'production' && (
-        <ProductionSection aggs={prodAggs} fpyPct={fpyPct} fpyColor={fpyColor} vsTargetColor={vsTargetColor} prodView={prodView} setProdView={setProdView} />
+        <ProductionSection aggs={prodAggs} fpyPct={fpyPct} fpyTone={fpyTone} vsTargetTone={vsTargetTone} prodView={prodView} setProdView={setProdView} />
       )}
       {!loading && section === 'cycle' && (
         <CycleSection ct={ctData} />
       )}
       {!loading && section === 'defects' && (
-        <DefectsSection aggs={defectAggs} fpyPct={fpyPct} fpyColor={fpyColor} defView={defView} setDefView={setDefView} />
+        <DefectsSection aggs={defectAggs} fpyPct={fpyPct} fpyTone={fpyTone} defView={defView} setDefView={setDefView} />
       )}
       {section === 'throughput' && (
         <ThroughputSection taktAggs={taktAggs} taktLoading={taktLoading} />
@@ -406,29 +437,29 @@ export default function ReportingPage() {
 }
 
 // ── Production section ───────────────────────────────────────
-function ProductionSection({ aggs, fpyPct, fpyColor, vsTargetColor, prodView, setProdView }) {
+function ProductionSection({ aggs, fpyPct, fpyTone, vsTargetTone, prodView, setProdView }) {
   const t = aggs.totals;
   return (
     <>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 18 }}>
-        <KpiCard label="QC Pass"       value={fmt(t.totalQc)}                                   color="yellow" />
-        <KpiCard label="FPY %"         value={fpyPct != null ? fpyPct + '%' : '—'}              color={fpyColor === 'var(--green)' ? 'green' : fpyColor === 'var(--yellow)' ? 'yellow' : fpyColor === 'var(--red)' ? 'red' : undefined} />
-        <KpiCard label="Dispatched"    value={fmt(t.totalDispatched)}                           color="green" />
-        <KpiCard label="vs Target"     value={t.vsTarget != null ? t.vsTarget + '%' : '—'}      color={vsTargetColor === 'var(--green)' ? 'green' : vsTargetColor === 'var(--yellow)' ? 'yellow' : vsTargetColor === 'var(--red)' ? 'red' : undefined} />
-        <KpiCard label="Runs"          value={fmt(t.runs)}                                      sub={`${fmt(t.totalTarget)} target`} />
+        <KpiTile label="QC Pass"    value={fmt(t.totalQc)}                              tone="brand" />
+        <KpiTile label="FPY %"      value={fpyPct != null ? fpyPct + '%' : '—'}         tone={fpyTone} />
+        <KpiTile label="Dispatched" value={fmt(t.totalDispatched)}                      tone="ok" />
+        <KpiTile label="vs Target"  value={t.vsTarget != null ? t.vsTarget + '%' : '—'} tone={vsTargetTone} />
+        <KpiTile label="Runs"       value={fmt(t.runs)}                                 sub={`${fmt(t.totalTarget)} target`} />
       </div>
 
       <div style={{ marginBottom: 18 }}>
-        <Panel padding={14} style={{ height: 280 }}>
+        <Panel pad={14} style={{ height: 280 }}>
           {aggs.chartRows.length === 0 ? (
-            <EmptyState icon="📊" message="No production data in this period" />
+            <EmptyMsg icon="chart" text="No production data in this period" />
           ) : (
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={aggs.chartRows} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
-                <XAxis dataKey="date" stroke="#666" tick={{ fontSize: 11, fontFamily: 'var(--mono)' }} />
-                <YAxis stroke="#666" tick={{ fontSize: 11, fontFamily: 'var(--mono)' }} />
-                <Tooltip contentStyle={{ background: '#111', border: '1px solid #333', fontSize: 12 }} />
-                <Legend wrapperStyle={{ fontSize: 11, fontFamily: 'var(--mono)' }} />
+                <XAxis dataKey="date" stroke="var(--t4)" tick={tickStyle} />
+                <YAxis stroke="var(--t4)" tick={tickStyle} />
+                <Tooltip contentStyle={tooltipStyle} cursor={{ fill: 'rgba(255,255,255,0.04)' }} />
+                <Legend wrapperStyle={{ fontSize: 11, fontFamily: 'var(--font-ui)' }} />
                 <Bar dataKey="qcPass"     name="QC Pass"     fill="#22c55e" />
                 <Bar dataKey="dispatched" name="Dispatched"  fill="var(--yellow)" />
               </BarChart>
@@ -438,11 +469,11 @@ function ProductionSection({ aggs, fpyPct, fpyColor, vsTargetColor, prodView, se
       </div>
 
       <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-        <Chip active={prodView === 'product'} onClick={() => setProdView('product')}>By Product</Chip>
-        <Chip active={prodView === 'line'}    onClick={() => setProdView('line')}>By Line</Chip>
+        <FilterChip active={prodView === 'product'} onClick={() => setProdView('product')}>By Product</FilterChip>
+        <FilterChip active={prodView === 'line'}    onClick={() => setProdView('line')}>By Line</FilterChip>
       </div>
 
-      <Panel padding={0}>
+      <Panel pad={0}>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -457,15 +488,19 @@ function ProductionSection({ aggs, fpyPct, fpyColor, vsTargetColor, prodView, se
                 const pct = r.target > 0 ? Math.round((r.dispatched / r.target) * 1000) / 10 : null;
                 return (
                   <tr key={i}>
-                    <td style={{ ...tdStyle, color: 'var(--t1)', fontWeight: 600 }}>{prodView === 'product' ? r.product : r.line}</td>
-                    <td style={{ ...tdStyle, fontFamily: 'var(--mono)' }}>{fmt(r.runs)}</td>
-                    {prodView === 'line' && <td style={{ ...tdStyle, fontFamily: 'var(--mono)' }}>{fmt(r.productCount)}</td>}
-                    <td style={{ ...tdStyle, fontFamily: 'var(--mono)' }}>{fmt(r.target)}</td>
-                    <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--green)' }}>{fmt(r.qcPass)}</td>
-                    <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{fmt(r.dispatched)}</td>
-                    <td style={{ ...tdStyle, fontFamily: 'var(--mono)' }}>{fmt(r.retail)}</td>
-                    <td style={{ ...tdStyle, fontFamily: 'var(--mono)' }}>{fmt(r.ecom)}</td>
-                    <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: pct == null ? 'var(--t3)' : pct >= 95 ? 'var(--green)' : pct >= 75 ? 'var(--yellow)' : 'var(--red)' }}>
+                    <td style={{ ...tdStyle, fontWeight: 600 }}>
+                      {prodView === 'product' ? r.product : (
+                        <span className="num" style={{ fontSize: 11, fontWeight: 700, color: lineColor(r.line), background: `rgba(${lineRgb(r.line)},0.12)`, padding: '1px 6px', borderRadius: 3 }}>{r.line}</span>
+                      )}
+                    </td>
+                    <td style={numTd}>{fmt(r.runs)}</td>
+                    {prodView === 'line' && <td style={numTd}>{fmt(r.productCount)}</td>}
+                    <td style={numTd}>{fmt(r.target)}</td>
+                    <td style={{ ...numTd, color: 'var(--ok-fg)' }}>{fmt(r.qcPass)}</td>
+                    <td style={{ ...numTd, color: 'var(--yellow)' }}>{fmt(r.dispatched)}</td>
+                    <td style={numTd}>{fmt(r.retail)}</td>
+                    <td style={numTd}>{fmt(r.ecom)}</td>
+                    <td style={{ ...numTd, color: pct == null ? 'var(--t3)' : pct >= 95 ? 'var(--ok-fg)' : pct >= 75 ? 'var(--warn-fg)' : 'var(--bad-fg)' }}>
                       {pct == null ? '—' : pct + '%'}
                     </td>
                   </tr>
@@ -487,8 +522,8 @@ function CycleSection({ ct }) {
 
   if (!ct || sections.every(s => !ct[s]?.units_measured)) {
     return (
-      <Panel padding={0}>
-        <EmptyState icon="⏱" message="No cycle time data in this period" />
+      <Panel pad={0}>
+        <EmptyMsg icon="clock" text="No cycle time data in this period" />
       </Panel>
     );
   }
@@ -503,26 +538,23 @@ function CycleSection({ ct }) {
 
   return (
     <>
-      {/* KPI cards */}
+      {/* KPI tiles */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 18 }}>
         {data.map(d => (
-          <div key={d.key} style={cardStyle}>
-            <div style={cardLbl}>{d.label} Avg</div>
-            <div style={cardVal(ctColor(d.avg))}>{fmtMins(d.avg)}</div>
-            <div style={cardSub}>{fmt(ct[d.key]?.units_measured)} units measured</div>
-          </div>
+          <KpiTile key={d.key} label={`${d.label} Avg`} value={fmtMins(d.avg)} tone={ctTone(d.avg)}
+            sub={`${fmt(ct[d.key]?.units_measured)} units measured`} />
         ))}
       </div>
 
       {/* Stacked horizontal bar */}
       <div style={{ marginBottom: 18 }}>
-        <Panel padding={14} style={{ height: 130 }}>
+        <Panel pad={14} style={{ height: 130 }}>
           <ResponsiveContainer width="100%" height="100%">
             <BarChart layout="vertical" data={stackedData}>
-              <XAxis type="number" stroke="#666" tick={{ fontSize: 11, fontFamily: 'var(--mono)' }} unit=" min" />
-              <YAxis type="category" dataKey="name" stroke="#666" tick={{ fontSize: 11, fontFamily: 'var(--mono)' }} />
-              <Tooltip contentStyle={{ background: '#111', border: '1px solid #333', fontSize: 12 }} formatter={(v) => fmtMins(v)} />
-              <Legend wrapperStyle={{ fontSize: 11, fontFamily: 'var(--mono)' }} />
+              <XAxis type="number" stroke="var(--t4)" tick={tickStyle} unit=" min" />
+              <YAxis type="category" dataKey="name" stroke="var(--t4)" tick={tickStyle} />
+              <Tooltip contentStyle={tooltipStyle} formatter={(v) => fmtMins(v)} cursor={{ fill: 'rgba(255,255,255,0.04)' }} />
+              <Legend wrapperStyle={{ fontSize: 11, fontFamily: 'var(--font-ui)' }} />
               <Bar dataKey="qc"  name="QC"  stackId="a" fill="#22c55e" />
               <Bar dataKey="pkg" name="PKG" stackId="a" fill="var(--yellow)" />
               <Bar dataKey="rtd" name="RTD" stackId="a" fill="#60a5fa" />
@@ -537,17 +569,16 @@ function CycleSection({ ct }) {
           const seg = ct[k];
           if (!seg) return null;
           return (
-            <Panel key={k} padding={16}>
-              <h3 style={{ ...sectionLabel, marginBottom: 10 }}>{labels[k]}</h3>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: 11, fontFamily: 'var(--mono)' }}>
+            <Panel key={k} title={labels[k]} icon="clock" pad={16}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                 <Stat label="Avg"               value={fmtMins(seg.avg_mins_all)}     valueColor={ctColor(seg.avg_mins_all)} />
                 <Stat label="Median"            value={fmtMins(seg.median_mins)} />
-                {seg.avg_mins_pass != null && <Stat label="Pass / Ecom"  value={fmtMins(seg.avg_mins_pass)} valueColor="var(--green)" />}
-                {seg.avg_mins_fail != null && <Stat label="Fail / Retail" value={fmtMins(seg.avg_mins_fail)} valueColor="var(--red)" />}
+                {seg.avg_mins_pass != null && <Stat label="Pass / Ecom"  value={fmtMins(seg.avg_mins_pass)} valueColor="var(--ok-fg)" />}
+                {seg.avg_mins_fail != null && <Stat label="Fail / Retail" value={fmtMins(seg.avg_mins_fail)} valueColor="var(--bad-fg)" />}
                 <Stat label="Fastest"           value={fmtMins(seg.fastest_mins)} />
                 <Stat label="Slowest (normal)"  value={fmtMins(seg.slowest_normal_mins)} />
                 <Stat label="Units measured"    value={fmt(seg.units_measured)} />
-                {seg.outlier_count > 0 && <Stat label="Outliers" value={`${fmt(seg.outlier_count)} (max ${fmtMins(seg.outlier_max_mins)})`} valueColor="var(--orange)" />}
+                {seg.outlier_count > 0 && <Stat label="Outliers" value={`${fmt(seg.outlier_count)} (max ${fmtMins(seg.outlier_max_mins)})`} valueColor="var(--warn-fg)" />}
               </div>
             </Panel>
           );
@@ -560,64 +591,62 @@ function CycleSection({ ct }) {
 function Stat({ label, value, valueColor }) {
   return (
     <div>
-      <div style={{ fontSize: 11, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 2 }}>{label}</div>
-      <div style={{ color: valueColor || 'var(--t1)', fontWeight: 600, fontSize: 13 }}>{value}</div>
+      <div className="eyebrow" style={{ marginBottom: 3 }}>{label}</div>
+      <div className="num" style={{ color: valueColor || 'var(--t1)', fontWeight: 600, fontSize: 13 }}>{value}</div>
     </div>
   );
 }
 
 // ── Defects section ──────────────────────────────────────────
-function DefectsSection({ aggs, fpyPct, fpyColor, defView, setDefView }) {
+function DefectsSection({ aggs, fpyPct, fpyTone, defView, setDefView }) {
   if (!aggs.total) {
     return (
-      <Panel padding={0}>
-        <EmptyState icon="⚠" message="No defect data in this period" />
+      <Panel pad={0}>
+        <EmptyMsg icon="alert" text="No defect data in this period" />
       </Panel>
     );
   }
   return (
     <>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 18 }}>
-        <KpiCard label="Total Occurrences" value={fmt(aggs.total)} color="red" />
-        <KpiCard label="FPY %"             value={fpyPct != null ? fpyPct + '%' : '—'} color={fpyColor === 'var(--green)' ? 'green' : fpyColor === 'var(--yellow)' ? 'yellow' : fpyColor === 'var(--red)' ? 'red' : undefined} />
-        <KpiCard label="Top Defect"        value={aggs.top?.code || '—'} sub={aggs.top?.issue || ''} />
-        <KpiCard label="Unique Codes"      value={fmt(aggs.uniqueCodes)} />
+        <KpiTile label="Total Occurrences" value={fmt(aggs.total)} tone="bad" />
+        <KpiTile label="FPY %"             value={fpyPct != null ? fpyPct + '%' : '—'} tone={fpyTone} />
+        <KpiTile label="Top Defect"        value={aggs.top?.code || '—'} sub={aggs.top?.issue || ''} />
+        <KpiTile label="Unique Codes"      value={fmt(aggs.uniqueCodes)} />
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 12, marginBottom: 18 }}>
-        <Panel padding={14} style={{ height: 280 }}>
-          <h3 style={{ ...sectionLabel, marginBottom: 8 }}>Top 8 Defect Codes</h3>
-          <ResponsiveContainer width="100%" height="90%">
+        <Panel title="Top 8 Defect Codes" icon="alert" pad={14} style={{ height: 300 }}>
+          <ResponsiveContainer width="100%" height="100%">
             <BarChart data={aggs.top8}>
-              <XAxis dataKey="code" stroke="#666" tick={{ fontSize: 10, fontFamily: 'var(--mono)' }} />
-              <YAxis stroke="#666" tick={{ fontSize: 10, fontFamily: 'var(--mono)' }} />
-              <Tooltip contentStyle={{ background: '#111', border: '1px solid #333', fontSize: 12 }} />
+              <XAxis dataKey="code" stroke="var(--t4)" tick={{ fontSize: 10, fontFamily: 'var(--font-mono)' }} />
+              <YAxis stroke="var(--t4)" tick={{ fontSize: 10, fontFamily: 'var(--font-mono)' }} />
+              <Tooltip contentStyle={tooltipStyle} cursor={{ fill: 'rgba(255,255,255,0.04)' }} />
               <Bar dataKey="count">
                 {aggs.top8.map((d, i) => <Cell key={i} fill={SEVERITY_COLOR[d.severity] || '#888'} />)}
               </Bar>
             </BarChart>
           </ResponsiveContainer>
         </Panel>
-        <Panel padding={14} style={{ height: 280 }}>
-          <h3 style={{ ...sectionLabel, marginBottom: 8 }}>Severity Split</h3>
-          <ResponsiveContainer width="100%" height="90%">
+        <Panel title="Severity Split" icon="chart" pad={14} style={{ height: 300 }}>
+          <ResponsiveContainer width="100%" height="100%">
             <PieChart>
               <Pie data={aggs.sevPie} dataKey="value" nameKey="name" innerRadius={50} outerRadius={80} paddingAngle={2}>
                 {aggs.sevPie.map((d, i) => <Cell key={i} fill={SEVERITY_COLOR[d.key]} />)}
               </Pie>
-              <Tooltip contentStyle={{ background: '#111', border: '1px solid #333', fontSize: 12 }} />
-              <Legend wrapperStyle={{ fontSize: 11, fontFamily: 'var(--mono)' }} />
+              <Tooltip contentStyle={tooltipStyle} />
+              <Legend wrapperStyle={{ fontSize: 11, fontFamily: 'var(--font-ui)' }} />
             </PieChart>
           </ResponsiveContainer>
         </Panel>
       </div>
 
       <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-        <Chip active={defView === 'code'}    onClick={() => setDefView('code')}>By Code</Chip>
-        <Chip active={defView === 'product'} onClick={() => setDefView('product')}>By Product</Chip>
+        <FilterChip active={defView === 'code'}    onClick={() => setDefView('code')}>By Code</FilterChip>
+        <FilterChip active={defView === 'product'} onClick={() => setDefView('product')}>By Product</FilterChip>
       </div>
 
-      <Panel padding={0}>
+      <Panel pad={0}>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -631,21 +660,21 @@ function DefectsSection({ aggs, fpyPct, fpyColor, defView, setDefView }) {
               {defView === 'code'
                 ? aggs.codeList.map((c, i) => (
                     <tr key={i}>
-                      <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)', fontWeight: 700 }}>{c.code}</td>
-                      <td style={{ ...tdStyle, color: 'var(--t1)', whiteSpace: 'normal' }}>{c.issue || '—'}</td>
+                      <td style={{ ...numTd, color: 'var(--yellow)', fontWeight: 700 }}>{c.code}</td>
+                      <td style={{ ...tdStyle, whiteSpace: 'normal' }}>{c.issue || '—'}</td>
                       <td style={{ ...tdStyle, color: 'var(--t2)' }}>{c.category || '—'}</td>
-                      <td style={{ ...tdStyle, color: SEVERITY_COLOR[c.severity] || 'var(--t3)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase' }}>{c.severity}</td>
-                      <td style={{ ...tdStyle, fontFamily: 'var(--mono)' }}>{fmt(c.count)}</td>
+                      <td style={tdStyle}><span className="label" style={{ fontSize: 10, color: SEVERITY_FG[c.severity] || 'var(--t3)' }}>{c.severity}</span></td>
+                      <td style={numTd}>{fmt(c.count)}</td>
                     </tr>
                   ))
                 : aggs.productList.map((p, i) => (
                     <tr key={i}>
-                      <td style={{ ...tdStyle, color: 'var(--t1)', fontWeight: 600 }}>{p.product}</td>
-                      <td style={{ ...tdStyle, fontFamily: 'var(--mono)' }}>{fmt(p.total)}</td>
-                      <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: SEVERITY_COLOR.critical }}>{fmt(p.critical)}</td>
-                      <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: SEVERITY_COLOR.major }}>{fmt(p.major)}</td>
-                      <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: SEVERITY_COLOR.minor }}>{fmt(p.minor)}</td>
-                      <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{p.top.code} <span style={{ color: 'var(--t3)' }}>({fmt(p.top.count)})</span></td>
+                      <td style={{ ...tdStyle, fontWeight: 600 }}>{p.product}</td>
+                      <td style={numTd}>{fmt(p.total)}</td>
+                      <td style={{ ...numTd, color: 'var(--bad-fg)' }}>{fmt(p.critical)}</td>
+                      <td style={{ ...numTd, color: 'var(--warn-fg)' }}>{fmt(p.major)}</td>
+                      <td style={{ ...numTd, color: 'var(--t3)' }}>{fmt(p.minor)}</td>
+                      <td style={{ ...numTd, color: 'var(--yellow)' }}>{p.top.code} <span style={{ color: 'var(--t3)' }}>({fmt(p.top.count)})</span></td>
                     </tr>
                   ))}
             </tbody>
@@ -660,8 +689,8 @@ function DefectsSection({ aggs, fpyPct, fpyColor, defView, setDefView }) {
 function ThroughputSection({ taktAggs, taktLoading }) {
   if (taktLoading || !taktAggs) {
     return (
-      <Panel padding={40} style={{ display: 'flex', justifyContent: 'center' }}>
-        <Spinner />
+      <Panel pad={40}>
+        <div style={{ display: 'flex', justifyContent: 'center' }}><Spinner /></div>
       </Panel>
     );
   }
@@ -671,32 +700,28 @@ function ThroughputSection({ taktAggs, taktLoading }) {
   const allEmpty = stations.every(st => !byStation[st]);
   if (allEmpty) {
     return (
-      <Panel padding={0}>
-        <EmptyState icon="⏱" message="No takt data in this period" />
+      <Panel pad={0}>
+        <EmptyMsg icon="clock" text="No takt data in this period" />
       </Panel>
     );
   }
 
   return (
     <>
-      {/* KPI cards */}
+      {/* KPI tiles */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 18 }}>
         {stations.map(st => {
           const s = byStation[st];
           return (
-            <div key={st} style={cardStyle}>
-              <div style={cardLbl}>{stationLabels[st]}</div>
-              <div style={cardVal(ctColor(s?.avg))}>{fmtMins(s?.avg)}</div>
-              <div style={cardSub}>{s ? `${s.unitsPerHour.toFixed(1)} u/hr` : '—'}</div>
-            </div>
+            <KpiTile key={st} label={stationLabels[st]} value={fmtMins(s?.avg)} tone={ctTone(s?.avg)}
+              sub={s ? `${s.unitsPerHour.toFixed(1)} u/hr` : '—'} />
           );
         })}
       </div>
 
       {/* Bottleneck per line */}
       <div style={{ marginBottom: 18 }}>
-      <Panel padding={14}>
-        <h3 style={{ ...sectionLabel, marginBottom: 12 }}>Per-Line Bottleneck</h3>
+      <Panel title="Per-Line Bottleneck" icon="activity" pad={16}>
         {lines.map(line => {
           const lineRows = stations.map(st => grid[`${line}|${st}`]).filter(Boolean);
           if (!lineRows.length) return null;
@@ -704,17 +729,19 @@ function ThroughputSection({ taktAggs, taktLoading }) {
           return (
             <div key={line} style={{ marginBottom: 14, paddingBottom: 12, borderBottom: '1px solid var(--border)' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-                <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--t1)', fontFamily: 'var(--mono)' }}>{line}</span>
-                {maxRow && <StatusBadge variant="error">Bottleneck: {maxRow.station}</StatusBadge>}
+                <span className="num" style={{ fontSize: 12, fontWeight: 700, color: lineColor(line),
+                  background: `rgba(${lineRgb(line)},0.12)`, padding: '1px 7px', borderRadius: 3 }}>{line}</span>
+                {maxRow && <ToneBadge tone="bad">Bottleneck: {maxRow.station}</ToneBadge>}
               </div>
               <div style={{ display: 'flex', gap: 4 }}>
                 {lineRows.map(r => {
                   const isMax = r === maxRow;
                   return (
-                    <div key={r.station} style={{ flex: 1, padding: 8, background: 'var(--surface2)', border: `1px solid ${isMax ? 'var(--red)' : 'var(--border)'}`, borderRadius: 3 }}>
-                      <div style={{ fontSize: 9, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{r.station}</div>
-                      <div style={{ fontSize: 13, fontFamily: 'var(--mono)', fontWeight: 700, color: ctColor(r.avg_takt_mins) }}>{fmtMins(r.avg_takt_mins)}</div>
-                      <div style={{ fontSize: 9, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>{Number(r.units_per_hour).toFixed(1)} u/hr</div>
+                    <div key={r.station} style={{ flex: 1, padding: 9, background: 'var(--surface-2)',
+                      border: `1px solid ${isMax ? 'var(--bad-bd)' : 'var(--border-2)'}`, borderRadius: 'var(--r-sm)' }}>
+                      <div className="eyebrow" style={{ fontSize: 9 }}>{r.station}</div>
+                      <div className="num" style={{ fontSize: 13, fontWeight: 700, color: ctColor(r.avg_takt_mins), marginTop: 3 }}>{fmtMins(r.avg_takt_mins)}</div>
+                      <div className="num" style={{ fontSize: 10, color: 'var(--t3)', marginTop: 2 }}>{Number(r.units_per_hour).toFixed(1)} u/hr</div>
                     </div>
                   );
                 })}
@@ -726,7 +753,7 @@ function ThroughputSection({ taktAggs, taktLoading }) {
       </div>
 
       {/* Takt grid table */}
-      <Panel padding={0}>
+      <Panel pad={0}>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -738,11 +765,12 @@ function ThroughputSection({ taktAggs, taktLoading }) {
             <tbody>
               {lines.map(line => (
                 <tr key={line}>
-                  <td style={{ ...tdStyle, color: 'var(--t1)', fontWeight: 700 }}>{line}</td>
+                  <td style={tdStyle}><span className="num" style={{ fontSize: 11, fontWeight: 700, color: lineColor(line),
+                    background: `rgba(${lineRgb(line)},0.12)`, padding: '1px 6px', borderRadius: 3 }}>{line}</span></td>
                   {stations.map(st => {
                     const r = grid[`${line}|${st}`];
                     return (
-                      <td key={st} style={{ ...tdStyle, fontFamily: 'var(--mono)' }}>
+                      <td key={st} style={numTd}>
                         {r ? (
                           <>
                             <div style={{ color: ctColor(r.avg_takt_mins), fontWeight: 600 }}>{fmtMins(r.avg_takt_mins)}</div>
@@ -766,8 +794,7 @@ function ThroughputSection({ taktAggs, taktLoading }) {
 function DownloadsSection({ downloadQc, downloadPva, downloadDefects, downloadModule, canViewFinance, periodLabel }) {
   return (
     <>
-      <Panel padding={18}>
-        <h2 style={{ ...sectionLabel, marginBottom: 14 }}>Production Exports{periodLabel && ` — ${periodLabel}`}</h2>
+      <Panel title={`Production Exports${periodLabel ? ` — ${periodLabel}` : ''}`} icon="arrowDown" pad={18}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 10 }}>
           <DownloadCard
             title="QC View"
@@ -787,8 +814,7 @@ function DownloadsSection({ downloadQc, downloadPva, downloadDefects, downloadMo
         </div>
       </Panel>
 
-      <Panel padding={18} style={{ marginTop: 14 }}>
-        <h2 style={{ ...sectionLabel, marginBottom: 14 }}>Audit & Compliance Exports{periodLabel && ` — ${periodLabel}`}</h2>
+      <Panel title={`Audit & Compliance Exports${periodLabel ? ` — ${periodLabel}` : ''}`} icon="shield" pad={18} style={{ marginTop: 14 }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 10 }}>
           <DownloadCard
             title="Process Deviations"
@@ -818,8 +844,7 @@ function DownloadsSection({ downloadQc, downloadPva, downloadDefects, downloadMo
         </div>
       </Panel>
 
-      <Panel padding={18} style={{ marginTop: 14 }}>
-        <h2 style={{ ...sectionLabel, marginBottom: 14 }}>Movement & Issuance Exports{periodLabel && ` — ${periodLabel}`}</h2>
+      <Panel title={`Movement & Issuance Exports${periodLabel ? ` — ${periodLabel}` : ''}`} icon="truck" pad={18} style={{ marginTop: 14 }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 10 }}>
           <DownloadCard
             title="Direct Issuances"
@@ -840,15 +865,15 @@ function DownloadsSection({ downloadQc, downloadPva, downloadDefects, downloadMo
           ) : (
             <DownloadCard
               title="Stock Adjustments"
-              sub="🔒 Requires reports_finance permission"
+              sub="Requires the reports_finance permission"
               onClick={() => {}}
               disabled
             />
           )}
         </div>
-        <div style={{ fontSize: 11, color: 'var(--t3)', marginTop: 14, fontFamily: 'var(--mono)' }}>
+        <div style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--t3)', marginTop: 14, lineHeight: 1.5 }}>
           CSV files are UTF-8 with BOM — Excel opens them correctly.
-          For richer per-module views see <strong>Garage → Reports</strong>.
+          For richer per-module views see <strong style={{ color: 'var(--t2)' }}>Garage → Reports</strong>.
         </div>
       </Panel>
     </>
@@ -861,15 +886,22 @@ function DownloadCard({ title, sub, onClick, disabled }) {
       onClick={onClick}
       disabled={disabled}
       style={{
-        background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 4,
+        background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-sm)',
         padding: 14, textAlign: 'left', cursor: disabled ? 'not-allowed' : 'pointer',
-        fontFamily: 'var(--mono)', color: 'var(--t1)',
-        opacity: disabled ? 0.55 : 1,
+        fontFamily: 'var(--font-ui)', color: 'var(--t1)',
+        opacity: disabled ? 0.55 : 1, transition: 'border-color var(--fast) var(--ease)',
       }}
+      onMouseEnter={e => { if (!disabled) e.currentTarget.style.borderColor = 'var(--border-3)'; }}
+      onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border-2)'; }}
     >
-      <div style={{ fontSize: 10, color: 'var(--t3)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 6 }}>CSV Download</div>
-      <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--yellow)', marginBottom: 4 }}>📥 {title}</div>
-      <div style={{ fontSize: 11, color: 'var(--t3)' }}>{sub}</div>
+      <div className="eyebrow" style={{ marginBottom: 7 }}>CSV Download</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 5 }}>
+        {disabled
+          ? <Lock size={14} strokeWidth={1.75} style={{ color: 'var(--t3)', flexShrink: 0 }} />
+          : <Download size={14} strokeWidth={1.75} style={{ color: 'var(--yellow)', flexShrink: 0 }} />}
+        <span style={{ fontSize: 14, fontWeight: 700, color: disabled ? 'var(--t2)' : 'var(--yellow)' }}>{title}</span>
+      </div>
+      <div style={{ fontSize: 11.5, color: 'var(--t3)', lineHeight: 1.4 }}>{sub}</div>
     </button>
   );
 }

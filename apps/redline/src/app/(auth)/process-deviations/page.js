@@ -1,8 +1,23 @@
 'use client';
+/* ════════════════════════════════════════════════════════════
+   PROCESS DEVIATIONS — Pit Wall v2 reskin (redesign-reference/
+   app/dev.jsx). Status tab chips · list rows with the tiered
+   approval stepper (data model carries current_tier/required_tier
+   + approved_l1/l2/l3 fields) · active-on-floor by-line cards ·
+   drill-down drawer with approval chain, what's-changing, history
+   timeline and the full action set (approve / reject / escalate /
+   ack / close / retro sign-off). All workerFetch actions, params
+   and permission gates preserved exactly from the pre-redesign
+   page; chrome only.
+   ════════════════════════════════════════════════════════════ */
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth, hasPermission } from '@throttle/auth';
 import { workerFetch } from '@throttle/db';
-import { Modal, Spinner, useToast, EmptyState } from '@throttle/ui';
+import { Modal, Spinner, useToast } from '@throttle/ui';
+import {
+  Icon, Panel, ToneBadge, Drawer,
+  lineColor, lineRgb, btnPrimary, btnGhost, inputStyle,
+} from '../../../components/kit/index.js';
 
 const TYPE_OPTIONS = [
   { id: 'material_substitution',    label: 'Material Substitution' },
@@ -17,59 +32,61 @@ const TYPE_OPTIONS = [
 ];
 
 const SEVERITY_OPTIONS = [
-  { id: 'low',      label: 'Low',      tone: 'green',  required_tier: 'L1' },
-  { id: 'medium',   label: 'Medium',   tone: 'yellow', required_tier: 'L1 + L2 (second-eye)' },
-  { id: 'high',     label: 'High',     tone: 'orange', required_tier: 'L3 (admin)' },
-  { id: 'critical', label: 'Critical', tone: 'red',    required_tier: 'L3 (admin)' },
+  { id: 'low',      label: 'Low',      required_tier: 'L1' },
+  { id: 'medium',   label: 'Medium',   required_tier: 'L1 + L2 (second-eye)' },
+  { id: 'high',     label: 'High',     required_tier: 'L3 (admin)' },
+  { id: 'critical', label: 'Critical', required_tier: 'L3 (admin)' },
 ];
+
+// severity → required approval chain (mirrors worker tiering rules)
+const CHAIN = { low: ['l1'], medium: ['l1', 'l2'], high: ['l3'], critical: ['l3'] };
 
 const STATUS_TABS = [
-  { id: 'pending',     label: 'Pending Approval', tone: 'yellow' },
-  { id: 'active',      label: 'Active on Floor',  tone: 'blue'   },
-  { id: 'retroactive', label: 'Retro Sign-off',   tone: 'orange' },
-  { id: 'rejected',    label: 'Rejected',         tone: 'red'    },
-  { id: 'closed',      label: 'Closed',           tone: 'gray'   },
-  { id: 'all',         label: 'All',              tone: 'gray'   },
+  { id: 'pending',     label: 'Pending',         dot: 'var(--warn-fg)' },
+  { id: 'active',      label: 'Active on floor', dot: 'var(--blue-bright)' },
+  { id: 'retroactive', label: 'Retro sign-off',  dot: 'var(--orange)' },
+  { id: 'rejected',    label: 'Rejected',        dot: 'var(--bad-fg)' },
+  { id: 'closed',      label: 'Closed',          dot: 'var(--t3)' },
+  { id: 'all',         label: 'All',             dot: 'var(--t3)' },
 ];
 
-const TONE = {
-  yellow: { bg: 'rgba(242,205,26,.12)', fg: '#f2cd1a', border: 'rgba(242,205,26,.25)' },
-  green:  { bg: 'rgba(34,197,94,.12)',  fg: '#4ade80', border: 'rgba(34,197,94,.25)'  },
-  red:    { bg: 'rgba(222,42,42,.15)',  fg: '#ff7070', border: 'rgba(222,42,42,.3)'   },
-  blue:   { bg: 'rgba(33,60,226,.2)',   fg: '#7b93ff', border: 'rgba(33,60,226,.35)'  },
-  orange: { bg: 'rgba(245,158,11,.15)', fg: '#fbbf24', border: 'rgba(245,158,11,.3)'  },
-  gray:   { bg: 'rgba(80,80,80,.2)',    fg: '#aaa',    border: 'rgba(80,80,80,.3)'    },
+const SEV_TONE = {
+  low:      { fg: 'var(--ok-fg)',   bg: 'var(--ok-bg)',   bd: 'var(--ok-bd)' },
+  medium:   { fg: 'var(--warn-fg)', bg: 'var(--warn-bg)', bd: 'var(--warn-bd)' },
+  high:     { fg: 'var(--orange)',  bg: 'rgba(249,115,22,0.14)', bd: 'rgba(249,115,22,0.3)' },
+  critical: { fg: 'var(--bad-fg)',  bg: 'var(--bad-bg)',  bd: 'var(--bad-bd)' },
+};
+const sevStyle = (sev) => SEV_TONE[sev] || { fg: 'var(--t2)', bg: 'var(--surface-2)', bd: 'var(--border-2)' };
+
+const STATUS_TONE = {
+  pending:   { label: 'Pending',   tone: 'warn' },
+  approved:  { label: 'Approved',  tone: 'ok' },
+  rejected:  { label: 'Rejected',  tone: 'bad' },
+  cancelled: { label: 'Cancelled', tone: 'mute' },
+  closed:    { label: 'Closed',    tone: 'mute' },
 };
 
-const panel = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, marginBottom: 16 };
-const phdr  = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid var(--border)', fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--t2)' };
-const pbody = { padding: '12px 14px' };
-const th    = { padding: '8px 10px', fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', textAlign: 'left' };
-const td    = { padding: '8px 10px', borderBottom: '1px solid rgba(42,42,42,.6)', fontSize: 12, verticalAlign: 'top' };
-const input = { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: '6px 10px', fontSize: 12, color: 'var(--t1)', outline: 'none', fontFamily: 'inherit' };
-const lbl   = { fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4, display: 'block' };
-const btnP  = { background: 'var(--yellow)', border: '1px solid var(--yellow)', borderRadius: 3, padding: '8px 14px', fontSize: 12, color: '#0a0a0a', cursor: 'pointer', fontFamily: 'var(--cond)', fontWeight: 700, letterSpacing: '0.05em' };
-const btnS  = { background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, padding: '6px 12px', fontSize: 11, color: 'var(--t2)', cursor: 'pointer', fontFamily: 'var(--cond)' };
-const btnG  = { background: 'rgba(34,197,94,.15)', border: '1px solid #4ade80', color: '#4ade80', borderRadius: 3, padding: '8px 14px', fontSize: 12, cursor: 'pointer', fontFamily: 'var(--cond)', fontWeight: 700, letterSpacing: '0.05em' };
-const btnR  = { background: 'rgba(222,42,42,.15)', border: '1px solid #ff7070', color: '#ff7070', borderRadius: 3, padding: '8px 14px', fontSize: 12, cursor: 'pointer', fontFamily: 'var(--cond)', fontWeight: 700, letterSpacing: '0.05em' };
-
-function SeverityBadge({ severity }) {
-  const cfg = SEVERITY_OPTIONS.find(s => s.id === severity) || { label: severity, tone: 'gray' };
-  const s = TONE[cfg.tone];
-  return <span style={{ display: 'inline-block', padding: '2px 7px', borderRadius: 2, fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '.04em', textTransform: 'uppercase', background: s.bg, color: s.fg, border: `1px solid ${s.border}`, whiteSpace: 'nowrap' }}>{cfg.label}</span>;
+function SevBadge({ severity }) {
+  const s = sevStyle(severity);
+  return (
+    <span className="num" style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.04em',
+      textTransform: 'uppercase', color: s.fg, background: s.bg, border: `1px solid ${s.bd}`,
+      borderRadius: 3, padding: '2px 6px', whiteSpace: 'nowrap' }}>{severity}</span>
+  );
 }
 
 function StatusBadge({ status }) {
-  const STATUS_MAP = {
-    pending:  { label: 'Pending',  tone: 'yellow' },
-    approved: { label: 'Approved', tone: 'green'  },
-    rejected: { label: 'Rejected', tone: 'red'    },
-    cancelled:{ label: 'Cancelled',tone: 'gray'   },
-    closed:   { label: 'Closed',   tone: 'gray'   },
-  };
-  const cfg = STATUS_MAP[status] || { label: status, tone: 'gray' };
-  const s = TONE[cfg.tone];
-  return <span style={{ display: 'inline-block', padding: '2px 7px', borderRadius: 2, fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '.04em', textTransform: 'uppercase', background: s.bg, color: s.fg, border: `1px solid ${s.border}`, whiteSpace: 'nowrap' }}>{cfg.label}</span>;
+  const cfg = STATUS_TONE[status] || { label: status, tone: 'mute' };
+  return <ToneBadge tone={cfg.tone}>{cfg.label}</ToneBadge>;
+}
+
+function LineChip({ line }) {
+  if (!line) return null;
+  return (
+    <span className="num" style={{ fontSize: 10, fontWeight: 700, color: lineColor(line),
+      background: `rgba(${lineRgb(line)},0.12)`, borderRadius: 3, padding: '1px 5px',
+      whiteSpace: 'nowrap' }}>{line}</span>
+  );
 }
 
 function fmtTs(ts) { if (!ts) return '—'; try { return new Date(ts).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch { return ts; } }
@@ -79,6 +96,122 @@ function isCurrentlyActive(dev) {
   if (dev.effective_from && new Date(dev.effective_from) > now) return false;
   if (dev.effective_until && new Date(dev.effective_until) < now) return false;
   return true;
+}
+function chainFor(dev) { return CHAIN[dev.severity] || ['l1']; }
+function tierApproval(dev, t) {
+  // t is 'l1' | 'l2' | 'l3' — list + detail rows expose approved_lX_at
+  return dev[`approved_${t}_at`]
+    ? { at: dev[`approved_${t}_at`], by: dev[`approver_${t}_name`], note: dev[`approver_${t}_reason`] }
+    : null;
+}
+
+/* ── tiered approval stepper ────────────────────────────────── */
+function TierStepper({ dev, compact }) {
+  const chain = chainFor(dev);
+  const cur = dev.status === 'pending' ? (dev.current_tier || '').toLowerCase() : null;
+  const rejected = dev.status === 'rejected';
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: compact ? 4 : 6 }}>
+      {chain.map((t, i) => {
+        const done = !!tierApproval(dev, t);
+        const isCur = t === cur;
+        const color = done ? 'var(--ok-fg)' : isCur ? 'var(--yellow)' : rejected ? 'var(--bad-fg)' : 'var(--t4)';
+        return (
+          <span key={t} style={{ display: 'contents' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4,
+              padding: compact ? '2px 6px' : '3px 8px', borderRadius: 'var(--r-full)',
+              border: `1px solid ${done ? 'var(--ok-bd)' : isCur ? 'var(--yellow)' : 'var(--border-2)'}`,
+              background: done ? 'var(--ok-bg)' : isCur ? 'var(--yellow-dim)' : 'transparent' }}>
+              {done && <Icon name="shield" size={compact ? 10 : 11} style={{ color }} />}
+              <span className="num" style={{ fontSize: compact ? 10 : 11, fontWeight: 700, color, textTransform: 'uppercase' }}>{t}</span>
+            </span>
+            {i < chain.length - 1 && (
+              <span style={{ width: compact ? 8 : 14, height: 1.5,
+                background: tierApproval(dev, chain[i]) ? 'var(--ok-bd)' : 'var(--border-2)' }} />
+            )}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ── list row ───────────────────────────────────────────────── */
+const LIST_COLS = '112px minmax(220px,1.6fr) 142px 118px 150px 96px 140px';
+
+function DevRow({ r, onOpen, hover, setHover }) {
+  const typeLabel = (r.type || '').replace(/_/g, ' ');
+  return (
+    <div onClick={() => onOpen(r.deviation_no)}
+      onMouseEnter={() => setHover(r.id)} onMouseLeave={() => setHover(null)}
+      style={{ display: 'grid', gridTemplateColumns: LIST_COLS, gap: 12, alignItems: 'center',
+        padding: '11px 12px', borderRadius: 'var(--r-sm)', cursor: 'pointer',
+        background: hover === r.id ? 'var(--surface-2)' : 'transparent',
+        border: '1px solid', borderColor: hover === r.id ? 'var(--border-2)' : 'transparent',
+        transition: 'all var(--fast) var(--ease)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span className="num" style={{ fontSize: 12, fontWeight: 700, color: 'var(--yellow)', whiteSpace: 'nowrap' }}>{r.deviation_no}</span>
+        {r.reactive && <span title="reactive — logged after the fact" style={{ color: 'var(--amber)', display: 'flex' }}><Icon name="alert" size={12} /></span>}
+        {r.needs_retroactive_signoff && <span title="needs retro sign-off" style={{ color: 'var(--orange)', display: 'flex' }}><Icon name="flag" size={12} /></span>}
+      </div>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--t1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.title}</div>
+        <div style={{ fontFamily: 'var(--font-ui)', fontSize: 11, color: 'var(--t3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: 2 }}>
+          {typeLabel}{r.run_id ? <span className="num"> · RUN-{r.run_id}</span> : null}{r.description ? ` · ${r.description.slice(0, 60)}${r.description.length > 60 ? '…' : ''}` : ''}
+        </div>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <SevBadge severity={r.severity} />
+        <LineChip line={r.line} />
+      </div>
+      <TierStepper dev={r} compact />
+      <div className="num" style={{ fontSize: 10.5, color: 'var(--t3)', lineHeight: 1.4 }}>
+        {fmtTs(r.effective_from)}<br />{r.effective_until ? `→ ${fmtTs(r.effective_until)}` : '→ open-ended'}
+      </div>
+      <div><StatusBadge status={r.status} /></div>
+      <div style={{ textAlign: 'right' }}>
+        <div className="num" style={{ fontSize: 10.5, color: 'var(--t3)' }}>{fmtTs(r.proposed_at)}</div>
+        {r.proposed_by_name && <div style={{ fontFamily: 'var(--font-ui)', fontSize: 11, color: 'var(--t2)', marginTop: 1 }}>{r.proposed_by_name}</div>}
+      </div>
+    </div>
+  );
+}
+
+/* ── active-on-floor by-line cards ──────────────────────────── */
+function ActiveByLine({ rows, onOpen }) {
+  const byLine = {};
+  rows.forEach((a) => { const k = a.line || 'All lines'; (byLine[k] = byLine[k] || []).push(a); });
+  const keys = Object.keys(byLine).sort();
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 12 }}>
+      {keys.map(line => (
+        <div key={line} style={{ background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 13px', borderBottom: '1px solid var(--border)' }}>
+            <span className="font-display" style={{ fontSize: 13, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase',
+              color: byLine[line][0]?.line ? lineColor(line) : 'var(--t2)' }}>{line}</span>
+            <span className="num" style={{ fontSize: 11, color: 'var(--t3)' }}>{byLine[line].length} active</span>
+          </div>
+          <div style={{ padding: 6, display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {byLine[line].map(d => (
+              <div key={d.id} onClick={() => onOpen(d.deviation_no)} style={{ padding: 9, borderRadius: 'var(--r-sm)', cursor: 'pointer' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                  <span className="num" style={{ fontSize: 11, color: 'var(--yellow)', whiteSpace: 'nowrap' }}>{d.deviation_no}</span>
+                  <SevBadge severity={d.severity} />
+                  {d.needs_retroactive_signoff && <span title="needs retro sign-off" style={{ marginLeft: 'auto', color: 'var(--orange)', display: 'flex' }}><Icon name="flag" size={12} /></span>}
+                </div>
+                <div style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t1)', marginTop: 5 }}>{d.title}</div>
+                <div style={{ fontFamily: 'var(--font-ui)', fontSize: 10.5, color: 'var(--t3)', marginTop: 3 }}>
+                  {(d.type || '').replace(/_/g, ' ')}
+                  {d.station ? ` · ${d.station}` : ''}
+                  {d.effective_until ? ` · until ${fmtTs(d.effective_until)}` : ' · open-ended'}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export default function ProcessDeviationsPage() {
@@ -97,17 +230,7 @@ export default function ProcessDeviationsPage() {
   const [detail,   setDetail]   = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
-
-  // Active tab keeps the floor-friendly by-line card layout (ported from the old Redline floor view).
-  const activeByLine = useMemo(() => {
-    const map = { L1: [], L2: [], L3: [], D1: [], D2: [], 'All lines': [] };
-    rows.forEach((a) => {
-      const k = a.line || 'All lines';
-      if (!map[k]) map[k] = [];
-      map[k].push(a);
-    });
-    return map;
-  }, [rows]);
+  const [hoverId, setHoverId] = useState(null);
 
   async function loadList() {
     if (!session) return;
@@ -143,111 +266,63 @@ export default function ProcessDeviationsPage() {
   }
 
   return (
-    <div style={{ padding: 16 }}>
-      <div style={panel}>
-        <div style={phdr}>
-          <span>Process Deviations</span>
-          {canPropose && <button onClick={() => setNewOpen(true)} style={btnP}>+ PROPOSE DEVIATION</button>}
+    <div style={{ maxWidth: 1180, margin: '0 auto' }}>
+      {/* controls */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, gap: 10, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {STATUS_TABS.map(t => {
+            const on = tab === t.id;
+            return (
+              <button key={t.id} onClick={() => setTab(t.id)} style={{ display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer',
+                background: on ? 'var(--surface-3)' : 'transparent', border: `1px solid ${on ? 'var(--border-3)' : 'var(--border)'}`,
+                color: on ? 'var(--t1)' : 'var(--t3)', borderRadius: 'var(--r-full)', padding: '6px 13px', whiteSpace: 'nowrap',
+                fontFamily: 'var(--font-ui)', fontSize: 12.5, fontWeight: 600 }}>
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: t.dot }} />{t.label}
+              </button>
+            );
+          })}
         </div>
-        <div style={pbody}>
-          <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
-            {STATUS_TABS.map(t => {
-              const active = tab === t.id;
-              const s = TONE[t.tone];
-              return <button key={t.id} onClick={() => setTab(t.id)} style={{
-                background: active ? s.bg : 'transparent',
-                border: `1px solid ${active ? s.border : 'var(--border)'}`,
-                color: active ? s.fg : 'var(--t2)',
-                borderRadius: 3, padding: '5px 12px', fontSize: 11,
-                cursor: 'pointer', fontFamily: 'var(--cond)',
-                letterSpacing: '0.05em', textTransform: 'uppercase',
-                fontWeight: active ? 700 : 400,
-              }}>{t.label}</button>;
-            })}
-          </div>
-          {loading ? <Spinner /> : rows.length === 0 ? (
-            <EmptyState title="No deviations" message={`No ${STATUS_TABS.find(t => t.id === tab)?.label.toLowerCase()} deviations.`} />
-          ) : tab === 'active' ? (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 10 }}>
-              {Object.entries(activeByLine).filter(([, devs]) => devs.length > 0).map(([line, devs]) => (
-                <div key={line} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 4, padding: 10 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                    <span style={{ fontFamily: 'var(--mono)', fontSize: 13, fontWeight: 700, color: 'var(--yellow)' }}>{line}</span>
-                    <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>{devs.length} active</span>
-                  </div>
-                  {devs.map(d => (
-                    <div key={d.id} onClick={() => openDetail(d.deviation_no)} style={{ borderTop: '1px solid var(--border)', paddingTop: 6, marginTop: 6, cursor: 'pointer' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6 }}>
-                        <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--yellow)' }}>{d.deviation_no}</span>
-                        <SeverityBadge severity={d.severity} />
-                      </div>
-                      <div style={{ fontSize: 12, color: 'var(--t1)', marginTop: 4 }}>{d.title}</div>
-                      <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 2 }}>
-                        {(d.type || '').replace(/_/g, ' ')}
-                        {d.station ? ` · ${d.station}` : ''}
-                        {d.effective_until ? ` · until ${fmtTs(d.effective_until)}` : ' · open-ended'}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr>
-                    <th style={th}>PD No</th>
-                    <th style={th}>Title</th>
-                    <th style={th}>Type</th>
-                    <th style={th}>Severity</th>
-                    <th style={th}>Line / Run</th>
-                    <th style={th}>Window</th>
-                    <th style={th}>Tier</th>
-                    <th style={th}>Status</th>
-                    <th style={th}>Proposed</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map(r => (
-                    <tr key={r.id} style={{ cursor: 'pointer' }} onClick={() => openDetail(r.deviation_no)}>
-                      <td style={{ ...td, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>
-                        {r.deviation_no}
-                        {r.reactive && <span title="reactive" style={{ marginLeft: 6, color: '#fbbf24' }}>⚡</span>}
-                        {r.needs_retroactive_signoff && <span title="needs retro sign-off" style={{ marginLeft: 4, color: '#fbbf24' }}>⚐</span>}
-                      </td>
-                      <td style={td}>
-                        <div style={{ color: 'var(--t1)', fontSize: 12 }}>{r.title}</div>
-                        <div style={{ color: 'var(--t3)', fontSize: 10, marginTop: 2 }}>{r.description?.slice(0, 80)}{r.description?.length > 80 ? '…' : ''}</div>
-                      </td>
-                      <td style={{ ...td, fontSize: 10, color: 'var(--t2)' }}>{(r.type || '').replace(/_/g, ' ')}</td>
-                      <td style={td}><SeverityBadge severity={r.severity} /></td>
-                      <td style={{ ...td, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t2)' }}>
-                        {r.line || '—'}{r.run_id ? <div style={{ color: 'var(--t3)' }}>RUN-{r.run_id}</div> : null}
-                      </td>
-                      <td style={{ ...td, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>
-                        {fmtTs(r.effective_from)}
-                        <div>→ {r.effective_until ? fmtTs(r.effective_until) : '∞'}</div>
-                      </td>
-                      <td style={{ ...td, fontFamily: 'var(--mono)', fontSize: 10, color: r.current_tier === 'l3' ? '#ff7070' : r.current_tier === 'l2' ? '#fbbf24' : r.current_tier === 'l1' ? '#7b93ff' : '#4ade80' }}>
-                        {r.current_tier.toUpperCase()}
-                      </td>
-                      <td style={td}><StatusBadge status={r.status} /></td>
-                      <td style={{ ...td, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>
-                        {fmtTs(r.proposed_at)}
-                        {r.proposed_by_name && <div style={{ color: 'var(--t2)' }}>{r.proposed_by_name}</div>}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+        {canPropose && (
+          <button onClick={() => setNewOpen(true)} style={btnPrimary}>
+            <Icon name="plus" size={15} /> Propose Deviation
+          </button>
+        )}
       </div>
 
+      <Panel pad={tab === 'active' ? 14 : 8}>
+        {loading ? (
+          <div style={{ padding: '32px 0', display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+        ) : rows.length === 0 ? (
+          <div style={{ padding: '48px 0', textAlign: 'center' }}>
+            <div style={{ display: 'inline-grid', placeItems: 'center', width: 46, height: 46, borderRadius: '50%',
+              background: 'var(--ok-bg)', color: 'var(--ok-fg)', border: '1px solid var(--ok-bd)', marginBottom: 12 }}>
+              <Icon name="shield" size={22} />
+            </div>
+            <div style={{ fontFamily: 'var(--font-ui)', fontSize: 14, color: 'var(--t1)', fontWeight: 600 }}>Nothing here</div>
+            <div style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t3)', marginTop: 3 }}>
+              No {STATUS_TABS.find(t => t.id === tab)?.label.toLowerCase()} deviations.
+            </div>
+          </div>
+        ) : tab === 'active' ? (
+          <ActiveByLine rows={rows} onOpen={openDetail} />
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <div style={{ minWidth: 980 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: LIST_COLS, gap: 12, padding: '0 12px 9px', borderBottom: '1px solid var(--border)' }}>
+                {['PD No', 'Title / type', 'Severity · line', 'Approval', 'Window', 'Status', 'Proposed'].map((h, i) => (
+                  <div key={h} className="eyebrow" style={{ textAlign: i === 6 ? 'right' : 'left' }}>{h}</div>
+                ))}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 1, marginTop: 2 }}>
+                {rows.map(r => <DevRow key={r.id} r={r} onOpen={openDetail} hover={hoverId} setHover={setHoverId} />)}
+              </div>
+            </div>
+          </div>
+        )}
+      </Panel>
+
       {detailNo && (
-        <DeviationDetailModal
+        <DeviationDrawer
           deviation_no={detailNo}
           detail={detail}
           loading={detailLoading}
@@ -275,7 +350,30 @@ export default function ProcessDeviationsPage() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-function DeviationDetailModal({ deviation_no, detail, loading, session, toast, canApproveL1, canApproveL2, canApproveL3, canClose, onClose, onReload }) {
+function KV({ label, value }) {
+  return (
+    <div>
+      <div className="eyebrow" style={{ marginBottom: 3 }}>{label}</div>
+      <div style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t1)', overflowWrap: 'anywhere' }}>{value}</div>
+    </div>
+  );
+}
+
+const actBtn = (kind) => ({
+  flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+  borderRadius: 'var(--r-sm)', padding: '10px 12px', cursor: 'pointer',
+  fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 11.5,
+  letterSpacing: '0.05em', textTransform: 'uppercase', whiteSpace: 'nowrap',
+  ...(kind === 'ok'
+    ? { background: 'var(--ok-bg)', color: 'var(--ok-fg)', border: '1px solid var(--ok-bd)' }
+    : kind === 'bad'
+      ? { background: 'var(--bad-bg)', color: 'var(--bad-fg)', border: '1px solid var(--bad-bd)' }
+      : kind === 'brand'
+        ? { background: 'var(--yellow)', color: '#1a1a1a', border: '1px solid var(--yellow)' }
+        : { background: 'var(--surface-2)', color: 'var(--t2)', border: '1px solid var(--border-2)' }),
+});
+
+function DeviationDrawer({ deviation_no, detail, loading, session, toast, canApproveL1, canApproveL2, canApproveL3, canClose, onClose, onReload }) {
   const [action, setAction] = useState(null);
   const [reason, setReason] = useState('');
   const [acting, setActing] = useState(false);
@@ -307,139 +405,226 @@ function DeviationDetailModal({ deviation_no, detail, loading, session, toast, c
     } finally { setActing(false); }
   }
 
-  return (
-    <Modal open onClose={onClose} size="lg" title={`Deviation · ${deviation_no}`}>
-      {loading || !detail ? <Spinner /> : (
-        <>
-          {detail.reactive && (
-            <div style={{ marginBottom: 10, padding: '6px 10px', background: 'rgba(245,158,11,.15)', border: '1px solid rgba(245,158,11,.3)', borderRadius: 3, fontSize: 11, color: '#fbbf24' }}>
-              ⚡ <strong>Reactive deviation</strong> — logged after the fact.
-              {detail.needs_retroactive_signoff && ' Supervisor sign-off still required below.'}
-            </div>
-          )}
+  const s = detail ? sevStyle(detail.severity) : null;
+  const cur = detail && detail.status === 'pending' ? (detail.current_tier || '').toLowerCase() : null;
 
-          <div style={{ marginBottom: 10 }}>
-            <h3 style={{ margin: 0, color: 'var(--t1)', fontSize: 14 }}>{detail.title}</h3>
-            <div style={{ display: 'flex', gap: 8, marginTop: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-              <SeverityBadge severity={detail.severity} />
+  return (
+    <Drawer open onClose={onClose} width={480}>
+      {/* header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '15px 20px', borderBottom: '1px solid var(--border)' }}>
+        <span className="num" style={{ fontSize: 13, fontWeight: 700, color: 'var(--yellow)', whiteSpace: 'nowrap' }}>{deviation_no}</span>
+        {detail && <SevBadge severity={detail.severity} />}
+        {detail?.reactive && (
+          <span className="num" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 9.5, fontWeight: 700,
+            color: 'var(--amber)', background: 'var(--warn-bg)', border: '1px solid var(--warn-bd)', borderRadius: 3, padding: '2px 6px' }}>
+            <Icon name="alert" size={10} /> REACTIVE
+          </span>
+        )}
+        <span style={{ flex: 1 }} />
+        <button onClick={onClose} aria-label="Close" style={{ background: 'none', border: '1px solid var(--border-2)',
+          borderRadius: 'var(--r-xs)', width: 26, height: 26, color: 'var(--t3)', cursor: 'pointer',
+          display: 'grid', placeItems: 'center' }}><Icon name="x" size={14} /></button>
+      </div>
+
+      {loading || !detail ? (
+        <div style={{ padding: 32, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+      ) : (
+        <>
+          <div style={{ overflowY: 'auto', padding: 20, flex: 1 }}>
+            {detail.reactive && (
+              <div style={{ marginBottom: 14, padding: '8px 11px', background: 'var(--warn-bg)', border: '1px solid var(--warn-bd)',
+                borderRadius: 'var(--r-sm)', fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--warn-fg)' }}>
+                Reactive deviation — logged after the fact.
+                {detail.needs_retroactive_signoff && ' Supervisor sign-off still required below.'}
+              </div>
+            )}
+
+            <div style={{ fontFamily: 'var(--font-ui)', fontSize: 18, fontWeight: 700, color: 'var(--t1)', lineHeight: 1.3 }}>{detail.title}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+              <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--t2)' }}>{(detail.type || '').replace(/_/g, ' ')}</span>
               <StatusBadge status={detail.status} />
-              <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{(detail.type || '').replace(/_/g, ' ')}</span>
-              <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>tier: {detail.current_tier.toUpperCase()} (required {detail.required_tier.toUpperCase()})</span>
               {isCurrentlyActive(detail) && (
-                <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: '#4ade80', fontWeight: 700 }}>● ACTIVE NOW</span>
+                <span className="num" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, fontWeight: 700, color: 'var(--ok-fg)' }}>
+                  <span className="rl-pulse" style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--green)' }} /> ACTIVE NOW
+                </span>
+              )}
+              {detail.needs_retroactive_signoff && (
+                <span className="num" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 700,
+                  color: 'var(--orange)', background: 'rgba(249,115,22,0.14)', border: '1px solid rgba(249,115,22,0.3)',
+                  borderRadius: 3, padding: '2px 7px' }}>
+                  <Icon name="flag" size={10} /> RETRO SIGN-OFF NEEDED
+                </span>
               )}
             </div>
-          </div>
 
-          <div style={{ marginBottom: 12, padding: 10, background: 'var(--surface2)', borderRadius: 3, fontSize: 12, color: 'var(--t1)', whiteSpace: 'pre-wrap' }}>{detail.description}</div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12, fontSize: 11 }}>
-            <KV label="Reason" value={detail.reason || '—'} />
-            <KV label="Rollback plan" value={detail.rollback_plan || '—'} />
-            <KV label="Line" value={detail.line || '—'} />
-            <KV label="Run" value={detail.run_id ? `RUN-${detail.run_id}` : '—'} />
-            <KV label="Product" value={[detail.product, detail.variant, detail.color].filter(Boolean).join(' · ') || '—'} />
-            <KV label="Station" value={detail.station || '—'} />
-            <KV label="Effective from" value={fmtTs(detail.effective_from)} />
-            <KV label="Effective until" value={detail.effective_until ? fmtTs(detail.effective_until) : '∞ open-ended'} />
-            <KV label="Proposed" value={`${fmtTs(detail.proposed_at)} · ${detail.proposed_by_name || '—'}`} />
-            {detail.escalated_count > 0 && <KV label="Escalated" value={`${detail.escalated_count}× · last by ${detail.last_escalated_by ? detail.last_escalated_by.slice(0,8) : '—'}`} />}
-            {detail.approved_l1_at && <KV label="L1 approval" value={`${fmtTs(detail.approved_l1_at)} · ${detail.approver_l1_name || '—'}${detail.approver_l1_reason ? ` · "${detail.approver_l1_reason}"` : ''}`} />}
-            {detail.approved_l2_at && <KV label="L2 approval" value={`${fmtTs(detail.approved_l2_at)} · ${detail.approver_l2_name || '—'}${detail.approver_l2_reason ? ` · "${detail.approver_l2_reason}"` : ''}`} />}
-            {detail.approved_l3_at && <KV label="L3 approval" value={`${fmtTs(detail.approved_l3_at)} · ${detail.approver_l3_name || '—'}${detail.approver_l3_reason ? ` · "${detail.approver_l3_reason}"` : ''}`} />}
-            {detail.rejected_at && <KV label="Rejected" value={`${fmtTs(detail.rejected_at)} · ${detail.rejected_by_name || '—'} · ${detail.reject_reason || ''}`} />}
-            {detail.closed_at && <KV label="Closed" value={`${fmtTs(detail.closed_at)} · ${detail.closed_by_name || '—'} · ${detail.close_reason || ''}`} />}
-            {detail.retroactive_signed_at && <KV label="Retro sign-off" value={`${fmtTs(detail.retroactive_signed_at)} · ${detail.retroactive_signed_by_name || '—'} · ${detail.retroactive_signed_reason || ''}`} />}
-          </div>
-
-          {action ? (
-            <div style={{ padding: 10, background: 'var(--surface2)', borderRadius: 3, marginBottom: 10 }}>
-              <label style={lbl}>{(action === 'approve' || action === 'ack') ? 'Notes (optional)' : action === 'confirm_yes' ? 'Sign-off note (optional)' : 'Reason'} {(action === 'reject' || action === 'cancel' || action === 'close') && <span style={{ color: '#ff7070' }}>*</span>}</label>
-              <textarea rows={2} value={reason} onChange={e => setReason(e.target.value)} style={{ ...input, width: '100%', resize: 'vertical', fontFamily: 'inherit' }} />
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 8 }}>
-                <button onClick={() => { setAction(null); setReason(''); }} style={btnS} disabled={acting}>CANCEL</button>
-                <button onClick={doAction} disabled={acting} style={(action === 'reject' || action === 'confirm_no' || action === 'close' || action === 'cancel') ? btnR : btnG}>
-                  {acting ? 'WORKING…' : `CONFIRM ${action.toUpperCase()}`}
-                </button>
+            {/* approval chain */}
+            <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '13px 15px', marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 11 }}>
+                <span className="eyebrow">Approval chain</span>
+                <span className="num" style={{ fontSize: 10.5, color: 'var(--t3)' }}>
+                  {detail.severity} → {chainFor(detail).map(t => t.toUpperCase()).join(' + ')} · required {String(detail.required_tier || '').toUpperCase()}
+                </span>
+              </div>
+              <TierStepper dev={detail} />
+              <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 7 }}>
+                {chainFor(detail).map(t => {
+                  const a = tierApproval(detail, t);
+                  return (
+                    <div key={t} style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--font-ui)', fontSize: 11.5 }}>
+                      <span style={{ width: 18, color: a ? 'var(--ok-fg)' : 'var(--t4)', display: 'flex' }}><Icon name={a ? 'shield' : 'clock'} size={13} /></span>
+                      <span className="num" style={{ color: 'var(--t2)', width: 22, textTransform: 'uppercase' }}>{t}</span>
+                      {a
+                        ? <span style={{ color: 'var(--t2)' }}>{a.by || '—'} · <span className="num" style={{ color: 'var(--t3)' }}>{fmtTs(a.at)}</span>{a.note ? ` · "${a.note}"` : ''}</span>
+                        : <span style={{ color: t === cur ? 'var(--yellow)' : 'var(--t4)' }}>{t === cur ? 'awaiting approval' : 'pending'}</span>}
+                    </div>
+                  );
+                })}
+                {detail.escalated_count > 0 && (
+                  <div style={{ fontFamily: 'var(--font-ui)', fontSize: 11.5, color: 'var(--t3)' }}>
+                    Escalated <span className="num">{detail.escalated_count}×</span>{detail.last_escalated_by ? <> · last by <span className="num">{detail.last_escalated_by.slice(0, 8)}</span></> : null}
+                  </div>
+                )}
               </div>
             </div>
-          ) : (
-            <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-              {/* Approve / Reject when pending */}
-              {detail.status === 'pending' && (
-                <>
-                  {((detail.current_tier === 'l1' && canApproveL1) ||
-                    (detail.current_tier === 'l2' && canApproveL2) ||
-                    (detail.current_tier === 'l3' && canApproveL3)) && (
-                    <>
-                      <button onClick={() => setAction('approve')} style={btnG}>✓ APPROVE</button>
-                      <button onClick={() => setAction('reject')} style={btnR}>✗ REJECT</button>
-                    </>
-                  )}
-                  {/* Escalate (operator or any L1+) */}
-                  {detail.current_tier !== 'l3' && (canApproveL1 || true) && (
-                    <button onClick={() => setAction('escalate')} style={btnS}>⬆ ESCALATE</button>
-                  )}
-                </>
-              )}
-              {/* Retroactive sign-off */}
-              {detail.needs_retroactive_signoff && (
-                (detail.severity === 'low' && canApproveL1) ||
-                (detail.severity === 'medium' && canApproveL2)
-              ) && (
-                <>
-                  <button onClick={() => setAction('confirm_yes')} style={btnG}>✓ CONFIRM RETRO</button>
-                  <button onClick={() => setAction('confirm_no')} style={btnR}>✗ REJECT RETRO</button>
-                </>
-              )}
-              {/* Acknowledge */}
-              {(detail.status === 'approved' || detail.status === 'closed' || detail.status === 'rejected') &&
-               canApproveL1 && !detail.currentUserAcknowledged && (
-                <button onClick={() => setAction('ack')} style={btnS}>👁 ACKNOWLEDGE</button>
-              )}
-              {detail.currentUserAcknowledged && (
-                <span style={{ fontSize: 11, color: '#4ade80', fontFamily: 'var(--mono)' }}>✓ You acknowledged</span>
-              )}
-              {/* Close (only approved) */}
-              {detail.status === 'approved' && canClose && (
-                <button onClick={() => setAction('close')} style={{ ...btnS, color: '#fbbf24', borderColor: 'rgba(245,158,11,.3)' }}>⏹ CLOSE</button>
-              )}
-            </div>
-          )}
 
-          <div style={{ borderTop: '1px solid var(--border)', paddingTop: 10 }}>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 6 }}>HISTORY · {detail.history?.length || 0}</div>
-            <div style={{ maxHeight: 320, overflowY: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead><tr>
-                  <th style={th}>When</th><th style={th}>Action</th><th style={th}>From → To</th><th style={th}>By</th><th style={th}>Reason</th>
-                </tr></thead>
-                <tbody>
-                  {(detail.history || []).map(h => (
-                    <tr key={h.id}>
-                      <td style={{ ...td, fontFamily: 'var(--mono)', fontSize: 10 }}>{fmtTs(h.acted_at)}</td>
-                      <td style={{ ...td, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t2)' }}>{h.action}</td>
-                      <td style={{ ...td, fontFamily: 'var(--mono)', fontSize: 10 }}><span style={{ color: 'var(--t3)' }}>{h.old_status || '—'}</span> → <span style={{ color: 'var(--t1)' }}>{h.new_status}</span></td>
-                      <td style={{ ...td, fontSize: 11 }}>{h.actor_name || (h.actor ? h.actor.slice(0,8) : '—')}</td>
-                      <td style={{ ...td, fontSize: 11, color: 'var(--t2)' }}>{h.reason || '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            {/* what's changing */}
+            <div style={{ borderLeft: `2px solid ${s.bd}`, paddingLeft: 13, marginBottom: 16 }}>
+              <div className="label" style={{ fontSize: 11, color: 'var(--t2)', marginBottom: 5 }}>What&apos;s changing</div>
+              <div style={{ fontFamily: 'var(--font-ui)', fontSize: 13.5, color: 'var(--t2)', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>{detail.description}</div>
             </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+              <KV label="Reason" value={detail.reason || '—'} />
+              <KV label="Rollback plan" value={detail.rollback_plan || '—'} />
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+              <KV label="Line / run" value={<>{detail.line || 'All lines'}{detail.run_id ? <span className="num"> · RUN-{detail.run_id}</span> : null}</>} />
+              <KV label="Station" value={detail.station || '—'} />
+              <KV label="Product" value={[detail.product, detail.variant, detail.color].filter(Boolean).join(' · ') || '—'} />
+              <KV label="Proposed" value={<><span className="num">{fmtTs(detail.proposed_at)}</span> · {detail.proposed_by_name || '—'}</>} />
+              <KV label="Effective from" value={<span className="num">{fmtTs(detail.effective_from)}</span>} />
+              <KV label="Effective until" value={<span className="num">{detail.effective_until ? fmtTs(detail.effective_until) : 'open-ended'}</span>} />
+              {detail.rejected_at && <KV label="Rejected" value={<><span className="num">{fmtTs(detail.rejected_at)}</span> · {detail.rejected_by_name || '—'}{detail.reject_reason ? ` · ${detail.reject_reason}` : ''}</>} />}
+              {detail.closed_at && <KV label="Closed" value={<><span className="num">{fmtTs(detail.closed_at)}</span> · {detail.closed_by_name || '—'}{detail.close_reason ? ` · ${detail.close_reason}` : ''}</>} />}
+              {detail.retroactive_signed_at && <KV label="Retro sign-off" value={<><span className="num">{fmtTs(detail.retroactive_signed_at)}</span> · {detail.retroactive_signed_by_name || '—'}{detail.retroactive_signed_reason ? ` · ${detail.retroactive_signed_reason}` : ''}</>} />}
+            </div>
+
+            {/* history timeline */}
+            <div className="label" style={{ fontSize: 11, color: 'var(--t2)', marginBottom: 10 }}>
+              History · <span className="num">{detail.history?.length || 0}</span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              {(detail.history || []).map((h, i, arr) => (
+                <div key={h.id} style={{ display: 'flex', gap: 11, paddingBottom: 12, position: 'relative' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0 }}>
+                    <span style={{ width: 9, height: 9, borderRadius: '50%', marginTop: 3,
+                      background: /reject|cancel/i.test(h.action) ? 'var(--bad-fg)' : /approv|propos|close|confirm/i.test(h.action) ? 'var(--ok-fg)' : 'var(--t3)' }} />
+                    {i < arr.length - 1 && <span style={{ flex: 1, width: 1.5, background: 'var(--border-2)', marginTop: 2 }} />}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                      <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, fontWeight: 600, color: 'var(--t1)', whiteSpace: 'nowrap' }}>{h.action}</span>
+                      <span className="num" style={{ fontSize: 10, color: 'var(--t4)' }}>{h.old_status || '—'} → {h.new_status}</span>
+                      <span className="num" style={{ fontSize: 10.5, color: 'var(--t4)', marginLeft: 'auto', whiteSpace: 'nowrap' }}>{fmtTs(h.acted_at)}</span>
+                    </div>
+                    <div style={{ fontFamily: 'var(--font-ui)', fontSize: 11.5, color: 'var(--t3)', marginTop: 2 }}>
+                      {h.actor_name || (h.actor ? h.actor.slice(0, 8) : '—')}{h.reason ? ` · ${h.reason}` : ''}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* actions footer */}
+          <div style={{ borderTop: '1px solid var(--border)', padding: 16 }}>
+            {action ? (
+              <div>
+                <div className="eyebrow" style={{ marginBottom: 7 }}>
+                  {(action === 'approve' || action === 'ack') ? 'Notes (optional)'
+                    : action === 'confirm_yes' ? 'Sign-off note (optional)'
+                    : <>Reason{(action === 'reject' || action === 'cancel' || action === 'close') && <span style={{ color: 'var(--bad-fg)' }}> *</span>}</>}
+                </div>
+                <textarea rows={2} value={reason} onChange={e => setReason(e.target.value)} autoFocus
+                  style={{ ...inputStyle, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 10 }}>
+                  <button onClick={() => { setAction(null); setReason(''); }} style={btnGhost} disabled={acting}>Cancel</button>
+                  <button onClick={doAction} disabled={acting}
+                    style={actBtn((action === 'reject' || action === 'confirm_no' || action === 'close' || action === 'cancel') ? 'bad' : 'ok')}>
+                    {acting ? 'Working…' : `Confirm ${action.replace('_', ' ')}`}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {/* Approve / Reject when pending */}
+                {detail.status === 'pending' && (
+                  <>
+                    {((cur === 'l1' && canApproveL1) ||
+                      (cur === 'l2' && canApproveL2) ||
+                      (cur === 'l3' && canApproveL3)) && (
+                      <>
+                        <button onClick={() => setAction('approve')} style={actBtn('ok')}>
+                          <Icon name="shield" size={14} /> Approve {cur.toUpperCase()}
+                        </button>
+                        <button onClick={() => setAction('reject')} style={actBtn('bad')}>
+                          <Icon name="alert" size={14} /> Reject
+                        </button>
+                      </>
+                    )}
+                    {/* Escalate (operator or any L1+) */}
+                    {cur !== 'l3' && (
+                      <button onClick={() => setAction('escalate')} style={actBtn('ghost')}>
+                        <Icon name="arrowUp" size={14} /> Escalate
+                      </button>
+                    )}
+                  </>
+                )}
+                {/* Retroactive sign-off */}
+                {detail.needs_retroactive_signoff && (
+                  (detail.severity === 'low' && canApproveL1) ||
+                  (detail.severity === 'medium' && canApproveL2)
+                ) && (
+                  <>
+                    <button onClick={() => setAction('confirm_yes')} style={actBtn('brand')}>
+                      <Icon name="flag" size={14} /> Confirm retro
+                    </button>
+                    <button onClick={() => setAction('confirm_no')} style={actBtn('bad')}>
+                      <Icon name="alert" size={14} /> Reject retro
+                    </button>
+                  </>
+                )}
+                {/* Acknowledge */}
+                {(detail.status === 'approved' || detail.status === 'closed' || detail.status === 'rejected') &&
+                 canApproveL1 && !detail.currentUserAcknowledged && (
+                  <button onClick={() => setAction('ack')} style={actBtn('ghost')}>
+                    <Icon name="clipboard" size={14} /> Acknowledge
+                  </button>
+                )}
+                {detail.currentUserAcknowledged && (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font-ui)',
+                    fontSize: 12, fontWeight: 600, color: 'var(--ok-fg)', padding: '10px 4px' }}>
+                    <Icon name="shield" size={13} /> You acknowledged
+                  </span>
+                )}
+                {/* Close (only approved) */}
+                {detail.status === 'approved' && canClose && (
+                  <button onClick={() => setAction('close')} style={actBtn('ghost')}>
+                    <Icon name="clock" size={14} /> Close deviation
+                  </button>
+                )}
+                {(detail.status === 'rejected' || detail.status === 'closed' || detail.status === 'cancelled') &&
+                 !detail.needs_retroactive_signoff && (
+                  <span style={{ flex: 1, textAlign: 'center', fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t3)', padding: '10px 0' }}>
+                    {detail.status === 'rejected' ? 'This deviation was rejected.' : detail.status === 'cancelled' ? 'This deviation was cancelled.' : 'This deviation is closed.'}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         </>
       )}
-    </Modal>
-  );
-}
-
-function KV({ label, value }) {
-  return (
-    <div>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 2 }}>{label}</div>
-      <div style={{ color: 'var(--t1)', fontSize: 11 }}>{value}</div>
-    </div>
+    </Drawer>
   );
 }
 
@@ -483,76 +668,91 @@ function NewDeviationModal({ session, toast, onClose, onCreated }) {
     } finally { setSubmitting(false); }
   }
 
-  const sev = SEVERITY_OPTIONS.find(s => s.id === form.severity);
+  const sev = SEVERITY_OPTIONS.find(x => x.id === form.severity);
+  const chain = (CHAIN[form.severity] || ['l1']).map(t => t.toUpperCase());
+  const eyebrow = { marginBottom: 6, display: 'block' };
 
   return (
     <Modal open onClose={onClose} size="lg" title="Propose process deviation"
-           confirmLabel={submitting ? 'CREATING…' : 'PROPOSE'} onConfirm={submit} loading={submitting}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+           confirmLabel={submitting ? 'Creating…' : 'Propose'} onConfirm={submit} loading={submitting}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <div style={{ gridColumn: '1 / 3' }}>
+          <span className="eyebrow" style={eyebrow}>Title <span style={{ color: 'var(--bad-fg)' }}>*</span></span>
+          <input value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} placeholder="short summary (visible in lists)" style={inputStyle} autoFocus />
+        </div>
         <div>
-          <label style={lbl}>Type <span style={{ color: '#ff7070' }}>*</span></label>
-          <select value={form.type} onChange={e => setForm({ ...form, type: e.target.value })} style={{ ...input, width: '100%' }}>
+          <span className="eyebrow" style={eyebrow}>Type <span style={{ color: 'var(--bad-fg)' }}>*</span></span>
+          <select value={form.type} onChange={e => setForm({ ...form, type: e.target.value })} style={{ ...inputStyle, cursor: 'pointer' }}>
             {TYPE_OPTIONS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
           </select>
         </div>
         <div>
-          <label style={lbl}>Severity <span style={{ color: '#ff7070' }}>*</span></label>
-          <select value={form.severity} onChange={e => setForm({ ...form, severity: e.target.value })} style={{ ...input, width: '100%' }}>
-            {SEVERITY_OPTIONS.map(s => <option key={s.id} value={s.id}>{s.label} — {s.required_tier}</option>)}
-          </select>
-        </div>
-        <div style={{ gridColumn: '1 / 3' }}>
-          <label style={lbl}>Title <span style={{ color: '#ff7070' }}>*</span></label>
-          <input value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} placeholder="short summary (visible in lists)" style={{ ...input, width: '100%' }} autoFocus />
-        </div>
-        <div style={{ gridColumn: '1 / 3' }}>
-          <label style={lbl}>Description <span style={{ color: '#ff7070' }}>*</span></label>
-          <textarea rows={3} value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="what's being done differently from the SOP" style={{ ...input, width: '100%', resize: 'vertical', fontFamily: 'inherit' }} />
-        </div>
-        <div style={{ gridColumn: '1 / 3' }}>
-          <label style={lbl}>Reason</label>
-          <textarea rows={2} value={form.reason} onChange={e => setForm({ ...form, reason: e.target.value })} placeholder="why the deviation is needed" style={{ ...input, width: '100%', resize: 'vertical', fontFamily: 'inherit' }} />
-        </div>
-        <div style={{ gridColumn: '1 / 3' }}>
-          <label style={lbl}>Rollback plan</label>
-          <textarea rows={2} value={form.rollback_plan} onChange={e => setForm({ ...form, rollback_plan: e.target.value })} placeholder="how to revert when the deviation ends" style={{ ...input, width: '100%', resize: 'vertical', fontFamily: 'inherit' }} />
-        </div>
-
-        <div>
-          <label style={lbl}>Line</label>
-          <select value={form.line} onChange={e => setForm({ ...form, line: e.target.value })} style={{ ...input, width: '100%' }}>
+          <span className="eyebrow" style={eyebrow}>Line</span>
+          <select value={form.line} onChange={e => setForm({ ...form, line: e.target.value })} style={{ ...inputStyle, cursor: 'pointer' }}>
             <option value="">— all lines —</option>
             {['L1','L2','L3','D1','D2'].map(l => <option key={l} value={l}>{l}</option>)}
           </select>
         </div>
-        <div>
-          <label style={lbl}>Run ID (optional)</label>
-          <input type="number" value={form.run_id} onChange={e => setForm({ ...form, run_id: e.target.value })} placeholder="numeric production_runs.id" style={{ ...input, width: '100%' }} />
+        <div style={{ gridColumn: '1 / 3' }}>
+          <span className="eyebrow" style={eyebrow}>Severity <span style={{ color: 'var(--bad-fg)' }}>*</span></span>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {SEVERITY_OPTIONS.map(sv => {
+              const st = sevStyle(sv.id); const on = form.severity === sv.id;
+              return (
+                <button key={sv.id} type="button" onClick={() => setForm({ ...form, severity: sv.id })}
+                  style={{ flex: 1, padding: '8px 0', borderRadius: 'var(--r-sm)', cursor: 'pointer',
+                    border: `1px solid ${on ? st.fg : 'var(--border-2)'}`, background: on ? st.bg : 'var(--surface-2)',
+                    color: on ? st.fg : 'var(--t2)', fontFamily: 'var(--font-display)', fontWeight: 700,
+                    fontSize: 11, letterSpacing: '0.04em', textTransform: 'uppercase' }}>{sv.label}</button>
+              );
+            })}
+          </div>
         </div>
-        <div>
-          <label style={lbl}>Product</label>
-          <input value={form.product} onChange={e => setForm({ ...form, product: e.target.value })} style={{ ...input, width: '100%' }} />
+        <div style={{ gridColumn: '1 / 3' }}>
+          <span className="eyebrow" style={eyebrow}>Description <span style={{ color: 'var(--bad-fg)' }}>*</span></span>
+          <textarea rows={3} value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="what's being done differently from the SOP" style={{ ...inputStyle, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
         </div>
-        <div>
-          <label style={lbl}>Station</label>
-          <input value={form.station} onChange={e => setForm({ ...form, station: e.target.value })} placeholder="Assembly / QC / Packaging…" style={{ ...input, width: '100%' }} />
+        <div style={{ gridColumn: '1 / 3' }}>
+          <span className="eyebrow" style={eyebrow}>Reason</span>
+          <textarea rows={2} value={form.reason} onChange={e => setForm({ ...form, reason: e.target.value })} placeholder="why the deviation is needed" style={{ ...inputStyle, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
         </div>
-        <div>
-          <label style={lbl}>Effective from (optional, default = now)</label>
-          <input type="datetime-local" value={form.effective_from} onChange={e => setForm({ ...form, effective_from: e.target.value })} style={{ ...input, width: '100%' }} />
-        </div>
-        <div>
-          <label style={lbl}>Effective until (optional)</label>
-          <input type="datetime-local" value={form.effective_until} onChange={e => setForm({ ...form, effective_until: e.target.value })} style={{ ...input, width: '100%' }} />
+        <div style={{ gridColumn: '1 / 3' }}>
+          <span className="eyebrow" style={eyebrow}>Rollback plan</span>
+          <textarea rows={2} value={form.rollback_plan} onChange={e => setForm({ ...form, rollback_plan: e.target.value })} placeholder="how to revert when the deviation ends" style={{ ...inputStyle, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
         </div>
 
-        <div style={{ gridColumn: '1 / 3', padding: 10, background: 'rgba(245,158,11,.08)', border: '1px solid rgba(245,158,11,.2)', borderRadius: 3 }}>
-          <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer', color: 'var(--t2)', fontSize: 12 }}>
+        <div>
+          <span className="eyebrow" style={eyebrow}>Run ID (optional)</span>
+          <input type="number" className="num" value={form.run_id} onChange={e => setForm({ ...form, run_id: e.target.value })} placeholder="numeric production_runs.id" style={inputStyle} />
+        </div>
+        <div>
+          <span className="eyebrow" style={eyebrow}>Station</span>
+          <input value={form.station} onChange={e => setForm({ ...form, station: e.target.value })} placeholder="Assembly / QC / Packaging…" style={inputStyle} />
+        </div>
+        <div>
+          <span className="eyebrow" style={eyebrow}>Product</span>
+          <input value={form.product} onChange={e => setForm({ ...form, product: e.target.value })} style={inputStyle} />
+        </div>
+        <div />
+        <div>
+          <span className="eyebrow" style={eyebrow}>Effective from (default = now)</span>
+          <input type="datetime-local" className="num" value={form.effective_from} onChange={e => setForm({ ...form, effective_from: e.target.value })} style={inputStyle} />
+        </div>
+        <div>
+          <span className="eyebrow" style={eyebrow}>Effective until (optional)</span>
+          <input type="datetime-local" className="num" value={form.effective_until} onChange={e => setForm({ ...form, effective_until: e.target.value })} style={inputStyle} />
+        </div>
+
+        <div style={{ gridColumn: '1 / 3', padding: '11px 13px', background: 'var(--warn-bg)', border: '1px solid var(--warn-bd)', borderRadius: 'var(--r-sm)' }}>
+          <label style={{ display: 'flex', gap: 9, alignItems: 'center', cursor: 'pointer', color: 'var(--t2)', fontFamily: 'var(--font-ui)', fontSize: 12.5 }}>
             <input type="checkbox" checked={form.reactive} onChange={e => setForm({ ...form, reactive: e.target.checked })} />
-            <strong style={{ color: '#fbbf24' }}>⚡ Reactive</strong> — this deviation is already in effect on the floor
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--warn-fg)', fontWeight: 700 }}>
+              <Icon name="alert" size={13} /> Reactive
+            </span>
+            — this deviation is already in effect on the floor
           </label>
           {form.reactive && (
-            <div style={{ marginTop: 6, fontSize: 11, color: 'var(--t2)' }}>
+            <div style={{ marginTop: 7, fontFamily: 'var(--font-ui)', fontSize: 11.5, color: 'var(--t2)', lineHeight: 1.5 }}>
               {form.severity === 'low' || form.severity === 'medium'
                 ? <>Reactive {form.severity} deviation will be created as <strong>approved immediately</strong> but flagged for supervisor retro sign-off. Use only when waiting for approval is not operationally possible.</>
                 : <>Reactive flag captured, but {form.severity} severity still requires pre-approval before the deviation can be considered active. Operator should stop deviating until approved.</>}
@@ -560,10 +760,15 @@ function NewDeviationModal({ session, toast, onClose, onCreated }) {
           )}
         </div>
 
-        <div style={{ gridColumn: '1 / 3', fontSize: 11, color: 'var(--t3)', padding: 6 }}>
-          <strong>Approval flow for {sev?.label}:</strong> {sev?.required_tier}.
-          {form.severity === 'medium' && ' Two approvers needed (L1 then L2 second-eye).'}
-          {(form.severity === 'high' || form.severity === 'critical') && ' Reactive auto-approval blocked at this severity.'}
+        <div style={{ gridColumn: '1 / 3', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)',
+          padding: '10px 13px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <span className="eyebrow">Approval needed</span>
+          <span className="num" style={{ fontSize: 12, fontWeight: 700, color: 'var(--t1)' }}>{chain.join(' → ')}</span>
+          <span style={{ fontFamily: 'var(--font-ui)', fontSize: 11, color: 'var(--t3)' }}>
+            {sev?.required_tier}.
+            {form.severity === 'medium' && ' Two approvers needed (L1 then L2 second-eye).'}
+            {(form.severity === 'high' || form.severity === 'critical') && ' Reactive auto-approval blocked at this severity.'}
+          </span>
         </div>
       </div>
     </Modal>

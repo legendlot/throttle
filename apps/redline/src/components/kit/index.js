@@ -7,3 +7,4 @@ export {
 export { RedlineSidebar } from './RedlineSidebar.js';
 export { RedlineTopbar } from './RedlineTopbar.js';
 export { CommandPalette } from './CommandPalette.js';
+export { InboxTabs } from './InboxTabs.js';

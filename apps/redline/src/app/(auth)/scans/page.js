@@ -1,15 +1,24 @@
 'use client';
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+/* ════════════════════════════════════════════════════════════
+   SCANS — Inbox stream (Pit Wall v2). Scan feed with date
+   presets, activity filters, UPC search (server-side ≥4 chars
+   via getScansByUpc, client-side 1–3), voided toggle, summary
+   tiles and cursor load-more. Data actions unchanged:
+   useScans (getAllScans) · getScanSummary · getScansByUpc.
+   ════════════════════════════════════════════════════════════ */
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
-import { Spinner, EmptyState, Panel, Chip, StatusBadge } from '@throttle/ui';
+import { Spinner } from '@throttle/ui';
 import { todayStr } from '@throttle/domain';
 import { useScans } from '../../../hooks/useScans.js';
 import { useRefreshState } from '../layout.js';
+import {
+  Icon, Panel, FilterChip, ToneBadge, InboxTabs, fmt, btnGhost, inputStyle,
+  lineColor, lineRgb,
+} from '../../../components/kit/index.js';
 
 // ── Helpers ───────────────────────────────────────────────────
-function fmt(n) { return n != null ? Number(n).toLocaleString('en-IN') : '0'; }
-
 function getMondayISO() {
   const d = new Date();
   const day = d.getDay();
@@ -37,16 +46,16 @@ function formatDateTime(ts) {
 }
 
 const ACT_COLORS = {
-  INW:        '#60a5fa',
-  QC_PASS:    'var(--green)',
-  QC_FAIL:    'var(--red)',
+  INW:        'var(--blue-bright)',
+  QC_PASS:    'var(--ok-fg)',
+  QC_FAIL:    'var(--bad-fg)',
   WKS_IN:     '#a78bfa',
   WKS_OUT:    '#a78bfa',
   PKG:        '#8b5cf6',
   RTO_IN:     'var(--orange)',
   RTD_RETURN: '#14b8a6',
-  RTE:        '#60a5fa',
-  RTR:        '#60a5fa',
+  RTE:        'var(--blue-bright)',
+  RTR:        'var(--blue-bright)',
   ALLOC:      '#38bdf8',
   PACK:       '#22d3ee',
   DTK:        '#0ea5e9',
@@ -88,40 +97,19 @@ const SUMMARY_LABELS = {
   RTD_RETURN: 'RTD Return',
 };
 
+// ── shared table cell styles (Pit Wall v2) ────────────────────
+const thStyle = { padding: '0 14px 9px', textAlign: 'left', whiteSpace: 'nowrap' };
+const tdBase = { padding: '9px 14px', borderTop: '1px solid var(--border)', whiteSpace: 'nowrap', verticalAlign: 'middle' };
+
 // ── Activity badge ────────────────────────────────────────────
 function ActivityBadge({ activity }) {
   const color = ACT_COLORS[activity] || 'var(--t2)';
-  // Convert color to rgba tint for background — pattern matches StatusBadge family.
-  let bg, border;
-  if (color.startsWith('var(--')) {
-    bg = color.replace('var(--green)', 'rgba(34, 197, 94, 0.12)')
-              .replace('var(--red)',   'rgba(222, 42, 42, 0.15)')
-              .replace('var(--orange)','rgba(249, 115, 22, 0.12)')
-              .replace('var(--t2)',    'rgba(80, 80, 80, 0.2)');
-    border = color.replace('var(--green)', 'rgba(34, 197, 94, 0.25)')
-                  .replace('var(--red)',   'rgba(222, 42, 42, 0.3)')
-                  .replace('var(--orange)','rgba(249, 115, 22, 0.25)')
-                  .replace('var(--t2)',    'rgba(80, 80, 80, 0.3)');
-  } else {
-    // hex — synthesize 18%/30% tints
-    bg     = color + '20';
-    border = color + '4d';
-  }
   return (
-    <span style={{
-      display: 'inline-block',
-      padding: '2px 7px',
-      fontFamily: 'var(--mono)',
-      fontSize: 11,
-      fontWeight: 600,
-      letterSpacing: '0.04em',
-      textTransform: 'uppercase',
-      color,
-      background: bg,
-      border: `1px solid ${border}`,
-      borderRadius: 3,
-      whiteSpace: 'nowrap',
-      lineHeight: 1.3,
+    <span className="num" style={{
+      display: 'inline-block', padding: '2px 7px', fontSize: 10.5, fontWeight: 600,
+      letterSpacing: '0.04em', textTransform: 'uppercase', color,
+      background: 'var(--surface-2)', border: '1px solid var(--border-2)',
+      borderRadius: 3, whiteSpace: 'nowrap', lineHeight: 1.3,
     }}>
       {activity || '—'}
     </span>
@@ -209,12 +197,7 @@ export default function ScansPage() {
 
   useEffect(() => {
     if (!loading && !upcLoading && !summaryLoading) {
-      setLastRefreshed(
-        new Date().toLocaleTimeString('en-IN', {
-          hour: '2-digit', minute: '2-digit', second: '2-digit',
-          hour12: true, timeZone: 'Asia/Kolkata',
-        })
-      );
+      setLastRefreshed(new Date());
     }
   }, [loading, upcLoading, summaryLoading, setLastRefreshed]);
 
@@ -247,36 +230,35 @@ export default function ScansPage() {
   }, [baseRows, upcMode, showVoided, activityFilter, trimmed]);
 
   // ── Style constants ───────────────────────────────────────
-  const dateInputStyle = { background: 'var(--surface2)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '6px 10px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 13, outline: 'none' };
-  const dateLabelStyle = { fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase' };
-  const inputStyle = { background: 'var(--surface2)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '6px 10px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 13, width: 220, outline: 'none' };
-
-  const thStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
-  const tdStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 13, borderBottom: '1px solid rgba(64,64,64,.5)', whiteSpace: 'nowrap', color: 'var(--t1)' };
+  const dateInput = { ...inputStyle, width: 'auto', padding: '6px 10px', fontFamily: 'var(--font-mono)', fontSize: 12.5, colorScheme: 'dark' };
+  const searchInput = { ...inputStyle, width: 220, padding: '7px 11px', fontSize: 13 };
 
   const isRange = dateFrom !== dateTo;
 
   // ── Render ────────────────────────────────────────────────
   return (
-    <div>
+    <div style={{ maxWidth: 1180, margin: '0 auto' }}>
+      <InboxTabs counts={{ scans: displayRows.length }} />
+
       {/* Date bar */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
         {isRange && (
           <>
-            <span style={dateLabelStyle}>From</span>
-            <input type="date" style={dateInputStyle} value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
-            <span style={dateLabelStyle}>to</span>
+            <span className="eyebrow">From</span>
+            <input type="date" className="num" style={dateInput} value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+            <span className="eyebrow">to</span>
           </>
         )}
         <input
           type="date"
-          style={dateInputStyle}
+          className="num"
+          style={dateInput}
           value={dateTo}
           onChange={e => { setDateTo(e.target.value); if (!isRange) setDateFrom(e.target.value); }}
         />
-        <Chip active={activePreset === 'today'} onClick={() => handlePreset('today')}>Today</Chip>
-        <Chip active={activePreset === 'week'}  onClick={() => handlePreset('week')}>This Week</Chip>
-        <Chip active={activePreset === 'month'} onClick={() => handlePreset('month')}>This Month</Chip>
+        <FilterChip active={activePreset === 'today'} onClick={() => handlePreset('today')}>Today</FilterChip>
+        <FilterChip active={activePreset === 'week'}  onClick={() => handlePreset('week')}>This Week</FilterChip>
+        <FilterChip active={activePreset === 'month'} onClick={() => handlePreset('month')}>This Month</FilterChip>
 
         <div style={{ flex: 1 }} />
 
@@ -284,36 +266,44 @@ export default function ScansPage() {
           data-search-primary
           type="text"
           placeholder="Search UPC…  · /"
-          style={inputStyle}
+          style={searchInput}
           value={upcSearch}
           onChange={e => setUpcSearch(e.target.value)}
         />
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t2)', cursor: 'pointer' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t2)', cursor: 'pointer' }}>
           <input type="checkbox" checked={showVoided} onChange={e => setShowVoided(e.target.checked)} />
           Show Voided
         </label>
       </div>
 
       {/* Activity filter row */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 18 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 16 }}>
         {ACTIVITY_FILTERS.map(f => (
-          <Chip
+          <FilterChip
             key={f.value || 'all'}
             active={activityFilter === f.value}
+            dot={f.value ? ACT_COLORS[f.value] : undefined}
             onClick={() => setActivityFilter(f.value)}
           >
             {f.label}
-          </Chip>
+          </FilterChip>
         ))}
       </div>
 
+      {scanError && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bad-bg)', border: '1px solid var(--bad-bd)',
+          borderRadius: 'var(--r-md)', padding: '12px 16px', fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--bad-fg)', marginBottom: 16 }}>
+          <Icon name="alert" size={16} /> {scanError}
+        </div>
+      )}
+
       {/* Summary cards (hidden in UPC mode) */}
       {!upcMode && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 8, marginBottom: 18 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 8, marginBottom: 16 }}>
           <SummaryCard
             label="Total"
             value={summary?.total}
-            color="yellow"
+            stripe="var(--yellow)"
             active={activityFilter === ''}
             onClick={() => setActivityFilter('')}
           />
@@ -339,7 +329,7 @@ export default function ScansPage() {
           <SummaryCard
             label="Voided"
             value={summary?.voided}
-            color="gray"
+            stripe="var(--t3)"
             active={false}
             onClick={() => setShowVoided(v => !v)}
           />
@@ -347,40 +337,48 @@ export default function ScansPage() {
       )}
 
       {/* Table */}
-      <Panel padding={0}>
+      <Panel pad={8}>
         {(loading || upcLoading) ? (
           <div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}><Spinner /></div>
         ) : displayRows.length === 0 ? (
-          <EmptyState icon="📡" message="No scans found" />
+          <div style={{ padding: '36px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, color: 'var(--t3)' }}>
+            <Icon name="scan" size={20} />
+            <span style={{ fontFamily: 'var(--font-ui)', fontSize: 13 }}>No scans found</span>
+          </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
                   {['Time','UPC','Activity','Line','Product','Operator','Loop','Status'].map(h => (
-                    <th key={h} style={thStyle}>{h}</th>
+                    <th key={h} style={thStyle}><span className="eyebrow">{h}</span></th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {displayRows.map(s => {
                   const voided = !!s.voided;
-                  const rowOpacity = voided ? 0.45 : 1;
                   return (
-                    <tr key={s.id} style={{ opacity: rowOpacity }}>
-                      <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--t2)' }}>
-                        {upcMode ? formatDateTime(s.timestamp) : formatTime(s.timestamp)}
+                    <tr key={s.id} style={{ opacity: voided ? 0.5 : 1 }}>
+                      <td style={tdBase}>
+                        <span className="num" style={{ fontSize: 11, color: 'var(--t3)' }}>
+                          {upcMode ? formatDateTime(s.timestamp) : formatTime(s.timestamp)}
+                        </span>
                       </td>
-                      <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{s.upc || '—'}</td>
-                      <td style={tdStyle}><ActivityBadge activity={s.activity} /></td>
-                      <td style={{ ...tdStyle, color: 'var(--t1)' }}>{s.line || '—'}</td>
-                      <td style={{ ...tdStyle, color: 'var(--t1)' }}>{s.unit_product || '—'}</td>
-                      <td style={{ ...tdStyle, color: 'var(--t2)' }}>{s.operator_name || (s.operator_id ? String(s.operator_id).slice(0, 8) : '—')}</td>
-                      <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--t2)' }}>{s.loop_count != null ? s.loop_count : '—'}</td>
-                      <td style={tdStyle}>
+                      <td style={tdBase}><span className="num" style={{ fontSize: 11.5, color: 'var(--yellow)' }}>{s.upc || '—'}</span></td>
+                      <td style={tdBase}><ActivityBadge activity={s.activity} /></td>
+                      <td style={tdBase}>
+                        {s.line
+                          ? <LineChip id={s.line} />
+                          : <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--t4)' }}>—</span>}
+                      </td>
+                      <td style={{ ...tdBase, fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--t1)' }}>{s.unit_product || '—'}</td>
+                      <td style={{ ...tdBase, fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t2)' }}>{s.operator_name || (s.operator_id ? String(s.operator_id).slice(0, 8) : '—')}</td>
+                      <td style={tdBase}><span className="num" style={{ fontSize: 12, color: 'var(--t2)' }}>{s.loop_count != null ? s.loop_count : '—'}</span></td>
+                      <td style={tdBase}>
                         {voided
-                          ? <StatusBadge variant="error"   icon="✗">Voided</StatusBadge>
-                          : <StatusBadge variant="success" icon="✓">OK</StatusBadge>}
+                          ? <ToneBadge tone="bad">Voided</ToneBadge>
+                          : <ToneBadge tone="ok">OK</ToneBadge>}
                       </td>
                     </tr>
                   );
@@ -391,11 +389,11 @@ export default function ScansPage() {
         )}
         {hasMore && !upcMode && (
           <div style={{ padding: '14px 16px', borderTop: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>
-              Showing {scans.length} scans — more available
+            <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--t3)' }}>
+              Showing <span className="num">{fmt(scans.length)}</span> scans — more available
             </span>
             <button
-              style={{ padding: '7px 14px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t1)', fontFamily: 'var(--mono)', fontSize: 12, cursor: loading ? 'not-allowed' : 'pointer' }}
+              style={{ ...btnGhost, cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.6 : 1 }}
               onClick={loadMore}
               disabled={loading}
             >
@@ -405,8 +403,8 @@ export default function ScansPage() {
         )}
         {!hasMore && scans.length > 0 && !upcMode && (
           <div style={{ padding: '10px 16px', borderTop: '1px solid var(--border)', textAlign: 'right' }}>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', letterSpacing: '0.04em' }}>
-              {scans.length} scans loaded
+            <span style={{ fontFamily: 'var(--font-ui)', fontSize: 11.5, color: 'var(--t3)' }}>
+              <span className="num">{fmt(scans.length)}</span> scans loaded
             </span>
           </div>
         )}
@@ -415,33 +413,36 @@ export default function ScansPage() {
   );
 }
 
+// ── Line chip (prototype lineChip) ────────────────────────────
+function LineChip({ id }) {
+  return (
+    <span className="num" style={{ fontSize: 10, fontWeight: 700, color: lineColor(id),
+      background: `rgba(${lineRgb(id)},0.12)`, borderRadius: 3, padding: '1px 5px' }}>{id}</span>
+  );
+}
+
 // ── Summary card (click-through filter tile) ─────────────────
-function SummaryCard({ label, value, color, stripe, sub, active, onClick }) {
-  const STRIPE_MAP = { yellow: 'var(--yellow)', gray: 'var(--t3)' };
-  const stripeColor = stripe || STRIPE_MAP[color] || 'transparent';
+function SummaryCard({ label, value, stripe, sub, active, onClick }) {
   return (
     <div
       onClick={onClick}
       style={{
-        background: active ? 'var(--surface2)' : 'var(--surface)',
-        border: active ? '1px solid var(--yellow)' : '1px solid var(--border)',
-        borderRadius: 4,
-        padding: 14,
+        background: active ? 'var(--surface-2)' : 'var(--surface)',
+        border: active ? '1px solid var(--brand-bd)' : '1px solid var(--border)',
+        borderRadius: 'var(--r-md)',
+        padding: 13,
         cursor: 'pointer',
         position: 'relative',
         overflow: 'hidden',
-        fontFamily: 'var(--mono)',
-        transition: 'border-color 150ms, background 150ms',
+        transition: 'border-color var(--fast) var(--ease), background var(--fast) var(--ease)',
       }}
     >
-      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 2, background: stripeColor }} />
-      <div style={{ fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 8 }}>
-        {label}
-      </div>
-      <div style={{ fontFamily: 'var(--cond)', fontSize: 24, color: 'var(--t1)', lineHeight: 1, fontWeight: 700 }}>
+      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 2, background: stripe || 'transparent' }} />
+      <div className="eyebrow" style={{ marginBottom: 8 }}>{label}</div>
+      <div className="num" style={{ fontSize: 22, fontWeight: 700, color: 'var(--t1)', lineHeight: 1 }}>
         {value != null ? fmt(value) : '—'}
       </div>
-      {sub && <div style={{ fontSize: 11, color: 'var(--t3)', marginTop: 6, letterSpacing: '0.04em' }}>{sub}</div>}
+      {sub && <div className="num" style={{ fontSize: 10.5, color: 'var(--t3)', marginTop: 6 }}>{sub}</div>}
     </div>
   );
 }

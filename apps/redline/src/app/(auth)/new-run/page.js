@@ -1,42 +1,81 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth, hasPermission } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { EmptyState, Panel, Combobox, useToast } from '@throttle/ui';
+import { Combobox, useToast } from '@throttle/ui';
+import { useRefreshState } from '../layout.js';
+import {
+  Icon, Panel, lineColor, lineRgb, btnPrimary, btnGhost, inputStyle,
+} from '../../../components/kit/index.js';
 import { RecentRuns } from '../../../components/production-runs/RecentRuns.js';
 
 // Unified run-request surface (run-request consolidation, 2026-06-07).
 // One place for production to request ANY run: Fresh · Outsourced · Repair · Repack.
 // Gated by the `run_request` permission. Each tab routes to its existing worker
 // create handler (backends stay separate — RULE consolidation framing #2).
+// Pit Wall v2 reskin — logic, calls and payloads unchanged.
 
 export function canRequestRun(perms) {
   return hasPermission(perms, 'run_request')
       || hasPermission(perms, 'users_manage'); // super_admin convenience
 }
 
-const input = { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: '8px 12px', fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--t1)', outline: 'none', width: '100%' };
-const lbl   = { fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6, display: 'block' };
-const btnP  = { background: 'var(--yellow)', border: '1px solid var(--yellow)', borderRadius: 3, padding: '10px 18px', fontFamily: 'var(--cond)', fontSize: 13, color: '#0a0a0a', cursor: 'pointer', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' };
-const btnS  = { background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, padding: '8px 14px', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t2)', cursor: 'pointer' };
-const tabBtn = (active) => ({ background: active ? 'var(--yellow)' : 'transparent', border: `1px solid ${active ? 'var(--yellow)' : 'var(--border)'}`, borderRadius: 3, padding: '8px 16px', fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: active ? '#0a0a0a' : 'var(--t2)', cursor: 'pointer' });
-const th = { padding: '7px 10px', fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--t3)', textAlign: 'left', borderBottom: '1px solid var(--border)' };
-const td = { padding: '5px 8px', borderBottom: '1px solid rgba(64,64,64,.4)' };
+/* ── v2 style vocabulary (NewRunModal pattern from the prototype) ── */
+const inp = { ...inputStyle, fontSize: 13.5 };
+const numInp = { ...inp, fontFamily: 'var(--font-mono)', fontVariantNumeric: 'tabular-nums' };
+const lblStyle = { display: 'block', marginBottom: 7 };
+const th = { padding: '9px 12px', fontFamily: 'var(--font-display)', fontSize: 10, fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--t3)', textAlign: 'left', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' };
+const td = { padding: '7px 10px', borderBottom: '1px solid var(--border)', fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--t1)' };
+const tabBtn = (active) => ({
+  display: 'inline-flex', alignItems: 'center', gap: 7,
+  background: active ? 'var(--yellow)' : 'var(--surface)',
+  border: `1px solid ${active ? 'var(--yellow)' : 'var(--border-2)'}`,
+  borderRadius: 'var(--r-sm)', padding: '8px 15px',
+  fontFamily: 'var(--font-display)', fontSize: 12, fontWeight: 700,
+  letterSpacing: '0.06em', textTransform: 'uppercase',
+  color: active ? '#1a1a1a' : 'var(--t2)', cursor: 'pointer',
+  transition: 'all var(--fast) var(--ease)',
+});
+const lineBtn = (active, id) => ({
+  flex: 1, padding: '9px 0', borderRadius: 'var(--r-sm)', cursor: 'pointer',
+  border: `1px solid ${active ? lineColor(id) : 'var(--border-2)'}`,
+  background: active ? `rgba(${lineRgb(id)},0.12)` : 'var(--surface-2)',
+  color: active ? lineColor(id) : 'var(--t2)',
+  fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 12, letterSpacing: '0.05em',
+  transition: 'all var(--fast) var(--ease)',
+});
+const iconBtn = {
+  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  width: 26, height: 26, background: 'transparent', border: '1px solid var(--border-2)',
+  borderRadius: 'var(--r-xs)', color: 'var(--t3)', cursor: 'pointer',
+};
+const helpText = { fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t3)', marginBottom: 16, lineHeight: 1.5 };
+
+function LinePicker({ value, onChange, lines }) {
+  return (
+    <div style={{ display: 'flex', gap: 6 }}>
+      {lines.map(l => (
+        <button key={l} type="button" onClick={() => onChange(l)} style={lineBtn(value === l, l)}>{l}</button>
+      ))}
+    </div>
+  );
+}
 
 const LINES_INHOUSE = ['L1', 'L2', 'L3', 'L4', 'L5'];
 const LINES_REPAIR  = ['L1', 'L2', 'L3', 'L4', 'L5'];
 const TABS = [
-  { id: 'fresh',      label: 'Fresh' },
-  { id: 'outsourced', label: 'Outsourced' },
-  { id: 'repair',     label: 'Repair' },
-  { id: 'repack',     label: 'Repack' },
+  { id: 'fresh',      label: 'Fresh',      icon: 'factory' },
+  { id: 'outsourced', label: 'Outsourced', icon: 'truck' },
+  { id: 'repair',     label: 'Repair',     icon: 'wrench' },
+  { id: 'repack',     label: 'Repack',     icon: 'swap' },
 ];
 
 export default function NewRunPage() {
   const router = useRouter();
   const { session, perms } = useAuth();
   const { showToast: toast } = useToast();
+  const { setRefreshing, setLastRefreshed } = useRefreshState();
   const allowed = canRequestRun(perms);
 
   const [tab, setTab]   = useState('fresh');
@@ -46,24 +85,37 @@ export default function NewRunPage() {
 
   useEffect(() => {
     if (!allowed) return;
-    garageFetch('getProductCatalogue', {}, session).then(setCat).catch(() => {});
-    garageFetch('getVendors', {}, session).then(v => setVendors(Array.isArray(v) ? v : [])).catch(() => {});
-  }, [allowed, session]);
+    setRefreshing(true);
+    Promise.allSettled([
+      garageFetch('getProductCatalogue', {}, session).then(setCat).catch(() => {}),
+      garageFetch('getVendors', {}, session).then(v => setVendors(Array.isArray(v) ? v : [])).catch(() => {}),
+    ]).finally(() => { setRefreshing(false); setLastRefreshed(new Date()); });
+  }, [allowed, session, setRefreshing, setLastRefreshed]);
 
   const products = cat?.products || [];
   // Ad Hoc Parts is a PRODUCTION-only request (store_head excluded) — gated on ad_hoc_request.
   const showAdhoc = hasPermission(perms, 'ad_hoc_request');
-  const tabs = showAdhoc ? [...TABS, { id: 'adhoc', label: 'Ad Hoc Parts' }] : TABS;
+  const tabs = showAdhoc ? [...TABS, { id: 'adhoc', label: 'Ad Hoc Parts', icon: 'filePlus' }] : TABS;
 
   if (!allowed) {
-    return <div style={{ padding: 16 }}><EmptyState icon="🔒" message="Access denied — you need the run_request permission to request runs." /></div>;
+    return (
+      <Panel title="Access denied" icon="shield" style={{ maxWidth: 520 }}>
+        <div style={{ fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--t2)', lineHeight: 1.5 }}>
+          You need the <span className="num" style={{ color: 'var(--t1)' }}>run_request</span> permission to request runs.
+        </div>
+      </Panel>
+    );
   }
 
   return (
-    <div style={{ padding: 16 }}>
-      <div style={{ maxWidth: 760 }}>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-          {tabs.map(t => <button key={t.id} style={tabBtn(tab === t.id)} onClick={() => setTab(t.id)}>{t.label}</button>)}
+    <div>
+      <div style={{ maxWidth: 780 }}>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 18, flexWrap: 'wrap' }}>
+          {tabs.map(t => (
+            <button key={t.id} style={tabBtn(tab === t.id)} onClick={() => setTab(t.id)}>
+              <Icon name={t.icon} size={14} />{t.label}
+            </button>
+          ))}
         </div>
         {tab === 'fresh'      && <ProductionForm key="fresh" runType="in-house" cat={cat} products={products} session={session} toast={toast} busy={busy} setBusy={setBusy} router={router} />}
         {tab === 'outsourced' && <ProductionForm key="ext" runType="outsourced" cat={cat} products={products} vendors={vendors} session={session} toast={toast} busy={busy} setBusy={setBusy} router={router} />}
@@ -120,20 +172,20 @@ function ProductionForm({ runType, cat, products, vendors = [], session, toast, 
   }
 
   return (
-    <Panel header={outsourced ? 'Request Outsourced Run · EXT' : 'Request Fresh Run'}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
-        <div><label style={lbl}>Product *</label>
+    <Panel title={outsourced ? 'Request Outsourced Run · EXT' : 'Request Fresh Run'} icon={outsourced ? 'truck' : 'factory'} pad={20}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 18 }}>
+        <div><span className="eyebrow" style={lblStyle}>Product *</span>
           <Combobox value={product} onChange={v => { setProduct(v); setRows([{ variant: '', colour: '', qty_ecomm: '', qty_retail: '' }]); }} options={products.map(p => ({ value: p, label: p }))} placeholder="Select product" /></div>
         {outsourced
-          ? <div><label style={lbl}>Vendor *</label>
+          ? <div><span className="eyebrow" style={lblStyle}>Vendor *</span>
               <Combobox value={vendorId} onChange={setVendorId} options={vendors.map(v => ({ value: String(v.id), label: v.vendor_name || v.vendor_code || `#${v.id}` }))} placeholder="Select vendor" /></div>
-          : <div><label style={lbl}>Line</label>
-              <select value={line} onChange={e => setLine(e.target.value)} style={input}>{LINES_INHOUSE.map(l => <option key={l}>{l}</option>)}</select></div>}
-        <div><label style={lbl}>Run date</label><input type="date" value={runDate} onChange={e => setRunDate(e.target.value)} style={input} /></div>
-        <div><label style={lbl}>Shift</label><select value={shift} onChange={e => setShift(e.target.value)} style={input}><option>Morning</option><option>Evening</option><option>Night</option></select></div>
+          : <div><span className="eyebrow" style={lblStyle}>Line</span>
+              <LinePicker value={line} onChange={setLine} lines={LINES_INHOUSE} /></div>}
+        <div><span className="eyebrow" style={lblStyle}>Run date</span><input type="date" value={runDate} onChange={e => setRunDate(e.target.value)} style={numInp} /></div>
+        <div><span className="eyebrow" style={lblStyle}>Shift</span><select value={shift} onChange={e => setShift(e.target.value)} style={inp}><option>Morning</option><option>Evening</option><option>Night</option></select></div>
       </div>
 
-      <label style={lbl}>Variants</label>
+      <span className="eyebrow" style={lblStyle}>Variants</span>
       <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 10 }}>
         <thead><tr><th style={th}>Variant</th><th style={th}>Colour</th><th style={{ ...th, textAlign: 'right' }}>Ecom</th><th style={{ ...th, textAlign: 'right' }}>Retail</th><th style={th}></th></tr></thead>
         <tbody>
@@ -141,18 +193,18 @@ function ProductionForm({ runType, cat, products, vendors = [], session, toast, 
             <tr key={i}>
               <td style={{ ...td, minWidth: 150 }}><Combobox value={r.variant} onChange={v => { setRow(i, 'variant', v); setRow(i, 'colour', ''); }} options={variants.map(v => ({ value: v, label: v }))} placeholder="—" /></td>
               <td style={{ ...td, minWidth: 150 }}><Combobox value={r.colour} onChange={v => setRow(i, 'colour', v)} options={colorsFor(r.variant).map(c => ({ value: c, label: c }))} placeholder="—" /></td>
-              <td style={td}><input type="number" min="0" value={r.qty_ecomm} onChange={e => setRow(i, 'qty_ecomm', e.target.value)} style={{ ...input, width: 80, textAlign: 'right' }} /></td>
-              <td style={td}><input type="number" min="0" value={r.qty_retail} onChange={e => setRow(i, 'qty_retail', e.target.value)} style={{ ...input, width: 80, textAlign: 'right' }} /></td>
-              <td style={td}><button onClick={() => delRow(i)} style={{ ...btnS, padding: '4px 8px' }}>✕</button></td>
+              <td style={td}><input type="number" min="0" value={r.qty_ecomm} onChange={e => setRow(i, 'qty_ecomm', e.target.value)} style={{ ...numInp, width: 80, textAlign: 'right' }} /></td>
+              <td style={td}><input type="number" min="0" value={r.qty_retail} onChange={e => setRow(i, 'qty_retail', e.target.value)} style={{ ...numInp, width: 80, textAlign: 'right' }} /></td>
+              <td style={{ ...td, textAlign: 'right' }}><button onClick={() => delRow(i)} style={iconBtn} title="Remove row"><Icon name="x" size={13} /></button></td>
             </tr>
           ))}
         </tbody>
       </table>
-      <button onClick={addRow} style={{ ...btnS, marginBottom: 16 }}>+ Add variant</button>
+      <button onClick={addRow} style={{ ...btnGhost, marginBottom: 18 }}><Icon name="plus" size={14} />Add variant</button>
 
-      <div><label style={lbl}>Notes · optional</label><textarea rows={2} value={notes} onChange={e => setNotes(e.target.value)} style={{ ...input, resize: 'vertical' }} /></div>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
-        <button onClick={() => submit(false)} disabled={busy} style={{ ...btnP, opacity: busy ? 0.6 : 1 }}>{busy ? 'Creating…' : 'Create Run'}</button>
+      <div><span className="eyebrow" style={lblStyle}>Notes · optional</span><textarea rows={2} value={notes} onChange={e => setNotes(e.target.value)} style={{ ...inp, resize: 'vertical' }} /></div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+        <button onClick={() => submit(false)} disabled={busy} style={{ ...btnPrimary, padding: '10px 20px', opacity: busy ? 0.6 : 1 }}>{busy ? 'Creating…' : 'Create Run'}</button>
       </div>
     </Panel>
   );
@@ -186,15 +238,15 @@ function RepairForm({ cat, products, session, toast, busy, setBusy, router }) {
   }
 
   return (
-    <Panel header="Request Repair Run · target-less recovery (optional target lines below)">
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)', marginBottom: 14, lineHeight: 1.5 }}>
-        A repair run is open-ended — leave the target lines blank to start a pure recovery run, or add expected products/quantities. Parts are requested ad-hoc off-line and linked to the run.
+    <Panel title="Request Repair Run" icon="wrench" pad={20}>
+      <div style={helpText}>
+        A repair run is open-ended — leave the target lines blank to start a pure recovery run, or add expected products and quantities. Parts are requested ad-hoc off-line and linked to the run.
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
-        <div><label style={lbl}>Line</label><select value={line} onChange={e => setLine(e.target.value)} style={input}>{LINES_REPAIR.map(l => <option key={l}>{l}</option>)}</select></div>
-        <div><label style={lbl}>Run date</label><input type="date" value={runDate} onChange={e => setRunDate(e.target.value)} style={input} /></div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 18 }}>
+        <div><span className="eyebrow" style={lblStyle}>Line</span><LinePicker value={line} onChange={setLine} lines={LINES_REPAIR} /></div>
+        <div><span className="eyebrow" style={lblStyle}>Run date</span><input type="date" value={runDate} onChange={e => setRunDate(e.target.value)} style={numInp} /></div>
       </div>
-      <label style={lbl}>Target lines · optional</label>
+      <span className="eyebrow" style={lblStyle}>Target lines · optional</span>
       <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 10 }}>
         <thead><tr><th style={th}>Product</th><th style={th}>Model</th><th style={th}>Colour</th><th style={{ ...th, textAlign: 'right' }}>Cars</th><th style={{ ...th, textAlign: 'right' }}>Remotes</th><th style={th}></th></tr></thead>
         <tbody>
@@ -203,17 +255,17 @@ function RepairForm({ cat, products, session, toast, busy, setBusy, router }) {
               <td style={{ ...td, minWidth: 140 }}><Combobox value={r.product} onChange={v => { setRow(i, 'product', v); setRow(i, 'model', ''); setRow(i, 'color', ''); }} options={products.map(p => ({ value: p, label: p }))} placeholder="—" /></td>
               <td style={{ ...td, minWidth: 130 }}><Combobox value={r.model} onChange={v => { setRow(i, 'model', v); setRow(i, 'color', ''); }} options={variantsFor(r.product).map(v => ({ value: v, label: v }))} placeholder="—" /></td>
               <td style={{ ...td, minWidth: 130 }}><Combobox value={r.color} onChange={v => setRow(i, 'color', v)} options={colorsFor(r.product, r.model).map(c => ({ value: c, label: c }))} placeholder="—" /></td>
-              <td style={td}><input type="number" min="0" value={r.target_car_qty} onChange={e => setRow(i, 'target_car_qty', e.target.value)} style={{ ...input, width: 72, textAlign: 'right' }} /></td>
-              <td style={td}><input type="number" min="0" value={r.target_remote_qty} onChange={e => setRow(i, 'target_remote_qty', e.target.value)} style={{ ...input, width: 72, textAlign: 'right' }} /></td>
-              <td style={td}><button onClick={() => delRow(i)} style={{ ...btnS, padding: '4px 8px' }}>✕</button></td>
+              <td style={td}><input type="number" min="0" value={r.target_car_qty} onChange={e => setRow(i, 'target_car_qty', e.target.value)} style={{ ...numInp, width: 72, textAlign: 'right' }} /></td>
+              <td style={td}><input type="number" min="0" value={r.target_remote_qty} onChange={e => setRow(i, 'target_remote_qty', e.target.value)} style={{ ...numInp, width: 72, textAlign: 'right' }} /></td>
+              <td style={{ ...td, textAlign: 'right' }}><button onClick={() => delRow(i)} style={iconBtn} title="Remove row"><Icon name="x" size={13} /></button></td>
             </tr>
           ))}
         </tbody>
       </table>
-      <button onClick={addRow} style={{ ...btnS, marginBottom: 16 }}>+ Add line</button>
-      <div><label style={lbl}>Notes · optional</label><textarea rows={2} value={notes} onChange={e => setNotes(e.target.value)} style={{ ...input, resize: 'vertical' }} /></div>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
-        <button onClick={submit} disabled={busy} style={{ ...btnP, opacity: busy ? 0.6 : 1 }}>{busy ? 'Creating…' : 'Create Repair Run'}</button>
+      <button onClick={addRow} style={{ ...btnGhost, marginBottom: 18 }}><Icon name="plus" size={14} />Add line</button>
+      <div><span className="eyebrow" style={lblStyle}>Notes · optional</span><textarea rows={2} value={notes} onChange={e => setNotes(e.target.value)} style={{ ...inp, resize: 'vertical' }} /></div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+        <button onClick={submit} disabled={busy} style={{ ...btnPrimary, padding: '10px 20px', opacity: busy ? 0.6 : 1 }}>{busy ? 'Creating…' : 'Create Repair Run'}</button>
       </div>
     </Panel>
   );
@@ -250,25 +302,25 @@ function RepackForm({ cat, products, session, toast, busy, setBusy, router }) {
   }
 
   const chSel = (val, set) => (
-    <select value={val} onChange={e => set(e.target.value)} style={input}><option value="retail">Retail</option><option value="ecom">Ecom</option></select>
+    <select value={val} onChange={e => set(e.target.value)} style={inp}><option value="retail">Retail</option><option value="ecom">Ecom</option></select>
   );
 
   return (
-    <Panel header="Request Repack Run · channel swap">
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)', marginBottom: 14, lineHeight: 1.5 }}>
-        Repack swaps a unit's channel packaging. This raises a store request for the To-channel primary packaging and a dispatch release of the units.
+    <Panel title="Request Repack Run · Channel Swap" icon="swap" pad={20}>
+      <div style={helpText}>
+        Repack swaps a unit&rsquo;s channel packaging. This raises a store request for the To-channel primary packaging and a dispatch release of the units.
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 14 }}>
-        <div><label style={lbl}>Product</label><Combobox value={product} onChange={v => { setProduct(v); setModel(''); setColour(''); }} options={products.map(p => ({ value: p, label: p }))} placeholder="Select product" /></div>
-        <div><label style={lbl}>Model</label><Combobox value={model} onChange={v => { setModel(v); setColour(''); }} options={variants.map(v => ({ value: v, label: v }))} placeholder="—" /></div>
-        <div><label style={lbl}>Colour</label><Combobox value={colour} onChange={setColour} options={colorsFor(model).map(c => ({ value: c, label: c }))} placeholder="—" /></div>
-        <div><label style={lbl}>From channel *</label>{chSel(fromCh, setFromCh)}</div>
-        <div><label style={lbl}>To channel *</label>{chSel(toCh, setToCh)}</div>
-        <div><label style={lbl}>Target qty *</label><input type="number" min="1" value={qty} onChange={e => setQty(e.target.value)} style={input} placeholder="units" /></div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14, marginBottom: 18 }}>
+        <div><span className="eyebrow" style={lblStyle}>Product</span><Combobox value={product} onChange={v => { setProduct(v); setModel(''); setColour(''); }} options={products.map(p => ({ value: p, label: p }))} placeholder="Select product" /></div>
+        <div><span className="eyebrow" style={lblStyle}>Model</span><Combobox value={model} onChange={v => { setModel(v); setColour(''); }} options={variants.map(v => ({ value: v, label: v }))} placeholder="—" /></div>
+        <div><span className="eyebrow" style={lblStyle}>Colour</span><Combobox value={colour} onChange={setColour} options={colorsFor(model).map(c => ({ value: c, label: c }))} placeholder="—" /></div>
+        <div><span className="eyebrow" style={lblStyle}>From channel *</span>{chSel(fromCh, setFromCh)}</div>
+        <div><span className="eyebrow" style={lblStyle}>To channel *</span>{chSel(toCh, setToCh)}</div>
+        <div><span className="eyebrow" style={lblStyle}>Target qty *</span><input type="number" min="1" value={qty} onChange={e => setQty(e.target.value)} style={numInp} placeholder="units" /></div>
       </div>
-      <div><label style={lbl}>Notes · optional</label><textarea rows={2} value={notes} onChange={e => setNotes(e.target.value)} style={{ ...input, resize: 'vertical' }} /></div>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
-        <button onClick={submit} disabled={busy} style={{ ...btnP, opacity: busy ? 0.6 : 1 }}>{busy ? 'Creating…' : 'Create Repack Run'}</button>
+      <div><span className="eyebrow" style={lblStyle}>Notes · optional</span><textarea rows={2} value={notes} onChange={e => setNotes(e.target.value)} style={{ ...inp, resize: 'vertical' }} /></div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+        <button onClick={submit} disabled={busy} style={{ ...btnPrimary, padding: '10px 20px', opacity: busy ? 0.6 : 1 }}>{busy ? 'Creating…' : 'Create Repack Run'}</button>
       </div>
     </Panel>
   );
@@ -341,47 +393,47 @@ function AdHocPartsForm({ products, session, toast, busy, setBusy }) {
   }
 
   return (
-    <Panel header="Request Ad Hoc Parts">
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)', marginBottom: 14, lineHeight: 1.5 }}>
+    <Panel title="Request Ad Hoc Parts" icon="filePlus" pad={20}>
+      <div style={helpText}>
         A one-off parts request to the store (not a run). Build it from a product&rsquo;s BOM category or type part codes by hand; optionally link it to a repair run.
       </div>
-      <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
         <button style={tabBtn(mode === 'bom')} onClick={() => { setMode('bom'); setLines([]); }}>BOM-based</button>
         <button style={tabBtn(mode === 'manual')} onClick={() => { setMode('manual'); setLines([]); }}>Manual</button>
       </div>
       {mode === 'bom' && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 8, alignItems: 'end', marginBottom: 12 }}>
-          <div><label style={lbl}>Product</label><Combobox value={product} onChange={v => { setProduct(v); setCategory(''); }} options={products.map(p => ({ value: p, label: p }))} placeholder="Select product" /></div>
-          <div><label style={lbl}>Category</label><select value={category} onChange={e => setCategory(e.target.value)} style={input} disabled={!product}><option value="">{product ? 'Select…' : 'Pick a product'}</option>{categories.map(c => <option key={c}>{c}</option>)}</select></div>
-          <button style={btnS} onClick={addCategory} disabled={!product || !category}>+ Add category</button>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 10, alignItems: 'end', marginBottom: 14 }}>
+          <div><span className="eyebrow" style={lblStyle}>Product</span><Combobox value={product} onChange={v => { setProduct(v); setCategory(''); }} options={products.map(p => ({ value: p, label: p }))} placeholder="Select product" /></div>
+          <div><span className="eyebrow" style={lblStyle}>Category</span><select value={category} onChange={e => setCategory(e.target.value)} style={inp} disabled={!product}><option value="">{product ? 'Select…' : 'Pick a product'}</option>{categories.map(c => <option key={c}>{c}</option>)}</select></div>
+          <button style={{ ...btnGhost, opacity: (!product || !category) ? 0.5 : 1 }} onClick={addCategory} disabled={!product || !category}><Icon name="plus" size={14} />Add category</button>
         </div>
       )}
       {mode === 'manual' && (
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}><button style={btnS} onClick={addManual}>+ Add part</button></div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}><button style={btnGhost} onClick={addManual}><Icon name="plus" size={14} />Add part</button></div>
       )}
-      <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 10 }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 12 }}>
         <thead><tr><th style={th}>Part</th><th style={th}>Name</th><th style={{ ...th, textAlign: 'right' }}>Qty</th><th style={th}></th></tr></thead>
         <tbody>
-          {lines.length === 0 && <tr><td colSpan={4} style={{ ...td, color: 'var(--t3)', textAlign: 'center', padding: 16 }}>{mode === 'bom' ? 'Pick a product + category, then Add category.' : 'Click + Add part.'}</td></tr>}
+          {lines.length === 0 && <tr><td colSpan={4} style={{ ...td, color: 'var(--t3)', textAlign: 'center', padding: 18 }}>{mode === 'bom' ? 'Pick a product + category, then Add category.' : 'Click Add part to start.'}</td></tr>}
           {lines.map(l => l.type === 'header'
-            ? <tr key={l.id}><td colSpan={4} style={{ ...td, background: 'var(--surface2)', fontFamily: 'var(--mono)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--t2)' }}>{l.label}</td></tr>
+            ? <tr key={l.id}><td colSpan={4} style={{ ...td, background: 'var(--surface-2)', fontFamily: 'var(--font-display)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--t2)' }}>{l.label}</td></tr>
             : <tr key={l.id}>
                 <td style={{ ...td, minWidth: 120 }}>{mode === 'bom'
-                  ? <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--yellow)' }}>{l.code}</span>
-                  : <input value={l.code} onChange={e => setL(l.id, { code: e.target.value.toUpperCase() })} onBlur={e => codeBlur(l.id, e.target.value)} placeholder="Part code" style={{ ...input, fontSize: 11 }} />}</td>
-                <td style={td}>{l.name || (mode === 'manual' ? <span style={{ color: 'var(--t3)', fontSize: 11 }}>auto-fills</span> : '')}</td>
-                <td style={td}><input type="number" min="0" value={l.qty} onChange={e => setL(l.id, { qty: e.target.value })} style={{ ...input, width: 72, textAlign: 'right' }} /></td>
-                <td style={td}><button onClick={() => delL(l.id)} style={{ ...btnS, padding: '4px 8px' }}>✕</button></td>
+                  ? <span className="num" style={{ fontSize: 12, color: 'var(--yellow)' }}>{l.code}</span>
+                  : <input value={l.code} onChange={e => setL(l.id, { code: e.target.value.toUpperCase() })} onBlur={e => codeBlur(l.id, e.target.value)} placeholder="Part code" style={{ ...numInp, fontSize: 12 }} />}</td>
+                <td style={td}>{l.name || (mode === 'manual' ? <span style={{ color: 'var(--t3)', fontSize: 12 }}>auto-fills</span> : '')}</td>
+                <td style={{ ...td, textAlign: 'right' }}><input type="number" min="0" value={l.qty} onChange={e => setL(l.id, { qty: e.target.value })} style={{ ...numInp, width: 72, textAlign: 'right' }} /></td>
+                <td style={{ ...td, textAlign: 'right' }}><button onClick={() => delL(l.id)} style={iconBtn} title="Remove part"><Icon name="x" size={13} /></button></td>
               </tr>)}
         </tbody>
       </table>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
-        <div><label style={lbl}>Line</label><select value={line} onChange={e => setLineNo(e.target.value)} style={input}>{['L1', 'L2', 'L3', 'L4', 'L5'].map(l => <option key={l}>{l}</option>)}</select></div>
-        <div><label style={lbl}>Shift</label><select value={shift} onChange={e => setShift(e.target.value)} style={input}><option>Morning</option><option>Evening</option><option>Night</option></select></div>
-        <div><label style={lbl}>Date</label><input type="date" value={date} onChange={e => setDate(e.target.value)} style={input} /></div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14, marginBottom: 14 }}>
+        <div><span className="eyebrow" style={lblStyle}>Line</span><LinePicker value={line} onChange={setLineNo} lines={['L1', 'L2', 'L3', 'L4', 'L5']} /></div>
+        <div><span className="eyebrow" style={lblStyle}>Shift</span><select value={shift} onChange={e => setShift(e.target.value)} style={inp}><option>Morning</option><option>Evening</option><option>Night</option></select></div>
+        <div><span className="eyebrow" style={lblStyle}>Date</span><input type="date" value={date} onChange={e => setDate(e.target.value)} style={numInp} /></div>
       </div>
-      <div style={{ marginBottom: 12 }}><label style={lbl}>Repair run · optional</label><Combobox value={repairRunId} onChange={setRepairRunId} options={repairRuns.map(r => ({ value: r.id, label: `${r.run_no} · ${r.line || '—'}` }))} placeholder="Link to a repair run (for parts tracking)…" /></div>
-      <div style={{ display: 'flex', justifyContent: 'flex-end' }}><button onClick={submit} disabled={busy} style={{ ...btnP, opacity: busy ? 0.6 : 1 }}>{busy ? 'Creating…' : 'Create Request'}</button></div>
+      <div style={{ marginBottom: 14 }}><span className="eyebrow" style={lblStyle}>Repair run · optional</span><Combobox value={repairRunId} onChange={setRepairRunId} options={repairRuns.map(r => ({ value: r.id, label: `${r.run_no} · ${r.line || '—'}` }))} placeholder="Link to a repair run (for parts tracking)…" /></div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}><button onClick={submit} disabled={busy} style={{ ...btnPrimary, padding: '10px 20px', opacity: busy ? 0.6 : 1 }}>{busy ? 'Creating…' : 'Create Request'}</button></div>
     </Panel>
   );
 }

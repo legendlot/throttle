@@ -1,8 +1,25 @@
 'use client';
+/* ════════════════════════════════════════════════════════════
+   PLANNER — Setup › Planner (redesign-reference/app/planner.jsx).
+   Pit Wall v2 reskin ONLY: the CSV/plan parsing, upload payloads
+   (uploadDispatchPlan), run creation (createPlannerRun), batch
+   config (getBatchConfig/updateBatchConfig) and stock checks
+   (checkRunBomStock) are byte-identical to the previous version
+   (incl. the S125 abbreviated-month patch). The prototype's
+   per-product CascadeStrip/daily-ledger drawer needs a per-SKU
+   daily stock series + DTK stock snapshot that getDispatchPlan
+   does not carry — skipped; the existing date-grouped Cascaded
+   Waterfall / Normal toggle is kept and restyled instead.
+   ════════════════════════════════════════════════════════════ */
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, useToast, Panel, Chip, StatusBadge } from '@throttle/ui';
+import { Spinner, useToast } from '@throttle/ui';
+import { Check, RotateCcw } from 'lucide-react';
+import { useRefreshState } from '../layout.js';
+import {
+  Icon, KpiTile, ToneBadge, fmt, btnPrimary, btnGhost,
+} from '../../../components/kit/index.js';
 
 const LEAD_COLORS = {
   impossible: '#DE2A2A',
@@ -198,31 +215,85 @@ function parseDispatchCsv(csvText) {
 const variantKey = (variant, colour) => `${variant ?? ''}·${colour ?? ''}`;
 
 function resolveStatus(gap, leadStatus) {
-  if (!gap || gap <= 0) return { label: 'Covered', color: '#22c55e' };
+  if (!gap || gap <= 0) return { label: 'Covered', tone: 'ok' };
   switch (leadStatus) {
-    case 'ok':         return { label: 'Plan Run',  color: '#eab308' };
-    case 'warning':    return { label: 'Urgent',    color: '#f97316' };
-    case 'critical':   return { label: 'Critical',  color: '#ef4444' };
-    case 'impossible': return { label: 'Too Late',  color: '#991b1b' };
-    default:           return { label: 'Plan Run',  color: '#eab308' };
+    case 'ok':         return { label: 'Plan Run',  tone: 'brand' };
+    case 'warning':    return { label: 'Urgent',    tone: 'warn' };
+    case 'critical':   return { label: 'Critical',  tone: 'bad' };
+    case 'impossible': return { label: 'Too Late',  tone: 'bad' };
+    default:           return { label: 'Plan Run',  tone: 'brand' };
   }
 }
 
 function LeadStatusPill({ gap, leadStatus }) {
-  const { label, color } = resolveStatus(gap, leadStatus);
-  const fg = (color === '#eab308' || color === '#22c55e') ? '#080808' : '#fff';
+  const { label, tone } = resolveStatus(gap, leadStatus);
+  return <ToneBadge tone={tone}>{label}</ToneBadge>;
+}
+
+/* ── shared style fragments (presentation only) ─────────────── */
+const thStyle = (align = 'left') => ({
+  padding: '7px 10px', textAlign: align,
+});
+const tdNum = { fontFamily: 'var(--font-mono)', fontVariantNumeric: 'tabular-nums' };
+const smallInput = {
+  width: 70, padding: '4px 7px', background: 'var(--surface-2)',
+  border: '1px solid var(--border-2)', color: 'var(--t1)', borderRadius: 'var(--r-xs)',
+  fontFamily: 'var(--font-mono)', fontSize: 12, outline: 'none',
+};
+const dateInput = {
+  padding: '5px 9px', background: 'var(--surface-2)', border: '1px solid var(--border-2)',
+  color: 'var(--t1)', borderRadius: 'var(--r-xs)', fontFamily: 'var(--font-mono)',
+  fontSize: 12, outline: 'none', colorScheme: 'dark',
+};
+
+function SegTabs({ value, onChange, options }) {
   return (
-    <span style={{
-      fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 3,
-      letterSpacing: '0.04em', textTransform: 'uppercase',
-      color: fg, background: color,
-    }}>{label}</span>
+    <div style={{ display: 'flex', gap: 3, padding: 3, background: 'var(--surface)',
+      border: '1px solid var(--border-2)', borderRadius: 'var(--r-sm)' }}>
+      {options.map(([k, l, ic]) => (
+        <button key={k} onClick={() => onChange(k)} style={{
+          display: 'flex', alignItems: 'center', gap: 6, border: 'none', cursor: 'pointer',
+          borderRadius: 'var(--r-xs)', padding: '6px 13px', fontFamily: 'var(--font-display)',
+          fontSize: 11, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase',
+          whiteSpace: 'nowrap', transition: 'all var(--fast) var(--ease)',
+          background: value === k ? 'var(--yellow)' : 'transparent',
+          color: value === k ? '#1a1a1a' : 'var(--t3)' }}>
+          {ic && <Icon name={ic} size={13} />} {l}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function LinePickBtn({ active, onClick, children, size = 'md' }) {
+  return (
+    <button onClick={onClick} style={{
+      padding: size === 'sm' ? '3px 10px' : '5px 12px',
+      fontFamily: 'var(--font-display)', fontSize: size === 'sm' ? 10 : 11, fontWeight: 600,
+      letterSpacing: '0.05em', textTransform: 'uppercase',
+      background: active ? 'var(--yellow)' : 'var(--surface-2)',
+      color:      active ? '#1a1a1a' : 'var(--t2)',
+      border: '1px solid ' + (active ? 'var(--yellow)' : 'var(--border-2)'),
+      borderRadius: 'var(--r-xs)', cursor: 'pointer',
+    }}>{children}</button>
+  );
+}
+
+function InlineError({ children }) {
+  return (
+    <div style={{ marginTop: 8, padding: '6px 10px', display: 'flex', alignItems: 'center', gap: 7,
+      background: 'var(--bad-bg)', color: 'var(--bad-fg)',
+      border: '1px solid var(--bad-bd)', borderRadius: 'var(--r-xs)',
+      fontFamily: 'var(--font-ui)', fontSize: 12, fontWeight: 600 }}>
+      <Icon name="alert" size={13} /> {children}
+    </div>
   );
 }
 
 export default function PlannerPage() {
   const { session } = useAuth();
   const { showToast } = useToast();
+  const { setRefreshing, setLastRefreshed } = useRefreshState();
 
   const [planData, setPlanData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -257,6 +328,7 @@ export default function PlannerPage() {
   const loadPlan = useCallback(async () => {
     if (!session) return;
     setLoading(true);
+    setRefreshing(true);
     try {
       const data = await garageFetch('getDispatchPlan', {}, session);
       setPlanData(data);
@@ -264,7 +336,9 @@ export default function PlannerPage() {
       showToast('Failed to load planner data: ' + e.message, 'error');
     }
     setLoading(false);
-  }, [session, showToast]);
+    setRefreshing(false);
+    setLastRefreshed(new Date());
+  }, [session, showToast, setRefreshing, setLastRefreshed]);
 
   const loadBatchConfig = useCallback(async () => {
     if (!session) return;
@@ -698,71 +772,74 @@ export default function PlannerPage() {
     return a.production_date.localeCompare(b.production_date);
   });
 
+  // Display-only roll-ups for the KPI rail (derived from the loaded plan)
+  const totalDemand = activeDates.reduce((a, d) => a + (Number(d.total_demand) || 0), 0);
+  const totalGap    = activeDates.reduce((a, d) => a + (Number(d.total_gap)    || 0), 0);
+
   if (loading) return <div style={{ padding: 32 }}><Spinner /></div>;
 
   const { upload } = planData || {};
 
   return (
-    <div style={{ padding: '24px 32px', maxWidth: 1180 }}>
+    <div style={{ maxWidth: 1280, margin: '0 auto', fontFamily: 'var(--font-ui)' }}>
 
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
-        <div>
-          <h1 style={{ fontFamily: 'Tomorrow, sans-serif', fontSize: 22, margin: 0, color: 'var(--t1)' }}>
-            Production Planner
-          </h1>
+      {/* controls row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface)',
+          border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '7px 13px', color: 'var(--t2)' }}>
+          <Icon name="clock" size={14} />
           {upload ? (
-            <p style={{ margin: '4px 0 0', fontSize: 13, color: 'var(--t2)' }}>
-              Plan: {upload.month_label || 'Uploaded'} &nbsp;·&nbsp;
-              {upload.row_count} demand rows &nbsp;·&nbsp;
-              Last updated {new Date(upload.uploaded_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })}
-            </p>
+            <span style={{ fontSize: 12.5, whiteSpace: 'nowrap' }}>
+              <span className="num" style={{ color: 'var(--t1)' }}>{upload.month_label || 'Uploaded'}</span>
+              <span style={{ color: 'var(--t3)' }}> · </span>
+              <span className="num">{fmt(upload.row_count)}</span>
+              <span style={{ color: 'var(--t3)' }}> demand rows · updated </span>
+              <span className="num">{new Date(upload.uploaded_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })}</span>
+            </span>
           ) : (
-            <p style={{ margin: '4px 0 0', fontSize: 13, color: 'var(--t2)' }}>
-              No plan uploaded yet
-            </p>
+            <span style={{ fontSize: 12.5, color: 'var(--t3)' }}>No plan uploaded yet</span>
           )}
         </div>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-          <input ref={fileRef} type="file" accept=".csv" style={{ display: 'none' }}
-            onChange={handleFileChange} />
-          <button
-            onClick={() => fileRef.current?.click()}
-            disabled={uploading}
-            style={{ padding: '8px 16px', background: 'var(--border)', border: '1px solid var(--border)',
-              color: 'var(--t1)', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>
-            {uploading ? 'Uploading…' : '↑ Upload Plan CSV'}
-          </button>
+        <input ref={fileRef} type="file" accept=".csv" style={{ display: 'none' }}
+          onChange={handleFileChange} />
+        <button onClick={() => fileRef.current?.click()} disabled={uploading}
+          style={{ ...btnGhost, opacity: uploading ? 0.6 : 1, whiteSpace: 'nowrap' }}>
+          <Icon name="arrowDown" size={14} /> {uploading ? 'Uploading…' : 'Upload dispatch plan'}
+        </button>
+        <div style={{ marginLeft: 'auto' }}>
+          <SegTabs value={view} onChange={setView} options={[
+            ['timeline', 'Dispatch Timeline', 'calendar'],
+            ['recommendations', `Recommended Runs (${recDateCount})`, 'flag'],
+            ['config', 'Batch Sizes', 'settings'],
+          ]} />
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 6, marginBottom: 24, paddingBottom: 12, borderBottom: '1px solid var(--border)' }}>
-        {[
-          { key: 'timeline',        label: 'Dispatch Timeline' },
-          { key: 'recommendations', label: `Recommended Runs (${recDateCount} date${recDateCount === 1 ? '' : 's'})` },
-          { key: 'config',          label: 'Batch Sizes' },
-        ].map(tab => (
-          <Chip key={tab.key} active={view === tab.key} onClick={() => setView(tab.key)}>
-            {tab.label}
-          </Chip>
-        ))}
-      </div>
+      {/* summary rail (derived display only) */}
+      {view !== 'config' && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 18 }}>
+          <KpiTile label="Upcoming demand" value={fmt(totalDemand)}
+            sub={`${viewMode === 'cascaded' ? 'cascaded' : 'normal'} view · all products`} tone="blue" />
+          <KpiTile label="Dispatch dates" value={fmt(activeDates.length)} sub="in the uploaded plan" tone="brand" />
+          <KpiTile label="Open gap" value={fmt(totalGap)} sub="units not covered by stock"
+            tone={totalGap > 0 ? 'bad' : 'ok'} />
+          <KpiTile label="Dates needing runs" value={fmt(recDateCount)}
+            sub={recDateCount ? 'see Recommended Runs' : 'all covered'}
+            tone={recDateCount ? 'warn' : 'ok'} />
+        </div>
+      )}
 
       {view === 'timeline' && (
         <div>
-          <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center' }}>
-            <span style={{ fontSize: 12, color: 'var(--t2)' }}>View:</span>
-            {[
-              { key: 'cascaded', label: 'Cascaded Waterfall' },
-              { key: 'normal',   label: 'Normal' },
-            ].map(opt => (
-              <Chip key={opt.key} active={viewMode === opt.key} onClick={() => setViewMode(opt.key)}>
-                {opt.label}
-              </Chip>
-            ))}
-            <span style={{ fontSize: 11, color: 'var(--t3)', marginLeft: 8 }}>
+          <div style={{ display: 'flex', gap: 10, marginBottom: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+            <SegTabs value={viewMode} onChange={setViewMode} options={[
+              ['cascaded', 'Cascaded Waterfall', 'layers'],
+              ['normal', 'Normal', 'activity'],
+            ]} />
+            <span style={{ fontSize: 12, color: 'var(--t3)' }}>
               {viewMode === 'cascaded'
-                ? '— stock balance carries forward across dates per SKU'
-                : '— each date compared against current static stock'}
+                ? 'stock balance carries forward across dates per SKU'
+                : 'each date compared against current static stock'}
             </span>
           </div>
 
@@ -777,22 +854,27 @@ export default function PlannerPage() {
               const hasGaps = dateEntry.total_gap > 0;
               return (
                 <div key={dateEntry.date} style={{
-                  border: `1px solid ${hasGaps ? '#DE2A2A44' : 'var(--border)'}`,
-                  borderRadius: 8, overflow: 'hidden',
+                  background: 'var(--surface)', boxShadow: 'var(--shadow-card)',
+                  border: `1px solid ${hasGaps ? 'var(--bad-bd)' : 'var(--border)'}`,
+                  borderRadius: 'var(--r-md)', overflow: 'hidden',
                 }}>
                   <div style={{
-                    padding: '12px 16px', background: 'var(--surface)',
-                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    padding: '12px 16px',
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap',
                   }}>
-                    <div>
-                      <span style={{ fontFamily: 'Tomorrow, sans-serif', fontSize: 15, color: 'var(--t1)', fontWeight: 600 }}>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+                      <span className="num" style={{ fontSize: 14, fontWeight: 700, color: 'var(--t1)' }}>
                         {new Date(dateEntry.date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}
                       </span>
-                      <span style={{ marginLeft: 10, fontSize: 12, color: 'var(--t2)' }}>{dateLabel}</span>
+                      <span className="eyebrow">{dateLabel}</span>
                     </div>
-                    <span style={{ fontSize: 12, color: 'var(--t2)' }}>
-                      {dateEntry.total_demand.toLocaleString()} units · {dateEntry.products.length} product{dateEntry.products.length === 1 ? '' : 's'}
-                      {hasGaps && <span style={{ color: '#DE2A2A', fontWeight: 600, marginLeft: 8 }}>⚠ {dateEntry.total_gap} gap</span>}
+                    <span style={{ fontSize: 12, color: 'var(--t2)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span><span className="num">{fmt(dateEntry.total_demand)}</span> units · <span className="num">{dateEntry.products.length}</span> product{dateEntry.products.length === 1 ? '' : 's'}</span>
+                      {hasGaps && (
+                        <span style={{ color: 'var(--bad-fg)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <Icon name="alert" size={13} /> <span className="num">{fmt(dateEntry.total_gap)}</span> gap
+                        </span>
+                      )}
                     </span>
                   </div>
                   <div>
@@ -806,18 +888,18 @@ export default function PlannerPage() {
                             style={{
                               width: '100%', textAlign: 'left',
                               padding: '10px 16px', background: 'transparent', border: 'none',
-                              cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                              color: 'var(--t1)', fontSize: 13,
+                              cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
+                              color: 'var(--t1)', fontFamily: 'var(--font-ui)', fontSize: 13,
                             }}>
-                            <span>
-                              <span style={{ display: 'inline-block', width: 14, color: 'var(--t2)' }}>
-                                {isOpen ? '▼' : '▶'}
+                            <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                              <span style={{ color: 'var(--t3)', display: 'flex' }}>
+                                <Icon name={isOpen ? 'chevD' : 'chevR'} size={14} />
                               </span>
-                              <strong>{prod.product}</strong>
-                              <span style={{ marginLeft: 12, color: 'var(--t2)' }}>
-                                Need <strong style={{ color: 'var(--t1)' }}>{prod.total_need}</strong> ·
-                                Gap <strong style={{ color: prod.total_gap > 0 ? '#DE2A2A' : 'var(--t1)' }}>{prod.total_gap}</strong> ·
-                                {prod.variants.length} variant{prod.variants.length === 1 ? '' : 's'}
+                              <strong style={{ fontWeight: 600 }}>{prod.product}</strong>
+                              <span style={{ color: 'var(--t3)', fontSize: 12 }}>
+                                Need <span className="num" style={{ color: 'var(--t1)', fontWeight: 600 }}>{fmt(prod.total_need)}</span> ·
+                                Gap <span className="num" style={{ color: prod.total_gap > 0 ? 'var(--bad-fg)' : 'var(--t1)', fontWeight: 600 }}> {fmt(prod.total_gap)}</span> ·
+                                <span className="num"> {prod.variants.length}</span> variant{prod.variants.length === 1 ? '' : 's'}
                               </span>
                             </span>
                             <LeadStatusPill
@@ -828,13 +910,13 @@ export default function PlannerPage() {
                           {isOpen && (
                             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                               <thead>
-                                <tr style={{ background: 'var(--surface-2)', color: 'var(--t2)' }}>
+                                <tr style={{ background: 'var(--surface-2)' }}>
                                   {[
                                     'Variant', 'Mapping', 'Need', 'RTD', 'Allocated',
                                     viewMode === 'cascaded' ? 'Balance' : 'Available',
                                     'Gap', 'Status'
                                   ].map(h => (
-                                    <th key={h} style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 500 }}>{h}</th>
+                                    <th key={h} className="eyebrow" style={thStyle()}>{h}</th>
                                   ))}
                                 </tr>
                               </thead>
@@ -842,23 +924,23 @@ export default function PlannerPage() {
                                 {prod.variants.map((v, vi) => (
                                   <tr key={vi} style={{
                                     borderTop: '1px solid var(--border)',
-                                    background: v.gap > 0 ? '#DE2A2A0A' : 'transparent',
+                                    background: v.gap > 0 ? 'var(--bad-bg)' : 'transparent',
                                   }}>
                                     <td style={{ padding: '6px 10px', color: 'var(--t1)' }}>
                                       {v.variant} {v.colour}
                                     </td>
                                     <td style={{ padding: '6px 10px', color: 'var(--t2)' }}>{v.mapping}</td>
-                                    <td style={{ padding: '6px 10px' }}>{v.need}</td>
-                                    <td style={{ padding: '6px 10px' }}>{v.rtd}</td>
-                                    <td style={{ padding: '6px 10px' }}>{v.allocated}</td>
-                                    <td style={{ padding: '6px 10px' }}>
+                                    <td className="num" style={{ padding: '6px 10px', color: 'var(--t2)' }}>{v.need}</td>
+                                    <td className="num" style={{ padding: '6px 10px', color: 'var(--t2)' }}>{v.rtd}</td>
+                                    <td className="num" style={{ padding: '6px 10px', color: 'var(--t2)' }}>{v.allocated}</td>
+                                    <td className="num" style={{ padding: '6px 10px', color: 'var(--t2)' }}>
                                       {viewMode === 'cascaded'
                                         ? (v.balance_before ?? 0)
                                         : (v.rtd + v.allocated)}
                                     </td>
-                                    <td style={{ padding: '6px 10px',
-                                      color: v.gap > 0 ? '#DE2A2A' : 'inherit',
-                                      fontWeight: v.gap > 0 ? 600 : 400 }}>
+                                    <td className="num" style={{ padding: '6px 10px',
+                                      color: v.gap > 0 ? 'var(--bad-fg)' : 'var(--t2)',
+                                      fontWeight: v.gap > 0 ? 700 : 400 }}>
                                       {v.gap > 0 ? v.gap : '—'}
                                     </td>
                                     <td style={{ padding: '6px 10px' }}>
@@ -877,6 +959,14 @@ export default function PlannerPage() {
               );
             })}
           </div>
+
+          <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 8,
+            fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--t3)' }}>
+            <Icon name={viewMode === 'cascaded' ? 'layers' : 'activity'} size={13} />
+            {viewMode === 'cascaded'
+              ? 'Waterfall: each SKU\'s stock balance cascades across dispatch dates — the gap surfaces on the date stock actually runs dry.'
+              : 'Normal: every date is netted against today\'s static stock, ignoring earlier dispatches. Use Waterfall to see when shortfalls actually bite.'}
+          </div>
         </div>
       )}
 
@@ -885,9 +975,9 @@ export default function PlannerPage() {
           {/* LEFT: Dispatch Needs */}
           <div style={{ minWidth: 0 }}>
             {recommendations.length === 0 ? (
-              <p style={{ color: '#22c55e', fontSize: 14 }}>
-                ✓ All upcoming dispatch dates are covered. No production runs needed.
-              </p>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--ok-fg)', fontSize: 14 }}>
+                <Icon name={Check} size={16} /> All upcoming dispatch dates are covered. No production runs needed.
+              </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                 {recommendations.map(rec => {
@@ -904,22 +994,23 @@ export default function PlannerPage() {
 
                   return (
                     <div key={rec.dispatch_date} style={{
-                      border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden',
+                      background: 'var(--surface)', boxShadow: 'var(--shadow-card)',
+                      border: '1px solid var(--border)', borderRadius: 'var(--r-md)', overflow: 'hidden',
                     }}>
                       <button
                         onClick={() => setExpandedDates(prev => ({ ...prev, [rec.dispatch_date]: !dateExpanded }))}
                         style={{
                           width: '100%', textAlign: 'left',
-                          padding: '12px 16px', background: 'var(--surface)', border: 'none',
-                          cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                          color: 'var(--t1)',
+                          padding: '12px 16px', background: 'transparent', border: 'none',
+                          cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
+                          color: 'var(--t1)', fontFamily: 'var(--font-ui)',
                         }}>
-                        <span>
-                          <span style={{ display: 'inline-block', width: 16, color: 'var(--t2)' }}>
-                            {dateExpanded ? '▼' : '▶'}
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                          <span style={{ color: 'var(--t3)', display: 'flex' }}>
+                            <Icon name={dateExpanded ? 'chevD' : 'chevR'} size={15} />
                           </span>
-                          <strong style={{ fontFamily: 'Tomorrow, sans-serif', fontSize: 15 }}>{dateLabel}</strong>
-                          <span style={{ marginLeft: 10, fontSize: 12, color: 'var(--t2)' }}>{daysLabel}</span>
+                          <strong className="num" style={{ fontSize: 14, fontWeight: 700 }}>{dateLabel}</strong>
+                          <span className="eyebrow">{daysLabel}</span>
                         </span>
                         <LeadStatusPill gap={1} leadStatus={rec.lead_status} />
                       </button>
@@ -928,8 +1019,10 @@ export default function PlannerPage() {
                         <div style={{ padding: '12px 16px 16px' }}>
                           <div style={{ fontSize: 12, color: 'var(--t2)', marginBottom: 10 }}>
                             {rec.too_late
-                              ? <span style={{ color: '#DE2A2A', fontWeight: 600 }}>⚠ Too late to produce in time</span>
-                              : <span>Suggested production date: <strong style={{ color: 'var(--t1)' }}>{suggestedLabel}</strong></span>}
+                              ? <span style={{ color: 'var(--bad-fg)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                  <Icon name="alert" size={13} /> Too late to produce in time
+                                </span>
+                              : <span>Suggested production date: <strong className="num" style={{ color: 'var(--t1)' }}>{suggestedLabel}</strong></span>}
                           </div>
 
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -941,19 +1034,22 @@ export default function PlannerPage() {
                                 && scheduling.product === prod.product;
                               return (
                                 <div key={prod.product} style={{ borderTop: '1px solid var(--border)' }}>
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 4px' }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '8px 4px' }}>
                                     <button
                                       onClick={() => setExpandedDateProducts(prev => ({ ...prev, [prodKey]: !isProdOpen }))}
                                       style={{
                                         background: 'transparent', border: 'none', cursor: 'pointer',
-                                        color: 'var(--t1)', fontSize: 13, padding: 0, textAlign: 'left',
+                                        color: 'var(--t1)', fontFamily: 'var(--font-ui)', fontSize: 13, padding: 0, textAlign: 'left',
+                                        display: 'flex', alignItems: 'center', gap: 6, minWidth: 0,
                                       }}>
-                                      <span style={{ color: 'var(--t2)', marginRight: 4 }}>{isProdOpen ? '▼' : '▶'}</span>
-                                      <strong>{prod.product}</strong>
-                                      <span style={{ marginLeft: 10, color: 'var(--t2)', fontSize: 12 }}>
-                                        {prod.gap_ecomm > 0 && <span>{prod.gap_ecomm} ecomm</span>}
+                                      <span style={{ color: 'var(--t3)', display: 'flex' }}>
+                                        <Icon name={isProdOpen ? 'chevD' : 'chevR'} size={13} />
+                                      </span>
+                                      <strong style={{ fontWeight: 600 }}>{prod.product}</strong>
+                                      <span className="num" style={{ color: 'var(--t3)', fontSize: 12 }}>
+                                        {prod.gap_ecomm > 0 && <span>{fmt(prod.gap_ecomm)} ecomm</span>}
                                         {prod.gap_ecomm > 0 && prod.gap_retail > 0 && <span> · </span>}
-                                        {prod.gap_retail > 0 && <span>{prod.gap_retail} retail</span>}
+                                        {prod.gap_retail > 0 && <span>{fmt(prod.gap_retail)} retail</span>}
                                       </span>
                                     </button>
                                     <button
@@ -961,27 +1057,31 @@ export default function PlannerPage() {
                                       disabled={rec.too_late}
                                       title={rec.too_late ? 'Too late to produce in time' : ''}
                                       style={{
-                                        padding: '4px 10px', fontSize: 11, fontWeight: 600,
-                                        background: rec.too_late ? 'var(--surface)' : (isPanelOpen ? 'var(--surface-2)' : '#F2CD1A'),
-                                        color:      rec.too_late ? 'var(--t3)' : (isPanelOpen ? 'var(--t2)' : '#080808'),
-                                        border: '1px solid ' + (isPanelOpen ? 'var(--border)' : 'transparent'),
-                                        borderRadius: 4,
+                                        display: 'inline-flex', alignItems: 'center', gap: 5,
+                                        padding: '4px 10px', fontFamily: 'var(--font-display)', fontSize: 10,
+                                        fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase',
+                                        background: rec.too_late ? 'var(--surface-2)' : (isPanelOpen ? 'var(--surface-2)' : 'var(--yellow)'),
+                                        color:      rec.too_late ? 'var(--t3)' : (isPanelOpen ? 'var(--t2)' : '#1a1a1a'),
+                                        border: '1px solid ' + (isPanelOpen ? 'var(--border-2)' : 'transparent'),
+                                        borderRadius: 'var(--r-xs)', whiteSpace: 'nowrap',
                                         cursor: rec.too_late ? 'not-allowed' : 'pointer',
                                       }}>
-                                      {rec.too_late ? '(Too late)' : isPanelOpen ? '× Cancel' : '+ Schedule'}
+                                      {rec.too_late
+                                        ? 'Too late'
+                                        : isPanelOpen
+                                          ? <><Icon name="x" size={11} /> Cancel</>
+                                          : <><Icon name="plus" size={11} /> Schedule</>}
                                     </button>
                                   </div>
 
                                   {prod.planned_runs?.length > 0 && (
-                                    <div style={{ paddingLeft: 22, paddingBottom: 6, paddingTop: 2 }}>
+                                    <div style={{ paddingLeft: 22, paddingBottom: 6, paddingTop: 2, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                                       {prod.planned_runs.map(pr => (
-                                        <span key={pr.run_id} style={{ marginRight: 6, marginBottom: 4, display: 'inline-block' }}>
-                                          <StatusBadge variant="info" icon="✓">
-                                            {pr.run_no} planned — {pr.quantity} units
-                                            {pr.days_covered > 0 ? ` · covers ${pr.days_covered}d` : ''}
-                                            {` (${pr.status})`}
-                                          </StatusBadge>
-                                        </span>
+                                        <ToneBadge key={pr.run_id} tone="info">
+                                          {pr.run_no} planned — {fmt(pr.quantity)} units
+                                          {pr.days_covered > 0 ? ` · covers ${pr.days_covered}d` : ''}
+                                          {` (${pr.status})`}
+                                        </ToneBadge>
                                       ))}
                                     </div>
                                   )}
@@ -991,10 +1091,10 @@ export default function PlannerPage() {
                                       {prod.variants.map((v, vi) => (
                                         <div key={vi} style={{ display: 'flex', gap: 12, padding: '2px 0' }}>
                                           <span style={{ minWidth: 140, color: 'var(--t1)' }}>
-                                            {v.variant} {v.colour && <span style={{ color: 'var(--t2)' }}>{v.colour}</span>}
+                                            {v.variant} {v.colour && <span style={{ color: 'var(--t3)' }}>{v.colour}</span>}
                                           </span>
-                                          {v.gap_ecomm  > 0 && <span>{v.gap_ecomm} ecomm</span>}
-                                          {v.gap_retail > 0 && <span>{v.gap_retail} retail</span>}
+                                          {v.gap_ecomm  > 0 && <span className="num">{fmt(v.gap_ecomm)} ecomm</span>}
+                                          {v.gap_retail > 0 && <span className="num">{fmt(v.gap_retail)} retail</span>}
                                         </div>
                                       ))}
                                     </div>
@@ -1004,19 +1104,19 @@ export default function PlannerPage() {
                                     <div style={{
                                       margin: '6px 4px 10px',
                                       padding: 14,
-                                      background: 'var(--surface)',
-                                      border: '1px solid var(--border)',
-                                      borderRadius: 6,
+                                      background: 'var(--surface-2)',
+                                      border: '1px solid var(--border-2)',
+                                      borderRadius: 'var(--r-sm)',
                                     }}>
                                       <div style={{ fontSize: 12, color: 'var(--t2)', marginBottom: 10 }}>
                                         Schedule <strong style={{ color: 'var(--t1)' }}>{scheduling.product}</strong>
-                                        &nbsp;→&nbsp;{dateLabel} dispatch
+                                        {' → '}<span className="num">{dateLabel}</span> dispatch
                                       </div>
                                       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, marginBottom: 10 }}>
                                         <thead>
-                                          <tr style={{ background: 'var(--surface-2)', color: 'var(--t2)' }}>
+                                          <tr>
                                             {['Variant', 'Colour', 'Qty Ecomm', 'Qty Retail'].map(h => (
-                                              <th key={h} style={{ padding: '5px 8px', textAlign: 'left', fontWeight: 500 }}>{h}</th>
+                                              <th key={h} className="eyebrow" style={{ padding: '5px 8px', textAlign: 'left' }}>{h}</th>
                                             ))}
                                           </tr>
                                         </thead>
@@ -1025,21 +1125,19 @@ export default function PlannerPage() {
                                             <tr key={vi} style={{ borderTop: '1px solid var(--border)' }}>
                                               <td style={{ padding: '5px 8px', color: 'var(--t1)' }}>{v.variant}</td>
                                               <td style={{ padding: '5px 8px', color: 'var(--t2)' }}>{v.colour}</td>
-                                              <td style={{ padding: '5px 8px' }}>
+                                              <td style={{ padding: '5px 8px', whiteSpace: 'nowrap' }}>
                                                 <input type="number" min={0} value={v.qty_ecomm}
                                                   onChange={e => setSchedulingVariantQty(vi, 'qty_ecomm', e.target.value)}
-                                                  style={{ width: 70, padding: '3px 6px', background: 'var(--surface-2)',
-                                                    border: '1px solid var(--border)', color: 'var(--t1)', borderRadius: 3, fontSize: 12 }} />
-                                                <span style={{ marginLeft: 6, color: 'var(--t3)', fontSize: 11 }}>
+                                                  style={smallInput} />
+                                                <span className="num" style={{ marginLeft: 6, color: 'var(--t3)', fontSize: 11 }}>
                                                   /{v.gap_ecomm}
                                                 </span>
                                               </td>
-                                              <td style={{ padding: '5px 8px' }}>
+                                              <td style={{ padding: '5px 8px', whiteSpace: 'nowrap' }}>
                                                 <input type="number" min={0} value={v.qty_retail}
                                                   onChange={e => setSchedulingVariantQty(vi, 'qty_retail', e.target.value)}
-                                                  style={{ width: 70, padding: '3px 6px', background: 'var(--surface-2)',
-                                                    border: '1px solid var(--border)', color: 'var(--t1)', borderRadius: 3, fontSize: 12 }} />
-                                                <span style={{ marginLeft: 6, color: 'var(--t3)', fontSize: 11 }}>
+                                                  style={smallInput} />
+                                                <span className="num" style={{ marginLeft: 6, color: 'var(--t3)', fontSize: 11 }}>
                                                   /{v.gap_retail}
                                                 </span>
                                               </td>
@@ -1050,9 +1148,10 @@ export default function PlannerPage() {
 
                                       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 }}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                                          <span style={{ color: 'var(--t2)' }}>Add to:</span>
-                                          <label style={{ cursor: 'pointer', color: 'var(--t1)' }}>
+                                          <span className="eyebrow">Add to</span>
+                                          <label style={{ cursor: 'pointer', color: 'var(--t1)', display: 'flex', alignItems: 'center', gap: 5 }}>
                                             <input type="radio" name="cartTarget"
+                                              style={{ accentColor: 'var(--yellow)' }}
                                               checked={scheduleTarget.cartId === 'new'}
                                               onChange={() => {
                                                 setScheduleTarget(prev => ({
@@ -1061,11 +1160,12 @@ export default function PlannerPage() {
                                                 }));
                                                 setSchedulingError('');
                                               }} />
-                                            &nbsp;New day
+                                            New day
                                           </label>
                                           {sortedCarts.map(c => (
-                                            <label key={c.id} style={{ cursor: 'pointer', color: 'var(--t1)' }}>
+                                            <label key={c.id} style={{ cursor: 'pointer', color: 'var(--t1)', display: 'flex', alignItems: 'center', gap: 5 }}>
                                               <input type="radio" name="cartTarget"
+                                                style={{ accentColor: 'var(--yellow)' }}
                                                 checked={scheduleTarget.cartId === c.id}
                                                 onChange={() => {
                                                   setScheduleTarget(prev => ({
@@ -1075,61 +1175,47 @@ export default function PlannerPage() {
                                                   }));
                                                   setSchedulingError('');
                                                 }} />
-                                              &nbsp;{c.production_date
+                                              <span className="num">{c.production_date
                                                 ? new Date(c.production_date + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
-                                                : 'Unscheduled'}
-                                              <span style={{ color: 'var(--t3)' }}> ({c.lines.length})</span>
+                                                : 'Unscheduled'}</span>
+                                              <span className="num" style={{ color: 'var(--t4)' }}>({c.lines.length})</span>
                                             </label>
                                           ))}
                                         </div>
 
                                         {scheduleTarget.cartId === 'new' && (
                                           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                            <span style={{ color: 'var(--t2)' }}>Production date:</span>
+                                            <span className="eyebrow">Production date</span>
                                             <input type="date"
                                               value={scheduleTarget.production_date}
                                               min={todayLocalISO}
                                               onChange={e => { setScheduleTarget(prev => ({ ...prev, production_date: e.target.value })); setSchedulingError(''); }}
-                                              style={{ padding: '4px 8px', background: 'var(--surface-2)', border: '1px solid var(--border)',
-                                                color: 'var(--t1)', borderRadius: 3, fontSize: 12 }} />
+                                              style={dateInput} />
                                           </div>
                                         )}
 
                                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                          <span style={{ color: 'var(--t2)', marginRight: 4 }}>Line:</span>
+                                          <span className="eyebrow" style={{ marginRight: 4 }}>Line</span>
                                           {['L1','L2','L3'].map(L => (
-                                            <button key={L}
-                                              onClick={() => { setScheduleTarget(prev => ({ ...prev, line_no: L })); setSchedulingError(''); }}
-                                              style={{
-                                                padding: '5px 12px', fontSize: 11, fontWeight: 600,
-                                                background: scheduleTarget.line_no === L ? '#F2CD1A' : 'var(--surface-2)',
-                                                color:      scheduleTarget.line_no === L ? '#080808' : 'var(--t2)',
-                                                border: '1px solid ' + (scheduleTarget.line_no === L ? '#F2CD1A' : 'var(--border)'),
-                                                borderRadius: 3, cursor: 'pointer',
-                                              }}>{L}</button>
+                                            <LinePickBtn key={L}
+                                              active={scheduleTarget.line_no === L}
+                                              onClick={() => { setScheduleTarget(prev => ({ ...prev, line_no: L })); setSchedulingError(''); }}>
+                                              {L}
+                                            </LinePickBtn>
                                           ))}
                                         </div>
                                       </div>
 
-                                      {schedulingError && (
-                                        <div style={{
-                                          marginTop: 10, padding: '6px 10px',
-                                          background: '#DE2A2A1A', color: '#DE2A2A',
-                                          border: '1px solid #DE2A2A55', borderRadius: 4,
-                                          fontSize: 11, fontWeight: 600,
-                                        }}>{schedulingError}</div>
-                                      )}
+                                      {schedulingError && <InlineError>{schedulingError}</InlineError>}
 
                                       <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
                                         <button onClick={() => { setScheduling(null); setSchedulingError(''); }}
-                                          style={{ padding: '6px 12px', fontSize: 12, background: 'transparent',
-                                            color: 'var(--t2)', border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer' }}>
+                                          style={{ ...btnGhost, padding: '6px 12px', fontSize: 12 }}>
                                           Cancel
                                         </button>
                                         <button onClick={addToSchedule}
-                                          style={{ padding: '6px 14px', fontSize: 12, fontWeight: 600,
-                                            background: '#F2CD1A', color: '#080808', border: 'none', borderRadius: 4, cursor: 'pointer' }}>
-                                          Add to Schedule
+                                          style={{ ...btnPrimary, padding: '6px 14px', fontSize: 11 }}>
+                                          <Icon name="plus" size={12} /> Add to Schedule
                                         </button>
                                       </div>
                                     </div>
@@ -1147,34 +1233,35 @@ export default function PlannerPage() {
             )}
           </div>
 
-          {/* RIGHT: Production Schedule — yellow-accent treatment */}
+          {/* RIGHT: Production Schedule — yellow-accent rail */}
           <div style={{
             position: 'sticky', top: 16, alignSelf: 'flex-start',
             maxHeight: 'calc(100vh - 32px)', overflowY: 'auto',
-            borderLeft: '2px solid #F2CD1A', paddingLeft: 16,
+            borderLeft: '2px solid var(--yellow)', paddingLeft: 16,
           }}>
             <div style={{
               display: 'flex', justifyContent: 'space-between', alignItems: 'center',
               paddingBottom: 10, marginBottom: 14,
-              borderBottom: '1px solid #F2CD1A',
+              borderBottom: '1px solid var(--brand-bd)',
             }}>
-              <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', color: '#F2CD1A', textTransform: 'uppercase' }}>
-                Production Schedule
+              <span className="label" style={{ fontSize: 11, color: 'var(--yellow)', display: 'flex', alignItems: 'center', gap: 7 }}>
+                <Icon name="calendar" size={14} /> Production Schedule
               </span>
               <button onClick={createEmptyCart}
-                style={{ padding: 0, fontSize: 11, fontWeight: 600, background: 'transparent',
-                  border: 'none', color: '#F2CD1A', cursor: 'pointer' }}>
-                + New Day
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: 0,
+                  fontFamily: 'var(--font-display)', fontSize: 10, fontWeight: 700,
+                  letterSpacing: '0.05em', textTransform: 'uppercase',
+                  background: 'transparent', border: 'none', color: 'var(--yellow)', cursor: 'pointer' }}>
+                <Icon name="plus" size={12} /> New Day
               </button>
             </div>
 
             {sortedCarts.length === 0 && (
               <p style={{ color: 'var(--t3)', fontSize: 12 }}>
-                No production days scheduled yet. Click &quot;+ Schedule&quot; on a product
+                No production days scheduled yet. Click &quot;Schedule&quot; on a product
                 under Dispatch Needs to start a cart.
               </p>
             )}
-
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               {sortedCarts.map(cart => {
                 const cartStatus = createStatus[cart.id] || {};
@@ -1183,26 +1270,26 @@ export default function PlannerPage() {
 
                 return (
                   <div key={cart.id} style={{
-                    border: '1px solid var(--border)', borderRadius: 8, padding: 14,
-                    background: 'var(--surface)',
+                    border: '1px solid var(--border)', borderRadius: 'var(--r-md)', padding: 14,
+                    background: 'var(--surface)', boxShadow: 'var(--shadow-card)',
                   }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-                      <span style={{ fontSize: 13, color: '#F2CD1A' }}>📅</span>
+                      <span style={{ color: 'var(--yellow)', display: 'flex' }}><Icon name="calendar" size={14} /></span>
                       <input type="date"
                         value={cart.production_date}
                         min={todayLocalISO}
                         onChange={e => setCartDate(cart.id, e.target.value)}
                         style={{
                           padding: '3px 0', background: 'transparent',
-                          border: 'none', borderBottom: '1px solid var(--border)',
-                          color: 'var(--t1)', fontSize: 13, width: 138,
-                          outline: 'none',
+                          border: 'none', borderBottom: '1px solid var(--border-2)',
+                          color: 'var(--t1)', fontFamily: 'var(--font-mono)', fontSize: 13, width: 138,
+                          outline: 'none', colorScheme: 'dark',
                         }} />
                       <button onClick={() => deleteCart(cart.id)}
                         title="Delete cart"
-                        style={{ marginLeft: 'auto', padding: 0, fontSize: 13, background: 'transparent',
-                          color: 'var(--t3)', border: 'none', cursor: 'pointer' }}>
-                        ✕
+                        style={{ marginLeft: 'auto', padding: 0, background: 'transparent',
+                          color: 'var(--t3)', border: 'none', cursor: 'pointer', display: 'flex' }}>
+                        <Icon name="x" size={14} />
                       </button>
                     </div>
 
@@ -1211,11 +1298,11 @@ export default function PlannerPage() {
                       if (!line) {
                         return (
                           <div key={L} style={{
-                            padding: '8px 4px', fontSize: 11, color: 'var(--t3)',
+                            padding: '8px 4px', fontSize: 11, color: 'var(--t4)',
                             borderTop: '1px dashed var(--border)',
                             display: 'flex', alignItems: 'center', gap: 8,
                           }}>
-                            <span style={{ fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{L}</span>
+                            <span className="num" style={{ color: 'var(--t4)' }}>{L}</span>
                             <span style={{ fontStyle: 'italic' }}>(empty)</span>
                           </div>
                         );
@@ -1228,24 +1315,28 @@ export default function PlannerPage() {
                           padding: '8px 4px', borderTop: '1px solid var(--border)',
                         }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)' }}>{L}</span>
-                            <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--t1)' }}>{line.product}</span>
+                            <span className="num" style={{ fontSize: 11, fontWeight: 700, color: 'var(--t2)' }}>{L}</span>
+                            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--t1)' }}>{line.product}</span>
                             {status === 'creating' && <span style={{ fontSize: 11, color: 'var(--t3)' }}>…</span>}
-                            {status === 'done' && <span style={{ fontSize: 11, color: '#22c55e' }}>✓ {runNo || ''}</span>}
-                            {status === 'error' && <span style={{ fontSize: 11, color: '#DE2A2A' }}>✗</span>}
+                            {status === 'done' && (
+                              <span className="num" style={{ fontSize: 11, color: 'var(--ok-fg)', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                                <Icon name={Check} size={11} /> {runNo || ''}
+                              </span>
+                            )}
+                            {status === 'error' && <span style={{ color: 'var(--bad-fg)', display: 'flex' }}><Icon name="x" size={12} /></span>}
                             {status === 'skipped' && <span style={{ fontSize: 11, color: 'var(--t3)' }}>(skipped)</span>}
                             <button
                               onClick={() => isRepeatOpen ? setRepeatPanel(null) : openRepeatPanel(cart, line)}
                               title="Repeat on another day"
-                              style={{ marginLeft: 'auto', padding: 0, fontSize: 13, background: 'transparent',
-                                color: isRepeatOpen ? '#F2CD1A' : 'var(--t3)', border: 'none', cursor: 'pointer' }}>
-                              ↻
+                              style={{ marginLeft: 'auto', padding: 0, background: 'transparent',
+                                color: isRepeatOpen ? 'var(--yellow)' : 'var(--t3)', border: 'none', cursor: 'pointer', display: 'flex' }}>
+                              <Icon name={RotateCcw} size={13} />
                             </button>
                             <button onClick={() => deleteLine(cart.id, line.id)}
                               title="Remove line"
-                              style={{ padding: 0, fontSize: 12, background: 'transparent',
-                                color: 'var(--t3)', border: 'none', cursor: 'pointer' }}>
-                              ✕
+                              style={{ padding: 0, background: 'transparent',
+                                color: 'var(--t3)', border: 'none', cursor: 'pointer', display: 'flex' }}>
+                              <Icon name="x" size={13} />
                             </button>
                           </div>
 
@@ -1260,35 +1351,25 @@ export default function PlannerPage() {
                                   display: 'flex', alignItems: 'center', gap: 6, fontSize: 11,
                                 }}>
                                   <span style={{ flex: 1, color: 'var(--t1)', minWidth: 0 }}>
-                                    {v.variant} <span style={{ color: 'var(--t2)' }}>{v.colour}</span>
+                                    {v.variant} <span style={{ color: 'var(--t3)' }}>{v.colour}</span>
                                   </span>
                                   {v.gap_ecomm > 0 && (
                                     <>
                                       <input type="number" min={0} value={v.qty_ecomm}
                                         onChange={e => updateVariantQty(cart.id, line.id, v.variant, v.colour, 'qty_ecomm', e.target.value)}
-                                        style={{
-                                          width: 56, padding: '2px 6px',
-                                          background: 'var(--surface-2)', border: '1px solid var(--border)',
-                                          color: 'var(--t1)', borderRadius: 3,
-                                          fontSize: 11, textAlign: 'right',
-                                        }} />
-                                      <span style={{ color: 'var(--t3)' }}>e</span>
+                                        style={{ ...smallInput, width: 56, padding: '2px 6px', fontSize: 11, textAlign: 'right' }} />
+                                      <span className="num" style={{ color: 'var(--t3)' }}>e</span>
                                     </>
                                   )}
                                   {v.gap_retail > 0 && (
                                     <>
                                       <input type="number" min={0} value={v.qty_retail}
                                         onChange={e => updateVariantQty(cart.id, line.id, v.variant, v.colour, 'qty_retail', e.target.value)}
-                                        style={{
-                                          width: 56, padding: '2px 6px',
-                                          background: 'var(--surface-2)', border: '1px solid var(--border)',
-                                          color: 'var(--t1)', borderRadius: 3,
-                                          fontSize: 11, textAlign: 'right',
-                                        }} />
-                                      <span style={{ color: 'var(--t3)' }}>r</span>
+                                        style={{ ...smallInput, width: 56, padding: '2px 6px', fontSize: 11, textAlign: 'right' }} />
+                                      <span className="num" style={{ color: 'var(--t3)' }}>r</span>
                                     </>
                                   )}
-                                  <span style={{ color: 'var(--t3)', fontSize: 10, marginLeft: 4, whiteSpace: 'nowrap' }}>
+                                  <span className="num" style={{ color: 'var(--t4)', fontSize: 10, marginLeft: 4, whiteSpace: 'nowrap' }}>
                                     gap: {gapLabel || '—'}
                                   </span>
                                 </div>
@@ -1303,16 +1384,18 @@ export default function PlannerPage() {
                             return (
                               <div style={{
                                 marginTop: 6, marginLeft: 16,
-                                padding: '4px 8px',
-                                background: 'rgba(242,205,26,0.12)',
-                                border: '1px solid rgba(242,205,26,0.4)',
-                                borderRadius: 4,
+                                padding: '5px 9px',
+                                background: 'var(--warn-bg)',
+                                border: '1px solid var(--warn-bd)',
+                                borderRadius: 'var(--r-xs)',
                                 fontSize: 11,
-                                color: '#a07c00',
+                                color: 'var(--warn-fg)',
+                                display: 'flex', alignItems: 'flex-start', gap: 6,
                               }}>
-                                ⚠ Stock short: {head.map(p =>
+                                <Icon name="alert" size={12} style={{ marginTop: 1 }} />
+                                <span>Stock short: {head.map(p =>
                                   `${p.part_name || p.part_code} (need ${p.required}, have ${p.available})`
-                                ).join(' · ')}{moreCount > 0 ? ` · +${moreCount} more` : ''}
+                                ).join(' · ')}{moreCount > 0 ? ` · +${moreCount} more` : ''}</span>
                               </div>
                             );
                           })()}
@@ -1320,49 +1403,35 @@ export default function PlannerPage() {
                           {isRepeatOpen && (
                             <div style={{
                               marginTop: 8, padding: 10,
-                              background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 4,
+                              background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-sm)',
                             }}>
-                              <div style={{ fontSize: 11, color: 'var(--t2)', marginBottom: 8 }}>
-                                ↻ Repeat <strong style={{ color: 'var(--t1)' }}>{line.product}</strong> on another day
+                              <div style={{ fontSize: 11, color: 'var(--t2)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <Icon name={RotateCcw} size={12} /> Repeat <strong style={{ color: 'var(--t1)' }}>{line.product}</strong> on another day
                               </div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 11 }}>
-                                <span style={{ color: 'var(--t2)' }}>Date:</span>
+                                <span className="eyebrow">Date</span>
                                 <input type="date"
                                   value={repeatTarget.date}
                                   min={todayLocalISO}
                                   onChange={e => { setRepeatTarget(prev => ({ ...prev, date: e.target.value })); setRepeatError(''); }}
-                                  style={{ padding: '3px 6px', background: 'var(--surface)', border: '1px solid var(--border)',
-                                    color: 'var(--t1)', borderRadius: 3, fontSize: 11 }} />
-                                <span style={{ color: 'var(--t2)', marginLeft: 4 }}>Line:</span>
+                                  style={{ ...dateInput, fontSize: 11, padding: '3px 7px' }} />
+                                <span className="eyebrow" style={{ marginLeft: 4 }}>Line</span>
                                 {['L1','L2','L3'].map(LL => (
-                                  <button key={LL}
-                                    onClick={() => { setRepeatTarget(prev => ({ ...prev, line_no: LL })); setRepeatError(''); }}
-                                    style={{
-                                      padding: '3px 10px', fontSize: 10, fontWeight: 600,
-                                      background: repeatTarget.line_no === LL ? '#F2CD1A' : 'var(--surface)',
-                                      color:      repeatTarget.line_no === LL ? '#080808' : 'var(--t2)',
-                                      border: '1px solid ' + (repeatTarget.line_no === LL ? '#F2CD1A' : 'var(--border)'),
-                                      borderRadius: 3, cursor: 'pointer',
-                                    }}>{LL}</button>
+                                  <LinePickBtn key={LL} size="sm"
+                                    active={repeatTarget.line_no === LL}
+                                    onClick={() => { setRepeatTarget(prev => ({ ...prev, line_no: LL })); setRepeatError(''); }}>
+                                    {LL}
+                                  </LinePickBtn>
                                 ))}
                               </div>
-                              {repeatError && (
-                                <div style={{
-                                  marginTop: 6, padding: '4px 8px',
-                                  background: '#DE2A2A1A', color: '#DE2A2A',
-                                  border: '1px solid #DE2A2A55', borderRadius: 3,
-                                  fontSize: 10, fontWeight: 600,
-                                }}>{repeatError}</div>
-                              )}
+                              {repeatError && <InlineError>{repeatError}</InlineError>}
                               <div style={{ marginTop: 8, display: 'flex', gap: 6 }}>
                                 <button onClick={() => { setRepeatPanel(null); setRepeatError(''); }}
-                                  style={{ padding: '4px 10px', fontSize: 10, background: 'transparent',
-                                    color: 'var(--t2)', border: '1px solid var(--border)', borderRadius: 3, cursor: 'pointer' }}>
+                                  style={{ ...btnGhost, padding: '4px 10px', fontSize: 11 }}>
                                   Cancel
                                 </button>
                                 <button onClick={() => handleRepeatLine(line)}
-                                  style={{ padding: '4px 12px', fontSize: 10, fontWeight: 600,
-                                    background: '#F2CD1A', color: '#080808', border: 'none', borderRadius: 3, cursor: 'pointer' }}>
+                                  style={{ ...btnPrimary, padding: '4px 12px', fontSize: 10 }}>
                                   Add to Schedule
                                 </button>
                               </div>
@@ -1375,22 +1444,20 @@ export default function PlannerPage() {
                     <div style={{ marginTop: 12 }}>
                       {allDone ? (
                         <button disabled
-                          style={{ width: '100%', padding: '8px 10px', fontSize: 12, fontWeight: 600,
-                            background: 'var(--surface-2)', color: '#22c55e',
-                            border: '1px solid #22c55e44', borderRadius: 4, cursor: 'default' }}>
-                          ✓ All Created
+                          style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                            padding: '8px 10px', fontFamily: 'var(--font-display)', fontSize: 11, fontWeight: 700,
+                            letterSpacing: '0.05em', textTransform: 'uppercase',
+                            background: 'var(--ok-bg)', color: 'var(--ok-fg)',
+                            border: '1px solid var(--ok-bd)', borderRadius: 'var(--r-sm)', cursor: 'default' }}>
+                          <Icon name={Check} size={13} /> All Created
                         </button>
                       ) : (
                         <button
                           onClick={() => handleCreateAll(cart)}
                           disabled={!cart.production_date || cart.lines.length === 0 || cartCreating}
                           style={{
-                            width: '100%', padding: '8px 10px', fontSize: 12, fontWeight: 600,
-                            background: (!cart.production_date || cart.lines.length === 0 || cartCreating)
-                              ? 'var(--surface-2)' : '#F2CD1A',
-                            color: (!cart.production_date || cart.lines.length === 0 || cartCreating)
-                              ? 'var(--t3)' : '#080808',
-                            border: 'none', borderRadius: 4,
+                            ...btnPrimary, width: '100%', padding: '8px 10px', fontSize: 11,
+                            opacity: (!cart.production_date || cart.lines.length === 0 || cartCreating) ? 0.5 : 1,
                             cursor: (!cart.production_date || cart.lines.length === 0 || cartCreating)
                               ? 'not-allowed' : 'pointer',
                           }}>
@@ -1411,58 +1478,60 @@ export default function PlannerPage() {
       )}
 
       {view === 'config' && (
-        <div>
-          <p style={{ fontSize: 13, color: 'var(--t2)', marginBottom: 16 }}>
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)',
+          borderRadius: 'var(--r-md)', boxShadow: 'var(--shadow-card)', overflow: 'hidden' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '13px 16px',
+            borderBottom: '1px solid var(--border)' }}>
+            <span style={{ color: 'var(--t3)', display: 'flex' }}><Icon name="settings" size={15} /></span>
+            <span className="label" style={{ fontSize: 12, color: 'var(--t1)', flex: 1 }}>Default batch sizes</span>
+          </div>
+          <p style={{ fontSize: 13, color: 'var(--t2)', margin: 0, padding: '12px 16px 4px' }}>
             Set the default production run size per product. Used to calculate
             how many runs are needed to cover a dispatch gap.
             &quot;History&quot; shows the most common run size from past production runs.
           </p>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
-              <tr style={{ background: 'var(--surface-2)', color: 'var(--t2)' }}>
+              <tr>
                 {['Product', 'Default Batch Size', 'From History', ''].map(h => (
-                  <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontWeight: 500 }}>{h}</th>
+                  <th key={h} className="eyebrow" style={{ padding: '10px 16px', textAlign: 'left' }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {batchConfig.map(row => (
                 <tr key={row.product} style={{ borderTop: '1px solid var(--border)' }}>
-                  <td style={{ padding: '10px 14px', color: 'var(--t1)' }}>{row.product}</td>
-                  <td style={{ padding: '10px 14px' }}>
+                  <td style={{ padding: '10px 16px', color: 'var(--t1)', fontWeight: 600 }}>{row.product}</td>
+                  <td style={{ padding: '10px 16px' }}>
                     {editingBatch[row.product] !== undefined ? (
                       <input type="number" min={1} max={10000}
                         value={editingBatch[row.product]}
                         onChange={e => setEditingBatch(prev => ({ ...prev, [row.product]: e.target.value }))}
-                        style={{ width: 80, padding: '4px 8px', background: 'var(--surface)',
-                          border: '1px solid var(--border)', color: 'var(--t1)', borderRadius: 4 }} />
+                        style={{ ...smallInput, width: 84 }} />
                     ) : (
-                      <strong>{row.default_batch_size}</strong>
+                      <strong className="num" style={{ fontWeight: 700 }}>{fmt(row.default_batch_size)}</strong>
                     )}
                   </td>
-                  <td style={{ padding: '10px 14px', color: 'var(--t2)' }}>
+                  <td className="num" style={{ padding: '10px 16px', color: 'var(--t2)' }}>
                     {row.history_suggested_qty || '—'}
                   </td>
-                  <td style={{ padding: '10px 14px' }}>
+                  <td style={{ padding: '10px 16px' }}>
                     {editingBatch[row.product] !== undefined ? (
                       <div style={{ display: 'flex', gap: 6 }}>
                         <button onClick={() => handleSaveBatch(row.product)}
-                          style={{ padding: '4px 12px', background: '#F2CD1A', color: '#080808',
-                            border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+                          style={{ ...btnPrimary, padding: '4px 12px', fontSize: 11 }}>
                           Save
                         </button>
                         <button onClick={() => setEditingBatch(prev => { const n = { ...prev }; delete n[row.product]; return n; })}
-                          style={{ padding: '4px 12px', background: 'transparent', color: 'var(--t2)',
-                            border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer', fontSize: 12 }}>
+                          style={{ ...btnGhost, padding: '4px 12px', fontSize: 12 }}>
                           Cancel
                         </button>
                       </div>
                     ) : (
                       <button
                         onClick={() => setEditingBatch(prev => ({ ...prev, [row.product]: row.default_batch_size }))}
-                        style={{ padding: '4px 12px', background: 'transparent', color: 'var(--t2)',
-                          border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer', fontSize: 12 }}>
-                        Edit
+                        style={{ ...btnGhost, padding: '4px 12px', fontSize: 12 }}>
+                        <Icon name="edit" size={12} /> Edit
                       </button>
                     )}
                   </td>

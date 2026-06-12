@@ -1,8 +1,21 @@
 'use client';
+/* ════════════════════════════════════════════════════════════
+   OPERATORS — Setup › Operators (Pit Wall v2 reskin of
+   redesign-reference/app/operators.jsx). Backend operator
+   directory that feeds Attendance + Manpower. Search · dept +
+   status filters · Add Operator (auto-assigns LOT-FACT-#### +
+   QR badge) · per-row QR / Edit / Deactivate. All data actions
+   (getOperators, createOperator, updateOperator, QR print HTML)
+   kept exactly as before — visual layer only.
+   ════════════════════════════════════════════════════════════ */
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from '@throttle/auth';
 import { workerFetch } from '@throttle/db';
-import { Spinner, EmptyState, Panel, Chip, StatusBadge, useToast, printWindow, useEscapeClose } from '@throttle/ui';
+import { Spinner, useToast, printWindow, useEscapeClose } from '@throttle/ui';
+import { useRefreshState } from '../layout.js';
+import {
+  Icon, Panel, btnPrimary, btnGhost, inputStyle,
+} from '../../../components/kit/index.js';
 
 // ── Constants ────────────────────────────────────────────────
 // Department values must match the CHECK constraint on public.operators.
@@ -27,20 +40,29 @@ const STATUSES = [
 ];
 
 // ── Styles ───────────────────────────────────────────────────
-const primaryBtn    = { padding: '8px 14px', background: 'var(--yellow)', color: '#0a0a0a', border: '1px solid var(--yellow)', borderRadius: 3, fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer' };
-const secondaryBtn  = { padding: '8px 14px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 13, cursor: 'pointer' };
-const smallBtn      = { padding: '5px 11px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 12, cursor: 'pointer', letterSpacing: '0.04em' };
-const inputStyle    = { background: 'var(--surface)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '8px 12px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 13, outline: 'none' };
-const selectStyle   = { background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--t1)', fontSize: 13, fontFamily: 'var(--mono)', padding: '8px 12px', borderRadius: 3 };
-const labelStyle    = { fontSize: 11, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase', display: 'block', marginBottom: 6, fontFamily: 'var(--mono)' };
-const sectionLabel  = { fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t2)', margin: 0 };
-const thStyle       = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
-const tdStyle       = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 13, borderBottom: '1px solid rgba(64,64,64,.5)', whiteSpace: 'nowrap', color: 'var(--t1)' };
+const selectStyle = {
+  background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-sm)',
+  padding: '9px 12px', color: 'var(--t1)', fontFamily: 'var(--font-ui)', fontSize: 13,
+  outline: 'none', cursor: 'pointer',
+};
+const modalInput = {
+  background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-sm)',
+  padding: '9px 11px', color: 'var(--t1)', fontFamily: 'var(--font-ui)', fontSize: 14,
+  outline: 'none', width: '100%',
+};
+const actionBtn = (color) => ({
+  display: 'inline-flex', alignItems: 'center', gap: 5, background: 'transparent',
+  border: `1px solid ${color}`, color, borderRadius: 'var(--r-xs)', padding: '4px 9px',
+  fontFamily: 'var(--font-ui)', fontSize: 11.5, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap',
+});
+
+const COLS = 'minmax(160px,1.5fr) 150px 130px 110px 110px 220px';
 
 // ── Operators Page ───────────────────────────────────────────
 export default function OperatorsPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
+  const { setRefreshing, setLastRefreshed } = useRefreshState();
 
   // Permission: anyone with the floor-management role (or admin) can manage
   // operators. The worker itself gates by canManageFloor — this guards the UI.
@@ -69,6 +91,7 @@ export default function OperatorsPage() {
   const loadData = useCallback(async () => {
     if (!session) return;
     setLoading(true);
+    setRefreshing(true);
     try {
       const res = await workerFetch('getOperators', { data: {} }, session);
       const rows = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : []);
@@ -78,8 +101,10 @@ export default function OperatorsPage() {
       setOperators([]);
     } finally {
       setLoading(false);
+      setRefreshing(false);
+      setLastRefreshed(new Date());
     }
-  }, [session, showToast]);
+  }, [session, showToast, setRefreshing, setLastRefreshed]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -213,83 +238,105 @@ export default function OperatorsPage() {
 
   // ── Render ───────────────────────────────────────────────
   return (
-    <>
+    <div style={{ maxWidth: 1320, margin: '0 auto' }}>
+      <style>{`.rl-op-row:hover { background: var(--surface-2); }`}</style>
+
       {/* Add/Edit Modal */}
       {modal && (
         <div
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 1000, display: 'grid', placeItems: 'center' }}
           onClick={(e) => { if (e.target === e.currentTarget && !mSaving) setModal(null); }}
         >
-          <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: 24, width: 480, maxWidth: '92vw' }}>
-            <h2 style={{ ...sectionLabel, color: 'var(--yellow)', marginBottom: 16 }}>
-              {modal.mode === 'add' ? 'Add Operator' : `Edit ${modal.op?.name}`}
-            </h2>
-            {modal.mode === 'edit' && modal.op?.employee_id && (
-              <div style={{ marginBottom: 12, fontSize: 11, color: 'var(--t3)' }}>
-                Employee ID: <span style={{ color: 'var(--t1)', fontFamily: 'var(--mono)' }}>{modal.op.employee_id}</span>
-              </div>
-            )}
-
-            <div style={{ marginBottom: 12 }}>
-              <label style={labelStyle}>Name <span style={{ color: 'var(--red)' }}>*</span></label>
-              <input style={{ ...inputStyle, width: '100%' }} value={mName} onChange={e => setMName(e.target.value)} placeholder="Full name" />
+          <div style={{ width: 480, maxWidth: '92vw', background: 'var(--surface)', border: '1px solid var(--border-2)',
+            borderRadius: 'var(--r-lg)', boxShadow: 'var(--shadow-pop)', animation: 'rl-pop-in 200ms var(--ease)' }}>
+            <div style={{ padding: '18px 22px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10 }}>
+              <Icon name="users" size={18} style={{ color: 'var(--yellow)' }} />
+              <span className="label" style={{ fontSize: 13, color: 'var(--t1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {modal.mode === 'add' ? 'Add operator' : `Edit · ${modal.op?.name || ''}`}
+              </span>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
-              <div>
-                <label style={labelStyle}>Department</label>
-                <select style={{ ...selectStyle, width: '100%' }} value={mDept} onChange={e => setMDept(e.target.value)}>
-                  {DEPARTMENTS.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
-                </select>
-              </div>
-              <div>
-                <label style={labelStyle}>Employment</label>
-                <select style={{ ...selectStyle, width: '100%' }} value={mType} onChange={e => setMType(e.target.value)}>
-                  {EMPLOYMENT_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-                </select>
-              </div>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
-              {modal.mode === 'edit' && (
-                <div>
-                  <label style={labelStyle}>Status</label>
-                  <select style={{ ...selectStyle, width: '100%' }} value={mStatus} onChange={e => setMStatus(e.target.value)}>
-                    {STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-                  </select>
+            <div style={{ padding: 22, display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {modal.mode === 'edit' && modal.op?.employee_id && (
+                <div style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--t3)' }}>
+                  Employee ID · <span className="num" style={{ color: 'var(--t1)', fontSize: 12 }}>{modal.op.employee_id}</span>
                 </div>
               )}
+
               <div>
-                <label style={labelStyle}>Phone (optional)</label>
-                <input style={{ ...inputStyle, width: '100%' }} value={mPhone} onChange={e => setMPhone(e.target.value)} placeholder="" />
+                <div className="eyebrow" style={{ marginBottom: 7 }}>Full name <span style={{ color: 'var(--bad-fg)' }}>*</span></div>
+                <input autoFocus style={modalInput} value={mName} onChange={e => setMName(e.target.value)} placeholder="Operator name" />
               </div>
+
+              <div style={{ display: 'flex', gap: 14 }}>
+                <div style={{ flex: 1 }}>
+                  <div className="eyebrow" style={{ marginBottom: 7 }}>Department</div>
+                  <select style={{ ...selectStyle, width: '100%' }} value={mDept} onChange={e => setMDept(e.target.value)}>
+                    {DEPARTMENTS.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
+                  </select>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div className="eyebrow" style={{ marginBottom: 7 }}>Type</div>
+                  <select style={{ ...selectStyle, width: '100%' }} value={mType} onChange={e => setMType(e.target.value)}>
+                    {EMPLOYMENT_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: 14 }}>
+                {modal.mode === 'edit' && (
+                  <div style={{ flex: 1 }}>
+                    <div className="eyebrow" style={{ marginBottom: 7 }}>Status</div>
+                    <select style={{ ...selectStyle, width: '100%' }} value={mStatus} onChange={e => setMStatus(e.target.value)}>
+                      {STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                    </select>
+                  </div>
+                )}
+                <div style={{ flex: 1 }}>
+                  <div className="eyebrow" style={{ marginBottom: 7 }}>Phone (optional)</div>
+                  <input style={modalInput} value={mPhone} onChange={e => setMPhone(e.target.value)} placeholder="" />
+                </div>
+              </div>
+
+              {modal.mode === 'add' && (
+                <div style={{ fontFamily: 'var(--font-ui)', fontSize: 11.5, color: 'var(--t3)' }}>
+                  Employee ID auto-assigned · <span className="num" style={{ fontSize: 11 }}>LOT-FACT-####</span>. A QR badge is generated on save.
+                </div>
+              )}
+
+              {mError && (
+                <div style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--bad-fg)' }}>{mError}</div>
+              )}
             </div>
 
-            {mError && <div style={{ color: 'var(--red)', fontSize: 11, marginBottom: 10, fontFamily: 'var(--mono)' }}>{mError}</div>}
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <button onClick={() => setModal(null)} style={secondaryBtn} disabled={mSaving}>Cancel</button>
+            <div style={{ padding: '16px 22px', borderTop: '1px solid var(--border)', display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <button onClick={() => setModal(null)} style={{ ...btnGhost, padding: '9px 16px' }} disabled={mSaving}>Cancel</button>
               <button
                 onClick={submitModal}
                 disabled={mSaving}
-                style={{ ...primaryBtn, opacity: mSaving ? 0.5 : 1 }}
+                style={{ ...btnPrimary, padding: '9px 18px', opacity: mSaving ? 0.5 : 1 }}
               >
-                {mSaving ? 'Saving…' : (modal.mode === 'add' ? 'Add' : 'Save')}
+                {mSaving ? 'Saving…' : (modal.mode === 'add' ? 'Save operator' : 'Save changes')}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Filter bar */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
-        <input
-          data-search-primary
-          style={{ ...inputStyle, width: 220 }}
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          placeholder="Search name / employee ID  · /"
-        />
+      {/* Controls */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, maxWidth: 320, minWidth: 220, display: 'flex', alignItems: 'center', gap: 9,
+          background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-sm)', padding: '9px 12px' }}>
+          <Icon name="search" size={15} style={{ color: 'var(--t3)' }} />
+          <input
+            data-search-primary
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search name / employee ID  · /"
+            style={{ flex: 1, background: 'none', border: 'none', outline: 'none', color: 'var(--t1)',
+              fontFamily: 'var(--font-ui)', fontSize: 13, minWidth: 0 }}
+          />
+        </div>
         <select style={selectStyle} value={deptFilter} onChange={e => setDeptFilter(e.target.value)}>
           <option value="">All Departments</option>
           {DEPARTMENTS.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
@@ -299,77 +346,80 @@ export default function OperatorsPage() {
           {STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
         <div style={{ flex: 1 }} />
-        <button style={secondaryBtn} onClick={loadData} disabled={loading}>↻ Refresh</button>
+        <button style={btnGhost} onClick={loadData} disabled={loading}>
+          <Icon name="activity" size={13} /> Refresh
+        </button>
         {canEdit && (
-          <button onClick={openAdd} style={primaryBtn}>
-            + Add Operator
+          <button onClick={openAdd} style={{ ...btnPrimary, padding: '9px 16px', whiteSpace: 'nowrap' }}>
+            <Icon name="plus" size={15} /> Add Operator
           </button>
         )}
       </div>
 
-      {/* Table */}
-      <Panel padding={0}>
+      {/* Directory */}
+      <Panel pad={8}>
         {loading && operators.length === 0 ? (
           <div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}><Spinner /></div>
         ) : displayRows.length === 0 ? (
-          <EmptyState icon="👥" message="No operators match these filters" />
+          <div style={{ padding: 40, textAlign: 'center', fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--t3)' }}>
+            No operators match these filters.
+          </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr>
-                  {['Name','Employee ID','Department','Type','Status','Actions'].map(h => (
-                    <th key={h} style={thStyle}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {displayRows.map(op => {
-                  const inactive = (op.status || '').toLowerCase() !== 'active';
-                  return (
-                    <tr key={op.id} style={{ opacity: inactive ? 0.55 : 1 }}>
-                      <td style={{ ...tdStyle, fontWeight: 600 }}>{op.name}</td>
-                      <td style={{ ...tdStyle, color: 'var(--t2)' }}>{op.employee_id || '—'}</td>
-                      <td style={{ ...tdStyle, color: 'var(--t2)' }}>{DEPT_LABEL[op.department] || op.department || '—'}</td>
-                      <td style={{ ...tdStyle, color: 'var(--t2)' }}>{op.employment_type === 'contract' ? 'Contract' : 'In House'}</td>
-                      <td style={tdStyle}>
-                        {(op.status || '').toLowerCase() === 'active'
-                          ? <StatusBadge variant="success" icon="●">Active</StatusBadge>
-                          : <StatusBadge variant="neutral">{op.status || 'Inactive'}</StatusBadge>}
-                      </td>
-                      <td style={tdStyle}>
-                        <button onClick={() => printOperatorQr(op)} style={{ ...smallBtn, color: 'var(--state-info, #7b93ff)', borderColor: 'var(--state-info, #7b93ff)', marginRight: 4 }}>
-                          🖨 QR
-                        </button>
-                        {canEdit && (
-                          <>
-                            <button onClick={() => openEdit(op)} style={{ ...smallBtn, color: 'var(--yellow)', borderColor: 'var(--yellow)', marginRight: 4 }}>
-                              Edit
+            <div style={{ display: 'grid', gridTemplateColumns: COLS, gap: 12, padding: '4px 12px 9px',
+              borderBottom: '1px solid var(--border)', minWidth: 880 }}>
+              {['Name', 'Employee ID', 'Department', 'Type', 'Status', 'Actions'].map(h => (
+                <div key={h} className="eyebrow">{h}</div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              {displayRows.map((op, i) => {
+                const inactive = (op.status || '').toLowerCase() !== 'active';
+                return (
+                  <div key={op.id} className="rl-op-row" style={{ display: 'grid', gridTemplateColumns: COLS, gap: 12,
+                    alignItems: 'center', padding: '10px 12px', borderTop: i ? '1px solid var(--border)' : 'none',
+                    minWidth: 880, opacity: inactive ? 0.55 : 1, transition: 'background var(--fast) var(--ease)' }}>
+                    <span style={{ fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 600, color: 'var(--t1)',
+                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                      textTransform: 'uppercase', letterSpacing: '0.02em' }}>{op.name}</span>
+                    <span className="num" style={{ fontSize: 12, color: 'var(--t2)' }}>{op.employee_id || '—'}</span>
+                    <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t2)' }}>{DEPT_LABEL[op.department] || op.department || '—'}</span>
+                    <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t3)' }}>{op.employment_type === 'contract' ? 'Contract' : 'In House'}</span>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
+                        background: !inactive ? 'var(--green)' : 'var(--t4)' }} />
+                      <span className="num" style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase',
+                        color: !inactive ? 'var(--ok-fg)' : 'var(--t3)' }}>
+                        {!inactive ? 'Active' : (op.status || 'Inactive')}
+                      </span>
+                    </span>
+                    <span style={{ display: 'flex', gap: 6 }}>
+                      <button onClick={() => printOperatorQr(op)} style={actionBtn('var(--blue-bright)')}>
+                        <Icon name="qr" size={12} /> QR
+                      </button>
+                      {canEdit && (
+                        <>
+                          <button onClick={() => openEdit(op)} style={actionBtn('var(--yellow)')}>Edit</button>
+                          {!inactive && (
+                            <button onClick={() => deactivate(op)} style={{ ...actionBtn('var(--bad-fg)'), borderColor: 'var(--bad-bd)' }}>
+                              Deactivate
                             </button>
-                            {!inactive && (
-                              <button
-                                onClick={() => deactivate(op)}
-                                style={{ ...smallBtn, color: 'var(--red)', borderColor: 'var(--red)' }}
-                              >
-                                Deactivate
-                              </button>
-                            )}
-                          </>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                          )}
+                        </>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
       </Panel>
 
-      <div style={{ marginTop: 10, fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
-        Showing {displayRows.length} of {operators.length} operators
+      <div style={{ marginTop: 12, fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--t3)', textAlign: 'center' }}>
+        {displayRows.length} of {operators.length} operators · feeds Attendance &amp; Manpower
       </div>
-    </>
+    </div>
   );
 }
 

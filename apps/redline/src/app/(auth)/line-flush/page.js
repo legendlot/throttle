@@ -1,52 +1,32 @@
 'use client';
 import { useEffect, useMemo, useState, useCallback } from 'react';
+import { RotateCw } from 'lucide-react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Modal, Spinner, useToast } from '@throttle/ui';
 import { todayStr } from '@throttle/domain';
+import { useRefreshState } from '../layout.js';
+import {
+  Icon, Panel, ToneBadge, btnPrimary, btnGhost, inputStyle, lineColor, lineRgb,
+} from '../../../components/kit/index.js';
+
+// Pit Wall v2 reskin — flush flows, calls and payloads unchanged.
 
 const LF_RETURN_TYPES = ['Unused', 'Damaged', 'QC Rejected', 'Partial Assembly', 'Wrong Issue'];
-const LF_STATUS_TONES = { 'Pending Verification': 'yellow', Verified: 'green', Disputed: 'red' };
+const LF_STATUS_TONES = { 'Pending Verification': 'warn', Verified: 'ok', Disputed: 'bad' };
 
-const TONE_STYLES = {
-  yellow: { bg: 'rgba(242,205,26,.12)', fg: '#f2cd1a', border: 'rgba(242,205,26,.2)' },
-  green:  { bg: 'rgba(34,197,94,.12)',  fg: '#4ade80', border: 'rgba(34,197,94,.2)' },
-  red:    { bg: 'rgba(222,42,42,.15)',  fg: '#ff7070', border: 'rgba(222,42,42,.25)' },
-  blue:   { bg: 'rgba(33,60,226,.2)',   fg: '#7b93ff', border: 'rgba(33,60,226,.3)' },
-  orange: { bg: 'rgba(255,140,0,.15)',  fg: '#ffaa33', border: 'rgba(255,140,0,.25)' },
-  gray:   { bg: 'rgba(80,80,80,.2)',    fg: '#aaa',    border: 'rgba(80,80,80,.3)' },
+/* ── v2 style vocabulary ─────────────────────────────────────── */
+const inp = { ...inputStyle, fontSize: 13.5, width: 'auto' };
+const inpFull = { ...inputStyle, fontSize: 13.5 };
+const numInp = { ...inpFull, fontFamily: 'var(--font-mono)', fontVariantNumeric: 'tabular-nums' };
+const lblStyle = { display: 'block', marginBottom: 6 };
+const th = { padding: '9px 12px', fontFamily: 'var(--font-display)', fontSize: 10, fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--t3)', textAlign: 'left', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' };
+const td = { padding: '9px 12px', borderBottom: '1px solid var(--border)', fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--t1)', whiteSpace: 'nowrap' };
+const iconBtn = {
+  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  width: 26, height: 26, background: 'transparent', border: '1px solid var(--border-2)',
+  borderRadius: 'var(--r-xs)', color: 'var(--t3)', cursor: 'pointer',
 };
-
-function StatusBadge({ label, tone = 'gray' }) {
-  const s = TONE_STYLES[tone] || TONE_STYLES.gray;
-  return (
-    <span style={{
-      display: 'inline-block', padding: '2px 6px', borderRadius: 2,
-      fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '.04em',
-      textTransform: 'uppercase',
-      background: s.bg, color: s.fg, border: `1px solid ${s.border}`,
-    }}>{label}</span>
-  );
-}
-
-const panelStyle       = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, marginBottom: 16 };
-const panelHeaderStyle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid var(--border)', fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--t2)', gap: 8, flexWrap: 'wrap' };
-const panelBodyStyle   = { padding: '12px 14px' };
-const tableThStyle     = { padding: '8px 10px', fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', textAlign: 'left' };
-const tableTdStyle     = { padding: '9px 10px', borderBottom: '1px solid rgba(42,42,42,.6)', fontSize: 12, whiteSpace: 'nowrap' };
-const inputStyle       = { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: '6px 10px', fontSize: 12, color: 'var(--t1)', outline: 'none', fontFamily: 'inherit' };
-const selectStyle      = { ...inputStyle, cursor: 'pointer' };
-const labelStyle       = { fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4, display: 'block' };
-const btnPrimary       = { background: 'var(--yellow)', border: '1px solid var(--yellow)', borderRadius: 3, padding: '7px 16px', fontSize: 12, fontWeight: 700, color: '#000', cursor: 'pointer', fontFamily: 'var(--cond)', letterSpacing: '0.04em' };
-const btnSecondary     = { background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, padding: '6px 12px', fontSize: 11, color: 'var(--t2)', cursor: 'pointer', fontFamily: 'var(--cond)' };
-
-const tabBtn = (active) => ({
-  background: active ? 'var(--yellow)' : 'var(--surface2)',
-  color: active ? '#000' : 'var(--t3)',
-  border: active ? '1px solid var(--yellow)' : '1px solid var(--border)',
-  borderRadius: 4, padding: '5px 12px', fontFamily: 'var(--mono)', fontSize: 11,
-  textTransform: 'uppercase', letterSpacing: 1, cursor: 'pointer', fontWeight: active ? 700 : 500,
-});
 
 function newCard(seed = {}) {
   return {
@@ -61,6 +41,7 @@ function newCard(seed = {}) {
 export default function LineFlushPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
+  const { setRefreshing, setLastRefreshed } = useRefreshState();
   const [view, setView] = useState('list'); // list | detail
   const [showNewFlush, setShowNewFlush] = useState(false);
 
@@ -90,6 +71,7 @@ export default function LineFlushPage() {
   const loadFlushes = useCallback(async () => {
     if (!session) return;
     setListLoading(true);
+    setRefreshing(true);
     try {
       const data = await garageFetch('getFlushes', statusFilter ? { status: statusFilter } : {}, session);
       setFlushRows(Array.isArray(data) ? data : []);
@@ -98,8 +80,10 @@ export default function LineFlushPage() {
       setFlushRows([]);
     } finally {
       setListLoading(false);
+      setRefreshing(false);
+      setLastRefreshed(new Date());
     }
-  }, [session, statusFilter, showToast]);
+  }, [session, statusFilter, showToast, setRefreshing, setLastRefreshed]);
 
   useEffect(() => { loadFlushes(); }, [loadFlushes]);
 
@@ -304,7 +288,6 @@ export default function LineFlushPage() {
   async function openFlushDetail(flushId) {
     setView('detail');
     setDetailLoading(true);
-    setVerifyOpen(false);
     setCurrentFlush(null);
     try {
       const data = await garageFetch('getFlush', { flush_id: flushId }, session);
@@ -325,62 +308,68 @@ export default function LineFlushPage() {
 
   return (
     <div style={{ color: 'var(--t1)' }}>
-      <div style={{ marginBottom: 16 }}>
-        <h1 style={{ fontFamily: 'var(--cond)', fontSize: 28, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.03em', margin: 0 }}>
-          Line Flush
-        </h1>
-        <p style={{ color: 'var(--t3)', fontSize: 11, marginTop: 4, fontFamily: 'var(--mono)' }}>
-          Raise a line flush to return leftover material to the store. The store receives, dispositions and verifies it in Garage (Flush Verify).
-        </p>
-      </div>
+      <p style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t3)', margin: '0 0 16px', lineHeight: 1.5 }}>
+        Raise a line flush to return leftover material to the store. The store receives, dispositions and verifies it in Garage (Flush Verify).
+      </p>
 
       {view === 'list' && (
         <>
           {pendingCount > 0 && (
-            <div style={{ background: 'rgba(222,42,42,.1)', border: '1px solid rgba(222,42,42,.3)', borderRadius: 4, padding: '8px 12px', marginBottom: 12, color: '#ff7070', fontSize: 12 }}>
-              ⚠ {pendingCount} flush{pendingCount === 1 ? '' : 'es'} awaiting store verification
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'var(--bad-bg)',
+              border: '1px solid var(--bad-bd)', borderRadius: 'var(--r-sm)', padding: '9px 13px',
+              marginBottom: 14, color: 'var(--bad-fg)', fontFamily: 'var(--font-ui)', fontSize: 13 }}>
+              <Icon name="alert" size={15} />
+              <span><span className="num" style={{ fontWeight: 700 }}>{pendingCount}</span> flush{pendingCount === 1 ? '' : 'es'} awaiting store verification</span>
             </div>
           )}
-          <div style={panelStyle}>
-            <div style={panelHeaderStyle}>
-              <span>Flushes {flushRows.length > 0 && <span style={{ color: 'var(--t3)', marginLeft: 6, fontSize: 11 }}>({flushRows.length})</span>}</span>
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <Panel
+            title="Flushes"
+            icon="undo"
+            pad={0}
+            action={
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                {flushRows.length > 0 && <span className="num" style={{ fontSize: 12, color: 'var(--t3)' }}>{flushRows.length}</span>}
                 <select
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value)}
-                  style={selectStyle}
+                  style={{ ...inp, padding: '6px 10px', fontSize: 12.5, cursor: 'pointer' }}
                 >
                   <option value="">All Statuses</option>
                   <option>Pending Verification</option>
                   <option>Verified</option>
                   <option>Disputed</option>
                 </select>
-                <button style={btnSecondary} onClick={loadFlushes} disabled={listLoading}>↻</button>
+                <button style={{ ...btnGhost, padding: '6px 10px' }} onClick={loadFlushes} disabled={listLoading} title="Refresh">
+                  <RotateCw size={14} strokeWidth={1.75} />
+                </button>
                 {canCreate && (
-                  <button style={btnPrimary} onClick={() => { resetNewForm(); setShowNewFlush(true); }}>+ NEW FLUSH</button>
+                  <button style={{ ...btnPrimary, padding: '7px 14px' }} onClick={() => { resetNewForm(); setShowNewFlush(true); }}>
+                    <Icon name="plus" size={14} />New Flush
+                  </button>
                 )}
               </div>
-            </div>
+            }
+          >
             <div style={{ overflowX: 'auto' }}>
               {listLoading ? (
                 <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
               ) : flushRows.length === 0 ? (
-                <div style={{ padding: 24, textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>No flushes</div>
+                <div style={{ padding: 28, textAlign: 'center', color: 'var(--t3)', fontFamily: 'var(--font-ui)', fontSize: 13 }}>No flushes</div>
               ) : (
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead>
                     <tr>
-                      <th style={tableThStyle}>Flush ID</th>
-                      <th style={tableThStyle}>Date</th>
-                      <th style={tableThStyle}>WO / Run</th>
-                      <th style={tableThStyle}>Line</th>
-                      <th style={tableThStyle}>Shift</th>
-                      <th style={tableThStyle}>Parts</th>
-                      <th style={tableThStyle}>Raised Qty</th>
-                      <th style={tableThStyle}>Damages</th>
-                      <th style={tableThStyle}>Raised By</th>
-                      <th style={tableThStyle}>Status</th>
-                      <th style={{ ...tableThStyle, textAlign: 'right' }}></th>
+                      <th style={th}>Flush ID</th>
+                      <th style={th}>Date</th>
+                      <th style={th}>WO / Run</th>
+                      <th style={th}>Line</th>
+                      <th style={th}>Shift</th>
+                      <th style={th}>Parts</th>
+                      <th style={th}>Raised Qty</th>
+                      <th style={th}>Damages</th>
+                      <th style={th}>Raised By</th>
+                      <th style={th}>Status</th>
+                      <th style={{ ...th, textAlign: 'right' }}></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -388,22 +377,24 @@ export default function LineFlushPage() {
                       const damages = (r.damaged_lines || 0) + (r.rejected_lines || 0);
                       return (
                         <tr key={r.flush_id} style={{ cursor: 'pointer' }} onClick={() => openFlushDetail(r.flush_id)}>
-                          <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{r.flush_id}</td>
-                          <td style={tableTdStyle}>{r.flush_date || '—'}</td>
-                          <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontSize: 11 }}>{r.run_no || r.wo_no || 'Standalone'}</td>
-                          <td style={tableTdStyle}>{r.line_no || '—'}</td>
-                          <td style={tableTdStyle}>{r.shift || '—'}</td>
-                          <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.line_count || r.parts_count || 0}</td>
-                          <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.total_qty_raised || 0}</td>
-                          <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: damages > 0 ? '#ff7070' : 'var(--t3)' }}>{damages > 0 ? damages : '—'}</td>
-                          <td style={tableTdStyle}>{r.raised_by || '—'}</td>
-                          <td style={tableTdStyle}><StatusBadge label={r.status || '—'} tone={LF_STATUS_TONES[r.status] || 'gray'} /></td>
-                          <td style={{ ...tableTdStyle, textAlign: 'right' }}>
+                          <td style={td}><span className="num" style={{ color: 'var(--yellow)' }}>{r.flush_id}</span></td>
+                          <td style={td}><span className="num">{r.flush_date || '—'}</span></td>
+                          <td style={td}><span className="num" style={{ fontSize: 12, color: 'var(--t2)' }}>{r.run_no || r.wo_no || 'Standalone'}</span></td>
+                          <td style={td}>{r.line_no
+                            ? <span className="num" style={{ fontSize: 11, fontWeight: 700, color: lineColor(r.line_no), background: `rgba(${lineRgb(r.line_no)},0.12)`, padding: '1px 6px', borderRadius: 3 }}>{r.line_no}</span>
+                            : '—'}</td>
+                          <td style={{ ...td, color: 'var(--t2)' }}>{r.shift || '—'}</td>
+                          <td style={td}><span className="num">{r.line_count || r.parts_count || 0}</span></td>
+                          <td style={td}><span className="num">{r.total_qty_raised || 0}</span></td>
+                          <td style={td}><span className="num" style={{ color: damages > 0 ? 'var(--bad-fg)' : 'var(--t3)' }}>{damages > 0 ? damages : '—'}</span></td>
+                          <td style={{ ...td, color: 'var(--t2)' }}>{r.raised_by || '—'}</td>
+                          <td style={td}><ToneBadge tone={LF_STATUS_TONES[r.status] || 'mute'}>{r.status || '—'}</ToneBadge></td>
+                          <td style={{ ...td, textAlign: 'right' }}>
                             <button
-                              style={btnSecondary}
+                              style={{ ...btnGhost, padding: '5px 10px', fontSize: 12 }}
                               onClick={(e) => { e.stopPropagation(); openFlushDetail(r.flush_id); }}
                             >
-                              VIEW →
+                              View<Icon name="chevR" size={13} />
                             </button>
                           </td>
                         </tr>
@@ -413,7 +404,7 @@ export default function LineFlushPage() {
                 </table>
               )}
             </div>
-          </div>
+          </Panel>
         </>
       )}
 
@@ -474,156 +465,175 @@ function NewFlushForm(props) {
 
   return (
     <>
-      <div style={{ marginBottom: 12 }}>
-        <button style={btnSecondary} onClick={onCancel} disabled={submitting}>← Back to list</button>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+        <Icon name="plus" size={17} style={{ color: 'var(--yellow)' }} />
+        <span className="label" style={{ fontSize: 13, color: 'var(--t1)', flex: 1 }}>New line flush</span>
+        <button style={{ ...btnGhost, padding: '5px 10px', fontSize: 12 }} onClick={onCancel} disabled={submitting}>
+          <Icon name="chevL" size={13} />Back to list
+        </button>
       </div>
-      <h2 style={{ fontFamily: 'var(--cond)', fontSize: 18, textTransform: 'uppercase', letterSpacing: '0.06em', margin: '0 0 12px' }}>New Line Flush</h2>
 
-      <div style={panelStyle}>
-        <div style={panelHeaderStyle}><span>Flush Header</span></div>
-        <div style={panelBodyStyle}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10, marginBottom: 10 }}>
-            <div>
-              <span style={labelStyle}>Date</span>
-              <input type="date" value={flushDate} onChange={(e) => setFlushDate(e.target.value)} style={{ ...inputStyle, fontFamily: 'var(--mono)', width: '100%' }} disabled={submitting} />
-            </div>
-            <div>
-              <span style={labelStyle}>Flush Type</span>
-              <select value={flushType} onChange={(e) => setFlushType(e.target.value)} style={{ ...selectStyle, width: '100%' }} disabled={submitting}>
-                <option value="run">Production Run</option>
-                <option value="standalone">Standalone</option>
-              </select>
-            </div>
-            <div>
-              <span style={labelStyle}>Line</span>
-              <select value={flushLine} onChange={(e) => setFlushLine(e.target.value)} style={{ ...selectStyle, width: '100%' }} disabled={submitting}>
-                <option>L1</option><option>L2</option><option>L3</option>
-              </select>
-            </div>
-            <div>
-              <span style={labelStyle}>Shift</span>
-              <select value={flushShift} onChange={(e) => setFlushShift(e.target.value)} style={{ ...selectStyle, width: '100%' }} disabled={submitting}>
-                <option>Morning</option><option>Afternoon</option><option>Night</option>
-              </select>
+      <Panel title="Flush Header" icon="clipboard" pad={16} style={{ marginBottom: 16 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12, marginBottom: 12 }}>
+          <div>
+            <span className="eyebrow" style={lblStyle}>Date</span>
+            <input type="date" value={flushDate} onChange={(e) => setFlushDate(e.target.value)} style={numInp} disabled={submitting} />
+          </div>
+          <div>
+            <span className="eyebrow" style={lblStyle}>Flush Type</span>
+            <select value={flushType} onChange={(e) => setFlushType(e.target.value)} style={{ ...inpFull, cursor: 'pointer' }} disabled={submitting}>
+              <option value="run">Production Run</option>
+              <option value="standalone">Standalone</option>
+            </select>
+          </div>
+          <div>
+            <span className="eyebrow" style={lblStyle}>Line</span>
+            <div style={{ display: 'flex', gap: 5 }}>
+              {['L1', 'L2', 'L3'].map(l => (
+                <button key={l} type="button" disabled={submitting} onClick={() => setFlushLine(l)}
+                  style={{ flex: 1, padding: '8px 0', borderRadius: 'var(--r-sm)', cursor: 'pointer',
+                    border: `1px solid ${flushLine === l ? lineColor(l) : 'var(--border-2)'}`,
+                    background: flushLine === l ? `rgba(${lineRgb(l)},0.12)` : 'var(--surface-2)',
+                    color: flushLine === l ? lineColor(l) : 'var(--t2)',
+                    fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 12, letterSpacing: '0.05em',
+                    transition: 'all var(--fast) var(--ease)' }}>{l}</button>
+              ))}
             </div>
           </div>
-
-          {flushType === 'run' && (
-            <div style={{ marginBottom: 10 }}>
-              <span style={labelStyle}>Production Run</span>
-              <select
-                value={selectedRun}
-                onChange={(e) => setSelectedRun(e.target.value)}
-                style={{ ...selectStyle, width: '100%' }}
-                disabled={submitting}
-              >
-                <option value="">Select a run…</option>
-                {runs.map((r) => (
-                  <option key={r.run_no} value={r.run_no}>
-                    {r.run_no} — {r.product} — {r.total_units || 0} units ({r.status})
-                  </option>
-                ))}
-              </select>
-              {runInfo && (
-                <div style={{ marginTop: 6, fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
-                  Run {runInfo.run_no} — {runInfo.product} — status {runInfo.status}
-                </div>
-              )}
-            </div>
-          )}
-
           <div>
-            <span style={labelStyle}>Notes</span>
-            <input type="text" placeholder="Optional notes…" value={flushNotes} onChange={(e) => setFlushNotes(e.target.value)} style={{ ...inputStyle, width: '100%' }} disabled={submitting} />
+            <span className="eyebrow" style={lblStyle}>Shift</span>
+            <select value={flushShift} onChange={(e) => setFlushShift(e.target.value)} style={{ ...inpFull, cursor: 'pointer' }} disabled={submitting}>
+              <option>Morning</option><option>Afternoon</option><option>Night</option>
+            </select>
           </div>
         </div>
-      </div>
 
-      <div style={panelStyle}>
-        <div style={panelHeaderStyle}>
-          <span>Parts Being Returned</span>
+        {flushType === 'run' && (
+          <div style={{ marginBottom: 12 }}>
+            <span className="eyebrow" style={lblStyle}>Production Run</span>
+            <select
+              value={selectedRun}
+              onChange={(e) => setSelectedRun(e.target.value)}
+              style={{ ...inpFull, cursor: 'pointer' }}
+              disabled={submitting}
+            >
+              <option value="">Select a run…</option>
+              {runs.map((r) => (
+                <option key={r.run_no} value={r.run_no}>
+                  {r.run_no} — {r.product} — {r.total_units || 0} units ({r.status})
+                </option>
+              ))}
+            </select>
+            {runInfo && (
+              <div className="num" style={{ marginTop: 6, fontSize: 11.5, color: 'var(--t3)' }}>
+                Run {runInfo.run_no} — {runInfo.product} — status {runInfo.status}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div>
+          <span className="eyebrow" style={lblStyle}>Notes</span>
+          <input type="text" placeholder="Optional notes…" value={flushNotes} onChange={(e) => setFlushNotes(e.target.value)} style={inpFull} disabled={submitting} />
+        </div>
+      </Panel>
+
+      <Panel
+        title="Parts Being Returned"
+        icon="box"
+        pad={16}
+        style={{ marginBottom: 16 }}
+        action={
           <div style={{ display: 'flex', gap: 6 }}>
             {flushType === 'run' && selectedRun && runPickList.length > 0 && (
-              <button style={btnSecondary} onClick={loadPartsFromRun} disabled={submitting}>↓ Load From Run</button>
+              <button style={{ ...btnGhost, padding: '5px 10px', fontSize: 12 }} onClick={loadPartsFromRun} disabled={submitting}>
+                <Icon name="arrowDown" size={13} />Load from run
+              </button>
             )}
-            <button style={btnSecondary} onClick={addEmptyCard} disabled={submitting}>+ Add Part</button>
+            <button style={{ ...btnGhost, padding: '5px 10px', fontSize: 12 }} onClick={addEmptyCard} disabled={submitting}>
+              <Icon name="plus" size={13} />Add part
+            </button>
           </div>
-        </div>
-        <div style={panelBodyStyle}>
-          {partCards.length === 0 && (
-            <div style={{ padding: 16, textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>
-              No parts added yet — click &quot;+ Add Part&quot; or load from a selected run.
-            </div>
-          )}
-          {partCards.map((card) => {
-            const total = card.splits.reduce((s, sp) => s + (parseFloat(sp.qty) || 0), 0);
-            return (
-              <div key={card.id} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: 10, marginBottom: 10 }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', flex: 1, minWidth: 240 }}>
-                    <input
-                      type="text"
-                      value={card.partCode}
-                      onChange={(e) => updateCard(card.id, 'partCode', e.target.value)}
-                      onBlur={(e) => lookupPart(card.id, e.target.value)}
-                      placeholder="Part code"
-                      style={{ ...inputStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)', width: 140 }}
-                      disabled={submitting}
-                    />
-                    <span style={{ fontSize: 12, color: 'var(--t2)' }}>{card.partName || '—'}</span>
-                    {card.category && (
-                      <span style={{ fontSize: 9, color: 'var(--t3)', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>· {card.category}</span>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontSize: 10, color: 'var(--t3)' }}>Total: <strong style={{ color: 'var(--yellow)', fontFamily: 'var(--mono)' }}>{total}</strong></span>
-                    <button onClick={() => removeCard(card.id)} disabled={submitting} style={{ background: 'transparent', border: '1px solid var(--border)', color: '#ff7070', cursor: 'pointer', fontSize: 11, borderRadius: 3, padding: '2px 8px' }}>✕</button>
-                  </div>
+        }
+      >
+        {partCards.length === 0 && (
+          <div style={{ padding: 18, textAlign: 'center', color: 'var(--t3)', fontFamily: 'var(--font-ui)', fontSize: 13 }}>
+            No parts added yet — click &quot;Add part&quot; or load from a selected run.
+          </div>
+        )}
+        {partCards.map((card) => {
+          const total = card.splits.reduce((s, sp) => s + (parseFloat(sp.qty) || 0), 0);
+          return (
+            <div key={card.id} style={{ background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-sm)', padding: 12, marginBottom: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 9, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', flex: 1, minWidth: 240 }}>
+                  <input
+                    type="text"
+                    value={card.partCode}
+                    onChange={(e) => updateCard(card.id, 'partCode', e.target.value)}
+                    onBlur={(e) => lookupPart(card.id, e.target.value)}
+                    placeholder="Part code"
+                    style={{ ...numInp, color: 'var(--yellow)', width: 140, background: 'var(--bg-2)' }}
+                    disabled={submitting}
+                  />
+                  <span style={{ fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--t2)' }}>{card.partName || '—'}</span>
+                  {card.category && (
+                    <span className="eyebrow">· {card.category}</span>
+                  )}
                 </div>
-
-                {card.splits.map((s) => (
-                  <div key={s.id} style={{ display: 'grid', gridTemplateColumns: '200px 120px 24px', gap: 6, marginBottom: 4 }}>
-                    <select
-                      value={s.type}
-                      onChange={(e) => updateSplit(card.id, s.id, 'type', e.target.value)}
-                      style={selectStyle}
-                      disabled={submitting}
-                    >
-                      {LF_RETURN_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-                    </select>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      placeholder="Qty"
-                      value={s.qty}
-                      onChange={(e) => updateSplit(card.id, s.id, 'qty', e.target.value)}
-                      style={{ ...inputStyle, fontFamily: 'var(--mono)' }}
-                      disabled={submitting}
-                    />
-                    <button
-                      onClick={() => removeSplit(card.id, s.id)}
-                      disabled={submitting || card.splits.length <= 1}
-                      style={{ background: 'transparent', border: '1px solid var(--border)', color: card.splits.length <= 1 ? 'var(--t3)' : '#ff7070', cursor: card.splits.length <= 1 ? 'not-allowed' : 'pointer', fontSize: 11, borderRadius: 3, padding: 0 }}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
-
-                <button onClick={() => addSplit(card.id)} disabled={submitting} style={{ ...btnSecondary, marginTop: 4, fontSize: 10 }}>
-                  + Add Split
-                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                  <span className="eyebrow">Total <span className="num" style={{ color: 'var(--yellow)', fontSize: 13, fontWeight: 700, letterSpacing: 0 }}>{total}</span></span>
+                  <button onClick={() => removeCard(card.id)} disabled={submitting} style={{ ...iconBtn, color: 'var(--bad-fg)' }} title="Remove part">
+                    <Icon name="x" size={13} />
+                  </button>
+                </div>
               </div>
-            );
-          })}
-        </div>
-      </div>
 
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-        <button onClick={onCancel} disabled={submitting} style={btnSecondary}>Cancel</button>
-        <button onClick={submitFlush} disabled={submitting} style={{ ...btnPrimary, opacity: submitting ? 0.6 : 1, cursor: submitting ? 'wait' : 'pointer' }}>
-          {submitting ? 'SUBMITTING…' : 'SUBMIT FLUSH'}
+              {card.splits.map((s) => (
+                <div key={s.id} style={{ display: 'grid', gridTemplateColumns: '200px 120px 28px', gap: 6, marginBottom: 5 }}>
+                  <select
+                    value={s.type}
+                    onChange={(e) => updateSplit(card.id, s.id, 'type', e.target.value)}
+                    style={{ ...inpFull, cursor: 'pointer', background: 'var(--bg-2)' }}
+                    disabled={submitting}
+                  >
+                    {LF_RETURN_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="Qty"
+                    value={s.qty}
+                    onChange={(e) => updateSplit(card.id, s.id, 'qty', e.target.value)}
+                    style={{ ...numInp, background: 'var(--bg-2)' }}
+                    disabled={submitting}
+                  />
+                  <button
+                    onClick={() => removeSplit(card.id, s.id)}
+                    disabled={submitting || card.splits.length <= 1}
+                    style={{ ...iconBtn, width: '100%', height: '100%',
+                      color: card.splits.length <= 1 ? 'var(--t4)' : 'var(--bad-fg)',
+                      cursor: card.splits.length <= 1 ? 'not-allowed' : 'pointer' }}
+                    title="Remove split"
+                  >
+                    <Icon name="x" size={13} />
+                  </button>
+                </div>
+              ))}
+
+              <button onClick={() => addSplit(card.id)} disabled={submitting} style={{ ...btnGhost, marginTop: 5, padding: '4px 9px', fontSize: 11.5, background: 'transparent' }}>
+                <Icon name="plus" size={12} />Add split
+              </button>
+            </div>
+          );
+        })}
+      </Panel>
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+        <button onClick={onCancel} disabled={submitting} style={btnGhost}>Cancel</button>
+        <button onClick={submitFlush} disabled={submitting} style={{ ...btnPrimary, padding: '9px 18px', opacity: submitting ? 0.6 : 1, cursor: submitting ? 'wait' : 'pointer' }}>
+          {submitting ? 'Submitting…' : 'Submit Flush'}
         </button>
       </div>
     </>
@@ -634,66 +644,60 @@ function FlushDetailView({ loading, data, onClose }) {
   const grouped = useMemoLineGroups(data?.lines);
   if (loading) {
     return (
-      <div style={panelStyle}>
-        <div style={panelBodyStyle}>
-          <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
-        </div>
-      </div>
+      <Panel pad={24}>
+        <div style={{ display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+      </Panel>
     );
   }
   if (!data) {
     return (
-      <div style={panelStyle}>
-        <div style={panelBodyStyle}>
-          <button style={btnSecondary} onClick={onClose}>← Back</button>
-          <div style={{ padding: 24, textAlign: 'center', color: 'var(--t3)' }}>Flush not found.</div>
-        </div>
-      </div>
+      <Panel pad={16}>
+        <button style={btnGhost} onClick={onClose}><Icon name="chevL" size={13} />Back</button>
+        <div style={{ padding: 24, textAlign: 'center', color: 'var(--t3)', fontFamily: 'var(--font-ui)', fontSize: 13 }}>Flush not found.</div>
+      </Panel>
     );
   }
   const { flush, dispositions } = data;
 
   return (
     <>
-      <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <button style={btnSecondary} onClick={onClose}>← Back to list</button>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span style={{ fontFamily: 'var(--mono)', color: 'var(--yellow)', fontSize: 13 }}>{flush.flush_id}</span>
-          <StatusBadge label={flush.status || '—'} tone={LF_STATUS_TONES[flush.status] || 'gray'} />
+      <div style={{ marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <button style={btnGhost} onClick={onClose}><Icon name="chevL" size={13} />Back to list</button>
+        <div style={{ display: 'flex', gap: 9, alignItems: 'center' }}>
+          <span className="num" style={{ color: 'var(--yellow)', fontSize: 14, fontWeight: 700 }}>{flush.flush_id}</span>
+          <ToneBadge tone={LF_STATUS_TONES[flush.status] || 'mute'}>{flush.status || '—'}</ToneBadge>
         </div>
       </div>
 
-      <div style={panelStyle}>
-        <div style={panelHeaderStyle}><span>Flush Details</span></div>
-        <div style={panelBodyStyle}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 12, fontSize: 12 }}>
-            <div><div style={labelStyle}>Date</div><div>{flush.flush_date || '—'}</div></div>
-            <div><div style={labelStyle}>Work Order</div><div style={{ fontFamily: 'var(--mono)' }}>{flush.run_no || flush.wo_no || 'Standalone'}</div></div>
-            <div><div style={labelStyle}>Line</div><div>{flush.line_no || '—'}</div></div>
-            <div><div style={labelStyle}>Shift</div><div>{flush.shift || '—'}</div></div>
-            <div><div style={labelStyle}>Raised By</div><div>{flush.raised_by || '—'}</div></div>
+      <Panel title="Flush Details" icon="clipboard" pad={16} style={{ marginBottom: 16 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 14 }}>
+          <div><div className="eyebrow" style={{ marginBottom: 4 }}>Date</div><div className="num" style={{ fontSize: 13 }}>{flush.flush_date || '—'}</div></div>
+          <div><div className="eyebrow" style={{ marginBottom: 4 }}>Work Order</div><div className="num" style={{ fontSize: 13 }}>{flush.run_no || flush.wo_no || 'Standalone'}</div></div>
+          <div><div className="eyebrow" style={{ marginBottom: 4 }}>Line</div><div style={{ fontFamily: 'var(--font-ui)', fontSize: 13 }}>{flush.line_no
+            ? <span className="num" style={{ fontSize: 11, fontWeight: 700, color: lineColor(flush.line_no), background: `rgba(${lineRgb(flush.line_no)},0.12)`, padding: '1px 6px', borderRadius: 3 }}>{flush.line_no}</span>
+            : '—'}</div></div>
+          <div><div className="eyebrow" style={{ marginBottom: 4 }}>Shift</div><div style={{ fontFamily: 'var(--font-ui)', fontSize: 13 }}>{flush.shift || '—'}</div></div>
+          <div><div className="eyebrow" style={{ marginBottom: 4 }}>Raised By</div><div style={{ fontFamily: 'var(--font-ui)', fontSize: 13 }}>{flush.raised_by || '—'}</div></div>
+        </div>
+        {flush.notes && (
+          <div style={{ marginTop: 12, padding: '9px 12px', background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-sm)', fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--t2)' }}>
+            {flush.notes}
           </div>
-          {flush.notes && (
-            <div style={{ marginTop: 10, padding: 8, background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, fontSize: 12, color: 'var(--t2)', fontStyle: 'italic' }}>
-              {flush.notes}
-            </div>
-          )}
-        </div>
-      </div>
+        )}
+      </Panel>
 
-      <div style={panelStyle}>
-        <div style={panelHeaderStyle}><span>Parts Returned by Production</span></div>
+      <Panel title="Parts Returned by Production" icon="undo" pad={0} style={{ marginBottom: 16 }}>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
-                <th style={tableThStyle}>Part Code</th>
-                <th style={tableThStyle}>Part Name</th>
-                <th style={tableThStyle}>Return Type</th>
-                <th style={tableThStyle}>Qty Raised</th>
-                <th style={tableThStyle}>Qty Verified</th>
-                <th style={tableThStyle}>Variance</th>
-                <th style={tableThStyle}>Notes</th>
+                <th style={th}>Part Code</th>
+                <th style={th}>Part Name</th>
+                <th style={th}>Return Type</th>
+                <th style={th}>Qty Raised</th>
+                <th style={th}>Qty Verified</th>
+                <th style={th}>Variance</th>
+                <th style={th}>Notes</th>
               </tr>
             </thead>
             <tbody>
@@ -703,41 +707,39 @@ function FlushDetailView({ loading, data, onClose }) {
             </tbody>
           </table>
         </div>
-      </div>
-
+      </Panel>
 
       {Array.isArray(dispositions) && dispositions.length > 0 && (
-        <div style={panelStyle}>
-          <div style={panelHeaderStyle}><span>Dispositions ({dispositions.length})</span></div>
+        <Panel title={`Dispositions (${dispositions.length})`} icon="flow" pad={0}>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
-                  <th style={tableThStyle}>Part Code</th>
-                  <th style={tableThStyle}>Part Name</th>
-                  <th style={tableThStyle}>Disposition</th>
-                  <th style={tableThStyle}>Qty</th>
-                  <th style={tableThStyle}>Bin</th>
-                  <th style={tableThStyle}>Rework WO</th>
-                  <th style={tableThStyle}>Notes</th>
+                  <th style={th}>Part Code</th>
+                  <th style={th}>Part Name</th>
+                  <th style={th}>Disposition</th>
+                  <th style={th}>Qty</th>
+                  <th style={th}>Bin</th>
+                  <th style={th}>Rework WO</th>
+                  <th style={th}>Notes</th>
                 </tr>
               </thead>
               <tbody>
                 {dispositions.map((d) => (
                   <tr key={d.disp_id}>
-                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{d.part_code}</td>
-                    <td style={tableTdStyle}>{d.part_name || '—'}</td>
-                    <td style={tableTdStyle}>{d.disposition || '—'}</td>
-                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{d.qty}</td>
-                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{d.bin_code || '—'}</td>
-                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{d.rework_wo_no || '—'}</td>
-                    <td style={tableTdStyle}>{d.notes || '—'}</td>
+                    <td style={td}><span className="num" style={{ color: 'var(--yellow)' }}>{d.part_code}</span></td>
+                    <td style={td}>{d.part_name || '—'}</td>
+                    <td style={{ ...td, color: 'var(--t2)' }}>{d.disposition || '—'}</td>
+                    <td style={td}><span className="num">{d.qty}</span></td>
+                    <td style={td}><span className="num">{d.bin_code || '—'}</span></td>
+                    <td style={td}><span className="num">{d.rework_wo_no || '—'}</span></td>
+                    <td style={{ ...td, color: 'var(--t2)' }}>{d.notes || '—'}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        </div>
+        </Panel>
       )}
     </>
   );
@@ -765,29 +767,29 @@ function FragmentRows({ group }) {
         const variance = Math.round(((parseFloat(l.qty_verified) || 0) - (parseFloat(l.qty_raised) || 0)) * 100) / 100;
         return (
           <tr key={l.line_id}>
-            <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: i === 0 ? 'var(--yellow)' : 'var(--t3)' }}>
+            <td style={td}><span className="num" style={{ color: i === 0 ? 'var(--yellow)' : 'var(--t3)' }}>
               {i === 0 ? group.part_code : '↳'}
-            </td>
-            <td style={tableTdStyle}>{i === 0 ? (group.part_name || '—') : ''}</td>
-            <td style={tableTdStyle}>{l.return_type || '—'}</td>
-            <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{l.qty_raised || 0}</td>
-            <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{l.qty_verified ?? '—'}</td>
-            <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: variance > 0 ? '#ffaa33' : variance < 0 ? '#ff7070' : 'var(--t3)' }}>
+            </span></td>
+            <td style={td}>{i === 0 ? (group.part_name || '—') : ''}</td>
+            <td style={{ ...td, color: 'var(--t2)' }}>{l.return_type || '—'}</td>
+            <td style={td}><span className="num">{l.qty_raised || 0}</span></td>
+            <td style={td}><span className="num">{l.qty_verified ?? '—'}</span></td>
+            <td style={td}><span className="num" style={{ color: variance > 0 ? 'var(--warn-fg)' : variance < 0 ? 'var(--bad-fg)' : 'var(--t3)' }}>
               {l.qty_verified == null ? '—' : (variance === 0 ? '—' : variance)}
-            </td>
-            <td style={tableTdStyle}>{l.notes || '—'}</td>
+            </span></td>
+            <td style={{ ...td, color: 'var(--t2)' }}>{l.notes || '—'}</td>
           </tr>
         );
       })}
       {group.splits.length > 1 && (
-        <tr style={{ background: 'var(--surface2)' }}>
-          <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase' }} colSpan={3}>Part Total</td>
-          <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontWeight: 700 }}>{totalRaised}</td>
-          <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontWeight: 700 }}>{totalVerified || '—'}</td>
-          <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontWeight: 700, color: totalVariance > 0 ? '#ffaa33' : totalVariance < 0 ? '#ff7070' : 'var(--t3)' }}>
+        <tr style={{ background: 'var(--surface-2)' }}>
+          <td style={{ ...td, fontFamily: 'var(--font-display)', fontSize: 10, fontWeight: 600, color: 'var(--t3)', letterSpacing: '0.12em', textTransform: 'uppercase' }} colSpan={3}>Part Total</td>
+          <td style={td}><span className="num" style={{ fontWeight: 700 }}>{totalRaised}</span></td>
+          <td style={td}><span className="num" style={{ fontWeight: 700 }}>{totalVerified || '—'}</span></td>
+          <td style={td}><span className="num" style={{ fontWeight: 700, color: totalVariance > 0 ? 'var(--warn-fg)' : totalVariance < 0 ? 'var(--bad-fg)' : 'var(--t3)' }}>
             {totalVerified ? (totalVariance === 0 ? '—' : totalVariance) : '—'}
-          </td>
-          <td style={tableTdStyle}></td>
+          </span></td>
+          <td style={td}></td>
         </tr>
       )}
     </>

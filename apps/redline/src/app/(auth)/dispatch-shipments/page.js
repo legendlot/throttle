@@ -1,9 +1,26 @@
 'use client';
-import { Fragment, useState, useEffect, useCallback } from 'react';
+/* ════════════════════════════════════════════════════════════
+   DISPATCH › SHIPMENTS — Pit Wall v2 reskin (prototype:
+   redesign-reference/app/shipments.jsx). Same APIs + mutations:
+   getDispatchShipments / getShipmentBoxes / getShipmentLines /
+   getBoxDetail reads; createShipment / updateShipment /
+   updateShipmentLines / markShipmentShipped / cancelShipment /
+   deleteShipment / createBoxes / deleteBox / reopenBox /
+   reprintBoxLabel / removeBoxUnit mutations — all unchanged.
+   Detail moved from a centered overlay to the kit Drawer.
+   Prototype carrier/AWB block skipped — no awb/carrier fields
+   in the shipment payload.
+   ════════════════════════════════════════════════════════════ */
+import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { ConfirmModal, Modal, Spinner, EmptyState, useToast, Panel, Chip, StatusBadge, useEscapeClose } from '@throttle/ui';
+import { ConfirmModal, Modal, Spinner, useToast, useEscapeClose } from '@throttle/ui';
+import { useRefreshState } from '../layout.js';
 import { useDispatchChannels } from '../../../hooks/useDispatchChannels.js';
+import {
+  Icon, Panel, FilterChip, ToneBadge, Drawer,
+  btnPrimary, btnGhost, inputStyle,
+} from '../../../components/kit/index.js';
 
 // ── Helpers ───────────────────────────────────────────────────
 function fmt(n) { return n != null ? Number(n).toLocaleString('en-IN') : '0'; }
@@ -22,58 +39,71 @@ function formatDateTime(ts) {
   return `${date} ${time}`;
 }
 
-const STATUS_VARIANT = {
+// Status → kit tone (draft → info, packing → brand, ready → warn,
+// shipped → ok, cancelled → bad) per prototype SHIP.STATUS.
+const STATUS_TONE = {
   draft:     'info',
   packing:   'brand',
-  ready:     'warning',
-  shipped:   'success',
-  cancelled: 'error',
+  ready:     'warn',
+  shipped:   'ok',
+  cancelled: 'bad',
 };
-const STATUS_ICON = {
-  shipped:   '✓',
-  cancelled: '✗',
+const STATUS_DOT = {
+  '':          'var(--t3)',
+  draft:       'var(--info-fg)',
+  packing:     'var(--yellow)',
+  ready:       'var(--warn-fg)',
+  shipped:     'var(--ok-fg)',
+  cancelled:   'var(--bad-fg)',
 };
 
 function ShipmentStatusBadge({ status }) {
-  if (!status) return <StatusBadge variant="neutral">—</StatusBadge>;
-  const variant = STATUS_VARIANT[status] || 'neutral';
-  const icon = STATUS_ICON[status];
-  return <StatusBadge variant={variant} icon={icon}>{status}</StatusBadge>;
+  if (!status) return <ToneBadge tone="mute">—</ToneBadge>;
+  return <ToneBadge tone={STATUS_TONE[status] || 'mute'}>{status}</ToneBadge>;
 }
 
-// Box statuses (open / packed / closed) use the same family but mapped distinctly.
-const BOX_STATUS_VARIANT = {
-  open:   'warning',
-  packed: 'success',
-  closed: 'success',
-};
+// Box statuses (open / packed / closed).
+const BOX_TONE = { open: 'warn', packed: 'ok', closed: 'ok' };
 function BoxStatusBadge({ status }) {
-  if (!status) return <StatusBadge variant="neutral">—</StatusBadge>;
-  const variant = BOX_STATUS_VARIANT[status] || 'neutral';
-  const icon = (status === 'packed' || status === 'closed') ? '✓' : undefined;
-  return <StatusBadge variant={variant} icon={icon}>{status}</StatusBadge>;
+  if (!status) return <ToneBadge tone="mute">—</ToneBadge>;
+  return <ToneBadge tone={BOX_TONE[status] || 'mute'}>{status}</ToneBadge>;
 }
 
-function ChannelTypeBadge({ type }) {
-  const t = (type || 'other').toLowerCase();
-  const variant = t === 'ecom' ? 'info' : t === 'retail' ? 'brand' : 'neutral';
-  return <StatusBadge variant={variant}>{type || '—'}</StatusBadge>;
+// Tiny channel-type tag (prototype CType).
+function CType({ t }) {
+  if (!t) return null;
+  const tt = String(t).toLowerCase();
+  const ecom = tt === 'ecom';
+  const retail = tt === 'retail';
+  return (
+    <span className="num" style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase',
+      color: ecom ? 'var(--blue-bright)' : retail ? 'var(--yellow)' : 'var(--t3)',
+      background: ecom ? 'var(--info-bg)' : retail ? 'var(--brand-bg)' : 'var(--surface-2)',
+      borderRadius: 3, padding: '0 4px', whiteSpace: 'nowrap' }}>{t}</span>
+  );
 }
 
 // ── Common styles ────────────────────────────────────────────
-// Secondary / utility button (modal close, +Add row, Cancel) — per design system.
-const btnStyle = { padding: '6px 12px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontSize: 13, cursor: 'pointer', fontFamily: 'var(--mono)', letterSpacing: '0.04em', outline: 'none' };
-// Primary CTA — yellow, uppercase Tomorrow.
-const primaryBtnStyle = { padding: '8px 14px', background: 'var(--yellow)', color: '#0a0a0a', border: '1px solid var(--yellow)', borderRadius: 3, fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer' };
-const inputStyle = { background: 'var(--surface)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '6px 10px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 13, outline: 'none' };
-const selectStyle = { background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--t1)', fontSize: 13, fontFamily: 'var(--mono)', padding: '8px 12px', borderRadius: 3, outline: 'none' };
-const labelStyle = { fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase', display: 'block', marginBottom: 6 };
+const selectStyle = {
+  background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-sm)',
+  color: 'var(--t1)', fontFamily: 'var(--font-ui)', fontSize: 13, padding: '8px 11px',
+  outline: 'none', cursor: 'pointer',
+};
+const eyebrowLbl = { marginBottom: 6, display: 'block' };
+// Small per-row action button — colored ghost.
+const actionBtn = (color) => ({
+  padding: '4px 9px', background: 'transparent', border: `1px solid ${color}`,
+  borderRadius: 'var(--r-xs)', color, fontFamily: 'var(--font-display)', fontSize: 10,
+  fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer',
+  whiteSpace: 'nowrap',
+});
 
 // ── Shipments Page ────────────────────────────────────────────
 export default function DispatchShipmentsPage() {
   const { session, user } = useAuth();
   const { showToast } = useToast();
   const { channels } = useDispatchChannels(session);
+  const { setRefreshing, setLastRefreshed } = useRefreshState();
 
   const [shipments,    setShipments]    = useState([]);
   const [loading,      setLoading]      = useState(false);
@@ -118,13 +148,14 @@ export default function DispatchShipmentsPage() {
   const [editError,    setEditError]    = useState('');
   const [editProduct,  setEditProduct]  = useState('');
 
-  // Create + Edit modals use shared <Modal/> (handles ESC internally). Detail panel is still a raw overlay.
+  // Create + Edit modals use shared <Modal/> (handles ESC internally). Detail drawer handled here.
   useEscapeClose(!!detailShipment,  () => setDetailShipment(null));
 
   // ── Loaders ───────────────────────────────────────────────
   const loadShipments = useCallback(async () => {
     if (!session) return;
     setLoading(true);
+    setRefreshing(true);
     try {
       const params = statusFilter ? { status: statusFilter } : {};
       const data = await garageFetch('getDispatchShipments', params, session);
@@ -133,8 +164,10 @@ export default function DispatchShipmentsPage() {
       setShipments([]);
     } finally {
       setLoading(false);
+      setRefreshing(false);
+      setLastRefreshed(new Date());
     }
-  }, [session, statusFilter]);
+  }, [session, statusFilter, setRefreshing, setLastRefreshed]);
 
   useEffect(() => { loadShipments(); }, [loadShipments]);
 
@@ -493,25 +526,6 @@ export default function DispatchShipmentsPage() {
     }
   }
 
-  // ── Style helpers ─────────────────────────────────────────
-  const sectionLabel = { margin: 0, fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t2)', marginBottom: 12 };
-  const thStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
-  const tdStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 13, borderBottom: '1px solid rgba(64,64,64,.5)', whiteSpace: 'nowrap', color: 'var(--t1)' };
-  const actionBtn = (color) => ({
-    padding: '4px 10px',
-    background: 'transparent',
-    border: `1px solid ${color}`,
-    borderRadius: 3,
-    color,
-    fontSize: 11,
-    fontWeight: 700,
-    fontFamily: 'var(--mono)',
-    letterSpacing: '0.06em',
-    textTransform: 'uppercase',
-    cursor: 'pointer',
-    marginRight: 4,
-  });
-
   // Manifest line groups (by product) for create form
   const createGroups = {};
   for (const l of createLines) {
@@ -545,8 +559,19 @@ export default function DispatchShipmentsPage() {
   const selectedChannel = channels.find(c => c.id === createChannelId);
   const isBulk = selectedChannel?.fulfillment_model === 'bulk';
 
+  // Manifest group card (shared by create + edit modals).
+  const groupCard = { background: 'var(--surface-2)', border: '1px solid var(--border-2)',
+    borderRadius: 'var(--r-sm)', padding: 11, marginBottom: 8 };
+
+  const TABS = [
+    ['', 'All'], ['draft', 'Draft'], ['packing', 'Packing'],
+    ['ready', 'Ready'], ['shipped', 'Shipped'], ['cancelled', 'Cancelled'],
+  ];
+
+  const cols = '150px 1.3fr 1fr 104px 120px 96px 96px 220px';
+
   return (
-    <>
+    <div style={{ maxWidth: 1280, margin: '0 auto', fontFamily: 'var(--font-ui)' }}>
       {/* Confirm Modal */}
       <ConfirmModal
         open={!!confirmModal}
@@ -572,13 +597,13 @@ export default function DispatchShipmentsPage() {
       >
         {createOpen && (
           <>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
               <div>
-                <label style={labelStyle}>Title (optional)</label>
-                <input style={{ ...inputStyle, width: '100%' }} value={createTitle} onChange={e => setCreateTitle(e.target.value)} placeholder="e.g. Amazon Mar wk-3" />
+                <span className="eyebrow" style={eyebrowLbl}>Title · optional</span>
+                <input style={inputStyle} value={createTitle} onChange={e => setCreateTitle(e.target.value)} placeholder="e.g. Amazon Mar wk-3" />
               </div>
               <div>
-                <label style={labelStyle}>Channel <span style={{ color: 'var(--red)' }}>*</span></label>
+                <span className="eyebrow" style={eyebrowLbl}>Channel <span style={{ color: 'var(--bad-fg)' }}>*</span></span>
                 <select style={{ ...selectStyle, width: '100%' }} value={createChannelId} onChange={e => setCreateChannelId(e.target.value)}>
                   <option value="">Select channel…</option>
                   {channels.filter(c => c.is_active !== false).map(c => (
@@ -589,57 +614,63 @@ export default function DispatchShipmentsPage() {
             </div>
 
             {isBulk && (
-              <div style={{ marginBottom: 12 }}>
-                <label style={labelStyle}>Destination Warehouse</label>
-                <input style={{ ...inputStyle, width: '100%' }} value={createWarehouse} onChange={e => setCreateWarehouse(e.target.value)} placeholder="e.g. BOM Bulk" />
+              <div style={{ marginBottom: 14 }}>
+                <span className="eyebrow" style={eyebrowLbl}>Destination Warehouse</span>
+                <input style={inputStyle} value={createWarehouse} onChange={e => setCreateWarehouse(e.target.value)} placeholder="e.g. BOM Bulk" />
               </div>
             )}
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
               <div>
-                <label style={labelStyle}>Scheduled Date</label>
-                <input type="date" style={{ ...inputStyle, width: '100%' }} value={createDate} onChange={e => setCreateDate(e.target.value)} />
+                <span className="eyebrow" style={eyebrowLbl}>Scheduled Date</span>
+                <input type="date" style={inputStyle} value={createDate} onChange={e => setCreateDate(e.target.value)} />
               </div>
               <div>
-                <label style={labelStyle}>Notes</label>
-                <input style={{ ...inputStyle, width: '100%' }} value={createNotes} onChange={e => setCreateNotes(e.target.value)} placeholder="Internal notes" />
+                <span className="eyebrow" style={eyebrowLbl}>Notes</span>
+                <input style={inputStyle} value={createNotes} onChange={e => setCreateNotes(e.target.value)} placeholder="Internal notes" />
               </div>
             </div>
 
             {/* Manifest */}
             <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14, marginTop: 8 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                <div style={{ ...sectionLabel, marginBottom: 0 }}>Manifest</div>
+                <span className="label" style={{ fontSize: 11, color: 'var(--t2)' }}>Manifest</span>
                 <div style={{ flex: 1 }} />
                 <select style={selectStyle} value={createProduct} onChange={e => setCreateProduct(e.target.value)}>
                   <option value="">{productOptions.length ? 'Select product…' : 'Loading products…'}</option>
                   {productOptions.filter(p => hasMissingVariant(p, createGroups)).map(p => <option key={p} value={p}>{p}</option>)}
                 </select>
-                <button style={btnStyle} onClick={() => addCreateLine(createProduct)} disabled={!createProduct}>+ Add</button>
+                <button style={btnGhost} onClick={() => addCreateLine(createProduct)} disabled={!createProduct}>
+                  <Icon name="plus" size={13} /> Add
+                </button>
               </div>
 
               {Object.keys(createGroups).length === 0 ? (
-                <div style={{ padding: '14px 0', textAlign: 'center', color: 'var(--t3)', fontSize: 11, fontFamily: 'var(--mono)' }}>
+                <div style={{ padding: '14px 0', textAlign: 'center', color: 'var(--t3)', fontSize: 12.5, fontFamily: 'var(--font-ui)' }}>
                   No products yet — add one above
                 </div>
               ) : (
                 Object.entries(createGroups).map(([product, group]) => (
-                  <div key={product} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: 10, marginBottom: 8 }}>
+                  <div key={product} style={groupCard}>
                     <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
-                      <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--t1)' }}>{product}</span>
+                      <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, fontWeight: 700, color: 'var(--t1)' }}>{product}</span>
                       <div style={{ flex: 1 }} />
-                      <button onClick={() => removeCreateProduct(product)} style={{ ...btnStyle, color: 'var(--red)', borderColor: 'var(--red)' }}>× Remove</button>
+                      <button onClick={() => removeCreateProduct(product)}
+                        style={{ ...actionBtn('var(--bad-fg)'), display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                        <Icon name="x" size={11} /> Remove
+                      </button>
                     </div>
                     {group.map((l) => {
                       const idx = createLines.findIndex(x => x.product === l.product && x.model === l.model && x.color === l.color);
                       return (
                         <div key={`${l.product}-${l.model}-${l.color}`} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                          <span style={{ fontSize: 11, color: 'var(--t2)', flex: 1 }}>{l.label}</span>
+                          <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t2)', flex: 1 }}>{l.label}</span>
                           <input
                             type="number" min={0}
                             value={l.qty}
                             onChange={e => updateCreateLineQty(idx, e.target.value)}
-                            style={{ ...inputStyle, width: 80, textAlign: 'right' }}
+                            className="num"
+                            style={{ ...inputStyle, width: 84, textAlign: 'right', padding: '6px 9px' }}
                           />
                         </div>
                       );
@@ -648,22 +679,22 @@ export default function DispatchShipmentsPage() {
                 ))
               )}
 
-              <div style={{ marginTop: 10, fontSize: 11, color: 'var(--t2)', fontFamily: 'var(--mono)' }}>
-                Total: <span style={{ color: 'var(--yellow)', fontWeight: 700 }}>{fmt(createTotal)}</span> units
+              <div style={{ marginTop: 10, fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t2)' }}>
+                Total: <span className="num" style={{ color: 'var(--yellow)', fontWeight: 700 }}>{fmt(createTotal)}</span> units
               </div>
             </div>
 
             {createError && (
-              <div style={{ color: 'var(--red)', fontSize: 11, marginTop: 12, fontFamily: 'var(--mono)' }}>{createError}</div>
+              <div style={{ color: 'var(--bad-fg)', fontSize: 12.5, marginTop: 12, fontFamily: 'var(--font-ui)' }}>{createError}</div>
             )}
 
             {/* TODO: B-4 follow-up: Modal lacks a `footer` slot — keeping inline buttons to preserve yellow-on-black primary style. */}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
-              <button onClick={() => setCreateOpen(false)} style={btnStyle} disabled={createLoading}>Cancel</button>
+              <button onClick={() => setCreateOpen(false)} style={btnGhost} disabled={createLoading}>Cancel</button>
               <button
                 onClick={submitCreate}
                 disabled={createLoading}
-                style={{ ...primaryBtnStyle, opacity: createLoading ? 0.5 : 1 }}
+                style={{ ...btnPrimary, opacity: createLoading ? 0.5 : 1 }}
               >
                 {createLoading ? 'Creating…' : 'Create Shipment'}
               </button>
@@ -682,55 +713,61 @@ export default function DispatchShipmentsPage() {
       >
         {editOpen && editShipment && (
           <>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
               <div>
-                <label style={labelStyle}>Title</label>
-                <input style={{ ...inputStyle, width: '100%' }} value={editTitle} onChange={e => setEditTitle(e.target.value)} />
+                <span className="eyebrow" style={eyebrowLbl}>Title</span>
+                <input style={inputStyle} value={editTitle} onChange={e => setEditTitle(e.target.value)} />
               </div>
               <div>
-                <label style={labelStyle}>Scheduled Date</label>
-                <input type="date" style={{ ...inputStyle, width: '100%' }} value={editDate} onChange={e => setEditDate(e.target.value)} />
+                <span className="eyebrow" style={eyebrowLbl}>Scheduled Date</span>
+                <input type="date" style={inputStyle} value={editDate} onChange={e => setEditDate(e.target.value)} />
               </div>
             </div>
-            <div style={{ marginBottom: 12 }}>
-              <label style={labelStyle}>Notes</label>
-              <input style={{ ...inputStyle, width: '100%' }} value={editNotes} onChange={e => setEditNotes(e.target.value)} />
+            <div style={{ marginBottom: 14 }}>
+              <span className="eyebrow" style={eyebrowLbl}>Notes</span>
+              <input style={inputStyle} value={editNotes} onChange={e => setEditNotes(e.target.value)} />
             </div>
 
             {/* Manifest */}
             <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14, marginTop: 8 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                <div style={{ ...sectionLabel, marginBottom: 0 }}>Manifest</div>
+                <span className="label" style={{ fontSize: 11, color: 'var(--t2)' }}>Manifest</span>
                 <div style={{ flex: 1 }} />
                 <select style={selectStyle} value={editProduct} onChange={e => setEditProduct(e.target.value)}>
                   <option value="">{productOptions.length ? 'Add product…' : 'Loading…'}</option>
                   {productOptions.filter(p => hasMissingVariant(p, editGroups)).map(p => <option key={p} value={p}>{p}</option>)}
                 </select>
-                <button style={btnStyle} onClick={() => addEditLine(editProduct)} disabled={!editProduct}>+ Add</button>
+                <button style={btnGhost} onClick={() => addEditLine(editProduct)} disabled={!editProduct}>
+                  <Icon name="plus" size={13} /> Add
+                </button>
               </div>
 
               {Object.entries(editGroups).map(([product, group]) => {
                 const groupPacked = group.reduce((s, l) => s + (l.packed_qty || 0), 0);
                 return (
-                  <div key={product} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: 10, marginBottom: 8 }}>
+                  <div key={product} style={groupCard}>
                     <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
-                      <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--t1)' }}>{product}</span>
+                      <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, fontWeight: 700, color: 'var(--t1)' }}>{product}</span>
                       <div style={{ flex: 1 }} />
                       {groupPacked === 0 && (
-                        <button onClick={() => removeEditProduct(product)} style={{ ...btnStyle, color: 'var(--red)', borderColor: 'var(--red)' }}>× Remove</button>
+                        <button onClick={() => removeEditProduct(product)}
+                          style={{ ...actionBtn('var(--bad-fg)'), display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <Icon name="x" size={11} /> Remove
+                        </button>
                       )}
                     </div>
                     {group.map((l) => {
                       const idx = editLines.findIndex(x => x.product === l.product && x.model === l.model && x.color === l.color);
                       return (
                         <div key={`${l.product}-${l.model}-${l.color}`} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                          <span style={{ fontSize: 11, color: 'var(--t2)', flex: 1 }}>{l.label}</span>
-                          <span style={{ fontSize: 10, color: 'var(--t3)', minWidth: 80, textAlign: 'right' }}>packed {fmt(l.packed_qty)}</span>
+                          <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t2)', flex: 1 }}>{l.label}</span>
+                          <span className="num" style={{ fontSize: 11, color: 'var(--t3)', minWidth: 80, textAlign: 'right' }}>packed {fmt(l.packed_qty)}</span>
                           <input
                             type="number" min={l.packed_qty || 0}
                             value={l.target_qty}
                             onChange={e => updateEditLineQty(idx, e.target.value)}
-                            style={{ ...inputStyle, width: 80, textAlign: 'right' }}
+                            className="num"
+                            style={{ ...inputStyle, width: 84, textAlign: 'right', padding: '6px 9px' }}
                           />
                         </div>
                       );
@@ -739,24 +776,24 @@ export default function DispatchShipmentsPage() {
                 );
               })}
 
-              <div style={{ marginTop: 10, fontSize: 11, color: 'var(--t2)', fontFamily: 'var(--mono)' }}>
-                Target: <span style={{ color: 'var(--yellow)', fontWeight: 700 }}>{fmt(editTargetTotal)}</span>
+              <div style={{ marginTop: 10, fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t2)' }}>
+                Target: <span className="num" style={{ color: 'var(--yellow)', fontWeight: 700 }}>{fmt(editTargetTotal)}</span>
                 {' · '}
-                Packed: <span style={{ color: 'var(--green)', fontWeight: 700 }}>{fmt(editPackedTotal)}</span>
+                Packed: <span className="num" style={{ color: 'var(--ok-fg)', fontWeight: 700 }}>{fmt(editPackedTotal)}</span>
               </div>
             </div>
 
             {editError && (
-              <div style={{ color: 'var(--red)', fontSize: 11, marginTop: 12, fontFamily: 'var(--mono)' }}>{editError}</div>
+              <div style={{ color: 'var(--bad-fg)', fontSize: 12.5, marginTop: 12, fontFamily: 'var(--font-ui)' }}>{editError}</div>
             )}
 
             {/* TODO: B-4 follow-up: Modal lacks a `footer` slot — keeping inline buttons to preserve yellow-on-black primary style. */}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
-              <button onClick={() => setEditOpen(false)} style={btnStyle} disabled={editLoading}>Cancel</button>
+              <button onClick={() => setEditOpen(false)} style={btnGhost} disabled={editLoading}>Cancel</button>
               <button
                 onClick={submitEdit}
                 disabled={editLoading}
-                style={{ ...primaryBtnStyle, opacity: editLoading ? 0.5 : 1 }}
+                style={{ ...btnPrimary, opacity: editLoading ? 0.5 : 1 }}
               >
                 {editLoading ? 'Saving…' : 'Save Changes'}
               </button>
@@ -767,268 +804,312 @@ export default function DispatchShipmentsPage() {
 
       {/* Page content */}
       <div>
-        {/* Filter bar + Create */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
-          <Chip active={statusFilter === ''}          onClick={() => setStatusFilter('')}>All</Chip>
-          <Chip active={statusFilter === 'draft'}     onClick={() => setStatusFilter('draft')}>Draft</Chip>
-          <Chip active={statusFilter === 'packing'}   onClick={() => setStatusFilter('packing')}>Packing</Chip>
-          <Chip active={statusFilter === 'ready'}     onClick={() => setStatusFilter('ready')}>Ready</Chip>
-          <Chip active={statusFilter === 'shipped'}   onClick={() => setStatusFilter('shipped')}>Shipped</Chip>
-          <Chip active={statusFilter === 'cancelled'} onClick={() => setStatusFilter('cancelled')}>Cancelled</Chip>
+        {/* Filter tabs + Create */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
+          {TABS.map(([val, label]) => (
+            <FilterChip key={val || 'all'} active={statusFilter === val} dot={STATUS_DOT[val]}
+              onClick={() => setStatusFilter(val)}>
+              {label}
+            </FilterChip>
+          ))}
           <div style={{ flex: 1 }} />
-          <button style={primaryBtnStyle} onClick={openCreate}>
-            + New Shipment
+          <button style={btnPrimary} onClick={openCreate}>
+            <Icon name="plus" size={15} /> New Shipment
           </button>
         </div>
 
         {/* Shipments table */}
-        <Panel padding={0}>
+        <Panel pad={8}>
           {loading ? (
             <div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}><Spinner /></div>
           ) : shipments.length === 0 ? (
-            <EmptyState icon="📤" message="No shipments" />
+            <div style={{ padding: '44px 0', textAlign: 'center' }}>
+              <div style={{ display: 'inline-grid', placeItems: 'center', width: 44, height: 44, borderRadius: '50%',
+                background: 'var(--surface-2)', color: 'var(--t3)', border: '1px solid var(--border-2)', marginBottom: 12 }}>
+                <Icon name="send" size={20} />
+              </div>
+              <div style={{ fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 600, color: 'var(--t1)' }}>
+                No {statusFilter || ''} shipments
+              </div>
+              <div style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t3)', marginTop: 3 }}>
+                Create a shipment to start packing for a channel.
+              </div>
+            </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr>
-                    {['Ref','Title','Channel','Pool / Target','Packed','Scheduled','Status','Actions'].map(h => (
-                      <th key={h} style={thStyle}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {shipments.map(s => {
+              <div style={{ minWidth: 1080 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: cols, gap: 12, padding: '0 12px 9px', borderBottom: '1px solid var(--border)' }}>
+                  {['Ref', 'Title', 'Channel', 'Pool / target', 'Packed', 'Scheduled', 'Status', 'Actions'].map(h => (
+                    <div key={h} className="eyebrow">{h}</div>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  {shipments.map((s, i) => {
                     const isOpen = detailShipment?.id === s.id;
                     const ch = s.dispatch_channels;
                     const ready = s.is_ready && s.status !== 'shipped';
+                    const pct = (Number(s.expected_units) || 0) > 0
+                      ? Math.min(100, Math.round((Number(s.packed_count) || 0) * 100 / Number(s.expected_units)))
+                      : 0;
                     return (
-                      <tr
+                      <div
                         key={s.id}
                         onClick={() => isOpen ? setDetailShipment(null) : openDetail(s)}
-                        style={{ cursor: 'pointer', background: isOpen ? 'var(--surface2)' : undefined }}
+                        style={{ display: 'grid', gridTemplateColumns: cols, gap: 12, alignItems: 'center',
+                          padding: '11px 12px', cursor: 'pointer',
+                          borderTop: i ? '1px solid var(--border)' : 'none',
+                          background: isOpen ? 'var(--surface-2)' : 'transparent',
+                          transition: 'background var(--fast) var(--ease)' }}
+                        onMouseEnter={(e) => { if (!isOpen) e.currentTarget.style.background = 'var(--surface-2)'; }}
+                        onMouseLeave={(e) => { if (!isOpen) e.currentTarget.style.background = 'transparent'; }}
                       >
-                        <td style={{ ...tdStyle, color: 'var(--yellow)' }}>
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                            {s.shipment_no}
-                            {s.sales_order_no && <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: '#7b93ff', border: '1px solid rgba(33,60,226,.3)', background: 'rgba(33,60,226,.12)', borderRadius: 2, padding: '1px 5px' }} title={`Offline sales order ${s.sales_order_no}`}>{s.sales_order_no}</span>}
-                            {ready && <StatusBadge variant="success" icon="✓">Ready</StatusBadge>}
-                          </span>
-                        </td>
-                        <td style={tdStyle}>{s.title || '—'}</td>
-                        <td style={tdStyle}>
-                          {ch ? (
-                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                              <span>{ch.name}</span>
-                              <ChannelTypeBadge type={ch.type} />
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                          <span className="num" style={{ fontSize: 12, fontWeight: 700, color: 'var(--yellow)', whiteSpace: 'nowrap' }}>{s.shipment_no}</span>
+                          {s.sales_order_no && (
+                            <span className="num" title={`Offline sales order ${s.sales_order_no}`}
+                              style={{ fontSize: 9, fontWeight: 700, color: 'var(--info-fg)', border: '1px solid var(--info-bd)',
+                                background: 'var(--info-bg)', borderRadius: 3, padding: '1px 5px', whiteSpace: 'nowrap' }}>
+                              {s.sales_order_no}
                             </span>
-                          ) : '—'}
-                        </td>
-                        <td style={{ ...tdStyle, color: 'var(--t2)' }}>
-                          {fmt(s.pool_count)} / {fmt(s.expected_units)}
-                        </td>
-                        <td style={{ ...tdStyle, color: 'var(--green)' }}>{fmt(s.packed_count)}</td>
-                        <td style={{ ...tdStyle, color: 'var(--t3)' }}>{formatDate(s.scheduled_date)}</td>
-                        <td style={tdStyle}><ShipmentStatusBadge status={s.status} /></td>
-                        <td style={tdStyle} onClick={(e) => e.stopPropagation()}>
-                          {!['shipped','cancelled'].includes(s.status) && (
-                            <button onClick={(e) => { e.stopPropagation(); confirmMarkShipped(s); }} style={actionBtn('var(--green)')}>Shipped</button>
                           )}
-                          {['draft','packing'].includes(s.status) && (
+                          {ready && <ToneBadge tone="ok">Ready</ToneBadge>}
+                        </span>
+                        <span style={{ fontFamily: 'var(--font-ui)', fontSize: 13, color: s.title ? 'var(--t1)' : 'var(--t4)',
+                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.title || '—'}</span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+                          <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: ch ? 'var(--t2)' : 'var(--t4)',
+                            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ch?.name || '—'}</span>
+                          {ch && <CType t={ch.type} />}
+                        </span>
+                        <span className="num" style={{ fontSize: 12.5, color: 'var(--t2)', whiteSpace: 'nowrap' }}>
+                          {fmt(s.pool_count)} / {fmt(s.expected_units)}
+                        </span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                          <div style={{ flex: 1, height: 5, background: 'var(--bg-2)', borderRadius: 3, overflow: 'hidden', minWidth: 30 }}>
+                            <div style={{ height: '100%', width: `${pct}%`, background: pct === 100 ? 'var(--ok-fg)' : 'var(--yellow)', borderRadius: 3 }} />
+                          </div>
+                          <span className="num" style={{ fontSize: 12, color: pct === 100 ? 'var(--ok-fg)' : 'var(--t2)' }}>{fmt(s.packed_count)}</span>
+                        </span>
+                        <span className="num" style={{ fontSize: 11.5, color: 'var(--t3)', whiteSpace: 'nowrap' }}>{formatDate(s.scheduled_date)}</span>
+                        <span><ShipmentStatusBadge status={s.status} /></span>
+                        <span onClick={(e) => e.stopPropagation()} style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                          {!['shipped', 'cancelled'].includes(s.status) && (
+                            <button onClick={(e) => { e.stopPropagation(); confirmMarkShipped(s); }} style={actionBtn('var(--ok-fg)')}>Shipped</button>
+                          )}
+                          {['draft', 'packing'].includes(s.status) && (
                             <button onClick={(e) => { e.stopPropagation(); openEdit(s); }} style={actionBtn('var(--yellow)')}>Edit</button>
                           )}
-                          {['draft','packing'].includes(s.status) && (
-                            <button onClick={(e) => { e.stopPropagation(); confirmCancel(s); }} style={actionBtn('var(--orange)')}>Cancel</button>
+                          {['draft', 'packing'].includes(s.status) && (
+                            <button onClick={(e) => { e.stopPropagation(); confirmCancel(s); }} style={actionBtn('var(--warn-fg)')}>Cancel</button>
                           )}
                           {s.status === 'draft' && (
-                            <button onClick={(e) => { e.stopPropagation(); confirmDelete(s); }} style={actionBtn('var(--red)')}>Delete</button>
+                            <button onClick={(e) => { e.stopPropagation(); confirmDelete(s); }} style={actionBtn('var(--bad-fg)')}>Delete</button>
                           )}
-                        </td>
-                      </tr>
+                        </span>
+                      </div>
                     );
                   })}
-                </tbody>
-              </table>
+                </div>
+              </div>
             </div>
           )}
         </Panel>
 
-        {/* Detail Panel — modal overlay */}
-        {detailShipment && (
-          <div
-            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
-            onClick={(e) => { if (e.target === e.currentTarget) setDetailShipment(null); }}
-          >
-          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: 16, width: 800, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-              <span style={{ fontFamily: 'var(--mono)', color: 'var(--yellow)', fontSize: 14, fontWeight: 700 }}>{detailShipment.shipment_no}</span>
-              <ShipmentStatusBadge status={detailShipment.status} />
-              {detailShipment.sales_order_no && (
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: '#7b93ff', border: '1px solid rgba(33,60,226,.3)', background: 'rgba(33,60,226,.12)', borderRadius: 2, padding: '2px 6px' }}>
-                  Order {detailShipment.sales_order_no}
-                </span>
-              )}
-              {detailShipment.title && <span style={{ color: 'var(--t2)', fontSize: 12 }}>· {detailShipment.title}</span>}
-              <div style={{ flex: 1 }} />
-              {detailLoading && <Spinner size="sm" />}
-              <button onClick={() => setDetailShipment(null)} style={btnStyle}>× Close</button>
-            </div>
-
-            {/* Meta cards */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 18 }}>
-              <MetaCard label="Channel"   value={detailShipment.dispatch_channels?.name || '—'}   sub={detailShipment.dispatch_channels?.type} />
-              <MetaCard label="Pool / Target" value={`${fmt(detailShipment.pool_count)} / ${fmt(detailShipment.expected_units)}`} />
-              <MetaCard label="Packed"    value={fmt(detailShipment.packed_count)} sub={`of ${fmt(detailShipment.expected_units)}`} />
-              <MetaCard label="Scheduled" value={formatDate(detailShipment.scheduled_date)} />
-            </div>
-
-            {/* Offline-sales delivery date — drives the partner's payment-due clock in Snorkel */}
-            {detailShipment.sales_order_no && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18, padding: '8px 12px', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 4 }}>
-                <span style={{ ...sectionLabel, marginBottom: 0 }}>Delivery date</span>
-                <input
-                  type="date"
-                  defaultValue={detailShipment.delivery_date || ''}
-                  onChange={e => saveDeliveryDate(detailShipment.id, e.target.value)}
-                  style={{ ...inputStyle, width: 160 }}
-                />
-                <span style={{ fontSize: 11, color: 'var(--t3)' }}>
-                  Sales order {detailShipment.sales_order_no} — set the date goods reached the partner (defaults to dispatch date if blank).
-                </span>
+        {/* Detail — drill-down drawer */}
+        <Drawer open={!!detailShipment} onClose={() => setDetailShipment(null)} width={540}>
+          {detailShipment && (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '15px 20px', borderBottom: '1px solid var(--border)' }}>
+                <span className="num" style={{ fontSize: 13, fontWeight: 700, color: 'var(--yellow)', whiteSpace: 'nowrap' }}>{detailShipment.shipment_no}</span>
+                <ShipmentStatusBadge status={detailShipment.status} />
+                {detailShipment.sales_order_no && (
+                  <span className="num" style={{ fontSize: 10, fontWeight: 700, color: 'var(--info-fg)', border: '1px solid var(--info-bd)',
+                    background: 'var(--info-bg)', borderRadius: 3, padding: '2px 6px', whiteSpace: 'nowrap' }}>
+                    Order {detailShipment.sales_order_no}
+                  </span>
+                )}
+                <span style={{ flex: 1 }} />
+                {detailLoading && <Spinner size="sm" />}
+                <button onClick={() => setDetailShipment(null)}
+                  style={{ background: 'none', border: '1px solid var(--border-2)', borderRadius: 'var(--r-xs)',
+                    width: 26, height: 26, color: 'var(--t3)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}>
+                  <Icon name="x" size={14} />
+                </button>
               </div>
-            )}
 
-            {/* Manifest */}
-            <div style={{ marginBottom: 18 }}>
-              <div style={sectionLabel}>Manifest</div>
-              {detailLines.length === 0 ? (
-                <div style={{ padding: '14px 0', textAlign: 'center', color: 'var(--t3)', fontSize: 11 }}>No lines</div>
-              ) : (
-                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                  <thead>
-                    <tr>
-                      {['Product','Target','Packed','Progress'].map(h => <th key={h} style={thStyle}>{h}</th>)}
-                    </tr>
-                  </thead>
-                  <tbody>
+              <div style={{ overflowY: 'auto', padding: 20, flex: 1 }}>
+                {detailShipment.title && (
+                  <div style={{ fontFamily: 'var(--font-ui)', fontSize: 16, fontWeight: 600, color: 'var(--t1)', marginBottom: 14 }}>
+                    {detailShipment.title}
+                  </div>
+                )}
+
+                {/* Meta cards */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 18 }}>
+                  <MetaCard label="Channel" value={detailShipment.dispatch_channels?.name || '—'}
+                    extra={<CType t={detailShipment.dispatch_channels?.type} />} text />
+                  <MetaCard label="Pool / target" value={`${fmt(detailShipment.pool_count)} / ${fmt(detailShipment.expected_units)}`} />
+                  <MetaCard label="Packed" value={fmt(detailShipment.packed_count)}
+                    sub={`of ${fmt(detailShipment.expected_units)}`} />
+                  <MetaCard label="Scheduled" value={formatDate(detailShipment.scheduled_date)} />
+                </div>
+
+                {/* Offline-sales delivery date — drives the partner's payment-due clock in Snorkel */}
+                {detailShipment.sales_order_no && (
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 18, padding: '11px 14px',
+                    background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)' }}>
+                    <div style={{ flexShrink: 0 }}>
+                      <span className="eyebrow" style={{ display: 'block', marginBottom: 6 }}>Delivery date</span>
+                      <input
+                        type="date"
+                        defaultValue={detailShipment.delivery_date || ''}
+                        onChange={e => saveDeliveryDate(detailShipment.id, e.target.value)}
+                        style={{ ...inputStyle, width: 160, padding: '7px 9px' }}
+                      />
+                    </div>
+                    <span style={{ fontFamily: 'var(--font-ui)', fontSize: 11.5, color: 'var(--t3)', lineHeight: 1.5, paddingTop: 2 }}>
+                      Sales order {detailShipment.sales_order_no} — set the date goods reached the partner (defaults to dispatch date if blank).
+                    </span>
+                  </div>
+                )}
+
+                {/* Manifest */}
+                <div className="label" style={{ fontSize: 11, color: 'var(--t2)', marginBottom: 10 }}>Manifest</div>
+                {detailLines.length === 0 ? (
+                  <div style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t3)', padding: '4px 0 14px' }}>No lines.</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 18 }}>
                     {detailLines.map((l, i) => {
                       const pct = l.target_qty > 0 ? Math.min(100, Math.round((l.packed_qty || 0) * 100 / l.target_qty)) : 0;
+                      const done = pct === 100;
                       return (
-                        <tr key={`${l.product}-${l.model}-${l.color}-${i}`}>
-                          <td style={{ ...tdStyle, color: 'var(--t1)' }}>
-                            {l.product}
-                            {(l.model || l.color) && <span style={{ color: 'var(--t3)', marginLeft: 6, fontSize: 11 }}>{[l.model, l.color].filter(Boolean).join(' ')}</span>}
-                          </td>
-                          <td style={{ ...tdStyle, fontFamily: 'var(--mono)' }}>{fmt(l.target_qty)}</td>
-                          <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: pct === 100 ? 'var(--green)' : 'var(--yellow)' }}>{fmt(l.packed_qty)}</td>
-                          <td style={tdStyle}>
-                            <div style={{ height: 6, background: 'var(--border)', borderRadius: 3, overflow: 'hidden', minWidth: 120 }}>
-                              <div style={{ height: '100%', width: `${pct}%`, background: pct === 100 ? 'var(--green)' : 'var(--yellow)', transition: 'width .3s' }} />
-                            </div>
-                          </td>
-                        </tr>
+                        <div key={`${l.product}-${l.model}-${l.color}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                          <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t1)', width: 168, flexShrink: 0,
+                            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {l.product} <span style={{ color: 'var(--t4)' }}>{[l.model, l.color].filter(Boolean).join(' ')}</span>
+                          </span>
+                          <div style={{ flex: 1, height: 7, background: 'var(--bg-2)', borderRadius: 4, overflow: 'hidden' }}>
+                            <div style={{ height: '100%', width: `${pct}%`, background: done ? 'var(--ok-fg)' : 'var(--yellow)',
+                              borderRadius: 4, transition: 'width var(--base) var(--ease)' }} />
+                          </div>
+                          <span className="num" style={{ fontSize: 12, color: done ? 'var(--ok-fg)' : 'var(--t2)', width: 84, textAlign: 'right' }}>
+                            {fmt(l.packed_qty)}/{fmt(l.target_qty)}
+                          </span>
+                        </div>
                       );
                     })}
-                  </tbody>
-                </table>
-              )}
-            </div>
-
-            {/* Boxes */}
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-                <div style={{ ...sectionLabel, marginBottom: 0 }}>Boxes ({detailBoxes.length})</div>
-                <div style={{ flex: 1 }} />
-                {!['shipped','cancelled'].includes(detailShipment.status) && (
-                  <>
-                    <input
-                      type="number" min={1}
-                      value={addBoxCount}
-                      onChange={e => setAddBoxCount(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                      style={{ ...inputStyle, width: 60, textAlign: 'right', padding: '4px 6px' }}
-                    />
-                    <button onClick={() => addBoxes(detailShipment.id, addBoxCount)} style={btnStyle}>+ Add Boxes</button>
-                  </>
+                  </div>
                 )}
-              </div>
-              {detailBoxes.length === 0 ? (
-                <div style={{ padding: '14px 0', textAlign: 'center', color: 'var(--t3)', fontSize: 11 }}>No boxes yet</div>
-              ) : (
-                detailBoxes.map(box => {
-                  const expanded = expandedBoxes.has(box.id);
-                  const units = boxUnitsCache[box.id];
-                  const isPacked = box.status === 'packed' || box.status === 'closed';
-                  return (
-                    <div key={box.id} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 4, marginBottom: 8 }}>
-                      <div
-                        style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', cursor: 'pointer' }}
-                        onClick={() => toggleBoxUnits(box.id)}
-                      >
-                        <span style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 11 }}>{expanded ? '▼' : '▶'}</span>
-                        <span style={{ fontFamily: 'var(--mono)', color: 'var(--yellow)', fontSize: 12, fontWeight: 700 }}>{box.box_ref || `Box ${box.id}`}</span>
-                        <span style={{ fontSize: 11, color: 'var(--t2)' }}>{fmt(box.unit_count)} units</span>
-                        <BoxStatusBadge status={box.status} />
-                        <div style={{ flex: 1 }} />
-                        {isPacked && (
-                          <>
-                            <button onClick={(e) => { e.stopPropagation(); reprintBox(box.id); }} style={actionBtn('var(--blue)')}>Reprint</button>
-                            <button onClick={(e) => { e.stopPropagation(); reopenBox(box.id); }} style={actionBtn('var(--orange)')}>Reopen</button>
-                          </>
-                        )}
-                        {!isPacked && (box.unit_count || 0) === 0 && (
-                          <button onClick={(e) => { e.stopPropagation(); confirmDeleteBox(box); }} style={actionBtn('var(--red)')}>× Remove</button>
-                        )}
-                      </div>
-                      {expanded && (
-                        <div style={{ borderTop: '1px solid var(--border)', padding: 8 }}>
-                          {units == null ? (
-                            <div style={{ padding: 8, color: 'var(--t3)', fontSize: 11 }}>Loading units…</div>
-                          ) : units.length === 0 ? (
-                            <div style={{ padding: 8, color: 'var(--t3)', fontSize: 11 }}>No active units</div>
-                          ) : (
-                            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                              <thead>
-                                <tr>
-                                  {['Batch','Product','Added',''].map(h => <th key={h} style={{ ...thStyle, padding: '6px 10px' }}>{h}</th>)}
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {units.map(u => (
-                                  <tr key={u.id}>
-                                    <td style={{ ...tdStyle, padding: '6px 10px', fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{u.batch_label || '—'}</td>
-                                    <td style={{ ...tdStyle, padding: '6px 10px' }}>{u.product || '—'}{(u.model || u.color) && <span style={{ color: 'var(--t3)', marginLeft: 6, fontSize: 11 }}>{[u.model, u.color].filter(Boolean).join(' ')}</span>}</td>
-                                    <td style={{ ...tdStyle, padding: '6px 10px', fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{formatDateTime(u.added_at)}</td>
-                                    <td style={{ ...tdStyle, padding: '6px 10px' }}>
-                                      {!isPacked && (
-                                        <button onClick={() => confirmRemoveUnit(u.id, box.id, u.batch_label)} style={actionBtn('var(--red)')}>× Remove</button>
-                                      )}
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
+
+                {/* Boxes */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                  <span className="label" style={{ fontSize: 11, color: 'var(--t2)' }}>Boxes · {detailBoxes.length}</span>
+                  <div style={{ flex: 1 }} />
+                  {!['shipped', 'cancelled'].includes(detailShipment.status) && (
+                    <>
+                      <input
+                        type="number" min={1}
+                        value={addBoxCount}
+                        onChange={e => setAddBoxCount(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                        className="num"
+                        style={{ ...inputStyle, width: 60, textAlign: 'right', padding: '5px 8px', fontSize: 12.5 }}
+                      />
+                      <button onClick={() => addBoxes(detailShipment.id, addBoxCount)}
+                        style={{ ...btnGhost, padding: '6px 11px', fontSize: 12 }}>
+                        <Icon name="plus" size={13} /> Add Boxes
+                      </button>
+                    </>
+                  )}
+                </div>
+                {detailBoxes.length === 0 ? (
+                  <div style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t3)', padding: '4px 0' }}>No boxes yet.</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {detailBoxes.map(box => {
+                      const expanded = expandedBoxes.has(box.id);
+                      const units = boxUnitsCache[box.id];
+                      const isPacked = box.status === 'packed' || box.status === 'closed';
+                      return (
+                        <div key={box.id} style={{ background: 'var(--surface-2)', borderRadius: 'var(--r-sm)', overflow: 'hidden' }}>
+                          <div
+                            style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', cursor: 'pointer' }}
+                            onClick={() => toggleBoxUnits(box.id)}
+                          >
+                            <span style={{ color: 'var(--t4)', display: 'flex',
+                              transform: expanded ? 'rotate(0)' : 'rotate(-90deg)', transition: 'transform var(--fast) var(--ease)' }}>
+                              <Icon name="chevD" size={12} />
+                            </span>
+                            <span className="num" style={{ fontSize: 12, fontWeight: 700, color: 'var(--yellow)' }}>{box.box_ref || `Box ${box.id}`}</span>
+                            <span className="num" style={{ fontSize: 11.5, color: 'var(--t2)' }}>{fmt(box.unit_count)} units</span>
+                            <BoxStatusBadge status={box.status} />
+                            <div style={{ flex: 1 }} />
+                            {isPacked && (
+                              <>
+                                <button onClick={(e) => { e.stopPropagation(); reprintBox(box.id); }} style={actionBtn('var(--blue-bright)')}>Reprint</button>
+                                <button onClick={(e) => { e.stopPropagation(); reopenBox(box.id); }} style={actionBtn('var(--warn-fg)')}>Reopen</button>
+                              </>
+                            )}
+                            {!isPacked && (box.unit_count || 0) === 0 && (
+                              <button onClick={(e) => { e.stopPropagation(); confirmDeleteBox(box); }} style={actionBtn('var(--bad-fg)')}>Remove</button>
+                            )}
+                          </div>
+                          {expanded && (
+                            <div style={{ borderTop: '1px solid var(--border)', padding: '6px 12px 10px 30px' }}>
+                              {units == null ? (
+                                <div style={{ padding: '6px 0', color: 'var(--t3)', fontSize: 12, fontFamily: 'var(--font-ui)' }}>Loading units…</div>
+                              ) : units.length === 0 ? (
+                                <div style={{ padding: '6px 0', color: 'var(--t3)', fontSize: 12, fontFamily: 'var(--font-ui)' }}>No active units.</div>
+                              ) : (
+                                <div>
+                                  <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr 96px 70px', gap: 8, padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
+                                    {['Batch', 'Product', 'Added', ''].map((h, hi) => <div key={hi} className="eyebrow">{h}</div>)}
+                                  </div>
+                                  {units.map(u => (
+                                    <div key={u.id} style={{ display: 'grid', gridTemplateColumns: '110px 1fr 96px 70px', gap: 8,
+                                      alignItems: 'center', padding: '7px 0', borderBottom: '1px solid var(--border)' }}>
+                                      <span className="num" style={{ fontSize: 11.5, color: 'var(--yellow)', whiteSpace: 'nowrap' }}>{u.batch_label || '—'}</span>
+                                      <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--t1)', minWidth: 0,
+                                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                        {u.product || '—'}
+                                        {(u.model || u.color) && <span style={{ color: 'var(--t4)', marginLeft: 5 }}>{[u.model, u.color].filter(Boolean).join(' ')}</span>}
+                                      </span>
+                                      <span className="num" style={{ fontSize: 10.5, color: 'var(--t3)', whiteSpace: 'nowrap' }}>{formatDateTime(u.added_at)}</span>
+                                      <span>
+                                        {!isPacked && (
+                                          <button onClick={() => confirmRemoveUnit(u.id, box.id, u.batch_label)} style={actionBtn('var(--bad-fg)')}>Remove</button>
+                                        )}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
                           )}
                         </div>
-                      )}
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
-          </div>
-        )}
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </Drawer>
       </div>
-    </>
+    </div>
   );
 }
 
-function MetaCard({ label, value, sub }) {
+function MetaCard({ label, value, sub, extra, text }) {
   return (
-    <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 4, padding: 10 }}>
-      <div style={{ fontSize: 9, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 4 }}>{label}</div>
-      <div style={{ fontSize: 14, color: 'var(--t1)', fontFamily: 'var(--mono)', fontWeight: 600 }}>{value}</div>
-      {sub && <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 2 }}>{sub}</div>}
+    <div style={{ background: 'var(--surface-2)', borderRadius: 'var(--r-sm)', padding: '10px 13px' }}>
+      <div className="eyebrow">{label}</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+        <span className={text ? undefined : 'num'} style={{ fontFamily: text ? 'var(--font-ui)' : undefined,
+          fontSize: text ? 13.5 : 15, fontWeight: 700, color: 'var(--t1)', minWidth: 0,
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</span>
+        {extra}
+      </div>
+      {sub && <div style={{ fontFamily: 'var(--font-ui)', fontSize: 11, color: 'var(--t3)', marginTop: 2 }}>{sub}</div>}
     </div>
   );
 }

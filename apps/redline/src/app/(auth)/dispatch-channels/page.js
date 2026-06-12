@@ -1,23 +1,52 @@
 'use client';
+/* ════════════════════════════════════════════════════════════
+   CHANNELS — Setup › Channels (Pit Wall v2 reskin of the
+   Channels tab in redesign-reference/app/setup.jsx). Master list
+   of dispatch channels: type · fulfilment · sale flag · active
+   toggle, plus the add/edit form. All data actions
+   (getDispatchChannels, createChannel, updateChannel) kept
+   exactly as before — visual layer only. The row toggle uses the
+   same updateChannel action + parameters as the edit form.
+   ════════════════════════════════════════════════════════════ */
 import { useState, useEffect } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, EmptyState, Panel, Chip, StatusBadge, useToast } from '@throttle/ui';
+import { Spinner, useToast } from '@throttle/ui';
+import { useRefreshState } from '../layout.js';
+import {
+  Icon, Panel, btnPrimary, btnGhost, inputStyle,
+} from '../../../components/kit/index.js';
 
 // ── Helpers ───────────────────────────────────────────────────
-function ChannelTypeBadge({ type }) {
+function TypeChip({ type }) {
   const t = (type || 'other').toLowerCase();
-  const variant = t === 'ecom' ? 'info' : t === 'retail' ? 'brand' : 'neutral';
-  return <StatusBadge variant={variant}>{type || '—'}</StatusBadge>;
+  const fg = t === 'ecom' ? 'var(--blue-bright)' : t === 'retail' ? 'var(--yellow)' : 'var(--t3)';
+  const bg = t === 'ecom' ? 'var(--info-bg)' : t === 'retail' ? 'var(--brand-bg)' : 'var(--surface-2)';
+  return (
+    <span className="num" style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase',
+      color: fg, background: bg, borderRadius: 3, padding: '1px 5px', whiteSpace: 'nowrap' }}>
+      {type || '—'}
+    </span>
+  );
 }
+
+const selectStyle = {
+  background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-sm)',
+  padding: '9px 12px', color: 'var(--t1)', fontFamily: 'var(--font-ui)', fontSize: 13,
+  outline: 'none', cursor: 'pointer',
+};
+
+const COLS = 'minmax(150px,1.4fr) 80px 130px 90px 90px 90px';
 
 // ── Channel Master Page ───────────────────────────────────────
 export default function DispatchChannelsPage() {
   const { session } = useAuth();
   const { showToast } = useToast();
+  const { setRefreshing, setLastRefreshed } = useRefreshState();
 
   const [channels, setChannels] = useState([]);
   const [loading,  setLoading]  = useState(false);
+  const [toggling, setToggling] = useState({});   // { [channel_id]: true }
 
   const [formMode,    setFormMode]    = useState(null);   // null | 'new' | channel object
   const [name,        setName]        = useState('');
@@ -31,6 +60,7 @@ export default function DispatchChannelsPage() {
   async function loadChannels() {
     if (!session) return;
     setLoading(true);
+    setRefreshing(true);
     try {
       const data = await garageFetch('getDispatchChannels', {}, session);
       setChannels(Array.isArray(data) ? data : []);
@@ -38,6 +68,8 @@ export default function DispatchChannelsPage() {
       setChannels([]);
     } finally {
       setLoading(false);
+      setRefreshing(false);
+      setLastRefreshed(new Date());
     }
   }
 
@@ -85,54 +117,62 @@ export default function DispatchChannelsPage() {
     }
   }
 
-  // ── Style constants ───────────────────────────────────────
-  const inputStyle = { background: 'var(--surface)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '8px 12px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 13, outline: 'none' };
-  const selectStyle = { background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--t1)', fontFamily: 'var(--mono)', fontSize: 13, padding: '8px 12px', borderRadius: 3, outline: 'none', cursor: 'pointer' };
-  const labelStyle = { fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase', display: 'block', marginBottom: 8 };
-  const sectionLabel = { margin: 0, fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t2)' };
-  const thStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
-  const tdStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 13, borderBottom: '1px solid rgba(64,64,64,.5)', whiteSpace: 'nowrap', color: 'var(--t1)' };
-
-  const primaryBtnStyle = {
-    padding: '8px 14px', background: 'var(--yellow)', color: '#0a0a0a',
-    border: '1px solid var(--yellow)', borderRadius: 3,
-    fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700,
-    letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer',
-  };
-  const secondaryBtnStyle = {
-    padding: '8px 14px', background: 'transparent', border: '1px solid var(--border)',
-    borderRadius: 3, color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 13, cursor: 'pointer',
-  };
+  // Row-level active toggle — same updateChannel action + parameter set as
+  // the edit form, just flipping is_active for one channel.
+  async function toggleActive(c) {
+    const next = c.is_active === false;
+    setToggling(prev => ({ ...prev, [c.id]: true }));
+    try {
+      await workerFetch('updateChannel', {
+        channel_id: c.id,
+        name: c.name, type: c.type, fulfillment_model: c.fulfillment_model,
+        is_sale: !!c.is_sale, is_active: next,
+      }, session);
+      showToast(`${c.name} ${next ? 'activated' : 'deactivated'}`, 'success');
+      await loadChannels();
+    } catch (e) {
+      showToast(e.message || 'Failed to update channel', 'error');
+    } finally {
+      setToggling(prev => ({ ...prev, [c.id]: false }));
+    }
+  }
 
   return (
-    <div>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18 }}>
-        <h2 style={sectionLabel}>Channel Master</h2>
+    <div style={{ maxWidth: 1180, margin: '0 auto' }}>
+      <style>{`.rl-ch-row:hover { background: var(--surface-2); }`}</style>
+
+      {/* Header row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+        <span style={{ fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--t3)' }}>
+          Channel master · feeds dispatch + reporting. Done-once setup, out of the daily flow.
+        </span>
         <div style={{ flex: 1 }} />
         {!formMode && (
-          <button style={primaryBtnStyle} onClick={openNew}>+ Add Channel</button>
+          <button style={btnPrimary} onClick={openNew}>
+            <Icon name="plus" size={15} /> Add Channel
+          </button>
         )}
       </div>
 
       {/* Inline form */}
       {formMode && (
-        <div style={{ background: 'var(--surface2)', border: '1px solid var(--yellow)', borderRadius: 4, padding: 18, marginBottom: 18 }}>
-          <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16 }}>
-            <h3 style={{ ...sectionLabel, color: 'var(--yellow)' }}>
-              {formMode === 'new' ? 'New Channel' : `Edit ${formMode.name}`}
-            </h3>
-            <div style={{ flex: 1 }} />
-            <button onClick={() => setFormMode(null)} style={secondaryBtnStyle}>× Cancel</button>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <Panel
+          title={formMode === 'new' ? 'New channel' : `Edit · ${formMode.name}`}
+          icon="send" pad={18}
+          style={{ marginBottom: 18, borderColor: 'var(--yellow)' }}
+          action={
+            <button onClick={() => setFormMode(null)} style={{ ...btnGhost, padding: '5px 11px', fontSize: 12 }} disabled={saving}>
+              <Icon name="x" size={13} /> Cancel
+            </button>
+          }
+        >
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
             <div>
-              <label style={labelStyle}>Name <span style={{ color: 'var(--red)' }}>*</span></label>
-              <input style={{ ...inputStyle, width: '100%' }} value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Amazon, Flipkart, BOM Bulk" />
+              <div className="eyebrow" style={{ marginBottom: 7 }}>Name <span style={{ color: 'var(--bad-fg)' }}>*</span></div>
+              <input style={inputStyle} value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Amazon, Flipkart, BOM Bulk" />
             </div>
             <div>
-              <label style={labelStyle}>Type</label>
+              <div className="eyebrow" style={{ marginBottom: 7 }}>Type</div>
               <select style={{ ...selectStyle, width: '100%' }} value={type} onChange={e => setType(e.target.value)}>
                 <option value="ecom">Ecom</option>
                 <option value="retail">Retail</option>
@@ -141,21 +181,21 @@ export default function DispatchChannelsPage() {
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
             <div>
-              <label style={labelStyle}>Fulfillment Model</label>
+              <div className="eyebrow" style={{ marginBottom: 7 }}>Fulfilment model</div>
               <select style={{ ...selectStyle, width: '100%' }} value={fulfillment} onChange={e => setFulfillment(e.target.value)}>
                 <option value="unit">Unit (per-unit dispatch)</option>
                 <option value="bulk">Bulk (warehouse transfer)</option>
               </select>
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', gap: 6 }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--t2)', fontFamily: 'var(--mono)', cursor: 'pointer' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', gap: 8 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t2)', cursor: 'pointer' }}>
                 <input type="checkbox" checked={isSale} onChange={e => setIsSale(e.target.checked)} />
                 Generates revenue (sale channel)
               </label>
               {formMode !== 'new' && (
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--t2)', fontFamily: 'var(--mono)', cursor: 'pointer' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t2)', cursor: 'pointer' }}>
                   <input type="checkbox" checked={isActive} onChange={e => setIsActive(e.target.checked)} />
                   Active
                 </label>
@@ -164,75 +204,77 @@ export default function DispatchChannelsPage() {
           </div>
 
           {formError && (
-            <div style={{ color: '#ff7070', fontFamily: 'var(--mono)', fontSize: 12, marginBottom: 12 }}>{formError}</div>
+            <div style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--bad-fg)', marginBottom: 14 }}>{formError}</div>
           )}
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-            <button onClick={() => setFormMode(null)} style={secondaryBtnStyle} disabled={saving}>Cancel</button>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+            <button onClick={() => setFormMode(null)} style={btnGhost} disabled={saving}>Cancel</button>
             <button
               onClick={submitForm}
               disabled={saving}
-              style={{ ...primaryBtnStyle, opacity: saving ? 0.5 : 1 }}
+              style={{ ...btnPrimary, opacity: saving ? 0.5 : 1 }}
             >
               {saving ? 'Saving…' : (formMode === 'new' ? 'Add Channel' : 'Save Changes')}
             </button>
           </div>
-        </div>
+        </Panel>
       )}
 
       {/* Channel list */}
-      <Panel padding={0}>
+      <Panel pad={8}>
         {loading && channels.length === 0 ? (
           <div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}><Spinner /></div>
         ) : channels.length === 0 ? (
-          <EmptyState icon="📡" message="No channels yet" />
+          <div style={{ padding: 40, textAlign: 'center', fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--t3)' }}>
+            No channels yet.
+          </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr>
-                  {['Channel','Type','Fulfillment','Is Sale','Active','Actions'].map(h => (
-                    <th key={h} style={thStyle}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {channels.map(c => {
-                  const inactive = c.is_active === false;
-                  return (
-                    <tr key={c.id} style={{ opacity: inactive ? 0.45 : 1 }}>
-                      <td style={{ ...tdStyle, fontFamily: 'var(--cond)', fontWeight: 700, color: 'var(--t1)', letterSpacing: '0.04em' }}>{c.name}</td>
-                      <td style={tdStyle}><ChannelTypeBadge type={c.type} /></td>
-                      <td style={{ ...tdStyle, color: 'var(--t2)' }}>{c.fulfillment_model || '—'}</td>
-                      <td style={tdStyle}>
-                        {c.is_sale
-                          ? <StatusBadge variant="success" icon="●">Sale</StatusBadge>
-                          : <StatusBadge variant="neutral" icon="●">Cost</StatusBadge>}
-                      </td>
-                      <td style={tdStyle}>
-                        {!inactive
-                          ? <StatusBadge variant="success">Active</StatusBadge>
-                          : <StatusBadge variant="neutral">Inactive</StatusBadge>}
-                      </td>
-                      <td style={tdStyle}>
-                        <button
-                          onClick={() => openEdit(c)}
-                          style={{
-                            padding: '5px 11px', background: 'transparent',
-                            border: '1px solid var(--yellow)', borderRadius: 3,
-                            color: 'var(--yellow)', fontFamily: 'var(--mono)',
-                            fontSize: 11, fontWeight: 700, letterSpacing: '0.08em',
-                            textTransform: 'uppercase', cursor: 'pointer',
-                          }}
-                        >
-                          Edit
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+            <div style={{ display: 'grid', gridTemplateColumns: COLS, gap: 12, padding: '4px 12px 9px',
+              borderBottom: '1px solid var(--border)', minWidth: 700 }}>
+              {['Channel', 'Type', 'Fulfilment', 'Sale', 'Active', 'Actions'].map(h => (
+                <div key={h} className="eyebrow">{h}</div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              {channels.map((c, i) => {
+                const inactive = c.is_active === false;
+                return (
+                  <div key={c.id} className="rl-ch-row" style={{ display: 'grid', gridTemplateColumns: COLS, gap: 12,
+                    alignItems: 'center', padding: '11px 12px', borderTop: i ? '1px solid var(--border)' : 'none',
+                    minWidth: 700, opacity: inactive ? 0.55 : 1, transition: 'background var(--fast) var(--ease)' }}>
+                    <span style={{ fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 600, color: 'var(--t1)',
+                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.name}</span>
+                    <span style={{ justifySelf: 'start' }}><TypeChip type={c.type} /></span>
+                    <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t2)' }}>{c.fulfillment_model || '—'}</span>
+                    <span className="num" style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase',
+                      color: c.is_sale ? 'var(--ok-fg)' : 'var(--t3)' }}>
+                      {c.is_sale ? 'Sale' : 'Cost'}
+                    </span>
+                    <button
+                      onClick={() => toggleActive(c)}
+                      disabled={!!toggling[c.id]}
+                      title={inactive ? 'Activate channel' : 'Deactivate channel'}
+                      style={{ justifySelf: 'start', width: 38, height: 22, borderRadius: 'var(--r-full)', border: 'none',
+                        cursor: toggling[c.id] ? 'default' : 'pointer', position: 'relative',
+                        background: !inactive ? 'var(--ok-fg)' : 'var(--surface-3)',
+                        opacity: toggling[c.id] ? 0.6 : 1, transition: 'background var(--fast)' }}
+                    >
+                      <span style={{ position: 'absolute', top: 2, left: !inactive ? 18 : 2, width: 18, height: 18,
+                        borderRadius: '50%', background: '#fff', transition: 'left var(--fast)' }} />
+                    </button>
+                    <span>
+                      <button onClick={() => openEdit(c)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5,
+                        background: 'transparent', border: '1px solid var(--yellow)', color: 'var(--yellow)',
+                        borderRadius: 'var(--r-xs)', padding: '4px 11px', fontFamily: 'var(--font-ui)',
+                        fontSize: 11.5, fontWeight: 600, cursor: 'pointer' }}>
+                        <Icon name="edit" size={12} /> Edit
+                      </button>
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
       </Panel>

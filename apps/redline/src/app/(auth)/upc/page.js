@@ -1,12 +1,22 @@
 'use client';
+/* ════════════════════════════════════════════════════════════
+   UPC GENERATOR — Setup › UPC Generator (Pit Wall v2 reskin of
+   redesign-reference/app/upc.jsx). Batch-print unique unit codes
+   (car AND remote are separate products — SHTK / SHTKR). Manages
+   the Generated → Sent → Received round-trip. All data actions
+   (generateUpcBatch, markUpcBatchSent, receiveUpcBatch, print
+   HTML builder) kept exactly as before — visual layer only.
+   ════════════════════════════════════════════════════════════ */
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, EmptyState, Panel, Chip, StatusBadge, useToast, printWindow } from '@throttle/ui';
+import { Spinner, useToast, printWindow } from '@throttle/ui';
+import { useRefreshState } from '../layout.js';
+import {
+  Icon, Panel, FilterChip, fmt, btnPrimary, btnGhost, inputStyle,
+} from '../../../components/kit/index.js';
 
 // ── Helpers ───────────────────────────────────────────────────
-function fmt(n) { return n != null ? Number(n).toLocaleString('en-IN') : '0'; }
-
 function formatDateTime(ts) {
   if (!ts) return '—';
   const d = new Date(ts);
@@ -15,42 +25,37 @@ function formatDateTime(ts) {
   return `${date} ${time}`;
 }
 
-const BATCH_STATUS_VARIANT = {
-  generated:     'brand',
-  sent_to_print: 'warning',
-  printed:       'info',
-  received:      'success',
-};
-
-const BATCH_STATUS_LABEL = {
-  generated:     'Generated',
-  sent_to_print: 'Sent to Print',
-  printed:       'Printed',
-  received:      'Received',
+// Full round-trip lifecycle — keep all four DB statuses.
+const BATCH_STATUS = {
+  generated:     { label: 'Generated',     fg: 'var(--warn-fg)', bg: 'var(--warn-bg)',            bd: 'var(--warn-bd)' },
+  sent_to_print: { label: 'Sent to Print', fg: 'var(--orange)',  bg: 'rgba(249,115,22,0.14)',     bd: 'rgba(249,115,22,0.3)' },
+  printed:       { label: 'Printed',       fg: 'var(--info-fg)', bg: 'var(--info-bg)',            bd: 'var(--info-bd)' },
+  received:      { label: 'Received',      fg: 'var(--ok-fg)',   bg: 'var(--ok-bg)',              bd: 'var(--ok-bd)' },
 };
 
 function BatchStatus({ status }) {
+  const st = BATCH_STATUS[status] || { label: status || '—', fg: 'var(--t2)', bg: 'var(--surface-2)', bd: 'var(--border-2)' };
   return (
-    <StatusBadge variant={BATCH_STATUS_VARIANT[status] || 'neutral'}>
-      {BATCH_STATUS_LABEL[status] || status || '—'}
-    </StatusBadge>
+    <span className="num" style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase',
+      color: st.fg, background: st.bg, border: `1px solid ${st.bd}`, borderRadius: 3, padding: '2px 7px', whiteSpace: 'nowrap' }}>
+      {st.label}
+    </span>
   );
 }
 
-// ── Common styles ────────────────────────────────────────────
-const primaryBtn = { padding: '8px 14px', background: 'var(--yellow)', color: '#0a0a0a', border: '1px solid var(--yellow)', borderRadius: 3, fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer' };
-const secondaryBtn = { padding: '8px 14px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 13, cursor: 'pointer' };
-const smallBtn = { padding: '5px 11px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 12, cursor: 'pointer', letterSpacing: '0.04em' };
-const inputStyle = { background: 'var(--surface)', color: 'var(--t1)', border: '1px solid var(--border)', padding: '8px 12px', borderRadius: 3, fontFamily: 'var(--mono)', fontSize: 13, outline: 'none' };
-const labelStyle = { fontSize: 11, color: 'var(--t3)', letterSpacing: '0.08em', textTransform: 'uppercase', display: 'block', marginBottom: 6, fontFamily: 'var(--mono)' };
-const sectionLabel = { fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t2)', margin: 0 };
-const thStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
-const tdStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 13, borderBottom: '1px solid rgba(64,64,64,.5)', whiteSpace: 'nowrap', color: 'var(--t1)' };
+const actionBtn = (color) => ({
+  display: 'inline-flex', alignItems: 'center', gap: 5, background: 'transparent',
+  border: `1px solid ${color}`, color, borderRadius: 'var(--r-xs)', padding: '4px 9px',
+  fontFamily: 'var(--font-ui)', fontSize: 11.5, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap',
+});
+
+const COLS = '76px 88px minmax(120px,1fr) minmax(110px,1fr) 56px 230px 110px 122px 196px';
 
 // ── UPC Generator Page ────────────────────────────────────────
 export default function UpcPage() {
   const { session } = useAuth();
   const { showToast } = useToast();
+  const { setRefreshing, setLastRefreshed } = useRefreshState();
 
   const [products,     setProducts]     = useState([]);
   const [batches,      setBatches]      = useState([]);
@@ -84,12 +89,17 @@ export default function UpcPage() {
   const loadHistory = useCallback(async () => {
     if (!session) return;
     setLoadingHist(true);
+    setRefreshing(true);
     try {
       const data = await garageFetch('getUpcBatches', { limit: '50' }, session);
       setBatches(Array.isArray(data) ? data : []);
     } catch (_) { setBatches([]); }
-    finally { setLoadingHist(false); }
-  }, [session]);
+    finally {
+      setLoadingHist(false);
+      setRefreshing(false);
+      setLastRefreshed(new Date());
+    }
+  }, [session, setRefreshing, setLastRefreshed]);
 
   useEffect(() => { loadProducts(); }, [loadProducts]);
   useEffect(() => { loadHistory(); }, [loadHistory]);
@@ -151,7 +161,7 @@ export default function UpcPage() {
       const sheets = Math.ceil((b.quantity || numQty) / 609);
       setGenStatus({
         type: 'ok',
-        text: `✓ Batch ${b.batch_id} generated — ${fmt(b.quantity)} stickers · ${productCode}-${b.seq_from} to ${productCode}-${b.seq_to} · ${sheets} A3 sheet${sheets !== 1 ? 's' : ''}`,
+        text: `Batch ${b.batch_id} generated — ${fmt(b.quantity)} stickers · ${productCode}-${b.seq_from} to ${productCode}-${b.seq_to} · ${sheets} A3 sheet${sheets !== 1 ? 's' : ''}`,
       });
       await loadHistory();
       setTimeout(() => printBatch(b.batch_id), 500);
@@ -259,16 +269,16 @@ export default function UpcPage() {
 
   // ── Render ────────────────────────────────────────────────
   return (
-    <div>
-      {/* Generator section */}
-      <Panel style={{ marginBottom: 20 }}>
-        <h2 style={{ ...sectionLabel, marginBottom: 12 }}>Generate New Batch</h2>
+    <div style={{ maxWidth: 1320, margin: '0 auto' }}>
+      <style>{`.rl-upc-opt:hover, .rl-upc-row:hover { background: var(--surface-2); }`}</style>
 
+      {/* Generate new batch */}
+      <Panel title="Generate new batch" icon="box" pad={18} style={{ marginBottom: 18 }}>
         {/* Product picker */}
-        <div style={{ marginBottom: 12, position: 'relative' }} ref={dropdownRef}>
-          <label style={labelStyle}>Product</label>
+        <div style={{ position: 'relative', marginBottom: 16 }} ref={dropdownRef}>
+          <div className="eyebrow" style={{ marginBottom: 7 }}>Product</div>
           <input
-            style={{ ...inputStyle, width: '100%' }}
+            style={inputStyle}
             placeholder={loadingProds ? 'Loading products…' : 'Search product code, name, model, or color…'}
             value={search}
             onChange={e => { setSearch(e.target.value); setDropdownOpen(true); if (!e.target.value) clearSelection(); }}
@@ -276,21 +286,24 @@ export default function UpcPage() {
             disabled={loadingProds}
           />
           {dropdownOpen && filteredProducts.length > 0 && (
-            <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 2, background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, zIndex: 10, maxHeight: 280, overflowY: 'auto' }}>
+            <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 10, marginTop: 4,
+              background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-sm)',
+              boxShadow: 'var(--shadow-pop)', overflow: 'hidden', maxHeight: 280, overflowY: 'auto' }}>
               {filteredProducts.slice(0, 60).map(p => (
                 <div
                   key={p.product_code}
+                  className="rl-upc-opt"
                   onClick={() => selectProduct(p)}
-                  style={{ padding: '8px 12px', cursor: 'pointer', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}
-                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--surface3)'}
-                  onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                  style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 13px', cursor: 'pointer',
+                    transition: 'background var(--fast) var(--ease)' }}
                 >
-                  <span style={{ color: 'var(--yellow)', fontFamily: 'var(--mono)', fontWeight: 700, minWidth: 60 }}>{p.product_code}</span>
-                  <span style={{ color: 'var(--t1)', flex: 1 }}>
+                  <span className="num" style={{ fontSize: 12, fontWeight: 700, color: 'var(--yellow)', minWidth: 64 }}>{p.product_code}</span>
+                  <span style={{ fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--t1)', flex: 1 }}>
                     {p.product}{(p.model || p.color) && <span style={{ color: 'var(--t3)' }}> · {[p.model, p.color].filter(Boolean).join(' · ')}</span>}
                   </span>
                   {p.has_remote && (
-                    <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 5px', borderRadius: 2, background: 'rgba(167,139,250,.15)', color: '#a78bfa', letterSpacing: '0.05em' }}>+ REMOTE</span>
+                    <span className="label" style={{ fontSize: 9, color: 'var(--info-fg)', background: 'var(--info-bg)',
+                      border: '1px solid var(--info-bd)', borderRadius: 3, padding: '2px 6px', whiteSpace: 'nowrap' }}>+ Remote</span>
                   )}
                 </div>
               ))}
@@ -298,35 +311,36 @@ export default function UpcPage() {
           )}
         </div>
 
-        {/* Component toggle (only if has_remote) */}
+        {/* Component toggle (only if has_remote) — car and remote are separate products */}
         {selectedHasRemote && (
-          <div style={{ marginBottom: 12 }}>
-            <label style={labelStyle}>Component</label>
+          <div style={{ marginBottom: 16 }}>
+            <div className="eyebrow" style={{ marginBottom: 7 }}>Component</div>
             <div style={{ display: 'flex', gap: 6 }}>
-              <Chip active={component === 'car'} onClick={() => setComponent('car')}>Car ({selectedCode})</Chip>
-              <Chip active={component === 'remote'} onClick={() => setComponent('remote')}>Remote ({selectedCode}R)</Chip>
+              <FilterChip active={component === 'car'} onClick={() => setComponent('car')}>Car ({selectedCode})</FilterChip>
+              <FilterChip active={component === 'remote'} onClick={() => setComponent('remote')}>Remote ({selectedCode}R)</FilterChip>
             </div>
           </div>
         )}
 
         {/* Qty + notes */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 12, marginBottom: 12 }}>
-          <div>
-            <label style={labelStyle}>Quantity (1–10,000)</label>
+        <div style={{ display: 'flex', gap: 16, alignItems: 'flex-end', marginBottom: 16 }}>
+          <div style={{ width: 220 }}>
+            <div className="eyebrow" style={{ marginBottom: 7 }}>Quantity (1–10,000)</div>
             <input
               type="number" min={1} max={10000}
               value={qty}
               onChange={e => setQty(e.target.value)}
-              style={{ ...inputStyle, width: '100%' }}
+              className="num"
+              style={inputStyle}
             />
           </div>
-          <div>
-            <label style={labelStyle}>Notes (optional)</label>
+          <div style={{ flex: 1 }}>
+            <div className="eyebrow" style={{ marginBottom: 7 }}>Notes (optional)</div>
             <input
               value={notes}
               onChange={e => setNotes(e.target.value)}
               placeholder="Internal note for this batch"
-              style={{ ...inputStyle, width: '100%' }}
+              style={inputStyle}
             />
           </div>
         </div>
@@ -334,76 +348,81 @@ export default function UpcPage() {
         {/* Status */}
         {genStatus && (
           <div style={{
-            padding: '10px 12px', borderRadius: 3, marginBottom: 10, fontSize: 12, fontFamily: 'var(--mono)',
-            background: genStatus.type === 'err' ? 'rgba(222,42,42,.1)' : genStatus.type === 'ok' ? 'rgba(34,197,94,.1)' : 'rgba(80,80,80,.15)',
-            color:      genStatus.type === 'err' ? 'var(--red)' : genStatus.type === 'ok' ? 'var(--green)' : 'var(--t2)',
-            border:     `1px solid ${genStatus.type === 'err' ? 'rgba(222,42,42,.3)' : genStatus.type === 'ok' ? 'rgba(34,197,94,.3)' : 'rgba(80,80,80,.3)'}`,
+            padding: '10px 13px', borderRadius: 'var(--r-sm)', marginBottom: 14,
+            fontFamily: 'var(--font-ui)', fontSize: 13,
+            background: genStatus.type === 'err' ? 'var(--bad-bg)' : genStatus.type === 'ok' ? 'var(--ok-bg)' : 'var(--surface-2)',
+            color:      genStatus.type === 'err' ? 'var(--bad-fg)' : genStatus.type === 'ok' ? 'var(--ok-fg)' : 'var(--t2)',
+            border:     `1px solid ${genStatus.type === 'err' ? 'var(--bad-bd)' : genStatus.type === 'ok' ? 'var(--ok-bd)' : 'var(--border-2)'}`,
           }}>{genStatus.text}</div>
         )}
 
         <button
           onClick={generateBatch}
           disabled={generating || !selectedCode}
-          style={{ ...primaryBtn, opacity: (generating || !selectedCode) ? 0.5 : 1 }}
+          style={{ ...btnPrimary, padding: '11px 18px', opacity: (generating || !selectedCode) ? 0.5 : 1,
+            cursor: (generating || !selectedCode) ? 'default' : 'pointer' }}
         >
-          {generating ? 'Generating…' : '⚡ Generate & Print'}
+          <Icon name="box" size={15} /> {generating ? 'Generating…' : 'Generate & Print'}
         </button>
       </Panel>
 
-      {/* Batch history */}
-      <div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-          <h2 style={sectionLabel}>Recent Batches</h2>
-          <div style={{ flex: 1 }} />
-          <button style={secondaryBtn} onClick={loadHistory} disabled={loadingHist}>↻ Refresh</button>
-        </div>
-        <Panel padding={0}>
-          {loadingHist && batches.length === 0 ? (
-            <div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}><Spinner /></div>
-          ) : batches.length === 0 ? (
-            <EmptyState icon="🏷" message="No batches yet — generate one above" />
-          ) : (
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr>
-                    {['Batch','Product Code','Product','Variant','Qty','Seq Range','Status','Generated','Actions'].map(h => (
-                      <th key={h} style={thStyle}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {batches.map(b => {
-                    const canMove = ['generated','sent_to_print','printed'].includes(b.status);
-                    const variant = [b.model, b.color].filter(Boolean).join(' ') || '—';
-                    return (
-                      <tr key={b.batch_id}>
-                        <td style={{ ...tdStyle, color: 'var(--yellow)' }}>{b.batch_id}</td>
-                        <td style={tdStyle}>{b.product_code}</td>
-                        <td style={tdStyle}>{b.product || '—'}</td>
-                        <td style={{ ...tdStyle, color: 'var(--t2)' }}>{variant}</td>
-                        <td style={tdStyle}>{fmt(b.quantity)}</td>
-                        <td style={{ ...tdStyle, color: 'var(--t3)' }}>{b.upc_from} → {b.upc_to}</td>
-                        <td style={tdStyle}><BatchStatus status={b.status} /></td>
-                        <td style={{ ...tdStyle, color: 'var(--t3)' }}>{formatDateTime(b.generated_at)}</td>
-                        <td style={tdStyle}>
-                          <button onClick={() => printBatch(b.batch_id)} style={{ ...smallBtn, color: 'var(--state-info, #7b93ff)', borderColor: 'var(--state-info, #7b93ff)', marginRight: 4 }}>🖨 Print</button>
-                          {canMove && b.status === 'generated' && (
-                            <button onClick={() => markSent(b.batch_id)} style={{ ...smallBtn, color: 'var(--orange)', borderColor: 'var(--orange)', marginRight: 4 }}>Sent</button>
-                          )}
-                          {canMove && (
-                            <button onClick={() => receiveBatch(b.batch_id)} style={{ ...smallBtn, color: 'var(--green)', borderColor: 'var(--green)' }}>Received</button>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+      {/* Recent batches */}
+      <Panel
+        title="Recent batches" icon="layers" pad={8}
+        action={
+          <button style={{ ...btnGhost, padding: '6px 11px', fontSize: 12 }} onClick={loadHistory} disabled={loadingHist}>
+            <Icon name="activity" size={13} /> Refresh
+          </button>
+        }
+      >
+        {loadingHist && batches.length === 0 ? (
+          <div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+        ) : batches.length === 0 ? (
+          <div style={{ padding: 40, textAlign: 'center', fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--t3)' }}>
+            No batches yet — generate one above.
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: COLS, gap: 12, padding: '4px 12px 9px',
+              borderBottom: '1px solid var(--border)', minWidth: 1140 }}>
+              {['Batch', 'Code', 'Product', 'Variant', 'Qty', 'Seq range', 'Status', 'Generated', 'Actions'].map(h => (
+                <div key={h} className="eyebrow">{h}</div>
+              ))}
             </div>
-          )}
-        </Panel>
-      </div>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              {batches.map((b, i) => {
+                const canMove = ['generated', 'sent_to_print', 'printed'].includes(b.status);
+                const variant = [b.model, b.color].filter(Boolean).join(' ') || '—';
+                return (
+                  <div key={b.batch_id} className="rl-upc-row" style={{ display: 'grid', gridTemplateColumns: COLS, gap: 12,
+                    alignItems: 'center', padding: '11px 12px', borderTop: i ? '1px solid var(--border)' : 'none',
+                    minWidth: 1140, transition: 'background var(--fast) var(--ease)' }}>
+                    <span className="num" style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--yellow)', whiteSpace: 'nowrap' }}>{b.batch_id}</span>
+                    <span className="num" style={{ fontSize: 12, color: 'var(--t2)' }}>{b.product_code}</span>
+                    <span style={{ fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--t1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{b.product || '—'}</span>
+                    <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{variant}</span>
+                    <span className="num" style={{ fontSize: 12.5, color: 'var(--t1)' }}>{fmt(b.quantity)}</span>
+                    <span className="num" style={{ fontSize: 11.5, color: 'var(--t3)', whiteSpace: 'nowrap' }}>{b.upc_from} → {b.upc_to}</span>
+                    <span><BatchStatus status={b.status} /></span>
+                    <span className="num" style={{ fontSize: 11.5, color: 'var(--t3)', whiteSpace: 'nowrap' }}>{formatDateTime(b.generated_at)}</span>
+                    <span style={{ display: 'flex', gap: 6 }}>
+                      <button onClick={() => printBatch(b.batch_id)} style={actionBtn('var(--blue-bright)')}>
+                        <Icon name="printer" size={12} /> Print
+                      </button>
+                      {canMove && b.status === 'generated' && (
+                        <button onClick={() => markSent(b.batch_id)} style={actionBtn('var(--orange)')}>Sent</button>
+                      )}
+                      {canMove && (
+                        <button onClick={() => receiveBatch(b.batch_id)} style={actionBtn('var(--ok-fg)')}>Received</button>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </Panel>
     </div>
   );
 }

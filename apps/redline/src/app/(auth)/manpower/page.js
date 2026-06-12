@@ -1,17 +1,28 @@
 'use client';
+/* ════════════════════════════════════════════════════════════
+   MANPOWER — Pit Wall v2 reskin (redesign-reference/app/
+   manpower.jsx). Four tabs: Live View (floor map, line → station
+   presence, 60s auto-refresh) · Attendance · Daily Roster
+   (drag-and-drop assignment — every handler preserved exactly:
+   assignManpower upsert, removeManpower, bulkAssignManpower,
+   pickers, multi-select, auto-assign, target seeding from
+   getLineSetup) · Performance. All garageFetch/workerFetch calls,
+   params and business rules unchanged; chrome only.
+   ════════════════════════════════════════════════════════════ */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Badge, ConfirmModal, DataTable, EmptyState, Modal, Spinner, useToast, Panel, Chip, StatusBadge } from '@throttle/ui';
+import { ConfirmModal, Modal, Spinner, useToast } from '@throttle/ui';
 import { useAutoRefresh } from '../../../hooks/useAutoRefresh.js';
 import { useRefreshState } from '../layout.js';
+import {
+  Icon, Panel, ToneBadge, lineColor, lineRgb, btnPrimary, btnGhost,
+  inputStyle as kitInput,
+} from '../../../components/kit/index.js';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 const LINE_ORDER          = ['L1', 'L2', 'L3'];
 const DISPATCH_LINE_ORDER = ['D1', 'D2'];
-const OTHERS_DEPT_BUCKETS = ['Admin', 'Store'];  // visual split of line='Others' by operator department
-const LINE_COLORS         = { L1: 'var(--yellow)', L2: 'var(--blue)', L3: 'var(--green)', D1: '#ec4899', D2: '#06b6d4', Others: '#f97316', Admin: '#f59e0b', Store: '#a855f7' };
-const ROSTER_LINE_COLORS  = { L1: '#22c55e', L2: '#3b82f6', L3: '#a855f7', D1: '#ec4899', D2: '#06b6d4', Others: '#f97316', Admin: '#f59e0b', Store: '#f97316' };
 const ROSTER_SECTIONS     = ['Assembly', 'QC', 'Packaging'];
 const PERFORMANCE_CATEGORIES = [
   { value: 'attendance', label: 'Attendance' },
@@ -21,15 +32,17 @@ const PERFORMANCE_CATEGORIES = [
   { value: 'other',      label: 'Other' },
 ];
 
+// Non-production buckets keep their own accents (lineColor only maps L1–L5).
+const BUCKET_COLOR = {
+  D1: '#ec4899', D2: '#06b6d4', Others: '#f97316', Admin: '#fbbf24', Store: '#c084fc',
+  Dispatch: '#ec4899', Unassigned: 'var(--t3)',
+};
+const accentFor = (key) => (LINE_ORDER.includes(key) ? lineColor(key) : BUCKET_COLOR[key] || 'var(--t3)');
+
 // ── Shared styles ───────────────────────────────────────────────────────────
-const panelStyle       = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, marginBottom: 16 };
-const panelHeaderStyle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid var(--border)', fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--t1)', gap: 8, flexWrap: 'wrap' };
-const panelBodyStyle   = { padding: '12px 14px' };
-const inputStyle       = { background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 6, padding: '8px 12px', fontSize: 13, color: 'var(--t1)', outline: 'none', fontFamily: 'var(--mono)' };
-const selectStyle      = { ...inputStyle, cursor: 'pointer' };
-const labelStyle       = { fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4, display: 'block' };
-const btnPrimary       = { padding: '8px 14px', background: 'var(--yellow)', color: '#0a0a0a', border: '1px solid var(--yellow)', borderRadius: 3, fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer' };
-const btnSecondary     = { padding: '8px 14px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 13, cursor: 'pointer' };
+const inputStyle  = { ...kitInput, width: 'auto', fontSize: 13, padding: '8px 11px' };
+const selectStyle = { ...inputStyle, cursor: 'pointer' };
+const smallGhost  = { ...btnGhost, padding: '6px 10px', fontSize: 12 };
 
 // ── Display helpers ─────────────────────────────────────────────────────────
 function capitalize(s) { return (s || '').charAt(0).toUpperCase() + (s || '').slice(1); }
@@ -75,15 +88,40 @@ function getInitials(name) {
     : (parts[0] || '?').slice(0, 2).toUpperCase();
 }
 const DEPT_TINT = {
-  assembly:  { bg: '#213CE233', color: '#7b93ff' },
-  qc:        { bg: '#F2CD1A22', color: '#e5ba00' },
-  packaging: { bg: '#a855f722', color: '#d8b4fe' },
-  dispatch:  { bg: '#DE2A2A22', color: '#fca5a5' },
-  store:     { bg: '#22c55e22', color: '#4ade80' },
-  admin:     { bg: '#22c55e22', color: '#4ade80' },
+  assembly:  { bg: 'var(--info-bg)',            color: 'var(--info-fg)' },
+  qc:        { bg: 'var(--brand-bg)',           color: 'var(--brand-fg)' },
+  packaging: { bg: 'rgba(192,132,252,0.14)',    color: '#d8b4fe' },
+  dispatch:  { bg: 'var(--bad-bg)',             color: 'var(--bad-fg)' },
+  store:     { bg: 'var(--ok-bg)',              color: 'var(--ok-fg)' },
+  admin:     { bg: 'var(--ok-bg)',              color: 'var(--ok-fg)' },
 };
 function deptTint(dept) {
-  return DEPT_TINT[(dept || '').toLowerCase()] || { bg: 'rgba(80,80,80,0.20)', color: 'var(--t2)' };
+  return DEPT_TINT[(dept || '').toLowerCase()] || { bg: 'var(--surface-2)', color: 'var(--t2)' };
+}
+
+function Avatar({ name, size = 26, color }) {
+  return (
+    <div style={{ width: size, height: size, borderRadius: '50%', background: 'var(--surface-2)',
+      border: `1px solid ${color || 'var(--border-2)'}`, display: 'grid', placeItems: 'center', flexShrink: 0,
+      fontFamily: 'var(--font-display)', fontSize: Math.max(size * 0.36, 8.5), fontWeight: 700,
+      color: color || 'var(--t2)' }}>
+      {getInitials(name)}
+    </div>
+  );
+}
+
+// Restricted / empty notes — lucide icon in a muted circle, no emoji.
+function EmptyNote({ icon = 'users', title, sub }) {
+  return (
+    <div style={{ padding: '42px 0', textAlign: 'center' }}>
+      <div style={{ display: 'inline-grid', placeItems: 'center', width: 44, height: 44, borderRadius: '50%',
+        background: 'var(--surface-2)', color: 'var(--t3)', border: '1px solid var(--border-2)', marginBottom: 11 }}>
+        <Icon name={icon} size={20} />
+      </div>
+      <div style={{ fontFamily: 'var(--font-ui)', fontSize: 13.5, color: 'var(--t1)', fontWeight: 600 }}>{title}</div>
+      {sub && <div style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--t3)', marginTop: 3 }}>{sub}</div>}
+    </div>
+  );
 }
 
 // getManpowerLog returns { L1: { Assembly:[], QC:[], Packaging:[], Unassigned:[] }, ...,
@@ -109,7 +147,6 @@ function flattenRoster(nested) {
 // ═══════════════════════════════════════════════════════════════════════════
 // Manpower page — 4 tabs: Live View, Attendance, Daily Roster, Performance.
 // Live View keeps the existing read-only floor view (60s auto-refresh).
-// The other three are ports of Garage /manpower tabs (now removed from Garage).
 // ═══════════════════════════════════════════════════════════════════════════
 export default function ManpowerPage() {
   const { session, perms } = useAuth();
@@ -138,33 +175,37 @@ export default function ManpowerPage() {
 
   if (perms && !canManageFloor) {
     return (
-      <div style={{ padding: 24 }}>
-        <EmptyState message="Manpower view is restricted to floor supervisors." />
-      </div>
+      <Panel>
+        <EmptyNote icon="users" title="Restricted" sub="Manpower view is restricted to floor supervisors." />
+      </Panel>
     );
   }
 
-  return (
-    <div style={{ color: 'var(--t1)' }}>
-      <div style={{ marginBottom: 16 }}>
-        <h1 style={{ fontFamily: 'var(--cond)', fontSize: 28, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.03em', margin: 0 }}>
-          Manpower
-        </h1>
-        <p style={{ color: 'var(--t3)', fontSize: 11, marginTop: 4, fontFamily: 'var(--mono)' }}>
-          Live floor view, attendance, daily roster, and performance.
-        </p>
-      </div>
+  const TABS = [
+    { key: 'live',        label: 'Live view',   icon: 'grid' },
+    { key: 'attendance',  label: 'Attendance',  icon: 'clock' },
+    { key: 'roster',      label: 'Daily roster',icon: 'layers' },
+    { key: 'performance', label: 'Performance', icon: 'activity' },
+  ];
 
-      <TabBar
-        tabs={[
-          { key: 'live',        label: 'Live View' },
-          { key: 'attendance',  label: 'Attendance' },
-          { key: 'roster',      label: 'Daily Roster' },
-          { key: 'performance', label: 'Performance' },
-        ]}
-        active={activeTab}
-        onChange={setActiveTab}
-      />
+  return (
+    <div style={{ maxWidth: 1280, margin: '0 auto', color: 'var(--t1)' }}>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
+        {TABS.map((t) => {
+          const on = t.key === activeTab;
+          return (
+            <button key={t.key} onClick={() => setActiveTab(t.key)}
+              style={{ display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer',
+                background: on ? 'var(--surface-3)' : 'transparent',
+                border: `1px solid ${on ? 'var(--border-3)' : 'var(--border)'}`,
+                color: on ? 'var(--t1)' : 'var(--t3)', borderRadius: 'var(--r-full)',
+                padding: '7px 14px', whiteSpace: 'nowrap',
+                fontFamily: 'var(--font-ui)', fontSize: 12.5, fontWeight: 600 }}>
+              <Icon name={t.icon} size={14} /> {t.label}
+            </button>
+          );
+        })}
+      </div>
 
       {activeTab === 'live'        && <LiveViewTab session={session} canManageFloor={canManageFloor} />}
       {activeTab === 'attendance'  && <AttendanceTab session={session} canManageFloor={canManageFloor} operators={allOperators} />}
@@ -174,41 +215,10 @@ export default function ManpowerPage() {
   );
 }
 
-// ── TabBar ──────────────────────────────────────────────────────────────────
-function TabBar({ tabs, active, onChange }) {
-  return (
-    <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid var(--border)', marginBottom: 16 }}>
-      {tabs.map((t) => {
-        const on = t.key === active;
-        return (
-          <button
-            key={t.key}
-            onClick={() => onChange(t.key)}
-            style={{
-              background: 'transparent',
-              border: 'none',
-              borderBottom: on ? '2px solid var(--yellow)' : '2px solid transparent',
-              padding: '8px 14px',
-              fontFamily: 'var(--cond)',
-              fontSize: 12,
-              fontWeight: 700,
-              letterSpacing: '0.04em',
-              textTransform: 'uppercase',
-              color: on ? 'var(--yellow)' : 'var(--t2)',
-              cursor: 'pointer',
-              marginBottom: -1,
-            }}
-          >
-            {t.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
 // LiveViewTab — existing read-only floor view. Auto-refresh every 60s.
+// Restyled as the prototype floor map: line cards with station groups
+// (station derived from the same getManpowerLog response — no new APIs).
 // ═══════════════════════════════════════════════════════════════════════════
 function LiveViewTab({ session, canManageFloor }) {
   const { showToast } = useToast();
@@ -216,6 +226,7 @@ function LiveViewTab({ session, canManageFloor }) {
   const [today] = useState(() => istToday());
   const [openShifts, setOpenShifts] = useState([]);
   const [rosterByLine, setRosterByLine] = useState({});
+  const [rosterNested, setRosterNested] = useState({});
   const [loading, setLoading] = useState(true);
   const [forbidden, setForbidden] = useState(false);
 
@@ -235,6 +246,7 @@ function LiveViewTab({ session, canManageFloor }) {
       const grouped = rosterInner && typeof rosterInner === 'object' && !Array.isArray(rosterInner)
         ? rosterInner
         : {};
+      setRosterNested(grouped);
       setRosterByLine(flattenRoster(grouped));
       setForbidden(false);
     } catch (e) {
@@ -247,12 +259,7 @@ function LiveViewTab({ session, canManageFloor }) {
     } finally {
       setLoading(false);
       setRefreshing(false);
-      setLastRefreshed(
-        new Date().toLocaleTimeString('en-IN', {
-          hour: '2-digit', minute: '2-digit', second: '2-digit',
-          hour12: true, timeZone: 'Asia/Kolkata',
-        })
-      );
+      setLastRefreshed(new Date());
     }
   }, [session, canManageFloor, today, setRefreshing, setLastRefreshed, showToast]);
 
@@ -269,6 +276,19 @@ function LiveViewTab({ session, canManageFloor }) {
     for (const a of rosterByLine.Others || []) m[a.operator_id] = 'Others';
     return m;
   }, [rosterByLine]);
+
+  // operator → station, from the nested L1–L3 roster sections (presentation only).
+  const stationByOpId = useMemo(() => {
+    const m = {};
+    for (const line of LINE_ORDER) {
+      const sections = rosterNested?.[line];
+      if (!sections || Array.isArray(sections)) continue;
+      for (const [station, rows] of Object.entries(sections)) {
+        for (const r of rows || []) m[r.operator_id] = station;
+      }
+    }
+    return m;
+  }, [rosterNested]);
 
   const { byLine, dispatch, store, others, unassigned } = useMemo(() => {
     const lines = { L1: [], L2: [], L3: [] };
@@ -291,17 +311,22 @@ function LiveViewTab({ session, canManageFloor }) {
 
   if (forbidden) {
     return (
-      <div style={{ padding: 24 }}>
-        <EmptyState message="Manpower view is restricted to floor supervisors." />
-      </div>
+      <Panel>
+        <EmptyNote icon="users" title="Restricted" sub="Manpower view is restricted to floor supervisors." />
+      </Panel>
     );
   }
 
   return (
     <div>
-      <div style={{ marginBottom: 12 }}>
-        <span style={{ color: 'var(--t3)', fontSize: 11, fontFamily: 'var(--mono)' }}>
-          {fmtIstDate(today)} · open shifts only · refreshes every 60s.
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface)',
+          border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '6px 11px', color: 'var(--t2)' }}>
+          <Icon name="clock" size={14} />
+          <span className="num" style={{ fontSize: 12.5, color: 'var(--t1)', whiteSpace: 'nowrap' }}>{fmtIstDate(today)}</span>
+        </div>
+        <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--t3)' }}>
+          Open shifts only · refreshes every 60s
         </span>
       </div>
 
@@ -309,7 +334,7 @@ function LiveViewTab({ session, canManageFloor }) {
         <div style={{ padding: 48, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
       ) : (
         <>
-          {/* Headcount bar */}
+          {/* Headcount strip — ties visually to the Overview manpower strip */}
           {(() => {
             const othersAssigned = (rosterByLine.Others || []).filter(
               (r) => (r.operator_department || '').toLowerCase() !== 'store',
@@ -317,58 +342,54 @@ function LiveViewTab({ session, canManageFloor }) {
             const storeAssigned = (rosterByLine.Others || []).filter(
               (r) => (r.operator_department || '').toLowerCase() === 'store',
             );
+            const cards = [
+              ...LINE_ORDER.map((line) => ({
+                key: line, label: line, accent: accentFor(line),
+                count: byLine[line].length, sub: `${(rosterByLine[line] || []).length} assigned`,
+              })),
+              { key: 'Dispatch', label: 'Dispatch', accent: BUCKET_COLOR.Dispatch, count: dispatch.length,
+                sub: `${((rosterByLine.D1 || []).length) + ((rosterByLine.D2 || []).length)} assigned` },
+              { key: 'Store', label: 'Store', accent: BUCKET_COLOR.Store, count: store.length,
+                sub: `${storeAssigned.length} assigned` },
+              { key: 'Others', label: 'Others', accent: BUCKET_COLOR.Others, count: others.length,
+                sub: `${othersAssigned.length} assigned` },
+              { key: 'Unassigned', label: 'Unassigned', accent: 'var(--t3)', count: unassigned.length,
+                sub: 'open shift, no line' },
+            ];
             return (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 12, marginBottom: 16 }}>
-            {LINE_ORDER.map((line) => (
-              <HeadcountCard
-                key={line}
-                label={line}
-                accent={LINE_COLORS[line]}
-                count={byLine[line].length}
-                sub={`${(rosterByLine[line] || []).length} assigned`}
-              />
-            ))}
-            <HeadcountCard
-              label="Dispatch"
-              accent={LINE_COLORS.D1}
-              count={dispatch.length}
-              sub={`${((rosterByLine.D1 || []).length) + ((rosterByLine.D2 || []).length)} assigned`}
-            />
-            <HeadcountCard
-              label="Store"
-              accent={LINE_COLORS.Store}
-              count={store.length}
-              sub={`${storeAssigned.length} assigned`}
-            />
-            <HeadcountCard
-              label="Others"
-              accent={LINE_COLORS.Others}
-              count={others.length}
-              sub={`${othersAssigned.length} assigned`}
-            />
-            <HeadcountCard
-              label="Unassigned"
-              accent="var(--t3)"
-              count={unassigned.length}
-              sub="open shift, no line"
-            />
-          </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 12, marginBottom: 18 }}>
+                {cards.map((c) => (
+                  <div key={c.key} style={{ background: 'var(--surface)', border: '1px solid var(--border)',
+                    borderRadius: 'var(--r-md)', boxShadow: 'var(--shadow-card)', padding: '12px 14px',
+                    position: 'relative', overflow: 'hidden' }}>
+                    <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, background: c.accent }} />
+                    <span className="eyebrow">{c.label}</span>
+                    <div className="num" style={{ fontSize: 22, fontWeight: 700, color: 'var(--t1)', lineHeight: 1, marginTop: 8 }}>
+                      {c.count}
+                    </div>
+                    <div style={{ fontFamily: 'var(--font-ui)', fontSize: 11, color: 'var(--t3)', marginTop: 5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflowEllipsis: 'ellipsis' }}>
+                      on floor · {c.sub}
+                    </div>
+                  </div>
+                ))}
+              </div>
             );
           })()}
 
-          {/* Line sections */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12, marginBottom: 16 }}>
+          {/* Line floor map — line → station presence */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 16, marginBottom: 16, alignItems: 'start' }}>
             {LINE_ORDER.map((line) => (
-              <LineColumn key={line} line={line} rows={byLine[line]} accent={LINE_COLORS[line]} />
+              <LineColumn key={line} line={line} rows={byLine[line]} accent={accentFor(line)}
+                assigned={(rosterByLine[line] || []).length} stationByOpId={stationByOpId} />
             ))}
           </div>
 
           {others.length > 0 && (
-            <OthersSection rows={others} accent={LINE_COLORS.Others} />
+            <FlatSection label="Others" accent={BUCKET_COLOR.Others} rows={others} />
           )}
 
           {unassigned.length > 0 && (
-            <UnassignedSection rows={unassigned} />
+            <FlatSection label="Unassigned" accent="var(--t3)" rows={unassigned} sub="open shift, no line assignment" />
           )}
         </>
       )}
@@ -376,49 +397,46 @@ function LiveViewTab({ session, canManageFloor }) {
   );
 }
 
-function HeadcountCard({ label, accent, count, sub }) {
-  return (
-    <div style={{
-      background: 'var(--surface)',
-      border: '1px solid var(--border)',
-      borderRadius: 8,
-      padding: 16,
-      display: 'flex', flexDirection: 'column', gap: 4,
-    }}>
-      <div style={{ height: 3, borderRadius: 2, background: accent, marginBottom: 4 }} />
-      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--t2)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-        {label}
-      </span>
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 20, fontWeight: 700, color: 'var(--t1)', lineHeight: 1 }}>
-        {count}
-      </span>
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>
-        {count === 1 ? '1 on floor' : `${count} on floor`}{sub ? ` · ${sub}` : ''}
-      </span>
-    </div>
-  );
-}
+function LineColumn({ line, rows, accent, assigned, stationByOpId }) {
+  // group operators on this line by their roster station (presentation only)
+  const groups = useMemo(() => {
+    const g = {};
+    for (const row of rows) {
+      const st = stationByOpId[row.operator_id] || 'Unassigned';
+      (g[st] = g[st] || []).push(row);
+    }
+    const order = [...ROSTER_SECTIONS, ...Object.keys(g).filter((k) => !ROSTER_SECTIONS.includes(k))];
+    return order.filter((st) => (g[st] || []).length > 0).map((st) => [st, g[st]]);
+  }, [rows, stationByOpId]);
 
-function LineColumn({ line, rows, accent }) {
   return (
-    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: 'var(--t1)', fontFamily: 'var(--cond)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-          <span style={{ width: 8, height: 8, borderRadius: '50%', background: accent, display: 'inline-block', flexShrink: 0 }} />
-          {line}
-        </span>
-        <span style={{ fontSize: 11, fontWeight: 600, padding: '1px 8px', borderRadius: 4, background: 'var(--surface-2)', color: 'var(--t2)' }}>
-          {rows.length}
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)',
+      borderTop: `3px solid ${accent}`, borderRadius: 'var(--r-md)', boxShadow: 'var(--shadow-card)', overflow: 'hidden' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '13px 15px', borderBottom: '1px solid var(--border)' }}>
+        <span className="font-display" style={{ fontSize: 16, fontWeight: 700, letterSpacing: '0.04em', color: accent }}>{line}</span>
+        <span style={{ marginLeft: 'auto' }}>
+          <span className="num" style={{ fontSize: 15, fontWeight: 700, color: 'var(--t1)' }}>
+            {rows.length}<span style={{ color: 'var(--t4)', fontWeight: 400 }}>/{assigned} assigned</span>
+          </span>
         </span>
       </div>
-      <div style={{ padding: '12px 14px' }}>
+      <div style={{ padding: 13, display: 'flex', flexDirection: 'column', gap: 14 }}>
         {rows.length === 0 ? (
-          <div style={{ color: 'var(--t3)', fontSize: 11, fontFamily: 'var(--mono)' }}>
-            — No operators assigned
+          <div style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--t3)', padding: '6px 0' }}>
+            No operators on the floor
           </div>
         ) : (
-          rows.map((row) => (
-            <OperatorCard key={row.id} row={row} accent={accent} />
+          groups.map(([station, sops]) => (
+            <div key={station}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <span className="eyebrow">{station}</span>
+                <span className="num" style={{ fontSize: 10.5, color: 'var(--t4)' }}>{sops.length}</span>
+                <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {sops.map((row) => <OperatorRow key={row.id} row={row} accent={accent} />)}
+              </div>
+            </div>
           ))
         )}
       </div>
@@ -426,84 +444,46 @@ function LineColumn({ line, rows, accent }) {
   );
 }
 
-function UnassignedSection({ rows }) {
-  return (
-    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
-        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--t1)', fontFamily: 'var(--cond)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Unassigned</span>
-        <span style={{ fontSize: 11, fontWeight: 600, padding: '1px 8px', borderRadius: 4, background: 'var(--surface-2)', color: 'var(--t2)' }}>
-          {rows.length}
-        </span>
-      </div>
-      <div style={{ padding: '12px 14px', display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-        {rows.map((row) => (
-          <div key={row.id} style={{ minWidth: 220, flex: '0 1 240px' }}>
-            <OperatorCard row={row} accent="var(--t3)" />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function OthersSection({ rows, accent }) {
-  return (
-    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, marginBottom: 16 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: 'var(--t1)', fontFamily: 'var(--cond)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-          <span style={{ width: 8, height: 8, borderRadius: '50%', background: accent, display: 'inline-block', flexShrink: 0 }} />
-          Others
-        </span>
-        <span style={{ fontSize: 11, fontWeight: 600, padding: '1px 8px', borderRadius: 4, background: 'var(--surface-2)', color: 'var(--t2)' }}>
-          {rows.length}
-        </span>
-      </div>
-      <div style={{ padding: '12px 14px', display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-        {rows.map((row) => (
-          <div key={row.id} style={{ minWidth: 220, flex: '0 1 240px' }}>
-            <OperatorCard row={row} accent={accent} />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function OperatorCard({ row, accent }) {
+function OperatorRow({ row, accent }) {
   const isOvertime = (row.shift_type || '').toLowerCase() === 'overtime';
-  const initials = getInitials(row.operator_name);
   const tint = deptTint(row.operator_department);
+  const clockIn = fmtIstTime(row.clock_in);
   return (
-    <div style={{
-      background: 'var(--surface)',
-      border: '1px solid var(--border)',
-      borderRadius: 6,
-      padding: '8px 10px',
-      marginBottom: 6,
-      display: 'flex', alignItems: 'center', gap: 10,
-    }}>
-      <div style={{
-        width: 26, height: 26, borderRadius: '50%',
-        background: accent,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: 10, fontWeight: 700, color: '#fff', flexShrink: 0,
-      }}>
-        {initials}
+    <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '5px 7px',
+      borderRadius: 'var(--r-sm)', background: 'var(--surface-2)' }}>
+      <Avatar name={row.operator_name} size={24} color={accent} />
+      <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t1)', flex: 1, minWidth: 0,
+        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        {row.operator_name || '(unknown)'}
+      </span>
+      {row.operator_department && (
+        <span style={{ fontFamily: 'var(--font-ui)', fontSize: 10, fontWeight: 600, padding: '1px 6px',
+          borderRadius: 3, background: tint.bg, color: tint.color, whiteSpace: 'nowrap' }}>
+          {capitalize(row.operator_department)}
+        </span>
+      )}
+      {isOvertime && <ToneBadge tone="brand" style={{ fontSize: 9 }}>OT</ToneBadge>}
+      {clockIn && <span className="num" style={{ fontSize: 10, color: 'var(--t4)', whiteSpace: 'nowrap' }}>{clockIn}</span>}
+    </div>
+  );
+}
+
+function FlatSection({ label, accent, rows, sub }) {
+  return (
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)',
+      boxShadow: 'var(--shadow-card)', marginBottom: 16, overflow: 'hidden' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '11px 15px', borderBottom: '1px solid var(--border)' }}>
+        <span style={{ width: 8, height: 8, borderRadius: '50%', background: accent, flexShrink: 0 }} />
+        <span className="label" style={{ fontSize: 12, color: 'var(--t1)' }}>{label}</span>
+        {sub && <span style={{ fontFamily: 'var(--font-ui)', fontSize: 11.5, color: 'var(--t3)' }}>{sub}</span>}
+        <span className="num" style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--t3)' }}>{rows.length}</span>
       </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--t1)', fontFamily: 'var(--mono)' }}>
-          {row.operator_name || '(unknown)'}
-        </div>
-        <div style={{ display: 'flex', gap: 4, marginTop: 3, flexWrap: 'wrap' }}>
-          {row.operator_department && (
-            <span style={{ fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 3, background: tint.bg, color: tint.color }}>
-              {capitalize(row.operator_department)}
-            </span>
-          )}
-          <StatusBadge variant={isOvertime ? 'brand' : 'neutral'}>
-            {isOvertime ? 'Overtime' : 'Standard'}
-          </StatusBadge>
-        </div>
+      <div style={{ padding: '10px 13px', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {rows.map((row) => (
+          <div key={row.id} style={{ minWidth: 230, flex: '0 1 250px' }}>
+            <OperatorRow row={row} accent={accent} />
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -575,102 +555,91 @@ function AttendanceTab({ session, canManageFloor, operators }) {
 
   if (!canManageFloor) {
     return (
-      <div style={{ ...panelStyle, padding: '40px 24px', textAlign: 'center' }}>
-        <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>
-          Attendance is restricted to floor supervisors.
-        </div>
-      </div>
+      <Panel>
+        <EmptyNote icon="clock" title="Restricted" sub="Attendance is restricted to floor supervisors." />
+      </Panel>
     );
   }
 
-  const columns = [
-    { key: 'employee_id', label: 'Employee ID' },
-    { key: 'name',        label: 'Name' },
-    { key: 'department',  label: 'Department' },
-    { key: 'shift',       label: 'Shift' },
-    { key: 'clock_in',    label: 'Clock In' },
-    { key: 'clock_out',   label: 'Clock Out' },
-    { key: 'duration',    label: 'Duration' },
-    { key: 'device',      label: 'Device' },
-    { key: '_actions',    label: '' },
-  ];
-
-  function renderCell(row, c) {
-    const op = opMap[row.operator_id];
-    switch (c.key) {
-      case 'employee_id':
-        return <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)' }}>{op?.employee_id || '—'}</span>;
-      case 'name':
-        return row.operator_name || op?.name || '—';
-      case 'department':
-        return capitalize(row.operator_department || op?.department || '');
-      case 'shift':
-        return capitalize(row.shift_type || '');
-      case 'clock_in':
-        return <span style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>{fmtIstTime(row.clock_in) || '—'}</span>;
-      case 'clock_out':
-        return row.clock_out
-          ? <span style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>{fmtIstTime(row.clock_out)}</span>
-          : <StatusBadge variant="warning" icon="⚠">Open</StatusBadge>;
-      case 'duration':
-        return <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)' }}>{fmtDuration(row.clock_in, row.clock_out)}</span>;
-      case 'device':
-        return <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>{row.clock_in_device || '—'}</span>;
-      case '_actions':
-        if (row.clock_out) return null;
-        return (
-          <button
-            onClick={(e) => { e.stopPropagation(); setCloseTarget(row); }}
-            style={{ ...btnSecondary, padding: '4px 8px' }}
-            title="Close shift"
-          >
-            Close Shift
-          </button>
-        );
-      default:
-        return row[c.key];
-    }
-  }
+  const cols = '100px 1.6fr 120px 100px 90px 90px 90px 130px 110px';
 
   return (
     <div>
-      <div style={{ ...panelStyle, marginBottom: 12 }}>
-        <div style={{ padding: '10px 14px', display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-          <div>
-            <span style={labelStyle}>Date</span>
-            <input
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              style={{ ...inputStyle, fontFamily: 'var(--mono)' }}
-            />
-          </div>
-          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-              {new Set(rows.map(r => r.operator_id)).size} present · {rows.length} record{rows.length === 1 ? '' : 's'}
-            </span>
-            <button style={btnSecondary} onClick={load} disabled={loading}>↻</button>
-          </div>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 14 }}>
+        <div>
+          <span className="eyebrow" style={{ display: 'block', marginBottom: 6 }}>Date</span>
+          <input type="date" className="num" value={date} onChange={(e) => setDate(e.target.value)} style={inputStyle} />
+        </div>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 10, alignItems: 'center' }}>
+          <span className="num" style={{ fontSize: 11.5, color: 'var(--t3)' }}>
+            {new Set(rows.map(r => r.operator_id)).size} present · {rows.length} record{rows.length === 1 ? '' : 's'}
+          </span>
+          <button style={smallGhost} onClick={load} disabled={loading} title="Refresh">
+            <Icon name="undo" size={13} /> Refresh
+          </button>
         </div>
       </div>
 
-      <div style={panelStyle}>
-        <div style={panelBodyStyle}>
-          {loading ? (
-            <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
-          ) : rows.length === 0 ? (
-            <EmptyState message={`No attendance records for ${date}`} />
-          ) : (
-            <DataTable
-              columns={columns}
-              rows={rows}
-              loading={false}
-              emptyMessage=""
-              renderCell={renderCell}
-            />
-          )}
-        </div>
-      </div>
+      <Panel pad={8}>
+        {loading ? (
+          <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+        ) : rows.length === 0 ? (
+          <EmptyNote icon="clock" title="No attendance records" sub={`Nothing logged for ${fmtIstDate(date)}.`} />
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <div style={{ minWidth: 920 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: cols, gap: 12, padding: '0 12px 9px', borderBottom: '1px solid var(--border)' }}>
+                {['Employee ID', 'Operator', 'Department', 'Shift', 'Clock in', 'Clock out', 'Duration', 'Device', ''].map((h, i) => (
+                  <div key={h || `c${i}`} className="eyebrow">{h}</div>
+                ))}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                {rows.map((row, i) => {
+                  const op = opMap[row.operator_id];
+                  const isOvertime = (row.shift_type || '').toLowerCase() === 'overtime';
+                  return (
+                    <div key={row.id} style={{ display: 'grid', gridTemplateColumns: cols, gap: 12, alignItems: 'center',
+                      padding: '9px 12px', borderTop: i ? '1px solid var(--border)' : 'none' }}>
+                      <span className="num" style={{ fontSize: 11.5, color: 'var(--t2)' }}>{op?.employee_id || '—'}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
+                        <Avatar name={row.operator_name || op?.name} size={26} />
+                        <span style={{ fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--t1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {row.operator_name || op?.name || '—'}
+                        </span>
+                      </div>
+                      <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t2)' }}>
+                        {capitalize(row.operator_department || op?.department || '') || '—'}
+                      </span>
+                      <ToneBadge tone={isOvertime ? 'brand' : 'mute'} style={{ justifySelf: 'start' }}>
+                        {capitalize(row.shift_type || '') || '—'}
+                      </ToneBadge>
+                      <span className="num" style={{ fontSize: 12.5, color: 'var(--t1)' }}>{fmtIstTime(row.clock_in) || '—'}</span>
+                      {row.clock_out
+                        ? <span className="num" style={{ fontSize: 12.5, color: 'var(--t1)' }}>{fmtIstTime(row.clock_out)}</span>
+                        : <ToneBadge tone="warn" style={{ justifySelf: 'start' }}>Open</ToneBadge>}
+                      <span className="num" style={{ fontSize: 12, color: 'var(--t2)' }}>{fmtDuration(row.clock_in, row.clock_out)}</span>
+                      <span className="num" style={{ fontSize: 10.5, color: 'var(--t3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {row.clock_in_device || '—'}
+                      </span>
+                      <div style={{ textAlign: 'right' }}>
+                        {!row.clock_out && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setCloseTarget(row); }}
+                            style={{ ...smallGhost, padding: '4px 9px', fontSize: 11.5 }}
+                            title="Close shift"
+                          >
+                            Close shift
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+      </Panel>
 
       <ConfirmModal
         open={!!closeTarget}
@@ -928,12 +897,6 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
     if (opIds.length) handleBulkAssign(opIds, line, station);
   }
 
-  function onDropToOthers(e) {
-    e.preventDefault();
-    const opIds = readDropOpIds(e);
-    if (opIds.length) handleBulkAssign(opIds, 'Others', null);
-  }
-
   async function handleAutoAssign() {
     if (!canManageFloor) return;
     if (availableOperators.length === 0) {
@@ -1000,78 +963,213 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
 
   if (!canManageFloor) {
     return (
-      <div style={{ ...panelStyle, padding: '40px 24px', textAlign: 'center' }}>
-        <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>
-          Daily Roster is restricted to floor supervisors.
-        </div>
+      <Panel>
+        <EmptyNote icon="layers" title="Restricted" sub="Daily Roster is restricted to floor supervisors." />
+      </Panel>
+    );
+  }
+
+  // shared picker dropdown (assign fallback) — logic identical, restyled
+  function Picker({ pkey, line, station, ops }) {
+    const open = !!pickerOpen[pkey];
+    return (
+      <div ref={(el) => { pickerRefs.current[pkey] = el; }} style={{ position: 'relative' }}>
+        <button
+          style={{ width: 22, height: 22, borderRadius: 'var(--r-xs)', background: 'var(--surface-3)',
+            border: '1px solid var(--border-2)', color: 'var(--t2)', cursor: 'pointer',
+            display: 'grid', placeItems: 'center' }}
+          onClick={() => {
+            setPickerOpen((s) => ({ ...s, [pkey]: !s[pkey] }));
+            setPickerQuery((s) => ({ ...s, [pkey]: '' }));
+          }}
+          title={open ? 'Close' : `Assign to ${station || line}`}
+        >
+          <Icon name={open ? 'x' : 'plus'} size={13} />
+        </button>
+        {open && (
+          <div style={{
+            position: 'absolute', top: '100%', right: 0,
+            marginTop: 4, zIndex: 20, width: 250,
+            background: 'var(--surface-2)', border: '1px solid var(--border-2)',
+            borderRadius: 'var(--r-sm)', boxShadow: 'var(--shadow-pop)',
+            animation: 'rl-pop-in 140ms var(--ease)', overflow: 'hidden',
+          }}>
+            <input
+              type="text"
+              autoFocus
+              placeholder="Search name or ID…"
+              value={pickerQuery[pkey] || ''}
+              onChange={(e) => {
+                setPickerQuery((s) => ({ ...s, [pkey]: e.target.value }));
+                setPickerHighlight((s) => ({ ...s, [pkey]: -1 }));
+              }}
+              onKeyDown={(e) => {
+                const visible = ops.slice(0, 50);
+                const hi = pickerHighlight[pkey] ?? -1;
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setPickerHighlight((s) => ({ ...s, [pkey]: Math.min((hi < 0 ? -1 : hi) + 1, visible.length - 1) }));
+                } else if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setPickerHighlight((s) => ({ ...s, [pkey]: Math.max(hi - 1, 0) }));
+                } else if (e.key === 'Enter') {
+                  if (hi >= 0 && visible[hi]) {
+                    e.preventDefault();
+                    handleAssign(visible[hi].id, line, station);
+                    setPickerOpen((s) => ({ ...s, [pkey]: false }));
+                    setPickerQuery((s) => ({ ...s, [pkey]: '' }));
+                    setPickerHighlight((s) => ({ ...s, [pkey]: -1 }));
+                  }
+                } else if (e.key === 'Escape') {
+                  setPickerOpen((s) => ({ ...s, [pkey]: false }));
+                  setPickerHighlight((s) => ({ ...s, [pkey]: -1 }));
+                }
+              }}
+              style={{ ...kitInput, fontSize: 12.5, borderRadius: 0, border: 'none', borderBottom: '1px solid var(--border)' }}
+            />
+            <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+              {ops.length === 0 ? (
+                <div style={{ padding: '9px 12px', color: 'var(--t3)', fontFamily: 'var(--font-ui)', fontSize: 12 }}>
+                  No available operators
+                </div>
+              ) : (
+                ops.slice(0, 50).map((op, opIdx) => {
+                  const isHi = (pickerHighlight[pkey] ?? -1) === opIdx;
+                  return (
+                    <div
+                      key={op.id}
+                      ref={isHi ? highlightedPickerRef : null}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        handleAssign(op.id, line, station);
+                        setPickerOpen((s) => ({ ...s, [pkey]: false }));
+                        setPickerQuery((s) => ({ ...s, [pkey]: '' }));
+                        setPickerHighlight((s) => ({ ...s, [pkey]: -1 }));
+                      }}
+                      onMouseEnter={() => setPickerHighlight((s) => ({ ...s, [pkey]: opIdx }))}
+                      style={{ padding: '7px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5,
+                        color: 'var(--t1)', background: isHi ? 'var(--surface-3)' : 'transparent' }}
+                    >
+                      <div>{op.name}</div>
+                      <div className="num" style={{ fontSize: 9.5, color: 'var(--t3)', marginTop: 1 }}>
+                        {op.employee_id || '—'} · {(op.department || '').toUpperCase()}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
       </div>
     );
   }
 
+  function AssignedCard({ row, accent, onRemove, removeTitle, dashed }) {
+    return (
+      <div style={{
+        background: 'var(--surface)',
+        border: dashed ? '1px dashed var(--orange)' : '1px solid var(--border)',
+        borderRadius: 'var(--r-sm)',
+        padding: '7px 9px',
+        marginBottom: 4,
+        display: 'flex', alignItems: 'center', gap: 8,
+      }}>
+        <Avatar name={row.operator_name} size={24} color={accent} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, fontWeight: 500, color: 'var(--t1)',
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {row.operator_name || '(unknown)'}
+          </div>
+          {dashed ? (
+            <div style={{ fontFamily: 'var(--font-ui)', fontSize: 10, color: 'var(--orange)', marginTop: 2 }}>
+              Legacy row · re-drag to a section
+            </div>
+          ) : row.operator_department ? (
+            <div className="eyebrow" style={{ fontSize: 9, marginTop: 2 }}>
+              {row.operator_department}
+            </div>
+          ) : null}
+        </div>
+        <button
+          onClick={onRemove}
+          title={removeTitle}
+          style={{
+            background: 'transparent', border: '1px solid var(--border-2)', color: 'var(--bad-fg)',
+            cursor: 'pointer', borderRadius: 'var(--r-xs)', width: 20, height: 20,
+            display: 'grid', placeItems: 'center', flexShrink: 0,
+          }}
+        >
+          <Icon name="x" size={11} />
+        </button>
+      </div>
+    );
+  }
+
+  const dropZone = {
+    border: '1.5px dashed var(--border-2)', borderRadius: 'var(--r-sm)',
+    padding: '13px 10px', textAlign: 'center',
+  };
+
   return (
     <div>
-      <div style={{ ...panelStyle, marginBottom: 12 }}>
-        <div style={{ padding: '10px 14px', display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-          <div>
-            <span style={labelStyle}>Date</span>
-            <input
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              style={{ ...inputStyle, fontFamily: 'var(--mono)' }}
-            />
-          </div>
-          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-              {totalAssigned} assigned
-            </span>
-            <button style={btnSecondary} onClick={load} disabled={loading}>↻</button>
-          </div>
+      {/* date + totals */}
+      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 14 }}>
+        <div>
+          <span className="eyebrow" style={{ display: 'block', marginBottom: 6 }}>Date</span>
+          <input type="date" className="num" value={date} onChange={(e) => setDate(e.target.value)} style={inputStyle} />
+        </div>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 10, alignItems: 'center' }}>
+          <span className="num" style={{ fontSize: 11.5, color: 'var(--t3)' }}>{totalAssigned} assigned</span>
+          <button style={smallGhost} onClick={load} disabled={loading} title="Refresh">
+            <Icon name="undo" size={13} /> Refresh
+          </button>
         </div>
       </div>
 
-      <div style={{ ...panelStyle, marginBottom: 12 }}>
-        <div style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-            Targets
-          </span>
+      {/* targets */}
+      <Panel pad={0} style={{ marginBottom: 14 }}>
+        <div style={{ padding: '12px 15px', display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
+          <span className="eyebrow">Targets</span>
           {['L1', 'L2', 'L3'].map((line) => (
             <div key={line} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: ROSTER_LINE_COLORS[line], minWidth: 18, fontWeight: 700 }}>{line}</span>
+              <span className="num" style={{ fontSize: 11.5, color: lineColor(line), minWidth: 18, fontWeight: 700 }}>{line}</span>
               {ROSTER_SECTIONS.map((section) => (
-                <label key={section} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
-                  <span style={{ textTransform: 'uppercase', letterSpacing: '0.06em' }}>{section.slice(0, 3)}</span>
+                <label key={section} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <span className="eyebrow" style={{ fontSize: 9 }}>{section.slice(0, 3)}</span>
                   <input
                     type="number"
                     min="0"
+                    className="num"
                     value={targets[line][section]}
                     onChange={(e) => setTargets((prev) => ({
                       ...prev,
                       [line]: { ...prev[line], [section]: e.target.value },
                     }))}
-                    style={{ ...inputStyle, width: 48, fontFamily: 'var(--mono)', textAlign: 'center', padding: '3px 6px' }}
+                    style={{ ...inputStyle, width: 48, textAlign: 'center', padding: '3px 6px', fontSize: 12 }}
                   />
                 </label>
               ))}
             </div>
           ))}
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
-            <span style={{ color: ROSTER_LINE_COLORS.Others, fontWeight: 700 }}>OTHERS</span>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span className="num" style={{ fontSize: 11.5, color: BUCKET_COLOR.Others, fontWeight: 700 }}>OTHERS</span>
             <input
               type="number"
               min="0"
+              className="num"
               value={targets.Others}
               onChange={(e) => setTargets((prev) => ({ ...prev, Others: e.target.value }))}
-              style={{ ...inputStyle, width: 48, fontFamily: 'var(--mono)', textAlign: 'center', padding: '3px 6px' }}
+              style={{ ...inputStyle, width: 48, textAlign: 'center', padding: '3px 6px', fontSize: 12 }}
             />
           </label>
           <button
             onClick={handleAutoAssign}
             disabled={availableOperators.length === 0}
             style={{
-              marginLeft: 'auto',
               ...btnPrimary,
-              padding: '6px 14px',
+              marginLeft: 'auto',
+              padding: '7px 13px',
               opacity: availableOperators.length === 0 ? 0.5 : 1,
               cursor: availableOperators.length === 0 ? 'not-allowed' : 'pointer',
             }}
@@ -1080,35 +1178,40 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
           </button>
         </div>
         {/* Hint row — shows which active run seeded each line's targets, or "no run". */}
-        <div style={{ padding: '0 14px 10px', display: 'flex', gap: 18, flexWrap: 'wrap', fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', letterSpacing: '0.04em' }}>
+        <div style={{ padding: '0 15px 11px', display: 'flex', gap: 18, flexWrap: 'wrap',
+          fontFamily: 'var(--font-ui)', fontSize: 11, color: 'var(--t3)' }}>
           {['L1', 'L2', 'L3'].map((line) => (
             targetHints[line] ? (
               <span key={line}>
-                <span style={{ color: ROSTER_LINE_COLORS[line], fontWeight: 700, marginRight: 4 }}>{line}</span>
-                seeded from {targetHints[line].product} · {targetHints[line].run_no}
+                <span className="num" style={{ color: lineColor(line), fontWeight: 700, marginRight: 4 }}>{line}</span>
+                seeded from {targetHints[line].product} · <span className="num">{targetHints[line].run_no}</span>
               </span>
             ) : (
               <span key={line} style={{ opacity: 0.55 }}>
-                <span style={{ color: ROSTER_LINE_COLORS[line], fontWeight: 700, marginRight: 4 }}>{line}</span>
+                <span className="num" style={{ color: lineColor(line), fontWeight: 700, marginRight: 4 }}>{line}</span>
                 no active run
               </span>
             )
           ))}
         </div>
-      </div>
+      </Panel>
 
-      <div style={{ ...panelStyle, marginBottom: 12 }}>
-        <div style={panelHeaderStyle}>
-          <span>Available ({availableOperators.length})</span>
+      {/* available pool */}
+      <Panel pad={0} style={{ marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+          padding: '11px 15px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+          <span className="label" style={{ fontSize: 12, color: 'var(--t1)' }}>
+            Available <span className="num" style={{ color: 'var(--t3)' }}>({availableOperators.length})</span>
+          </span>
           {selectedOpIds.size > 0 && (
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--yellow)', letterSpacing: '0.06em' }}>
+            <span className="num" style={{ fontSize: 11, color: 'var(--yellow)' }}>
               {selectedOpIds.size} selected · drag to assign
             </span>
           )}
         </div>
-        <div style={{ padding: '10px 14px', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        <div style={{ padding: '11px 15px', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
           {availableOperators.length === 0 ? (
-            <div style={{ fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
+            <div style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--t3)' }}>
               {loading
                 ? 'Loading…'
                 : activeOperators.length === 0
@@ -1126,19 +1229,20 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                   title={isSelected ? 'Drag to assign selected operators' : 'Click checkbox to multi-select, or drag this chip'}
                   style={{
                     display: 'inline-flex', alignItems: 'center', gap: 6,
-                    padding: '3px 8px 3px 6px', borderRadius: 4,
+                    padding: '4px 9px 4px 6px', borderRadius: 'var(--r-full)',
                     background: isSelected ? 'var(--yellow)' : 'var(--surface-2)',
-                    color: isSelected ? '#0a0a0a' : 'var(--t1)',
-                    border: `1px solid ${isSelected ? 'var(--yellow)' : 'var(--border)'}`,
-                    cursor: 'grab', fontSize: 11, userSelect: 'none', fontFamily: 'var(--mono)',
+                    color: isSelected ? '#1a1a1a' : 'var(--t1)',
+                    border: `1px solid ${isSelected ? 'var(--yellow)' : 'var(--border-2)'}`,
+                    cursor: 'grab', userSelect: 'none',
+                    fontFamily: 'var(--font-ui)', fontSize: 12, fontWeight: 500,
                   }}
                 >
                   <span
                     onClick={(e) => { e.stopPropagation(); toggleSelected(op.id); }}
                     style={{
                       width: 14, height: 14, borderRadius: 3, flexShrink: 0,
-                      border: `1.5px solid ${isSelected ? '#000' : 'var(--border)'}`,
-                      background: isSelected ? '#000' : 'transparent',
+                      border: `1.5px solid ${isSelected ? '#1a1a1a' : 'var(--border-3)'}`,
+                      background: isSelected ? '#1a1a1a' : 'transparent',
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
                       cursor: 'pointer',
                     }}
@@ -1150,7 +1254,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                     )}
                   </span>
                   <span>{op.name}</span>
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: isSelected ? '#000' : 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                  <span className="eyebrow" style={{ fontSize: 8.5, color: isSelected ? '#1a1a1a' : 'var(--t3)' }}>
                     {(op.department || '').slice(0, 4)}
                   </span>
                 </div>
@@ -1158,29 +1262,30 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
             })
           )}
         </div>
-      </div>
+      </Panel>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12 }}>
           {['L1', 'L2', 'L3'].map((line) => {
             const sections = grouped[line] || {};
-            const accent = ROSTER_LINE_COLORS[line];
+            const accent = lineColor(line);
             const lineCount = Object.values(sections).reduce((s, arr) => s + (Array.isArray(arr) ? arr.length : 0), 0);
             return (
-              <div key={line} style={{ ...panelStyle, marginBottom: 0, minHeight: 220 }}>
-                <div style={panelHeaderStyle}>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: accent, display: 'inline-block', flexShrink: 0 }} />
+              <div key={line} style={{ background: 'var(--surface)', border: '1px solid var(--border)',
+                borderTop: `3px solid ${accent}`, borderRadius: 'var(--r-md)', boxShadow: 'var(--shadow-card)', minHeight: 220 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  padding: '11px 13px', borderBottom: '1px solid var(--border)' }}>
+                  <span className="font-display" style={{ fontSize: 14, fontWeight: 700, letterSpacing: '0.04em', color: accent }}>
                     {line}
                   </span>
-                  <span style={{ fontSize: 11, fontWeight: 600, padding: '1px 8px', borderRadius: 4, background: 'var(--surface-2)', color: 'var(--t2)' }}>
+                  <span className="num" style={{ fontSize: 11.5, fontWeight: 600, padding: '1px 8px',
+                    borderRadius: 'var(--r-full)', background: 'var(--surface-2)', color: 'var(--t2)' }}>
                     {lineCount}
                   </span>
                 </div>
                 <div style={{ padding: 6 }}>
                   {[...ROSTER_SECTIONS, ...Object.keys(sections).filter((k) => !ROSTER_SECTIONS.includes(k) && k !== 'Unassigned')].map((station, idx) => {
-                    const rows = sections[station] || [];
+                    const sectionRows = sections[station] || [];
                     const key = `${line}-${station}`;
-                    const open = !!pickerOpen[key];
                     const q = (pickerQuery[key] || '').trim().toLowerCase();
                     const pickerOps = activeOperators.filter((op) => {
                       if (assignedOpIds.has(op.id)) return false;
@@ -1198,210 +1303,47 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                           padding: '8px 8px 10px',
                         }}
                       >
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                          <span style={{
-                            fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 700,
-                            color: 'var(--t2)', textTransform: 'uppercase', letterSpacing: '0.08em',
-                          }}>
-                            {station} ({rows.length})
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7 }}>
+                          <span className="eyebrow">
+                            {station} <span className="num" style={{ color: 'var(--t4)' }}>({sectionRows.length})</span>
                           </span>
-                          <div
-                            ref={(el) => { pickerRefs.current[key] = el; }}
-                            style={{ position: 'relative' }}
-                          >
-                            <button
-                              style={{ ...btnSecondary, padding: '1px 7px', fontSize: 11 }}
-                              onClick={() => {
-                                setPickerOpen((s) => ({ ...s, [key]: !s[key] }));
-                                setPickerQuery((s) => ({ ...s, [key]: '' }));
-                              }}
-                              title={open ? 'Close' : `Assign to ${station}`}
-                            >
-                              {open ? '×' : '+'}
-                            </button>
-                            {open && (
-                              <div style={{
-                                position: 'absolute', top: '100%', right: 0,
-                                marginTop: 4, zIndex: 20, width: 240,
-                                background: 'var(--surface-2)', border: '1px solid var(--border)',
-                                borderRadius: 6, boxShadow: '0 4px 16px #00000066',
-                              }}>
-                                <input
-                                  type="text"
-                                  autoFocus
-                                  placeholder="Search name or ID…"
-                                  value={pickerQuery[key] || ''}
-                                  onChange={(e) => {
-                                    setPickerQuery((s) => ({ ...s, [key]: e.target.value }));
-                                    setPickerHighlight((s) => ({ ...s, [key]: -1 }));
-                                  }}
-                                  onKeyDown={(e) => {
-                                    const visible = pickerOps.slice(0, 50);
-                                    const hi = pickerHighlight[key] ?? -1;
-                                    if (e.key === 'ArrowDown') {
-                                      e.preventDefault();
-                                      setPickerHighlight((s) => ({ ...s, [key]: Math.min((hi < 0 ? -1 : hi) + 1, visible.length - 1) }));
-                                    } else if (e.key === 'ArrowUp') {
-                                      e.preventDefault();
-                                      setPickerHighlight((s) => ({ ...s, [key]: Math.max(hi - 1, 0) }));
-                                    } else if (e.key === 'Enter') {
-                                      if (hi >= 0 && visible[hi]) {
-                                        e.preventDefault();
-                                        handleAssign(visible[hi].id, line, station);
-                                        setPickerOpen((s) => ({ ...s, [key]: false }));
-                                        setPickerQuery((s) => ({ ...s, [key]: '' }));
-                                        setPickerHighlight((s) => ({ ...s, [key]: -1 }));
-                                      }
-                                    } else if (e.key === 'Escape') {
-                                      setPickerOpen((s) => ({ ...s, [key]: false }));
-                                      setPickerHighlight((s) => ({ ...s, [key]: -1 }));
-                                    }
-                                  }}
-                                  style={{ ...inputStyle, width: '100%', borderRadius: 0, border: 'none', borderBottom: '1px solid var(--border)' }}
-                                />
-                                <div style={{ maxHeight: 220, overflowY: 'auto' }}>
-                                  {pickerOps.length === 0 ? (
-                                    <div style={{ padding: '8px 12px', color: 'var(--t3)', fontSize: 11, fontFamily: 'var(--mono)' }}>
-                                      No available operators
-                                    </div>
-                                  ) : (
-                                    pickerOps.slice(0, 50).map((op, opIdx) => {
-                                      const isHi = (pickerHighlight[key] ?? -1) === opIdx;
-                                      return (
-                                        <div
-                                          key={op.id}
-                                          ref={isHi ? highlightedPickerRef : null}
-                                          onMouseDown={(e) => {
-                                            e.preventDefault();
-                                            handleAssign(op.id, line, station);
-                                            setPickerOpen((s) => ({ ...s, [key]: false }));
-                                            setPickerQuery((s) => ({ ...s, [key]: '' }));
-                                            setPickerHighlight((s) => ({ ...s, [key]: -1 }));
-                                          }}
-                                          onMouseEnter={() => setPickerHighlight((s) => ({ ...s, [key]: opIdx }))}
-                                          style={{ padding: '6px 10px', cursor: 'pointer', fontSize: 12, color: 'var(--t1)', background: isHi ? 'var(--surface-3)' : 'transparent' }}
-                                        >
-                                          <div>{op.name}</div>
-                                          <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', marginTop: 1 }}>
-                                            {op.employee_id || '—'} · {(op.department || '').toUpperCase()}
-                                          </div>
-                                        </div>
-                                      );
-                                    })
-                                  )}
-                                </div>
-                              </div>
-                            )}
-                          </div>
+                          <Picker pkey={key} line={line} station={station} ops={pickerOps} />
                         </div>
                         {loading && idx === 0 ? (
                           <div style={{ padding: 12, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
-                        ) : rows.length === 0 ? (
-                          <div style={{
-                            border: '1.5px dashed var(--border)', borderRadius: 6,
-                            padding: '12px 10px', textAlign: 'center',
-                            color: 'var(--t3)', fontSize: 10, fontFamily: 'var(--mono)',
-                            textTransform: 'uppercase', letterSpacing: '0.08em',
-                          }}>
-                            Drop operator here
+                        ) : sectionRows.length === 0 ? (
+                          <div style={dropZone}>
+                            <span className="eyebrow" style={{ fontSize: 9 }}>Drop operator here</span>
                           </div>
                         ) : (
-                          rows.map((row) => {
-                            const initials = getInitials(row.operator_name);
-                            return (
-                              <div
-                                key={row.id}
-                                style={{
-                                  background: 'var(--surface)',
-                                  border: '1px solid var(--border)',
-                                  borderRadius: 6,
-                                  padding: '8px 10px',
-                                  marginBottom: 4,
-                                  display: 'flex', alignItems: 'center', gap: 8,
-                                }}
-                              >
-                                <div style={{ width: 24, height: 24, borderRadius: '50%', background: accent, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 700, color: '#fff', flexShrink: 0 }}>
-                                  {initials}
-                                </div>
-                                <div style={{ flex: 1, minWidth: 0 }}>
-                                  <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--t1)', fontFamily: 'var(--mono)' }}>{row.operator_name || '(unknown)'}</div>
-                                  {row.operator_department && (
-                                    <div style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 2 }}>
-                                      {row.operator_department}
-                                    </div>
-                                  )}
-                                </div>
-                                <button
-                                  onClick={() => handleUnassign(row, line)}
-                                  title={`Remove ${row.operator_name || 'operator'} from ${line}`}
-                                  style={{
-                                    background: 'transparent',
-                                    border: '1px solid var(--border)',
-                                    color: '#ff7070',
-                                    cursor: 'pointer',
-                                    borderRadius: 3,
-                                    padding: '0 5px',
-                                    fontSize: 12,
-                                    lineHeight: '18px',
-                                    height: 20,
-                                    flexShrink: 0,
-                                  }}
-                                >
-                                  ×
-                                </button>
-                              </div>
-                            );
-                          })
+                          sectionRows.map((row) => (
+                            <AssignedCard
+                              key={row.id}
+                              row={row}
+                              accent={accent}
+                              onRemove={() => handleUnassign(row, line)}
+                              removeTitle={`Remove ${row.operator_name || 'operator'} from ${line}`}
+                            />
+                          ))
                         )}
                       </div>
                     );
                   })}
                   {(sections.Unassigned || []).length > 0 && (
                     <div style={{ borderTop: '1px solid var(--border)', padding: '8px 8px 10px' }}>
-                      <span style={{
-                        fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 700,
-                        color: '#ff9d33', textTransform: 'uppercase', letterSpacing: '0.08em',
-                      }}>
-                        Unassigned ({sections.Unassigned.length})
+                      <span className="eyebrow" style={{ color: 'var(--orange)' }}>
+                        Unassigned <span className="num">({sections.Unassigned.length})</span>
                       </span>
                       <div style={{ marginTop: 6 }}>
                         {sections.Unassigned.map((row) => (
-                          <div
+                          <AssignedCard
                             key={row.id}
-                            style={{
-                              background: 'var(--surface)',
-                              border: '1px dashed #ff9d33',
-                              borderRadius: 6,
-                              padding: '8px 10px',
-                              marginBottom: 4,
-                              display: 'flex', alignItems: 'flex-start', gap: 6,
-                            }}
-                          >
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontSize: 12, color: 'var(--t1)' }}>{row.operator_name || '(unknown)'}</div>
-                              <div style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 2 }}>
-                                Legacy row · re-drag to a section
-                              </div>
-                            </div>
-                            <button
-                              onClick={() => handleUnassign(row, line)}
-                              title={`Remove ${row.operator_name || 'operator'} from ${line}`}
-                              style={{
-                                background: 'transparent',
-                                border: '1px solid var(--border)',
-                                color: '#ff7070',
-                                cursor: 'pointer',
-                                borderRadius: 3,
-                                padding: '0 5px',
-                                fontSize: 12,
-                                lineHeight: '18px',
-                                height: 20,
-                                flexShrink: 0,
-                              }}
-                            >
-                              ×
-                            </button>
-                          </div>
+                            row={row}
+                            accent={accent}
+                            dashed
+                            onRemove={() => handleUnassign(row, line)}
+                            removeTitle={`Remove ${row.operator_name || 'operator'} from ${line}`}
+                          />
                         ))}
                       </div>
                     </div>
@@ -1416,19 +1358,18 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
               Store are a visual department-based split of line='Others' rows
               (no schema change — option γ from the scope diagnostic). */}
           {([
-            { key: 'D1',    label: 'D1',    accent: ROSTER_LINE_COLORS.D1,    rows: grouped.D1 || [],    assignLine: 'D1' },
-            { key: 'D2',    label: 'D2',    accent: ROSTER_LINE_COLORS.D2,    rows: grouped.D2 || [],    assignLine: 'D2' },
-            { key: 'Admin', label: 'Admin', accent: ROSTER_LINE_COLORS.Admin,
+            { key: 'D1',    label: 'D1',    accent: BUCKET_COLOR.D1,    rows: grouped.D1 || [],    assignLine: 'D1' },
+            { key: 'D2',    label: 'D2',    accent: BUCKET_COLOR.D2,    rows: grouped.D2 || [],    assignLine: 'D2' },
+            { key: 'Admin', label: 'Admin', accent: BUCKET_COLOR.Admin,
               rows: (grouped.Others || []).filter((r) => (r.operator_department || '').toLowerCase() === 'admin'),
               assignLine: 'Others' },
-            { key: 'Store', label: 'Store', accent: ROSTER_LINE_COLORS.Store,
+            { key: 'Store', label: 'Store', accent: BUCKET_COLOR.Store,
               rows: (grouped.Others || []).filter((r) => (r.operator_department || '').toLowerCase() !== 'admin'),
               assignLine: 'Others' },
-          ]).map((panel) => {
-            const accent = panel.accent;
-            const rows = panel.rows;
-            const key = panel.key;
-            const open = !!pickerOpen[key];
+          ]).map((bucket) => {
+            const accent = bucket.accent;
+            const bucketRows = bucket.rows;
+            const key = bucket.key;
             const q = (pickerQuery[key] || '').trim().toLowerCase();
             const pickerOps = activeOperators.filter((op) => {
               if (assignedOpIds.has(op.id)) return false;
@@ -1437,14 +1378,16 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                      (op.employee_id || '').toLowerCase().includes(q);
             });
             return (
-              <div key={key} style={{ ...panelStyle, marginBottom: 0, minHeight: 220 }}>
-                <div style={panelHeaderStyle}>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: accent, display: 'inline-block', flexShrink: 0 }} />
-                    {panel.label}
+              <div key={key} style={{ background: 'var(--surface)', border: '1px solid var(--border)',
+                borderTop: `3px solid ${accent}`, borderRadius: 'var(--r-md)', boxShadow: 'var(--shadow-card)', minHeight: 220 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  padding: '11px 13px', borderBottom: '1px solid var(--border)' }}>
+                  <span className="font-display" style={{ fontSize: 14, fontWeight: 700, letterSpacing: '0.04em', color: accent, textTransform: 'uppercase' }}>
+                    {bucket.label}
                   </span>
-                  <span style={{ fontSize: 11, fontWeight: 600, padding: '1px 8px', borderRadius: 4, background: 'var(--surface-2)', color: 'var(--t2)' }}>
-                    {rows.length}
+                  <span className="num" style={{ fontSize: 11.5, fontWeight: 600, padding: '1px 8px',
+                    borderRadius: 'var(--r-full)', background: 'var(--surface-2)', color: 'var(--t2)' }}>
+                    {bucketRows.length}
                   </span>
                 </div>
                 <div
@@ -1452,164 +1395,32 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                   onDrop={(e) => {
                     e.preventDefault();
                     const opIds = readDropOpIds(e);
-                    if (opIds.length) handleBulkAssign(opIds, panel.assignLine, null);
+                    if (opIds.length) handleBulkAssign(opIds, bucket.assignLine, null);
                   }}
                   style={{ padding: '8px 8px 10px' }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                    <span style={{
-                      fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 700,
-                      color: 'var(--t2)', textTransform: 'uppercase', letterSpacing: '0.08em',
-                    }}>
-                      Operators ({rows.length})
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7 }}>
+                    <span className="eyebrow">
+                      Operators <span className="num" style={{ color: 'var(--t4)' }}>({bucketRows.length})</span>
                     </span>
-                    <div
-                      ref={(el) => { pickerRefs.current[key] = el; }}
-                      style={{ position: 'relative' }}
-                    >
-                      <button
-                        style={{ ...btnSecondary, padding: '1px 7px', fontSize: 11 }}
-                        onClick={() => {
-                          setPickerOpen((s) => ({ ...s, [key]: !s[key] }));
-                          setPickerQuery((s) => ({ ...s, [key]: '' }));
-                        }}
-                        title={open ? 'Close' : `Assign to ${panel.label}`}
-                      >
-                        {open ? '×' : '+'}
-                      </button>
-                      {open && (
-                        <div style={{
-                          position: 'absolute', top: '100%', right: 0,
-                          marginTop: 4, zIndex: 20, width: 240,
-                          background: 'var(--surface-2)', border: '1px solid var(--border)',
-                          borderRadius: 6, boxShadow: '0 4px 16px #00000066',
-                        }}>
-                          <input
-                            type="text"
-                            autoFocus
-                            placeholder="Search name or ID…"
-                            value={pickerQuery[key] || ''}
-                            onChange={(e) => {
-                              setPickerQuery((s) => ({ ...s, [key]: e.target.value }));
-                              setPickerHighlight((s) => ({ ...s, [key]: -1 }));
-                            }}
-                            onKeyDown={(e) => {
-                              const visible = pickerOps.slice(0, 50);
-                              const hi = pickerHighlight[key] ?? -1;
-                              if (e.key === 'ArrowDown') {
-                                e.preventDefault();
-                                setPickerHighlight((s) => ({ ...s, [key]: Math.min((hi < 0 ? -1 : hi) + 1, visible.length - 1) }));
-                              } else if (e.key === 'ArrowUp') {
-                                e.preventDefault();
-                                setPickerHighlight((s) => ({ ...s, [key]: Math.max(hi - 1, 0) }));
-                              } else if (e.key === 'Enter') {
-                                if (hi >= 0 && visible[hi]) {
-                                  e.preventDefault();
-                                  handleAssign(visible[hi].id, panel.assignLine, null);
-                                  setPickerOpen((s) => ({ ...s, [key]: false }));
-                                  setPickerQuery((s) => ({ ...s, [key]: '' }));
-                                  setPickerHighlight((s) => ({ ...s, [key]: -1 }));
-                                }
-                              } else if (e.key === 'Escape') {
-                                setPickerOpen((s) => ({ ...s, [key]: false }));
-                                setPickerHighlight((s) => ({ ...s, [key]: -1 }));
-                              }
-                            }}
-                            style={{ ...inputStyle, width: '100%', borderRadius: 0, border: 'none', borderBottom: '1px solid var(--border)' }}
-                          />
-                          <div style={{ maxHeight: 220, overflowY: 'auto' }}>
-                            {pickerOps.length === 0 ? (
-                              <div style={{ padding: '8px 12px', color: 'var(--t3)', fontSize: 11, fontFamily: 'var(--mono)' }}>
-                                No available operators
-                              </div>
-                            ) : (
-                              pickerOps.slice(0, 50).map((op, opIdx) => {
-                                const isHi = (pickerHighlight[key] ?? -1) === opIdx;
-                                return (
-                                  <div
-                                    key={op.id}
-                                    ref={isHi ? highlightedPickerRef : null}
-                                    onMouseDown={(e) => {
-                                      e.preventDefault();
-                                      handleAssign(op.id, panel.assignLine, null);
-                                      setPickerOpen((s) => ({ ...s, [key]: false }));
-                                      setPickerQuery((s) => ({ ...s, [key]: '' }));
-                                      setPickerHighlight((s) => ({ ...s, [key]: -1 }));
-                                    }}
-                                    onMouseEnter={() => setPickerHighlight((s) => ({ ...s, [key]: opIdx }))}
-                                    style={{ padding: '6px 10px', cursor: 'pointer', fontSize: 12, color: 'var(--t1)', background: isHi ? 'var(--surface-3)' : 'transparent' }}
-                                  >
-                                    <div>{op.name}</div>
-                                    <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', marginTop: 1 }}>
-                                      {op.employee_id || '—'} · {(op.department || '').toUpperCase()}
-                                    </div>
-                                  </div>
-                                );
-                              })
-                            )}
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                    <Picker pkey={key} line={bucket.assignLine} station={null} ops={pickerOps} />
                   </div>
                   {loading ? (
                     <div style={{ padding: 12, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
-                  ) : rows.length === 0 ? (
-                    <div style={{
-                      border: '1.5px dashed var(--border)', borderRadius: 6,
-                      padding: '12px 10px', textAlign: 'center',
-                      color: 'var(--t3)', fontSize: 10, fontFamily: 'var(--mono)',
-                      textTransform: 'uppercase', letterSpacing: '0.08em',
-                    }}>
-                      Drop operator here
+                  ) : bucketRows.length === 0 ? (
+                    <div style={dropZone}>
+                      <span className="eyebrow" style={{ fontSize: 9 }}>Drop operator here</span>
                     </div>
                   ) : (
-                    rows.map((row) => {
-                      const initials = getInitials(row.operator_name);
-                      return (
-                        <div
-                          key={row.id}
-                          style={{
-                            background: 'var(--surface)',
-                            border: '1px solid var(--border)',
-                            borderRadius: 6,
-                            padding: '8px 10px',
-                            marginBottom: 4,
-                            display: 'flex', alignItems: 'center', gap: 8,
-                          }}
-                        >
-                          <div style={{ width: 24, height: 24, borderRadius: '50%', background: accent, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 700, color: '#fff', flexShrink: 0 }}>
-                            {initials}
-                          </div>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--t1)', fontFamily: 'var(--mono)' }}>{row.operator_name || '(unknown)'}</div>
-                            {row.operator_department && (
-                              <div style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 2 }}>
-                                {row.operator_department}
-                              </div>
-                            )}
-                          </div>
-                          <button
-                            onClick={() => handleUnassign(row, panel.assignLine)}
-                            title={`Remove ${row.operator_name || 'operator'} from ${panel.label}`}
-                            style={{
-                              background: 'transparent',
-                              border: '1px solid var(--border)',
-                              color: '#ff7070',
-                              cursor: 'pointer',
-                              borderRadius: 3,
-                              padding: '0 5px',
-                              fontSize: 12,
-                              lineHeight: '18px',
-                              height: 20,
-                              flexShrink: 0,
-                            }}
-                          >
-                            ×
-                          </button>
-                        </div>
-                      );
-                    })
+                    bucketRows.map((row) => (
+                      <AssignedCard
+                        key={row.id}
+                        row={row}
+                        accent={accent}
+                        onRemove={() => handleUnassign(row, bucket.assignLine)}
+                        removeTitle={`Remove ${row.operator_name || 'operator'} from ${bucket.label}`}
+                      />
+                    ))
                   )}
                 </div>
               </div>
@@ -1626,6 +1437,14 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
 // records points (non-zero int), reason, category, event_date. recorded_by is
 // captured server-side from JWT userId.
 // ═══════════════════════════════════════════════════════════════════════════
+const CAT_TONE = {
+  quality:    'warn',
+  output:     'info',
+  behaviour:  'ok',
+  attendance: 'brand',
+  other:      'mute',
+};
+
 function PerformanceTab({ session, canManageFloor, operators }) {
   const { showToast } = useToast();
   const [selectedOp, setSelectedOp] = useState(null);
@@ -1715,182 +1534,166 @@ function PerformanceTab({ session, canManageFloor, operators }) {
 
   if (!canManageFloor) {
     return (
-      <div style={{ ...panelStyle, padding: '40px 24px', textAlign: 'center' }}>
-        <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>
-          Performance log is restricted to floor supervisors.
-        </div>
-      </div>
+      <Panel>
+        <EmptyNote icon="activity" title="Restricted" sub="Performance log is restricted to floor supervisors." />
+      </Panel>
     );
   }
 
-  const totalColor = data.total > 0 ? 'var(--green)' : data.total < 0 ? '#ff7070' : 'var(--t2)';
-
-  const columns = [
-    { key: 'event_date',  label: 'Date' },
-    { key: 'points',      label: 'Points' },
-    { key: 'category',    label: 'Category' },
-    { key: 'reason',      label: 'Reason' },
-    { key: 'recorded_by', label: 'Recorded by' },
-  ];
-
-  function renderCell(row, c) {
-    switch (c.key) {
-      case 'event_date':
-        return <span style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>{fmtDate(row.event_date)}</span>;
-      case 'points': {
-        const p = Number(row.points);
-        const color = p > 0 ? 'var(--green)' : p < 0 ? '#ff7070' : 'var(--t2)';
-        return <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, color }}>{p > 0 ? `+${p}` : p}</span>;
-      }
-      case 'category': {
-        const def = PERFORMANCE_CATEGORIES.find((x) => x.value === (row.category || 'other'));
-        const label = def?.label || capitalize(row.category || 'other');
-        return (
-          <span style={{ display: 'inline-block', padding: '1px 6px', borderRadius: 3, background: 'var(--surface-2)', color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-            {label}
-          </span>
-        );
-      }
-      case 'reason': {
-        const t = row.reason || '';
-        return <span title={t.length > 80 ? t : undefined}>{t.length > 80 ? t.slice(0, 80) + '…' : t}</span>;
-      }
-      case 'recorded_by':
-        return <span style={{ fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>{row.recorded_by_name || '—'}</span>;
-      default:
-        return row[c.key];
-    }
-  }
+  const totalColor = data.total > 0 ? 'var(--ok-fg)' : data.total < 0 ? 'var(--bad-fg)' : 'var(--t2)';
+  const cols = '110px 80px 130px 1.8fr 150px';
 
   return (
     <div>
-      <div style={{ ...panelStyle, marginBottom: 12 }}>
-        <div style={{ padding: '10px 14px', display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-          <div ref={comboRef} style={{ flex: '1 1 280px', minWidth: 220, position: 'relative' }}>
-            <span style={labelStyle}>Operator</span>
-            <input
-              type="text"
-              value={query}
-              placeholder="Search by name or employee ID…"
-              onChange={(e) => {
-                setQuery(e.target.value);
-                setSelectedOp(null);
+      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 14 }}>
+        <div ref={comboRef} style={{ flex: '1 1 280px', minWidth: 220, position: 'relative' }}>
+          <span className="eyebrow" style={{ display: 'block', marginBottom: 6 }}>Operator</span>
+          <input
+            type="text"
+            value={query}
+            placeholder="Search by name or employee ID…"
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setSelectedOp(null);
+              setShowDropdown(true);
+              setHighlightedIdx(-1);
+            }}
+            onFocus={() => setShowDropdown(true)}
+            onClick={() => setShowDropdown(true)}
+            onKeyDown={(e) => {
+              const visible = filteredOps.slice(0, 50);
+              if (e.key === 'ArrowDown') {
+                e.preventDefault();
                 setShowDropdown(true);
-                setHighlightedIdx(-1);
-              }}
-              onFocus={() => setShowDropdown(true)}
-              onClick={() => setShowDropdown(true)}
-              onKeyDown={(e) => {
-                const visible = filteredOps.slice(0, 50);
-                if (e.key === 'ArrowDown') {
+                setHighlightedIdx((i) => Math.min((i < 0 ? -1 : i) + 1, visible.length - 1));
+              } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setHighlightedIdx((i) => Math.max(i - 1, 0));
+              } else if (e.key === 'Enter') {
+                if (showDropdown && highlightedIdx >= 0 && visible[highlightedIdx]) {
                   e.preventDefault();
-                  setShowDropdown(true);
-                  setHighlightedIdx((i) => Math.min((i < 0 ? -1 : i) + 1, visible.length - 1));
-                } else if (e.key === 'ArrowUp') {
-                  e.preventDefault();
-                  setHighlightedIdx((i) => Math.max(i - 1, 0));
-                } else if (e.key === 'Enter') {
-                  if (showDropdown && highlightedIdx >= 0 && visible[highlightedIdx]) {
-                    e.preventDefault();
-                    pickOperator(visible[highlightedIdx]);
-                    setHighlightedIdx(-1);
-                  }
-                } else if (e.key === 'Escape') {
-                  setShowDropdown(false);
+                  pickOperator(visible[highlightedIdx]);
                   setHighlightedIdx(-1);
                 }
+              } else if (e.key === 'Escape') {
+                setShowDropdown(false);
+                setHighlightedIdx(-1);
+              }
+            }}
+            style={{ ...kitInput, fontSize: 13 }}
+          />
+          {showDropdown && (
+            <div
+              style={{
+                position: 'absolute', top: '100%', left: 0, right: 0,
+                marginTop: 4, zIndex: 20,
+                background: 'var(--surface-2)', border: '1px solid var(--border-2)',
+                borderRadius: 'var(--r-sm)', maxHeight: 280, overflowY: 'auto',
+                boxShadow: 'var(--shadow-pop)', animation: 'rl-pop-in 140ms var(--ease)',
               }}
-              style={{ ...inputStyle, width: '100%' }}
-            />
-            {showDropdown && (
-              <div
-                style={{
-                  position: 'absolute', top: '100%', left: 0, right: 0,
-                  marginTop: 2, zIndex: 20,
-                  background: 'var(--surface-2)', border: '1px solid var(--border)',
-                  borderRadius: 6, maxHeight: 280, overflowY: 'auto',
-                  boxShadow: '0 4px 16px #00000066',
-                }}
-              >
-                {filteredOps.length === 0 ? (
-                  <div style={{ padding: '8px 12px', color: 'var(--t3)', fontSize: 12, fontFamily: 'var(--mono)' }}>
-                    No operators found
-                  </div>
-                ) : (
-                  filteredOps.slice(0, 50).map((op, idx) => {
-                    const isSel = selectedOp?.id === op.id;
-                    const isHi = idx === highlightedIdx;
-                    let bg = 'transparent';
-                    if (isSel) bg = 'rgba(255,200,0,0.05)';
-                    else if (isHi) bg = 'var(--surface-3)';
-                    return (
-                      <div
-                        key={op.id}
-                        ref={isHi ? highlightedOpRef : null}
-                        onMouseDown={(e) => { e.preventDefault(); pickOperator(op); setHighlightedIdx(-1); }}
-                        onMouseEnter={() => setHighlightedIdx(idx)}
-                        style={{
-                          padding: '8px 12px',
-                          cursor: 'pointer',
-                          borderLeft: isSel ? '3px solid var(--yellow)' : '3px solid transparent',
-                          background: bg,
-                          fontSize: 12, color: 'var(--t1)',
-                        }}
-                      >
-                        <div>{op.name}</div>
-                        <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', marginTop: 2 }}>
-                          {op.employee_id} · {capitalize(op.department || '')}
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            )}
-          </div>
-          {operatorId && (
-            <div style={{
-              display: 'flex', gap: 14, alignItems: 'center',
-              padding: '8px 14px', background: 'var(--surface-2)',
-              border: '1px solid var(--border)', borderRadius: 6,
-            }}>
-              <div>
-                <div style={{ fontSize: 9, color: 'var(--t3)', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Total</div>
-                <div style={{ fontFamily: 'var(--mono)', fontSize: 20, fontWeight: 700, color: totalColor }}>
-                  {data.total > 0 ? `+${data.total}` : data.total} pts
+            >
+              {filteredOps.length === 0 ? (
+                <div style={{ padding: '9px 12px', color: 'var(--t3)', fontFamily: 'var(--font-ui)', fontSize: 12.5 }}>
+                  No operators found
                 </div>
-              </div>
-              <div>
-                <div style={{ fontSize: 9, color: 'var(--t3)', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Events</div>
-                <div style={{ fontFamily: 'var(--mono)', fontSize: 20, fontWeight: 700, color: 'var(--t1)' }}>{data.events.length}</div>
-              </div>
+              ) : (
+                filteredOps.slice(0, 50).map((op, idx) => {
+                  const isSel = selectedOp?.id === op.id;
+                  const isHi = idx === highlightedIdx;
+                  let bg = 'transparent';
+                  if (isSel) bg = 'var(--yellow-dim)';
+                  else if (isHi) bg = 'var(--surface-3)';
+                  return (
+                    <div
+                      key={op.id}
+                      ref={isHi ? highlightedOpRef : null}
+                      onMouseDown={(e) => { e.preventDefault(); pickOperator(op); setHighlightedIdx(-1); }}
+                      onMouseEnter={() => setHighlightedIdx(idx)}
+                      style={{
+                        padding: '8px 12px',
+                        cursor: 'pointer',
+                        borderLeft: isSel ? '3px solid var(--yellow)' : '3px solid transparent',
+                        background: bg,
+                        fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t1)',
+                      }}
+                    >
+                      <div>{op.name}</div>
+                      <div className="num" style={{ fontSize: 10, color: 'var(--t3)', marginTop: 2 }}>
+                        {op.employee_id} · {capitalize(op.department || '')}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
           )}
-          <div style={{ marginLeft: 'auto' }}>
-            <button onClick={() => setShowAdd(true)} style={btnPrimary}>+ Add Event</button>
+        </div>
+        {operatorId && (
+          <div style={{
+            display: 'flex', gap: 18, alignItems: 'center',
+            padding: '9px 15px', background: 'var(--surface)',
+            border: '1px solid var(--border)', borderRadius: 'var(--r-md)', boxShadow: 'var(--shadow-card)',
+          }}>
+            <div>
+              <div className="eyebrow">Total</div>
+              <div className="num" style={{ fontSize: 20, fontWeight: 700, color: totalColor, marginTop: 2 }}>
+                {data.total > 0 ? `+${data.total}` : data.total} pts
+              </div>
+            </div>
+            <div>
+              <div className="eyebrow">Events</div>
+              <div className="num" style={{ fontSize: 20, fontWeight: 700, color: 'var(--t1)', marginTop: 2 }}>{data.events.length}</div>
+            </div>
           </div>
+        )}
+        <div style={{ marginLeft: 'auto' }}>
+          <button onClick={() => setShowAdd(true)} style={btnPrimary}>
+            <Icon name="plus" size={14} /> Add Event
+          </button>
         </div>
       </div>
 
-      <div style={panelStyle}>
-        <div style={panelBodyStyle}>
-          {!operatorId ? (
-            <EmptyState message="Select an operator to view their performance history" />
-          ) : loading ? (
-            <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
-          ) : data.events.length === 0 ? (
-            <EmptyState message={`No performance events for ${selectedOp?.name || 'this operator'}`} />
-          ) : (
-            <DataTable
-              columns={columns}
-              rows={data.events}
-              loading={false}
-              emptyMessage=""
-              renderCell={renderCell}
-            />
-          )}
-        </div>
-      </div>
+      <Panel pad={8}>
+        {!operatorId ? (
+          <EmptyNote icon="users" title="Pick an operator" sub="Select an operator to view their performance history." />
+        ) : loading ? (
+          <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+        ) : data.events.length === 0 ? (
+          <EmptyNote icon="activity" title="No events" sub={`No performance events for ${selectedOp?.name || 'this operator'}.`} />
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <div style={{ minWidth: 720 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: cols, gap: 12, padding: '0 12px 9px', borderBottom: '1px solid var(--border)' }}>
+                {['Date', 'Points', 'Category', 'Reason', 'Recorded by'].map(h => <div key={h} className="eyebrow">{h}</div>)}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                {data.events.map((row, i) => {
+                  const p = Number(row.points);
+                  const pColor = p > 0 ? 'var(--ok-fg)' : p < 0 ? 'var(--bad-fg)' : 'var(--t2)';
+                  const catKey = (row.category || 'other').toLowerCase();
+                  const def = PERFORMANCE_CATEGORIES.find((x) => x.value === catKey);
+                  const reasonText = row.reason || '';
+                  return (
+                    <div key={row.id || i} style={{ display: 'grid', gridTemplateColumns: cols, gap: 12,
+                      alignItems: 'start', padding: '10px 12px', borderTop: i ? '1px solid var(--border)' : 'none' }}>
+                      <span className="num" style={{ fontSize: 11.5, color: 'var(--t2)' }}>{fmtDate(row.event_date)}</span>
+                      <span className="num" style={{ fontSize: 13, fontWeight: 700, color: pColor }}>{p > 0 ? `+${p}` : p}</span>
+                      <ToneBadge tone={CAT_TONE[catKey] || 'mute'} style={{ justifySelf: 'start' }}>
+                        {def?.label || capitalize(row.category || 'other')}
+                      </ToneBadge>
+                      <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t1)', lineHeight: 1.5 }}
+                        title={reasonText.length > 80 ? reasonText : undefined}>
+                        {reasonText.length > 80 ? reasonText.slice(0, 80) + '…' : reasonText}
+                      </span>
+                      <span style={{ fontFamily: 'var(--font-ui)', fontSize: 11.5, color: 'var(--t3)' }}>{row.recorded_by_name || '—'}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+      </Panel>
 
       <AddPerformanceEventModal
         open={showAdd}
@@ -1976,12 +1779,13 @@ function AddPerformanceEventModal({ open, onClose, session, operators, defaultOp
         <Field label="Points *">
           <input
             type="number"
+            className="num"
             value={points}
             onChange={(e) => setPoints(e.target.value)}
             placeholder="+5 or -3"
             style={{ ...inputStyle, width: '100%' }}
           />
-          <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 4, fontFamily: 'var(--mono)' }}>
+          <div style={{ fontFamily: 'var(--font-ui)', fontSize: 11, color: 'var(--t3)', marginTop: 4 }}>
             Positive for good, negative for poor performance.
           </div>
         </Field>
@@ -1993,7 +1797,7 @@ function AddPerformanceEventModal({ open, onClose, session, operators, defaultOp
           </select>
         </Field>
         <Field label="Date *">
-          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ ...inputStyle, width: '100%' }} />
+          <input type="date" className="num" value={date} onChange={(e) => setDate(e.target.value)} style={{ ...inputStyle, width: '100%' }} />
         </Field>
         <Field label="Reason *" full>
           <textarea
@@ -2001,7 +1805,7 @@ function AddPerformanceEventModal({ open, onClose, session, operators, defaultOp
             onChange={(e) => setReason(e.target.value)}
             rows={3}
             placeholder="What happened?"
-            style={{ ...inputStyle, width: '100%', resize: 'vertical', fontFamily: 'inherit' }}
+            style={{ ...inputStyle, width: '100%', resize: 'vertical', fontFamily: 'var(--font-ui)' }}
           />
         </Field>
       </div>
@@ -2012,7 +1816,7 @@ function AddPerformanceEventModal({ open, onClose, session, operators, defaultOp
 function Field({ label, full, children }) {
   return (
     <div style={{ gridColumn: full ? '1 / -1' : 'auto' }}>
-      <span style={labelStyle}>{label}</span>
+      <span className="eyebrow" style={{ display: 'block', marginBottom: 6 }}>{label}</span>
       {children}
     </div>
   );
