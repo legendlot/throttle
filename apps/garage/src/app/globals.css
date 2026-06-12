@@ -17,19 +17,22 @@
    ════════════════════════════════════════════════════════════ */
 
 :root {
-  /* ── Surface ramp (lifted dark, 4 steps) ─────────────── */
-  --bg:         #1f1f1f;   /* body */
-  --surface:    #2a2a2a;   /* cards, panels, sidebar, modals */
-  --surface-2:  #333333;   /* inputs, table-row hover, raised inner */
-  --surface-3:  #3c3c3c;   /* active fills, chip-neutral bg, hover */
-  --border:     #404040;   /* default 1px border */
-  --border-2:   #4a4a4a;   /* emphasized border, focus, raised secondary */
+  /* ── Surface ramp — lifted dark, slightly cool (redesign S128) ────────
+     Matches the prototype tokens.css (same family Redline shipped) — the
+     cooler #1b1c1f base reads more vibrant than the old flat-gray #1f1f1f.
+     WCAG-tuned; cards stay visibly separated from --bg. */
+  --bg:         #1b1c1f;   /* body */
+  --surface:    #232428;   /* cards, panels, sidebar, modals */
+  --surface-2:  #2c2e33;   /* inputs, table-row hover, raised inner */
+  --surface-3:  #383a41;   /* active fills, chip-neutral bg, hover */
+  --border:     #34353c;   /* default 1px border */
+  --border-2:   #44464e;   /* emphasized border, focus, raised secondary */
 
   /* ── Text ramp (4 steps, AA-conformant on --bg) ──────── */
-  --text-1:     #f5f5f5;   /* primary */
-  --text-2:     #b0b0b0;   /* secondary (AAA on --bg) */
-  --text-3:     #888888;   /* tertiary (AA on --bg, replaces #555) */
-  --text-4:     #666666;   /* decorative-only — icons, dividers; sub-AA */
+  --text-1:     #f4f5f6;   /* primary */
+  --text-2:     #b4b6bd;   /* secondary (AAA on --bg) */
+  --text-3:     #8a8c95;   /* tertiary (AA on --bg) */
+  --text-4:     #74767f;   /* decorative-only — bold/large micro-labels; sub-AA */
 
   /* ── Brand colors ────────────────────────────────────── */
   --brand-yellow:      #F2CD1A;
@@ -107,8 +110,8 @@
      missing steps, semantic fg/bg/bd triplets, product accents,
      and shorthand radius/shadow/motion the redesign kit expects.
      ════════════════════════════════════════════════════════ */
-  --bg-2:       #161616;   /* sunken rails / wells (below --bg) */
-  --border-3:   #565656;   /* focus / active edge */
+  --bg-2:       #141518;   /* sunken rails / wells (below --bg) */
+  --border-3:   #565862;   /* focus / active edge */
 
   /* Semantic fills — subtle bg + BRIGHT fg (AA on dark) + border */
   --ok-bg:   rgba(34,197,94,0.12);   --ok-fg:   #4ade80;  --ok-bd:   rgba(34,197,94,0.28);
