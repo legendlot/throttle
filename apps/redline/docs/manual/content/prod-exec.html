@@ -1,43 +1,52 @@
-<p class="lead">The Dashboard is Redline&rsquo;s home screen and the factory&rsquo;s headline view for the day: how much has been inwarded, passed QC, packed and dispatched, per line, against target. It refreshes itself every 30 seconds, so it&rsquo;s built to live on the production-floor monitor all shift.</p>
+<p class="lead">Overview is Redline&rsquo;s home screen and the factory&rsquo;s triage view for the day: the headline numbers, who is on the floor, and a single list of what needs your attention right now. It refreshes itself every 30 seconds, so it&rsquo;s built to live on the production-floor monitor all shift.</p>
 
 <div class="glance">
-  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">The day&rsquo;s production at a glance.</div></div>
-  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read-only.</div></div>
-  <div class="g-cell"><div class="g-lbl">Covers</div><div class="g-val">The selected date.</div></div>
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">What needs me now, at a glance.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Mostly read; quick acknowledge actions.</div></div>
+  <div class="g-cell"><div class="g-lbl">Covers</div><div class="g-val">Today (with week / month presets).</div></div>
   <div class="g-cell"><div class="g-lbl">Updates</div><div class="g-val">Every 30s.</div></div>
 </div>
 
-<h2 class="sec">Today at a Glance</h2>
-<p>The top row of cards is the pulse of the day. The ones to watch:</p>
+<h2 class="sec">The headline cards</h2>
+<p>The top row is the pulse of the day. A <strong>Today / This Week / This Month</strong> preset and a <strong>New Run</strong> button sit just above it.</p>
 <table class="tbl">
   <thead><tr><th>Card</th><th>Meaning</th></tr></thead>
   <tbody>
-    <tr><td><strong>QC Pass / Inwarded, Today</strong></td><td>Units checked-and-passed, and units brought off the line, today.</td></tr>
-    <tr><td><strong>QC Fail</strong></td><td>Failed QC today (turns red when above zero). Sub-line splits cars vs remotes (e.g. <span class="mono">4C · 1R</span>).</td></tr>
-    <tr><td><strong>Pass Rate</strong></td><td>First-pass yield. <strong>Green</strong> 95%+, <strong>yellow</strong> 85%+, <strong>red</strong> below.</td></tr>
-    <tr><td><strong>Dispatched, Today</strong></td><td>Units shipped (green); sub-line splits retail vs ecom.</td></tr>
-    <tr><td><strong>PKG Out</strong></td><td>Units packed and sitting ready-to-dispatch (at RTD).</td></tr>
-    <tr><td><strong>Repair Queue</strong></td><td>Units in the workshop (turns yellow above 50).</td></tr>
-    <tr><td><strong>Open Findings</strong></td><td>Outstanding audit findings (only shows when above zero): a prompt to visit Audit.</td></tr>
+    <tr><td><strong>Dispatched</strong></td><td>Units shipped; the sub-line splits retail vs ecom.</td></tr>
+    <tr><td><strong>QC Pass</strong></td><td>Units checked-and-passed (first-pass yield).</td></tr>
+    <tr><td><strong>Pass Rate</strong></td><td>First-pass yield percentage against the 95% target (green at or above 95%, yellow below).</td></tr>
+    <tr><td><strong>QC Fail</strong></td><td>Failed QC (turns red when above zero); the sub-line splits cars vs remotes.</td></tr>
+    <tr><td><strong>Repair Q</strong></td><td>Units in the workshop (turns yellow above 50).</td></tr>
+    <tr><td><strong>Pkg Out</strong></td><td>Units packed and sitting ready-to-dispatch (at RTD).</td></tr>
   </tbody>
 </table>
-<p>WTD / MTD Pass and Open Runs round out the row with week- and month-to-date passes and the count of live runs.</p>
 
-<h2 class="sec">Plan vs Actual, Today</h2>
-<p>One card per production run, showing how far it has progressed against its target: a big <strong>% complete</strong> (green 90%+, yellow 60%+, orange above 0, red at 0), a progress bar, and a stats row: <strong>Target</strong>, <strong>QC</strong> (units passed), <strong>RTR</strong> (ready-to-retail) and <strong>RTE</strong> (ready-to-ecom). The footer reads either <span class="mono">−N short</span> in red or <span class="mono">✓ On track</span> in green.</p>
+<h2 class="sec">The monthly projection chip</h2>
+<p>The <strong>Dispatched</strong> and <strong>QC Pass</strong> cards carry a small <span class="mono">&#8593; ~N proj / mo</span> line at the top. It takes what has actually happened so far this month and extends it to a whole-month estimate at today&rsquo;s pace: month-to-date total, divided by the day of the month, times the number of days in the month. So on the 12th, a month-to-date figure is scaled up by 30/12. Hover it for the exact basis. It is a pace estimate, not a promise, and it only sits on the two cards that count a running monthly total. The other cards are either a percentage or a live snapshot, where a monthly projection would not mean anything.</p>
 
-<h2 class="sec">Hourly Output</h2>
-<p>A per-line, hour-by-hour grid of dispatch achievement against target. Each line (L1 yellow, L2 blue, L3 green) shows its hourly target, today&rsquo;s total, and a pace label: <span class="mono">▲ ahead</span> (green), <span class="mono">▼ behind</span> (red), or &ldquo;on pace&rdquo;. Each hour cell is colour-filled against its target: green met it, amber was close, red missed, and a corner dot marks an hour that beat target. Hours past 6&nbsp;PM are marked <span class="mono">OT</span> (overtime).</p>
+<h2 class="sec">On floor today</h2>
+<p>A strip under the cards shows the day&rsquo;s manpower: how many people are on the floor against the plan, the present percentage and the absent count, then a per-line crew breakdown with a short marker (for example <span class="mono">&minus;2</span>) when a line is below its planned headcount. The <strong>Manpower</strong> button opens the full Manpower screen.</p>
 
-<h2 class="sec">Production Runs</h2>
-<p>A table of runs split into <strong>Active Today</strong> (green dot: today&rsquo;s Issued / In&nbsp;Progress runs) and <strong>Upcoming</strong> (blue dot: Submitted runs). Columns: Run, Product, Line, Date, Target, Retail, Ecom, Status.</p>
+<h2 class="sec">Needs attention now</h2>
+<p>This is the heart of the screen: a prioritised list of the things worth acting on, highest pressure first. Items are worked out live from the day&rsquo;s data, such as a line falling behind its pace, the pass rate dropping under target, the repair queue going over cap, or open alerts, returns and audit findings piling up. Filter chips at the top (<strong>All / High / Med / Low</strong>) narrow the list by severity.</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Open a row</div><div class="a-val"><p>Click any item to slide out a panel with a short trend, a plain-language recommendation, the supporting context, and a button that jumps straight to the right screen to fix it.</p></div></div>
+  <div class="a-row"><div class="a-key">Acknowledge</div><div class="a-val"><p>Hover a row for a quick <strong>Ack</strong> button, or use <strong>Acknowledge</strong> / <strong>Snooze 1h</strong> in the open panel, to clear an item off your list. This only tidies your view; it does not change any floor data.</p></div></div>
+</div>
+<p>When nothing needs you, the list shows an <strong>All clear</strong> message.</p>
+
+<h2 class="sec">Shift progress &amp; dispatch today</h2>
+<p>On the right, <strong>Shift progress</strong> shows one battery per line filling toward its daily target, with a pace marker for where you should be by now (green when on pace, red when behind). <strong>Dispatch today</strong> shows retail, ecom and pkg-out tallies, with a link to the dispatch Pipeline.</p>
+
+<h2 class="sec">Tomorrow&rsquo;s runs</h2>
+<p>At the bottom, a table of the production runs already lined up for tomorrow: those requested, submitted or in-flight (closed and cancelled runs are left out). Columns are Run, Product, Line, Target (with the retail / ecom split) and Status. Click a row to open New Run. Use it at end of shift to see what the floor is set up to build next.</p>
 
 <div class="callout warn">
   <div class="c-title">&#9888; About the date presets</div>
-  <p>The <strong>Today / This Week / This Month</strong> chips change the date, but the cards, Plan-vs-Actual and runs all read the single selected <em>end</em> date; they don&rsquo;t add a whole week into one total. Use the presets to jump <em>to</em> a date, not to sum a range. For range totals, use <strong>Reporting</strong>.</p>
+  <p><strong>Today</strong> shows today&rsquo;s figures. <strong>This Week</strong> and <strong>This Month</strong> re-key the headline cards to running totals for that range; where a range figure is not available a card shows a dash. The monthly projection chip always reads the month so far, whichever preset is selected.</p>
 </div>
 
 <div class="callout floor">
   <div class="c-title">&#9874; On the floor</div>
-  <p>This is the screen to leave running on the wall. &ldquo;Pace&rdquo; and &ldquo;behind/ahead&rdquo; only appear once the shift is underway and a target is set, so an empty pace early in the morning is normal.</p>
+  <p>This is the screen to leave running on the wall. Pace and behind/ahead only appear once the shift is underway and a target is set, so an empty pace early in the morning is normal.</p>
 </div>

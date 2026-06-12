@@ -6,6 +6,14 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md` → Versioning).
 
+## [1.4.0] - 2026-06-12
+
+### Changed
+- **Navigation** chapter rewritten for the "Pit Wall v2" redesign: four primary destinations (Overview, Production, Dispatch, Inbox), a collapsed Setup drawer, the System Manual entry, the collapsible icon-rail sidebar, and the new search-anything command bar (⌘K / Ctrl+K).
+- **Dashboard** chapter renamed to **Overview** and rewritten for the triage layout: six headline cards, the month-end projection chip on Dispatched and QC Pass, the on-floor manpower strip, the live "Needs attention now" feed with its drill-down panel and acknowledge/snooze, shift-progress batteries, dispatch-today, and the new "Tomorrow's runs" table. Date presets now re-key the cards for week/month ranges.
+- **Shipments** chapter notes the new search box (by shipment number, title or channel).
+- Renamed the **Activity** part to **Inbox** to match the new destination, and refreshed cross-references from "Dashboard" to "Overview".
+
 ## [1.3.0] - 2026-06-08
 
 ### Added

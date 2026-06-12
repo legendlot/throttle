@@ -2,8 +2,8 @@
   "title": "Redline",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to the production floor, QC, dispatch and admin screens that run Legend of Toys.",
-  "version": "1.3.0",
-  "date": "2026-06-08",
+  "version": "1.4.0",
+  "date": "2026-06-12",
   "app_url": "redline.legendoftoys.com",
   "owner": "Legend of Toys",
   "roles": {
@@ -85,7 +85,7 @@
         },
         {
           "id": "exec",
-          "title": "Dashboard",
+          "title": "Overview",
           "route": "/exec",
           "file": "prod-exec.html",
           "roles": [
@@ -203,8 +203,8 @@
       ]
     },
     {
-      "part": "Activity",
-      "subtitle": "Live alerts, returns intake, the raw scan log, and fixing mistaken scans.",
+      "part": "Inbox",
+      "subtitle": "The one activity surface: live alerts, returns intake, the raw scan log, and fixing mistaken scans. In the app these sit under the Inbox destination alongside the Repair queue.",
       "chapters": [
         {
           "id": "alerts",
