@@ -497,6 +497,8 @@ function AttendanceTab({ session, canManageFloor, operators }) {
   const { showToast } = useToast();
   const [date, setDate] = useState(istToday());
   const [rows, setRows] = useState([]);
+  const [stats, setStats] = useState({});   // operator_id → { streak, absent_month }
+  const [dept, setDept] = useState('');      // '' = all departments
   const [loading, setLoading] = useState(true);
   const [closeTarget, setCloseTarget] = useState(null);
   const [closing, setClosing] = useState(false);
@@ -512,22 +514,41 @@ function AttendanceTab({ session, canManageFloor, operators }) {
     if (!session || !canManageFloor || !date) return;
     setLoading(true);
     try {
-      const res = await workerFetch(
-        'getOperatorAttendance',
-        { data: { date_from: date, date_to: date } },
-        session
-      );
-      const list = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
+      const [attRes, statRes] = await Promise.all([
+        workerFetch('getOperatorAttendance', { data: { date_from: date, date_to: date } }, session),
+        workerFetch('getAttendanceStats',    { data: { date } },                            session).catch(() => null),
+      ]);
+      const list = Array.isArray(attRes?.data) ? attRes.data : Array.isArray(attRes) ? attRes : [];
       setRows(list);
+      const statList = Array.isArray(statRes?.data) ? statRes.data : [];
+      const map = {};
+      for (const s of statList) map[s.operator_id] = { streak: s.streak, absent_month: s.absent_month };
+      setStats(map);
     } catch (e) {
       showToast(e.message || 'Failed to load attendance', 'error');
       setRows([]);
+      setStats({});
     } finally {
       setLoading(false);
     }
   }, [session, canManageFloor, date, showToast]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Department helpers — options derived from the day's records; filter client-side.
+  const deptOf = useCallback(
+    (row) => (row.operator_department || opMap[row.operator_id]?.department || '').toLowerCase(),
+    [opMap]
+  );
+  const deptOptions = useMemo(() => {
+    const set = new Set();
+    for (const r of rows) { const dpt = deptOf(r); if (dpt) set.add(dpt); }
+    return [...set].sort();
+  }, [rows, deptOf]);
+  const visibleRows = useMemo(
+    () => (dept ? rows.filter((r) => deptOf(r) === dept) : rows),
+    [rows, dept, deptOf]
+  );
 
   async function confirmClose() {
     if (!closeTarget) return;
@@ -561,7 +582,7 @@ function AttendanceTab({ session, canManageFloor, operators }) {
     );
   }
 
-  const cols = '100px 1.6fr 120px 100px 90px 90px 90px 130px 110px';
+  const cols = '100px 1.5fr 120px 96px 88px 88px 86px 78px 92px 120px 96px';
 
   return (
     <div>
@@ -570,9 +591,19 @@ function AttendanceTab({ session, canManageFloor, operators }) {
           <span className="eyebrow" style={{ display: 'block', marginBottom: 6 }}>Date</span>
           <input type="date" className="num" value={date} onChange={(e) => setDate(e.target.value)} style={inputStyle} />
         </div>
+        <div>
+          <span className="eyebrow" style={{ display: 'block', marginBottom: 6 }}>Department</span>
+          <select value={dept} onChange={(e) => setDept(e.target.value)} style={selectStyle}>
+            <option value="">All departments</option>
+            {deptOptions.map((dpt) => (
+              <option key={dpt} value={dpt}>{capitalize(dpt)}</option>
+            ))}
+          </select>
+        </div>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 10, alignItems: 'center' }}>
           <span className="num" style={{ fontSize: 11.5, color: 'var(--t3)' }}>
-            {new Set(rows.map(r => r.operator_id)).size} present · {rows.length} record{rows.length === 1 ? '' : 's'}
+            {new Set(visibleRows.map(r => r.operator_id)).size} present · {visibleRows.length} record{visibleRows.length === 1 ? '' : 's'}
+            {dept ? ` · ${capitalize(dept)}` : ''}
           </span>
           <button style={smallGhost} onClick={load} disabled={loading} title="Refresh">
             <Icon name="undo" size={13} /> Refresh
@@ -583,20 +614,22 @@ function AttendanceTab({ session, canManageFloor, operators }) {
       <Panel pad={8}>
         {loading ? (
           <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
-        ) : rows.length === 0 ? (
-          <EmptyNote icon="clock" title="No attendance records" sub={`Nothing logged for ${fmtIstDate(date)}.`} />
+        ) : visibleRows.length === 0 ? (
+          <EmptyNote icon="clock" title="No attendance records"
+            sub={dept ? `No ${capitalize(dept)} records for ${fmtIstDate(date)}.` : `Nothing logged for ${fmtIstDate(date)}.`} />
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <div style={{ minWidth: 920 }}>
+            <div style={{ minWidth: 1040 }}>
               <div style={{ display: 'grid', gridTemplateColumns: cols, gap: 12, padding: '0 12px 9px', borderBottom: '1px solid var(--border)' }}>
-                {['Employee ID', 'Operator', 'Department', 'Shift', 'Clock in', 'Clock out', 'Duration', 'Device', ''].map((h, i) => (
+                {['Employee ID', 'Operator', 'Department', 'Shift', 'Clock in', 'Clock out', 'Duration', 'Streak', 'Absent (mo)', 'Device', ''].map((h, i) => (
                   <div key={h || `c${i}`} className="eyebrow">{h}</div>
                 ))}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column' }}>
-                {rows.map((row, i) => {
+                {visibleRows.map((row, i) => {
                   const op = opMap[row.operator_id];
                   const isOvertime = (row.shift_type || '').toLowerCase() === 'overtime';
+                  const st = stats[row.operator_id];
                   return (
                     <div key={row.id} style={{ display: 'grid', gridTemplateColumns: cols, gap: 12, alignItems: 'center',
                       padding: '9px 12px', borderTop: i ? '1px solid var(--border)' : 'none' }}>
@@ -615,9 +648,22 @@ function AttendanceTab({ session, canManageFloor, operators }) {
                       </ToneBadge>
                       <span className="num" style={{ fontSize: 12.5, color: 'var(--t1)' }}>{fmtIstTime(row.clock_in) || '—'}</span>
                       {row.clock_out
-                        ? <span className="num" style={{ fontSize: 12.5, color: 'var(--t1)' }}>{fmtIstTime(row.clock_out)}</span>
+                        ? (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                            <span className="num" style={{ fontSize: 12.5, color: 'var(--t1)' }}>{fmtIstTime(row.clock_out)}</span>
+                            {row.auto_closed && <ToneBadge tone="mute" style={{ fontSize: 9 }} title="Auto-closed at 1:00 AM IST">Auto</ToneBadge>}
+                          </span>
+                        )
                         : <ToneBadge tone="warn" style={{ justifySelf: 'start' }}>Open</ToneBadge>}
                       <span className="num" style={{ fontSize: 12, color: 'var(--t2)' }}>{fmtDuration(row.clock_in, row.clock_out)}</span>
+                      <span className="num" style={{ fontSize: 12.5, fontWeight: 600, color: st && st.streak > 0 ? 'var(--ok-fg)' : 'var(--t3)' }}
+                        title={st ? `${st.streak} consecutive working day${st.streak === 1 ? '' : 's'} (Mon–Sat)` : ''}>
+                        {st ? `${st.streak}d` : '—'}
+                      </span>
+                      <span className="num" style={{ fontSize: 12.5, fontWeight: 600, color: st && st.absent_month > 0 ? 'var(--bad-fg)' : 'var(--t3)' }}
+                        title={st ? `${st.absent_month} working day${st.absent_month === 1 ? '' : 's'} absent this month` : ''}>
+                        {st ? st.absent_month : '—'}
+                      </span>
                       <span className="num" style={{ fontSize: 10.5, color: 'var(--t3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {row.clock_in_device || '—'}
                       </span>
