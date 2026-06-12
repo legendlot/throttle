@@ -108,6 +108,7 @@ export default function DispatchShipmentsPage() {
   const [shipments,    setShipments]    = useState([]);
   const [loading,      setLoading]      = useState(false);
   const [statusFilter, setStatusFilter] = useState('');
+  const [query,        setQuery]        = useState('');
 
   // Detail panel
   const [detailShipment, setDetailShipment] = useState(null);
@@ -570,6 +571,21 @@ export default function DispatchShipmentsPage() {
 
   const cols = '150px 1.3fr 1fr 104px 120px 96px 96px 220px';
 
+  // Client-side search across shipment number, title, and channel name.
+  const q = query.trim().toLowerCase();
+  const visibleShipments = q
+    ? shipments.filter(s => {
+        const hay = [
+          s.shipment_no,
+          s.title,
+          s.dispatch_channels?.name,
+          s.dispatch_channels?.type,
+          s.sales_order_no,
+        ].filter(Boolean).join(' ').toLowerCase();
+        return hay.includes(q);
+      })
+    : shipments;
+
   return (
     <div style={{ maxWidth: 1280, margin: '0 auto', fontFamily: 'var(--font-ui)' }}>
       {/* Confirm Modal */}
@@ -813,6 +829,19 @@ export default function DispatchShipmentsPage() {
             </FilterChip>
           ))}
           <div style={{ flex: 1 }} />
+          <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+            <span style={{ position: 'absolute', left: 10, color: 'var(--t3)', display: 'flex', pointerEvents: 'none' }}>
+              <Icon name="search" size={14} />
+            </span>
+            <input
+              data-search-primary
+              type="search"
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder="Search ref, title, channel…  · /"
+              style={{ ...inputStyle, width: 250, padding: '8px 11px 8px 31px', fontSize: 13 }}
+            />
+          </div>
           <button style={btnPrimary} onClick={openCreate}>
             <Icon name="plus" size={15} /> New Shipment
           </button>
@@ -822,17 +851,17 @@ export default function DispatchShipmentsPage() {
         <Panel pad={8}>
           {loading ? (
             <div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}><Spinner /></div>
-          ) : shipments.length === 0 ? (
+          ) : visibleShipments.length === 0 ? (
             <div style={{ padding: '44px 0', textAlign: 'center' }}>
               <div style={{ display: 'inline-grid', placeItems: 'center', width: 44, height: 44, borderRadius: '50%',
                 background: 'var(--surface-2)', color: 'var(--t3)', border: '1px solid var(--border-2)', marginBottom: 12 }}>
-                <Icon name="send" size={20} />
+                <Icon name={q ? 'search' : 'send'} size={20} />
               </div>
               <div style={{ fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 600, color: 'var(--t1)' }}>
-                No {statusFilter || ''} shipments
+                {q ? 'No shipments match your search' : `No ${statusFilter || ''} shipments`}
               </div>
               <div style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t3)', marginTop: 3 }}>
-                Create a shipment to start packing for a channel.
+                {q ? 'Try a different ref, title, or channel.' : 'Create a shipment to start packing for a channel.'}
               </div>
             </div>
           ) : (
@@ -844,7 +873,7 @@ export default function DispatchShipmentsPage() {
                   ))}
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column' }}>
-                  {shipments.map((s, i) => {
+                  {visibleShipments.map((s, i) => {
                     const isOpen = detailShipment?.id === s.id;
                     const ch = s.dispatch_channels;
                     const ready = s.is_ready && s.status !== 'shipped';

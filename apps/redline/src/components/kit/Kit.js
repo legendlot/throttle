@@ -233,8 +233,10 @@ export function ExceptionRow({ ex, compact, onClick }) {
   );
 }
 
-/* ── KpiTile — mono value + Tomorrow eyebrow + tone stripe ──── */
-export function KpiTile({ label, value, sub, tone, spark, big }) {
+/* ── KpiTile — mono value + Tomorrow eyebrow + tone stripe ────
+   `proj` (optional) = a month-end projection string (e.g. "~1,405"),
+   rendered as a small "month proj" trend line at the top of the card. */
+export function KpiTile({ label, value, sub, tone, spark, big, proj, projTitle }) {
   const toneColor = { ok: 'var(--ok-fg)', warn: 'var(--warn-fg)', bad: 'var(--bad-fg)',
     brand: 'var(--yellow)', blue: 'var(--blue-bright)' }[tone];
   return (
@@ -242,6 +244,15 @@ export function KpiTile({ label, value, sub, tone, spark, big }) {
       borderRadius: 'var(--r-md)', padding: big ? '16px 18px' : '13px 15px', position: 'relative',
       overflow: 'hidden' }}>
       {tone && <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, background: toneColor }} />}
+      {proj != null && (
+        <div title={projTitle || 'Projected month-end at the current pace'}
+          style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 9, paddingBottom: 8,
+            borderBottom: '1px dashed var(--border-2)' }}>
+          <Icon name="arrowUp" size={11} style={{ color: 'var(--t3)' }} />
+          <span className="num" style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--t2)' }}>{proj}</span>
+          <span className="eyebrow" style={{ fontSize: 9 }}>proj / mo</span>
+        </div>
+      )}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <span className="eyebrow">{label}</span>
         {spark && <Spark data={spark} color={toneColor || 'var(--t3)'} />}

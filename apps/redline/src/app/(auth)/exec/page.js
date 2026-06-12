@@ -18,9 +18,15 @@ import { Plus, Users, X } from 'lucide-react';
 import { useAutoRefresh } from '../../../hooks/useAutoRefresh.js';
 import { useRefreshState } from '../layout.js';
 import {
-  Icon, Spark, ShiftBattery, KpiTile, Panel, FilterChip, Drawer,
+  Icon, Spark, ShiftBattery, KpiTile, Panel, FilterChip, ToneBadge, Drawer,
   lineColor, lineRgb, fmt, SEV, istNow, btnPrimary, btnGhost,
 } from '../../../components/kit/index.js';
+
+// run status → kit ToneBadge tone
+const RUN_TONE = {
+  Requested: 'info', Submitted: 'info', Draft: 'mute', Picking: 'warn',
+  Issued: 'brand', 'In Progress': 'ok',
+};
 
 const SHIFT_START = 9, SHIFT_END = 18, SHIFT_HRS = 9;
 const REPAIR_CAP = 50;
@@ -259,6 +265,8 @@ export default function OverviewPage() {
   const [alertsOpen, setAlertsOpen] = useState(0);
   const [returnsOpen, setReturnsOpen] = useState(0);
   const [mp, setMp] = useState(null);
+  const [runs, setRuns] = useState([]);           // open runs (for tomorrow's-runs panel)
+  const [mtdDispatched, setMtdDispatched] = useState(0); // month-to-date dispatched (Σ rtr+rte)
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState('all');
@@ -277,9 +285,11 @@ export default function OverviewPage() {
     setRefreshing(true);
     try {
       const date = todayStr();
-      const [dashData, pvaData, scanData, vioData, retData, mplData, attData] = await Promise.allSettled([
+      const monthStart = getFirstOfMonthISO();
+      const [dashData, pvaData, monthPvaData, scanData, vioData, retData, mplData, attData] = await Promise.allSettled([
         garageFetch('getProductionDashboard', { date }, session),
         garageFetch('getPlanVsActual', { from: date, to: date }, session),
+        garageFetch('getPlanVsActual', { from: monthStart, to: date }, session),
         garageFetch('getScanSummary', { date }, session),
         garageFetch('getViolations', { acknowledged: 'false' }, session),
         garageFetch('getReturnQueue', {}, session),
@@ -291,11 +301,19 @@ export default function OverviewPage() {
         const d = dashData.value;
         setSummary(d.summary || null);
         setHourly(d.hourly_dispatch?.length ? d.hourly_dispatch : (d.hourly_chart || []));
+        setRuns(Array.isArray(d.open_runs) ? d.open_runs : []);
         setError(null);
       } else {
         setError('Dashboard data unavailable');
       }
       setPva(pvaData.status === 'fulfilled' ? (pvaData.value || []) : []);
+
+      // Month-to-date dispatched (Σ rtr+rte) — drives the per-card monthly projection.
+      if (monthPvaData.status === 'fulfilled' && Array.isArray(monthPvaData.value)) {
+        const mtd = monthPvaData.value.reduce((sum, r) =>
+          sum + (Number(r.actual_rtr) || 0) + (Number(r.actual_rte) || 0), 0);
+        setMtdDispatched(mtd);
+      }
       setScanSummary(scanData.status === 'fulfilled' ? (scanData.value || null) : null);
       setAlertsOpen(vioData.status === 'fulfilled' && Array.isArray(vioData.value) ? vioData.value.length : 0);
       setReturnsOpen(retData.status === 'fulfilled' && Array.isArray(retData.value) ? retData.value.length : 0);
@@ -489,6 +507,29 @@ export default function OverviewPage() {
   };
   const shown = filter === 'all' ? exceptions : exceptions.filter(e => e.sev === filter);
 
+  /* ── monthly projection (run-rate extrapolation of MTD → month-end) ──
+     factor = daysInMonth / dayElapsed. Applied to cumulative flow metrics
+     only (Dispatched, QC Pass) — the others are point-in-time snapshots or
+     ratios where a cumulative projection isn't meaningful. */
+  const todayISO = todayStr();
+  const dayOfMonth = Number(todayISO.slice(8, 10)) || 1;
+  const monthNum = Number(todayISO.slice(5, 7));
+  const yearNum = Number(todayISO.slice(0, 4));
+  const daysInMonth = new Date(yearNum, monthNum, 0).getDate() || 30;
+  const projFactor = daysInMonth / dayOfMonth;
+  const projOf = (v) => '~' + fmt(Math.round((Number(v) || 0) * projFactor));
+  const projNote = (mtdVal, what) => `${fmt(mtdVal)} ${what} in ${dayOfMonth} of ${daysInMonth} days → projected month-end at this pace`;
+
+  /* ── tomorrow's planned runs (Submitted/Requested + in-flight, not closed) ── */
+  const tomorrowISO = (() => {
+    const d = new Date(`${todayISO}T00:00:00`);
+    d.setDate(d.getDate() + 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  })();
+  const tomorrowRuns = (runs || [])
+    .filter(r => r.run_date === tomorrowISO && !['Completed', 'Cancelled', 'Rejected'].includes(r.status))
+    .sort((a, b) => (a.line_no || '').localeCompare(b.line_no || ''));
+
   const doAction = (a, ex) => {
     if (a === 'open') { setSel(null); router.push(ex.route); }
     else if (a === 'ack') {
@@ -538,8 +579,10 @@ export default function OverviewPage() {
 
       {/* KPI rail */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginBottom: 22 }}>
-        <KpiTile label="Dispatched" value={k.dispatched} sub={k.subR} tone="ok" />
-        <KpiTile label="QC Pass" value={k.qcPass} sub="First-pass yield" tone="brand" />
+        <KpiTile label="Dispatched" value={k.dispatched} sub={k.subR} tone="ok"
+          proj={projOf(mtdDispatched)} projTitle={projNote(mtdDispatched, 'dispatched')} />
+        <KpiTile label="QC Pass" value={k.qcPass} sub="First-pass yield" tone="brand"
+          proj={projOf(s.mtd_pass)} projTitle={projNote(s.mtd_pass, 'passed QC')} />
         <KpiTile label="Pass Rate" value={k.passRate} sub="Target 95%" tone={k.passTone} />
         <KpiTile label="QC Fail" value={k.qcFail} sub={k.failSub} tone={preset === 'today' && (Number(s.today_qc_fail) || 0) > 0 ? 'bad' : undefined} />
         <KpiTile label="Repair Q" value={fmt(s.repair_queue)} sub={`Cap ${REPAIR_CAP}`} tone={(Number(s.repair_queue) || 0) > REPAIR_CAP ? 'warn' : undefined} />
@@ -614,6 +657,47 @@ export default function OverviewPage() {
             </div>
           </Panel>
         </div>
+      </div>
+
+      {/* Tomorrow's planned runs */}
+      <div style={{ marginTop: 18 }}>
+        <Panel title={`Tomorrow's runs · ${tomorrowISO}`} icon="factory"
+          action={<span onClick={() => router.push('/lines')}
+            style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--t3)', cursor: 'pointer' }}>Lines →</span>}
+          pad={tomorrowRuns.length ? 8 : 16}>
+          {tomorrowRuns.length === 0 ? (
+            <div style={{ padding: '24px 0', textAlign: 'center', fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t3)' }}>
+              No runs requested or submitted for tomorrow yet.
+            </div>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '120px 1.4fr 80px 1fr 110px', gap: 12, padding: '0 12px 9px', borderBottom: '1px solid var(--border)' }}>
+                {['Run', 'Product', 'Line', 'Target', 'Status'].map(h => <div key={h} className="eyebrow">{h}</div>)}
+              </div>
+              {tomorrowRuns.map((r, i) => (
+                <div key={r.run_no} onClick={() => router.push('/new-run')}
+                  style={{ display: 'grid', gridTemplateColumns: '120px 1.4fr 80px 1fr 110px', gap: 12, alignItems: 'center',
+                    padding: '11px 12px', cursor: 'pointer', borderTop: i ? '1px solid var(--border)' : 'none',
+                    transition: 'background var(--fast) var(--ease)' }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-2)'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
+                  <span className="num" style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--yellow)' }}>{r.run_no}</span>
+                  <span style={{ fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--t1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.product || '—'}</span>
+                  <span>
+                    {r.line_no
+                      ? <span className="num" style={{ fontSize: 10, fontWeight: 700, color: lineColor(r.line_no), background: `rgba(${lineRgb(r.line_no)},0.12)`, borderRadius: 3, padding: '1px 5px' }}>{r.line_no}</span>
+                      : <span style={{ color: 'var(--t4)' }}>—</span>}
+                  </span>
+                  <span className="num" style={{ fontSize: 12.5, color: 'var(--t2)', whiteSpace: 'nowrap' }}>
+                    {fmt(r.target_qty)}
+                    <span style={{ color: 'var(--t4)' }}> · {fmt(r.target_retail)}R / {fmt(r.target_ecom)}E</span>
+                  </span>
+                  <span><ToneBadge tone={RUN_TONE[r.status] || 'mute'}>{r.status}</ToneBadge></span>
+                </div>
+              ))}
+            </div>
+          )}
+        </Panel>
       </div>
 
       <ExceptionDrawer ex={sel} onClose={() => setSel(null)} onAction={doAction} />
