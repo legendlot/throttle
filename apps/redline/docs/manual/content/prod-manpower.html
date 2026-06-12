@@ -11,10 +11,18 @@
 <p>Today&rsquo;s headcount across L1, L2, L3, Dispatch, Store, Others and Unassigned, then operator cards under each line. It shows only people with an <strong>open shift</strong> (clocked in, not yet out); someone who has clocked out drops off. &ldquo;On floor&rdquo; (from attendance) and &ldquo;assigned&rdquo; (from the roster) are different counts, shown side by side. Refreshes every 60 seconds.</p>
 
 <h2 class="sec">Attendance</h2>
-<p>Clock-in/out records for a chosen date. Columns include Clock In, Clock Out, Duration and Device. A shift with no clock-out shows an amber <span class="mono">Open ⚠</span> badge and gets a <strong>Close Shift</strong> button.</p>
+<p>Clock-in/out records for a chosen date. Columns include Clock In, Clock Out, Duration, <strong>Streak</strong>, <strong>Absent (mo)</strong> and Device. A shift with no clock-out shows an amber <span class="mono">Open ⚠</span> badge and gets a <strong>Close Shift</strong> button. Use the <strong>Department</strong> filter at the top to narrow the list to one department.</p>
+<ul>
+  <li><strong>Streak</strong> &mdash; how many working days in a row the operator has been present, counting back from the selected date. Working days are Mon&ndash;Sat; Sundays neither count nor break a streak.</li>
+  <li><strong>Absent (mo)</strong> &mdash; how many working days (Mon&ndash;Sat) the operator has missed so far this month. Days before they joined don&rsquo;t count.</li>
+</ul>
+<div class="callout">
+  <div class="c-title">&#9432; Auto clock-out at 1 AM</div>
+  <p>Anyone still clocked in from a previous day is automatically clocked out at <strong>1:00 AM IST</strong> the next day and tagged <span class="mono">Auto</span> next to their clock-out time. This stops forgotten shifts running forever &mdash; you don&rsquo;t need to Close them by hand.</p>
+</div>
 <div class="callout warn">
   <div class="c-title">&#9888; Close Shift sets clock-out to now</div>
-  <p>Closing an open shift stamps the clock-out at the current time and can&rsquo;t be undone here. Use it to tidy up someone who forgot to clock out; the duration is calculated from it.</p>
+  <p>Closing an open shift stamps the clock-out at the current time and can&rsquo;t be undone here. Use it to tidy up someone who forgot to clock out <em>today</em>; the duration is calculated from it.</p>
 </div>
 
 <h2 class="sec">Daily Roster</h2>
