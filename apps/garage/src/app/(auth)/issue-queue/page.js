@@ -107,6 +107,7 @@ export default function IssueQueuePage() {
   const [voidSubmitting, setVoidSubmitting]   = useState(false);
   // Outsourced vendor round-trip — store steps folded into the queue (run-request consolidation)
   const [vendorRuns, setVendorRuns] = useState({ issued: [], progress: [] });
+  const [expandedUdr, setExpandedUdr] = useState({}); // ref -> bool: show the per-variant UDR breakdown
   const [vendorBusy, setVendorBusy] = useState(null);
   const [rcvQty, setRcvQty]         = useState({});
 
@@ -958,17 +959,39 @@ export default function IssueQueuePage() {
                     <td style={tableTdStyle}>{r.line_no}</td>
                     <td style={tableTdStyle}>{r.product}</td>
                     {r.type === 'udr' && r.udrLines?.length ? (
-                      <td style={{ ...tableTdStyle }}>
-                        <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 3 }}>UDR re-dispatch — scan at Issue UDR</div>
-                        {r.udrLines.map((l) => {
-                          const done = l.status === 'Complete' || (Number(l.fulfilled_qty) || 0) >= (Number(l.qty) || 0);
-                          return (
-                            <div key={l.id} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: done ? '#22c55e' : 'var(--t1)' }}>
-                              {done ? '✓' : '▸'} {[l.product, l.variant, l.colour].filter(Boolean).join(' ') || '—'} — {Number(l.fulfilled_qty) || 0}/{l.qty}
-                            </div>
-                          );
-                        })}
-                      </td>
+                      (() => {
+                        const open = !!expandedUdr[r.ref];
+                        const totDone = r.udrLines.reduce((a, l) => a + (Number(l.fulfilled_qty) || 0), 0);
+                        const totQty = r.udrLines.reduce((a, l) => a + (Number(l.qty) || 0), 0);
+                        const allDone = totDone >= totQty;
+                        const n = r.udrLines.length;
+                        return (
+                          <td style={{ ...tableTdStyle, whiteSpace: 'normal' }}>
+                            <div style={{ fontSize: 11, color: 'var(--t4)', marginBottom: 3 }}>UDR re-dispatch — scan at Issue UDR</div>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setExpandedUdr((m) => ({ ...m, [r.ref]: !m[r.ref] })); }}
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'var(--t1)' }}
+                            >
+                              <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t4)', transform: open ? 'rotate(90deg)' : 'none', display: 'inline-block', transition: 'transform 120ms' }}>▸</span>
+                              <span style={{ fontSize: 13, fontWeight: 600 }}>{n} variant{n === 1 ? '' : 's'}</span>
+                              <span className="num" style={{ fontFamily: 'var(--mono)', fontSize: 12, color: allDone ? 'var(--state-success-fg)' : 'var(--t2)' }}>{totDone}/{totQty}</span>
+                              <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t4)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{open ? 'hide' : 'show'}</span>
+                            </button>
+                            {open && (
+                              <div style={{ marginTop: 6, paddingLeft: 17, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                {r.udrLines.map((l) => {
+                                  const done = l.status === 'Complete' || (Number(l.fulfilled_qty) || 0) >= (Number(l.qty) || 0);
+                                  return (
+                                    <div key={l.id} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: done ? 'var(--state-success-fg)' : 'var(--t2)' }}>
+                                      {done ? '✓' : '▸'} {[l.product, l.variant, l.colour].filter(Boolean).join(' ') || '—'} — {Number(l.fulfilled_qty) || 0}/{l.qty}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </td>
+                        );
+                      })()
                     ) : (
                       <td style={{ ...tableTdStyle, maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.details}>{r.details}</td>
                     )}

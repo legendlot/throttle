@@ -25,14 +25,15 @@ const countPill = { fontFamily: 'var(--font-mono)', fontSize: 10.5, fontWeight: 
 const railToggle = { width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'none', border: '1px solid var(--border-2)', borderRadius: 'var(--r-xs)', color: 'var(--t3)', cursor: 'pointer' };
 const drawerItem = { width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', background: 'none', border: 'none', cursor: 'pointer', borderRadius: 'var(--r-xs)', fontSize: 13, fontFamily: 'var(--font-ui)', fontWeight: 500, textAlign: 'left' };
 
-function Brand({ short, onClick }) {
+function Brand({ short }) {
   return (
-    <button onClick={onClick} style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+    <span style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
       <span style={{ width: 28, height: 28, borderRadius: 'var(--r-sm)', background: 'var(--yellow)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-        <GarageIcon size={18} strokeWidth={2.5} />
+        {/* dark glyph on the yellow tile — yellow-on-yellow was invisible */}
+        <GarageIcon size={17} strokeWidth={2.6} color="#161616" />
       </span>
       {!short && <span style={{ fontFamily: 'var(--font-display)', fontSize: 15, fontWeight: 700, letterSpacing: '0.1em', color: 'var(--t1)' }}>GARAGE</span>}
-    </button>
+    </span>
   );
 }
 
@@ -136,10 +137,11 @@ export function GarageSidebar({
 
   return (
     <aside style={{ width: W, flexShrink: 0, display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRight: '1px solid var(--border)', transition: 'width var(--base) var(--ease)', height: '100%', overflow: 'hidden' }}>
-      {/* header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'space-between', height: 60, padding: collapsed ? 0 : '0 14px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-        <Brand short={collapsed} onClick={() => onNavigate('/dashboard')} />
-        {!collapsed && <button onClick={onToggleCollapsed} title="Collapse" style={railToggle}><ChevronsLeft size={15} strokeWidth={1.75} /></button>}
+      {/* header — clicking anywhere on the bar collapses/expands the rail */}
+      <div onClick={onToggleCollapsed} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        style={{ display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'space-between', height: 60, padding: collapsed ? 0 : '0 14px', borderBottom: '1px solid var(--border)', flexShrink: 0, cursor: 'pointer' }}>
+        <Brand short={collapsed} />
+        {!collapsed && <span style={railToggle}><ChevronsLeft size={15} strokeWidth={1.75} /></span>}
       </div>
 
       {/* search / ⌘K launcher */}

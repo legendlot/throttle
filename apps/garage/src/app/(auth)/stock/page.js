@@ -219,9 +219,9 @@ export default function StockPage() {
           {/* category filter chips */}
           {categories.length > 0 && (
             <div style={{ display: 'flex', gap: 7, marginBottom: 14, flexWrap: 'wrap' }}>
-              <Chip active={!categoryFilter} onClick={() => setCategoryFilter('')} count={stockData.length}>All</Chip>
+              <Chip pill active={!categoryFilter} onClick={() => setCategoryFilter('')} count={stockData.length}>All</Chip>
               {categories.map(c => (
-                <Chip key={c} active={categoryFilter === c} onClick={() => setCategoryFilter(c)} count={stockData.filter(r => r.category === c).length}>{c}</Chip>
+                <Chip key={c} pill active={categoryFilter === c} onClick={() => setCategoryFilter(c)} count={stockData.filter(r => r.category === c).length}>{c}</Chip>
               ))}
             </div>
           )}
