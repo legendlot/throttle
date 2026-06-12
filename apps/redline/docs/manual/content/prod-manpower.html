@@ -39,3 +39,18 @@
 
 <h2 class="sec">Performance</h2>
 <p>Pick an operator to see their points total (green if positive, red if negative) and event history. <strong>+ Add Event</strong> logs a point change: choose points (positive for good, negative for poor), a category (Attendance, Quality, Behaviour, Output, Other), a date and a reason. Every event is stamped with who recorded it.</p>
+
+<h2 class="sec">Manpower analytics</h2>
+<p>A read-only view that turns attendance into a planning tool: who comes regularly, who&rsquo;s irregular, and how it&rsquo;s trending &mdash; so you can keep your reliable people on the critical line stations and move irregular ones to lower-risk work. Pick a window at the top (<strong>30 / 60 / 90 days</strong> or <strong>this month</strong>; 60 is the default). Operators are grouped into <strong>department sections</strong>, with the departments carrying the most absenteeism shown first, and the least-reliable people at the top of each section.</p>
+<p>Each operator carries a <strong>reliability tier</strong> based on how many of the working days (Mon&ndash;Sat) in the window they were present:</p>
+<ul>
+  <li><strong>Reliable</strong> &mdash; 90% or more. Your continuity backbone; best kept fixed on a line so on-the-job training compounds.</li>
+  <li><strong>Steady</strong> &mdash; 75&ndash;90%.</li>
+  <li><strong>Irregular</strong> &mdash; 50&ndash;75%. Candidates to move to low-risk activities.</li>
+  <li><strong>Critical</strong> &mdash; under 50%.</li>
+</ul>
+<p>The <strong>heartbeat strip</strong> is the quick read: one square per working day, newest on the right &mdash; <span class="mono">green</span> = present, <span class="mono">red</span> = absent, grey = before they joined. A clean green run is a dependable operator; scattered red is sporadic; a repeating gap (e.g. every Saturday) is a predictable pattern you can plan around &mdash; flagged as an &ldquo;Often off &lt;day&gt;&rdquo; hint. Each row also shows the current / longest streak, a trend arrow (recent half of the window vs the earlier half), and average arrival time with a count of days the person arrived later than their own norm.</p>
+<div class="callout note">
+  <div class="c-title">&#9432; Hide never-present</div>
+  <p>By default, operators with zero attendance in the window are hidden (usually departed or test accounts) so the genuinely irregular people stand out. Untick <strong>Hide never-present</strong> to show them.</p>
+</div>
