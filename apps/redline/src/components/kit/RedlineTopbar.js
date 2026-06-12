@@ -11,10 +11,12 @@ import { resolveNav } from '../../lib/nav.js';
 function fmtTime(d) {
   if (!d) return null;
   try {
+    const date = d instanceof Date ? d : new Date(d);
+    if (Number.isNaN(date.getTime())) return typeof d === 'string' ? d : null; // legacy pages pass a pre-formatted string
     return new Intl.DateTimeFormat('en-IN', {
       timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true,
-    }).format(d instanceof Date ? d : new Date(d));
-  } catch (_) { return null; }
+    }).format(date);
+  } catch (_) { return typeof d === 'string' ? d : null; }
 }
 
 export function RedlineTopbar({ refreshing = false, lastRefreshed = null, right }) {
