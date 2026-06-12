@@ -582,7 +582,11 @@ function AttendanceTab({ session, canManageFloor, operators }) {
     );
   }
 
-  const cols = '100px 1.5fr 120px 96px 88px 88px 86px 78px 92px 120px 96px';
+  // All tracks fixed except the operator column, which uses a minmax() floor so it
+  // can't collapse to the avatar width. The header row and each data row are separate
+  // grids; a bare `fr` whose body content has overflow:hidden (min-content 0) would
+  // size differently between header and body and drift the columns out of sync.
+  const cols = '110px minmax(170px, 1.5fr) 116px 96px 84px 104px 84px 72px 96px 120px 88px';
 
   return (
     <div>
@@ -619,7 +623,7 @@ function AttendanceTab({ session, canManageFloor, operators }) {
             sub={dept ? `No ${capitalize(dept)} records for ${fmtIstDate(date)}.` : `Nothing logged for ${fmtIstDate(date)}.`} />
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <div style={{ minWidth: 1040 }}>
+            <div style={{ minWidth: 1180 }}>
               <div style={{ display: 'grid', gridTemplateColumns: cols, gap: 12, padding: '0 12px 9px', borderBottom: '1px solid var(--border)' }}>
                 {['Employee ID', 'Operator', 'Department', 'Shift', 'Clock in', 'Clock out', 'Duration', 'Streak', 'Absent (mo)', 'Device', ''].map((h, i) => (
                   <div key={h || `c${i}`} className="eyebrow">{h}</div>
