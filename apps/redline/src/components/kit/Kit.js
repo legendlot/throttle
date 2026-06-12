@@ -368,6 +368,8 @@ export const inputStyle = {
   background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-sm)',
   padding: '9px 11px', color: 'var(--t1)', fontFamily: 'var(--font-ui)', fontSize: 14,
   outline: 'none', width: '100%',
+  // Dark-theme the browser-native widgets (date picker, spinners, scrollbars).
+  colorScheme: 'dark', accentColor: 'var(--accent)',
 };
 
 /* ── Drawer — right-hand drill-down surface ─────────────────── */

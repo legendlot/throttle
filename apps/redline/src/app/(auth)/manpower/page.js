@@ -186,6 +186,7 @@ export default function ManpowerPage() {
     { key: 'attendance',  label: 'Attendance',  icon: 'clock' },
     { key: 'roster',      label: 'Daily roster',icon: 'layers' },
     { key: 'performance', label: 'Performance', icon: 'activity' },
+    { key: 'analytics',   label: 'Manpower analytics', icon: 'gauge' },
   ];
 
   return (
@@ -211,6 +212,7 @@ export default function ManpowerPage() {
       {activeTab === 'attendance'  && <AttendanceTab session={session} canManageFloor={canManageFloor} operators={allOperators} />}
       {activeTab === 'roster'      && <DailyRosterTab session={session} canManageFloor={canManageFloor} operators={allOperators} />}
       {activeTab === 'performance' && <PerformanceTab session={session} canManageFloor={canManageFloor} operators={allOperators} />}
+      {activeTab === 'analytics'   && <ManpowerAnalyticsTab session={session} canManageFloor={canManageFloor} operators={allOperators} />}
     </div>
   );
 }
@@ -704,6 +706,253 @@ function AttendanceTab({ session, canManageFloor, operators }) {
             : ''
         }
       />
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ManpowerAnalyticsTab — attendance reliability by department, to help the
+// production manager spot absenteeism and reallocate irregular operators.
+// Read-only. Worker: getManpowerAnalytics (RPC get_manpower_analytics).
+// Working days = Mon–Sat. Tiers: Reliable ≥90 / Steady ≥75 / Irregular ≥50 / Critical.
+// ═══════════════════════════════════════════════════════════════════════════
+const ANALYTICS_WINDOWS = [
+  { key: '30',    label: '30d',        days: 30 },
+  { key: '60',    label: '60 days',    days: 60 },
+  { key: '90',    label: '90d',        days: 90 },
+  { key: 'month', label: 'This month', days: null },
+];
+const DOW_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+function tierOf(rate) {
+  if (rate >= 90) return { key: 'reliable',  label: 'Reliable',  tone: 'ok'   };
+  if (rate >= 75) return { key: 'steady',    label: 'Steady',    tone: 'info' };
+  if (rate >= 50) return { key: 'irregular', label: 'Irregular', tone: 'warn' };
+  return            { key: 'critical',  label: 'Critical',  tone: 'bad'  };
+}
+function analyticsRange(winKey) {
+  const end = istToday();
+  if (winKey === 'month') return { start: end.slice(0, 8) + '01', end };
+  const days = (ANALYTICS_WINDOWS.find((w) => w.key === winKey)?.days) || 60;
+  const d = new Date(end + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() - (days - 1));
+  return { start: d.toISOString().slice(0, 10), end };
+}
+function fmtMin(m) {
+  if (m === null || m === undefined) return null;
+  const h = Math.floor(m / 60), mm = m % 60;
+  return `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+function absentDowHint(dow) {
+  if (!Array.isArray(dow)) return null;
+  const tot = dow.reduce((a, b) => a + (b || 0), 0);
+  if (tot < 3) return null;
+  let mi = 0;
+  for (let i = 1; i < 6; i++) if ((dow[i] || 0) > (dow[mi] || 0)) mi = i;
+  if (dow[mi] >= 3 && dow[mi] / tot >= 0.4) return `Often off ${DOW_LABELS[mi]}`;
+  return null;
+}
+
+function ManpowerAnalyticsTab({ session, canManageFloor }) {
+  const { showToast } = useToast();
+  const [winKey, setWinKey] = useState('60');
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [hideZero, setHideZero] = useState(true);
+
+  const range = useMemo(() => analyticsRange(winKey), [winKey]);
+
+  const load = useCallback(async () => {
+    if (!session || !canManageFloor) return;
+    setLoading(true);
+    try {
+      const res = await workerFetch('getManpowerAnalytics', { data: { start: range.start, end: range.end } }, session);
+      const list = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
+      setRows(list);
+    } catch (e) {
+      showToast(e.message || 'Failed to load analytics', 'error');
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [session, canManageFloor, range, showToast]);
+
+  useEffect(() => { load(); }, [load]);
+
+  // Only operators with eligible working days in the window are analysable.
+  const withData = useMemo(() => rows.filter((r) => (r.working_days || 0) > 0), [rows]);
+  const zeroCount = useMemo(() => withData.filter((r) => (r.present_days || 0) === 0).length, [withData]);
+  const shown = useMemo(
+    () => (hideZero ? withData.filter((r) => (r.present_days || 0) > 0) : withData),
+    [withData, hideZero]
+  );
+
+  const overview = useMemo(() => {
+    const n = shown.length;
+    const avg = n ? Math.round(shown.reduce((a, r) => a + (r.attendance_rate || 0), 0) / n) : 0;
+    let reliable = 0, steady = 0, risk = 0;
+    for (const r of shown) {
+      const t = tierOf(r.attendance_rate || 0).key;
+      if (t === 'reliable') reliable++;
+      else if (t === 'steady') steady++;
+      else risk++;
+    }
+    return { n, avg, reliable, steady, risk };
+  }, [shown]);
+
+  // Group by department; sort sections worst-avg-first, operators worst-first within.
+  const sections = useMemo(() => {
+    const byDept = {};
+    for (const r of shown) {
+      const d = (r.department || 'unassigned').toLowerCase();
+      (byDept[d] = byDept[d] || []).push(r);
+    }
+    const out = Object.entries(byDept).map(([dept, ops]) => {
+      ops.sort((a, b) => (a.attendance_rate || 0) - (b.attendance_rate || 0));
+      const counts = { reliable: 0, steady: 0, irregular: 0, critical: 0 };
+      let sum = 0;
+      for (const o of ops) { counts[tierOf(o.attendance_rate || 0).key]++; sum += (o.attendance_rate || 0); }
+      return { dept, ops, counts, avg: ops.length ? Math.round(sum / ops.length) : 0 };
+    });
+    out.sort((a, b) => a.avg - b.avg);
+    return out;
+  }, [shown]);
+
+  const stripLen = shown[0]?.day_strip?.length || 0;
+  const cellW = stripLen ? Math.max(4, Math.min(11, Math.floor(470 / stripLen))) : 9;
+  const cellGap = stripLen > 45 ? 1 : 2;
+
+  if (!canManageFloor) {
+    return <Panel><EmptyNote icon="gauge" title="Restricted" sub="Manpower analytics is restricted to floor supervisors." /></Panel>;
+  }
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14 }}>
+        <span className="eyebrow">Window</span>
+        {ANALYTICS_WINDOWS.map((w) => {
+          const on = w.key === winKey;
+          return (
+            <button key={w.key} onClick={() => setWinKey(w.key)}
+              style={{ cursor: 'pointer', borderRadius: 'var(--r-sm)', padding: '5px 11px', fontSize: 12, fontWeight: 600,
+                fontFamily: 'var(--font-ui)', whiteSpace: 'nowrap',
+                background: on ? 'var(--yellow)' : 'var(--surface-2)', color: on ? '#1a1a1a' : 'var(--t3)',
+                border: `1px solid ${on ? 'var(--yellow)' : 'var(--border-2)'}` }}>
+              {w.label}
+            </button>
+          );
+        })}
+        <span className="num" style={{ fontSize: 11, color: 'var(--t4)' }}>
+          {stripLen} working day{stripLen === 1 ? '' : 's'} · Mon–Sat · as of {fmtIstDate(range.end)}
+        </span>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 10, alignItems: 'center' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'var(--t3)', cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>
+            <input type="checkbox" checked={hideZero} onChange={(e) => setHideZero(e.target.checked)} style={{ accentColor: 'var(--accent)', cursor: 'pointer' }} />
+            Hide never-present ({zeroCount})
+          </label>
+          <button style={smallGhost} onClick={load} disabled={loading} title="Refresh">
+            <Icon name="undo" size={13} /> Refresh
+          </button>
+        </div>
+      </div>
+
+      {loading ? (
+        <Panel><div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div></Panel>
+      ) : shown.length === 0 ? (
+        <Panel><EmptyNote icon="gauge" title="No attendance to analyse" sub={`Nothing recorded in this window${hideZero && zeroCount ? ` (${zeroCount} never-present hidden)` : ''}.`} /></Panel>
+      ) : (
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 18 }}>
+            {[
+              { label: 'Operators', value: overview.n, color: 'var(--t1)' },
+              { label: 'Avg attendance', value: `${overview.avg}%`, color: overview.avg >= 75 ? 'var(--ok-fg)' : 'var(--warn-fg)' },
+              { label: 'Reliable', value: overview.reliable, color: 'var(--ok-fg)' },
+              { label: 'Steady', value: overview.steady, color: 'var(--info-fg)' },
+              { label: 'At risk', value: overview.risk, color: overview.risk ? 'var(--bad-fg)' : 'var(--t1)' },
+            ].map((c) => (
+              <div key={c.label} style={{ background: 'var(--surface-2)', borderRadius: 'var(--r-sm)', padding: '11px 13px' }}>
+                <div style={{ fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--font-ui)' }}>{c.label}</div>
+                <div className="num" style={{ fontSize: 22, fontWeight: 700, marginTop: 3, color: c.color }}>{c.value}</div>
+              </div>
+            ))}
+          </div>
+
+          {sections.map((sec) => (
+            <Panel key={sec.dept} pad={14} style={{ marginBottom: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 14, marginBottom: 10, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ fontFamily: 'var(--font-ui)', fontSize: 15, fontWeight: 700, color: 'var(--t1)' }}>{capitalize(sec.dept)}</span>
+                  <span className="num" style={{ fontSize: 11.5, color: 'var(--t3)' }}>{sec.ops.length} operators · {sec.avg}% avg</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                  <div style={{ width: 150, height: 6, borderRadius: 3, overflow: 'hidden', display: 'flex' }}>
+                    {[['reliable', 'var(--ok-fg)'], ['steady', 'var(--info-fg)'], ['irregular', 'var(--warn-fg)'], ['critical', 'var(--bad-fg)']].map(([k, col]) =>
+                      sec.counts[k] ? <span key={k} title={`${sec.counts[k]} ${k}`} style={{ flex: sec.counts[k], background: col }} /> : null
+                    )}
+                  </div>
+                  <span className="num" style={{ fontSize: 10.5, color: 'var(--t4)' }}>
+                    {sec.counts.reliable}·{sec.counts.steady}·{sec.counts.irregular}·{sec.counts.critical}
+                  </span>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                {sec.ops.map((o, i) => {
+                  const tier = tierOf(o.attendance_rate || 0);
+                  const hint = absentDowHint(o.dow_absent);
+                  const arr = fmtMin(o.avg_arrival_min);
+                  const td = o.trend_delta || 0;
+                  return (
+                    <div key={o.operator_id} style={{ display: 'grid',
+                      gridTemplateColumns: '210px 92px 56px 92px minmax(120px, 1fr) 156px', gap: 12, alignItems: 'center',
+                      padding: '9px 2px', borderTop: i ? '1px solid var(--border)' : 'none' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
+                        <Avatar name={o.name} size={26} />
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--t1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{o.name || '—'}</div>
+                          <div className="num" style={{ fontSize: 10, color: 'var(--t4)' }}>{o.employee_id || ''}</div>
+                        </div>
+                      </div>
+                      <ToneBadge tone={tier.tone} style={{ justifySelf: 'start' }}>{tier.label}</ToneBadge>
+                      <span className="num" style={{ fontSize: 14, fontWeight: 700, color: (o.attendance_rate || 0) >= 75 ? 'var(--t1)' : 'var(--bad-fg)' }}>{o.attendance_rate || 0}%</span>
+                      <span className="num" style={{ fontSize: 11.5, color: 'var(--t2)' }} title={`Current streak ${o.current_streak || 0} · longest ${o.longest_streak || 0} (working days)`}>
+                        {o.current_streak || 0}d <span style={{ color: 'var(--t4)' }}>/ {o.longest_streak || 0}</span>
+                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                        <span style={{ display: 'flex', alignItems: 'center', flexShrink: 0, fontSize: 12, color: td >= 5 ? 'var(--ok-fg)' : td <= -5 ? 'var(--bad-fg)' : 'var(--t4)' }}
+                          title={`Trend ${td > 0 ? '+' : ''}${td}pp (recent vs earlier half)`}>
+                          {td >= 5 ? <Icon name="arrowUp" size={13} /> : td <= -5 ? <Icon name="arrowDown" size={13} /> : '–'}
+                        </span>
+                        <div style={{ display: 'flex', gap: cellGap, overflow: 'hidden' }} title={`${o.present_days}/${o.working_days} working days present`}>
+                          {(o.day_strip || '').split('').map((ch, idx) => {
+                            let bg = 'var(--surface-2)', bd = 'none';
+                            if (ch === '1') { bg = 'var(--ok-fg)'; }
+                            else if (ch === '0') { bg = 'rgba(222,42,42,0.20)'; bd = '1px solid var(--bad-bd)'; }
+                            return <span key={idx} style={{ width: cellW, height: 14, borderRadius: 2, background: bg, border: bd, flexShrink: 0 }} />;
+                          })}
+                        </div>
+                      </div>
+                      <div style={{ textAlign: 'right', lineHeight: 1.35 }}>
+                        {hint && <div style={{ fontSize: 10.5, color: 'var(--warn-fg)', fontFamily: 'var(--font-ui)' }}>{hint}</div>}
+                        <div className="num" style={{ fontSize: 10.5, color: 'var(--t4)' }}>
+                          {arr ? `avg ${arr}` : 'no day shifts'}{o.late_days ? ` · ${o.late_days} late` : ''}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </Panel>
+          ))}
+
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 4, fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--font-ui)' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: 'var(--ok-fg)' }} /> Present</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: 'rgba(222,42,42,0.20)', border: '1px solid var(--bad-bd)' }} /> Absent</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: 'var(--surface-2)' }} /> Before joining</span>
+            <span style={{ color: 'var(--t4)' }}>· streak = current / longest · trend = recent vs earlier half · newest day on the right</span>
+          </div>
+        </>
+      )}
     </div>
   );
 }
