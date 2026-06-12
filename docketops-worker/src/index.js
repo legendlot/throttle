@@ -763,6 +763,87 @@ async function getChecklistTemplate(url, auth, env) {
   });
 }
 
+// Oversight (R1): per-person adherence for a date, scoped to people the caller may monitor.
+async function getChecklistOversight(url, auth, env) {
+  const date = url.searchParams.get('date') || istDateStr();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return err('invalid date', 400);
+  const scope = await peopleInScope(auth, env);
+  const ids = [...scope];
+  if (!ids.length) return ok({ date, people: [] });
+
+  const [empRes, deptRes] = await Promise.all([
+    sbPodium(`/rest/v1/employees?id=in.${inList(ids)}&status=eq.active&select=id,full_name,department_id&order=full_name.asc`, env),
+    sbPodium(`/rest/v1/departments?select=id,name`, env),
+  ]);
+  const emps = empRes.data || [];
+  const deptName = {}; (deptRes.data || []).forEach(d => { deptName[d.id] = d.name; });
+
+  // Flat recurring tasks for everyone in scope (one read), then completions for the date.
+  const recRes = await sbDocket(
+    `/rest/v1/tasks?is_recurring=eq.true&status=neq.abandoned&owner_employee_id=in.${inList(ids)}&select=id,owner_employee_id,recurrence`, env);
+  const recByEmp = {}; (recRes.data || []).forEach(t => {
+    if (isDueOn(t.recurrence, date) && !isExpired(t.recurrence, date)) (recByEmp[t.owner_employee_id] ||= []).push(t.id);
+  });
+  const allRecIds = Object.values(recByEmp).flat();
+  const recDone = new Set();
+  if (allRecIds.length) {
+    const cRes = await sbDocket(`/rest/v1/checklist_completions?task_id=in.${inList(allRecIds)}&occurrence_date=eq.${date}&select=task_id`, env);
+    (cRes.ok ? cRes.data : []).forEach(c => recDone.add(c.task_id));
+  }
+
+  // Assignments → templates due today → items; completions for the date.
+  const asgRes = await sbDocket(
+    `/rest/v1/checklist_assignments?employee_id=in.${inList(ids)}&unassigned_at=is.null&select=template_id,employee_id`, env);
+  const asg = asgRes.data || [];
+  const tmplIds = uniq(asg.map(a => a.template_id));
+  const tmplRes = tmplIds.length
+    ? await sbDocket(`/rest/v1/checklist_templates?id=in.${inList(tmplIds)}&archived_at=is.null&is_active=eq.true&select=id,name,recurrence`, env)
+    : { data: [] };
+  const tmplById = {}; (tmplRes.data || []).forEach(t => { tmplById[t.id] = t; });
+  const dueTmplIds = (tmplRes.data || []).filter(t => isDueOn(t.recurrence, date) && !isExpired(t.recurrence, date)).map(t => t.id);
+  const secRes = dueTmplIds.length
+    ? await sbDocket(`/rest/v1/checklist_template_sections?template_id=in.${inList(dueTmplIds)}&select=id,template_id,title&order=sort_order.asc`, env)
+    : { data: [] };
+  const sections = secRes.data || [];
+  const secIds = sections.map(s => s.id);
+  const itemRes = secIds.length
+    ? await sbDocket(`/rest/v1/checklist_template_items?section_id=in.${inList(secIds)}&select=id,section_id`, env)
+    : { data: [] };
+  const items = itemRes.data || [];
+  const itemIds = items.map(i => i.id);
+  // Completions across ALL people in scope for the date (one read), keyed by item+employee.
+  const itemComplRes = itemIds.length
+    ? await sbDocket(`/rest/v1/checklist_item_completions?template_item_id=in.${inList(itemIds)}&occurrence_date=eq.${date}&select=template_item_id,employee_id`, env)
+    : { data: [] };
+  const doneByEmpItem = new Set((itemComplRes.data || []).map(c => `${c.employee_id}|${c.template_item_id}`));
+
+  const itemsBySec = {}; items.forEach(i => { (itemsBySec[i.section_id] ||= []).push(i.id); });
+  const secByTmpl = {}; sections.forEach(s => { (secByTmpl[s.template_id] ||= []).push(s); });
+  const tmplsByEmp = {}; asg.forEach(a => { if (tmplById[a.template_id]) (tmplsByEmp[a.employee_id] ||= []).push(a.template_id); });
+
+  const people = emps.map(e => {
+    const recIds = recByEmp[e.id] || [];
+    const recurring = { done: recIds.filter(id => recDone.has(id)).length, total: recIds.length };
+    const templates = (tmplsByEmp[e.id] || []).filter(tid => dueTmplIds.includes(tid)).map(tid => {
+      const secs = secByTmpl[tid] || [];
+      let done = 0, total = 0; const incompleteSections = [];
+      for (const s of secs) {
+        const sItemIds = itemsBySec[s.id] || [];
+        const sDone = sItemIds.filter(iid => doneByEmpItem.has(`${e.id}|${iid}`)).length;
+        done += sDone; total += sItemIds.length;
+        if (sItemIds.length && sDone < sItemIds.length) incompleteSections.push(s.title);
+      }
+      return { template_id: tid, name: tmplById[tid].name, done, total, incomplete_sections: incompleteSections };
+    });
+    return {
+      employee_id: e.id, full_name: e.full_name, department_name: deptName[e.department_id] || null,
+      recurring, templates,
+    };
+  });
+  // Only surface people who actually have something scheduled today.
+  return ok({ date, people: people.filter(p => p.recurring.total > 0 || p.templates.length > 0) });
+}
+
 async function getDocketRoles(url, auth, env) {
   const r = await sbStore(`/rest/v1/docket_roles?select=*&order=is_system.desc,label.asc`, env);
   if (!r.ok) return err('db_error', 500);
