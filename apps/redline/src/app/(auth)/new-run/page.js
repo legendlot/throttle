@@ -24,7 +24,7 @@ const tabBtn = (active) => ({ background: active ? 'var(--yellow)' : 'transparen
 const th = { padding: '7px 10px', fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--t3)', textAlign: 'left', borderBottom: '1px solid var(--border)' };
 const td = { padding: '5px 8px', borderBottom: '1px solid rgba(64,64,64,.4)' };
 
-const LINES_INHOUSE = ['L1', 'L2', 'L3'];
+const LINES_INHOUSE = ['L1', 'L2', 'L3', 'L4', 'L5'];
 const LINES_REPAIR  = ['L1', 'L2', 'L3', 'L4', 'L5'];
 const TABS = [
   { id: 'fresh',      label: 'Fresh' },

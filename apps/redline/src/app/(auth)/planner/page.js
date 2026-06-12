@@ -36,6 +36,15 @@ function parseCSVRows(text) {
 const MONTHS = ['january','february','march','april','may','june',
                 'july','august','september','october','november','december'];
 
+// Match a month token against full names OR 3-letter abbreviations ("Jun" → June).
+// Google Sheets CSV exports often write date headers as "Jun 1" not "June 1".
+function monthIndex(tok) {
+  const t = (tok || '').trim().toLowerCase();
+  const i = MONTHS.indexOf(t);
+  if (i !== -1) return i;
+  return MONTHS.findIndex(m => m.slice(0, 3) === t.slice(0, 3));
+}
+
 function formatLocalISO(d) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -61,7 +70,7 @@ function parseDateStr(str) {
 
   const mdy = s.match(/^([A-Za-z]+)\s+(\d{1,2})(?:,?\s*(\d{4}))?$/);
   if (mdy) {
-    const monthIdx = MONTHS.indexOf(mdy[1].toLowerCase());
+    const monthIdx = monthIndex(mdy[1]);
     if (monthIdx !== -1) {
       const year = mdy[3] ? parseInt(mdy[3]) : new Date().getFullYear();
       return new Date(year, monthIdx, parseInt(mdy[2]));
@@ -70,7 +79,7 @@ function parseDateStr(str) {
 
   const dmy = s.match(/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})$/);
   if (dmy) {
-    const monthIdx = MONTHS.indexOf(dmy[2].toLowerCase());
+    const monthIdx = monthIndex(dmy[2]);
     if (monthIdx !== -1) return new Date(parseInt(dmy[3]), monthIdx, parseInt(dmy[1]));
   }
 
