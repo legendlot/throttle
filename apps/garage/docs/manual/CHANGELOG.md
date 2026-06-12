@@ -6,6 +6,21 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md`).
 
+## [1.7.0] - 2026-06-13
+
+### Changed
+- Rewrote **Signing In & Getting Around** for the redesigned shell: the accordion sidebar (only the active group expands), the user-managed **Pinned** shortcuts list, the collapsible icon rail, the **Setup & More** drawer, and the **command bar** (Cmd/Ctrl+K). Clicking the GARAGE bar collapses the sidebar.
+- Re-grouped the manual to the new four-destination IA: **Overview, Inventory, Fulfilment, Returns**, plus a **Setup & More** part (Reports, Activity Log, Producibility, Manpower, Library, Users).
+- Rewrote the **Dashboard** chapter as **Overview**, the triage home: a clickable KPI rail and a prioritised "Needs Attention Now" feed that now contains what used to be the Alerts screen.
+- **Receiving**: documented Upcoming Shipments listing above Active Shipments, and the status now reading GRN'd / Received (green) once a shipment is fully booked.
+
+### Added
+- **Pick Scans** chapter under Fulfilment: the searchable run picker (each option shows product and status) and the per-run scan audit with a single Scan time.
+
+### Removed
+- Dropped the standalone **Alerts** chapter (folded into Overview).
+- Removed **Unit Restock**, **Dispatch Roster** and **Dispatch Counts**: these dispatch-team screens moved to Redline. Old Garage links redirect there.
+
 ## [1.5.0] - 2026-06-08
 
 ### Removed

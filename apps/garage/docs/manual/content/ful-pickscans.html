@@ -1,0 +1,21 @@
+<p class="lead">Pick Scans is a per-run audit of what was physically scanned at the store-issue pick. Choose a run and you see every bag scanned for it, grouped by part, with the bag count, total quantity and the time it was scanned. Use it to check that what left the store for a run matches what the run needed.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Auditing the bags scanned per run.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read-only, with CSV export.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sto">Store</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Lives under</div><div class="g-val">Fulfilment.</div></div>
+</div>
+
+<h2 class="sec">Pick a run</h2>
+<ol class="steps">
+  <li><span class="s-title">Search the run.</span> The run box is searchable: type a run number, a product, or a status. Each option shows the run number alongside its <strong>product</strong> and a colour-coded <strong>status</strong>, so a bare number is never the only thing you have to go on.</li>
+  <li><span class="s-title">Load it.</span> Pick the run (or press <strong>Load</strong>). The panel header shows the product, status, and the totals: parts, bags and units scanned.</li>
+  <li><span class="s-title">Read the table.</span> One row per part: part code, name, bag count, total quantity, and the time it was scanned.</li>
+  <li><span class="s-title">Export if needed.</span> <strong>CSV</strong> downloads the current run&rsquo;s audit.</li>
+</ol>
+
+<div class="callout note">
+  <div class="c-title">&#9432; One scan time per part</div>
+  <p>Each part row shows a single <strong>Scanned</strong> time. If a run has not been picked yet, the table is empty and the panel says nothing has been scanned for it. This screen is an audit view only; the actual picking happens in the Issue Queue and on the floor scanner&rsquo;s Store Issue station.</p>
+</div>

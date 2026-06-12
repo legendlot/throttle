@@ -2,8 +2,8 @@
   "title": "Garage",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to store, inventory, fulfilment, returns and procurement at Legend of Toys.",
-  "version": "1.6.0",
-  "date": "2026-06-12",
+  "version": "1.7.0",
+  "date": "2026-06-13",
   "app_url": "garage.legendoftoys.com",
   "owner": "Legend of Toys",
   "roles": {
@@ -70,11 +70,11 @@
     },
     {
       "part": "Overview",
-      "subtitle": "The morning dashboard, alerts, the system-wide activity log, reports and producibility.",
+      "subtitle": "Triage home: the day at a glance and what needs you now.",
       "chapters": [
         {
           "id": "dashboard",
-          "title": "Dashboard",
+          "title": "Overview",
           "route": "/dashboard",
           "file": "ov-dashboard.html",
           "roles": [
@@ -83,53 +83,12 @@
             "prc",
             "adm"
           ]
-        },
-        {
-          "id": "alerts",
-          "title": "Alerts",
-          "route": "/alerts",
-          "file": "ov-alerts.html",
-          "roles": [
-            "sto",
-            "prd",
-            "prc",
-            "adm"
-          ]
-        },
-        {
-          "id": "activity",
-          "title": "Activity Log",
-          "route": "/activity",
-          "file": "ov-activity.html",
-          "roles": [
-            "adm"
-          ]
-        },
-        {
-          "id": "reports",
-          "title": "Reports",
-          "route": "/reports",
-          "file": "ov-reports.html",
-          "roles": [
-            "adm"
-          ]
-        },
-        {
-          "id": "producibility",
-          "title": "Producibility",
-          "route": "/producibility",
-          "file": "ov-producibility.html",
-          "roles": [
-            "prd",
-            "sto",
-            "adm"
-          ]
         }
       ]
     },
     {
       "part": "Inventory",
-      "subtitle": "The stock ledger, recording goods received, and receiving against shipments.",
+      "subtitle": "Receiving goods, stock levels, counts and adjustments.",
       "chapters": [
         {
           "id": "stock",
@@ -171,42 +130,6 @@
             "prd",
             "adm"
           ]
-        }
-      ]
-    },
-    {
-      "part": "Store",
-      "subtitle": "Issuing parts, verifying flushes, damage, cycle counts, adjustments, direct issuance, gate passes, restocking and daily logs.",
-      "chapters": [
-        {
-          "id": "issue-queue",
-          "title": "Issue Queue",
-          "route": "/issue-queue",
-          "file": "store-issuequeue.html",
-          "roles": [
-            "sto",
-            "adm"
-          ]
-        },
-        {
-          "id": "flush-verify",
-          "title": "Flush Verify",
-          "route": "/flush-verify",
-          "file": "store-flushverify.html",
-          "roles": [
-            "sto",
-            "adm"
-          ]
-        },
-        {
-          "id": "damage-ledger",
-          "title": "Damage / Scrap Ledger",
-          "route": "/damage-ledger",
-          "file": "store-damage.html",
-          "roles": [
-            "sto",
-            "adm"
-          ]
         },
         {
           "id": "cycle-counts",
@@ -229,10 +152,46 @@
           ]
         },
         {
-          "id": "dispatch-counts",
-          "title": "Dispatch Counts",
-          "route": "/dispatch/unit-counts",
-          "file": "store-dispatchcounts.html",
+          "id": "damage-ledger",
+          "title": "Damage / Scrap Ledger",
+          "route": "/damage-ledger",
+          "file": "store-damage.html",
+          "roles": [
+            "sto",
+            "adm"
+          ]
+        }
+      ]
+    },
+    {
+      "part": "Fulfilment",
+      "subtitle": "Issuing parts to runs, picking, dispatch handover and history.",
+      "chapters": [
+        {
+          "id": "issue-queue",
+          "title": "Issue Queue",
+          "route": "/issue-queue",
+          "file": "store-issuequeue.html",
+          "roles": [
+            "sto",
+            "adm"
+          ]
+        },
+        {
+          "id": "pick-scans",
+          "title": "Pick Scans",
+          "route": "/library/pick-scans",
+          "roles": [
+            "sto",
+            "adm"
+          ],
+          "file": "ful-pickscans.html"
+        },
+        {
+          "id": "flush-verify",
+          "title": "Flush Verify",
+          "route": "/flush-verify",
+          "file": "store-flushverify.html",
           "roles": [
             "sto",
             "adm"
@@ -260,40 +219,10 @@
           ]
         },
         {
-          "id": "unit-restock",
-          "title": "Unit Restock",
-          "route": "/restock",
-          "file": "store-restock.html",
-          "roles": [
-            "sto",
-            "adm"
-          ]
-        },
-        {
           "id": "store-history",
           "title": "Store History",
           "route": "/store-history",
           "file": "store-history.html",
-          "roles": [
-            "sto",
-            "adm"
-          ]
-        },
-        {
-          "id": "manpower",
-          "title": "Manpower",
-          "route": "/manpower",
-          "file": "store-manpower.html",
-          "roles": [
-            "sto",
-            "adm"
-          ]
-        },
-        {
-          "id": "dispatch",
-          "title": "Dispatch Activity",
-          "route": "/dispatch",
-          "file": "store-dispatch.html",
           "roles": [
             "sto",
             "adm"
@@ -303,7 +232,7 @@
     },
     {
       "part": "Returns",
-      "subtitle": "The journey of a returned unit: receive, triage, then route to re-dispatch, repair or write-off.",
+      "subtitle": "Inbound returns, inspection, disposition and write-offs.",
       "chapters": [
         {
           "id": "ret-shipments",
@@ -368,7 +297,7 @@
     },
     {
       "part": "Scanner",
-      "subtitle": "The Store department's stations on the floor scanner: how to get in, and what each station does.",
+      "subtitle": "The store-team stations on the floor scanner.",
       "chapters": [
         {
           "id": "scan-basics",
@@ -415,9 +344,48 @@
       ]
     },
     {
-      "part": "Library",
-      "subtitle": "BOM downloads, the cross-product parts database, a part's full history, and bag sizes.",
+      "part": "Setup & More",
+      "subtitle": "Reference, insight and do-once configuration, tucked in the drawer.",
       "chapters": [
+        {
+          "id": "reports",
+          "title": "Reports",
+          "route": "/reports",
+          "file": "ov-reports.html",
+          "roles": [
+            "adm"
+          ]
+        },
+        {
+          "id": "activity",
+          "title": "Activity Log",
+          "route": "/activity",
+          "file": "ov-activity.html",
+          "roles": [
+            "adm"
+          ]
+        },
+        {
+          "id": "producibility",
+          "title": "Producibility",
+          "route": "/producibility",
+          "file": "ov-producibility.html",
+          "roles": [
+            "prd",
+            "sto",
+            "adm"
+          ]
+        },
+        {
+          "id": "manpower",
+          "title": "Manpower",
+          "route": "/manpower",
+          "file": "store-manpower.html",
+          "roles": [
+            "sto",
+            "adm"
+          ]
+        },
         {
           "id": "lib-downloads",
           "title": "BOM Downloads",
@@ -461,12 +429,21 @@
             "prc",
             "adm"
           ]
+        },
+        {
+          "id": "users",
+          "title": "Users & Roles",
+          "route": "/users",
+          "file": "usr-users.html",
+          "roles": [
+            "adm"
+          ]
         }
       ]
     },
     {
       "part": "Procurement",
-      "subtitle": "From reorder requests through purchase orders, vendors, forwarders and new-product registration.",
+      "subtitle": "Read-only purchase-order reference (procurement lives in Snorkel).",
       "chapters": [
         {
           "id": "proc-overview",
@@ -526,21 +503,6 @@
           "file": "proc-register.html",
           "roles": [
             "prc",
-            "adm"
-          ]
-        }
-      ]
-    },
-    {
-      "part": "Users",
-      "subtitle": "Managing staff accounts and the role-based permission matrix.",
-      "chapters": [
-        {
-          "id": "users",
-          "title": "Users & Roles",
-          "route": "/users",
-          "file": "usr-users.html",
-          "roles": [
             "adm"
           ]
         }

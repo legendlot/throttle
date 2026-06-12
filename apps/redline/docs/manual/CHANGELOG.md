@@ -6,6 +6,14 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md` → Versioning).
 
+## [1.5.0] - 2026-06-13
+
+### Added
+- **Dispatch** part gains three screens that moved over from Garage so the dispatch team works them in one place: **Unit Restock** (put shipped units back into sellable stock), **Dispatch Roster** (daily activity and hours log for lines D1/D2), and **Dispatch Counts** (physical headcount of dispatch-ready units). Routes: /restock, /dispatch-roster, /dispatch-counts.
+
+### Changed
+- Navigation chapter notes the three new Dispatch tools.
+
 ## [1.4.0] - 2026-06-12
 
 ### Changed

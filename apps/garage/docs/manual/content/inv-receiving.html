@@ -9,7 +9,7 @@
 
 <h2 class="sec">The receiving workflow</h2>
 <ol class="steps">
-  <li><span class="s-title">Log the shipment.</span> Use <strong>+ New Shipment</strong>: supplier (required), optionally a PO reference (auto-fills supplier and origin), arrival date, expected boxes, and the receive format (Parts/CKD or FBU Units). Pending POs appear as <strong>Upcoming Shipments</strong> you can turn into a shipment in one click.</li>
+  <li><span class="s-title">Log the shipment.</span> Use <strong>+ New Shipment</strong>: supplier (required), optionally a PO reference (auto-fills supplier and origin), arrival date, expected boxes, and the receive format (Parts/CKD or FBU Units). Pending POs are listed at the top under <strong>Upcoming Shipments</strong>; turn one into a shipment in one click. The shipments you are working on sit below, under <strong>Active Shipments</strong>.</li>
   <li><span class="s-title">Add shipping marks (boxes).</span> Inside the shipment, add marks one at a time or as a numbered range (for example BOX-1 to BOX-30, skipping any missing).</li>
   <li><span class="s-title">Open a box and count it.</span> For each expected line, enter how many arrived OK versus damaged. Items not on the list go under <strong>Unexpected Items</strong>. Submit the box (optionally printing bag labels for the OK quantity).</li>
   <li><span class="s-title">Reconcile.</span> The Reconciliation panel shows expected versus counted per line, with a status: Matched, Short, Over, Has Damage, Pending or GRN Raised.</li>
@@ -19,4 +19,9 @@
 <div class="callout warn">
   <div class="c-title">&#9888; A few things to know</div>
   <p>Bag labels are generated from the <strong>OK</strong> quantity only; damaged pieces never get labels. Re-opening a counted box to fix it runs in <strong>amend</strong> mode, which overwrites all that box&rsquo;s lines with whatever you enter (including zeros), so do not blank a field you did not mean to clear. <strong>Raise GRN</strong> only picks up lines that have a count and no existing GRN; re-counting after a GRN will not re-raise it.</p>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Reading the status column</div>
+  <p>A shipment&rsquo;s status shows where it is. Once every line is booked, it switches from <strong>Arriving</strong> to <strong>GRN&rsquo;d</strong> (or <strong>Received</strong> for a box-only shipment) in green, so you can tell at a glance which arrivals are still open and which are fully done. The Progress column shows the running count (for example &ldquo;2 / 2 GRN&rsquo;d&rdquo;).</p>
 </div>
