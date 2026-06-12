@@ -1639,7 +1639,7 @@ async function deleteScratchNote(body, auth, env) {
 const GET_ACTIONS = {
   getMe, getDepartments, getEmployees,
   getTasks, getTask, getDashboard,
-  getChecklist,
+  getChecklist, getChecklistTemplates, getChecklistTemplate, getChecklistOversight,
   getPrograms, getSpaces, getSpaceMembers, getAllSpaces,
   getScratchNotes,
   getDocketRoles, getDocketUsers, getDashboardSharing,
@@ -1647,6 +1647,9 @@ const GET_ACTIONS = {
 const POST_ACTIONS = {
   createTask, createSubtask, updateTask, changeStatus, reviseDeadline, abandonTask, setParent, moveTask,
   createRecurringTask, updateRecurrence, toggleChecklistOccurrence,
+  saveChecklistTemplate, archiveChecklistTemplate,
+  assignChecklistTemplate, unassignChecklistTemplate,
+  toggleChecklistItem, saveSectionComment,
   addCollaborator, removeCollaborator,
   addDocument, removeDocument,
   addComment, editComment, deleteComment,
