@@ -1,147 +1,145 @@
 'use client';
+/* ════════════════════════════════════════════════════════════
+   LINES (Production · Runs) — Pit Wall v2. Per-line run cards
+   with a completion ShiftBattery + INW→QC→PKG→OUT funnel +
+   crew/downtime/FPY; operator-output table; station-takt matrix
+   exposing the bottleneck. Prototype: redesign-reference/app/lines.jsx.
+   Data unchanged (getLineView + getTaktTime, first-load-only takt).
+   Prototype pause/reassign/open actions omitted — no backing API.
+   ════════════════════════════════════════════════════════════ */
 import { useCallback, useRef, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
-import { Spinner, Panel, StatusBadge } from '@throttle/ui';
+import { Spinner } from '@throttle/ui';
 import { todayStr } from '@throttle/domain';
 import { useAutoRefresh } from '../../../hooks/useAutoRefresh.js';
 import { useRefreshState } from '../layout.js';
+import {
+  Icon, ShiftBattery, Panel, SectionHead, ToneBadge,
+  lineColor, lineRgb, fmt,
+} from '../../../components/kit/index.js';
 
-function fmt(n) { return n != null ? Number(n).toLocaleString('en-IN') : '0'; }
+const FUNNEL = [
+  { key: 'inw',  label: 'INW',  color: 'var(--blue-bright)' },
+  { key: 'qc',   label: 'QC Pass', color: 'var(--ok-fg)' },
+  { key: 'pkg',  label: 'PKG',  color: 'var(--yellow)' },
+  { key: 'out',  label: 'Out',  color: 'var(--green-bright)' },
+];
 
-// ── Line Cards ────────────────────────────────────────────────
-function LineCards({ lines, crMap }) {
-  crMap = crMap || {};
-  const filtered = (lines || []).filter(l => l.line !== 'SHARED' && !(l.line || '').startsWith('D'));
+function fpyTone(p) { return p >= 95 ? 'ok' : p >= 85 ? 'warn' : 'bad'; }
 
-  if (!filtered.length) {
-    return <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>🏭 No line data for today</div>;
-  }
+// ── Per-line run card ─────────────────────────────────────────
+function LineCard({ l, crMap }) {
+  const pct = Number(l.completion_pct) || 0;
+  const target = Number(l.target_qty) || 0;
+  const dispatched = (Number(l.rtr_count) || 0) + (Number(l.rte_count) || 0);
+  // battery 'done' tracks the official completion % against target
+  const done = target ? Math.round((pct / 100) * target) : dispatched;
+
+  const counts = {
+    inw: crMap[`${l.line}:INW:car`] != null ? crMap[`${l.line}:INW:car`] : (Number(l.inw_count) || 0),
+    qc: Number(l.qc_pass_count) || 0,
+    pkg: Number(l.pkg_count) || 0,
+    out: dispatched,
+  };
+  const maxFunnel = Math.max(...FUNNEL.map(f => counts[f.key]), 1);
+  const passRate = Number(l.pass_rate_pct) || 0;
+  const firstScan = l.first_scan_at
+    ? new Date(l.first_scan_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' })
+    : null;
+  const lc = lineColor(l.line);
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 12 }}>
-      {filtered.map(l => {
-        const pct      = l.completion_pct || 0;
-        const passRate = l.pass_rate_pct  || 0;
-        const pctColor = pct >= 90 ? 'var(--green)' : pct >= 60 ? 'var(--yellow)' : pct >= 30 ? 'var(--orange)' : 'var(--red)';
-        const fillBg   = pct >= 90 ? 'var(--green)' : pct >= 60 ? 'var(--yellow)'  : pct >= 30 ? 'var(--orange)' : 'var(--red)';
-        const badgeVariant = pct >= 90 ? 'success' : pct >= 60 ? 'brand' : pct >= 30 ? 'warning' : 'error';
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)',
+      boxShadow: 'var(--shadow-card)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      {/* header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 16px', borderBottom: '1px solid var(--border)' }}>
+        <span style={{ width: 9, height: 9, borderRadius: '50%', background: lc, flexShrink: 0 }} />
+        <span className="font-display" style={{ fontSize: 15, fontWeight: 700, letterSpacing: '0.05em', color: 'var(--t1)' }}>{l.line || '—'}</span>
+        <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {l.product || (l.run_no ? 'Repair run' : 'No run assigned')}
+        </span>
+        <span className="num" style={{ fontSize: 11, color: 'var(--t4)', marginLeft: 'auto' }}>{l.run_no || ''}</span>
+      </div>
 
-        const inwCar  = crMap[`${l.line}:INW:car`];
-        const inwRem  = crMap[`${l.line}:INW:remote`];
-        const passCar = crMap[`${l.line}:QC_PASS:car`];
-        const passRem = crMap[`${l.line}:QC_PASS:remote`];
-        const failCar = crMap[`${l.line}:QC_FAIL:car`];
-        const failRem = crMap[`${l.line}:QC_FAIL:remote`];
+      <div style={{ padding: 16 }}>
+        {/* completion battery */}
+        <div style={{ marginBottom: 14 }}>
+          <ShiftBattery lineId={l.line} done={done} target={target} segments={16} height={24} />
+        </div>
 
-        const firstScan = l.first_scan_at
-          ? new Date(l.first_scan_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' })
-          : null;
+        {/* funnel */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 12 }}>
+          {FUNNEL.map(f => {
+            const v = counts[f.key];
+            return (
+              <div key={f.key} style={{ background: 'var(--surface-2)', borderRadius: 'var(--r-sm)', padding: '9px 10px', borderTop: `2px solid ${f.color}` }}>
+                <div className="eyebrow">{f.label}</div>
+                <div className="num" style={{ fontSize: 17, fontWeight: 700, color: 'var(--t1)', marginTop: 4 }}>{fmt(v)}</div>
+                <div style={{ height: 3, borderRadius: 2, background: 'var(--bg-2)', marginTop: 6, overflow: 'hidden' }}>
+                  <div style={{ height: '100%', width: `${(v / maxFunnel) * 100}%`, background: f.color, borderRadius: 2 }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
 
-        const statStyle = { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 };
-        const valStyle  = (color) => ({ fontFamily: 'var(--mono)', fontSize: 18, fontWeight: 700, color: color || 'var(--t1)' });
-        const lblStyle  = { fontSize: 9, color: 'var(--t3)', letterSpacing: '0.12em', textTransform: 'uppercase' };
-        const subStyle  = { fontSize: 8, color: 'var(--t3)', marginTop: 1 };
-
-        return (
-          <Panel key={l.line} style={{ borderRadius: 6 }} padding={14}>
-            {/* Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
-              <div>
-                <div style={{ fontFamily: 'var(--cond)', fontSize: 16, fontWeight: 700, color: 'var(--t1)' }}>{l.line || '—'}</div>
-                <div style={{ fontSize: 12, color: 'var(--t2)', marginTop: 2 }}>{l.product || (l.run_no ? 'Repair run' : 'No run assigned')}</div>
-              </div>
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontFamily: 'var(--cond)', fontSize: 22, fontWeight: 700, color: pctColor }}>{pct}%</div>
-                <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 1 }}>{l.run_no || ''}</div>
-              </div>
-            </div>
-
-            {/* Progress bar */}
-            <div style={{ background: 'var(--border)', borderRadius: 3, height: 5, marginBottom: 12, overflow: 'hidden' }}>
-              <div style={{ height: '100%', width: `${Math.min(pct, 100)}%`, background: fillBg, borderRadius: 3, transition: 'width .5s' }} />
-            </div>
-
-            {/* Stats grid */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 4, marginBottom: 10 }}>
-              <div style={statStyle}>
-                <div style={valStyle('var(--t1)')}>{fmt(inwCar != null ? inwCar : l.inw_count)}</div>
-                <div style={lblStyle}>INW</div>
-                <div style={subStyle}>{fmt(l.inw_remote_count || 0)}R</div>
-              </div>
-              <div style={statStyle}>
-                <div style={valStyle('var(--green)')}>{fmt(l.qc_pass_count)}</div>
-                <div style={lblStyle}>QC Pass</div>
-                {passCar != null && <div style={subStyle}>{passCar}C · {passRem || 0}R</div>}
-              </div>
-              <div style={statStyle}>
-                <div style={valStyle('var(--red)')}>{fmt(l.qc_fail_count)}</div>
-                <div style={lblStyle}>QC Fail</div>
-                {failCar != null && <div style={subStyle}>{failCar}C · {failRem || 0}R</div>}
-              </div>
-              <div style={statStyle}>
-                <div style={valStyle('var(--yellow)')}>{fmt(l.pkg_count)}</div>
-                <div style={lblStyle}>PKG</div>
-              </div>
-              <div style={statStyle}>
-                <div style={valStyle('var(--green)')}>{fmt((l.rtr_count || 0) + (l.rte_count || 0))}</div>
-                <div style={lblStyle}>Dispatched</div>
-                <div style={subStyle}>{fmt(l.rtr_count)}R · {fmt(l.rte_count)}E</div>
-              </div>
-            </div>
-
-            {/* Footer rows */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 10, color: 'var(--t3)', paddingTop: 8, borderTop: '1px solid var(--border)' }}>
-              <span>{fmt(l.active_operators)} operators · {fmt(l.downtime_mins)}m downtime</span>
-              <StatusBadge variant={badgeVariant}>{pct}% done</StatusBadge>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 10, color: 'var(--t3)', marginTop: 4 }}>
-              <span>Target: {fmt(l.target_qty)} · FPY: {passRate}%</span>
-              {firstScan && <span style={{ color: 'var(--t3)', marginLeft: 'auto' }}>⏱ {firstScan}</span>}
-            </div>
-          </Panel>
-        );
-      })}
+        {/* footer metrics */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, paddingTop: 10, borderTop: '1px solid var(--border)',
+          fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--t3)', flexWrap: 'wrap' }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <Icon name="users" size={13} /> <span className="num" style={{ color: 'var(--t2)' }}>{fmt(l.active_operators)}</span> crew
+          </span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <Icon name="clock" size={13} /> <span className="num" style={{ color: 'var(--t2)' }}>{fmt(l.downtime_mins)}</span>m down
+          </span>
+          {l.pass_rate_pct != null && (
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              FPY <ToneBadge tone={fpyTone(passRate)}>{passRate}%</ToneBadge>
+            </span>
+          )}
+          {firstScan && <span className="num" style={{ marginLeft: 'auto', color: 'var(--t4)' }}>⏱ {firstScan}</span>}
+        </div>
+      </div>
     </div>
   );
 }
 
-// ── Operator Table ────────────────────────────────────────────
+// ── Operator output table ─────────────────────────────────────
+const thStyle = { padding: '0 14px 9px', textAlign: 'left', whiteSpace: 'nowrap' };
+const tdBase = { padding: '10px 14px', borderTop: '1px solid var(--border)', whiteSpace: 'nowrap', verticalAlign: 'middle' };
+
 function OperatorTable({ ops }) {
   if (!ops.length) {
-    return <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>No operator data</div>;
+    return <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--t3)', fontFamily: 'var(--font-ui)', fontSize: 13 }}>No operator data</div>;
   }
-
   const sorted = [...ops].sort((a, b) => (a.operator_name || '').localeCompare(b.operator_name || ''));
-  const thStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
-  const tdStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 13, borderBottom: '1px solid rgba(64,64,64,.5)', whiteSpace: 'nowrap', color: 'var(--t1)' };
-
   return (
     <div style={{ overflowX: 'auto' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead>
           <tr>
-            {['Operator', 'Line', 'INW Cars', 'INW Remotes', 'QC Pass Cars', 'QC Pass Remotes', 'QC Fail', 'Pass Rate'].map(h => (
-              <th key={h} style={thStyle}>{h}</th>
+            {['Operator', 'Line', 'INW Cars', 'INW Rmt', 'QC Pass Cars', 'QC Pass Rmt', 'QC Fail', 'Pass Rate'].map((h, i) => (
+              <th key={h} className="eyebrow" style={{ ...thStyle, textAlign: i >= 2 ? 'right' : 'left' }}>{h}</th>
             ))}
           </tr>
         </thead>
         <tbody>
           {sorted.map((o, idx) => {
-            const pr = o.pass_rate_pct || 0;
-            const prColor = pr >= 95 ? 'var(--green)' : pr >= 85 ? 'var(--yellow)' : 'var(--red)';
+            const pr = Number(o.pass_rate_pct) || 0;
+            const prColor = pr >= 95 ? 'var(--ok-fg)' : pr >= 85 ? 'var(--warn-fg)' : 'var(--bad-fg)';
             return (
               <tr key={idx}>
-                <td style={{ ...tdStyle, color: 'var(--t1)' }}>{o.operator_name || '—'}</td>
-                <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{o.line || '—'}</td>
-                <td style={{ ...tdStyle, fontFamily: 'var(--mono)' }}>{fmt(o.inw_car_count)}</td>
-                <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{fmt(o.inw_remote_count)}</td>
-                <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--green)' }}>{fmt(o.qc_pass_car_count)}</td>
-                <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{fmt(o.qc_pass_remote_count)}</td>
-                <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: 'var(--red)' }}>{fmt(o.qc_fail_count)}</td>
-                <td style={{ ...tdStyle, fontFamily: 'var(--mono)', color: prColor }}>
-                  {o.pass_rate_pct != null ? o.pass_rate_pct + '%' : '—'}
+                <td style={{ ...tdBase, fontFamily: 'var(--font-ui)', color: 'var(--t1)' }}>{o.operator_name || '—'}</td>
+                <td style={tdBase}>
+                  {o.line ? <span className="num" style={{ fontSize: 10, fontWeight: 700, color: lineColor(o.line), background: `rgba(${lineRgb(o.line)},0.12)`, borderRadius: 3, padding: '1px 5px' }}>{o.line}</span> : <span style={{ color: 'var(--t4)' }}>—</span>}
                 </td>
+                <td className="num" style={{ ...tdBase, textAlign: 'right', color: 'var(--t1)' }}>{fmt(o.inw_car_count)}</td>
+                <td className="num" style={{ ...tdBase, textAlign: 'right', color: 'var(--t3)' }}>{fmt(o.inw_remote_count)}</td>
+                <td className="num" style={{ ...tdBase, textAlign: 'right', color: 'var(--ok-fg)' }}>{fmt(o.qc_pass_car_count)}</td>
+                <td className="num" style={{ ...tdBase, textAlign: 'right', color: 'var(--t3)' }}>{fmt(o.qc_pass_remote_count)}</td>
+                <td className="num" style={{ ...tdBase, textAlign: 'right', color: 'var(--bad-fg)' }}>{fmt(o.qc_fail_count)}</td>
+                <td className="num" style={{ ...tdBase, textAlign: 'right', color: prColor, fontWeight: 600 }}>{o.pass_rate_pct != null ? o.pass_rate_pct + '%' : '—'}</td>
               </tr>
             );
           })}
@@ -151,56 +149,56 @@ function OperatorTable({ ops }) {
   );
 }
 
-// ── Takt Table ────────────────────────────────────────────────
+// ── Station takt matrix ───────────────────────────────────────
 function TaktTable({ taktRows }) {
   if (!taktRows.length) {
-    return <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>No takt data for today</div>;
+    return <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--t3)', fontFamily: 'var(--font-ui)', fontSize: 13 }}>No takt data for today</div>;
   }
-
-  const stations   = ['INW', 'QC', 'PKG'];
-  const lines      = [...new Set(taktRows.filter(r => r.line !== 'SHARED').map(r => r.line))].sort();
-  const lookup     = {};
+  const stations = ['INW', 'QC', 'PKG'];
+  const lines = [...new Set(taktRows.filter(r => r.line !== 'SHARED').map(r => r.line))].sort();
+  const lookup = {};
   taktRows.forEach(r => { lookup[r.station + '|' + r.line] = r; });
-  const pkgout     = lookup['PKG_OUT|SHARED'];
+  const pkgout = lookup['PKG_OUT|SHARED'];
 
-  const tCol = v => {
-    if (!v) return 'var(--t3)';
-    const n = Number(v);
-    return n <= 5 ? 'var(--green)' : n <= 10 ? 'var(--yellow)' : 'var(--red)';
-  };
+  // flag the slowest (bottleneck) cell
+  let bottleneck = null;
+  taktRows.forEach(r => { if (r.line !== 'SHARED' && r.avg_takt_mins != null && (!bottleneck || Number(r.avg_takt_mins) > Number(bottleneck.avg_takt_mins))) bottleneck = r; });
+
+  const tCol = v => { if (!v) return 'var(--t3)'; const n = Number(v); return n <= 5 ? 'var(--ok-fg)' : n <= 10 ? 'var(--warn-fg)' : 'var(--bad-fg)'; };
   const fmtT = v => v ? Number(v).toFixed(1) + ' min' : '—';
   const fmtR = v => v ? Number(v).toFixed(1) + '/hr' : '—';
 
-  const thStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', fontWeight: 600 };
-  const tdStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 13, borderBottom: '1px solid rgba(64,64,64,.5)', color: 'var(--t1)', textAlign: 'center' };
-  const stStyle = { ...tdStyle, fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.1em', color: 'var(--t2)', textAlign: 'left' };
-
   return (
     <div style={{ overflowX: 'auto' }}>
+      {bottleneck && (
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: 'var(--bad-bg)', border: '1px solid var(--bad-bd)',
+          borderRadius: 'var(--r-sm)', padding: '6px 11px', marginBottom: 12, fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--bad-fg)' }}>
+          <Icon name="activity" size={13} /> Bottleneck: <span className="num" style={{ fontWeight: 700 }}>{bottleneck.station} · {bottleneck.line}</span> at {fmtT(bottleneck.avg_takt_mins)}/unit
+        </div>
+      )}
       <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 500 }}>
         <thead>
           <tr>
-            <th style={{ ...thStyle, textAlign: 'left' }}>Station</th>
+            <th className="eyebrow" style={{ ...thStyle, textAlign: 'left' }}>Station</th>
             {lines.map(l => (
-              <th key={l} style={{ ...thStyle, textAlign: 'center', color: 'var(--yellow)' }}>{l}</th>
+              <th key={l} style={{ ...thStyle, textAlign: 'center' }}>
+                <span className="num" style={{ fontSize: 11, fontWeight: 700, color: lineColor(l) }}>{l}</span>
+              </th>
             ))}
           </tr>
         </thead>
         <tbody>
           {stations.map(st => (
             <tr key={st}>
-              <td style={stStyle}>{st}</td>
+              <td style={{ ...tdBase, color: 'var(--t2)' }}><span className="label" style={{ fontSize: 11 }}>{st}</span></td>
               {lines.map(l => {
                 const r = lookup[st + '|' + l];
-                if (!r) return <td key={l} style={{ ...tdStyle, color: 'var(--t3)' }}>—</td>;
+                if (!r) return <td key={l} style={{ ...tdBase, textAlign: 'center', color: 'var(--t4)' }}>—</td>;
+                const isBn = bottleneck && r.station === bottleneck.station && r.line === bottleneck.line;
                 return (
-                  <td key={l} style={tdStyle}>
-                    <div style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: tCol(r.avg_takt_mins) }}>
-                      {fmtT(r.avg_takt_mins)}
-                    </div>
-                    <div style={{ fontSize: 10, color: 'var(--t3)' }}>
-                      {fmtR(r.units_per_hour)} · {r.units_measured} units
-                    </div>
+                  <td key={l} style={{ ...tdBase, textAlign: 'center', background: isBn ? 'var(--bad-bg)' : 'transparent' }}>
+                    <div className="num" style={{ fontWeight: 700, color: tCol(r.avg_takt_mins) }}>{fmtT(r.avg_takt_mins)}</div>
+                    <div className="num" style={{ fontSize: 10, color: 'var(--t3)', marginTop: 2 }}>{fmtR(r.units_per_hour)} · {r.units_measured}u</div>
                   </td>
                 );
               })}
@@ -208,14 +206,10 @@ function TaktTable({ taktRows }) {
           ))}
           {pkgout && (
             <tr>
-              <td style={stStyle}>PKG_OUT</td>
-              <td colSpan={lines.length} style={tdStyle}>
-                <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: tCol(pkgout.avg_takt_mins) }}>
-                  {fmtT(pkgout.avg_takt_mins)}
-                </span>
-                <span style={{ fontSize: 10, color: 'var(--t3)', marginLeft: 8 }}>
-                  {fmtR(pkgout.units_per_hour)} · {pkgout.units_measured} units · SHARED
-                </span>
+              <td style={{ ...tdBase, color: 'var(--t2)' }}><span className="label" style={{ fontSize: 11 }}>PKG_OUT</span></td>
+              <td colSpan={lines.length} style={{ ...tdBase, textAlign: 'center' }}>
+                <span className="num" style={{ fontWeight: 700, color: tCol(pkgout.avg_takt_mins) }}>{fmtT(pkgout.avg_takt_mins)}</span>
+                <span className="num" style={{ fontSize: 10, color: 'var(--t3)', marginLeft: 8 }}>{fmtR(pkgout.units_per_hour)} · {pkgout.units_measured}u · SHARED</span>
               </td>
             </tr>
           )}
@@ -225,31 +219,18 @@ function TaktTable({ taktRows }) {
   );
 }
 
-function Section({ label, children }) {
-  return (
-    <div style={{ marginBottom: 28 }}>
-      <h2 style={{ margin: '0 0 14px 0', fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t2)' }}>
-        {label}
-      </h2>
-      {children}
-    </div>
-  );
-}
-
-// ── Lines Page ────────────────────────────────────────────────
 export default function LinesPage() {
-  const { session }                         = useAuth();
+  const { session } = useAuth();
   const { setRefreshing, setLastRefreshed } = useRefreshState();
 
-  const [lines,     setLines]     = useState([]);
-  const [crMap,     setCrMap]     = useState({});
+  const [lines, setLines] = useState([]);
+  const [crMap, setCrMap] = useState({});
   const [operators, setOperators] = useState([]);
-  const [takt,      setTakt]      = useState([]);
-  const [loading,   setLoading]   = useState(true);
-  const [error,     setError]     = useState(null);
+  const [takt, setTakt] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  // isFirstLoadRef: first call includes getTaktTime; subsequent auto-refresh calls skip it.
-  // Matches legacy: loadLines(skipTakt=false) on first/manual, loadLines(skipTakt=true) on auto.
+  // first call includes getTaktTime; auto-refresh calls skip it (legacy behavior).
   const isFirstLoadRef = useRef(true);
 
   const loadAll = useCallback(async () => {
@@ -265,7 +246,6 @@ export default function LinesPage() {
 
       const [lineData, taktData] = await Promise.all(fetches);
 
-      // Build car/remote split map: "L1:INW:car" → count
       const map = {};
       (lineData.car_remote || []).forEach(r => {
         map[`${r.line}:${r.activity}:${r.component_type}`] = Number(r.cnt) || 0;
@@ -274,59 +254,58 @@ export default function LinesPage() {
       setLines(lineData.lines || []);
       setCrMap(map);
       setOperators(lineData.operator_stats || []);
-
-      if (!skipTakt && taktData) {
-        setTakt(taktData.takt || []);
-      }
-
+      if (!skipTakt && taktData) setTakt(taktData.takt || []);
       setError(null);
     } catch (e) {
       setError(e.message || 'Failed to load data');
     } finally {
       setLoading(false);
       setRefreshing(false);
-      setLastRefreshed(
-        new Date().toLocaleTimeString('en-IN', {
-          hour: '2-digit', minute: '2-digit', second: '2-digit',
-          hour12: true, timeZone: 'Asia/Kolkata',
-        })
-      );
+      setLastRefreshed(new Date());
     }
   }, [session, setRefreshing, setLastRefreshed]);
 
   useAutoRefresh(loadAll, 30000, !session);
 
   if (loading) {
-    return (
-      <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 60 }}>
-        <Spinner />
-      </div>
-    );
+    return <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 60 }}><Spinner /></div>;
   }
 
+  const cards = (lines || []).filter(l => l.line !== 'SHARED' && !(l.line || '').startsWith('D'));
+
   return (
-    <div>
+    <div style={{ fontFamily: 'var(--font-ui)' }}>
       {error && (
-        <div style={{ background: 'rgba(222,42,42,.1)', border: '1px solid rgba(222,42,42,.25)', borderRadius: 4, padding: '10px 14px', fontSize: 12, color: 'var(--red)', marginBottom: 20 }}>
-          {error}
-        </div>
+        <div style={{ background: 'var(--bad-bg)', border: '1px solid var(--bad-bd)', borderRadius: 'var(--r-sm)',
+          padding: '10px 14px', fontSize: 13, color: 'var(--bad-fg)', marginBottom: 20 }}>{error}</div>
       )}
 
-      <Section label="Line Performance">
-        <LineCards lines={lines} crMap={crMap} />
-      </Section>
+      <div style={{ marginBottom: 28 }}>
+        <SectionHead>Line performance</SectionHead>
+        {cards.length ? (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 14 }}>
+            {cards.map(l => <LineCard key={l.line} l={l} crMap={crMap} />)}
+          </div>
+        ) : (
+          <div style={{ padding: '40px 0', textAlign: 'center' }}>
+            <div style={{ display: 'inline-grid', placeItems: 'center', width: 46, height: 46, borderRadius: '50%',
+              background: 'var(--surface-2)', color: 'var(--t3)', border: '1px solid var(--border-2)', marginBottom: 12 }}>
+              <Icon name="factory" size={22} /></div>
+            <div style={{ fontSize: 14, color: 'var(--t1)', fontWeight: 600 }}>No line data for today</div>
+            <div style={{ fontSize: 12.5, color: 'var(--t3)', marginTop: 3 }}>No runs are active on the floor.</div>
+          </div>
+        )}
+      </div>
 
-      <Section label="Operator Output">
-        <Panel padding={0}>
-          <OperatorTable ops={operators} />
-        </Panel>
-      </Section>
+      <div style={{ marginBottom: 28 }}>
+        <SectionHead>Operator output</SectionHead>
+        <Panel pad={0}><OperatorTable ops={operators} /></Panel>
+      </div>
 
-      <Section label="Station Pace — Today">
-        <Panel padding={0}>
-          <TaktTable taktRows={takt} />
-        </Panel>
-      </Section>
+      <div style={{ marginBottom: 28 }}>
+        <SectionHead>Station pace · today</SectionHead>
+        <Panel pad={16}><TaktTable taktRows={takt} /></Panel>
+      </div>
     </div>
   );
 }

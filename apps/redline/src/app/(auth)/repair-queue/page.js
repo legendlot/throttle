@@ -1,40 +1,42 @@
 'use client';
+/* ════════════════════════════════════════════════════════════
+   REPAIR — Inbox stream (Pit Wall v2). Units awaiting a repair
+   run, grouped by product. Read-only (getRepairUnitsQueue);
+   repair runs are created in the Store system. Restyled to the
+   inbox prototype look (redesign-reference/app/inbox.jsx).
+   ════════════════════════════════════════════════════════════ */
 import { Fragment, useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
-import { Spinner, EmptyState, Panel, StatusBadge } from '@throttle/ui';
+import { Spinner } from '@throttle/ui';
+import { useRefreshState } from '../layout.js';
+import {
+  Icon, KpiTile, Panel, ToneBadge, InboxTabs, fmt, btnGhost,
+} from '../../../components/kit/index.js';
 
-// ── Helpers ───────────────────────────────────────────────────
-function fmt(n) { return n != null ? Number(n).toLocaleString('en-IN') : '0'; }
-
-// Map unit status → StatusBadge variant.
-const STATUS_MAP = {
-  qc_fail:         { variant: 'error',   label: 'QC Fail',   icon: '✗' },
-  rto_in:          { variant: 'warning', label: 'RTO In',    icon: '⚠' },
-  scrapped_repair: { variant: 'neutral', label: 'Scrapped' },
+const STATUS_TONE = {
+  qc_fail:         { tone: 'bad',  label: 'QC Fail' },
+  rto_in:          { tone: 'warn', label: 'RTO In' },
+  scrapped_repair: { tone: 'mute', label: 'Scrapped' },
 };
-
-function RepairStatusBadge({ status }) {
-  const meta = STATUS_MAP[status] || { variant: 'neutral', label: status || '—' };
-  return <StatusBadge variant={meta.variant} icon={meta.icon}>{meta.label}</StatusBadge>;
+function StatusBadge({ status }) {
+  const meta = STATUS_TONE[status] || { tone: 'mute', label: status || '—' };
+  return <ToneBadge tone={meta.tone}>{meta.label}</ToneBadge>;
 }
 
-// ── Common styles ────────────────────────────────────────────
-const refreshBtnStyle = { padding: '7px 12px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t1)', fontFamily: 'var(--mono)', fontSize: 12, cursor: 'pointer' };
-const sectionLabel = { margin: 0, fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t2)' };
-const thStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
-const tdStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 13, borderBottom: '1px solid rgba(64,64,64,.5)', whiteSpace: 'nowrap', color: 'var(--t1)' };
+const thStyle = { padding: '0 14px 9px', textAlign: 'left', whiteSpace: 'nowrap' };
+const tdBase = { padding: '10px 14px', borderTop: '1px solid var(--border)', whiteSpace: 'nowrap', verticalAlign: 'middle' };
 
-// ── Repair Queue Page ────────────────────────────────────────
 export default function RepairQueuePage() {
   const { session } = useAuth();
-  const [rows,    setRows]    = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error,   setError]   = useState(null);
+  const { setRefreshing, setLastRefreshed } = useRefreshState();
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   const load = useCallback(async () => {
     if (!session) return;
-    setLoading(true); setError(null);
+    setRefreshing(true); setError(null);
     try {
       const data = await garageFetch('getRepairUnitsQueue', {}, session);
       setRows(Array.isArray(data) ? data : []);
@@ -43,78 +45,81 @@ export default function RepairQueuePage() {
       setRows([]);
     } finally {
       setLoading(false);
+      setRefreshing(false);
+      setLastRefreshed(new Date());
     }
-  }, [session]);
+  }, [session, setRefreshing, setLastRefreshed]);
 
   useEffect(() => { load(); }, [load]);
 
-  // ── Group by product ─────────────────────────────────────
   const byProduct = {};
   for (const row of rows) {
     const p = row.product || '—';
-    if (!byProduct[p]) byProduct[p] = [];
-    byProduct[p].push(row);
+    (byProduct[p] = byProduct[p] || []).push(row);
   }
   const products = Object.keys(byProduct).sort();
-  const grandTotal = rows.reduce((s, r) => s + (r.count || 0), 0);
+  const grandTotal = rows.reduce((s, r) => s + (Number(r.count) || 0), 0);
+  const failTotal = rows.filter(r => r.status === 'qc_fail').reduce((s, r) => s + (Number(r.count) || 0), 0);
+  const rtoTotal = rows.filter(r => r.status === 'rto_in').reduce((s, r) => s + (Number(r.count) || 0), 0);
 
   return (
-    <div>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18, flexWrap: 'wrap' }}>
-        <h2 style={sectionLabel}>Repair Queue — Awaiting Repair Run</h2>
-        <div style={{ flex: 1 }} />
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)', letterSpacing: '0.04em' }}>
-          Total: <span style={{ color: 'var(--yellow)', fontWeight: 700 }}>{fmt(grandTotal)}</span> units
-        </span>
-        <button style={refreshBtnStyle} onClick={load} disabled={loading}>↻ Refresh</button>
+    <div style={{ fontFamily: 'var(--font-ui)' }}>
+      <InboxTabs counts={{ repair: grandTotal }} />
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10, marginBottom: 18 }}>
+        <KpiTile label="Awaiting Repair" value={fmt(grandTotal)} sub={`${products.length} product${products.length === 1 ? '' : 's'}`} tone="warn" />
+        <KpiTile label="QC Fail" value={fmt(failTotal)} sub="Failed at inspection" tone="bad" />
+        <KpiTile label="RTO In" value={fmt(rtoTotal)} sub="Returned to origin" tone="warn" />
       </div>
 
       {error && (
-        <div style={{ background: 'rgba(222,42,42,.1)', border: '1px solid rgba(222,42,42,.3)', borderRadius: 4, padding: '12px 14px', fontFamily: 'var(--mono)', fontSize: 13, color: '#ff7070', marginBottom: 16 }}>
-          ⚠ {error}
-        </div>
+        <div style={{ background: 'var(--bad-bg)', border: '1px solid var(--bad-bd)', borderRadius: 'var(--r-sm)',
+          padding: '12px 14px', fontSize: 13, color: 'var(--bad-fg)', marginBottom: 16 }}>{error}</div>
       )}
 
-      {/* Table */}
-      <Panel padding={0}>
+      <Panel title="Repair queue · awaiting repair run" icon="wrench" pad={0}
+        action={<button onClick={load} style={{ ...btnGhost, padding: '6px 11px' }}><Icon name="activity" size={13} /> Refresh</button>}>
         {loading && rows.length === 0 ? (
           <div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}><Spinner /></div>
         ) : products.length === 0 ? (
-          <EmptyState icon="🔧" message="No units awaiting repair" />
+          <div style={{ padding: '48px 0', textAlign: 'center' }}>
+            <div style={{ display: 'inline-grid', placeItems: 'center', width: 46, height: 46, borderRadius: '50%',
+              background: 'var(--ok-bg)', color: 'var(--ok-fg)', border: '1px solid var(--ok-bd)', marginBottom: 12 }}>
+              <Icon name="shield" size={22} /></div>
+            <div style={{ fontSize: 14, color: 'var(--t1)', fontWeight: 600 }}>No units awaiting repair</div>
+            <div style={{ fontSize: 12.5, color: 'var(--t3)', marginTop: 3 }}>The repair queue is clear.</div>
+          </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
-                  <th style={thStyle}>Product</th>
-                  <th style={thStyle}>Model</th>
-                  <th style={thStyle}>Color</th>
-                  <th style={thStyle}>Status</th>
-                  <th style={{ ...thStyle, textAlign: 'right' }}>Count</th>
+                  <th className="eyebrow" style={thStyle}>Product / Model</th>
+                  <th className="eyebrow" style={thStyle}>Color</th>
+                  <th className="eyebrow" style={thStyle}>Status</th>
+                  <th className="eyebrow" style={{ ...thStyle, textAlign: 'right' }}>Count</th>
                 </tr>
               </thead>
               <tbody>
                 {products.map(p => {
                   const productRows = byProduct[p];
-                  const productTotal = productRows.reduce((s, r) => s + (r.count || 0), 0);
+                  const productTotal = productRows.reduce((s, r) => s + (Number(r.count) || 0), 0);
                   return (
                     <Fragment key={p}>
-                      <tr style={{ background: 'var(--surface2)' }}>
-                        <td colSpan={4} style={{ padding: '10px 14px', fontFamily: 'var(--cond)', fontSize: 14, fontWeight: 700, color: 'var(--t1)', letterSpacing: '0.04em' }}>
-                          {p}
+                      <tr style={{ background: 'var(--surface-2)' }}>
+                        <td colSpan={3} style={{ padding: '9px 14px', borderTop: '1px solid var(--border)' }}>
+                          <span className="font-display" style={{ fontSize: 13, fontWeight: 700, letterSpacing: '0.05em', color: 'var(--t1)' }}>{p}</span>
                         </td>
-                        <td style={{ padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--yellow)', fontWeight: 700, textAlign: 'right' }}>
+                        <td className="num" style={{ padding: '9px 14px', borderTop: '1px solid var(--border)', fontSize: 13, color: 'var(--yellow)', fontWeight: 700, textAlign: 'right' }}>
                           {fmt(productTotal)}
                         </td>
                       </tr>
                       {productRows.map((r, i) => (
                         <tr key={`${p}-${i}`}>
-                          <td style={{ ...tdStyle, color: 'var(--t3)', paddingLeft: 32 }}>—</td>
-                          <td style={tdStyle}>{r.model || '—'}</td>
-                          <td style={{ ...tdStyle, color: 'var(--t2)' }}>{r.color || '—'}</td>
-                          <td style={tdStyle}><RepairStatusBadge status={r.status} /></td>
-                          <td style={{ ...tdStyle, textAlign: 'right' }}>{fmt(r.count)}</td>
+                          <td style={{ ...tdBase, paddingLeft: 30, color: 'var(--t2)' }}>{r.model || '—'}</td>
+                          <td style={{ ...tdBase, color: 'var(--t2)' }}>{r.color || '—'}</td>
+                          <td style={tdBase}><StatusBadge status={r.status} /></td>
+                          <td className="num" style={{ ...tdBase, textAlign: 'right', color: 'var(--t1)', fontWeight: 600 }}>{fmt(r.count)}</td>
                         </tr>
                       ))}
                     </Fragment>
@@ -126,9 +131,8 @@ export default function RepairQueuePage() {
         )}
       </Panel>
 
-      {/* Footer note */}
-      <div style={{ marginTop: 14, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)', letterSpacing: '0.04em' }}>
-        Units available for repair — grouped by product. Create runs in the Store system.
+      <div style={{ marginTop: 14, fontSize: 12, color: 'var(--t3)' }}>
+        Units available for repair — grouped by product. Create repair runs in the Store system.
       </div>
     </div>
   );

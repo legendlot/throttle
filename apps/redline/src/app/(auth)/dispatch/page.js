@@ -205,7 +205,7 @@ export default function DispatchPage() {
         <h2 style={sectionLabel}>Allocated — Awaiting Dispatch</h2>
         {allocByChannel.length === 0 ? (
           <Panel padding={0}>
-            <EmptyState icon="📦" message="No allocated units" />
+            <EmptyState message="No allocated units" />
           </Panel>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12 }}>
@@ -241,7 +241,7 @@ export default function DispatchPage() {
         </div>
         {shippedByChannel.length === 0 ? (
           <Panel padding={0}>
-            <EmptyState icon="📤" message="No units shipped in this range" />
+            <EmptyState message="No units shipped in this range" />
           </Panel>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12 }}>
@@ -278,7 +278,7 @@ export default function DispatchPage() {
           {unitsLoading ? (
             <div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}><Spinner /></div>
           ) : units.length === 0 ? (
-            <EmptyState icon="📦" message="No units match these filters" />
+            <EmptyState message="No units match these filters" />
           ) : (
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>

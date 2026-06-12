@@ -1,21 +1,30 @@
 'use client';
+/* ════════════════════════════════════════════════════════════
+   DISPATCH · REPACK — Pit Wall v2. Channel-swap repack runs.
+   Prototype: redesign-reference/app/repack.jsx. Data unchanged
+   (getRepackRuns, canManageRepack gate). Exports RPK_STATUSES /
+   RpkStatusBadge / fmtDate consumed by detail + reports routes.
+   ════════════════════════════════════════════════════════════ */
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAuth, hasPermission } from '@throttle/auth';
+import { useAuth } from '@throttle/auth';
 import { workerFetch } from '@throttle/db';
-import { Spinner, EmptyState, Panel, Chip, StatusBadge, useToast } from '@throttle/ui';
+import { Spinner, useToast } from '@throttle/ui';
 import { canManageRepack } from './new/page';
+import { useRefreshState } from '../layout.js';
+import { Icon, Panel, FilterChip, ToneBadge, fmt, btnPrimary } from '../../../components/kit/index.js';
 
+// status → kit ToneBadge tone (kept exported for sub-routes; variant retained for back-compat)
 export const RPK_STATUSES = [
-  { id: 'Open',        label: 'Open',        variant: 'info'    },
-  { id: 'In Progress', label: 'In Progress', variant: 'brand'   },
-  { id: 'Completed',   label: 'Completed',   variant: 'success' },
-  { id: 'Cancelled',   label: 'Cancelled',   variant: 'neutral' },
+  { id: 'Open',        label: 'Open',        tone: 'info',  variant: 'info'    },
+  { id: 'In Progress', label: 'In Progress', tone: 'brand', variant: 'brand'   },
+  { id: 'Completed',   label: 'Completed',   tone: 'ok',    variant: 'success' },
+  { id: 'Cancelled',   label: 'Cancelled',   tone: 'mute',  variant: 'neutral' },
 ];
 
 export function RpkStatusBadge({ status }) {
-  const cfg = RPK_STATUSES.find(s => s.id === status) || { label: status, variant: 'neutral' };
-  return <StatusBadge variant={cfg.variant}>{cfg.label}</StatusBadge>;
+  const cfg = RPK_STATUSES.find(s => s.id === status) || { label: status, tone: 'mute' };
+  return <ToneBadge tone={cfg.tone}>{cfg.label}</ToneBadge>;
 }
 
 export function fmtDate(ts) {
@@ -27,23 +36,23 @@ export function fmtDate(ts) {
   } catch { return ts; }
 }
 
-const th   = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', textAlign: 'left' };
-const td   = { padding: '10px 14px', borderBottom: '1px solid rgba(64,64,64,.5)', fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--t1)', verticalAlign: 'top' };
-const btnP = { background: 'var(--yellow)', border: '1px solid var(--yellow)', borderRadius: 3, padding: '8px 14px', fontFamily: 'var(--cond)', fontSize: 13, color: '#0a0a0a', cursor: 'pointer', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' };
+const thStyle = { padding: '0 14px 9px', textAlign: 'left', whiteSpace: 'nowrap' };
+const tdBase = { padding: '11px 14px', borderTop: '1px solid var(--border)', verticalAlign: 'middle' };
 
 export default function RepackRunsListPage() {
   const router = useRouter();
   const { session, perms } = useAuth();
   const { showToast: toast } = useToast();
+  const { setRefreshing, setLastRefreshed } = useRefreshState();
   const allowed = canManageRepack(perms);
 
-  const [rows, setRows]       = useState([]);
+  const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [statusF, setStatusF] = useState('');
 
   async function load() {
     if (!session || !allowed) return;
-    setLoading(true);
+    setLoading(true); setRefreshing(true);
     try {
       const filter = {};
       if (statusF) filter.status = statusF;
@@ -53,7 +62,7 @@ export default function RepackRunsListPage() {
     } catch (e) {
       toast(e.message || 'Failed', 'error');
       setRows([]);
-    } finally { setLoading(false); }
+    } finally { setLoading(false); setRefreshing(false); setLastRefreshed(new Date()); }
   }
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [session, statusF]);
 
@@ -66,59 +75,74 @@ export default function RepackRunsListPage() {
 
   if (!allowed) {
     return (
-      <div style={{ padding: 16 }}>
-        <EmptyState icon="🔒" message="Access denied — you need repack_run_manage (or dispatch) permission." />
-      </div>
+      <Panel pad={0}>
+        <div style={{ padding: '48px 0', textAlign: 'center' }}>
+          <div style={{ display: 'inline-grid', placeItems: 'center', width: 46, height: 46, borderRadius: '50%',
+            background: 'var(--bad-bg)', color: 'var(--bad-fg)', border: '1px solid var(--bad-bd)', marginBottom: 12 }}>
+            <Icon name="shield" size={22} /></div>
+          <div style={{ fontFamily: 'var(--font-ui)', fontSize: 14, color: 'var(--t1)', fontWeight: 600 }}>Access denied</div>
+          <div style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t3)', marginTop: 3 }}>You need repack_run_manage (or dispatch) permission.</div>
+        </div>
+      </Panel>
     );
   }
 
   return (
-    <div style={{ padding: 16 }}>
-      <Panel
-        header="Repack Runs · Channel Swap"
-        headerAction={<button onClick={() => router.push('/repack-runs/new')} style={btnP}>+ New Run</button>}
-      >
+    <div style={{ fontFamily: 'var(--font-ui)' }}>
+      <Panel title="Repack runs · channel swap" icon="swap" pad={16}
+        action={<button onClick={() => router.push('/repack-runs/new')} style={{ ...btnPrimary, padding: '7px 13px' }}><Icon name="plus" size={14} /> New Run</button>}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
-          <Chip active={statusF === ''} onClick={() => setStatusF('')} count={counts.all}>All</Chip>
+          <FilterChip active={statusF === ''} onClick={() => setStatusF('')} count={counts.all}>All</FilterChip>
           {RPK_STATUSES.map(s => (
-            <Chip key={s.id} active={statusF === s.id} onClick={() => setStatusF(s.id)} count={counts[s.id] || 0}>
-              {s.label}
-            </Chip>
+            <FilterChip key={s.id} active={statusF === s.id} onClick={() => setStatusF(s.id)} count={counts[s.id] || 0}>{s.label}</FilterChip>
           ))}
         </div>
 
         {loading ? (
           <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
         ) : rows.length === 0 ? (
-          <EmptyState
-            icon="🔁"
-            message={statusF ? 'No repack runs with this status.' : 'No repack runs yet — click + New Run to start a channel swap.'}
-          />
+          <div style={{ padding: '40px 0', textAlign: 'center' }}>
+            <div style={{ display: 'inline-grid', placeItems: 'center', width: 46, height: 46, borderRadius: '50%',
+              background: 'var(--surface-2)', color: 'var(--t3)', border: '1px solid var(--border-2)', marginBottom: 12 }}>
+              <Icon name="swap" size={22} /></div>
+            <div style={{ fontSize: 14, color: 'var(--t1)', fontWeight: 600 }}>{statusF ? 'No repack runs with this status' : 'No repack runs yet'}</div>
+            <div style={{ fontSize: 12.5, color: 'var(--t3)', marginTop: 3 }}>Click New Run to start a channel swap.</div>
+          </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr>
-                <th style={th}>Run</th>
-                <th style={th}>Progress</th>
-                <th style={th}>Status</th>
-                <th style={th}>Notes</th>
-                <th style={th}>Created</th>
+                <th className="eyebrow" style={thStyle}>Run</th>
+                <th className="eyebrow" style={thStyle}>Progress</th>
+                <th className="eyebrow" style={thStyle}>Status</th>
+                <th className="eyebrow" style={thStyle}>Notes</th>
+                <th className="eyebrow" style={thStyle}>Created</th>
               </tr></thead>
               <tbody>
                 {rows.map(r => {
-                  const repacked = r.repacked || 0;
-                  const pct = r.target_qty > 0 ? Math.round((repacked / r.target_qty) * 100) : 0;
+                  const repacked = Number(r.repacked) || 0;
+                  const target = Number(r.target_qty) || 0;
+                  const pct = target > 0 ? Math.round((repacked / target) * 100) : 0;
                   return (
-                    <tr key={r.id} style={{ cursor: 'pointer' }} onClick={() => router.push(`/repack-runs/detail?id=${r.id}`)}>
-                      <td style={{ ...td, color: 'var(--yellow)', fontWeight: 700 }}>{r.run_no}</td>
-                      <td style={td}>
-                        <span style={{ color: repacked >= r.target_qty ? 'var(--green, #34d399)' : 'var(--t1)', fontWeight: 700 }}>{repacked}</span>
-                        <span style={{ color: 'var(--t3)' }}> / {r.target_qty}</span>
-                        <span style={{ color: 'var(--t3)', marginLeft: 6, fontSize: 11 }}>{pct}%</span>
+                    <tr key={r.id} style={{ cursor: 'pointer' }} onClick={() => router.push(`/repack-runs/detail?id=${r.id}`)}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-2)'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
+                      <td className="num" style={{ ...tdBase, color: 'var(--yellow)', fontWeight: 700 }}>{r.run_no}</td>
+                      <td style={tdBase}>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span className="num" style={{ minWidth: 96 }}>
+                            <span style={{ color: repacked >= target ? 'var(--ok-fg)' : 'var(--t1)', fontWeight: 700 }}>{fmt(repacked)}</span>
+                            <span style={{ color: 'var(--t4)' }}> / {fmt(target)}</span>
+                          </span>
+                          <span style={{ flex: 1, maxWidth: 120, height: 5, borderRadius: 3, background: 'var(--bg-2)', overflow: 'hidden' }}>
+                            <span style={{ display: 'block', height: '100%', width: `${Math.min(pct, 100)}%`, background: repacked >= target ? 'var(--green)' : 'var(--yellow)' }} />
+                          </span>
+                          <span className="num" style={{ fontSize: 11, color: 'var(--t3)' }}>{pct}%</span>
+                        </span>
                       </td>
-                      <td style={td}><RpkStatusBadge status={r.status} /></td>
-                      <td style={{ ...td, color: 'var(--t2)', maxWidth: 320, fontSize: 12 }}>{r.notes || '—'}</td>
-                      <td style={{ ...td, fontSize: 11, color: 'var(--t3)' }}>{fmtDate(r.created_at)}</td>
+                      <td style={tdBase}><RpkStatusBadge status={r.status} /></td>
+                      <td style={{ ...tdBase, color: 'var(--t2)', maxWidth: 320, fontSize: 12.5 }}>{r.notes || '—'}</td>
+                      <td className="num" style={{ ...tdBase, fontSize: 11, color: 'var(--t3)' }}>{fmtDate(r.created_at)}</td>
                     </tr>
                   );
                 })}

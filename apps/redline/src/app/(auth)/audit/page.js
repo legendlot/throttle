@@ -2,7 +2,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '@throttle/auth'
 import { workerFetch } from '@throttle/db'
-import { Panel, Chip, StatusBadge, useEscapeClose } from '@throttle/ui'
+import { Panel, StatusBadge, useEscapeClose } from '@throttle/ui'
+import { FilterChip } from '../../../components/kit/index.js'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -36,27 +37,27 @@ const ACTIONS_REQUIRED = [
 const SEV = {
   critical: {
     dot:   'var(--red)',
-    badge: { background: 'rgba(222,42,42,0.12)', color: 'var(--red)',    border: '1px solid rgba(222,42,42,0.3)' },
-    btn:   { background: 'rgba(222,42,42,0.12)', color: 'var(--red)',    border: '1px solid rgba(222,42,42,0.4)' },
-    label: '🔴 Critical',
+    badge: { background: 'var(--bad-bg)', color: 'var(--bad-fg)',  border: '1px solid var(--bad-bd)' },
+    btn:   { background: 'var(--bad-bg)', color: 'var(--bad-fg)',  border: '1px solid var(--bad-bd)' },
+    label: 'Critical',
   },
   high: {
     dot:   'var(--orange)',
     badge: { background: 'rgba(249,115,22,0.12)', color: 'var(--orange)', border: '1px solid rgba(249,115,22,0.3)' },
     btn:   { background: 'rgba(249,115,22,0.12)', color: 'var(--orange)', border: '1px solid rgba(249,115,22,0.4)' },
-    label: '🟠 High',
+    label: 'High',
   },
   medium: {
-    dot:   '#d4b200',
-    badge: { background: 'rgba(212,178,0,0.12)',  color: '#d4b200',       border: '1px solid rgba(212,178,0,0.3)' },
-    btn:   { background: 'rgba(212,178,0,0.12)',  color: '#d4b200',       border: '1px solid rgba(212,178,0,0.4)' },
-    label: '🟡 Medium',
+    dot:   'var(--amber)',
+    badge: { background: 'var(--warn-bg)',  color: 'var(--warn-fg)', border: '1px solid var(--warn-bd)' },
+    btn:   { background: 'var(--warn-bg)',  color: 'var(--warn-fg)', border: '1px solid var(--warn-bd)' },
+    label: 'Medium',
   },
   low: {
     dot:   'var(--green)',
-    badge: { background: 'rgba(34,197,94,0.12)',  color: 'var(--green)',  border: '1px solid rgba(34,197,94,0.3)' },
-    btn:   { background: 'rgba(34,197,94,0.12)',  color: 'var(--green)',  border: '1px solid rgba(34,197,94,0.4)' },
-    label: '🟢 Low',
+    badge: { background: 'var(--ok-bg)',  color: 'var(--ok-fg)',  border: '1px solid var(--ok-bd)' },
+    btn:   { background: 'var(--ok-bg)',  color: 'var(--ok-fg)',  border: '1px solid var(--ok-bd)' },
+    label: 'Low',
   },
 }
 
@@ -69,13 +70,13 @@ const STATUS_BADGE = {
 // ── Style constants ───────────────────────────────────────────────────────────
 
 const S = {
-  input:    { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: '8px 12px', fontSize: 13, color: 'var(--t1)', outline: 'none', fontFamily: 'var(--mono)' },
-  select:   { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: '8px 12px', fontSize: 13, color: 'var(--t1)', outline: 'none', fontFamily: 'var(--mono)', cursor: 'pointer' },
-  textarea: { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: '8px 12px', fontSize: 13, color: 'var(--t1)', outline: 'none', fontFamily: 'var(--mono)', resize: 'none', width: '100%' },
-  label:    { fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6, display: 'block' },
-  btnYellow:{ padding: '8px 14px', background: 'var(--yellow)', color: '#0a0a0a', border: '1px solid var(--yellow)', borderRadius: 3, fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer' },
-  btnGhost: { padding: '8px 14px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--t2)', fontFamily: 'var(--mono)', fontSize: 13, cursor: 'pointer' },
-  card:     { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4 },
+  input:    { background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-sm)', padding: '8px 12px', fontSize: 13, color: 'var(--t1)', outline: 'none', fontFamily: 'var(--font-ui)' },
+  select:   { background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-sm)', padding: '8px 12px', fontSize: 13, color: 'var(--t1)', outline: 'none', fontFamily: 'var(--font-ui)', cursor: 'pointer' },
+  textarea: { background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-sm)', padding: '8px 12px', fontSize: 13, color: 'var(--t1)', outline: 'none', fontFamily: 'var(--font-ui)', resize: 'none', width: '100%' },
+  label:    { fontFamily: 'var(--font-display)', fontSize: 10, fontWeight: 600, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.16em', marginBottom: 6, display: 'block' },
+  btnYellow:{ padding: '8px 14px', background: 'var(--yellow)', color: '#1a1a1a', border: '1px solid var(--yellow)', borderRadius: 'var(--r-sm)', fontFamily: 'var(--font-display)', fontSize: 12, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', cursor: 'pointer' },
+  btnGhost: { padding: '8px 14px', background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-sm)', color: 'var(--t2)', fontFamily: 'var(--font-ui)', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' },
+  card:     { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)' },
   badge:    { fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 3, textTransform: 'uppercase', letterSpacing: '0.06em' },
   lineBadge:{ fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 3, background: 'rgba(33,60,226,0.18)', color: '#6882ff', border: '1px solid rgba(33,60,226,0.35)', flexShrink: 0 },
 }
@@ -288,9 +289,9 @@ function LogTab({ date, setDate, rounds, session, userId, perms, onRefresh }) {
           { val: totalFindings, lbl: 'Total findings', color: 'var(--yellow)' },
           { val: confirmed,     lbl: 'Confirmed',      color: 'var(--green)'  },
         ].map(({ val, lbl, color }) => (
-          <div key={lbl} style={{ ...S.card, padding: '10px 14px' }}>
-            <div style={{ fontFamily: 'var(--cond)', fontSize: 24, fontWeight: 800, color, lineHeight: 1 }}>{val}</div>
-            <div style={{ fontFamily: 'inherit', fontSize: 9, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 3 }}>{lbl}</div>
+          <div key={lbl} style={{ ...S.card, padding: '11px 15px', borderLeft: `3px solid ${color}` }}>
+            <div className="num" style={{ fontSize: 24, fontWeight: 700, color: 'var(--t1)', lineHeight: 1 }}>{val}</div>
+            <div className="eyebrow" style={{ marginTop: 5 }}>{lbl}</div>
           </div>
         ))}
       </div>
@@ -690,21 +691,16 @@ export default function AuditPage() {
   useEffect(() => { loadRounds() }, [loadRounds])
 
   return (
-    <div style={{ color: 'var(--t1)' }}>
-      {/* Page header */}
-      <div style={{ borderBottom: '1px solid var(--border)', padding: '12px 20px', display: 'flex', alignItems: 'center', gap: 14, marginBottom: 0 }}>
-        <h1 style={{ margin: 0, fontFamily: 'var(--cond)', fontSize: 16, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--yellow)' }}>
-          QC Audit
-        </h1>
-        <div style={{ display: 'flex', gap: 6 }}>
-          {['log', 'tracker'].map(t => (
-            <Chip key={t} active={tab === t} onClick={() => setTab(t)}>{t}</Chip>
-          ))}
-        </div>
+    <div style={{ color: 'var(--t1)', fontFamily: 'var(--font-ui)' }}>
+      {/* tab bar — topbar already titles this screen "Audit" */}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 18 }}>
+        {[['log', 'Inspection Log'], ['tracker', 'Findings Tracker']].map(([t, lbl]) => (
+          <FilterChip key={t} active={tab === t} onClick={() => setTab(t)}>{lbl}</FilterChip>
+        ))}
       </div>
 
       {/* Tab content */}
-      <div style={{ padding: '16px 20px', maxWidth: 1100 }}>
+      <div style={{ maxWidth: 1100 }}>
         {tab === 'log' ? (
           loading ? (
             <p style={{ color: 'var(--t3)', fontSize: 12, fontStyle: 'italic' }}>Loading…</p>
