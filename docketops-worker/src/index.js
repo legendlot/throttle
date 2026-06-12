@@ -243,6 +243,81 @@ function canViewChecklistOf(auth, targetEmp) {
   return false;
 }
 
+// ── Checklist TEMPLATES (structured, role-linked SOPs). RULE-DOCKET-009. ─────
+// A template (docket.checklist_templates) has sections → items, is assigned to people
+// (checklist_assignments), and runs per its own recurrence (no single time — times live
+// on sections). A "run" for (template, person, date) is DERIVED from item completions +
+// section comments. Templates are NOT docket.tasks → off the board + dashboard.
+const CHECKLIST_TAGS = ['Critical', 'QC', 'Deadline', 'Ongoing'];
+
+// Template recurrence is like a task recurrence but WITHOUT `time` (sections carry times).
+function validateTemplateRecurrence(rec) {
+  if (!rec || typeof rec !== 'object') return 'recurrence required';
+  if (!['daily', 'weekly', 'monthly'].includes(rec.freq)) return 'invalid freq';
+  if (rec.freq === 'weekly') {
+    if (!Array.isArray(rec.days_of_week) || !rec.days_of_week.length) return 'weekly needs days_of_week';
+    if (rec.days_of_week.some(x => !Number.isInteger(Number(x)) || x < 0 || x > 6)) return 'days_of_week must be 0..6';
+  }
+  if (rec.freq === 'monthly') {
+    const dom = Number(rec.day_of_month);
+    if (!Number.isInteger(dom) || dom < 1 || dom > 31) return 'day_of_month must be 1..31';
+  }
+  if (rec.until != null && rec.until !== '') {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(rec.until)) return 'invalid until (YYYY-MM-DD)';
+  }
+  return null;
+}
+function normalizeTemplateRecurrence(rec) {
+  const out = { freq: rec.freq };
+  if (rec.freq === 'weekly') out.days_of_week = uniq(rec.days_of_week.map(Number)).sort((a, b) => a - b);
+  if (rec.freq === 'monthly') out.day_of_month = Number(rec.day_of_month);
+  if (rec.until) out.until = rec.until;
+  return out;
+}
+function sanitizeTags(tags) {
+  if (!Array.isArray(tags)) return [];
+  return uniq(tags.filter(t => CHECKLIST_TAGS.includes(t)));
+}
+function canEditTemplate(auth, tmpl) {
+  return isAdmin(auth) || tmpl.created_by_user_id === auth.userId;
+}
+async function loadTemplate(id, env) {
+  const r = await sbDocket(`/rest/v1/checklist_templates?id=eq.${enc(id)}&select=*&limit=1`, env);
+  return (r.ok && r.data?.[0]) || null;
+}
+// IST 'HH:MM' for an ISO timestamp (used for late detection + display).
+function istHM(iso) {
+  if (!iso) return '';
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).format(new Date(iso));
+}
+// Late = completed after the section's due_time (IST). No due_time → never late.
+function lateFlag(completedAtIso, dueTime) {
+  if (!dueTime || !completedAtIso) return false;
+  return istHM(completedAtIso) > dueTime;
+}
+// The set of employee_ids a caller may MONITOR (Oversight scope, R1):
+// view_all → everyone; else direct reports ∪ people I assigned a template/recurring task to.
+async function peopleInScope(auth, env) {
+  if (canViewAll(auth)) {
+    const r = await sbPodium(`/rest/v1/employees?status=eq.active&select=id`, env);
+    return new Set((r.ok ? r.data : []).map(e => e.id));
+  }
+  const ids = new Set();
+  const [rep, ta, rt] = await Promise.all([
+    auth.employeeId
+      ? sbPodium(`/rest/v1/employees?status=eq.active&manager_id=eq.${enc(auth.employeeId)}&select=id`, env)
+      : Promise.resolve({ ok: true, data: [] }),
+    sbDocket(`/rest/v1/checklist_assignments?assigned_by_user_id=eq.${enc(auth.userId)}&unassigned_at=is.null&select=employee_id`, env),
+    sbDocket(`/rest/v1/tasks?is_recurring=eq.true&status=neq.abandoned&created_by_user_id=eq.${enc(auth.userId)}&select=owner_employee_id`, env),
+  ]);
+  (rep.ok ? rep.data : []).forEach(e => ids.add(e.id));
+  (ta.ok ? ta.data : []).forEach(a => ids.add(a.employee_id));
+  (rt.ok ? rt.data : []).forEach(t => { if (t.owner_employee_id && t.owner_employee_id !== auth.employeeId) ids.add(t.owner_employee_id); });
+  return ids;
+}
+
 // ── Space helpers (RULE-DOCKET-003) ─────────────────────────────────────────
 async function loadSpace(id, env) {
   const r = await sbDocket(`/rest/v1/spaces?id=eq.${enc(id)}&select=*&limit=1`, env);
