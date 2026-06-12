@@ -960,6 +960,33 @@ async function archiveChecklistTemplate(body, auth, env) {
   return ok({ archived: d.id });
 }
 
+// ── Checklist template assignment (RULE-DOCKET-009) ─────────────────────────
+// Open authoring → any authenticated user may assign. Idempotent via a pre-check
+// (the active-partial unique index can't be a PostgREST on_conflict target).
+async function assignChecklistTemplate(body, auth, env) {
+  const d = body.data || body;
+  if (!d.template_id || !d.employee_id) return err('template_id + employee_id required', 400);
+  const tmpl = await loadTemplate(d.template_id, env);
+  if (!tmpl) return err('template_not_found', 404);
+  const exists = await sbDocket(
+    `/rest/v1/checklist_assignments?template_id=eq.${enc(d.template_id)}&employee_id=eq.${enc(d.employee_id)}&unassigned_at=is.null&select=id&limit=1`, env);
+  if (exists.ok && exists.data?.length) return ok({ template_id: d.template_id, employee_id: d.employee_id, already: true });
+  const r = await sbDocket(`/rest/v1/checklist_assignments`, env, {
+    method: 'POST', prefer: 'return=minimal',
+    body: JSON.stringify({ template_id: d.template_id, employee_id: d.employee_id, assigned_by_user_id: auth.userId }) });
+  if (!r.ok) return err('assign_failed: ' + JSON.stringify(r.data), 400);
+  return ok({ template_id: d.template_id, employee_id: d.employee_id });
+}
+async function unassignChecklistTemplate(body, auth, env) {
+  const d = body.data || body;
+  if (!d.template_id || !d.employee_id) return err('template_id + employee_id required', 400);
+  const r = await sbDocket(
+    `/rest/v1/checklist_assignments?template_id=eq.${enc(d.template_id)}&employee_id=eq.${enc(d.employee_id)}&unassigned_at=is.null`,
+    env, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ unassigned_at: nowIso() }) });
+  if (!r.ok) return err('unassign_failed: ' + JSON.stringify(r.data), 400);
+  return ok({ template_id: d.template_id, employee_id: d.employee_id, unassigned: true });
+}
+
 const PROTECTED = new Set(['id','task_no','created_at','created_by_user_id','deadline','status','action','data']);
 const EDITABLE  = ['title','description','department_id','owner_employee_id','priority','program_id'];
 async function updateTask(body, auth, env) {
