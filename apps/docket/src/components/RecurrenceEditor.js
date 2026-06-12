@@ -9,15 +9,15 @@ const FREQS = [
   { key: 'monthly', label: 'Monthly' },
 ];
 
-export function RecurrenceEditor({ value, onChange }) {
-  const rec = value || { freq: 'daily', time: '09:00' };
+export function RecurrenceEditor({ value, onChange, hideTime = false }) {
+  const rec = value || (hideTime ? { freq: 'daily' } : { freq: 'daily', time: '09:00' });
 
   function setFreq(freq) {
     if (freq === rec.freq) return;
-    const time = rec.time || '09:00';
-    if (freq === 'daily') onChange({ freq, time });
-    else if (freq === 'weekly') onChange({ freq, time, days_of_week: rec.days_of_week?.length ? rec.days_of_week : [1] });
-    else onChange({ freq, time, day_of_month: rec.day_of_month || 1 });
+    const base = hideTime ? {} : { time: rec.time || '09:00' };
+    if (freq === 'daily') onChange({ freq, ...base });
+    else if (freq === 'weekly') onChange({ freq, ...base, days_of_week: rec.days_of_week?.length ? rec.days_of_week : [1] });
+    else onChange({ freq, ...base, day_of_month: rec.day_of_month || 1 });
   }
   function toggleDay(d) {
     const set = new Set((rec.days_of_week || []).map(Number));
@@ -54,11 +54,13 @@ export function RecurrenceEditor({ value, onChange }) {
         </div>
       )}
 
-      <div className="rec-row">
-        <label className="rec-lbl">At</label>
-        <input type="time" className="rec-time" value={rec.time || '09:00'}
-          onChange={e => onChange({ ...rec, time: e.target.value })} />
-      </div>
+      {!hideTime && (
+        <div className="rec-row">
+          <label className="rec-lbl">At</label>
+          <input type="time" className="rec-time" value={rec.time || '09:00'}
+            onChange={e => onChange({ ...rec, time: e.target.value })} />
+        </div>
+      )}
 
       <div className="rec-row">
         <label className="rec-lbl">Ends</label>

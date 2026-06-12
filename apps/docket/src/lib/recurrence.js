@@ -72,3 +72,25 @@ export function isValidRecurrence(rec) {
   if (rec.freq === 'monthly') { const d = Number(rec.day_of_month); return Number.isInteger(d) && d >= 1 && d <= 31; }
   return true;
 }
+
+// Template recurrences have no single `time` (times live on sections). RULE-DOCKET-009.
+export function isValidTemplateRecurrence(rec) {
+  if (!rec || !['daily', 'weekly', 'monthly'].includes(rec.freq)) return false;
+  if (rec.until && !/^\d{4}-\d{2}-\d{2}$/.test(rec.until)) return false;
+  if (rec.freq === 'weekly') return Array.isArray(rec.days_of_week) && rec.days_of_week.length > 0;
+  if (rec.freq === 'monthly') { const d = Number(rec.day_of_month); return Number.isInteger(d) && d >= 1 && d <= 31; }
+  return true;
+}
+export function templateRecurrenceSummary(rec) {
+  if (!rec || !rec.freq) return '—';
+  const until = rec.until ? ` · until ${fmtISTDateShort(rec.until)}` : '';
+  if (rec.freq === 'daily') return 'Daily' + until;
+  if (rec.freq === 'weekly') {
+    const days = (rec.days_of_week || []).slice().map(Number).sort((a, b) => a - b);
+    if (days.length === 7) return 'Every day' + until;
+    if (days.length === 5 && [1, 2, 3, 4, 5].every(d => days.includes(d))) return 'Weekdays' + until;
+    return `Weekly · ${days.map(d => WEEKDAYS[d]?.label).filter(Boolean).join(', ')}` + until;
+  }
+  if (rec.freq === 'monthly') return `Monthly on the ${ordinal(Number(rec.day_of_month))}` + until;
+  return '—';
+}
