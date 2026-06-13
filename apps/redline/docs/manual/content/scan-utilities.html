@@ -8,10 +8,21 @@
 </div>
 
 <h2 class="sec">Attendance</h2>
-<p>Attendance is its own tile on the Department Select screen and opens straight into clock-in / clock-out, with <strong>no PIN, no line and no operator gate</strong>. Scan the employee&rsquo;s QR card (or tap <strong>Type ID</strong> and enter it) to record the clock event. A 4-digit ID auto-submits; press Enter for a longer legacy ID. Back returns to Department Select.</p>
+<p>Attendance is its own tile on the Department Select screen and opens straight into clock-in / clock-out, with <strong>no PIN, no line and no operator gate</strong>. Scan the employee&rsquo;s QR card (or tap <strong>Type ID</strong> and enter it) and confirm to record the event. A 4-digit ID auto-submits; press Enter for a longer legacy ID. Back returns to Department Select.</p>
+<p>One scan does the right thing automatically &mdash; the system decides clock-in versus clock-out from the person&rsquo;s <strong>shift</strong> and whether they&rsquo;re already clocked in. You never pick &ldquo;in&rdquo; or &ldquo;out&rdquo;:</p>
+<ul>
+  <li><strong>Clock in</strong> &mdash; from up to an hour before the shift starts until it ends. Arriving early is fine and is <em>not</em> overtime; arriving after the start records how late they were.</li>
+  <li><strong>Clock out</strong> &mdash; only <strong>at or after the shift&rsquo;s end time</strong>. Staying late records overtime. You cannot check out early: a scan before the shift ends just shows <span class="mono">Already Clocked In</span>.</li>
+  <li><strong>Already clocked in</strong> &mdash; a second scan mid-shift (or an accidental double-scan) is ignored with that message, so nobody gets clocked out by mistake.</li>
+  <li><strong>See supervisor</strong> &mdash; if there&rsquo;s no valid window (e.g. a first scan of the day well before the shift, or after it has ended), the screen says to see a supervisor rather than guess.</li>
+</ul>
+<div class="callout note">
+  <div class="c-title">&#9432; Forgot to clock out, or left early?</div>
+  <p>No scan is needed for a normal late finish &mdash; clock out whenever you leave after the end. If someone forgets entirely, the overnight auto-close credits them to their shift end. For a genuine early departure (half-day, sent home), a supervisor closes the shift or sets a Day status in Redline &rarr; Manpower.</p>
+</div>
 
 <h2 class="sec">Lookup</h2>
-<p>Lookup is the safe &ldquo;what is this unit?&rdquo; tool, available under the Utilities category in both Production and Dispatch. Scan any code, a LOT UPC, a box label, or a remote, and it shows that unit&rsquo;s full history, box and packing information. It changes nothing, so use it freely to check a unit before acting on it elsewhere.</p>
+<p>Lookup is the safe &ldquo;what is this?&rdquo; tool, available under the Utilities category in both Production and Dispatch. Scan any code &mdash; a LOT UPC, a box label, a remote, or a <strong>part bag</strong> (<span class="mono">BAG-&hellip;</span>) &mdash; and it shows that item&rsquo;s details. For a unit: its full history, pairing, box and packing. For a part bag: the part, quantity and product, plus its <strong>pick history</strong> (which run it was picked into, when, and on which device). It changes nothing, so use it freely to check something before acting on it elsewhere.</p>
 <div class="callout floor">
   <div class="c-title">&#9874; Why these two skip the sign-in</div>
   <p>Every working station now asks for an operator badge, but Attendance and Lookup are device-free utilities that record no production work, so they open without one. That also means you can reach Lookup quickly to settle a &ldquo;where is this unit?&rdquo; question mid-shift.</p>

@@ -1,16 +1,38 @@
-<p class="lead">Manpower is a daily activity log for store-side staff: record what each store operator is doing today (receiving, picking, counting, and so on). Attendance, the roster and performance now live in Redline; this screen only logs activities for people already rostered to the store.</p>
+<p class="lead">Manpower is the store team&rsquo;s people screen, in three tabs: <strong>Store Activities</strong> (a daily log of what each store operator is doing), <strong>Attendance</strong> (the store team&rsquo;s clock-in/out) and <strong>Shifts</strong> (the store&rsquo;s shift timing). Production and Dispatch attendance live in Redline.</p>
 
 <div class="glance">
-  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Logging what store staff are doing today.</div></div>
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Store activities, attendance and shift timing.</div></div>
   <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action (supervisors).</div></div>
   <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sto">Store</span> <span class="role adm">Admin</span></div></div>
-  <div class="g-cell"><div class="g-lbl">Roster from</div><div class="g-val">Redline Daily Roster.</div></div>
+  <div class="g-cell"><div class="g-lbl">Tabs</div><div class="g-val">Activities &middot; Attendance &middot; Shifts.</div></div>
 </div>
 
-<h2 class="sec">Using it</h2>
-<p>Pick the date. Each operator rostered to the store for that day gets a row. Set their <strong>Current Activity</strong> from the dropdown (Inwarding / GRN / Receiving, Stock Issuance / Picking, Admin, Counting, Clean Up / Maintenance, Other); changing it immediately logs a new entry. Add <strong>Notes</strong> and save. The <strong>History</strong> button shows the day&rsquo;s entries for that person.</p>
-
+<h2 class="sec">Store Activities</h2>
+<p>A daily activity log for store-side staff. Pick the date; each operator rostered to the store for that day gets a row. Set their <strong>Current Activity</strong> from the dropdown (Inwarding / GRN / Receiving, Stock Issuance / Picking, Admin, Counting, Clean Up / Maintenance, Other); changing it immediately logs a new entry. Add <strong>Notes</strong> and save. The <strong>History</strong> button shows the day&rsquo;s entries for that person.</p>
 <div class="callout note">
   <div class="c-title">&#9432; Where the people come from</div>
-  <p>Garage cannot add operators; it only logs what rostered people are doing. If nobody appears, assign them to the store (&ldquo;Others&rdquo;) bucket in <strong>Redline &rarr; Manpower &rarr; Daily Roster</strong> first. The log is append-only: the latest entry is the current activity, and notes cannot be saved until an activity is chosen. Editing needs floor-supervisor access.</p>
+  <p>Activities only logs people already rostered to the store. If nobody appears, assign them to the store (&ldquo;Others&rdquo;) bucket in <strong>Redline &rarr; Manpower &rarr; Daily Roster</strong> first. The log is append-only: the latest entry is the current activity, and notes cannot be saved until an activity is chosen. Editing needs floor-supervisor access.</p>
+</div>
+
+<h2 class="sec">Attendance</h2>
+<p>Clock-in/out for the <strong>store team</strong> on a chosen date. Columns: Clock In (with a <span class="mono">+Xm late</span> note when someone arrived after the shift start), Clock Out (with <span class="mono">+Xm OT</span> when they stayed late), Duration, <strong>Streak</strong>, <strong>Absent (mo)</strong>, <strong>Day status</strong> and a <strong>Close Shift</strong> button on any open shift. Working days are Mon&ndash;Sat (Sundays don&rsquo;t count or break a streak).</p>
+<ul>
+  <li><strong>Streak</strong> &mdash; working days in a row present, counting back from the chosen date.</li>
+  <li><strong>Absent (mo)</strong> &mdash; working days missed so far this month (days before they joined don&rsquo;t count).</li>
+  <li><strong>Day status</strong> &mdash; a manual classification per row (<span class="mono">Normal / Full day / Half day / Absent / Leave / Holiday</span>) for someone sent home, on a half-day or on leave; it feeds the future payroll engine. Leave it on Normal for an ordinary worked day.</li>
+</ul>
+<div class="callout">
+  <div class="c-title">&#9432; Clocking happens on the floor scanner</div>
+  <p>Staff clock in and out at the scanner&rsquo;s <strong>Attendance</strong> tile, not here. This screen is the supervisor&rsquo;s view of those records. One scan decides in-vs-out automatically from the shift; an open shift left overnight is auto-closed to its scheduled end. Use <strong>Close Shift</strong> to tidy up a forgotten clock-out today, or for a genuine early departure (staff can&rsquo;t scan out before the shift ends).</p>
+</div>
+
+<h2 class="sec">Shifts</h2>
+<p>Set the store&rsquo;s shift timing here &mdash; the start and end that drive the clock-in window, lateness and overtime on the scanner. The store runs a single shift; the name is free text.</p>
+<ul>
+  <li><strong>Edit timing</strong> writes a <em>new version</em> effective from the date you pick &mdash; it never overwrites the old one. Previous versions stay under <strong>History</strong> (what the timing was on any past date, and who changed it).</li>
+  <li><strong>Add shift</strong> / <strong>Disable / Enable</strong> are there if the store ever needs more than one shift, or to turn one off without deleting it.</li>
+</ul>
+<div class="callout warn">
+  <div class="c-title">&#9888; No early checkout</div>
+  <p>The clock-out window opens only <strong>at the shift&rsquo;s end time</strong> &mdash; staff can clock in early and clock out late, but not check out early. For a genuine early departure, close the shift on the Attendance tab or set a <strong>Half day</strong> day-status. Fine-tuning (how early clock-in opens, overtime grace, minimum time on site) is under <strong>Advanced</strong> in Edit timing.</p>
 </div>

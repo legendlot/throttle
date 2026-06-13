@@ -1,4 +1,4 @@
-<p class="lead">Manpower is the people screen: who is on the floor right now, daily attendance, the day&rsquo;s roster, and a running log of performance points. It&rsquo;s organised into four tabs: one live view and three you work in.</p>
+<p class="lead">Manpower is the people screen: who is on the floor right now, daily attendance, the day&rsquo;s roster, performance points, and the shift timings behind it all. It&rsquo;s organised into tabs &mdash; a live floor view, <strong>Attendance</strong> (production), a separate <strong>Dispatch</strong> attendance view, the Daily Roster, Performance, Manpower analytics, and <strong>Shifts</strong>. (Store attendance and store shifts live in Garage.)</p>
 
 <div class="glance">
   <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Staffing the floor and tracking attendance.</div></div>
@@ -11,19 +11,23 @@
 <p>Today&rsquo;s headcount across L1, L2, L3, Dispatch, Store, Others and Unassigned, then operator cards under each line. It shows only people with an <strong>open shift</strong> (clocked in, not yet out); someone who has clocked out drops off. &ldquo;On floor&rdquo; (from attendance) and &ldquo;assigned&rdquo; (from the roster) are different counts, shown side by side. Refreshes every 60 seconds.</p>
 
 <h2 class="sec">Attendance</h2>
-<p>Clock-in/out records for a chosen date. Columns include Clock In, Clock Out, Duration, <strong>Streak</strong>, <strong>Absent (mo)</strong> and Device. A shift with no clock-out shows an amber <span class="mono">Open ⚠</span> badge and gets a <strong>Close Shift</strong> button. Use the <strong>Department</strong> filter at the top to narrow the list to one department.</p>
+<p>Clock-in/out records for a chosen date, for the <strong>Production</strong> team (assembly, QC, packaging, admin). Dispatch has its own tab and Store attendance is in Garage. Columns: Clock In (with a <span class="mono">+Xm late</span> note when someone arrived after their shift start), Clock Out (with <span class="mono">+Xm OT</span> when they stayed past the end), Duration, <strong>Streak</strong>, <strong>Absent (mo)</strong>, <strong>Day status</strong> and Device. A shift with no clock-out shows an amber <span class="mono">Open ⚠</span> badge and gets a <strong>Close Shift</strong> button. Use the <strong>Department</strong> filter at the top to narrow the list.</p>
 <ul>
   <li><strong>Streak</strong> &mdash; how many working days in a row the operator has been present, counting back from the selected date. Working days are Mon&ndash;Sat; Sundays neither count nor break a streak.</li>
   <li><strong>Absent (mo)</strong> &mdash; how many working days (Mon&ndash;Sat) the operator has missed so far this month. Days before they joined don&rsquo;t count.</li>
+  <li><strong>Day status</strong> &mdash; a manual classification you set per row: <span class="mono">Normal</span> / <span class="mono">Full day</span> / <span class="mono">Half day</span> / <span class="mono">Absent</span> / <span class="mono">Leave</span> / <span class="mono">Holiday</span>. Use it when someone was sent home, took a half-day or was on leave; it feeds the future payroll/overtime engine. Leave it on Normal for an ordinary worked day.</li>
 </ul>
 <div class="callout">
-  <div class="c-title">&#9432; Auto clock-out at 1 AM</div>
-  <p>Anyone still clocked in from a previous day is automatically clocked out at <strong>1:00 AM IST</strong> the next day and tagged <span class="mono">Auto</span> next to their clock-out time. This stops forgotten shifts running forever &mdash; you don&rsquo;t need to Close them by hand.</p>
+  <div class="c-title">&#9432; Auto clock-out overnight</div>
+  <p>Anyone still clocked in from a previous day is clocked out automatically overnight and tagged <span class="mono">Auto</span>. With shifts live, the clock-out is stamped at that person&rsquo;s <strong>scheduled shift end</strong> (older records that predate shifts fall back to 1:00 AM IST). This credits a forgotten clock-out to the end of the shift they actually worked &mdash; you don&rsquo;t need to Close them by hand.</p>
 </div>
 <div class="callout warn">
   <div class="c-title">&#9888; Close Shift sets clock-out to now</div>
-  <p>Closing an open shift stamps the clock-out at the current time and can&rsquo;t be undone here. Use it to tidy up someone who forgot to clock out <em>today</em>; the duration is calculated from it.</p>
+  <p>Closing an open shift stamps the clock-out at the current time and can&rsquo;t be undone here. Use it to tidy up someone who forgot to clock out <em>today</em>, or to close out someone who genuinely left early (they can&rsquo;t scan out before their shift ends &mdash; see Shifts). The duration is calculated from it.</p>
 </div>
+
+<h2 class="sec">Dispatch</h2>
+<p>The same attendance view, filtered to the <strong>Dispatch</strong> team. Dispatch runs two shifts that overlap in the middle of the day, so each dispatcher is given a <strong>home shift</strong> (set on the Shifts tab) that decides which shift a scan belongs to. Everything else matches the Attendance tab &mdash; clock times, late/OT, streak, day status and Close Shift.</p>
 
 <h2 class="sec">Daily Roster</h2>
 <p>Assign clocked-in people to lines and stations for the day. Set target headcounts per line/station at the top (pre-filled from the active run&rsquo;s line design), then staff from the <strong>Available</strong> pool: the people who are clocked in but not yet assigned.</p>
@@ -53,4 +57,16 @@
 <div class="callout note">
   <div class="c-title">&#9432; Hide never-present</div>
   <p>By default, operators with zero attendance in the window are hidden (usually departed or test accounts) so the genuinely irregular people stand out. Untick <strong>Hide never-present</strong> to show them.</p>
+</div>
+
+<h2 class="sec">Shifts</h2>
+<p>Each team sets its own shift timings here &mdash; the start and end that drive the clock-in window, lateness and overtime on the scanner. <strong>Production and Dispatch</strong> are managed on this tab; <strong>Store</strong> manages its shift in Garage. Shift names are free text.</p>
+<ul>
+  <li><strong>Edit timing</strong> writes a <em>new version</em> effective from the date you pick &mdash; it never overwrites the old one. The change takes effect that day; previous versions stay on record under <strong>History</strong> (so you can always see what the timing was on any past date, and who changed it).</li>
+  <li><strong>Add shift</strong> creates another shift for a department (e.g. Dispatch&rsquo;s second shift). <strong>Disable / Enable</strong> turns a shift off without deleting it.</li>
+  <li><strong>Dispatch &mdash; assign operators</strong>: the two dispatch shifts overlap, so a scan time alone can&rsquo;t tell them apart. Set each dispatcher&rsquo;s <strong>home shift</strong> here so their clock events are attributed to the right one.</li>
+</ul>
+<div class="callout warn">
+  <div class="c-title">&#9888; No early checkout</div>
+  <p>The clock-out window opens only <strong>at the shift&rsquo;s end time</strong>. People can clock in early and clock out late, but they cannot check out early &mdash; a too-early scan just says &ldquo;Already Clocked In&rdquo;. For a genuine early departure, close the shift here or set a <strong>Half day</strong> day-status; the overnight auto-close otherwise credits them to the shift end. Fine-tuning (how early clock-in opens, the overtime grace, the minimum time on site) is under <strong>Advanced</strong> in Edit timing.</p>
 </div>

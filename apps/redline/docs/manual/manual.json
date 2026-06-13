@@ -2,8 +2,8 @@
   "title": "Redline",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to the production floor, QC, dispatch and admin screens that run Legend of Toys.",
-  "version": "1.5.2",
-  "date": "2026-06-13",
+  "version": "1.6.0",
+  "date": "2026-06-14",
   "app_url": "redline.legendoftoys.com",
   "owner": "Legend of Toys",
   "roles": {

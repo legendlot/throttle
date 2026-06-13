@@ -6,6 +6,15 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md`).
 
+## [1.8.0] - 2026-06-14
+
+### Added
+- **Manpower** is now three tabs: **Store Activities** (the existing daily activity log), **Attendance** (the store team's clock-in/out with late/OT notes, Streak, Absent-this-month, **Day status** and Close Shift) and **Shifts** (the store's shift timing — effective-dated versions with History; no early checkout).
+
+### Changed
+- Rewrote the **Manpower** chapter accordingly (was just the Store Activities log; attendance/shifts for the store now live here rather than only in Redline).
+- **Scanner Lookup** now also resolves **part bags** (`BAG-…`) — showing the part, quantity, product and pick history (which run it was picked into, when, on which device).
+
 ## [1.7.0] - 2026-06-13
 
 ### Changed

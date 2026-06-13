@@ -6,6 +6,18 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md` → Versioning).
 
+## [1.6.0] - 2026-06-14
+
+### Added
+- **Manpower → Shifts** tab: each team sets its own shift timings (start/end driving the clock-in window, lateness and overtime). Edit timing writes a new effective-dated version (never overwrites) with History; Add shift / Disable / Enable; Dispatch home-shift assignment for its two overlapping shifts.
+- **Manpower → Dispatch** tab: attendance filtered to the Dispatch team (Dispatch runs two shifts; each dispatcher has a home shift).
+- **Manpower → Attendance**: new **Day status** column (Normal / Full day / Half day / Absent / Leave / Holiday — manual, feeds the future payroll engine) and **+Xm late / +Xm OT** notes on clock times.
+
+### Changed
+- **Manpower → Attendance** is now scoped to the **Production** team (Dispatch moved to its own tab; Store attendance is in Garage).
+- **Scanner Attendance** rewritten for the shift-aware resolver (the "flip"): one scan decides clock-in vs clock-out from the operator's shift and open-row state. Clock-in opens up to an hour early; **clock-out opens only at the shift end (no early checkout)**; a too-early or double scan shows "Already Clocked In"; out-of-window shows "see supervisor". Auto clock-out now stamps the **scheduled shift end** (1 AM fallback for pre-shift records).
+- **Scanner Lookup** now also resolves **part bags** (`BAG-…`) — part, quantity, product and pick history.
+
 ## [1.5.0] - 2026-06-13
 
 ### Added
