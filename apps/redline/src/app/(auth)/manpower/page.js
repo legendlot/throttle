@@ -2140,6 +2140,7 @@ function fmtHM(t) { return t ? String(t).slice(0, 5) : null; }
 function ShiftsTab({ session, canManageFloor }) {
   const { showToast } = useToast();
   const [shifts, setShifts] = useState([]);
+  const [dispatchOps, setDispatchOps] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editTarget, setEditTarget] = useState(null);
   const [histTarget, setHistTarget] = useState(null);
@@ -2149,9 +2150,13 @@ function ShiftsTab({ session, canManageFloor }) {
     if (!session || !canManageFloor) return;
     setLoading(true);
     try {
-      const res = await workerFetch('getShifts', { data: {} }, session);
-      const list = Array.isArray(res?.data) ? res.data : [];
+      const [shRes, opRes] = await Promise.all([
+        workerFetch('getShifts', { data: {} }, session),
+        workerFetch('getOperators', { data: { department: 'dispatch', status: 'active' } }, session),
+      ]);
+      const list = Array.isArray(shRes?.data) ? shRes.data : [];
       setShifts(list.filter((s) => SHIFT_DEPTS.includes(s.department)));
+      setDispatchOps(Array.isArray(opRes?.data) ? opRes.data : []);
     } catch (e) {
       showToast(e.message || 'Failed to load shifts', 'error');
     } finally { setLoading(false); }
@@ -2161,6 +2166,12 @@ function ShiftsTab({ session, canManageFloor }) {
   async function toggleActive(s) {
     try {
       await workerFetch('setShiftActive', { data: { shift_id: s.id, is_active: !s.is_active } }, session);
+      load();
+    } catch (e) { showToast(e.message || 'Failed', 'error'); }
+  }
+  async function assignOp(operator_id, shift_id) {
+    try {
+      await workerFetch('setOperatorShift', { data: { operator_id, shift_id: shift_id || null } }, session);
       load();
     } catch (e) { showToast(e.message || 'Failed', 'error'); }
   }
@@ -2212,6 +2223,39 @@ function ShiftsTab({ session, canManageFloor }) {
           </div>
         </Panel>
       ))}
+
+      {(byDept['dispatch'] || []).length > 1 && (
+        <Panel title="Dispatch — assign operators to shifts">
+          <div style={{ fontSize: 12.5, color: 'var(--t3)', marginBottom: 10 }}>
+            Dispatch shifts overlap, so a person's shift can't be read from scan time — set each
+            operator's home shift here. (Unassigned falls back to the earliest matching shift.)
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead><tr><th style={shTh}>Operator</th><th style={shTh}>ID</th><th style={shTh}>Home shift</th></tr></thead>
+              <tbody>
+                {dispatchOps.map((o) => (
+                  <tr key={o.id}>
+                    <td style={shTd}>{o.name}</td>
+                    <td style={shTd}>{o.employee_id}</td>
+                    <td style={shTd}>
+                      <select value={o.shift_id || ''} onChange={(e) => assignOp(o.id, e.target.value)} style={selectStyle}>
+                        <option value="">— unassigned —</option>
+                        {(byDept['dispatch'] || []).map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name}{s.current ? ` (${fmtHM(s.current.start_time)}–${fmtHM(s.current.end_time)})` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                  </tr>
+                ))}
+                {!dispatchOps.length && <tr><td colSpan={3} style={{ ...shTd, color: 'var(--t3)' }}>No active dispatch operators.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+      )}
 
       {editTarget && <EditTimingModal shift={editTarget} session={session} onClose={() => setEditTarget(null)} onSaved={() => { setEditTarget(null); load(); }} />}
       {histTarget && <ShiftHistoryModal shift={histTarget} session={session} onClose={() => setHistTarget(null)} />}
