@@ -80,8 +80,27 @@ async function verifyJWT(authHeader, env) {
 
   const profileRes = await sbStore(
     `/rest/v1/users_profile?id=eq.${user.id}&select=role,full_name,active&limit=1`, env);
-  if (!profileRes.ok || !profileRes.data?.[0]) return null;
-  const profile = profileRes.data[0];
+  let profile = (profileRes.ok && profileRes.data?.[0]) || null;
+
+  // Durable self-provision (2026-06-13): a valid @legendoftoys.com Google login with no
+  // users_profile row used to make this return null → Docket hung forever at "Loading"
+  // (every new hire who opened Docket before being set up in Garage /users — happened to
+  // Chiragh/Nitesh/Rayn/Prarthi/Aakash). Instead, auto-create a least-privilege baseline
+  // identity (viewer) so Docket's "no role = baseline" tier works immediately. Domain is
+  // already enforced at Google OAuth (RULE-010); re-checked here defensively. Upsert
+  // (merge-duplicates) is race-safe for a brand-new user's first concurrent calls. An
+  // admin can elevate/deactivate the role later in Garage /users.
+  if (!profile) {
+    const email = (user.email || '').toLowerCase();
+    if (!email.endsWith('@legendoftoys.com')) return null;
+    const fname = user.user_metadata?.full_name || user.user_metadata?.name || user.email;
+    const ins = await sbStore('/rest/v1/users_profile', env, {
+      method: 'POST',
+      prefer: 'return=representation,resolution=merge-duplicates',
+      body:   JSON.stringify({ id: user.id, full_name: fname, role: 'viewer', active: true }),
+    });
+    profile = (ins.ok && ins.data?.[0]) || { role: 'viewer', full_name: fname, active: true };
+  }
   if (!profile.active) return null;
 
   // Permissions from Docket's own layer (RULE-DOCKET-002). No role → {} → baseline.
