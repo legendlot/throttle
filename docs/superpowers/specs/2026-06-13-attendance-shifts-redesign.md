@@ -189,15 +189,20 @@ Same engine underneath; each surface filters by `operators.team` and scopes its 
    be inconsistent; flagged as a deliberate deviation from the original "filter Live too" wording).
 3. ✅ **DONE S132 — `day_status` control** in the attendance rows (both apps) → `setDayStatus` (optimistic,
    tone-coloured select Normal/Full day/Half day/Absent/Leave/Holiday). Feeds future payroll.
-4. **Auto-close → stamp scheduled end** — `public.auto_close_open_attendance()` (pg_cron 1 AM IST) currently
-   stamps next-day 1 AM + no OT. With shifts: stamp `scheduled_end`, leave `standard`. Amend RULE-ATT-001.
-   **NOTE (S132): coupled to the flip** — pre-flip the live `clockIn` path does NOT populate `scheduled_end`
-   (only `recordAttendance` does), so there's nothing to stamp until the flip lands. Do this WITH item 5.
-5. **2c — THE FLIP (behavioral go-live):** switch `02_scanner/index.html` `confirmAttendance` from
-   `clockIn`/`clockOut` → `recordAttendance` (read `res.data.action` = `in`/`out`/`noop`). **Deploy ONLY after
-   Store + Dispatch confirm their times** (Store can now do this via the new Garage Shifts tab; Dispatch via the
-   Redline Shifts tab) + dispatch assigns its 9 operators. Then live-test one in + one out.
-   After flip, `clockIn`/`clockOut` + `SHIFT_END_MIN` become legacy.
+4. ✅ **DONE S132 — Auto-close → stamp scheduled end.** `public.auto_close_open_attendance()` now sets
+   `clock_out = COALESCE(scheduled_end, next-day 01:00 IST)` (recordAttendance rows credited to shift end;
+   legacy rows keep the 1 AM fallback), `shift_type` left standard. pg_cron job unchanged.
+5. ✅ **DONE S132 — THE FLIP shipped (behavioral go-live).** `02_scanner/index.html` `confirmAttendance` now
+   calls `recordAttendance` (reads `res.data.action` = `in`/`out`/`noop`; `no_open_window` → "see supervisor",
+   `mid_shift`/`min_dwell` → "Already Clocked In"). Prereqs met: store time confirmed (single 09–18), dispatch
+   assigned (Shift 1 ×3 / Shift 2 ×9), **NO-EARLY-CHECKOUT** applied (`out_open_lead=0` all shifts),
+   `created_at` tiebreaker added for same-day shift re-edits. `clockIn`/`clockOut`+`SHIFT_END_MIN` now dead/rollback-only.
+
+### ✅ FLIP COMPLETE (Session 132) — one optional remains
+Live end-to-end. The **only** open item is the optional **supervisor "manually add attendance"** screen
+(Garage/Redline) for the rare operator who can't clock in (first scan >60 min early or after shift end →
+`no_open_window`, no row, no current recourse). Offered, not built — awaiting go-ahead. Also nice-to-have:
+per-department fallback gate (moot now the flip is global-live), assignment-change audit (deferred, §9).
 
 ### ⚠️ Resume gotchas
 - `SHIFT_END_MIN`/`shiftTypeAtClockOut` (Phase-1 hardcode) is still used by the **LIVE** `clockOut` path —
