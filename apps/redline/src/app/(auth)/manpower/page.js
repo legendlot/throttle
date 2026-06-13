@@ -187,6 +187,7 @@ export default function ManpowerPage() {
     { key: 'roster',      label: 'Daily roster',icon: 'layers' },
     { key: 'performance', label: 'Performance', icon: 'activity' },
     { key: 'analytics',   label: 'Manpower analytics', icon: 'gauge' },
+    { key: 'shifts',      label: 'Shifts',      icon: 'clock' },
   ];
 
   return (
@@ -213,6 +214,7 @@ export default function ManpowerPage() {
       {activeTab === 'roster'      && <DailyRosterTab session={session} canManageFloor={canManageFloor} operators={allOperators} />}
       {activeTab === 'performance' && <PerformanceTab session={session} canManageFloor={canManageFloor} operators={allOperators} />}
       {activeTab === 'analytics'   && <ManpowerAnalyticsTab session={session} canManageFloor={canManageFloor} operators={allOperators} />}
+      {activeTab === 'shifts'      && <ShiftsTab session={session} canManageFloor={canManageFloor} />}
     </div>
   );
 }
@@ -2118,5 +2120,210 @@ function Field({ label, full, children }) {
       <span className="eyebrow" style={{ display: 'block', marginBottom: 6 }}>{label}</span>
       {children}
     </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ShiftsTab (Phase 2) — team-owned, effective-dated, audited shift timings.
+// Production + Dispatch manage their shifts here (Store manages in Garage).
+// Editing a time writes a NEW effective-dated version (never overwrites) → full
+// audit trail. Worker: getShifts / createShift / renameShift / setShiftActive /
+// addShiftVersion / getShiftHistory. Read by the recordAttendance resolver.
+// ═══════════════════════════════════════════════════════════════════════════
+const SHIFT_DEPTS = ['assembly', 'qc', 'packaging', 'admin', 'dispatch']; // store lives in Garage
+const modalInput = { ...kitInput, width: '100%', fontSize: 13, padding: '8px 11px' };
+const shTd = { padding: '9px 10px', fontSize: 13, color: 'var(--t2)', borderBottom: '1px solid var(--border)' };
+const shTh = { textAlign: 'left', padding: '8px 10px', fontSize: 11, textTransform: 'uppercase',
+  letterSpacing: '.08em', color: 'var(--t3)', borderBottom: '1px solid var(--border)' };
+function fmtHM(t) { return t ? String(t).slice(0, 5) : null; }
+
+function ShiftsTab({ session, canManageFloor }) {
+  const { showToast } = useToast();
+  const [shifts, setShifts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [editTarget, setEditTarget] = useState(null);
+  const [histTarget, setHistTarget] = useState(null);
+  const [addDept, setAddDept] = useState(null);
+
+  const load = useCallback(async () => {
+    if (!session || !canManageFloor) return;
+    setLoading(true);
+    try {
+      const res = await workerFetch('getShifts', { data: {} }, session);
+      const list = Array.isArray(res?.data) ? res.data : [];
+      setShifts(list.filter((s) => SHIFT_DEPTS.includes(s.department)));
+    } catch (e) {
+      showToast(e.message || 'Failed to load shifts', 'error');
+    } finally { setLoading(false); }
+  }, [session, canManageFloor, showToast]);
+  useEffect(() => { load(); }, [load]);
+
+  async function toggleActive(s) {
+    try {
+      await workerFetch('setShiftActive', { data: { shift_id: s.id, is_active: !s.is_active } }, session);
+      load();
+    } catch (e) { showToast(e.message || 'Failed', 'error'); }
+  }
+
+  if (!canManageFloor) return <Panel><div style={{ padding: 20, color: 'var(--t3)' }}>Restricted to floor supervisors.</div></Panel>;
+  if (loading) return <div style={{ padding: 40, textAlign: 'center' }}><Spinner /></div>;
+
+  const byDept = {};
+  for (const s of shifts) (byDept[s.department] = byDept[s.department] || []).push(s);
+
+  return (
+    <div style={{ display: 'grid', gap: 14 }}>
+      <div style={{ fontSize: 13, color: 'var(--t3)', maxWidth: 700 }}>
+        Shift timings drive attendance — the clock-in window, the end time, and overtime.
+        Changing a time takes effect from the date you pick and is saved as a new version;
+        older versions stay for the record. Names are yours to set. (Store shifts are managed in Garage.)
+      </div>
+      {SHIFT_DEPTS.map((dept) => (
+        <Panel key={dept} title={capitalize(dept)}
+          action={<button style={smallGhost} onClick={() => setAddDept(dept)}>+ Add shift</button>}>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead><tr>
+                <th style={shTh}>Shift</th><th style={shTh}>Timing</th>
+                <th style={shTh}>Effective</th><th style={shTh}>Status</th>
+                <th style={{ ...shTh, textAlign: 'right' }}></th>
+              </tr></thead>
+              <tbody>
+                {(byDept[dept] || []).map((s) => (
+                  <tr key={s.id} style={{ opacity: s.is_active ? 1 : 0.55 }}>
+                    <td style={shTd}>{s.name}</td>
+                    <td style={shTd}>{s.current
+                      ? `${fmtHM(s.current.start_time)}–${fmtHM(s.current.end_time)}${s.current.ends_next_day ? ' (+1d)' : ''}`
+                      : <span style={{ color: 'var(--t3)' }}>— not set —</span>}</td>
+                    <td style={shTd}>{s.current?.effective_from || '—'}</td>
+                    <td style={shTd}><ToneBadge tone={s.is_active ? 'ok' : 'mute'}>{s.is_active ? 'Active' : 'Off'}</ToneBadge></td>
+                    <td style={{ ...shTd, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      <button style={smallGhost} onClick={() => setEditTarget(s)}>Edit timing</button>{' '}
+                      <button style={smallGhost} onClick={() => setHistTarget(s)}>History</button>{' '}
+                      <button style={smallGhost} onClick={() => toggleActive(s)}>{s.is_active ? 'Disable' : 'Enable'}</button>
+                    </td>
+                  </tr>
+                ))}
+                {!(byDept[dept] || []).length && (
+                  <tr><td colSpan={5} style={{ ...shTd, color: 'var(--t3)' }}>No shifts yet — add one.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+      ))}
+
+      {editTarget && <EditTimingModal shift={editTarget} session={session} onClose={() => setEditTarget(null)} onSaved={() => { setEditTarget(null); load(); }} />}
+      {histTarget && <ShiftHistoryModal shift={histTarget} session={session} onClose={() => setHistTarget(null)} />}
+      {addDept && <AddShiftModal dept={addDept} session={session} onClose={() => setAddDept(null)} onSaved={() => { setAddDept(null); load(); }} />}
+    </div>
+  );
+}
+
+function EditTimingModal({ shift, session, onClose, onSaved }) {
+  const { showToast } = useToast();
+  const c = shift.current || {};
+  const [f, setF] = useState({
+    effective_from: istToday(),
+    start_time: fmtHM(c.start_time) || '09:00',
+    end_time:   fmtHM(c.end_time)   || '18:00',
+    ends_next_day: !!c.ends_next_day,
+    in_open_lead_min:  c.in_open_lead_min  ?? 60,
+    out_open_lead_min: c.out_open_lead_min ?? 60,
+    grace_min:     c.grace_min     ?? 30,
+    min_dwell_min: c.min_dwell_min ?? 30,
+    note: '',
+  });
+  const [saving, setSaving] = useState(false);
+  const set = (k) => (e) => setF((p) => ({ ...p, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }));
+
+  async function save() {
+    setSaving(true);
+    try {
+      const res = await workerFetch('addShiftVersion', { data: {
+        shift_id: shift.id, effective_from: f.effective_from,
+        start_time: f.start_time, end_time: f.end_time, ends_next_day: f.ends_next_day,
+        in_open_lead_min: Number(f.in_open_lead_min), out_open_lead_min: Number(f.out_open_lead_min),
+        grace_min: Number(f.grace_min), min_dwell_min: Number(f.min_dwell_min), note: f.note || null,
+      } }, session);
+      if (res?.data?.ok === false) { showToast(res.data.error || 'Failed', 'error'); setSaving(false); return; }
+      showToast('Shift timing updated', 'success');
+      onSaved();
+    } catch (e) { showToast(e.message || 'Failed', 'error'); setSaving(false); }
+  }
+
+  return (
+    <Modal open onClose={onClose} title={`${capitalize(shift.department)} · ${shift.name} — edit timing`}
+      confirmLabel="Save new version" onConfirm={save} loading={saving}>
+      <div style={{ display: 'grid', gap: 12 }}>
+        <Field label="Effective from"><input type="date" value={f.effective_from} onChange={set('effective_from')} style={modalInput} /></Field>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <Field label="Start"><input type="time" value={f.start_time} onChange={set('start_time')} style={modalInput} /></Field>
+          <Field label="End"><input type="time" value={f.end_time} onChange={set('end_time')} style={modalInput} /></Field>
+        </div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, color: 'var(--t2)' }}>
+          <input type="checkbox" checked={f.ends_next_day} onChange={set('ends_next_day')} /> Ends next day (overnight shift)
+        </label>
+        <details>
+          <summary style={{ cursor: 'pointer', fontSize: 12.5, color: 'var(--t3)' }}>Advanced — windows · grace · min-dwell</summary>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10 }}>
+            <Field label="Clock-in opens (min before start)"><input type="number" value={f.in_open_lead_min} onChange={set('in_open_lead_min')} style={modalInput} /></Field>
+            <Field label="Clock-out opens (min before end)"><input type="number" value={f.out_open_lead_min} onChange={set('out_open_lead_min')} style={modalInput} /></Field>
+            <Field label="OT grace (min past end)"><input type="number" value={f.grace_min} onChange={set('grace_min')} style={modalInput} /></Field>
+            <Field label="Min dwell before clock-out (min)"><input type="number" value={f.min_dwell_min} onChange={set('min_dwell_min')} style={modalInput} /></Field>
+          </div>
+        </details>
+        <Field label="Note (optional — why the change)"><input value={f.note} onChange={set('note')} style={modalInput} placeholder="e.g. summer hours" /></Field>
+      </div>
+    </Modal>
+  );
+}
+
+function AddShiftModal({ dept, session, onClose, onSaved }) {
+  const { showToast } = useToast();
+  const [name, setName] = useState('');
+  const [saving, setSaving] = useState(false);
+  async function save() {
+    if (!name.trim()) { showToast('Name required', 'error'); return; }
+    setSaving(true);
+    try {
+      await workerFetch('createShift', { data: { department: dept, name: name.trim() } }, session);
+      showToast('Shift added — set its timing next', 'success');
+      onSaved();
+    } catch (e) { showToast(e.message || 'Failed', 'error'); setSaving(false); }
+  }
+  return (
+    <Modal open onClose={onClose} title={`Add shift — ${capitalize(dept)}`}
+      confirmLabel="Add shift" onConfirm={save} loading={saving}>
+      <Field label="Shift name"><input value={name} onChange={(e) => setName(e.target.value)} style={modalInput} placeholder="e.g. First, GT, Night…" autoFocus /></Field>
+    </Modal>
+  );
+}
+
+function ShiftHistoryModal({ shift, session, onClose }) {
+  const [rows, setRows] = useState(null);
+  useEffect(() => {
+    workerFetch('getShiftHistory', { data: { shift_id: shift.id } }, session)
+      .then((r) => setRows(Array.isArray(r?.data) ? r.data : []))
+      .catch(() => setRows([]));
+  }, [shift, session]);
+  return (
+    <Modal open onClose={onClose} title={`${shift.name} — version history`}>
+      {rows === null ? <div style={{ padding: 20, textAlign: 'center' }}><Spinner /></div>
+        : !rows.length ? <div style={{ color: 'var(--t3)' }}>No versions.</div> : (
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr><th style={shTh}>Effective</th><th style={shTh}>Timing</th><th style={shTh}>Added · note</th></tr></thead>
+          <tbody>
+            {rows.map((v) => (
+              <tr key={v.id}>
+                <td style={shTd}>{v.effective_from}</td>
+                <td style={shTd}>{fmtHM(v.start_time)}–{fmtHM(v.end_time)}{v.ends_next_day ? ' (+1d)' : ''}</td>
+                <td style={shTd}>{v.created_at ? new Date(v.created_at).toLocaleDateString('en-IN') : '—'}{v.note ? ` · ${v.note}` : ''}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Modal>
   );
 }
