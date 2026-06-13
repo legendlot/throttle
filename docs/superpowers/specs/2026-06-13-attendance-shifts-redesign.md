@@ -137,6 +137,71 @@ Same engine underneath; each surface filters by `operators.team` and scopes its 
 - **Phase 2:** `shifts` + `shift_versions` + `operators.team` + multi-shift resolver (`recordAttendance`) +
   the three Manpower homes + back-office shift admin (versioned + audited) + `day_status` + payroll-ready fields.
 
-## 11. Done this session (2026-06-13, data cleanup only — no code yet)
-- Reopened the 2 double-scan rows (AMIR LOT-FACT-1148, Vijay LOT-FACT-1118) — cleared the instant clock-out.
-- Relabeled all 42 of today's false-OVERTIME rows (early arrivals) → `standard`.
+## 11. BUILD STATUS & HANDOVER — end of Session 131 (2026-06-13)
+
+> **Read this first when resuming.** Phase 1 + the entire Phase-2 BACKEND are shipped & deployed.
+> The Phase-2 resolver is deployed but **INERT** (scanner still on the Phase-1 path). What remains
+> is the Phase-2 **frontend** (Garage Store Manpower, Dispatch tab, day_status UI) + the **flip**.
+
+### ✅ LIVE / deployed
+- **Phase 1 (both bugs fixed)** — lotopsproxy `023709ea`: `clockIn` writes `shift_type='standard'`;
+  `clockOut` has the **min-dwell guard** (clock-out <30 min ⇒ `action:'noop'`) + **OT-at-clock-out**
+  (`SHIFT_END_MIN` hardcode: assembly 18:00/qc 18:30/pkg 19:00 + 30m grace). Scanner pushed: a `noop`
+  clock-out shows **"Already Clocked In"** (`02_scanner/index.html` `confirmAttendance`).
+- **Phase 2a** — migration `attendance_shifts_phase2a`: `store.shifts` + `store.shift_versions`
+  (RLS-on, service_role-only), `operators.team` (backfilled production 119 / store 22 / dispatch 9),
+  `operator_attendance` +`shift_id`/`scheduled_start`/`scheduled_end`/`late_minutes`/`overtime_minutes`/
+  `day_status`(+`_by`/`_at`/`_note`). Seeded v1 shifts.
+- **Phase 2b** — lotopsproxy `0e9b49b4` → `1dc9f986` (latest): `recordAttendance` resolver
+  (SCANNER_ACTION, **INERT** — not called by scanner yet) + helpers `activeShiftsForDept`/`shiftZone`/
+  `istClockToUTC`/`hhmmToMin`; JWT actions `getShifts`/`getShiftHistory`/`createShift`/`renameShift`/
+  `setShiftActive`/`addShiftVersion` + `setDayStatus` + `setOperatorShift`; `getOperatorAttendance`
+  gained optional `team` filter; `getOperators` returns `team`+`shift_id`. Migration `operators_home_shift`
+  added `operators.shift_id` (per-worker home shift; resolver prefers it at clock-in, null⇒time-of-day).
+- **Redline Manpower → "Shifts" tab** (`apps/redline/.../manpower/page.js` `ShiftsTab` + `EditTimingModal`/
+  `AddShiftModal`/`ShiftHistoryModal`): production+dispatch list/add/edit-as-new-version/history/enable-disable
+  shifts; **Dispatch operator→home-shift assignment** panel. LIVE (auto-deployed).
+
+### 📊 Current shift data (store.shifts / shift_versions, all effective 2026-06-13)
+- assembly **09:00–18:00**, qc **09:00–18:30**, packaging **10:00–19:00**, admin **09:00–18:00** (production, CONFIRMED correct).
+- dispatch **Shift 1 08:00–17:00**, **Shift 2 10:00–19:00** (CONFIRMED by Afshaan S131; they OVERLAP → need per-worker assignment).
+- store **09:00–18:00** (PLACEHOLDER — store must confirm via the Garage admin, not yet built).
+- Window defaults per version: in_open_lead 60, out_open_lead 60, grace 30, min_dwell 30.
+
+### 🔧 REMAINING WORK (Phase 2 frontend + flip) — priority order
+1. **Garage Store Manpower view + store shift admin** — Garage has NO Manpower page today. Build a new
+   route + nav entry + attendance view (`getOperatorAttendance` `team:'store'` + `getAttendanceStats`) +
+   a Store shifts admin (reuse the Redline ShiftsTab pattern, scoped to dept `store`). **Unblocks Store
+   confirming its real time** (prereq for the store flip).
+2. **Redline Dispatch Manpower tab** (new tab/menu, `team:'dispatch'`) + **filter existing Redline
+   Attendance/Live/Analytics to `team:'production'`** (worker already accepts `team`; currently they show all teams).
+3. **`day_status` (half-day) control** in the attendance-row UI → calls `setDayStatus` (worker done). Feeds future payroll.
+4. **Auto-close → stamp scheduled end** — `public.auto_close_open_attendance()` (pg_cron 1 AM IST) currently
+   stamps next-day 1 AM + no OT. With shifts: stamp `scheduled_end`, leave `standard`. Amend RULE-ATT-001.
+5. **2c — THE FLIP (behavioral go-live):** switch `02_scanner/index.html` `confirmAttendance` from
+   `clockIn`/`clockOut` → `recordAttendance` (read `res.data.action` = `in`/`out`/`noop`). **Deploy ONLY after
+   Store + Dispatch confirm their times** + dispatch assigns its 9 operators. Then live-test one in + one out.
+   After flip, `clockIn`/`clockOut` + `SHIFT_END_MIN` become legacy.
+
+### ⚠️ Resume gotchas
+- `SHIFT_END_MIN`/`shiftTypeAtClockOut` (Phase-1 hardcode) is still used by the **LIVE** `clockOut` path —
+  do NOT remove until the flip. `recordAttendance` uses the shifts table; both coexist intentionally.
+- Worker DB helpers: `query`/`insert`/`update` = **store** schema; `queryPublic`/`insertPublic`/`updatePublic` = public. `authResult.userId` = caller id.
+- Redline UI: `workerFetch(action,{data},session)` → `res.data`. Kit: `Panel({title,icon,action,pad})`,
+  `Modal({open,onClose,title,confirmLabel,onConfirm,loading})`, `ToneBadge tone=ok|mute|bad`, existing `Field({label,full})`,
+  `istToday()`, `capitalize()`, `selectStyle`, `smallGhost`, `btnPrimary/btnGhost`. Build: `npx turbo build --filter=redline`.
+- Shift CRUD gated `canManageFloor` (team-scoped `shift_manage` perm = later refinement).
+- Dispatch shifts OVERLAP → resolver uses `operators.shift_id`; production/store single-shift use time-of-day.
+
+### ⏳ Pending on PEOPLE (not code)
+- **Piyush:** (a) physical recount of `HW-TM-CMB` (−2,525) — blocks producibility dashboard org-wide (BACKLOG DQ);
+  (b) confirm the 2 held screw codes `HW-CSC-59-24-4` + `GH-SC-03` (#system-updates thread).
+- **Dispatch team:** assign the 9 dispatch operators to Shift 1 / Shift 2 in the Redline Shifts tab.
+- **Store team:** confirm real store shift time (needs the Garage admin from item 1 first).
+
+### Migrations applied S131
+`attendance_shifts_phase2a`, `operators_home_shift`.
+
+### Data cleanups done S131 (no code)
+Reopened the 2 instant-double-scan rows (AMIR LOT-FACT-1148, Vijay LOT-FACT-1118); relabeled 42 false-OVERTIME
+rows → `standard`; set dispatch times (8-17/10-19); seeded Wisp ledger rows `WI-PB-37` 1036 + `WI-TM-01` 1029.
