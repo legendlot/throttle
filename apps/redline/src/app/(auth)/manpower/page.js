@@ -46,6 +46,16 @@ const smallGhost  = { ...btnGhost, padding: '6px 10px', fontSize: 12 };
 
 // ── Display helpers ─────────────────────────────────────────────────────────
 function capitalize(s) { return (s || '').charAt(0).toUpperCase() + (s || '').slice(1); }
+// Manual day classification (sick / half-day / leave …) — feeds the future salary/OT engine.
+const DAY_STATUS_OPTS = [
+  { value: '',         label: 'Normal' },
+  { value: 'full_day', label: 'Full day' },
+  { value: 'half_day', label: 'Half day' },
+  { value: 'absent',   label: 'Absent' },
+  { value: 'leave',    label: 'Leave' },
+  { value: 'holiday',  label: 'Holiday' },
+];
+const DAY_STATUS_TONE = { half_day: 'warn', absent: 'bad', leave: 'brand', holiday: 'mute', full_day: 'ok' };
 function fmtDate(d) {
   if (!d) return '—';
   try {
@@ -184,6 +194,7 @@ export default function ManpowerPage() {
   const TABS = [
     { key: 'live',        label: 'Live view',   icon: 'grid' },
     { key: 'attendance',  label: 'Attendance',  icon: 'clock' },
+    { key: 'dispatch',    label: 'Dispatch',    icon: 'truck' },
     { key: 'roster',      label: 'Daily roster',icon: 'layers' },
     { key: 'performance', label: 'Performance', icon: 'activity' },
     { key: 'analytics',   label: 'Manpower analytics', icon: 'gauge' },
@@ -210,10 +221,11 @@ export default function ManpowerPage() {
       </div>
 
       {activeTab === 'live'        && <LiveViewTab session={session} canManageFloor={canManageFloor} />}
-      {activeTab === 'attendance'  && <AttendanceTab session={session} canManageFloor={canManageFloor} operators={allOperators} />}
+      {activeTab === 'attendance'  && <AttendanceTab session={session} canManageFloor={canManageFloor} operators={allOperators} team="production" />}
+      {activeTab === 'dispatch'    && <AttendanceTab session={session} canManageFloor={canManageFloor} operators={allOperators} team="dispatch" />}
       {activeTab === 'roster'      && <DailyRosterTab session={session} canManageFloor={canManageFloor} operators={allOperators} />}
       {activeTab === 'performance' && <PerformanceTab session={session} canManageFloor={canManageFloor} operators={allOperators} />}
-      {activeTab === 'analytics'   && <ManpowerAnalyticsTab session={session} canManageFloor={canManageFloor} operators={allOperators} />}
+      {activeTab === 'analytics'   && <ManpowerAnalyticsTab session={session} canManageFloor={canManageFloor} operators={allOperators} team="production" />}
       {activeTab === 'shifts'      && <ShiftsTab session={session} canManageFloor={canManageFloor} />}
     </div>
   );
@@ -497,7 +509,7 @@ function FlatSection({ label, accent, rows, sub }) {
 // AttendanceTab — daily clock-in/out view with close-shift action.
 // Worker: getOperatorAttendance + closeAttendanceShift (canManageFloor gate).
 // ═══════════════════════════════════════════════════════════════════════════
-function AttendanceTab({ session, canManageFloor, operators }) {
+function AttendanceTab({ session, canManageFloor, operators, team }) {
   const { showToast } = useToast();
   const [date, setDate] = useState(istToday());
   const [rows, setRows] = useState([]);
@@ -506,6 +518,7 @@ function AttendanceTab({ session, canManageFloor, operators }) {
   const [loading, setLoading] = useState(true);
   const [closeTarget, setCloseTarget] = useState(null);
   const [closing, setClosing] = useState(false);
+  const [savingStatus, setSavingStatus] = useState({}); // attendance_id → bool (day_status save in flight)
 
   // employee_id lookup — attendance rows don't include it.
   const opMap = useMemo(() => {
@@ -519,7 +532,7 @@ function AttendanceTab({ session, canManageFloor, operators }) {
     setLoading(true);
     try {
       const [attRes, statRes] = await Promise.all([
-        workerFetch('getOperatorAttendance', { data: { date_from: date, date_to: date } }, session),
+        workerFetch('getOperatorAttendance', { data: { date_from: date, date_to: date, ...(team ? { team } : {}) } }, session),
         workerFetch('getAttendanceStats',    { data: { date } },                            session).catch(() => null),
       ]);
       const list = Array.isArray(attRes?.data) ? attRes.data : Array.isArray(attRes) ? attRes : [];
@@ -535,9 +548,23 @@ function AttendanceTab({ session, canManageFloor, operators }) {
     } finally {
       setLoading(false);
     }
-  }, [session, canManageFloor, date, showToast]);
+  }, [session, canManageFloor, date, team, showToast]);
 
   useEffect(() => { load(); }, [load]);
+
+  async function setDayStatus(row, day_status) {
+    setSavingStatus((s) => ({ ...s, [row.id]: true }));
+    // optimistic
+    setRows((rs) => rs.map((r) => (r.id === row.id ? { ...r, day_status: day_status || null } : r)));
+    try {
+      await workerFetch('setDayStatus', { data: { attendance_id: row.id, day_status: day_status || null } }, session);
+    } catch (e) {
+      showToast(e.message || 'Failed to set day status', 'error');
+      load(); // revert to server truth
+    } finally {
+      setSavingStatus((s) => { const n = { ...s }; delete n[row.id]; return n; });
+    }
+  }
 
   // Department helpers — options derived from the day's records; filter client-side.
   const deptOf = useCallback(
@@ -590,7 +617,7 @@ function AttendanceTab({ session, canManageFloor, operators }) {
   // can't collapse to the avatar width. The header row and each data row are separate
   // grids; a bare `fr` whose body content has overflow:hidden (min-content 0) would
   // size differently between header and body and drift the columns out of sync.
-  const cols = '110px minmax(170px, 1.5fr) 116px 96px 84px 104px 84px 72px 96px 120px 88px';
+  const cols = '102px minmax(160px, 1.4fr) 104px 84px 80px 102px 74px 56px 80px 104px 124px 88px';
 
   return (
     <div>
@@ -627,9 +654,9 @@ function AttendanceTab({ session, canManageFloor, operators }) {
             sub={dept ? `No ${capitalize(dept)} records for ${fmtIstDate(date)}.` : `Nothing logged for ${fmtIstDate(date)}.`} />
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <div style={{ minWidth: 1180 }}>
+            <div style={{ minWidth: 1320 }}>
               <div style={{ display: 'grid', gridTemplateColumns: cols, gap: 12, padding: '0 12px 9px', borderBottom: '1px solid var(--border)' }}>
-                {['Employee ID', 'Operator', 'Department', 'Shift', 'Clock in', 'Clock out', 'Duration', 'Streak', 'Absent (mo)', 'Device', ''].map((h, i) => (
+                {['Employee ID', 'Operator', 'Department', 'Shift', 'Clock in', 'Clock out', 'Duration', 'Streak', 'Absent (mo)', 'Device', 'Day status', ''].map((h, i) => (
                   <div key={h || `c${i}`} className="eyebrow">{h}</div>
                 ))}
               </div>
@@ -654,12 +681,24 @@ function AttendanceTab({ session, canManageFloor, operators }) {
                       <ToneBadge tone={isOvertime ? 'brand' : 'mute'} style={{ justifySelf: 'start' }}>
                         {capitalize(row.shift_type || '') || '—'}
                       </ToneBadge>
-                      <span className="num" style={{ fontSize: 12.5, color: 'var(--t1)' }}>{fmtIstTime(row.clock_in) || '—'}</span>
+                      <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+                        <span className="num" style={{ fontSize: 12.5, color: 'var(--t1)' }}>{fmtIstTime(row.clock_in) || '—'}</span>
+                        {row.late_minutes > 0 && (
+                          <span className="num" style={{ fontSize: 9.5, color: 'var(--bad-fg)' }}
+                            title={`${row.late_minutes} min late vs scheduled start`}>+{row.late_minutes}m late</span>
+                        )}
+                      </span>
                       {row.clock_out
                         ? (
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                            <span className="num" style={{ fontSize: 12.5, color: 'var(--t1)' }}>{fmtIstTime(row.clock_out)}</span>
-                            {row.auto_closed && <ToneBadge tone="mute" style={{ fontSize: 9 }} title="Auto-closed at 1:00 AM IST">Auto</ToneBadge>}
+                          <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                              <span className="num" style={{ fontSize: 12.5, color: 'var(--t1)' }}>{fmtIstTime(row.clock_out)}</span>
+                              {row.auto_closed && <ToneBadge tone="mute" style={{ fontSize: 9 }} title="Auto-closed at 1:00 AM IST">Auto</ToneBadge>}
+                            </span>
+                            {row.overtime_minutes > 0 && (
+                              <span className="num" style={{ fontSize: 9.5, color: 'var(--brand-fg, var(--t2))' }}
+                                title={`${row.overtime_minutes} min past scheduled end`}>+{row.overtime_minutes}m OT</span>
+                            )}
                           </span>
                         )
                         : <ToneBadge tone="warn" style={{ justifySelf: 'start' }}>Open</ToneBadge>}
@@ -675,6 +714,16 @@ function AttendanceTab({ session, canManageFloor, operators }) {
                       <span className="num" style={{ fontSize: 10.5, color: 'var(--t3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {row.clock_in_device || '—'}
                       </span>
+                      <select
+                        value={row.day_status || ''}
+                        disabled={!!savingStatus[row.id]}
+                        onChange={(e) => setDayStatus(row, e.target.value)}
+                        title={row.day_status_note || 'Manual day classification (feeds payroll)'}
+                        style={{ ...selectStyle, padding: '4px 6px', fontSize: 11.5, width: '100%',
+                          color: row.day_status ? `var(--${DAY_STATUS_TONE[row.day_status] || 'mute'}-fg, var(--t1))` : 'var(--t3)' }}
+                      >
+                        {DAY_STATUS_OPTS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                      </select>
                       <div style={{ textAlign: 'right' }}>
                         {!row.clock_out && (
                           <button
@@ -755,7 +804,7 @@ function absentDowHint(dow) {
   return null;
 }
 
-function ManpowerAnalyticsTab({ session, canManageFloor }) {
+function ManpowerAnalyticsTab({ session, canManageFloor, operators, team }) {
   const { showToast } = useToast();
   const [winKey, setWinKey] = useState('60');
   const [rows, setRows] = useState([]);
@@ -764,20 +813,28 @@ function ManpowerAnalyticsTab({ session, canManageFloor }) {
 
   const range = useMemo(() => analyticsRange(winKey), [winKey]);
 
+  // operator_id → team, so we can scope analytics to this surface's team (production).
+  const teamOf = useMemo(() => {
+    const m = {};
+    for (const op of operators || []) m[op.id] = op.team;
+    return m;
+  }, [operators]);
+
   const load = useCallback(async () => {
     if (!session || !canManageFloor) return;
     setLoading(true);
     try {
       const res = await workerFetch('getManpowerAnalytics', { data: { start: range.start, end: range.end } }, session);
       const list = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
-      setRows(list);
+      // The RPC analyses every active operator; scope to this surface's team when given.
+      setRows(team ? list.filter((r) => (teamOf[r.operator_id] || 'production') === team) : list);
     } catch (e) {
       showToast(e.message || 'Failed to load analytics', 'error');
       setRows([]);
     } finally {
       setLoading(false);
     }
-  }, [session, canManageFloor, range, showToast]);
+  }, [session, canManageFloor, range, team, teamOf, showToast]);
 
   useEffect(() => { load(); }, [load]);
 
