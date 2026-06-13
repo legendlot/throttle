@@ -169,18 +169,34 @@ Same engine underneath; each surface filters by `operators.team` and scopes its 
 - Window defaults per version: in_open_lead 60, out_open_lead 60, grace 30, min_dwell 30.
 
 ### 🔧 REMAINING WORK (Phase 2 frontend + flip) — priority order
-1. **Garage Store Manpower view + store shift admin** — Garage has NO Manpower page today. Build a new
-   route + nav entry + attendance view (`getOperatorAttendance` `team:'store'` + `getAttendanceStats`) +
-   a Store shifts admin (reuse the Redline ShiftsTab pattern, scoped to dept `store`). **Unblocks Store
-   confirming its real time** (prereq for the store flip).
-2. **Redline Dispatch Manpower tab** (new tab/menu, `team:'dispatch'`) + **filter existing Redline
-   Attendance/Live/Analytics to `team:'production'`** (worker already accepts `team`; currently they show all teams).
-3. **`day_status` (half-day) control** in the attendance-row UI → calls `setDayStatus` (worker done). Feeds future payroll.
+
+> **Update — Session 132 (2026-06-13):** items 1–3 SHIPPED (the Phase-2 frontend). Items 4 + 5 remain
+> (both coupled to the flip / people-confirmations). Worker `getOperatorAttendance` now also returns
+> `day_status`/`day_status_note`/`late_minutes`/`overtime_minutes`/`scheduled_start`/`scheduled_end`/`shift_id`
+> (lotopsproxy `160f475a`).
+
+1. ✅ **DONE S132 — Garage Store Manpower (Attendance + Shifts).** Garage already HAD a `/manpower` page
+   (single Store Activities tab) — added two tabs to it rather than a new route: **Attendance** (`getOperatorAttendance`
+   `team:'store'` + `getAttendanceStats` + close-shift + day_status + late/OT badges) and **Shifts** admin
+   (`getShifts` filtered to dept `store` + create/addVersion/setActive/history; reuses the Redline ShiftsTab pattern
+   in Garage's local-style kit). **Store can now confirm its real shift time here** (prereq for the store flip).
+   `apps/garage/.../manpower/page.js`.
+2. ✅ **DONE S132 — Redline Dispatch tab + production scoping.** New **Dispatch** tab renders the same
+   `AttendanceTab` with `team:'dispatch'`; the existing **Attendance** tab + **Analytics** now scope to
+   `team:'production'` (AttendanceTab gained a `team` prop → `getOperatorAttendance`; Analytics filters its RPC
+   rows via an operator→team map). **Live view left as the full cross-line floor map** (it's a line map, not a
+   per-team list — filtering its presence dots while it still shows Dispatch/Store/Others roster buckets would
+   be inconsistent; flagged as a deliberate deviation from the original "filter Live too" wording).
+3. ✅ **DONE S132 — `day_status` control** in the attendance rows (both apps) → `setDayStatus` (optimistic,
+   tone-coloured select Normal/Full day/Half day/Absent/Leave/Holiday). Feeds future payroll.
 4. **Auto-close → stamp scheduled end** — `public.auto_close_open_attendance()` (pg_cron 1 AM IST) currently
    stamps next-day 1 AM + no OT. With shifts: stamp `scheduled_end`, leave `standard`. Amend RULE-ATT-001.
+   **NOTE (S132): coupled to the flip** — pre-flip the live `clockIn` path does NOT populate `scheduled_end`
+   (only `recordAttendance` does), so there's nothing to stamp until the flip lands. Do this WITH item 5.
 5. **2c — THE FLIP (behavioral go-live):** switch `02_scanner/index.html` `confirmAttendance` from
    `clockIn`/`clockOut` → `recordAttendance` (read `res.data.action` = `in`/`out`/`noop`). **Deploy ONLY after
-   Store + Dispatch confirm their times** + dispatch assigns its 9 operators. Then live-test one in + one out.
+   Store + Dispatch confirm their times** (Store can now do this via the new Garage Shifts tab; Dispatch via the
+   Redline Shifts tab) + dispatch assigns its 9 operators. Then live-test one in + one out.
    After flip, `clockIn`/`clockOut` + `SHIFT_END_MIN` become legacy.
 
 ### ⚠️ Resume gotchas
