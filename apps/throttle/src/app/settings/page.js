@@ -35,7 +35,8 @@ function SettingsScreen() {
   const { session } = useAuth();
   const TABS = [{ v: 'team', label: 'Team' }, { v: 'workflow', label: 'Workflow' }, { v: 'types', label: 'Request Types' }, { v: 'notify', label: 'Notifications' }];
   const [tab, setTab] = useState('team');
-  const [team, setTeam] = useState(TEAM);
+  // Logged in → real roster or empty; seed only in the no-session dev preview.
+  const [team, setTeam] = useState(session ? [] : TEAM);
   const [ageing, setAgeing] = useState(AGEING_SEED);
   const [visible, setVisible] = useState(Object.fromEntries(Object.keys(REQ_TYPES).map(k => [k, k !== 'brand_initiative'])));
   const [notify, setNotify] = useState({ reviews: true, blocked: true, delivered: false, daily: true });
@@ -79,6 +80,7 @@ function SettingsScreen() {
 
       {tab === 'team' && (
         <Card pad={0}>
+          {team.length === 0 && <div style={{ padding: '26px 18px', textAlign: 'center', color: 'var(--t4)', fontSize: 12.5 }}>No teammates loaded.</div>}
           {team.map((u, i) => (
             <div key={u.id} className="t-row" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 18px', borderTop: i ? '1px solid var(--border)' : 'none' }}>
               <Avatar id={typeof u.id === 'string' && u.id.startsWith('u') ? u.id : undefined} name={u.name} initial={u.initial || initialsOf(u.name)} size={32} />

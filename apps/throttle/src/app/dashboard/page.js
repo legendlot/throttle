@@ -1,37 +1,38 @@
 'use client';
-/* Dashboard — the command view. Night Circuit hero, KPI cards w/ trend,
-   "Needs you" queue, activity feed, team workload, deliverables shipped.
-   KPI values + workload come from the worker; the queue is derived from
-   live tasks + requests; everything falls back to seed when unauthenticated
-   or a read fails. Layout/visuals ported verbatim from dashboard.jsx (dir b). */
+/* Dashboard — the command view. Night Circuit hero, KPI cards, "Needs you"
+   queue, activity feed, team workload, deliverables-shipped chart.
+
+   Real-data rule: when a session exists (the live app), every panel shows
+   real data from the worker / brand schema, or an honest empty state — NEVER
+   seed. Seed values render only in the no-session dev preview (NODE_ENV!=prod),
+   which real users never hit. KPI cards intentionally drop the prototype's
+   fabricated trend sparklines + deltas (no historical series exists to back
+   them) and show the real point-in-time number. */
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '@throttle/auth';
 import { AppShell } from '@/components/throttle/AppShell';
-import { Icon, Sparkline } from '@/components/throttle/Icon';
+import { Icon } from '@/components/throttle/Icon';
 import { Card, Pill, Avatar, PrimaryBtn, TONE } from '@/components/throttle/ui';
 import {
   KPIS, ACTIONS, ACTIVITY, WORKLOAD, OUTPUT, OUTPUT_COLS, taskTag, firstName,
 } from '@/lib/throttleData';
-import { fetchUsers, fetchTasks, fetchRequests, fetchDashboardStats, fetchTeamWorkload } from '@/lib/throttleApi';
+import {
+  fetchUsers, fetchTasks, fetchRequests, fetchDashboardStats, fetchTeamWorkload,
+  fetchRecentActivity, fetchDeliverablesChart,
+} from '@/lib/throttleApi';
+
+const KPI_META = KPIS.map(k => ({ key: k.key, label: k.label, tone: k.tone, value: k.value }));
 
 function KpiCard({ k }) {
   const tone = TONE[k.tone] || TONE.info;
-  const arrow = k.dir === 'up' ? 'arrowUp' : k.dir === 'down' ? 'arrowDown' : 'minus';
-  const deltaColor = k.dir === 'flat' ? 'var(--t3)'
-    : (k.key === 'overdue' || k.key === 'blocked') ? (k.dir === 'up' ? 'var(--bad-fg)' : 'var(--ok-fg)')
-    : (k.dir === 'up' ? 'var(--ok-fg)' : 'var(--warn-fg)');
   return (
     <div className="t-card" style={{ background: 'var(--card-bg)', border: '1px solid var(--card-bd)', borderRadius: 'var(--card-radius)',
       boxShadow: 'var(--card-shadow)', padding: 16 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
         <span style={{ fontFamily: 'var(--font-display)', fontSize: 10.5, fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--t3)' }}>{k.label}</span>
-        <Sparkline data={k.spark} color={tone.fg} w={52} h={18} />
+        <span style={{ width: 7, height: 7, borderRadius: '50%', background: tone.fg }} />
       </div>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 9 }}>
-        <span className="num" style={{ fontSize: 32, fontWeight: 600, color: 'var(--t1)', lineHeight: 1 }}>{k.value}</span>
-        <span className="num" style={{ display: 'inline-flex', alignItems: 'center', gap: 2, fontSize: 12, fontWeight: 700, color: deltaColor }}>
-          <Icon name={arrow} size={12} />{k.delta}</span>
-      </div>
+      <span className="num" style={{ fontSize: 32, fontWeight: 600, color: 'var(--t1)', lineHeight: 1 }}>{k.value}</span>
     </div>
   );
 }
@@ -70,10 +71,10 @@ function ActionQueue({ actions }) {
           <Icon name="zap" size={15} style={{ color: 'var(--yellow)' }} />
           <span className="t-h3">Needs you</span>
         </div>
-        <Pill tone="bad" dot>{actions.length} open</Pill>
+        <Pill tone={actions.length ? 'bad' : 'ok'} dot>{actions.length} open</Pill>
       </div>
       <div>
-        {actions.length === 0 && <div style={{ padding: '22px 16px', textAlign: 'center', color: 'var(--t4)', fontSize: 12.5 }}>Clean queue. Nothing waiting on you.</div>}
+        {actions.length === 0 && <div style={{ padding: '26px 16px', textAlign: 'center', color: 'var(--t4)', fontSize: 12.5 }}>Clean queue. Nothing waiting on you.</div>}
         {actions.map((a, i) => {
           const t = TONE[a.tone] || TONE.info;
           return (
@@ -109,9 +110,10 @@ function ActivityFeed({ activity }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
         <Icon name="activity" size={15} style={{ color: 'var(--t3)' }} />
         <span className="t-h3">Activity</span>
-        <span className="num" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--t4)', whiteSpace: 'nowrap' }}>last 6h</span>
+        <span className="num" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--t4)', whiteSpace: 'nowrap' }}>recent</span>
       </div>
       <div style={{ padding: '6px 16px 10px' }}>
+        {activity.length === 0 && <div style={{ padding: '26px 0', textAlign: 'center', color: 'var(--t4)', fontSize: 12.5 }}>No recent activity.</div>}
         {activity.map((e, i) => {
           const k = KIND[e.kind] || KIND.start;
           const clickable = !!e.taskId;
@@ -156,6 +158,7 @@ function WorkloadPanel({ workload }) {
         </div>
       </div>
       <div style={{ padding: '6px 16px 14px' }}>
+        {workload.length === 0 && <div style={{ padding: '20px 0', textAlign: 'center', color: 'var(--t4)', fontSize: 12.5 }}>No active assignments.</div>}
         {workload.map((p, i) => (
           <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '9px 0', borderTop: i ? '1px solid var(--border)' : 'none' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 9, width: 168, flexShrink: 0 }}>
@@ -178,22 +181,26 @@ function WorkloadPanel({ workload }) {
   );
 }
 
-function OutputPanel() {
-  const totals = OUTPUT_COLS.map(c => OUTPUT.reduce((s, r) => s + (r[c.key] || 0), 0));
+function OutputPanel({ output }) {
+  const totals = OUTPUT_COLS.map(c => output.reduce((s, r) => s + (r[c.key] || 0), 0));
   const grand = totals.reduce((a, b) => a + b, 0);
-  const dayTotals = OUTPUT.map(r => OUTPUT_COLS.reduce((s, c) => s + (r[c.key] || 0), 0));
-  const maxDay = Math.max(...dayTotals);
+  const dayTotals = output.map(r => OUTPUT_COLS.reduce((s, c) => s + (r[c.key] || 0), 0));
+  const maxDay = Math.max(1, ...dayTotals);
   const COLORS = ['var(--yellow)', 'var(--p-wolf,#6d83ff)', 'var(--info-fg)', 'var(--ok-fg)', 'var(--p-shadow,#b46bff)', 'var(--warn-fg)'];
   return (
     <Card pad={0}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
         <Icon name="film" size={15} style={{ color: 'var(--t3)' }} />
         <span className="t-h3">Deliverables shipped</span>
-        <span className="num" style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--t3)' }}>this week · <span style={{ color: 'var(--t1)', fontWeight: 700 }}>{grand}</span></span>
+        <span className="num" style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--t3)' }}>last 7 days · <span style={{ color: 'var(--t1)', fontWeight: 700 }}>{grand}</span></span>
       </div>
+      {output.length === 0 ? (
+        <div style={{ padding: '34px 16px', textAlign: 'center', color: 'var(--t4)', fontSize: 12.5 }}>Nothing shipped in the last 7 days yet.</div>
+      ) : (
+      <>
       <div style={{ padding: '18px 16px 10px', display: 'flex', alignItems: 'flex-end', gap: 18, height: 150 }}>
-        {OUTPUT.map((r, i) => (
-          <div key={r.day} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, height: '100%', justifyContent: 'flex-end' }}>
+        {output.map((r, i) => (
+          <div key={r.day + i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, height: '100%', justifyContent: 'flex-end' }}>
             <div style={{ width: '100%', maxWidth: 46, display: 'flex', flexDirection: 'column-reverse', borderRadius: 4, overflow: 'hidden',
               height: `${(dayTotals[i] / maxDay) * 100}%`, minHeight: 6 }}>
               {OUTPUT_COLS.map((c, ci) => r[c.key] > 0 && (
@@ -212,18 +219,23 @@ function OutputPanel() {
           </span>
         ))}
       </div>
+      </>
+      )}
     </Card>
   );
 }
 
 function DashboardScreen() {
   const { session, brandUser, user } = useAuth();
-  const [kpis, setKpis] = useState(KPIS);
-  const [actions, setActions] = useState(ACTIONS);
-  const [workload, setWorkload] = useState(WORKLOAD);
-  const [reviewCount, setReviewCount] = useState(2);
+  const live = !!session;
+  const [kpis, setKpis] = useState(KPI_META);
+  const [actions, setActions] = useState(live ? [] : ACTIONS);
+  const [workload, setWorkload] = useState(live ? [] : WORKLOAD);
+  const [activity, setActivity] = useState(live ? [] : ACTIVITY);
+  const [output, setOutput] = useState(live ? [] : OUTPUT);
+  const [reviewCount, setReviewCount] = useState(live ? 0 : 2);
   const [greeting, setGreeting] = useState('');
-  const name = brandUser?.name || user?.full_name || user?.email?.split('@')[0] || 'Meera Krishnan';
+  const name = brandUser?.name || user?.full_name || user?.email?.split('@')[0] || 'there';
 
   useEffect(() => {
     const now = new Date();
@@ -237,20 +249,35 @@ function DashboardScreen() {
     (async () => {
       const usersRes = await fetchUsers(session);
       const byId = usersRes?.byId || {};
-      const [stats, wl, tasks, reqs] = await Promise.all([
+      const [stats, wl, tasks, reqs, act, deliv] = await Promise.all([
         fetchDashboardStats(session), fetchTeamWorkload(session),
         fetchTasks(session, byId), fetchRequests(session, byId),
+        fetchRecentActivity(session, 12), fetchDeliverablesChart(session),
       ]);
       if (cancelled) return;
 
+      // KPIs — real numbers; admin/lead from stats, members derived from their tasks.
       if (stats && typeof stats.inReview === 'number') {
         setReviewCount(stats.inReview || 0);
-        setKpis(KPIS.map(k => {
-          if (k.key === 'in_review')  return { ...k, value: stats.inReview ?? k.value };
-          if (k.key === 'overdue')    return { ...k, value: stats.overdue ?? k.value };
-          if (k.key === 'blocked')    return { ...k, value: stats.extBlocked ?? k.value };
+        setKpis(KPI_META.map(k => {
+          if (k.key === 'in_review')  return { ...k, value: stats.inReview ?? 0 };
+          if (k.key === 'overdue')    return { ...k, value: stats.overdue ?? 0 };
+          if (k.key === 'blocked')    return { ...k, value: stats.extBlocked ?? 0 };
           if (k.key === 'completion') return { ...k, value: (stats.completionRate ?? 0) + '%' };
-          if (k.key === 'spillover')  return { ...k, value: stats.spillovers ?? k.value };
+          if (k.key === 'spillover')  return { ...k, value: stats.spillovers ?? 0 };
+          return k;
+        }));
+      } else if (tasks) {
+        const inReview = tasks.filter(t => t.stage === 'in_review').length;
+        const overdue = tasks.filter(t => t.age === 'crit').length;
+        const blocked = tasks.filter(t => t.stage === 'ext_blocked').length;
+        setReviewCount(inReview);
+        setKpis(KPI_META.map(k => {
+          if (k.key === 'in_review')  return { ...k, value: inReview };
+          if (k.key === 'overdue')    return { ...k, value: overdue };
+          if (k.key === 'blocked')    return { ...k, value: blocked };
+          if (k.key === 'completion') return { ...k, value: '—' };
+          if (k.key === 'spillover')  return { ...k, value: '—' };
           return k;
         }));
       }
@@ -258,7 +285,7 @@ function DashboardScreen() {
       if (wl?.rows?.length) {
         const agg = {};
         wl.rows.forEach(r => {
-          const p = agg[r.id] || (agg[r.id] = { id: r.id, name: r.name, discipline: r.discipline || '', initial: undefined, total: 0, inProgress: 0, inReview: 0, blocked: 0, queued: 0 });
+          const p = agg[r.id] || (agg[r.id] = { id: r.id, name: r.name, discipline: r.discipline || '', total: 0, inProgress: 0, inReview: 0, blocked: 0, queued: 0 });
           const n = Number(r.task_count) || 0;
           p.total += n;
           if (r.stage === 'in_progress') p.inProgress += n;
@@ -266,27 +293,31 @@ function DashboardScreen() {
           else if (r.stage === 'ext_blocked') p.blocked += n;
           else if (r.stage === 'in_sprint' || r.stage === 'backlog') p.queued += n;
         });
-        const rows = Object.values(agg).filter(p => p.total > 0).sort((a, b) => b.total - a.total);
-        if (rows.length) setWorkload(rows);
+        setWorkload(Object.values(agg).filter(p => p.total > 0).sort((a, b) => b.total - a.total));
+      } else {
+        setWorkload([]);
       }
 
-      if (tasks || reqs) {
-        const q = [];
-        (tasks || []).filter(t => t.stage === 'in_review').slice(0, 4).forEach(t =>
-          q.push({ id: 'rev' + t.id, kind: 'approve', taskId: t.id, label: `${t.title} — awaiting your approval`, meta: `${taskTag(t.num)} · ${t.ownerName || 'team'} · ${t.priority}`, tone: t.priority === 'urgent' ? 'bad' : 'info', age: t.due || '' }));
-        (reqs || []).filter(r => r.status === 'pending').slice(0, 3).forEach(r =>
-          q.push({ id: 'req' + r.id, kind: 'request', label: `New request: ${r.title}`, meta: `From ${r.who}${r.items ? ` · ${r.items} deliverables` : ''}`, tone: 'warn', age: r.age }));
-        (tasks || []).filter(t => t.stage === 'ext_blocked').slice(0, 2).forEach(t =>
-          q.push({ id: 'blk' + t.id, kind: 'blocked', taskId: t.id, label: `${t.title} blocked${t.blocked ? ' — ' + t.blocked : ''}`, meta: `${taskTag(t.num)} · ${t.ownerName || 'team'}`, tone: 'warn', age: t.due || '' }));
-        (tasks || []).filter(t => t.stage === 'delivered').slice(0, 2).forEach(t =>
-          q.push({ id: 'dlv' + t.id, kind: 'feedback', taskId: t.id, label: `${t.title} delivered — close the loop`, meta: `${taskTag(t.num)} · awaiting requester feedback`, tone: 'ok', age: t.due || '' }));
-        setActions(q.length ? q.slice(0, 6) : []);
-      }
+      setActivity(act || []);
+      setOutput(deliv || []);
+
+      // Needs-you queue from live tasks + pending requests
+      const q = [];
+      (tasks || []).filter(t => t.stage === 'in_review').slice(0, 4).forEach(t =>
+        q.push({ id: 'rev' + t.id, kind: 'approve', taskId: t.id, label: `${t.title} — awaiting your approval`, meta: `${taskTag(t.num)} · ${t.ownerName || 'team'} · ${t.priority}`, tone: t.priority === 'urgent' ? 'bad' : 'info', age: t.due || '' }));
+      (reqs || []).filter(r => r.status === 'pending').slice(0, 3).forEach(r =>
+        q.push({ id: 'req' + r.id, kind: 'request', label: `New request: ${r.title}`, meta: `From ${r.who}${r.items ? ` · ${r.items} deliverables` : ''}`, tone: 'warn', age: r.age }));
+      (tasks || []).filter(t => t.stage === 'ext_blocked').slice(0, 2).forEach(t =>
+        q.push({ id: 'blk' + t.id, kind: 'blocked', taskId: t.id, label: `${t.title} blocked${t.blocked ? ' — ' + t.blocked : ''}`, meta: `${taskTag(t.num)} · ${t.ownerName || 'team'}`, tone: 'warn', age: t.due || '' }));
+      (tasks || []).filter(t => t.stage === 'delivered').slice(0, 2).forEach(t =>
+        q.push({ id: 'dlv' + t.id, kind: 'feedback', taskId: t.id, label: `${t.title} delivered — close the loop`, meta: `${taskTag(t.num)} · awaiting requester feedback`, tone: 'ok', age: t.due || '' }));
+      setActions(q.slice(0, 6));
     })();
     return () => { cancelled = true; };
   }, [session]);
 
-  const sub = `${kpis.find(k => k.key === 'in_review')?.value ?? 0} in review · ${kpis.find(k => k.key === 'overdue')?.value ?? 0} overdue · ${kpis.find(k => k.key === 'blocked')?.value ?? 0} blocked. ${reviewCount} ${reviewCount === 1 ? 'approval is' : 'approvals are'} waiting on you.`;
+  const v = key => kpis.find(k => k.key === key)?.value ?? 0;
+  const sub = `${v('in_review')} in review · ${v('overdue')} overdue · ${v('blocked')} blocked. ${reviewCount} ${reviewCount === 1 ? 'approval is' : 'approvals are'} waiting on you.`;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 1240, margin: '0 auto' }}>
@@ -296,10 +327,10 @@ function DashboardScreen() {
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: 16, alignItems: 'start' }}>
         <ActionQueue actions={actions} />
-        <ActivityFeed activity={ACTIVITY} />
+        <ActivityFeed activity={activity} />
       </div>
       <WorkloadPanel workload={workload} />
-      <OutputPanel />
+      <OutputPanel output={output} />
     </div>
   );
 }

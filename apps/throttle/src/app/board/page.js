@@ -236,14 +236,14 @@ function TaskDrawer({ task, onClose, onMove, session }) {
 
 function BoardScreen() {
   const { session } = useAuth();
-  const [tasks, setTasks] = useState(TASKS);
-  const [usersById, setUsersById] = useState(teamById);
-  const [members, setMembers] = useState(() => TEAM.filter(t => t.role === 'member'));
+  // Logged in → show real data or empty; seed only in the no-session dev preview.
+  const [tasks, setTasks] = useState(session ? [] : TASKS);
+  const [usersById, setUsersById] = useState(session ? {} : teamById);
+  const [members, setMembers] = useState(session ? [] : TEAM.filter(t => t.role === 'member'));
   const [view, setView] = useState('kanban');
   const [person, setPerson] = useState(null);
   const [selected, setSelected] = useState(null);
   const [over, setOver] = useState(null);
-  const [live, setLive] = useState(false);
 
   useEffect(() => {
     if (!session) return;
@@ -257,7 +257,7 @@ function BoardScreen() {
         setUsersById(byId);
         setMembers(usersRes.list.filter(u => u.role === 'member' || u.role === 'lead'));
       }
-      if (t) { setTasks(t); setLive(true); }
+      setTasks(t || []);
     })();
     return () => { cancelled = true; };
   }, [session]);
@@ -266,7 +266,7 @@ function BoardScreen() {
     const prevTasks = tasks;
     setTasks(prev => prev.map(t => t.id === id ? { ...t, stage } : t));
     setSelected(prev => prev && prev.id === id ? { ...prev, stage } : prev);
-    if (live && session) {
+    if (session) {
       try { await moveTaskStage(session, id, stage, stage === 'ext_blocked' ? 'Flagged from the board' : undefined); }
       catch (e) {
         setTasks(prevTasks);

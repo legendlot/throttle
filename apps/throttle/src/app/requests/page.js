@@ -130,9 +130,9 @@ function RequestsScreen() {
     { v: 'info_needed', label: 'Info Needed' }, { v: 'rejected', label: 'Rejected' },
   ];
   const [filter, setFilter] = useState('needs');
-  const [reqs, setReqs] = useState(REQUESTS);
+  // Logged in → real data or empty; seed only in the no-session dev preview.
+  const [reqs, setReqs] = useState(session ? [] : REQUESTS);
   const [selected, setSelected] = useState(null);
-  const [live, setLive] = useState(false);
 
   useEffect(() => {
     if (!session) return;
@@ -141,7 +141,7 @@ function RequestsScreen() {
       const usersRes = await fetchUsers(session);
       const data = await fetchRequests(session, usersRes?.byId || {});
       if (cancelled) return;
-      if (data) { setReqs(data); setLive(true); }
+      setReqs(data || []);
     })();
     return () => { cancelled = true; };
   }, [session]);
@@ -155,7 +155,7 @@ function RequestsScreen() {
       : status === 'rejected' ? `Request rejected.` : `Request updated.`;
     toast(msg, status === 'approved' ? 'ok' : status === 'rejected' ? 'bad' : 'info',
       status === 'approved' ? 'check' : status === 'rejected' ? 'x' : 'clock');
-    if (live && session) {
+    if (session) {
       try { await actOnRequest(session, id, status); }
       catch (e) { setReqs(prev); toast('Action failed: ' + (e.message || 'not allowed'), 'bad', 'alert'); }
     }

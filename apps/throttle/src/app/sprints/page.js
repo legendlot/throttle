@@ -1,39 +1,37 @@
 'use client';
-/* Sprints — active summary, burndown, velocity, capacity, timeline + a
-   drag-to-plan sprint planner. Active sprint numbers + the all-sprints
-   list are live (worker getDashboardStats + brand.sprints); burndown /
-   velocity / capacity are illustrative trends; the planner persists to
-   localStorage (matching the prototype). Ported from sprints.jsx. */
+/* Sprints — active summary, burndown, velocity, per-person load, all-sprints
+   timeline + a drag-to-plan planner that commits real backlog tasks into the
+   active sprint (addTaskToSprint).
+
+   Real-data rule: with a session, everything is real or an honest empty state —
+   no seed, no invented story-points/capacity. Burndown draws the ideal
+   trajectory (committed → 0) plus the real current-remaining marker (there is
+   no daily-snapshot series to plot a fake actual line). Seed renders only in
+   the no-session dev preview. */
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '@throttle/auth';
 import { AppShell } from '@/components/throttle/AppShell';
 import { Icon } from '@/components/throttle/Icon';
 import { Card, Pill, Avatar, ProductTag, PrimaryBtn, SectionHead, TONE } from '@/components/throttle/ui';
 import { toast } from '@/components/throttle/ToastHost';
-import {
-  SPRINTS, BURNDOWN, CAPACITY, PLAN_BACKLOG, PLAN_CAPACITY, DTYPE, PRIORITY, teamById, lsGet, lsSet,
-} from '@/lib/throttleData';
-import { fetchSprints, fetchDashboardStats } from '@/lib/throttleApi';
+import { SPRINTS, CAPACITY, PLAN_BACKLOG, DTYPE, PRIORITY, teamById } from '@/lib/throttleData';
+import { fetchSprints, fetchDashboardStats, fetchTeamWorkload, fetchUsers, fetchTasks, addTaskToSprint } from '@/lib/throttleApi';
 
-const PLAN_TOTAL = Object.values(PLAN_CAPACITY).reduce((a, b) => a + b, 0);
-
-function PlanCard({ task, where, onMove, dim }) {
+function PlanCard({ task, where, onMove }) {
   const pr = PRIORITY[task.priority] || PRIORITY.medium;
   return (
     <div draggable onDragStart={e => { e.dataTransfer.setData('text/plain', task.id); e.dataTransfer.effectAllowed = 'move'; }}
       onClick={() => onMove(task.id)}
       className="t-card t-task" style={{ background: 'var(--card-bg)', border: '1px solid var(--card-bd)', borderRadius: 'var(--card-radius)',
-        borderLeft: `2px solid ${pr.color}`, padding: '10px 11px', cursor: 'pointer', boxShadow: 'var(--card-shadow)', opacity: dim ? 0.5 : 1 }}>
+        borderLeft: `2px solid ${pr.color}`, padding: '10px 11px', cursor: 'pointer', boxShadow: 'var(--card-shadow)' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9 }}>
-        <span className="num" title={`${task.est} points`} style={{ width: 24, height: 24, borderRadius: 'var(--r-sm)', background: 'var(--surface-2)',
-          border: '1px solid var(--border-2)', display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 700, color: 'var(--yellow)', flexShrink: 0 }}>{task.est}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 12.5, color: 'var(--t1)', lineHeight: 1.35, marginBottom: 6 }}>{task.title}</div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
             <span style={{ fontSize: 10, color: 'var(--t4)', fontFamily: 'var(--font-display)', letterSpacing: '0.05em', textTransform: 'uppercase' }}>{DTYPE[task.type] || task.type}</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <ProductTag code={task.product} />
-              <Avatar id={task.ownerId} size={20} />
+              <Avatar id={task.ownerId} name={task.ownerName} initial={task.ownerInitial} size={20} />
             </div>
           </div>
         </div>
@@ -43,40 +41,33 @@ function PlanCard({ task, where, onMove, dim }) {
   );
 }
 
-function SprintPlanner({ onClose, sprints }) {
-  const [committed, setCommitted] = useState(() => lsGet('throttle_plan_s25', []));
+function SprintPlanner({ onClose, sprint, backlog, usersById, canPlan, session, onCommitted }) {
+  const [staged, setStaged] = useState([]); // task ids selected for commit
   const [over, setOver] = useState(null);
-  const byId = Object.fromEntries(PLAN_BACKLOG.map(t => [t.id, t]));
-  const inSprint = committed.map(id => byId[id]).filter(Boolean);
-  const backlog = PLAN_BACKLOG.filter(t => !committed.includes(t.id));
+  const [busy, setBusy] = useState(false);
+  const byId = Object.fromEntries(backlog.map(t => [t.id, t]));
+  const inSprint = staged.map(id => byId[id]).filter(Boolean);
+  const available = backlog.filter(t => !staged.includes(t.id));
 
-  const pts = inSprint.reduce((s, t) => s + t.est, 0);
   const loadByPerson = {};
-  inSprint.forEach(t => { loadByPerson[t.ownerId] = (loadByPerson[t.ownerId] || 0) + t.est; });
-  const overCommitted = pts > PLAN_TOTAL;
-  const anyoneOver = Object.entries(loadByPerson).some(([id, v]) => v > (PLAN_CAPACITY[id] || 0));
+  inSprint.forEach(t => { const k = t.ownerId || 'unassigned'; loadByPerson[k] = (loadByPerson[k] || 0) + 1; });
 
-  const add = id => setCommitted(c => c.includes(id) ? c : [...c, id]);
-  const remove = id => setCommitted(c => c.filter(x => x !== id));
+  const add = id => setStaged(c => c.includes(id) ? c : [...c, id]);
+  const remove = id => setStaged(c => c.filter(x => x !== id));
   const drop = (id, target) => { target === 'sprint' ? add(id) : remove(id); setOver(null); };
 
-  const autoPlan = () => {
-    const load = {}; const picked = [];
-    const ordered = [...PLAN_BACKLOG].sort((a, b) => ({ high: 0, medium: 1, low: 2 }[a.priority] - { high: 0, medium: 1, low: 2 }[b.priority]));
-    let total = 0;
-    for (const t of ordered) {
-      const cap = PLAN_CAPACITY[t.ownerId] || 0;
-      if ((load[t.ownerId] || 0) + t.est <= cap && total + t.est <= PLAN_TOTAL) {
-        picked.push(t.id); load[t.ownerId] = (load[t.ownerId] || 0) + t.est; total += t.est;
-      }
+  const commit = async () => {
+    if (!staged.length) { toast('Drag tasks in before committing.', 'warn', 'alert'); return; }
+    if (!canPlan) { toast('Only leads and admins can plan sprints.', 'bad', 'alert'); return; }
+    if (!sprint?.id || !session) { toast(`Sprint planned · ${staged.length} task${staged.length === 1 ? '' : 's'}`, 'ok', 'check'); onClose(); return; }
+    setBusy(true);
+    let ok = 0, fail = 0;
+    for (const id of staged) {
+      try { await addTaskToSprint(session, id, sprint.id); ok++; } catch (_) { fail++; }
     }
-    setCommitted(picked);
-    toast(`Auto-planned · ${picked.length} tasks · ${total} of ${PLAN_TOTAL} pts`, 'info', 'zap');
-  };
-  const commit = () => {
-    if (!committed.length) { toast('Add tasks before committing the sprint.', 'warn', 'alert'); return; }
-    lsSet('throttle_plan_s25', committed);
-    toast(`Sprint planned · ${committed.length} tasks · ${pts} pts committed`, 'ok', 'check');
+    setBusy(false);
+    toast(fail ? `Committed ${ok}, ${fail} failed` : `Sprint ${sprint.shortId || ''} planned · ${ok} task${ok === 1 ? '' : 's'} committed`, fail ? 'warn' : 'ok', fail ? 'alert' : 'check');
+    onCommitted && onCommitted();
     onClose();
   };
 
@@ -99,9 +90,8 @@ function SprintPlanner({ onClose, sprints }) {
     </div>
   );
 
-  const sprint = (sprints || SPRINTS).find(s => s.status === 'planned') || { id: 'S-25', shortId: 'S-25', range: 'Jun 23 – Jul 4' };
-  const sid = sprint.shortId || sprint.id;
-  const meterColor = overCommitted ? 'var(--bad-fg)' : pts / PLAN_TOTAL > 0.9 ? 'var(--warn-fg)' : 'var(--yellow)';
+  const sid = sprint?.shortId || sprint?.id || 'sprint';
+  const people = Object.keys(loadByPerson);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', maxWidth: 1240, margin: '0 auto', width: '100%' }}>
@@ -110,11 +100,10 @@ function SprintPlanner({ onClose, sprints }) {
           <button onClick={onClose} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', color: 'var(--t3)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5, padding: 0, marginBottom: 6, whiteSpace: 'nowrap' }}>
             <Icon name="chevronLeft" size={14} />Back to sprint</button>
           <h1 style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 24, letterSpacing: '0.01em', color: 'var(--t1)', margin: 0 }}>Plan {sid}</h1>
-          <span className="eyebrow" style={{ padding: 0, marginTop: 5, display: 'block' }}>{sprint.range} · drag from backlog</span>
+          <span className="eyebrow" style={{ padding: 0, marginTop: 5, display: 'block' }}>{sprint?.range || ''} · drag approved backlog in</span>
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
-          <PrimaryBtn icon="zap" kind="ghost" onClick={autoPlan}>Auto-plan</PrimaryBtn>
-          <PrimaryBtn icon="check" onClick={commit}>Commit sprint</PrimaryBtn>
+          <PrimaryBtn icon="check" onClick={commit}>{busy ? 'Committing…' : 'Commit sprint'}</PrimaryBtn>
         </div>
       </div>
 
@@ -122,49 +111,45 @@ function SprintPlanner({ onClose, sprints }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
           <div style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-              <span className="num" style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 28, color: meterColor, lineHeight: 1 }}>{pts}</span>
-              <span className="num" style={{ fontSize: 14, color: 'var(--t3)' }}>/ {PLAN_TOTAL} pts</span>
+              <span className="num" style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 28, color: 'var(--yellow)', lineHeight: 1 }}>{staged.length}</span>
+              <span className="num" style={{ fontSize: 14, color: 'var(--t3)' }}>staged</span>
             </div>
-            <div className="eyebrow" style={{ padding: 0, marginTop: 5 }}>Committed · {committed.length} tasks</div>
+            <div className="eyebrow" style={{ padding: 0, marginTop: 5 }}>{available.length} in backlog</div>
           </div>
           <div style={{ flex: 1, minWidth: 200 }}>
             <div style={{ height: 12, borderRadius: 4, background: 'var(--surface-2)', overflow: 'hidden', display: 'flex' }}>
-              <div style={{ width: `${Math.min(100, (pts / PLAN_TOTAL) * 100)}%`, background: meterColor, transition: 'width .2s' }} />
+              <div style={{ width: `${backlog.length ? Math.min(100, (staged.length / backlog.length) * 100) : 0}%`, background: 'var(--yellow)', transition: 'width .2s' }} />
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6 }}>
-              <span style={{ fontSize: 11, color: 'var(--t4)' }}>{overCommitted ? 'Over team capacity' : `${Math.round((pts / PLAN_TOTAL) * 100)}% of capacity`}</span>
-              <span style={{ fontSize: 11, color: 'var(--t4)' }}>{PLAN_TOTAL} pts available</span>
+              <span style={{ fontSize: 11, color: 'var(--t4)' }}>{staged.length} of {backlog.length} backlog tasks staged</span>
+              <span style={{ fontSize: 11, color: 'var(--t4)' }}>{people.length} {people.length === 1 ? 'person' : 'people'} loaded</span>
             </div>
           </div>
-          {(overCommitted || anyoneOver) && <Pill tone="bad" dot>{overCommitted ? 'Over capacity' : 'Someone overloaded'}</Pill>}
+          {!canPlan && <Pill tone="warn" dot>View only — leads plan sprints</Pill>}
         </div>
       </Card>
 
       <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 1fr 230px', gap: 14, minHeight: 0 }}>
         <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-          {colHead('Backlog', backlog.length, 'approved')}
-          {dropZone('backlog', backlog.map(t => <PlanCard key={t.id} task={t} where="backlog" onMove={add} />), 'All pulled in.')}
+          {colHead('Backlog', available.length, 'approved')}
+          {dropZone('backlog', available.map(t => <PlanCard key={t.id} task={t} where="backlog" onMove={add} />), backlog.length ? 'All pulled in.' : 'Backlog is empty.')}
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-          {colHead(sid, inSprint.length, pts + ' pts')}
+          {colHead(sid, inSprint.length, inSprint.length + ' tasks')}
           {dropZone('sprint', inSprint.map(t => <PlanCard key={t.id} task={t} where="sprint" onMove={remove} />), 'Drag tasks here to commit them.')}
         </div>
         <Card pad={0} style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           <div style={{ padding: '13px 14px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}><span className="t-h3">Load</span></div>
           <div style={{ padding: '8px 14px', overflowY: 'auto' }}>
-            {Object.keys(PLAN_CAPACITY).map((uid, i) => {
-              const u = teamById[uid]; const load = loadByPerson[uid] || 0; const cap = PLAN_CAPACITY[uid];
-              const ov = load > cap;
+            {people.length === 0 && <div style={{ padding: '14px 0', color: 'var(--t4)', fontSize: 12, textAlign: 'center' }}>Nothing staged.</div>}
+            {people.map((uid, i) => {
+              const u = usersById[uid] || teamById[uid];
+              const load = loadByPerson[uid] || 0;
               return (
-                <div key={uid} style={{ padding: '9px 0', borderTop: i ? '1px solid var(--border)' : 'none' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                    <Avatar id={uid} size={20} />
-                    <span style={{ flex: 1, fontSize: 12.5, color: 'var(--t1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u?.name.split(' ')[0]}</span>
-                    <span className="num" style={{ fontSize: 11.5, color: ov ? 'var(--bad-fg)' : 'var(--t3)', fontWeight: 600 }}>{load}/{cap}</span>
-                  </div>
-                  <div style={{ height: 6, borderRadius: 3, background: 'var(--surface-2)', overflow: 'hidden' }}>
-                    <div style={{ width: `${Math.min(100, (load / cap) * 100)}%`, height: '100%', background: ov ? 'var(--bad-fg)' : load === cap ? 'var(--warn-fg)' : 'var(--ok-fg)', transition: 'width .2s' }} />
-                  </div>
+                <div key={uid} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 0', borderTop: i ? '1px solid var(--border)' : 'none' }}>
+                  <Avatar id={typeof uid === 'string' && uid.startsWith('u') ? uid : undefined} name={u?.name} initial={u?.initial} size={20} />
+                  <span style={{ flex: 1, fontSize: 12.5, color: 'var(--t1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u?.name?.split(' ')[0] || 'Unassigned'}</span>
+                  <span className="num" style={{ fontSize: 11.5, color: 'var(--t3)', fontWeight: 600 }}>{load}</span>
                 </div>
               );
             })}
@@ -175,38 +160,39 @@ function SprintPlanner({ onClose, sprints }) {
   );
 }
 
-function Burndown() {
+function Burndown({ committed, done, todayFrac }) {
   const W = 560, H = 200, pad = { l: 28, r: 12, t: 14, b: 26 };
   const iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
-  const { ideal, actual, days } = BURNDOWN;
-  const maxV = 21;
-  const xs = i => pad.l + (i / (ideal.length - 1)) * iw;
+  const N = 10;
+  const maxV = Math.max(committed, 1);
+  const remaining = Math.max(0, committed - done);
+  const xs = i => pad.l + (i / (N - 1)) * iw;
   const ys = v => pad.t + (1 - v / maxV) * ih;
-  const idealPath = ideal.map((v, i) => (i ? 'L' : 'M') + xs(i).toFixed(1) + ' ' + ys(v).toFixed(1)).join(' ');
-  const actualPts = actual.map((v, i) => v == null ? null : [xs(i), ys(v)]).filter(Boolean);
-  const actualPath = actualPts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
-  const todayIdx = actualPts.length - 1;
+  const idealPath = Array.from({ length: N }, (_, i) => committed * (1 - i / (N - 1)))
+    .map((v, i) => (i ? 'L' : 'M') + xs(i).toFixed(1) + ' ' + ys(v).toFixed(1)).join(' ');
+  const todayIdx = Math.round(Math.max(0, Math.min(1, todayFrac)) * (N - 1));
+  const actualPath = `M${xs(0).toFixed(1)} ${ys(committed).toFixed(1)} L${xs(todayIdx).toFixed(1)} ${ys(remaining).toFixed(1)}`;
+  const gridVals = [0, Math.round(maxV / 2), maxV];
   return (
     <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: 'block' }}>
-      {[0, 7, 14, 21].map(v => (
+      {gridVals.map(v => (
         <g key={v}>
           <line x1={pad.l} y1={ys(v)} x2={W - pad.r} y2={ys(v)} stroke="var(--border)" strokeWidth="1" strokeDasharray="2 4" />
           <text x={pad.l - 7} y={ys(v) + 3} textAnchor="end" fontSize="9" fill="var(--t4)" fontFamily="var(--font-mono)">{v}</text>
         </g>
       ))}
-      {days.map((d, i) => d && <text key={i} x={xs(i)} y={H - 8} textAnchor="middle" fontSize="9" fill="var(--t4)" fontFamily="var(--font-mono)">{d}</text>)}
+      {['D1', '', '', '', 'Mid', '', '', '', '', 'End'].map((d, i) => d && <text key={i} x={xs(i)} y={H - 8} textAnchor="middle" fontSize="9" fill="var(--t4)" fontFamily="var(--font-mono)">{d}</text>)}
       <path d={idealPath} fill="none" stroke="var(--t4)" strokeWidth="1.5" strokeDasharray="4 4" />
       <path d={actualPath} fill="none" stroke="var(--yellow)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-      {actualPts[todayIdx] && <circle cx={actualPts[todayIdx][0]} cy={actualPts[todayIdx][1]} r="4" fill="var(--yellow)" stroke="var(--bg)" strokeWidth="2" />}
+      <circle cx={xs(todayIdx)} cy={ys(remaining)} r="4" fill="var(--yellow)" stroke="var(--bg)" strokeWidth="2" />
     </svg>
   );
 }
 
 function VelocityCard({ sprints }) {
-  const all = sprints || SPRINTS;
-  const hist = all.filter(s => s.status !== 'planned').slice(0, 3).reverse();
-  const closed = all.filter(s => s.status === 'closed');
-  const avg = Math.round(closed.reduce((a, b) => a + (b.done || 0), 0) / Math.max(1, closed.length));
+  const hist = sprints.filter(s => s.status !== 'planned').slice(0, 3).reverse();
+  const closed = sprints.filter(s => s.status === 'closed');
+  const avg = closed.length ? Math.round(closed.reduce((a, b) => a + (b.done || 0), 0) / closed.length) : 0;
   const maxC = Math.max(1, ...hist.map(s => s.committed || 0));
   return (
     <Card pad={0}>
@@ -214,9 +200,13 @@ function VelocityCard({ sprints }) {
         <Icon name="activity" size={15} style={{ color: 'var(--t3)' }} /><span className="t-h3">Velocity</span>
         <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'baseline', gap: 6 }}>
           <span className="num" style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 18, color: 'var(--yellow)' }}>{avg}</span>
-          <span className="eyebrow" style={{ padding: 0 }}>avg tasks / sprint</span>
+          <span className="eyebrow" style={{ padding: 0 }}>avg done / sprint</span>
         </span>
       </div>
+      {hist.length === 0 || hist.every(s => !s.committed) ? (
+        <div style={{ padding: '34px 16px', textAlign: 'center', color: 'var(--t4)', fontSize: 12.5 }}>Not enough closed-sprint history yet.</div>
+      ) : (
+      <>
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 28, padding: '20px 22px 10px', height: 188, justifyContent: 'center' }}>
         {hist.map(s => (
           <div key={s.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 9 }}>
@@ -230,51 +220,140 @@ function VelocityCard({ sprints }) {
         ))}
       </div>
       <div style={{ display: 'flex', gap: 16, padding: '8px 16px 14px', borderTop: '1px solid var(--border)' }}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--t3)' }}><span style={{ width: 8, height: 8, borderRadius: 2, background: 'var(--ok-fg)' }} />Delivered</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--t3)' }}><span style={{ width: 8, height: 8, borderRadius: 2, background: 'var(--ok-fg)' }} />Done</span>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--t3)' }}><span style={{ width: 8, height: 8, borderRadius: 2, background: 'var(--p-wolf)', opacity: 0.5 }} />Committed</span>
+      </div>
+      </>
+      )}
+    </Card>
+  );
+}
+
+function LoadPanel({ rows }) {
+  return (
+    <Card pad={0}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
+        <Icon name="users" size={15} style={{ color: 'var(--t3)' }} /><span className="t-h3">Workload this sprint</span>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 14 }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--t3)' }}><span style={{ width: 8, height: 8, borderRadius: 2, background: 'var(--ok-fg)' }} />Done</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--t3)' }}><span style={{ width: 8, height: 8, borderRadius: 2, background: 'var(--p-wolf)' }} />Assigned</span>
+        </div>
+      </div>
+      <div style={{ padding: '8px 16px 14px' }}>
+        {rows.length === 0 && <div style={{ padding: '20px 0', textAlign: 'center', color: 'var(--t4)', fontSize: 12.5 }}>No assignments in this sprint yet.</div>}
+        {rows.map((c, i) => {
+          const max = Math.max(1, c.committed);
+          return (
+            <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '9px 0', borderTop: i ? '1px solid var(--border)' : 'none' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 9, width: 168, flexShrink: 0 }}>
+                <Avatar id={typeof c.id === 'string' && c.id.startsWith('u') ? c.id : undefined} name={c.name} initial={c.initial} size={24} />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, color: 'var(--t1)', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.name}</div>
+                  <div className="eyebrow" style={{ padding: 0, fontSize: 8.5 }}>{c.discipline}</div>
+                </div>
+              </div>
+              <div style={{ flex: 1, position: 'relative', height: 12, borderRadius: 3, background: 'var(--surface-3)', overflow: 'hidden' }}>
+                <div style={{ position: 'absolute', inset: 0, width: '100%', background: 'var(--p-wolf)', opacity: 0.45 }} />
+                <div style={{ position: 'absolute', inset: 0, width: `${(c.done / max) * 100}%`, background: 'var(--ok-fg)' }} />
+              </div>
+              <span className="num" style={{ fontSize: 12, color: 'var(--t2)', width: 56, textAlign: 'right' }}>{c.done}/{c.committed}</span>
+            </div>
+          );
+        })}
       </div>
     </Card>
   );
 }
 
 function SprintsScreen() {
-  const { session } = useAuth();
+  const { session, role } = useAuth();
+  const live = !!session;
+  const canPlan = role === 'admin' || role === 'lead' || !live;
   const [planning, setPlanning] = useState(false);
-  const [sprints, setSprints] = useState(SPRINTS);
+  const [sprints, setSprints] = useState(live ? [] : SPRINTS);
   const [stats, setStats] = useState(null);
-  const plannedIds = lsGet('throttle_plan_s25', []);
+  const [loadRows, setLoadRows] = useState(live ? [] : CAPACITY.map(c => { const u = teamById[c.id]; return { id: c.id, name: u.name, discipline: u.discipline, initial: u.initial, committed: c.committed, done: c.done }; }));
+  const [backlog, setBacklog] = useState(live ? [] : PLAN_BACKLOG);
+  const [usersById, setUsersById] = useState(teamById);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     const onPlan = () => setPlanning(true);
     window.addEventListener('throttle:plansprint', onPlan);
     return () => window.removeEventListener('throttle:plansprint', onPlan);
   }, []);
+
   useEffect(() => {
     if (!session) return;
     let cancelled = false;
     (async () => {
-      const [s, st] = await Promise.all([fetchSprints(session), fetchDashboardStats(session)]);
+      const usersRes = await fetchUsers(session);
+      const byId = usersRes?.byId || {};
+      const [s, st, wl, tasks] = await Promise.all([
+        fetchSprints(session), fetchDashboardStats(session), fetchTeamWorkload(session), fetchTasks(session, byId),
+      ]);
       if (cancelled) return;
+      if (usersRes?.list?.length) setUsersById(byId);
       if (s) setSprints(s);
       if (st && typeof st.doneCount === 'number') setStats(st);
+      if (wl?.rows?.length) {
+        const agg = {};
+        wl.rows.forEach(r => {
+          const p = agg[r.id] || (agg[r.id] = { id: r.id, name: r.name, discipline: r.discipline || '', committed: 0, done: 0 });
+          const n = Number(r.task_count) || 0;
+          p.committed += n;
+          if (r.stage === 'done' || r.stage === 'approved' || r.stage === 'delivered') p.done += n;
+        });
+        setLoadRows(Object.values(agg).filter(p => p.committed > 0).sort((a, b) => b.committed - a.committed));
+      } else setLoadRows([]);
+      if (tasks) setBacklog(tasks.filter(t => t.stage === 'backlog'));
     })();
     return () => { cancelled = true; };
-  }, [session]);
+  }, [session, reloadKey]);
 
-  if (planning) return <SprintPlanner onClose={() => setPlanning(false)} sprints={sprints} />;
+  const active = sprints.find(s => s.status === 'active') || (live ? null : SPRINTS.find(s => s.status === 'active'));
 
-  const active = sprints.find(s => s.status === 'active') || SPRINTS.find(s => s.status === 'active');
+  if (planning) {
+    return <SprintPlanner onClose={() => setPlanning(false)} sprint={active || sprints.find(s => s.status === 'planned')}
+      backlog={backlog} usersById={usersById} canPlan={canPlan} session={session} onCommitted={() => setReloadKey(k => k + 1)} />;
+  }
+
+  if (live && !active) {
+    return (
+      <div style={{ maxWidth: 1240, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16 }}>
+          <div>
+            <span className="eyebrow" style={{ padding: 0 }}>Sprints</span>
+            <h1 style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 24, letterSpacing: '0.01em', color: 'var(--t1)', margin: '7px 0 0' }}>No active sprint</h1>
+          </div>
+          {canPlan && <PrimaryBtn icon="target" onClick={() => setPlanning(true)}>Plan from backlog</PrimaryBtn>}
+        </div>
+        <Card><p style={{ color: 'var(--t3)', fontSize: 13, textAlign: 'center', margin: '24px 0' }}>There’s no active sprint right now. Plan one from the approved backlog to get going.</p></Card>
+        {sprints.length > 0 && <AllSprints sprints={sprints} onPlan={() => setPlanning(true)} />}
+      </div>
+    );
+  }
+
   const committed = stats ? (stats.totalEligible ?? active.committed) : active.committed;
   const done = stats ? (stats.doneCount ?? active.done) : active.done;
   const spill = stats ? (stats.spillovers ?? active.spill) : active.spill;
   const pct = committed ? Math.round((done / committed) * 100) : 0;
   const remaining = Math.max(0, committed - done);
+
+  // days left + today-fraction from real sprint dates
+  let daysLeft = 2, todayFrac = 0.8;
+  if (active.startDate && active.endDate) {
+    const start = new Date(active.startDate), end = new Date(active.endDate), now = new Date();
+    const span = end - start;
+    if (span > 0) { todayFrac = Math.max(0, Math.min(1, (now - start) / span)); daysLeft = Math.max(0, Math.ceil((end - now) / 8.64e7)); }
+  }
+
   const STAT = [
     { label: 'Committed', value: committed, tone: 'info' },
     { label: 'Completed', value: done, tone: 'ok' },
     { label: 'Remaining', value: remaining, tone: 'warn' },
     { label: 'Spill risk', value: spill, tone: 'bad' },
-    { label: 'Days left', value: 2, tone: 'brand' },
+    { label: 'Days left', value: daysLeft, tone: 'brand' },
   ];
 
   return (
@@ -285,8 +364,7 @@ function SprintsScreen() {
           <h1 style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 24, letterSpacing: '0.01em', color: 'var(--t1)', margin: '7px 0 0' }}>{active.name}</h1>
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
-          <PrimaryBtn icon="target" kind="ghost" onClick={() => setPlanning(true)}>Plan from backlog</PrimaryBtn>
-          <PrimaryBtn icon="check">Close sprint</PrimaryBtn>
+          {canPlan && <PrimaryBtn icon="target" kind="ghost" onClick={() => setPlanning(true)}>Plan from backlog</PrimaryBtn>}
         </div>
       </div>
 
@@ -309,7 +387,7 @@ function SprintsScreen() {
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--t3)' }}><span style={{ width: 14, height: 0, borderTop: '2px solid var(--yellow)' }} />Actual</span>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--t3)' }}><span style={{ width: 14, height: 0, borderTop: '2px dashed var(--t4)' }} />Ideal</span>
             </div>} />
-          <Burndown />
+          <Burndown committed={committed} done={done} todayFrac={todayFrac} />
         </Card>
         <Card style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 }}>
           <div style={{ position: 'relative', width: 130, height: 130 }}>
@@ -318,7 +396,7 @@ function SprintsScreen() {
               <circle cx="65" cy="65" r="56" fill="none" stroke="var(--yellow)" strokeWidth="9" strokeLinecap="round"
                 strokeDasharray={`${2 * Math.PI * 56 * pct / 100} ${2 * Math.PI * 56}`} transform="rotate(-90 65 65)" />
             </svg>
-            <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', flexDirection: 'column' }}>
+            <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center' }}>
               <div style={{ textAlign: 'center' }}>
                 <div className="num" style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 34, color: 'var(--t1)', lineHeight: 1 }}>{pct}%</div>
                 <div className="eyebrow" style={{ padding: 0, marginTop: 4 }}>Complete</div>
@@ -326,72 +404,45 @@ function SprintsScreen() {
             </div>
           </div>
           <p style={{ fontSize: 12.5, color: 'var(--t3)', textAlign: 'center', margin: 0, lineHeight: 1.5 }}>
-            {done} of {committed} done · {remaining} to go.<br/>On pace, {spill} may spill.</p>
+            {done} of {committed} done · {remaining} to go.{spill ? ` On pace, ${spill} may spill.` : ''}</p>
         </Card>
       </div>
 
       <VelocityCard sprints={sprints} />
-
-      <Card pad={0}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
-          <Icon name="users" size={15} style={{ color: 'var(--t3)' }} /><span className="t-h3">Capacity & commitment</span>
-          <div style={{ marginLeft: 'auto', display: 'flex', gap: 14 }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--t3)' }}><span style={{ width: 8, height: 8, borderRadius: 2, background: 'var(--ok-fg)' }} />Done</span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--t3)' }}><span style={{ width: 8, height: 8, borderRadius: 2, background: 'var(--p-wolf)' }} />Committed</span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--t3)' }}><span style={{ width: 8, height: 8, borderRadius: 2, background: 'var(--surface-3)' }} />Capacity</span>
-          </div>
-        </div>
-        <div style={{ padding: '8px 16px 14px' }}>
-          {CAPACITY.map((c, i) => {
-            const u = teamById[c.id];
-            return (
-              <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '9px 0', borderTop: i ? '1px solid var(--border)' : 'none' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 9, width: 168, flexShrink: 0 }}>
-                  <Avatar id={c.id} size={24} />
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 13, color: 'var(--t1)', fontWeight: 500 }}>{u.name}</div>
-                    <div className="eyebrow" style={{ padding: 0, fontSize: 8.5 }}>{u.discipline}</div>
-                  </div>
-                </div>
-                <div style={{ flex: 1, position: 'relative', height: 12, borderRadius: 3, background: 'var(--surface-3)', overflow: 'hidden' }}>
-                  <div style={{ position: 'absolute', inset: 0, width: `${(c.committed / c.cap) * 100}%`, background: 'var(--p-wolf)', opacity: 0.5 }} />
-                  <div style={{ position: 'absolute', inset: 0, width: `${(c.done / c.cap) * 100}%`, background: 'var(--ok-fg)' }} />
-                </div>
-                <span className="num" style={{ fontSize: 12, color: 'var(--t2)', width: 56, textAlign: 'right' }}>{c.done}/{c.committed} · {c.cap}</span>
-              </div>
-            );
-          })}
-        </div>
-      </Card>
-
-      <Card pad={0}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
-          <Icon name="calendar" size={15} style={{ color: 'var(--t3)' }} /><span className="t-h3">All sprints</span>
-        </div>
-        <div>
-          {sprints.map((s, i) => {
-            const stTone = s.status === 'active' ? 'brand' : s.status === 'planned' ? 'info' : 'ok';
-            const committedN = s.status === 'planned' && plannedIds.length ? plannedIds.length : s.committed;
-            const p = committedN ? Math.round((s.done / committedN) * 100) : 0;
-            const isPlan = s.status === 'planned';
-            return (
-              <div key={s.id} onClick={() => isPlan && setPlanning(true)} className="t-row" style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '13px 16px', borderTop: i ? '1px solid var(--border)' : 'none', cursor: 'pointer' }}>
-                <span className="num" style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14, color: 'var(--t1)', width: 56 }}>{s.shortId || s.id}</span>
-                <span className="num" style={{ fontSize: 12.5, color: 'var(--t3)', width: 130 }}>{s.range}</span>
-                <Pill tone={stTone} dot>{s.status === 'active' ? 'Active' : isPlan ? 'Planned' : 'Closed'}</Pill>
-                <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <div style={{ flex: 1, maxWidth: 240, height: 6, borderRadius: 3, background: 'var(--bg-2)', overflow: 'hidden' }}>
-                    <div style={{ width: `${p}%`, height: '100%', background: s.status === 'active' ? 'var(--yellow)' : 'var(--ok-fg)' }} /></div>
-                  {committedN > 0 && !isPlan && <span className="num" style={{ fontSize: 11.5, color: 'var(--t3)' }}>{s.done}/{committedN}{s.spill ? ` · ${s.spill} spill` : ''}</span>}
-                  {isPlan && <span className="num" style={{ fontSize: 11.5, color: plannedIds.length ? 'var(--info-fg)' : 'var(--t4)' }}>{plannedIds.length ? `${plannedIds.length} planned · tap to edit` : 'tap to plan'}</span>}
-                </div>
-                <Icon name="chevronRight" size={15} style={{ color: 'var(--t4)' }} />
-              </div>
-            );
-          })}
-        </div>
-      </Card>
+      <LoadPanel rows={loadRows} />
+      <AllSprints sprints={sprints} onPlan={() => setPlanning(true)} />
     </div>
+  );
+}
+
+function AllSprints({ sprints, onPlan }) {
+  return (
+    <Card pad={0}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
+        <Icon name="calendar" size={15} style={{ color: 'var(--t3)' }} /><span className="t-h3">All sprints</span>
+      </div>
+      <div>
+        {sprints.map((s, i) => {
+          const stTone = s.status === 'active' ? 'brand' : s.status === 'planned' ? 'info' : 'ok';
+          const p = s.committed ? Math.round((s.done / s.committed) * 100) : 0;
+          const isPlan = s.status === 'planned';
+          return (
+            <div key={s.id} onClick={() => isPlan && onPlan()} className="t-row" style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '13px 16px', borderTop: i ? '1px solid var(--border)' : 'none', cursor: isPlan ? 'pointer' : 'default' }}>
+              <span className="num" style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14, color: 'var(--t1)', width: 56 }}>{s.shortId || s.id}</span>
+              <span className="num" style={{ fontSize: 12.5, color: 'var(--t3)', width: 130 }}>{s.range}</span>
+              <Pill tone={stTone} dot>{s.status === 'active' ? 'Active' : isPlan ? 'Planned' : 'Closed'}</Pill>
+              <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ flex: 1, maxWidth: 240, height: 6, borderRadius: 3, background: 'var(--bg-2)', overflow: 'hidden' }}>
+                  <div style={{ width: `${p}%`, height: '100%', background: s.status === 'active' ? 'var(--yellow)' : 'var(--ok-fg)' }} /></div>
+                {s.committed > 0 && !isPlan && <span className="num" style={{ fontSize: 11.5, color: 'var(--t3)' }}>{s.done}/{s.committed}{s.spill ? ` · ${s.spill} spill` : ''}</span>}
+                {isPlan && <span className="num" style={{ fontSize: 11.5, color: 'var(--t4)' }}>tap to plan</span>}
+              </div>
+              <Icon name="chevronRight" size={15} style={{ color: 'var(--t4)' }} />
+            </div>
+          );
+        })}
+      </div>
+    </Card>
   );
 }
 

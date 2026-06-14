@@ -136,8 +136,73 @@ export async function fetchSprints(session) {
       const spill = hs.spillover_count ?? 0;
       const range = `${shortDate(s.start_date)} – ${shortDate(s.end_date)}`;
       return { id: s.id, _id: s.id, name: s.name, range, status: s.status, committed, done, spill,
+        startDate: s.start_date, endDate: s.end_date,
         shortId: String(s.name || '').replace(/^Sprint\s+/i, '') };
     });
+  } catch (_) { return null; }
+}
+
+// ── recent activity (dashboard feed) ─────────────────────────────
+const EVENT_MAP = {
+  approval:     { kind: 'approve', what: 'approved',  detail: 'work approved' },
+  completion:   { kind: 'approve', what: 'closed',    detail: 'marked done' },
+  delivery:     { kind: 'deliver', what: 'delivered', detail: 'delivered to requester' },
+  flag:         { kind: 'block',   what: 'flagged',   detail: 'blocked' },
+  iteration:    { kind: 'block',   what: 'sent back', detail: 'iteration requested' },
+  assignment:   { kind: 'start',   what: 'assigned',  detail: 'assignment changed' },
+  comment:      { kind: 'review',  what: 'commented on', detail: 'new comment' },
+  priority_change: { kind: 'start', what: 'reprioritised', detail: 'priority changed' },
+  meta_update:  { kind: 'start',   what: 'updated',   detail: 'details edited' },
+};
+const STAGE_EVENT = {
+  in_review:   { kind: 'review',  what: 'submitted', detail: 'moved to In Review' },
+  in_progress: { kind: 'start',   what: 'started',   detail: 'moved to In Progress' },
+  ext_blocked: { kind: 'block',   what: 'flagged',   detail: 'moved to Ext. Blocked' },
+  approved:    { kind: 'approve', what: 'approved',  detail: 'work approved' },
+  delivered:   { kind: 'deliver', what: 'delivered', detail: 'delivered to requester' },
+  in_sprint:   { kind: 'start',   what: 'queued',    detail: 'added to sprint' },
+  backlog:     { kind: 'start',   what: 'moved',     detail: 'sent to backlog' },
+  done:        { kind: 'approve', what: 'closed',    detail: 'marked done' },
+  abandoned:   { kind: 'block',   what: 'abandoned', detail: 'task abandoned' },
+};
+export async function fetchRecentActivity(session, limit = 12) {
+  try {
+    const r = await workerFetch('getRecentActivity', { limit }, session.access_token);
+    const rows = r?.activity || r?.data?.activity;
+    if (!rows) return null;
+    return rows.map(a => {
+      let m = EVENT_MAP[a.event_type] || { kind: 'start', what: 'updated', detail: a.event_type?.replace(/_/g, ' ') || 'activity' };
+      if (a.event_type === 'stage_change') {
+        const to = a.payload?.to || a.payload?.to_stage || a.payload?.stage;
+        m = STAGE_EVENT[to] || { kind: 'start', what: 'moved', detail: 'stage changed' };
+      }
+      const detail = (a.event_type === 'flag' || a.event_type === 'abandonment') && a.payload?.reason ? a.payload.reason : m.detail;
+      return {
+        id: a.id, who: a.user?.name || 'Someone', what: m.what,
+        target: a.task?.title || 'a task', detail, kind: m.kind,
+        t: relAge(a.created_at), taskId: a.task_id || null,
+      };
+    });
+  } catch (_) { return null; }
+}
+
+// ── deliverables-shipped chart (admin/lead) ──────────────────────
+const DT_COL = { graphic: 'graphic', video: 'video', photo: 'photo', listing_image: 'listing', social_post: 'social', copy: 'copy', deck: 'graphic', ad_creative: 'graphic', '3d_render': 'video' };
+export async function fetchDeliverablesChart(session) {
+  try {
+    const end = new Date(); const start = new Date(); start.setDate(end.getDate() - 6);
+    const fmt = d => d.toISOString().slice(0, 10);
+    const r = await workerFetch('getDeliverablesReport', { startDate: fmt(start), endDate: fmt(end) }, session.access_token);
+    const rows = r?.rows || r?.data?.rows;
+    if (!rows) return null;
+    const byDay = {};
+    rows.forEach(t => {
+      const day = t.completed_date; if (!day) return;
+      const col = DT_COL[t.deliverable_type] || 'graphic';
+      const b = byDay[day] || (byDay[day] = { graphic: 0, video: 0, photo: 0, listing: 0, social: 0, copy: 0 });
+      b[col]++;
+    });
+    return Object.keys(byDay).sort().map(d => ({ day: shortDate(d), ...byDay[d] }));
   } catch (_) { return null; }
 }
 
@@ -163,6 +228,9 @@ export async function moveTaskStage(session, taskId, stage, blockedReason) {
   const body = { task_id: taskId, stage };
   if (blockedReason) body.blocked_reason = blockedReason;
   return workerFetch('updateTaskStage', body, session.access_token);
+}
+export async function addTaskToSprint(session, taskId, sprintId) {
+  return workerFetch('addTaskToSprint', { task_id: taskId, sprint_id: sprintId }, session.access_token);
 }
 
 // ── request actions ──────────────────────────────────────────────

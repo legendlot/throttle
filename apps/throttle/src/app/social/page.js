@@ -310,17 +310,21 @@ function DayPopover({ day, pos, channel, onClose, onOpenPost, onSchedule }) {
   );
 }
 
+// Empty calendar scaffold (real June-2026 dates, no seed posts) for the live app.
+const EMPTY_WEEK = SOCIAL_WEEK.map(d => ({ ...d, posts: [] }));
+const EMPTY_MONTH = SOCIAL_MONTH.map(d => ({ ...d, posts: [] }));
+
 function SocialScreen() {
   const { session } = useAuth();
+  const live = !!session; // logged in → server-backed, never seed/localStorage
   const [channel, setChannel] = useState(null);
   const [view, setView] = useState('week');
-  const [week, setWeek] = useState(() => lsGet('throttle_week_v1', SOCIAL_WEEK));
-  const [month, setMonth] = useState(() => lsGet('throttle_month_v1', SOCIAL_MONTH));
+  const [week, setWeek] = useState(() => live ? EMPTY_WEEK : lsGet('throttle_week_v1', SOCIAL_WEEK));
+  const [month, setMonth] = useState(() => live ? EMPTY_MONTH : lsGet('throttle_month_v1', SOCIAL_MONTH));
   const [selected, setSelected] = useState(null);
   const [scheduling, setScheduling] = useState(false);
   const [presetDate, setPresetDate] = useState(null);
   const [dayPop, setDayPop] = useState(null);
-  const [live, setLive] = useState(false);
   const channelMapRef = useRef({}); // platform -> channel_id
 
   useEffect(() => {
@@ -339,7 +343,7 @@ function SocialScreen() {
       ]);
       if (cancelled) return;
       if (channels) { const m = {}; channels.forEach(c => { if (!m[c.platform]) m[c.platform] = c.id; }); channelMapRef.current = m; }
-      if (feed) { const built = buildFromFeed(feed); setWeek(built.week); setMonth(built.month); setLive(true); }
+      const built = buildFromFeed(feed || []); setWeek(built.week); setMonth(built.month);
     })();
     return () => { cancelled = true; };
   }, [session]);

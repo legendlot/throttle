@@ -273,6 +273,7 @@ export default {
       case 'getTasksInBucket':    return handleGetTasksInBucket(body, ctx, env);
       case 'updateRequest':       return handleUpdateRequest(body, ctx, env);
       case 'getTaskActivity':     return handleGetTaskActivity(body, ctx, env);
+      case 'getRecentActivity':   return handleGetRecentActivity(body, ctx, env);
       case 'addComment':          return handleAddComment(body, ctx, env);
       case 'getTeamMembers':      return handleGetTeamMembers(body, ctx, env);
       case 'updateTaskMeta':     return handleUpdateTaskMeta(body, ctx, env);
@@ -1426,6 +1427,52 @@ async function handleGetTaskActivity(body, ctx, env) {
     user: usersMap[a.user_id] || null,
   }));
 
+  return json({ activity: enriched });
+}
+
+// Recent activity across all tasks — powers the Dashboard activity feed.
+// admin/lead see the whole org; members are scoped to their assigned tasks;
+// requesters get nothing. Joins user names + task titles/product.
+async function handleGetRecentActivity(body, ctx, env) {
+  const limit = Math.min(Number(body.limit) || 12, 40);
+  if (ctx.role === 'requester') return json({ activity: [] });
+
+  let taskFilter = '';
+  if (ctx.role === 'member') {
+    const aRes = await sbFetch(
+      `task_assignees?user_id=eq.${ctx.userId}&select=task_id`, { method: 'GET' }, env
+    );
+    const rows = aRes.ok ? await aRes.json() : [];
+    const ids = [...new Set(rows.map(r => r.task_id).filter(Boolean))];
+    if (!ids.length) return json({ activity: [] });
+    taskFilter = `&task_id=in.(${ids.join(',')})`;
+  }
+
+  const actRes = await sbFetch(
+    `activity_log?select=id,task_id,user_id,event_type,payload,created_at&order=created_at.desc&limit=${limit}${taskFilter}`,
+    { method: 'GET' }, env
+  );
+  const activity = actRes.ok ? await actRes.json() : [];
+
+  const userIds = [...new Set(activity.map(a => a.user_id).filter(Boolean))];
+  const taskIds = [...new Set(activity.map(a => a.task_id).filter(Boolean))];
+  let usersMap = {}, tasksMap = {};
+  if (userIds.length > 0) {
+    const r = await sbFetch(`users?id=in.(${userIds.join(',')})&select=id,name,role`, { method: 'GET' }, env);
+    const u = r.ok ? await r.json() : [];
+    u.forEach(x => { usersMap[x.id] = x; });
+  }
+  if (taskIds.length > 0) {
+    const r = await sbFetch(`tasks?id=in.(${taskIds.join(',')})&select=id,title,task_number,product_code`, { method: 'GET' }, env);
+    const t = r.ok ? await r.json() : [];
+    t.forEach(x => { tasksMap[x.id] = x; });
+  }
+
+  const enriched = activity.map(a => ({
+    ...a,
+    user: usersMap[a.user_id] || null,
+    task: tasksMap[a.task_id] || null,
+  }));
   return json({ activity: enriched });
 }
 
