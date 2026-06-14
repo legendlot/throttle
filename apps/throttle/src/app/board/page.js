@@ -1,242 +1,232 @@
 'use client';
-import { useEffect, useState, useCallback } from 'react';
-import Layout from '@/components/Layout';
-import TaskSidePanel from '@/components/TaskSidePanel';
-import { supabaseBrand as supabase, workerFetch, getValidSession } from '@throttle/db';
+/* Board — production kanban + table, drag-to-move between stages, task
+   drawer (move / submit / approve / deliver + comment thread). Live tasks
+   from the brand schema; stage moves via updateTaskStage; comments via
+   getTaskActivity / addComment. Ported from board.jsx; seed fallback. */
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '@throttle/auth';
-import {
-  BOARD_STAGES, PRIORITIES,
-  getStageConfig, getPriorityConfig, canMoveTask
-} from '@/lib/taskConfig';
-import { getAgeingStatus, getAgeingTimestamp, AGEING_COLORS } from '@/lib/ageingUtils';
+import { AppShell } from '@/components/throttle/AppShell';
+import { Icon } from '@/components/throttle/Icon';
+import { Card, Pill, Avatar, ProductTag, PrimaryBtn } from '@/components/throttle/ui';
+import { STAGES, PRIORITY, DTYPE, TASKS, TEAM, stageByVal, teamById, taskTag } from '@/lib/throttleData';
+import { fetchUsers, fetchTasks, fetchTaskActivity, postComment, moveTaskStage, relAge } from '@/lib/throttleApi';
 
-function getDueDateStyle(dueDateStr, stage) {
-  if (!dueDateStr || ['done', 'abandoned'].includes(stage)) return null;
-  const now = Date.now();
-  const due = new Date(dueDateStr).getTime();
-  const hoursUntil = (due - now) / (1000 * 60 * 60);
-  if (hoursUntil < 0)   return { color: '#DE2A2A', fontWeight: 600 };
-  if (hoursUntil < 48)  return { color: '#f59e0b' };
-  return null;
-}
+const NEXT = {
+  backlog:     [{ to: 'in_sprint',   label: 'Add to sprint', kind: 'primary' }],
+  in_sprint:   [{ to: 'in_progress', label: 'Start work',    kind: 'primary' }, { to: 'backlog', label: 'Send to backlog', kind: 'ghost' }],
+  in_progress: [{ to: 'in_review',   label: 'Submit for review', kind: 'primary' }, { to: 'ext_blocked', label: 'Mark blocked', kind: 'ghost' }],
+  ext_blocked: [{ to: 'in_progress', label: 'Unblock',       kind: 'primary' }],
+  in_review:   [{ to: 'approved',    label: 'Approve',       kind: 'primary' }, { to: 'in_progress', label: 'Request changes', kind: 'ghost' }],
+  approved:    [{ to: 'delivered',   label: 'Deliver',       kind: 'primary' }],
+  delivered:   [{ to: 'done',        label: 'Mark done',     kind: 'primary' }],
+};
+const newReq = () => window.dispatchEvent(new CustomEvent('throttle:newreq'));
 
-function getTaskId(task, allTasks) {
-  if (!task.task_number) return null;
-  if (!task.batch_id) return `T-${String(task.task_number).padStart(3, '0')}`;
-  const siblings = allTasks
-    .filter(t => t.batch_id === task.batch_id)
-    .sort((a, b) => a.task_number - b.task_number);
-  const pos = siblings.findIndex(t => t.id === task.id) + 1;
-  return `T-${String(siblings[0].task_number).padStart(3, '0')}/${pos}`;
-}
-
-// ── Kanban Card ───────────────────────────────────────────────────────────────
-
-function TaskCard({ task, onClick, isDragging, ageingConfig, teamMembers, allTasks }) {
-  const priority = getPriorityConfig(task.priority);
-  const stage = getStageConfig(task.stage);
-
-  const ageingDot = (() => {
-    if (!ageingConfig) return null;
-    const stageKey = task.stage === 'in_sprint' ? 'accepted_to_in_progress'
-      : task.stage === 'in_progress' ? 'in_progress'
-      : task.stage === 'in_review'   ? 'in_review'
-      : task.stage === 'approved'    ? 'approved'
-      : task.stage === 'delivered'   ? 'delivered'
-      : null;
-    if (!stageKey || !ageingConfig[stageKey]) return null;
-    const cfg = ageingConfig[stageKey];
-    const ts  = getAgeingTimestamp(task);
-    const status = getAgeingStatus(ts, cfg.warning_hours, cfg.critical_hours);
-    if (!status || status === 'ok') return null;
-    return (
-      <span
-        title={status === 'critical' ? 'Overdue' : 'Ageing'}
-        style={{ width: 6, height: 6, borderRadius: '50%', background: AGEING_COLORS[status]?.color, display: 'inline-block', marginLeft: 4, flexShrink: 0 }}
-      />
-    );
-  })();
-
+function TaskCard({ task, onOpen }) {
+  const pr = PRIORITY[task.priority] || PRIORITY.medium;
+  const dueTone = task.age === 'crit' ? 'var(--bad-fg)' : task.age === 'warn' ? 'var(--warn-fg)' : 'var(--t3)';
   return (
-    <div
-      draggable
-      onDragStart={e => {
-        e.dataTransfer.setData('taskId', task.id);
-        e.dataTransfer.setData('fromStage', task.stage);
-      }}
-      onClick={() => onClick(task)}
-      style={{
-        background: 'var(--s1)',
-        border: '1px solid var(--b1)',
-        borderTop: `2px solid ${priority.color}`,
-        borderRadius: 6,
-        padding: '10px 12px',
-        cursor: 'pointer',
-        opacity: isDragging ? 0.5 : 1,
-        transition: 'border-color .15s, background .15s',
-        userSelect: 'none',
-      }}
-      onMouseEnter={e => { e.currentTarget.style.background = 'var(--s2)'; }}
-      onMouseLeave={e => { e.currentTarget.style.background = 'var(--s1)'; }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-          {(() => {
-            const taskId = getTaskId(task, allTasks);
-            return taskId ? (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', letterSpacing: '.04em' }}>
-                {taskId}
-              </span>
-            ) : null;
-          })()}
-          <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', letterSpacing: '.04em' }}>
-            {task.type}
-          </span>
+    <div className="t-card t-task" draggable
+      onDragStart={e => { e.dataTransfer.setData('text/plain', task.id); e.dataTransfer.effectAllowed = 'move'; }}
+      onClick={() => onOpen(task)}
+      style={{ background: 'var(--card-bg)', border: '1px solid var(--card-bd)', borderRadius: 'var(--card-radius)',
+        borderTop: `2px solid ${pr.color}`, padding: '10px 12px 11px', cursor: 'pointer', boxShadow: 'var(--card-shadow)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+          <span className="num" style={{ fontSize: 10.5, color: 'var(--t3)' }}>{taskTag(task.num)}</span>
+          <span style={{ fontSize: 10.5, color: 'var(--t4)', fontFamily: 'var(--font-display)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>{DTYPE[task.type] || task.type}</span>
         </div>
-        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-          {task.is_spillover && <span style={{ fontSize: 12, color: 'var(--amber)' }}>↩</span>}
-          {task.stage === 'ext_blocked' && <span style={{ fontSize: 12, color: 'var(--amber)' }}>⚠</span>}
-          {task.is_revision && <span style={{ fontFamily: 'var(--sans)', fontSize: 11, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--t3)', background: 'var(--s3)', padding: '2px 6px', borderRadius: 3, fontWeight: 500 }}>REV</span>}
-          {ageingDot}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+          {task.blocked && <span title={task.blocked} style={{ color: 'var(--warn-fg)', display: 'flex' }}><Icon name="alert" size={13} /></span>}
+          {task.age && <span style={{ width: 6, height: 6, borderRadius: '50%', background: dueTone }} />}
         </div>
       </div>
-
-      <p style={{
-        fontFamily: 'var(--sans)',
-        fontSize: 13,
-        color: 'var(--text)',
-        lineHeight: 1.45,
-        marginBottom: 8,
-        display: '-webkit-box',
-        WebkitLineClamp: 2,
-        WebkitBoxOrient: 'vertical',
-        overflow: 'hidden',
-      }}>
-        {task.title}
-      </p>
-
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          {task.product_code && (
-            <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)' }}>
-              {task.product_code}
-            </span>
-          )}
-          {(() => {
-            const cardOwner = task.task_assignees?.find(a => a.is_owner);
-            const collabCount = task.task_assignees?.filter(a => !a.is_owner).length || 0;
-            if (!cardOwner) return null;
-            const owner = { ...cardOwner, name: teamMembers?.find(m => m.id === cardOwner.user_id)?.name };
-            return (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-                <div style={{ width: 20, height: 20, borderRadius: '50%', background: '#F2CD1A', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--head)', fontSize: 11, fontWeight: 700, color: 'var(--fg-accent)' }}>
-                  {owner.name?.[0]?.toUpperCase() || '?'}
-                </div>
-                {collabCount > 0 && (
-                  <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)' }}>+{collabCount}</span>
-                )}
-              </div>
-            );
-          })()}
+      <p style={{ fontSize: 13, color: 'var(--t1)', lineHeight: 1.4, margin: '0 0 10px', display: '-webkit-box',
+        WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{task.title}</p>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <ProductTag code={task.product} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+          {task.due && <span className="num" style={{ fontSize: 11, color: dueTone, fontWeight: task.age ? 600 : 400 }}>{task.due}</span>}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+            <Avatar id={task.ownerId} name={task.ownerName} initial={task.ownerInitial} size={21} />
+            {task.collabs > 0 && <span className="num" style={{ fontSize: 11, color: 'var(--t3)' }}>+{task.collabs}</span>}
+          </div>
         </div>
-        {task.due_date && (() => {
-          const duStyle = getDueDateStyle(task.due_date, task.stage);
-          return (
-            <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', marginLeft: 'auto', ...duStyle }}>
-              {new Date(task.due_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
-              {duStyle?.color === '#DE2A2A' ? ' !' : ''}
-            </span>
-          );
-        })()}
       </div>
     </div>
   );
 }
 
-// ── Kanban Column ─────────────────────────────────────────────────────────────
+function Column({ stage, tasks, onOpen, onDropTask, over, setOver }) {
+  return (
+    <div style={{ width: 252, flexShrink: 0, display: 'flex', flexDirection: 'column', height: '100%' }}
+      onDragOver={e => { e.preventDefault(); setOver(stage.value); }}
+      onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget)) setOver(o => o === stage.value ? null : o); }}
+      onDrop={e => { e.preventDefault(); const id = e.dataTransfer.getData('text/plain'); onDropTask(id, stage.value); setOver(null); }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '0 4px 11px', flexShrink: 0 }}>
+        <span style={{ width: 8, height: 8, borderRadius: 2, background: stage.color }} />
+        <span style={{ fontFamily: 'var(--font-display)', fontSize: 11.5, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: stage.color }}>{stage.label}</span>
+        <span className="num" style={{ fontSize: 11.5, color: 'var(--t2)', background: 'var(--surface-2)', border: '1px solid var(--border)', padding: '1px 8px', borderRadius: 999, fontWeight: 600 }}>{tasks.length}</span>
+      </div>
+      <div className="t-col-scroll" style={{ display: 'flex', flexDirection: 'column', gap: 9, flex: 1, minHeight: 0, overflowY: 'auto',
+        padding: '4px', borderRadius: 'var(--r-sm)', transition: 'background .12s, box-shadow .12s',
+        background: over === stage.value ? 'var(--surface-2)' : 'transparent',
+        boxShadow: over === stage.value ? 'inset 0 0 0 1px var(--border-3)' : 'none' }}>
+        {tasks.map(t => <TaskCard key={t.id} task={t} onOpen={onOpen} />)}
+        {tasks.length === 0 && <div style={{ padding: '18px 0', textAlign: 'center', color: 'var(--t4)', fontSize: 11.5 }}>{over === stage.value ? 'Drop here' : 'Empty'}</div>}
+      </div>
+    </div>
+  );
+}
 
-function KanbanColumn({ stage, tasks, onTaskClick, onDrop, canDrop, ageingConfig, teamMembers, allTasks }) {
-  const [isDragOver, setIsDragOver] = useState(false);
-  const config = getStageConfig(stage);
+function TaskDrawer({ task, onClose, onMove, session }) {
+  const [comment, setComment] = useState('');
+  const [comments, setComments] = useState(null); // null = loading/seed
+  const [posting, setPosting] = useState(false);
+
+  useEffect(() => { setComment(''); setComments(null); }, [task?.id]);
+  useEffect(() => {
+    if (!task) return;
+    const onKey = e => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [task, onClose]);
+  useEffect(() => {
+    if (!task || !session) return;
+    let cancelled = false;
+    (async () => {
+      const act = await fetchTaskActivity(session, task.id);
+      if (cancelled || !act) return;
+      const rows = act.filter(a => a.event_type === 'comment' && a.payload?.comment)
+        .map(a => ({ who: a.user?.name || 'Someone', t: relAge(a.created_at), text: a.payload.comment }));
+      setComments(rows);
+    })();
+    return () => { cancelled = true; };
+  }, [task, session]);
+
+  if (!task) return null;
+  const st = stageByVal[task.stage] || { label: task.stage, color: 'var(--t3)' };
+  const pr = PRIORITY[task.priority] || PRIORITY.medium;
+  const ownerName = task.ownerName || teamById[task.ownerId]?.name || 'Owner';
+  const actions = NEXT[task.stage] || [];
+  const SEED_COMMENTS = [
+    { who: ownerName, t: '2h ago', text: 'First pass uploaded. Went with the wet-tarmac grade on the hero frame.' },
+    { who: 'Aarav Menon', t: '1h ago', text: 'Tighten the logo lockup, otherwise close. Push the yellow rim a touch.' },
+  ];
+  const shown = comments == null ? (session ? [] : SEED_COMMENTS) : comments;
+  const meta = [
+    ['Type', DTYPE[task.type] || task.type], ['Priority', pr.label, pr.color],
+    ['Due', task.due || '—'], ['Sprint', task.sprintShort || 'S-24'],
+  ];
+
+  async function send() {
+    const text = comment.trim();
+    if (!text) return;
+    setComment('');
+    if (session) {
+      setPosting(true);
+      try {
+        await postComment(session, task.id, text);
+        const act = await fetchTaskActivity(session, task.id);
+        if (act) setComments(act.filter(a => a.event_type === 'comment' && a.payload?.comment)
+          .map(a => ({ who: a.user?.name || 'Someone', t: relAge(a.created_at), text: a.payload.comment })));
+      } catch (e) {
+        window.dispatchEvent(new CustomEvent('throttle:toast', { detail: { msg: 'Comment failed: ' + (e.message || 'error'), tone: 'bad', icon: 'alert' } }));
+      }
+      setPosting(false);
+    } else {
+      setComments(c => [...(c || []), { who: 'You', t: 'now', text }]);
+    }
+  }
 
   return (
-    <div
-      style={{ display: 'flex', flexDirection: 'column', minWidth: 208, width: 208, flexShrink: 0, height: '100%' }}
-      onDragOver={e => { if (canDrop) { e.preventDefault(); setIsDragOver(true); } }}
-      onDragLeave={() => setIsDragOver(false)}
-      onDrop={e => {
-        e.preventDefault();
-        setIsDragOver(false);
-        if (canDrop) {
-          const taskId = e.dataTransfer.getData('taskId');
-          const fromStage = e.dataTransfer.getData('fromStage');
-          onDrop(taskId, fromStage, stage);
-        }
-      }}
-    >
-      {/* Column header */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        marginBottom: 12,
-        padding: '6px 4px',
-        borderRadius: 6,
-        background: isDragOver ? 'var(--s2)' : 'transparent',
-        transition: 'background .15s',
-        flexShrink: 0,
-      }}>
-        <span style={{
-          fontFamily: 'var(--head)',
-          fontSize: 12,
-          letterSpacing: '.08em',
-          textTransform: 'uppercase',
-          color: config.color || 'var(--t3)',
-          fontWeight: 700,
-        }}>
-          {config.label}
-        </span>
-        <span style={{
-          fontFamily: 'var(--sans)',
-          fontSize: 12,
-          color: 'var(--text)',
-          background: 'var(--s3)',
-          border: '1px solid var(--b2)',
-          padding: '2px 7px',
-          borderRadius: 3,
-          fontWeight: 600,
-        }}>
-          {tasks.length}
-        </span>
-      </div>
+    <div onClick={onClose} className="t-drawer-back" style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(8,8,10,0.55)',
+      display: 'flex', justifyContent: 'flex-end' }}>
+      <div onClick={e => e.stopPropagation()} className="t-drawer-panel" style={{ width: 'min(440px, 94vw)', height: '100%', background: 'var(--surface)',
+        borderLeft: '1px solid var(--border-2)', boxShadow: 'var(--shadow-pop)', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '16px 18px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+          <span className="num" style={{ fontSize: 12, color: 'var(--yellow)', fontWeight: 600 }}>{taskTag(task.num)}</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--t2)' }}>
+            <span style={{ width: 7, height: 7, borderRadius: '50%', background: st.color }} />{st.label}</span>
+          <button onClick={onClose} className="t-iconbtn" style={{ marginLeft: 'auto', width: 30, height: 30 }}><Icon name="x" size={15} /></button>
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '20px 18px' }}>
+          <h2 style={{ fontFamily: 'var(--font-ui)', fontWeight: 600, fontSize: 18, color: 'var(--t1)', lineHeight: 1.3, margin: '0 0 16px' }}>{task.title}</h2>
+          {task.blocked && <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px', borderRadius: 'var(--r-sm)',
+            background: 'var(--warn-bg)', border: '1px solid var(--warn-bd)', color: 'var(--warn-fg)', fontSize: 12.5, marginBottom: 16 }}>
+            <Icon name="alert" size={15} />{task.blocked}</div>}
 
-      {/* Cards */}
-      <div style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 8,
-        flex: 1,
-        minHeight: 0,
-        overflowY: 'auto',
-        borderRadius: 6,
-        padding: 4,
-        transition: 'all .15s',
-        background: isDragOver ? 'rgba(42,42,42,0.3)' : 'transparent',
-        border: isDragOver ? '1px dashed var(--b2)' : '1px solid transparent',
-      }}>
-        {tasks.map(task => (
-          <TaskCard
-            key={task.id}
-            task={task}
-            onClick={onTaskClick}
-            ageingConfig={ageingConfig}
-            teamMembers={teamMembers}
-            allTasks={allTasks}
-          />
-        ))}
-        {tasks.length === 0 && isDragOver && (
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <p style={{ color: 'var(--t3)', fontFamily: 'var(--sans)', fontSize: 11 }}>Drop here</p>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px 16px', marginBottom: 18 }}>
+            {meta.map(([k, v, c]) => (
+              <div key={k}>
+                <div className="eyebrow" style={{ padding: 0, marginBottom: 5 }}>{k}</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13.5, color: 'var(--t1)' }}>
+                  {c && <span style={{ width: 7, height: 7, borderRadius: '50%', background: c }} />}{v}</div>
+              </div>
+            ))}
+            <div>
+              <div className="eyebrow" style={{ padding: 0, marginBottom: 5 }}>Product</div>
+              <ProductTag code={task.product} size="lg" />
+            </div>
+            <div>
+              <div className="eyebrow" style={{ padding: 0, marginBottom: 5 }}>Assignees</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                <Avatar id={task.ownerId} name={task.ownerName} initial={task.ownerInitial} size={24} />
+                <span style={{ fontSize: 13, color: 'var(--t2)' }}>{ownerName.split(' ')[0]}{task.collabs > 0 ? ` +${task.collabs}` : ''}</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="eyebrow" style={{ padding: 0, marginBottom: 6 }}>Brief</div>
+          <p style={{ fontSize: 13.5, color: 'var(--t2)', lineHeight: 1.6, margin: '0 0 20px' }}>
+            {task.product ? `${task.product} ` : ''}deliverable for the current sprint. Match the brand book — dark-first, motorsport energy, no birthday-party context. Final files to the shared drive on approval.
+          </p>
+
+          <div className="eyebrow" style={{ padding: 0, marginBottom: 8 }}>Move to stage</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 22 }}>
+            {STAGES.map(s => (
+              <button key={s.value} onClick={() => onMove(task.id, s.value)} className="t-chip" data-on={s.value === task.stage}>
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: s.color, display: 'inline-block', marginRight: 6 }} />{s.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="eyebrow" style={{ padding: 0, marginBottom: 10 }}>Activity</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginBottom: 16 }}>
+            {shown.length === 0 && <p style={{ fontSize: 12.5, color: 'var(--t4)', margin: 0 }}>No comments yet.</p>}
+            {shown.map((c, i) => (
+              <div key={i} style={{ display: 'flex', gap: 10 }}>
+                <span style={{ width: 26, height: 26, borderRadius: '50%', background: 'var(--surface-3)', border: '1px solid var(--border-2)',
+                  display: 'grid', placeItems: 'center', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 10.5, color: 'var(--t2)', flexShrink: 0 }}>{c.who[0]}</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--t1)' }}>{c.who}</span>
+                    <span className="num" style={{ fontSize: 10.5, color: 'var(--t4)' }}>{c.t}</span>
+                  </div>
+                  <p style={{ fontSize: 13, color: 'var(--t2)', lineHeight: 1.5, margin: '3px 0 0' }}>{c.text}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input value={comment} onChange={e => setComment(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') send(); }} placeholder="Add a comment…"
+              style={{ flex: 1, background: 'var(--bg-2)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-sm)', padding: '9px 12px',
+                color: 'var(--t1)', fontFamily: 'var(--font-ui)', fontSize: 13, outline: 'none' }} />
+            <button onClick={send} disabled={posting} className="t-iconbtn" style={{ width: 38, height: 38, background: comment ? 'var(--yellow)' : 'var(--card-bg)', color: comment ? '#15140b' : 'var(--t3)', borderColor: comment ? 'var(--yellow)' : 'var(--border)' }}><Icon name="send" size={15} /></button>
+          </div>
+        </div>
+
+        {actions.length > 0 && (
+          <div style={{ display: 'flex', gap: 10, padding: '14px 18px', borderTop: '1px solid var(--border)', flexShrink: 0 }}>
+            {actions.map(a => (
+              <button key={a.to} onClick={() => { onMove(task.id, a.to); if (a.kind === 'primary') onClose(); }} className="t-btn"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '10px 15px', borderRadius: 'var(--r-sm)', cursor: 'pointer',
+                  fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 11.5, letterSpacing: '0.06em', textTransform: 'uppercase',
+                  ...(a.kind === 'primary' ? { background: 'var(--yellow)', color: '#15140b', border: '1px solid var(--yellow)', flex: 1, justifyContent: 'center' }
+                    : { background: 'transparent', color: 'var(--t2)', border: '1px solid var(--border-2)' }) }}>
+                {a.kind === 'primary' && <Icon name="check" size={14} />}{a.label}
+              </button>
+            ))}
           </div>
         )}
       </div>
@@ -244,504 +234,127 @@ function KanbanColumn({ stage, tasks, onTaskClick, onDrop, canDrop, ageingConfig
   );
 }
 
-// ── Table View ────────────────────────────────────────────────────────────────
-
-function TableView({ tasks, onTaskClick }) {
-  const [sortKey, setSortKey] = useState('created_at');
-  const [sortDir, setSortDir] = useState('desc');
-  const [filterStage, setFilterStage] = useState('all');
-  const [filterPriority, setFilterPriority] = useState('all');
-
-  function handleSort(key) {
-    if (sortKey === key) {
-      setSortDir(d => d === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortKey(key);
-      setSortDir('asc');
-    }
-  }
-
-  const filtered = tasks
-    .filter(t => filterStage === 'all' || t.stage === filterStage)
-    .filter(t => filterPriority === 'all' || t.priority === filterPriority)
-    .sort((a, b) => {
-      let av = a[sortKey] || '';
-      let bv = b[sortKey] || '';
-      if (av < bv) return sortDir === 'asc' ? -1 : 1;
-      if (av > bv) return sortDir === 'asc' ? 1 : -1;
-      return 0;
-    });
-
-  const selectStyle = {
-    background: 'var(--s2)',
-    border: '1px solid var(--b2)',
-    borderRadius: 6,
-    padding: '6px 10px',
-    fontSize: 11,
-    color: 'var(--t2)',
-    fontFamily: 'var(--sans)',
-    outline: 'none',
-  };
-
-  const thStyle = {
-    padding: '8px 12px',
-    textAlign: 'left',
-    fontFamily: 'var(--sans)',
-    fontSize: 11,
-    letterSpacing: '.08em',
-    textTransform: 'uppercase',
-    color: 'var(--t3)',
-    fontWeight: 600,
-    cursor: 'pointer',
-    whiteSpace: 'nowrap',
-  };
-
-  return (
-    <div>
-      {/* Table filters */}
-      <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'center' }}>
-        <select value={filterStage} onChange={e => setFilterStage(e.target.value)} style={selectStyle}>
-          <option value="all">All Stages</option>
-          {BOARD_STAGES.map(s => (
-            <option key={s.value} value={s.value}>{s.label}</option>
-          ))}
-        </select>
-        <select value={filterPriority} onChange={e => setFilterPriority(e.target.value)} style={selectStyle}>
-          <option value="all">All Priorities</option>
-          {PRIORITIES.map(p => (
-            <option key={p.value} value={p.value}>{p.label}</option>
-          ))}
-        </select>
-        <span style={{ marginLeft: 'auto', fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)' }}>
-          {filtered.length} task{filtered.length !== 1 ? 's' : ''}
-        </span>
-      </div>
-
-      {/* Table */}
-      <div style={{ overflowX: 'auto', borderRadius: 8, border: '1px solid var(--b1)' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--sans)', fontSize: 12 }}>
-          <thead>
-            <tr style={{ background: 'var(--s1)', borderBottom: '1px solid var(--b1)' }}>
-              <th style={thStyle} onClick={() => handleSort('title')}>
-                Title {sortKey === 'title' && (sortDir === 'asc' ? '↑' : '↓')}
-              </th>
-              <th style={thStyle} onClick={() => handleSort('stage')}>
-                Stage {sortKey === 'stage' && (sortDir === 'asc' ? '↑' : '↓')}
-              </th>
-              <th style={thStyle} onClick={() => handleSort('priority')}>
-                Priority {sortKey === 'priority' && (sortDir === 'asc' ? '↑' : '↓')}
-              </th>
-              <th style={{ ...thStyle, cursor: 'default' }}>Product</th>
-              <th style={{ ...thStyle, cursor: 'default' }}>Type</th>
-              <th style={thStyle} onClick={() => handleSort('due_date')}>
-                Due {sortKey === 'due_date' && (sortDir === 'asc' ? '↑' : '↓')}
-              </th>
-              <th style={thStyle} onClick={() => handleSort('created_at')}>
-                Created {sortKey === 'created_at' && (sortDir === 'asc' ? '↑' : '↓')}
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.length === 0 ? (
-              <tr>
-                <td colSpan={7} style={{ textAlign: 'center', color: 'var(--t3)', fontSize: 12, padding: '40px 0' }}>
-                  No tasks match these filters
-                </td>
-              </tr>
-            ) : (
-              filtered.map((task, i) => {
-                const stage = getStageConfig(task.stage);
-                const priority = getPriorityConfig(task.priority);
-                return (
-                  <tr
-                    key={task.id}
-                    onClick={() => onTaskClick(task)}
-                    style={{
-                      cursor: 'pointer',
-                      borderBottom: '1px solid var(--b1)',
-                      background: i % 2 !== 0 ? 'var(--s1)' : 'transparent',
-                      transition: 'background .1s',
-                    }}
-                    onMouseEnter={e => e.currentTarget.style.background = 'var(--s2)'}
-                    onMouseLeave={e => e.currentTarget.style.background = i % 2 !== 0 ? 'var(--s1)' : 'transparent'}
-                  >
-                    <td style={{ padding: '10px 12px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        {task.is_spillover && <span style={{ color: 'var(--amber)', fontSize: 11 }}>↩</span>}
-                        <span style={{ color: 'var(--text)', fontSize: 12, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200 }}>
-                          {task.title}
-                        </span>
-                      </div>
-                    </td>
-                    <td style={{ padding: '10px 12px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: '50%', background: stage.color, flexShrink: 0 }} />
-                        <span style={{ color: 'var(--t2)', fontSize: 11 }}>{stage.label}</span>
-                      </div>
-                    </td>
-                    <td style={{ padding: '10px 12px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: '50%', background: priority.color, flexShrink: 0 }} />
-                        <span style={{ color: 'var(--t2)', fontSize: 11 }}>{priority.label}</span>
-                      </div>
-                    </td>
-                    <td style={{ padding: '10px 12px', color: 'var(--t3)', fontSize: 11 }}>{task.product_code || '—'}</td>
-                    <td style={{ padding: '10px 12px', color: 'var(--t3)', fontSize: 11, textTransform: 'capitalize' }}>
-                      {task.type?.replace(/_/g, ' ')}
-                    </td>
-                    <td style={{ padding: '10px 12px', color: 'var(--t3)', fontSize: 11 }}>
-                      {task.due_date
-                        ? new Date(task.due_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
-                        : '—'}
-                    </td>
-                    <td style={{ padding: '10px 12px', color: 'var(--t3)', fontSize: 11 }}>
-                      {new Date(task.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-// ── Person Filter ────────────────────────────────────────────────────────────
-
-function PersonFilter({ members, selected, onChange }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-      <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', letterSpacing: '.06em', textTransform: 'uppercase', fontWeight: 500 }}>Person</span>
-      <button onClick={() => onChange(null)} style={{ background: selected === null ? '#F2CD1A' : 'var(--s2)', color: selected === null ? 'var(--fg-accent)' : 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 10px', fontFamily: 'var(--sans)', fontSize: 12, cursor: 'pointer' }}>All</button>
-      {members.map(m => (
-        <button key={m.id} onClick={() => onChange(m.id)} style={{ background: selected === m.id ? '#F2CD1A' : 'var(--s2)', color: selected === m.id ? 'var(--fg-accent)' : 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 10px', fontFamily: 'var(--sans)', fontSize: 12, cursor: 'pointer' }}>{m.name.split(' ')[0]}</button>
-      ))}
-    </div>
-  );
-}
-
-// ── Main Board Page ───────────────────────────────────────────────────────────
-
-export default function BoardPage() {
-  const { session, brandUser } = useAuth();
-  const [tasks, setTasks] = useState([]);
-  const [loading, setLoading] = useState(true);
+function BoardScreen() {
+  const { session } = useAuth();
+  const [tasks, setTasks] = useState(TASKS);
+  const [usersById, setUsersById] = useState(teamById);
+  const [members, setMembers] = useState(() => TEAM.filter(t => t.role === 'member'));
   const [view, setView] = useState('kanban');
-  const [selectedTask, setSelectedTask] = useState(null);
-  const [selectedPerson, setSelectedPerson] = useState(null);
-  const [teamMembers, setTeamMembers] = useState([]);
-  const [ageingConfig, setAgeingConfig] = useState({});
-  const [searchOpen, setSearchOpen]   = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState(null);
-  const [searchLoading, setSearchLoading] = useState(false);
-
-  const isAdminLead = ['admin', 'lead'].includes(brandUser?.role);
+  const [person, setPerson] = useState(null);
+  const [selected, setSelected] = useState(null);
+  const [over, setOver] = useState(null);
+  const [live, setLive] = useState(false);
 
   useEffect(() => {
-    function onKey(e) {
-      if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey) {
-        const tag = document.activeElement?.tagName;
-        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-        e.preventDefault();
-        setSearchOpen(o => !o);
-        setSearchQuery('');
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const usersRes = await fetchUsers(session);
+      const byId = usersRes?.byId || {};
+      const t = await fetchTasks(session, byId);
+      if (cancelled) return;
+      if (usersRes?.list?.length) {
+        setUsersById(byId);
+        setMembers(usersRes.list.filter(u => u.role === 'member' || u.role === 'lead'));
+      }
+      if (t) { setTasks(t); setLive(true); }
+    })();
+    return () => { cancelled = true; };
+  }, [session]);
+
+  const move = async (id, stage) => {
+    const prevTasks = tasks;
+    setTasks(prev => prev.map(t => t.id === id ? { ...t, stage } : t));
+    setSelected(prev => prev && prev.id === id ? { ...prev, stage } : prev);
+    if (live && session) {
+      try { await moveTaskStage(session, id, stage, stage === 'ext_blocked' ? 'Flagged from the board' : undefined); }
+      catch (e) {
+        setTasks(prevTasks);
+        window.dispatchEvent(new CustomEvent('throttle:toast', { detail: { msg: 'Move failed: ' + (e.message || 'not allowed'), tone: 'bad', icon: 'alert' } }));
       }
     }
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, []);
+  };
 
   useEffect(() => {
-    if (brandUser) loadTasks();
-  }, [brandUser]);
+    const open = id => { const f = tasks.find(t => t.id === id) || (id === 'review' && tasks.find(t => t.stage === 'in_review')); if (f) setSelected(f); };
+    if (typeof window !== 'undefined' && window.__throttleOpenTask) { open(window.__throttleOpenTask); delete window.__throttleOpenTask; }
+    const onEvt = e => { open(e.detail); if (typeof window !== 'undefined') delete window.__throttleOpenTask; };
+    window.addEventListener('throttle:opentask', onEvt);
+    return () => window.removeEventListener('throttle:opentask', onEvt);
+  }, [tasks]);
 
-  useEffect(() => {
-    const q = searchQuery.trim();
-    if (!q) {
-      setSearchResults(null);
-      setSearchLoading(false);
-      return;
-    }
-    setSearchLoading(true);
-    const timer = setTimeout(async () => {
-      await getValidSession();
-      const sanitized = q.replace(/["\\]/g, '');
-      const pattern = `"%${sanitized}%"`;
-      const { data, error } = await supabase
-        .from('tasks')
-        .select('id, title, type, stage, due_date, product_code, sprint_id, task_number, batch_id')
-        .or(`title.ilike.${pattern},product_code.ilike.${pattern},type.ilike.${pattern}`)
-        .order('created_at', { ascending: false })
-        .limit(20);
-      setSearchResults(error ? [] : (data || []));
-      setSearchLoading(false);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [searchQuery]);
-
-  useEffect(() => {
-    if (!brandUser?.id || !session) return;
-    if (brandUser?.role !== 'requester') {
-      workerFetch('getTeamMembers', {}, session?.access_token)
-        .then(data => setTeamMembers(data.members || []))
-        .catch(() => {});
-    }
-    workerFetch('getAgeingConfig', {}, session?.access_token)
-      .then(d => {
-        const map = {};
-        for (const row of d.config || []) map[row.stage] = row;
-        setAgeingConfig(map);
-      })
-      .catch(() => {});
-  }, [brandUser?.id]);
-
-  async function loadTasks() {
-    await getValidSession();
-    setLoading(true);
-    const { data, error } = await supabase
-      .from('tasks')
-      .select('*, task_assignees(user_id, is_owner), task_number, batch_id')
-      .not('stage', 'in', '("done","abandoned")')
-      .order('created_at', { ascending: false });
-    if (!error) setTasks(data || []);
-    setLoading(false);
-  }
-
-  function handleTaskClick(task) {
-    const displayId = getTaskId(task, tasks);
-    setSelectedTask({ ...task, displayId });
-  }
-
-  async function handleDrop(taskId, fromStage, toStage) {
-    if (fromStage === toStage) return;
-    const task = tasks.find(t => t.id === taskId);
-    if (!task) return;
-    if (!canMoveTask(task, toStage, brandUser?.role)) return;
-
-    if (toStage === 'ext_blocked' || toStage === 'abandoned') {
-      const displayId = getTaskId(task, tasks);
-      setSelectedTask({ ...task, displayId, _pendingStage: toStage });
-      return;
-    }
-
-    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, stage: toStage } : t));
-    try {
-      await workerFetch('updateTaskStage', { task_id: taskId, stage: toStage }, session?.access_token);
-    } catch {
-      setTasks(prev => prev.map(t => t.id === taskId ? { ...t, stage: fromStage } : t));
-    }
-  }
-
-  function handleTaskUpdate(updatedTask) {
-    setTasks(prev => prev.map(t => t.id === updatedTask.id ? updatedTask : t));
-    setSelectedTask(prev => ({ ...updatedTask, displayId: prev?.displayId }));
-  }
-
-  const visibleTasks = selectedPerson
-    ? tasks.filter(t => t.task_assignees?.some(a => a.user_id === selectedPerson))
-    : tasks;
-
-  const tasksByStage = BOARD_STAGES.reduce((acc, stage) => {
-    acc[stage.value] = visibleTasks.filter(t => t.stage === stage.value);
-    return acc;
-  }, {});
-
-  const reviewCount = tasksByStage['in_review']?.length || 0;
+  const visible = person ? tasks.filter(t => t.ownerId === person) : tasks;
+  const reviewCount = visible.filter(t => t.stage === 'in_review').length;
 
   return (
-    <Layout>
-      <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 48px - 48px)', overflow: 'hidden' }}>
-        {/* Board header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, flexShrink: 0 }}>
-          <div>
-            <h1 style={{ fontFamily: 'var(--head)', fontWeight: 900, fontSize: 18, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--text)', lineHeight: 1 }}>
-              Board
-            </h1>
-            <p style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', marginTop: 4, display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span>
-                {selectedPerson ? `${visibleTasks.length} of ${tasks.length}` : tasks.length} active task{(selectedPerson ? visibleTasks.length : tasks.length) !== 1 ? 's' : ''}
-              </span>
-              <span style={{ color: 'var(--t3)' }}>
-                <kbd style={{ background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 3, padding: '2px 6px', fontSize: 11 }}>/</kbd> search
-              </span>
-            </p>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 16, flexShrink: 0, flexWrap: 'wrap' }}>
+        <span className="eyebrow" style={{ padding: 0 }}>{visible.length} active</span>
+        {reviewCount > 0 && <Pill tone="info" dot>{reviewCount} awaiting review</Pill>}
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <button onClick={() => setPerson(null)} className="t-chip" data-on={person === null}>All</button>
+            {members.map(m => (
+              <button key={m.id} onClick={() => setPerson(m.id)} className="t-chip" data-on={person === m.id} title={m.name}>{m.name.split(' ')[0]}</button>
+            ))}
           </div>
+          <div style={{ display: 'flex', background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: 2 }}>
+            {['kanban', 'table'].map(v => (
+              <button key={v} onClick={() => setView(v)} style={{ padding: '6px 13px', fontFamily: 'var(--font-display)', fontSize: 10, fontWeight: 700,
+                letterSpacing: '0.08em', textTransform: 'uppercase', borderRadius: 4, border: 'none', cursor: 'pointer',
+                background: view === v ? 'var(--surface-3)' : 'transparent', color: view === v ? 'var(--t1)' : 'var(--t3)' }}>{v}</button>
+            ))}
+          </div>
+          <PrimaryBtn icon="plus" onClick={newReq}>New request</PrimaryBtn>
+        </div>
+      </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            {/* Review queue indicator */}
-            {isAdminLead && reviewCount > 0 && (
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: 8,
-                background: 'rgba(6,182,212,0.1)', border: '1px solid rgba(6,182,212,0.3)',
-                borderRadius: 6, padding: '6px 12px',
-              }}>
-                <span style={{ fontSize: 11, color: '#22d3ee' }}>👀</span>
-                <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: '#22d3ee', fontWeight: 500 }}>
-                  {reviewCount} awaiting review
-                </span>
-              </div>
-            )}
-
-            {/* Person filter */}
-            {brandUser?.role !== 'requester' && teamMembers.length > 0 && (
-              <PersonFilter members={teamMembers} selected={selectedPerson} onChange={setSelectedPerson} />
-            )}
-
-            {/* View toggle */}
-            <div style={{ display: 'flex', background: 'var(--s1)', border: '1px solid var(--b1)', borderRadius: 6, padding: 2 }}>
-              {[
-                { value: 'kanban', label: 'Kanban' },
-                { value: 'table', label: 'Table' },
-              ].map(v => (
-                <button
-                  key={v.value}
-                  onClick={() => setView(v.value)}
-                  style={{
-                    padding: '6px 14px',
-                    fontFamily: 'var(--sans)',
-                    fontSize: 10,
-                    fontWeight: view === v.value ? 700 : 400,
-                    borderRadius: 4,
-                    border: 'none',
-                    cursor: 'pointer',
-                    letterSpacing: '.08em',
-                    textTransform: 'uppercase',
-                    transition: 'all .15s',
-                    background: view === v.value ? 'var(--s3)' : 'transparent',
-                    color: view === v.value ? 'var(--text)' : 'var(--t3)',
-                  }}
-                >
-                  {v.label}
-                </button>
-              ))}
-            </div>
+      {view === 'kanban' ? (
+        <div style={{ flex: 1, overflowX: 'auto', overflowY: 'hidden', minHeight: 0 }}>
+          <div style={{ display: 'flex', gap: 14, height: '100%', minWidth: 'max-content', paddingBottom: 4 }}>
+            {STAGES.map(s => <Column key={s.value} stage={s} over={over} setOver={setOver} onOpen={setSelected} onDropTask={move} tasks={visible.filter(t => t.stage === s.value)} />)}
           </div>
         </div>
-
-        {loading ? (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '80px 0' }}>
-            <p style={{ color: 'var(--t3)', fontFamily: 'var(--sans)', fontSize: 12 }}>Loading tasks...</p>
-          </div>
-        ) : view === 'kanban' ? (
-          <div style={{ flex: 1, overflowX: 'auto', overflowY: 'hidden' }}>
-            <div style={{ display: 'flex', gap: 12, minWidth: 'max-content', height: '100%' }}>
-              {BOARD_STAGES.map(stage => (
-                <KanbanColumn
-                  key={stage.value}
-                  stage={stage.value}
-                  tasks={tasksByStage[stage.value] || []}
-                  onTaskClick={handleTaskClick}
-                  onDrop={handleDrop}
-                  canDrop={true}
-                  ageingConfig={ageingConfig}
-                  teamMembers={teamMembers}
-                  allTasks={tasks}
-                />
-              ))}
-            </div>
-          </div>
-        ) : (
-          <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: '0 2px' }}>
-            <TableView tasks={visibleTasks} onTaskClick={handleTaskClick} />
-          </div>
-        )}
-
-        {selectedTask && (
-          <TaskSidePanel
-            task={selectedTask}
-            onClose={() => setSelectedTask(null)}
-            onUpdate={handleTaskUpdate}
-          />
-        )}
-
-        {searchOpen && (
-          <>
-            <div
-              onClick={() => setSearchOpen(false)}
-              style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 200 }}
-            />
-            <div style={{
-              position: 'fixed', top: '20%', left: '50%', transform: 'translateX(-50%)',
-              width: '100%', maxWidth: 560, background: '#1a1a1a', border: '1px solid var(--b2)',
-              borderRadius: 10, overflow: 'hidden', zIndex: 201, boxShadow: '0 20px 60px rgba(0,0,0,0.6)',
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderBottom: '1px solid var(--b1)' }}>
-                <span style={{ color: 'var(--t3)', fontSize: 14 }}>⌕</span>
-                <input
-                  autoFocus
-                  type="text"
-                  placeholder="Search tasks..."
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === 'Escape') { setSearchOpen(false); }
-                  }}
-                  style={{ flex: 1, background: 'none', border: 'none', outline: 'none', fontFamily: 'var(--sans)', fontSize: 13, color: 'var(--text)', caretColor: '#F2CD1A' }}
-                />
-                <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)' }}>/ or ESC to close</span>
-              </div>
-              <div style={{ maxHeight: 360, overflowY: 'auto' }}>
-                {(() => {
-                  const usingSearch = searchResults !== null;
-                  const items = usingSearch ? searchResults : (tasks || []).slice(0, 12);
-
-                  if (usingSearch && searchLoading && items.length === 0) {
-                    return (
-                      <div style={{ padding: '24px 16px', textAlign: 'center', fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--t3)' }}>
-                        Searching...
-                      </div>
-                    );
-                  }
-
-                  if (items.length === 0) {
-                    return (
-                      <div style={{ padding: '24px 16px', textAlign: 'center', fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--t3)' }}>
-                        No tasks found
-                      </div>
-                    );
-                  }
-
-                  return items.map(t => {
-                    const stage = getStageConfig(t.stage);
-                    return (
-                      <div
-                        key={t.id}
-                        onClick={() => { handleTaskClick(t); setSearchOpen(false); setSearchQuery(''); }}
-                        style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', cursor: 'pointer', borderBottom: '1px solid var(--b1)', transition: 'background .1s' }}
-                        onMouseEnter={e => e.currentTarget.style.background = 'var(--s2)'}
-                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-                      >
-                        <span style={{ width: 8, height: 8, borderRadius: '50%', background: stage?.color || 'var(--t3)', flexShrink: 0 }} />
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <p style={{ fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--text)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.title}</p>
-                          <p style={{ fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--t3)', margin: '2px 0 0' }}>{stage?.label || t.stage}</p>
+      ) : (
+        <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+          <Card pad={0}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--font-ui)' }}>
+              <thead><tr style={{ borderBottom: '1px solid var(--border)' }}>
+                {['Task', 'Stage', 'Priority', 'Product', 'Owner', 'Due'].map(h => (
+                  <th key={h} style={{ textAlign: 'left', padding: '11px 14px', fontFamily: 'var(--font-display)', fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--t3)', fontWeight: 600 }}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {visible.map((t, i) => {
+                  const stt = stageByVal[t.stage] || { label: t.stage, color: 'var(--t3)' };
+                  const pr = PRIORITY[t.priority] || PRIORITY.medium;
+                  return (
+                    <tr key={t.id} className="t-row" onClick={() => setSelected(t)} style={{ borderTop: i ? '1px solid var(--border)' : 'none', cursor: 'pointer' }}>
+                      <td style={{ padding: '10px 14px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span className="num" style={{ fontSize: 11, color: 'var(--t4)' }}>{taskTag(t.num)}</span>
+                          <span style={{ fontSize: 13, color: 'var(--t1)' }}>{t.title}</span>
                         </div>
-                        {t.due_date && (
-                          <span style={{ fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--t3)', flexShrink: 0 }}>
-                            {new Date(t.due_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
-                          </span>
-                        )}
-                      </div>
-                    );
-                  });
-                })()}
-              </div>
-              <div style={{ padding: '8px 16px', borderTop: '1px solid var(--b1)' }}>
-                <span style={{ fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--t3)' }}>
-                  {searchQuery === ''
-                    ? `${(tasks || []).length} active tasks — type to filter`
-                    : searchLoading
-                      ? 'Searching all tasks...'
-                      : `${(searchResults || []).length} result${(searchResults || []).length === 1 ? '' : 's'}`}
-                </span>
-              </div>
-            </div>
-          </>
-        )}
-      </div>
-    </Layout>
+                      </td>
+                      <td style={{ padding: '10px 14px' }}><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--t2)' }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: stt.color }} />{stt.label}</span></td>
+                      <td style={{ padding: '10px 14px' }}><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--t2)' }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: pr.color }} />{pr.label}</span></td>
+                      <td style={{ padding: '10px 14px' }}><ProductTag code={t.product} /></td>
+                      <td style={{ padding: '10px 14px' }}><Avatar id={t.ownerId} name={t.ownerName} initial={t.ownerInitial} size={22} /></td>
+                      <td style={{ padding: '10px 14px' }}><span className="num" style={{ fontSize: 12, color: t.age === 'crit' ? 'var(--bad-fg)' : t.age === 'warn' ? 'var(--warn-fg)' : 'var(--t3)' }}>{t.due || '—'}</span></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </Card>
+        </div>
+      )}
+
+      <TaskDrawer task={selected} onClose={() => setSelected(null)} onMove={move} session={session} />
+    </div>
   );
+}
+
+export default function BoardPage() {
+  return <AppShell route="board"><BoardScreen /></AppShell>;
 }

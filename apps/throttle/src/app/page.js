@@ -4,14 +4,14 @@ import { useRouter } from 'next/navigation';
 import { useEffect } from 'react';
 
 export default function Home() {
-  const { session, brandUser, loading } = useAuth();
+  const { session, loading } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
     if (loading) return;
     if (!session) { router.replace('/login/'); return; }
-    if (brandUser) { router.replace('/requests/'); }
-  }, [session, brandUser, loading, router]);
+    router.replace('/dashboard/');
+  }, [session, loading, router]);
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>

@@ -1,69 +1,147 @@
-@import url('https://fonts.googleapis.com/css2?family=Tomorrow:wght@400;600;700;900&family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Tomorrow:wght@400;500;600;700;800;900&family=Hanken+Grotesk:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* ════════════════════════════════════════════════════════════════
+   THROTTLE — Night Circuit (locked direction "b").
+   Token set + atom classes lifted verbatim from the redesign
+   prototype (Throttle Redesign.html, [data-dir="b"] resolved).
+   ════════════════════════════════════════════════════════════════ */
+
 :root {
-  --yellow:     #F2CD1A;
-  --blue:       #213CE2;
-  --red:        #DE2A2A;
-  --green:      #22c55e;
-  --orange:     #f97316;
-  --amber:      #f59e0b;
+  /* ── Surface ramp — Night Circuit ── */
+  --bg: #161318; --bg-2: #100e12;
+  --surface: #211d24; --surface-2: #2a2530; --surface-3: #362f3d;
+  --border: #383140; --border-2: #4a4253; --border-3: #565862;
+  /* ── Text ── */
+  --t1: #f4f5f6; --t2: #b4b6bd; --t3: #8a8c95; --t4: #74767f;
+  /* ── Brand ── */
+  --yellow: #F2CD1A; --brand-blue: #213CE2; --brand-red: #DE2A2A;
+  --p-wolf: #6d83ff; --p-shadow: #b46bff;
+  /* ── Semantic fills ── */
+  --ok-bg: rgba(34,197,94,0.12);   --ok-fg: #4ade80;  --ok-bd: rgba(34,197,94,0.30);
+  --warn-bg: rgba(251,191,36,0.12);--warn-fg: #fbbf24;--warn-bd: rgba(251,191,36,0.30);
+  --bad-bg: rgba(222,42,42,0.15);  --bad-fg: #ff7a7a; --bad-bd: rgba(222,42,42,0.34);
+  --info-bg: rgba(33,60,226,0.22); --info-fg: #8fa2ff;--info-bd: rgba(109,131,255,0.34);
+  --brand-bg: rgba(242,205,26,0.12);--brand-bd: rgba(242,205,26,0.30);
+  /* ── Fonts ── */
+  --font-display: 'Tomorrow', system-ui, sans-serif;
+  --font-ui: 'Hanken Grotesk', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  /* ── Radius / motion / shadow ── */
+  --r-xs: 4px; --r-sm: 6px; --r-md: 9px; --r-lg: 13px;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --shadow-pop: 0 18px 48px -12px rgba(0,0,0,0.78), 0 0 0 1px var(--border-2);
 
-  --bg:         #1f1f1f;   /* page background — lifted dark */
-  --s1:         #2a2a2a;   /* surface 1 — nav, cards, panels */
-  --s2:         #333333;   /* surface 2 — input backgrounds */
-  --s3:         #3c3c3c;   /* surface 3 — hover states */
-  --s4:         #444444;   /* surface 4 — selected/active backgrounds */
+  /* ── Theme vars — Night Circuit ── */
+  --side-bg: #1a161d;
+  --topbar-bg: #161318;
+  --card-bg: #211d24;
+  --card-bd: #383140;
+  --card-radius: var(--r-lg);
+  --card-shadow: 0 12px 34px -18px rgba(0,0,0,0.9), 0 1px 0 rgba(255,255,255,0.03) inset;
+  --active-bg: rgba(242,205,26,0.12);
+  --active-fg: var(--yellow);
+  --active-bar: var(--yellow);
+  --mark-bg: var(--yellow);
+  --mark-fg: #15140b;
+  --mark-shadow: none;
+  --radius-mark: var(--r-sm);
+  --radius-nav: var(--r-sm);
+  --h2-size: 17px;
 
-  --b1:         #404040;   /* border 1 — default borders */
-  --b2:         #4a4a4a;   /* border 2 — slightly stronger */
-  --b3:         #555555;   /* border 3 — hover borders */
-
-  --text:       #f5f5f5;   /* primary text */
-  --t2:         #b0b0b0;   /* secondary text — 7.9:1 on --bg */
-  --t3:         #888888;   /* tertiary text — 4.65:1 on --bg, WCAG AA */
-
-  --fg-accent:  #0a0a0a;   /* foreground on brand-yellow surfaces */
-
-  --sans:  'Inter', system-ui, sans-serif;
-  --mono:  'JetBrains Mono', ui-monospace, monospace;
-  --head:  'Tomorrow', sans-serif;
-
-  /* Short-form aliases consumed by shared @throttle/ui components (e.g. Manual) so they
-     theme natively in Throttle. Additive — maps Throttle's vars to the common names. */
-  --surface:    var(--s1);
-  --surface2:   var(--s2);
-  --border:     var(--b1);
-  --border2:    var(--b2);
-  --t1:         var(--text);
-  --accent:     var(--yellow);
-  --accent-fg:  var(--fg-accent);
-  --cond:       var(--head);
+  /* ── Legacy aliases — keep older Throttle pages + shared @throttle/ui
+     (Manual, etc.) rendering coherently on the new ramp. ── */
+  --s1: var(--surface); --s2: var(--surface-2); --s3: var(--surface-3); --s4: #423a4a;
+  --b1: var(--border); --b2: var(--border-2); --b3: var(--border-3);
+  --text: var(--t1);
+  --green: #22c55e; --orange: #f97316; --amber: #f59e0b; --red: var(--brand-red); --blue: var(--brand-blue);
+  --fg-accent: #15140b;
+  --sans: var(--font-ui); --mono: var(--font-mono); --head: var(--font-display);
+  --surface2: var(--surface-2); --border2: var(--border-2);
+  --accent: var(--yellow); --accent-fg: #15140b; --cond: var(--font-display);
 }
 
-* { box-sizing: border-box; }
-
+*, *::before, *::after { box-sizing: border-box; }
+html, body { height: 100%; }
 body {
-  background: var(--bg);
-  color: var(--text);
-  font-family: var(--sans);
-  font-size: 14px;
+  background: var(--bg); color: var(--t1);
+  font-family: var(--font-ui); font-size: 14px; line-height: 1.5;
+  -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+}
+button { font-family: inherit; }
+a { color: inherit; text-decoration: none; }
+
+/* ── Type atoms ── */
+.eyebrow { font-family: var(--font-display); font-size: 10px; font-weight: 600;
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--t3); }
+.t-h2 { font-family: var(--font-display); font-weight: 700; font-size: var(--h2-size);
+  letter-spacing: 0.02em; text-transform: uppercase; color: var(--t1); }
+.t-h3 { font-family: var(--font-display); font-weight: 700; font-size: 13px;
+  letter-spacing: 0.06em; text-transform: uppercase; color: var(--t1); }
+.t-title { font-family: var(--font-display); font-weight: 700; letter-spacing: 0.02em;
+  text-transform: uppercase; color: var(--t1); }
+.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.t-kbd { font-family: var(--font-mono); font-size: 10.5px; color: var(--t3);
+  background: var(--surface-2); border: 1px solid var(--border-2); border-radius: 4px; padding: 2px 6px; line-height: 1.2; }
+
+/* ── Interactive atoms ── */
+.t-iconbtn { display: grid; place-items: center; width: 34px; height: 34px; background: var(--card-bg);
+  border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--t3); cursor: pointer; transition: all .14s; flex-shrink: 0; }
+.t-iconbtn:hover { border-color: var(--border-3); color: var(--t1); }
+.t-chip { padding: 5px 11px; border-radius: 999px; border: 1px solid var(--border); background: var(--card-bg);
+  color: var(--t3); font-family: var(--font-ui); font-size: 12.5px; cursor: pointer; transition: all .14s; display: inline-flex; align-items: center; }
+.t-chip:hover { color: var(--t1); border-color: var(--border-3); }
+.t-chip[data-on="true"] { background: var(--brand-bg); color: var(--yellow); border-color: var(--brand-bd); font-weight: 600; }
+.t-btn { transition: filter .12s, transform .06s; }
+.t-btn:hover { filter: brightness(1.06); }
+.t-btn:active { transform: scale(0.98); }
+.t-search:hover { border-color: var(--border-3); }
+.t-row { transition: background .12s; }
+.t-row:hover { background: var(--surface-2); }
+.t-cmdrow:hover { background: var(--surface-2); }
+.t-navrow:hover[data-on="false"] { background: var(--surface-2) !important; }
+.t-card-hover { transition: border-color .14s, transform .14s; }
+.t-card-hover:hover { border-color: var(--border-3); }
+.t-task { transition: border-color .14s, transform .12s, box-shadow .14s; }
+.t-task:hover { border-color: var(--border-3); transform: translateY(-1px); }
+.t-addpost:hover { border-color: var(--border-3); color: var(--t2); }
+.t-act:hover { background: var(--surface-2); }
+.t-monthcell:hover { border-color: var(--border-3) !important; }
+
+/* ── toast ── */
+@keyframes t-toast-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+.t-toast { animation: t-toast-in .2s var(--ease) both; }
+
+/* ── pulse ── */
+@keyframes t-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+.t-pulse { animation: t-pulse 2s ease-in-out infinite; }
+
+/* ── task drawer mount (transition, not keyframes — survives frozen anim clocks) ── */
+.t-drawer-back { background: rgba(8,8,10,0.55); }
+.t-drawer-panel { will-change: transform; }
+@media (prefers-reduced-motion: no-preference) {
+  .t-drawer-panel { animation: t-slidein .24s var(--ease); }
+  @keyframes t-slidein { from { transform: translateX(28px); } to { transform: none; } }
 }
 
-/* Scrollbar */
-::-webkit-scrollbar { width: 4px; height: 4px; }
-::-webkit-scrollbar-track { background: var(--bg); }
-::-webkit-scrollbar-thumb { background: var(--b2); border-radius: 2px; }
-::-webkit-scrollbar-thumb:hover { background: var(--b3); }
+/* ── scrollbars ── */
+::-webkit-scrollbar { width: 7px; height: 7px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-3); }
+* { scrollbar-width: thin; scrollbar-color: var(--border-2) transparent; }
 
-@layer utilities {
-  .text-balance { text-wrap: balance; }
-}
+/* ── focus ── */
+:focus { outline: none; }
+:focus-visible { outline: 2px solid rgba(242,205,26,0.6); outline-offset: 2px; border-radius: 2px; }
+::selection { background: rgba(242,205,26,0.32); color: var(--t1); }
 
-@keyframes slideUp {
-  from { opacity: 0; transform: translateY(12px); }
-  to   { opacity: 1; transform: translateY(0); }
+@layer utilities { .text-balance { text-wrap: balance; } }
+@keyframes slideUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }

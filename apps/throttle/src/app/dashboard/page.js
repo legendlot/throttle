@@ -1,856 +1,309 @@
 'use client';
-import { useEffect, useState, useCallback } from 'react';
-import Layout from '@/components/Layout';
-import TaskDrillModal from '@/components/TaskDrillModal';
-import { supabaseBrand as supabase, workerFetch } from '@throttle/db';
+/* Dashboard — the command view. Night Circuit hero, KPI cards w/ trend,
+   "Needs you" queue, activity feed, team workload, deliverables shipped.
+   KPI values + workload come from the worker; the queue is derived from
+   live tasks + requests; everything falls back to seed when unauthenticated
+   or a read fails. Layout/visuals ported verbatim from dashboard.jsx (dir b). */
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '@throttle/auth';
-import { DELIVERABLE_TYPES } from '@/lib/taskConfig';
+import { AppShell } from '@/components/throttle/AppShell';
+import { Icon, Sparkline } from '@/components/throttle/Icon';
+import { Card, Pill, Avatar, PrimaryBtn, TONE } from '@/components/throttle/ui';
+import {
+  KPIS, ACTIONS, ACTIVITY, WORKLOAD, OUTPUT, OUTPUT_COLS, taskTag, firstName,
+} from '@/lib/throttleData';
+import { fetchUsers, fetchTasks, fetchRequests, fetchDashboardStats, fetchTeamWorkload } from '@/lib/throttleApi';
 
-// ── Deliverable column config ────────────────────────────────────────────────
-
-const DEL_COLS = [
-  { key: 'graphic',       label: 'Graphic' },
-  { key: 'video',         label: 'Video' },
-  { key: 'photo',         label: 'Photo' },
-  { key: '3d_render',     label: '3D / Render' },
-  { key: 'copy',          label: 'Copy' },
-  { key: 'deck',          label: 'Deck' },
-  { key: 'social_post',   label: 'Social Post' },
-  { key: 'ad_creative',   label: 'Ad Creative' },
-  { key: 'listing_image', label: 'Listing Image' },
-  { key: 'other',         label: 'Other' },
-];
-
-// ── StatCard ─────────────────────────────────────────────────────────────────
-
-const CARD_ACCENTS = {
-  cyan:   '#22d3ee',
-  red:    'var(--red)',
-  amber:  'var(--amber)',
-  green:  'var(--green)',
-  orange: 'var(--amber)',
-};
-
-function StatCard({ label, value, bucket, color, onClick }) {
-  const accent = CARD_ACCENTS[color] || CARD_ACCENTS.green;
+function KpiCard({ k }) {
+  const tone = TONE[k.tone] || TONE.info;
+  const arrow = k.dir === 'up' ? 'arrowUp' : k.dir === 'down' ? 'arrowDown' : 'minus';
+  const deltaColor = k.dir === 'flat' ? 'var(--t3)'
+    : (k.key === 'overdue' || k.key === 'blocked') ? (k.dir === 'up' ? 'var(--bad-fg)' : 'var(--ok-fg)')
+    : (k.dir === 'up' ? 'var(--ok-fg)' : 'var(--warn-fg)');
   return (
-    <div
-      style={{
-        background: 'var(--s1)',
-        border: '1px solid var(--b1)',
-        borderTop: `2px solid ${accent}`,
-        borderRadius: 6,
-        padding: 16,
-        display: 'flex',
-        flexDirection: 'column',
-        justifyContent: 'space-between',
-        minHeight: 80,
-        ...(bucket ? { cursor: 'pointer' } : {}),
-      }}
-      onClick={bucket ? onClick : undefined}
-    >
-      <div style={{ fontFamily: 'var(--head)', fontWeight: 700, fontSize: 28, color: 'var(--text)', lineHeight: 1 }}>{value}</div>
-      <div style={{ fontFamily: 'var(--sans)', fontSize: 11, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--t3)', marginTop: 8, fontWeight: 500 }}>{label}</div>
+    <div className="t-card" style={{ background: 'var(--card-bg)', border: '1px solid var(--card-bd)', borderRadius: 'var(--card-radius)',
+      boxShadow: 'var(--card-shadow)', padding: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        <span style={{ fontFamily: 'var(--font-display)', fontSize: 10.5, fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--t3)' }}>{k.label}</span>
+        <Sparkline data={k.spark} color={tone.fg} w={52} h={18} />
+      </div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 9 }}>
+        <span className="num" style={{ fontSize: 32, fontWeight: 600, color: 'var(--t1)', lineHeight: 1 }}>{k.value}</span>
+        <span className="num" style={{ display: 'inline-flex', alignItems: 'center', gap: 2, fontSize: 12, fontWeight: 700, color: deltaColor }}>
+          <Icon name={arrow} size={12} />{k.delta}</span>
+      </div>
     </div>
   );
 }
 
-// ── SprintSelector ───────────────────────────────────────────────────────────
-
-function SprintSelector({ sprints, value, onChange }) {
+function DashHero({ name, greeting, sub, reviewCount }) {
   return (
-    <select
-      value={value || ''}
-      onChange={e => {
-        const sprint = sprints.find(s => s.id === e.target.value);
-        if (sprint) onChange(sprint);
-      }}
-      style={{
-        background: 'var(--s2)',
-        border: '1px solid var(--b2)',
-        borderRadius: 6,
-        fontFamily: 'var(--sans)',
-        fontSize: 11,
-        color: 'var(--t2)',
-        padding: '6px 12px',
-        outline: 'none',
-      }}
-    >
-      {sprints.map(s => (
-        <option key={s.id} value={s.id}>
-          {s.name} {s.status === 'active' ? '● Active' : ''}
-        </option>
-      ))}
-    </select>
+    <div style={{ position: 'relative', borderRadius: 'var(--card-radius)', overflow: 'hidden', border: '1px solid var(--card-bd)', minHeight: 230 }}>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src="/throttle-hero-night.png" alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+      <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, rgba(12,12,14,0.92) 0%, rgba(12,12,14,0.72) 42%, rgba(12,12,14,0.28) 100%)' }} />
+      <div style={{ position: 'relative', padding: '34px 34px 30px', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', minHeight: 230 }}>
+        <span className="eyebrow" style={{ padding: 0, color: 'var(--yellow)' }}>{greeting}</span>
+        <h1 style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 30, letterSpacing: '0.005em', color: '#fff',
+          margin: '10px 0 8px', maxWidth: 560, lineHeight: 1.08 }}>OWN THE NIGHT, {firstName(name).toUpperCase()}</h1>
+        <p style={{ fontFamily: 'var(--font-ui)', fontSize: 14.5, color: 'rgba(255,255,255,0.82)', margin: 0, maxWidth: 520 }}>{sub}</p>
+        <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
+          <PrimaryBtn icon="check" onClick={() => window.dispatchEvent(new CustomEvent('throttle:opentask', { detail: 'review' }))}>Review queue · {reviewCount}</PrimaryBtn>
+          <PrimaryBtn icon="plus" kind="ghost" onClick={() => window.dispatchEvent(new CustomEvent('throttle:newreq'))}>New request</PrimaryBtn>
+        </div>
+      </div>
+    </div>
   );
 }
 
-// ── DateRangePicker ──────────────────────────────────────────────────────────
+function actOnQueueItem(a) {
+  if (a.kind === 'request') { window.dispatchEvent(new CustomEvent('throttle:newreq')); return; }
+  if (a.taskId) { window.dispatchEvent(new CustomEvent('throttle:opentask', { detail: a.taskId })); }
+}
 
-function DateRangePicker({ start, end, onChange }) {
-  const [localStart, setLocalStart] = useState(start);
-  const [localEnd, setLocalEnd] = useState(end);
-  const [error, setError] = useState('');
+function ActionQueue({ actions }) {
+  const KIND_ICON = { approve: 'check', request: 'inbox', blocked: 'alert', feedback: 'send' };
+  return (
+    <Card pad={0}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+          <Icon name="zap" size={15} style={{ color: 'var(--yellow)' }} />
+          <span className="t-h3">Needs you</span>
+        </div>
+        <Pill tone="bad" dot>{actions.length} open</Pill>
+      </div>
+      <div>
+        {actions.length === 0 && <div style={{ padding: '22px 16px', textAlign: 'center', color: 'var(--t4)', fontSize: 12.5 }}>Clean queue. Nothing waiting on you.</div>}
+        {actions.map((a, i) => {
+          const t = TONE[a.tone] || TONE.info;
+          return (
+            <div key={a.id} className="t-row" onClick={() => actOnQueueItem(a)} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '12px 16px',
+              borderTop: i ? '1px solid var(--border)' : 'none', cursor: 'pointer' }}>
+              <span style={{ width: 30, height: 30, borderRadius: 'var(--r-sm)', background: t.bg, border: `1px solid ${t.bd}`,
+                color: t.fg, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name={KIND_ICON[a.kind]} size={15} /></span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13.5, color: 'var(--t1)', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.label}</div>
+                <div className="num" style={{ fontSize: 11.5, color: 'var(--t3)', marginTop: 2 }}>{a.meta}</div>
+              </div>
+              <span className="num" style={{ fontSize: 11, color: 'var(--t4)', flexShrink: 0 }}>{a.age}</span>
+              <Icon name="chevronRight" size={15} style={{ color: 'var(--t4)', flexShrink: 0 }} />
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
+function ActivityFeed({ activity }) {
+  const KIND = {
+    review:  { c: 'var(--info-fg)',  i: 'eye' },
+    approve: { c: 'var(--ok-fg)',    i: 'check' },
+    block:   { c: 'var(--warn-fg)',  i: 'alert' },
+    request: { c: 'var(--yellow)',   i: 'inbox' },
+    deliver: { c: 'var(--p-shadow, #b46bff)', i: 'send' },
+    start:   { c: 'var(--t3)',       i: 'box' },
+  };
+  return (
+    <Card pad={0} style={{ height: '100%' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
+        <Icon name="activity" size={15} style={{ color: 'var(--t3)' }} />
+        <span className="t-h3">Activity</span>
+        <span className="num" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--t4)', whiteSpace: 'nowrap' }}>last 6h</span>
+      </div>
+      <div style={{ padding: '6px 16px 10px' }}>
+        {activity.map((e, i) => {
+          const k = KIND[e.kind] || KIND.start;
+          const clickable = !!e.taskId;
+          return (
+            <div key={e.id} onClick={clickable ? () => window.dispatchEvent(new CustomEvent('throttle:opentask', { detail: e.taskId })) : undefined}
+              className={clickable ? 't-act' : ''}
+              style={{ display: 'flex', gap: 12, padding: '10px 0', borderTop: i ? '1px solid var(--border)' : 'none',
+                cursor: clickable ? 'pointer' : 'default', borderRadius: 4 }}>
+              <span style={{ marginTop: 2, color: k.c, display: 'flex', flexShrink: 0 }}><Icon name={k.i} size={15} /></span>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 13, color: 'var(--t2)', lineHeight: 1.45, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  <span style={{ color: 'var(--t1)', fontWeight: 600 }}>{e.who}</span> {e.what} <span style={{ color: 'var(--t1)' }}>{e.target}</span>
+                </div>
+                <div className="num" style={{ fontSize: 11, color: 'var(--t4)', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{e.detail} · {e.t}</div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
+function WorkloadPanel({ workload }) {
+  const max = Math.max(1, ...workload.map(p => p.total));
+  const SEG = [
+    { key: 'inProgress', color: 'var(--p-wolf, #6d83ff)', label: 'In progress' },
+    { key: 'inReview',   color: 'var(--info-fg)',          label: 'In review' },
+    { key: 'blocked',    color: 'var(--warn-fg)',          label: 'Blocked' },
+    { key: 'queued',     color: 'var(--surface-3)',        label: 'Queued' },
+  ];
+  return (
+    <Card pad={0}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
+        <Icon name="users" size={15} style={{ color: 'var(--t3)' }} />
+        <span className="t-h3">Team workload</span>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 14 }}>
+          {SEG.map(s => (
+            <span key={s.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--t3)' }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: s.color }} />{s.label}</span>
+          ))}
+        </div>
+      </div>
+      <div style={{ padding: '6px 16px 14px' }}>
+        {workload.map((p, i) => (
+          <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '9px 0', borderTop: i ? '1px solid var(--border)' : 'none' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9, width: 168, flexShrink: 0 }}>
+              <Avatar id={typeof p.id === 'string' && p.id.startsWith('u') ? p.id : undefined} name={p.name} initial={p.initial} size={24} />
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 13, color: 'var(--t1)', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}</div>
+                <div className="eyebrow" style={{ padding: 0, fontSize: 8.5 }}>{p.discipline}</div>
+              </div>
+            </div>
+            <div style={{ flex: 1, display: 'flex', height: 12, borderRadius: 3, overflow: 'hidden', background: 'var(--bg-2)' }}>
+              {SEG.map(s => p[s.key] > 0 && (
+                <div key={s.key} title={`${p[s.key]} ${s.label}`} style={{ width: `${(p[s.key] / max) * 100}%`, background: s.color }} />
+              ))}
+            </div>
+            <span className="num" style={{ fontSize: 13, color: p.total > 4 ? 'var(--warn-fg)' : 'var(--t2)', fontWeight: 600, width: 24, textAlign: 'right' }}>{p.total}</span>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function OutputPanel() {
+  const totals = OUTPUT_COLS.map(c => OUTPUT.reduce((s, r) => s + (r[c.key] || 0), 0));
+  const grand = totals.reduce((a, b) => a + b, 0);
+  const dayTotals = OUTPUT.map(r => OUTPUT_COLS.reduce((s, c) => s + (r[c.key] || 0), 0));
+  const maxDay = Math.max(...dayTotals);
+  const COLORS = ['var(--yellow)', 'var(--p-wolf,#6d83ff)', 'var(--info-fg)', 'var(--ok-fg)', 'var(--p-shadow,#b46bff)', 'var(--warn-fg)'];
+  return (
+    <Card pad={0}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
+        <Icon name="film" size={15} style={{ color: 'var(--t3)' }} />
+        <span className="t-h3">Deliverables shipped</span>
+        <span className="num" style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--t3)' }}>this week · <span style={{ color: 'var(--t1)', fontWeight: 700 }}>{grand}</span></span>
+      </div>
+      <div style={{ padding: '18px 16px 10px', display: 'flex', alignItems: 'flex-end', gap: 18, height: 150 }}>
+        {OUTPUT.map((r, i) => (
+          <div key={r.day} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, height: '100%', justifyContent: 'flex-end' }}>
+            <div style={{ width: '100%', maxWidth: 46, display: 'flex', flexDirection: 'column-reverse', borderRadius: 4, overflow: 'hidden',
+              height: `${(dayTotals[i] / maxDay) * 100}%`, minHeight: 6 }}>
+              {OUTPUT_COLS.map((c, ci) => r[c.key] > 0 && (
+                <div key={c.key} style={{ height: `${(r[c.key] / dayTotals[i]) * 100}%`, background: COLORS[ci] }} />
+              ))}
+            </div>
+            <span className="num" style={{ fontSize: 11, color: 'var(--t3)' }}>{r.day}</span>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px', padding: '8px 16px 16px', borderTop: '1px solid var(--border)' }}>
+        {OUTPUT_COLS.map((c, ci) => (
+          <span key={c.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'var(--t3)' }}>
+            <span style={{ width: 8, height: 8, borderRadius: 2, background: COLORS[ci] }} />{c.label}
+            <span className="num" style={{ color: 'var(--t1)', fontWeight: 600 }}>{totals[ci]}</span>
+          </span>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function DashboardScreen() {
+  const { session, brandUser, user } = useAuth();
+  const [kpis, setKpis] = useState(KPIS);
+  const [actions, setActions] = useState(ACTIONS);
+  const [workload, setWorkload] = useState(WORKLOAD);
+  const [reviewCount, setReviewCount] = useState(2);
+  const [greeting, setGreeting] = useState('');
+  const name = brandUser?.name || user?.full_name || user?.email?.split('@')[0] || 'Meera Krishnan';
 
   useEffect(() => {
-    setLocalStart(start);
-    setLocalEnd(end);
-    setError('');
-  }, [start, end]);
+    const now = new Date();
+    setGreeting(now.toLocaleString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }) + ' · ' +
+      now.toLocaleString('en-GB', { hour: 'numeric', minute: '2-digit', hour12: true }).toUpperCase());
+  }, []);
 
-  function handleApply() {
-    if (localStart > localEnd) {
-      setError('Start date must be before end date.');
-      return;
-    }
-    setError('');
-    onChange({ start: localStart, end: localEnd });
-  }
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const usersRes = await fetchUsers(session);
+      const byId = usersRes?.byId || {};
+      const [stats, wl, tasks, reqs] = await Promise.all([
+        fetchDashboardStats(session), fetchTeamWorkload(session),
+        fetchTasks(session, byId), fetchRequests(session, byId),
+      ]);
+      if (cancelled) return;
 
-  const dateInputStyle = {
-    background: 'var(--s2)',
-    border: '1px solid var(--b2)',
-    borderRadius: 6,
-    fontFamily: 'var(--sans)',
-    fontSize: 11,
-    color: 'var(--t2)',
-    padding: '6px 8px',
-    outline: 'none',
-  };
+      if (stats && typeof stats.inReview === 'number') {
+        setReviewCount(stats.inReview || 0);
+        setKpis(KPIS.map(k => {
+          if (k.key === 'in_review')  return { ...k, value: stats.inReview ?? k.value };
+          if (k.key === 'overdue')    return { ...k, value: stats.overdue ?? k.value };
+          if (k.key === 'blocked')    return { ...k, value: stats.extBlocked ?? k.value };
+          if (k.key === 'completion') return { ...k, value: (stats.completionRate ?? 0) + '%' };
+          if (k.key === 'spillover')  return { ...k, value: stats.spillovers ?? k.value };
+          return k;
+        }));
+      }
 
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-      <input
-        type="date"
-        value={localStart}
-        onChange={e => setLocalStart(e.target.value)}
-        style={dateInputStyle}
-      />
-      <span style={{ color: 'var(--t3)', fontFamily: 'var(--sans)', fontSize: 11 }}>to</span>
-      <input
-        type="date"
-        value={localEnd}
-        onChange={e => setLocalEnd(e.target.value)}
-        style={dateInputStyle}
-      />
-      <button
-        onClick={handleApply}
-        style={{
-          background: 'transparent',
-          color: 'var(--t2)',
-          border: '1px solid var(--b2)',
-          borderRadius: 6,
-          fontFamily: 'var(--sans)',
-          fontSize: 11,
-          padding: '6px 12px',
-          cursor: 'pointer',
-        }}
-      >
-        Apply
-      </button>
-      {error && <span style={{ color: 'var(--red)', fontFamily: 'var(--sans)', fontSize: 11 }}>{error}</span>}
-    </div>
-  );
-}
-
-// ── ViewToggle ───────────────────────────────────────────────────────────────
-
-function ViewToggle({ value, onChange }) {
-  return (
-    <div style={{ display: 'flex', background: 'var(--s1)', border: '1px solid var(--b1)', borderRadius: 6, padding: 2 }}>
-      {[
-        { value: 'date', label: 'By Date' },
-        { value: 'person', label: 'By Person' },
-      ].map(v => (
-        <button
-          key={v.value}
-          onClick={() => onChange(v.value)}
-          style={{
-            padding: '6px 12px',
-            fontFamily: 'var(--sans)',
-            fontSize: 11,
-            fontWeight: 500,
-            borderRadius: 4,
-            border: 'none',
-            cursor: 'pointer',
-            ...(value === v.value
-              ? { background: 'var(--s3)', color: 'var(--text)' }
-              : { background: 'transparent', color: 'var(--t3)' }),
-          }}
-        >
-          {v.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-// ── Table shared styles ─────────────────────────────────────────────────────
-
-const thStyle = {
-  fontFamily: 'var(--sans)',
-  fontSize: 11,
-  letterSpacing: '.08em',
-  textTransform: 'uppercase',
-  color: 'var(--t3)',
-  fontWeight: 600,
-  padding: '8px 8px',
-  whiteSpace: 'nowrap',
-};
-
-const thStyleLeft = { ...thStyle, textAlign: 'left', padding: '8px 12px' };
-const thStyleCenter = { ...thStyle, textAlign: 'center' };
-const thStyleTotal = { ...thStyle, textAlign: 'center', color: 'var(--t2)', padding: '8px 12px' };
-
-const cellStyle = {
-  fontFamily: 'var(--sans)',
-  fontSize: 12,
-  color: 'var(--t2)',
-  textAlign: 'center',
-  padding: '8px 8px',
-};
-
-const cellStyleEmpty = {
-  ...cellStyle,
-  color: 'var(--t3)',
-};
-
-const cellStyleLeft = {
-  ...cellStyle,
-  textAlign: 'left',
-  padding: '8px 12px',
-};
-
-const totalCellStyle = {
-  ...cellStyle,
-  fontWeight: 700,
-  color: 'var(--text)',
-  textAlign: 'center',
-  padding: '8px 12px',
-};
-
-// ── ByDateTable ──────────────────────────────────────────────────────────────
-
-function ByDateTable({ rows }) {
-  if (!rows || rows.length === 0) {
-    return <p style={{ color: 'var(--t3)', fontFamily: 'var(--sans)', fontSize: 12, padding: '40px 0', textAlign: 'center' }}>No deliverables completed in this date range.</p>;
-  }
-
-  // Pivot: group by completed_date, count per deliverable_type
-  const pivot = {};
-  rows.forEach(row => {
-    if (!pivot[row.completed_date]) pivot[row.completed_date] = {};
-    const key = row.deliverable_type || 'other';
-    pivot[row.completed_date][key] = (pivot[row.completed_date][key] || 0) + 1;
-  });
-
-  const dates = Object.keys(pivot).sort((a, b) => b.localeCompare(a));
-
-  // Column totals
-  const colTotals = {};
-  DEL_COLS.forEach(c => { colTotals[c.key] = 0; });
-  let grandTotal = 0;
-
-  dates.forEach(date => {
-    DEL_COLS.forEach(c => {
-      const val = pivot[date][c.key] || 0;
-      colTotals[c.key] += val;
-    });
-  });
-  grandTotal = Object.values(colTotals).reduce((a, b) => a + b, 0);
-
-  return (
-    <div style={{ overflowX: 'auto', borderRadius: 6, border: '1px solid var(--b1)' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-        <thead>
-          <tr style={{ background: 'var(--s1)' }}>
-            <th style={thStyleLeft}>Date</th>
-            {DEL_COLS.map(c => (
-              <th key={c.key} style={thStyleCenter}>{c.label}</th>
-            ))}
-            <th style={thStyleTotal}>Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          {dates.map((date, i) => {
-            const rowTotal = DEL_COLS.reduce((sum, c) => sum + (pivot[date][c.key] || 0), 0);
-            return (
-              <tr key={date} style={{ borderTop: '1px solid var(--b1)', ...(i % 2 !== 0 ? { background: 'var(--s1)' } : {}) }}>
-                <td style={{ ...cellStyleLeft, color: 'var(--t2)', whiteSpace: 'nowrap' }}>
-                  {new Date(date + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}
-                </td>
-                {DEL_COLS.map(c => {
-                  const val = pivot[date][c.key];
-                  return (
-                    <td key={c.key} style={val ? cellStyle : cellStyleEmpty}>
-                      {val || '\u2014'}
-                    </td>
-                  );
-                })}
-                <td style={totalCellStyle}>{rowTotal}</td>
-              </tr>
-            );
-          })}
-          {/* Totals row */}
-          <tr style={{ background: 'var(--s2)', borderTop: '2px solid var(--b2)' }}>
-            <td style={{ ...cellStyleLeft, fontWeight: 700, color: 'var(--text)' }}>Totals</td>
-            {DEL_COLS.map(c => {
-              const val = colTotals[c.key];
-              return (
-                <td key={c.key} style={{ ...cellStyle, fontWeight: 700, color: 'var(--text)' }}>
-                  {val || '\u2014'}
-                </td>
-              );
-            })}
-            <td style={{ ...totalCellStyle, fontWeight: 900 }}>{grandTotal}</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-// ── ByPersonTable ────────────────────────────────────────────────────────────
-
-function ByPersonTable({ rows }) {
-  const [collapsed, setCollapsed] = useState({});
-
-  if (!rows || rows.length === 0) {
-    return <p style={{ color: 'var(--t3)', fontFamily: 'var(--sans)', fontSize: 12, padding: '40px 0', textAlign: 'center' }}>No deliverables completed in this date range.</p>;
-  }
-
-  // Group by assignee_id
-  const byPerson = {};
-  rows.forEach(row => {
-    const pid = row.assignee_id || 'unassigned';
-    if (!byPerson[pid]) byPerson[pid] = { name: row.assignee_name, discipline: row.discipline, dates: {} };
-    const d = byPerson[pid].dates;
-    if (!d[row.completed_date]) d[row.completed_date] = {};
-    const key = row.deliverable_type || 'other';
-    d[row.completed_date][key] = (d[row.completed_date][key] || 0) + 1;
-  });
-
-  const personIds = Object.keys(byPerson).sort((a, b) =>
-    (byPerson[a].name || '').localeCompare(byPerson[b].name || '')
-  );
-
-  function toggleCollapse(pid) {
-    setCollapsed(prev => ({ ...prev, [pid]: !prev[pid] }));
-  }
-
-  return (
-    <div style={{ overflowX: 'auto', borderRadius: 6, border: '1px solid var(--b1)' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-        <thead>
-          <tr style={{ background: 'var(--s1)' }}>
-            <th style={thStyleLeft}>Person / Date</th>
-            {DEL_COLS.map(c => (
-              <th key={c.key} style={thStyleCenter}>{c.label}</th>
-            ))}
-            <th style={thStyleTotal}>Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          {personIds.map(pid => {
-            const person = byPerson[pid];
-            const dates = Object.keys(person.dates).sort((a, b) => b.localeCompare(a));
-            const personTotal = dates.reduce((sum, date) =>
-              sum + DEL_COLS.reduce((s, c) => s + (person.dates[date][c.key] || 0), 0), 0
-            );
-            const isCollapsed = collapsed[pid];
-
-            return [
-              // Person header row
-              <tr
-                key={`person-${pid}`}
-                style={{ background: 'var(--s2)', cursor: 'pointer', borderTop: '1px solid var(--b2)' }}
-                onClick={() => toggleCollapse(pid)}
-              >
-                <td style={{ padding: '10px 12px' }} colSpan={DEL_COLS.length + 2}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ color: 'var(--t3)', fontFamily: 'var(--sans)', fontSize: 11 }}>{isCollapsed ? '\u25B6' : '\u25BC'}</span>
-                    <span style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>{person.name}</span>
-                    {person.discipline && (
-                      <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', textTransform: 'capitalize' }}>({person.discipline.replace(/_/g, ' ')})</span>
-                    )}
-                    <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', marginLeft: 'auto' }}>{personTotal} deliverable{personTotal !== 1 ? 's' : ''}</span>
-                  </div>
-                </td>
-              </tr>,
-              // Date rows (if not collapsed)
-              ...(!isCollapsed ? dates.map((date, i) => {
-                const rowTotal = DEL_COLS.reduce((sum, c) => sum + (person.dates[date][c.key] || 0), 0);
-                return (
-                  <tr key={`${pid}-${date}`} style={{ borderTop: '1px solid var(--b1)', ...(i % 2 !== 0 ? { background: 'var(--s1)' } : {}) }}>
-                    <td style={{ ...cellStyleLeft, color: 'var(--t2)', whiteSpace: 'nowrap', paddingLeft: 24 }}>
-                      {new Date(date + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}
-                    </td>
-                    {DEL_COLS.map(c => {
-                      const val = person.dates[date][c.key];
-                      return (
-                        <td key={c.key} style={val ? cellStyle : cellStyleEmpty}>
-                          {val || '\u2014'}
-                        </td>
-                      );
-                    })}
-                    <td style={totalCellStyle}>{rowTotal}</td>
-                  </tr>
-                );
-              }) : []),
-            ];
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-// ── WorkloadGrid ─────────────────────────────────────────────────────────────
-
-const WORKLOAD_STAGES = [
-  { key: 'backlog',     label: 'Backlog' },
-  { key: 'in_sprint',   label: 'In Sprint' },
-  { key: 'in_progress', label: 'In Progress' },
-  { key: 'in_review',   label: 'In Review' },
-  { key: 'ext_blocked', label: 'Ext. Blocked' },
-  { key: 'done',        label: 'Done' },
-  { key: 'abandoned',   label: 'Abandoned' },
-];
-
-function WorkloadGrid({ rows, highlightId }) {
-  if (!rows || rows.length === 0) {
-    return <p style={{ color: 'var(--t3)', fontFamily: 'var(--sans)', fontSize: 12, padding: '40px 0', textAlign: 'center' }}>No workload data for this sprint.</p>;
-  }
-
-  // Group by person, sum task_count per stage
-  const byPerson = {};
-  rows.forEach(r => {
-    if (!byPerson[r.id]) byPerson[r.id] = { name: r.name, discipline: r.discipline, stages: {}, total: 0 };
-    byPerson[r.id].stages[r.stage] = (byPerson[r.id].stages[r.stage] || 0) + r.task_count;
-    byPerson[r.id].total += r.task_count;
-  });
-
-  const people = Object.entries(byPerson).map(([id, p]) => ({ ...p, id })).sort((a, b) => a.name.localeCompare(b.name));
-
-  return (
-    <div style={{ overflowX: 'auto', borderRadius: 6, border: '1px solid var(--b1)' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-        <thead>
-          <tr style={{ background: 'var(--s1)' }}>
-            <th style={thStyleLeft}>Person</th>
-            {WORKLOAD_STAGES.map(s => (
-              <th key={s.key} style={thStyleCenter}>{s.label}</th>
-            ))}
-            <th style={thStyleTotal}>Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          {people.map((person, i) => (
-            <tr key={person.id} style={{ borderTop: '1px solid var(--b1)', opacity: highlightId && person.id !== highlightId ? 0.4 : 1, background: highlightId && person.id === highlightId ? 'var(--s3)' : (i % 2 !== 0 ? 'var(--s1)' : 'transparent') }}>
-              <td style={{ padding: '10px 12px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 500, color: 'var(--text)' }}>{person.name}</span>
-                  {person.discipline && (
-                    <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', textTransform: 'capitalize' }}>({person.discipline.replace(/_/g, ' ')})</span>
-                  )}
-                </div>
-              </td>
-              {WORKLOAD_STAGES.map(s => {
-                const val = person.stages[s.key] || 0;
-                let cellColor = 'var(--t2)';
-                let cellWeight = 400;
-                if (s.key === 'ext_blocked' && val > 0) { cellColor = 'var(--amber)'; cellWeight = 500; }
-                else if (s.key === 'done' && val > 0) { cellColor = 'var(--green)'; }
-                return (
-                  <td key={s.key} style={{ ...cellStyle, color: val ? cellColor : 'var(--t3)', fontWeight: cellWeight }}>
-                    {val || '\u2014'}
-                  </td>
-                );
-              })}
-              <td style={{
-                ...totalCellStyle,
-                color: person.total > 8 ? '#f97316' : 'var(--text)',
-              }}>
-                {person.total}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-// ── ExportCSV button ─────────────────────────────────────────────────────────
-
-function ExportButton({ deliverables, dateRange, viewMode }) {
-  function handleExport() {
-    if (!deliverables || deliverables.length === 0) return;
-
-    const colHeaders = DEL_COLS.map(c => c.label);
-    let csvRows = [];
-
-    if (viewMode === 'date') {
-      // Pivot by date
-      const pivot = {};
-      deliverables.forEach(row => {
-        if (!pivot[row.completed_date]) pivot[row.completed_date] = {};
-        const key = row.deliverable_type || 'other';
-        pivot[row.completed_date][key] = (pivot[row.completed_date][key] || 0) + 1;
-      });
-      const dates = Object.keys(pivot).sort((a, b) => b.localeCompare(a));
-
-      csvRows.push(['Date', ...colHeaders, 'Total'].join(','));
-      dates.forEach(date => {
-        const vals = DEL_COLS.map(c => pivot[date][c.key] || 0);
-        const total = vals.reduce((a, b) => a + b, 0);
-        csvRows.push([date, ...vals, total].join(','));
-      });
-    } else {
-      // Pivot by person
-      const byPerson = {};
-      deliverables.forEach(row => {
-        const pid = row.assignee_id || 'unassigned';
-        if (!byPerson[pid]) byPerson[pid] = { name: row.assignee_name, discipline: row.discipline || '', dates: {} };
-        const d = byPerson[pid].dates;
-        if (!d[row.completed_date]) d[row.completed_date] = {};
-        const key = row.deliverable_type || 'other';
-        d[row.completed_date][key] = (d[row.completed_date][key] || 0) + 1;
-      });
-
-      csvRows.push(['Person', 'Discipline', 'Date', ...colHeaders, 'Total'].join(','));
-      Object.values(byPerson)
-        .sort((a, b) => a.name.localeCompare(b.name))
-        .forEach(person => {
-          const dates = Object.keys(person.dates).sort((a, b) => b.localeCompare(a));
-          dates.forEach(date => {
-            const vals = DEL_COLS.map(c => person.dates[date][c.key] || 0);
-            const total = vals.reduce((a, b) => a + b, 0);
-            csvRows.push([`"${person.name}"`, `"${person.discipline}"`, date, ...vals, total].join(','));
-          });
+      if (wl?.rows?.length) {
+        const agg = {};
+        wl.rows.forEach(r => {
+          const p = agg[r.id] || (agg[r.id] = { id: r.id, name: r.name, discipline: r.discipline || '', initial: undefined, total: 0, inProgress: 0, inReview: 0, blocked: 0, queued: 0 });
+          const n = Number(r.task_count) || 0;
+          p.total += n;
+          if (r.stage === 'in_progress') p.inProgress += n;
+          else if (r.stage === 'in_review') p.inReview += n;
+          else if (r.stage === 'ext_blocked') p.blocked += n;
+          else if (r.stage === 'in_sprint' || r.stage === 'backlog') p.queued += n;
         });
-    }
+        const rows = Object.values(agg).filter(p => p.total > 0).sort((a, b) => b.total - a.total);
+        if (rows.length) setWorkload(rows);
+      }
 
-    const csvContent = csvRows.join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `throttle-deliverables-${dateRange.start}-to-${dateRange.end}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
+      if (tasks || reqs) {
+        const q = [];
+        (tasks || []).filter(t => t.stage === 'in_review').slice(0, 4).forEach(t =>
+          q.push({ id: 'rev' + t.id, kind: 'approve', taskId: t.id, label: `${t.title} — awaiting your approval`, meta: `${taskTag(t.num)} · ${t.ownerName || 'team'} · ${t.priority}`, tone: t.priority === 'urgent' ? 'bad' : 'info', age: t.due || '' }));
+        (reqs || []).filter(r => r.status === 'pending').slice(0, 3).forEach(r =>
+          q.push({ id: 'req' + r.id, kind: 'request', label: `New request: ${r.title}`, meta: `From ${r.who}${r.items ? ` · ${r.items} deliverables` : ''}`, tone: 'warn', age: r.age }));
+        (tasks || []).filter(t => t.stage === 'ext_blocked').slice(0, 2).forEach(t =>
+          q.push({ id: 'blk' + t.id, kind: 'blocked', taskId: t.id, label: `${t.title} blocked${t.blocked ? ' — ' + t.blocked : ''}`, meta: `${taskTag(t.num)} · ${t.ownerName || 'team'}`, tone: 'warn', age: t.due || '' }));
+        (tasks || []).filter(t => t.stage === 'delivered').slice(0, 2).forEach(t =>
+          q.push({ id: 'dlv' + t.id, kind: 'feedback', taskId: t.id, label: `${t.title} delivered — close the loop`, meta: `${taskTag(t.num)} · awaiting requester feedback`, tone: 'ok', age: t.due || '' }));
+        setActions(q.length ? q.slice(0, 6) : []);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [session]);
+
+  const sub = `${kpis.find(k => k.key === 'in_review')?.value ?? 0} in review · ${kpis.find(k => k.key === 'overdue')?.value ?? 0} overdue · ${kpis.find(k => k.key === 'blocked')?.value ?? 0} blocked. ${reviewCount} ${reviewCount === 1 ? 'approval is' : 'approvals are'} waiting on you.`;
 
   return (
-    <button
-      onClick={handleExport}
-      style={{
-        background: 'transparent',
-        color: 'var(--t2)',
-        border: '1px solid var(--b2)',
-        borderRadius: 6,
-        fontFamily: 'var(--sans)',
-        fontSize: 11,
-        padding: '6px 12px',
-        cursor: 'pointer',
-      }}
-    >
-      Export CSV
-    </button>
-  );
-}
-
-// ── PersonFilter ────────────────────────────────────────────────────────────
-
-function PersonFilter({ members, selected, onChange }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-      <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', letterSpacing: '.06em', textTransform: 'uppercase', fontWeight: 500 }}>Person</span>
-      <button onClick={() => onChange(null)} style={{ background: selected === null ? '#F2CD1A' : 'var(--s2)', color: selected === null ? 'var(--fg-accent)' : 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 10px', fontFamily: 'var(--sans)', fontSize: 12, cursor: 'pointer' }}>All</button>
-      {members.map(m => (
-        <button key={m.id} onClick={() => onChange(m.id)} style={{ background: selected === m.id ? '#F2CD1A' : 'var(--s2)', color: selected === m.id ? 'var(--fg-accent)' : 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 10px', fontFamily: 'var(--sans)', fontSize: 12, cursor: 'pointer' }}>{m.name.split(' ')[0]}</button>
-      ))}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 1240, margin: '0 auto' }}>
+      <DashHero name={name} greeting={greeting} sub={sub} reviewCount={reviewCount} />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 14 }}>
+        {kpis.map(k => <KpiCard key={k.key} k={k} />)}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: 16, alignItems: 'start' }}>
+        <ActionQueue actions={actions} />
+        <ActivityFeed activity={ACTIVITY} />
+      </div>
+      <WorkloadPanel workload={workload} />
+      <OutputPanel />
     </div>
   );
 }
-
-// ── Main Dashboard Page ──────────────────────────────────────────────────────
 
 export default function DashboardPage() {
-  const { session, brandUser } = useAuth();
-
-  const [allSprints, setAllSprints] = useState([]);
-  const [activeSprint, setActiveSprint] = useState(null);
-  const [stats, setStats] = useState(null);
-  const [deliverables, setDeliverables] = useState([]);
-  const [collaborations, setCollaborations] = useState([]);
-  const [collabOpen, setCollabOpen] = useState(false);
-  const [workload, setWorkload] = useState([]);
-  const [dateRange, setDateRange] = useState({ start: '', end: '' });
-  const [deliverableView, setDeliverableView] = useState('date');
-  const [drillModal, setDrillModal] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [selectedPerson, setSelectedPerson] = useState(null);
-  const [teamMembers, setTeamMembers] = useState([]);
-
-  // Load team members for person filter (admin/lead only)
-  useEffect(() => {
-    if (brandUser && ['admin','lead'].includes(brandUser.role) && session) {
-      workerFetch('getTeamMembers', {}, session)
-        .then(data => setTeamMembers(data.members || []))
-        .catch(() => {});
-    }
-  }, [brandUser, session]);
-
-  // Load sprints on mount
-  useEffect(() => {
-    if (brandUser && ['admin', 'lead'].includes(brandUser.role)) {
-      loadSprints();
-    } else {
-      setLoading(false);
-    }
-  }, [brandUser]);
-
-  async function loadSprints() {
-    const { data, error } = await supabase
-      .from('sprints')
-      .select('*')
-      .order('start_date', { ascending: false });
-
-    if (error || !data || data.length === 0) {
-      setAllSprints([]);
-      setActiveSprint(null);
-      setLoading(false);
-      return;
-    }
-
-    setAllSprints(data);
-    const active = data.find(s => s.status === 'active') || data[0];
-    setActiveSprint(active);
-  }
-
-  // When activeSprint changes, load all data
-  useEffect(() => {
-    if (activeSprint && session) {
-      const range = { start: activeSprint.start_date, end: activeSprint.end_date };
-      setDateRange(range);
-      setSelectedPerson(null); // Reset person filter on sprint change
-      loadAllData(activeSprint.id, range, null);
-    }
-  }, [activeSprint, session]);
-
-  // Re-fetch when selectedPerson changes (not on initial load)
-  useEffect(() => {
-    if (activeSprint && session && selectedPerson !== undefined) {
-      const range = { start: activeSprint.start_date, end: activeSprint.end_date };
-      loadAllData(activeSprint.id, dateRange.start ? dateRange : range, selectedPerson);
-    }
-  }, [selectedPerson]);
-
-  async function loadAllData(sprintId, range, personId) {
-    setLoading(true);
-    try {
-      const [statsData, delData, wlData] = await Promise.all([
-        workerFetch('getDashboardStats', { sprintId, personId: personId || undefined }, session),
-        workerFetch('getDeliverablesReport', { startDate: range.start, endDate: range.end }, session),
-        workerFetch('getTeamWorkload', { sprintId }, session),
-      ]);
-      setStats(statsData);
-      setDeliverables(delData.rows || []);
-      setCollaborations(delData.collaborations || []);
-      setWorkload(wlData.rows || []);
-    } catch (e) {
-      console.error('Dashboard load error:', e);
-    }
-    setLoading(false);
-  }
-
-  async function handleDateRangeChange(newRange) {
-    setDateRange(newRange);
-    try {
-      const delData = await workerFetch('getDeliverablesReport', {
-        startDate: newRange.start,
-        endDate: newRange.end,
-      }, session);
-      setDeliverables(delData.rows || []);
-      setCollaborations(delData.collaborations || []);
-    } catch (e) {
-      console.error('Deliverables fetch error:', e);
-    }
-  }
-
-  function handleSprintChange(sprint) {
-    setActiveSprint(sprint);
-  }
-
-  // Access denied for non-admin/lead
-  if (!brandUser) return null;
-  if (!['admin', 'lead'].includes(brandUser.role)) {
-    return (
-      <Layout>
-        <div style={{ maxWidth: 640, margin: '0 auto', padding: '80px 0', textAlign: 'center' }}>
-          <h1 style={{ fontFamily: 'var(--head)', fontWeight: 900, fontSize: 18, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--text)', marginBottom: 8 }}>Access Restricted</h1>
-          <p style={{ fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--t3)' }}>This view is for brand team managers only.</p>
-        </div>
-      </Layout>
-    );
-  }
-
-  // No sprints found
-  if (!loading && allSprints.length === 0) {
-    return (
-      <Layout>
-        <div style={{ maxWidth: 640, margin: '0 auto', padding: '80px 0', textAlign: 'center' }}>
-          <h1 style={{ fontFamily: 'var(--head)', fontWeight: 900, fontSize: 18, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--text)', marginBottom: 8 }}>No Sprints Found</h1>
-          <p style={{ fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--t3)' }}>Create your first sprint to see dashboard data.</p>
-        </div>
-      </Layout>
-    );
-  }
-
-  return (
-    <Layout>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-        {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-            <h1 style={{ fontFamily: 'var(--head)', fontWeight: 900, fontSize: 18, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--text)' }}>Manager Dashboard</h1>
-            {['admin','lead'].includes(brandUser?.role) && teamMembers.length > 0 && (
-              <PersonFilter members={teamMembers} selected={selectedPerson} onChange={setSelectedPerson} />
-            )}
-          </div>
-          {allSprints.length > 0 && (
-            <SprintSelector
-              sprints={allSprints}
-              value={activeSprint?.id}
-              onChange={handleSprintChange}
-            />
-          )}
-        </div>
-
-        {loading ? (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '80px 0' }}>
-            <p style={{ fontFamily: 'var(--sans)', fontSize: 13, color: 'var(--t3)' }}>Loading dashboard…</p>
-          </div>
-        ) : (
-          <>
-            {/* Section 1: Summary Cards */}
-            {stats && (
-              <section style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12 }}>
-                <StatCard
-                  label="In Review"
-                  value={stats.inReview}
-                  bucket="in_review"
-                  color="cyan"
-                  onClick={() => setDrillModal({ bucket: 'in_review', sprintId: activeSprint.id, personId: selectedPerson })}
-                />
-                <StatCard
-                  label="Overdue"
-                  value={stats.overdue}
-                  bucket="overdue"
-                  color="red"
-                  onClick={() => setDrillModal({ bucket: 'overdue', sprintId: activeSprint.id, personId: selectedPerson })}
-                />
-                <StatCard
-                  label="Ext. Blocked"
-                  value={stats.extBlocked}
-                  bucket="ext_blocked"
-                  color="amber"
-                  onClick={() => setDrillModal({ bucket: 'ext_blocked', sprintId: activeSprint.id, personId: selectedPerson })}
-                />
-                <StatCard
-                  label="Completion"
-                  value={`${stats.completionRate}%`}
-                  bucket={null}
-                  color="green"
-                />
-                <StatCard
-                  label="Spillovers"
-                  value={stats.spillovers}
-                  bucket="spillovers"
-                  color="orange"
-                  onClick={() => setDrillModal({ bucket: 'spillovers', sprintId: activeSprint.id, personId: selectedPerson })}
-                />
-              </section>
-            )}
-
-            {/* Section 2: Deliverables Output */}
-            {(() => {
-              const visibleDeliverables = selectedPerson
-                ? deliverables.filter(r => r.assignee_id === selectedPerson)
-                : deliverables;
-              return (
-                <section>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-                    <h2 style={{ fontFamily: 'var(--head)', fontWeight: 900, fontSize: 13, letterSpacing: '.25em', textTransform: 'uppercase', color: 'var(--text)' }}>Deliverables Output</h2>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                      <DateRangePicker
-                        start={dateRange.start}
-                        end={dateRange.end}
-                        onChange={handleDateRangeChange}
-                      />
-                      <ViewToggle value={deliverableView} onChange={setDeliverableView} />
-                      <ExportButton
-                        deliverables={visibleDeliverables}
-                        dateRange={dateRange}
-                        viewMode={deliverableView}
-                      />
-                    </div>
-                  </div>
-                  {deliverableView === 'date'
-                    ? <ByDateTable rows={visibleDeliverables} />
-                    : <ByPersonTable rows={visibleDeliverables} />
-                  }
-
-                  {/* Collaborator footnote */}
-                  {collaborations.length > 0 && (
-                    <div style={{ marginTop: 16, borderTop: '1px solid var(--b1)', paddingTop: 12 }}>
-                      <div
-                        onClick={() => setCollabOpen(o => !o)}
-                        style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: collabOpen ? 10 : 0 }}
-                      >
-                        <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', letterSpacing: '.06em', textTransform: 'uppercase', fontWeight: 500 }}>
-                          Collaborator contributions ({collaborations.length})
-                        </span>
-                        <span style={{ color: 'var(--t3)', fontSize: 11 }}>{collabOpen ? '▲' : '▼'}</span>
-                      </div>
-                      {collabOpen && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                          {collaborations.map(c => (
-                            <div key={`collab-${c.id}`} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid var(--b1)' }}>
-                              <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t2)', flex: 1 }}>{c.title}</span>
-                              <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', marginLeft: 12 }}>
-                                {c.collaborators?.map(col => col.name).join(', ')}
-                              </span>
-                              <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', marginLeft: 12, flexShrink: 0 }}>{c.completed_date}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </section>
-              );
-            })()}
-
-            {/* Section 3: Team Workload */}
-            <section>
-              <h2 style={{ fontFamily: 'var(--head)', fontWeight: 900, fontSize: 13, letterSpacing: '.25em', textTransform: 'uppercase', color: 'var(--text)', marginBottom: 16 }}>Team Workload</h2>
-              <WorkloadGrid rows={workload} highlightId={selectedPerson} />
-            </section>
-          </>
-        )}
-
-        {/* Drill-down Modal */}
-        {drillModal && (
-          <TaskDrillModal
-            bucket={drillModal.bucket}
-            sprintId={drillModal.sprintId}
-            personId={drillModal.personId}
-            onClose={() => setDrillModal(null)}
-          />
-        )}
-      </div>
-    </Layout>
-  );
+  return <AppShell route="dashboard"><DashboardScreen /></AppShell>;
 }

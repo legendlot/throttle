@@ -1,919 +1,400 @@
 'use client';
-import { useEffect, useState } from 'react';
-import Layout from '@/components/Layout';
-import { supabaseBrand as supabase, workerFetch } from '@throttle/db';
+/* Sprints — active summary, burndown, velocity, capacity, timeline + a
+   drag-to-plan sprint planner. Active sprint numbers + the all-sprints
+   list are live (worker getDashboardStats + brand.sprints); burndown /
+   velocity / capacity are illustrative trends; the planner persists to
+   localStorage (matching the prototype). Ported from sprints.jsx. */
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '@throttle/auth';
-import { getPriorityConfig, getStageConfig } from '@/lib/taskConfig';
+import { AppShell } from '@/components/throttle/AppShell';
+import { Icon } from '@/components/throttle/Icon';
+import { Card, Pill, Avatar, ProductTag, PrimaryBtn, SectionHead, TONE } from '@/components/throttle/ui';
+import { toast } from '@/components/throttle/ToastHost';
 import {
-  getNextThursday, getSprintEndDate, toDateString,
-  generateSprintName, getSprintDays, taskDueOnDay,
-  getSprintStatusLabel, isThursday
-} from '@/lib/sprintUtils';
+  SPRINTS, BURNDOWN, CAPACITY, PLAN_BACKLOG, PLAN_CAPACITY, DTYPE, PRIORITY, teamById, lsGet, lsSet,
+} from '@/lib/throttleData';
+import { fetchSprints, fetchDashboardStats } from '@/lib/throttleApi';
 
-// ── Sprint Timeline ───────────────────────────────────────────────────────────
+const PLAN_TOTAL = Object.values(PLAN_CAPACITY).reduce((a, b) => a + b, 0);
 
-function SprintTimeline({ sprint, sprintTasks }) {
-  if (!sprint) return null;
-  const days = getSprintDays(sprint.start_date);
-  const DAY_LABELS = ['Thu', 'Fri', 'Sat', 'Sun', 'Mon', 'Tue', 'Wed'];
+function PlanCard({ task, where, onMove, dim }) {
+  const pr = PRIORITY[task.priority] || PRIORITY.medium;
+  return (
+    <div draggable onDragStart={e => { e.dataTransfer.setData('text/plain', task.id); e.dataTransfer.effectAllowed = 'move'; }}
+      onClick={() => onMove(task.id)}
+      className="t-card t-task" style={{ background: 'var(--card-bg)', border: '1px solid var(--card-bd)', borderRadius: 'var(--card-radius)',
+        borderLeft: `2px solid ${pr.color}`, padding: '10px 11px', cursor: 'pointer', boxShadow: 'var(--card-shadow)', opacity: dim ? 0.5 : 1 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9 }}>
+        <span className="num" title={`${task.est} points`} style={{ width: 24, height: 24, borderRadius: 'var(--r-sm)', background: 'var(--surface-2)',
+          border: '1px solid var(--border-2)', display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 700, color: 'var(--yellow)', flexShrink: 0 }}>{task.est}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 12.5, color: 'var(--t1)', lineHeight: 1.35, marginBottom: 6 }}>{task.title}</div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <span style={{ fontSize: 10, color: 'var(--t4)', fontFamily: 'var(--font-display)', letterSpacing: '0.05em', textTransform: 'uppercase' }}>{DTYPE[task.type] || task.type}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <ProductTag code={task.product} />
+              <Avatar id={task.ownerId} size={20} />
+            </div>
+          </div>
+        </div>
+        <span style={{ color: 'var(--t4)', display: 'flex', flexShrink: 0 }}><Icon name={where === 'backlog' ? 'plus' : 'x'} size={14} /></span>
+      </div>
+    </div>
+  );
+}
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+function SprintPlanner({ onClose, sprints }) {
+  const [committed, setCommitted] = useState(() => lsGet('throttle_plan_s25', []));
+  const [over, setOver] = useState(null);
+  const byId = Object.fromEntries(PLAN_BACKLOG.map(t => [t.id, t]));
+  const inSprint = committed.map(id => byId[id]).filter(Boolean);
+  const backlog = PLAN_BACKLOG.filter(t => !committed.includes(t.id));
+
+  const pts = inSprint.reduce((s, t) => s + t.est, 0);
+  const loadByPerson = {};
+  inSprint.forEach(t => { loadByPerson[t.ownerId] = (loadByPerson[t.ownerId] || 0) + t.est; });
+  const overCommitted = pts > PLAN_TOTAL;
+  const anyoneOver = Object.entries(loadByPerson).some(([id, v]) => v > (PLAN_CAPACITY[id] || 0));
+
+  const add = id => setCommitted(c => c.includes(id) ? c : [...c, id]);
+  const remove = id => setCommitted(c => c.filter(x => x !== id));
+  const drop = (id, target) => { target === 'sprint' ? add(id) : remove(id); setOver(null); };
+
+  const autoPlan = () => {
+    const load = {}; const picked = [];
+    const ordered = [...PLAN_BACKLOG].sort((a, b) => ({ high: 0, medium: 1, low: 2 }[a.priority] - { high: 0, medium: 1, low: 2 }[b.priority]));
+    let total = 0;
+    for (const t of ordered) {
+      const cap = PLAN_CAPACITY[t.ownerId] || 0;
+      if ((load[t.ownerId] || 0) + t.est <= cap && total + t.est <= PLAN_TOTAL) {
+        picked.push(t.id); load[t.ownerId] = (load[t.ownerId] || 0) + t.est; total += t.est;
+      }
+    }
+    setCommitted(picked);
+    toast(`Auto-planned · ${picked.length} tasks · ${total} of ${PLAN_TOTAL} pts`, 'info', 'zap');
+  };
+  const commit = () => {
+    if (!committed.length) { toast('Add tasks before committing the sprint.', 'warn', 'alert'); return; }
+    lsSet('throttle_plan_s25', committed);
+    toast(`Sprint planned · ${committed.length} tasks · ${pts} pts committed`, 'ok', 'check');
+    onClose();
+  };
+
+  const colHead = (title, count, sub) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '0 4px 11px', flexShrink: 0 }}>
+      <span className="t-h3">{title}</span>
+      <span className="num" style={{ fontSize: 11.5, color: 'var(--t2)', background: 'var(--surface-2)', border: '1px solid var(--border)', padding: '1px 8px', borderRadius: 999, fontWeight: 600 }}>{count}</span>
+      {sub && <span style={{ marginLeft: 'auto', fontSize: 11.5, color: 'var(--t4)' }}>{sub}</span>}
+    </div>
+  );
+  const dropZone = (target, children, empty) => (
+    <div className="t-col-scroll" onDragOver={e => { e.preventDefault(); setOver(target); }}
+      onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget)) setOver(o => o === target ? null : o); }}
+      onDrop={e => { e.preventDefault(); drop(e.dataTransfer.getData('text/plain'), target); }}
+      style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, minHeight: 0, overflowY: 'auto', padding: 8, borderRadius: 'var(--r-sm)',
+        background: over === target ? 'var(--surface-2)' : 'var(--bg-2)', border: '1px solid var(--border)',
+        boxShadow: over === target ? 'inset 0 0 0 1px var(--border-3)' : 'none', transition: 'background .12s' }}>
+      {children}
+      {React.Children.count(children) === 0 && <div style={{ margin: 'auto', textAlign: 'center', color: 'var(--t4)', fontSize: 12.5, padding: '20px' }}>{empty}</div>}
+    </div>
+  );
+
+  const sprint = (sprints || SPRINTS).find(s => s.status === 'planned') || { id: 'S-25', shortId: 'S-25', range: 'Jun 23 – Jul 4' };
+  const sid = sprint.shortId || sprint.id;
+  const meterColor = overCommitted ? 'var(--bad-fg)' : pts / PLAN_TOTAL > 0.9 ? 'var(--warn-fg)' : 'var(--yellow)';
 
   return (
-    <div style={{ background: 'var(--s1)', border: '1px solid var(--b1)', borderRadius: 6, padding: 16, marginBottom: 24 }}>
-      <p style={{ fontFamily: 'var(--head)', fontSize: 11, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 12 }}>Sprint Timeline</p>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 4 }}>
-        {days.map((day, i) => {
-          const dayDate = new Date(day);
-          dayDate.setHours(0, 0, 0, 0);
-          const isToday = dayDate.getTime() === today.getTime();
-          const isPast = dayDate < today;
-          const dueTasks = sprintTasks.filter(t => taskDueOnDay(t, day));
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', maxWidth: 1240, margin: '0 auto', width: '100%' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, marginBottom: 16, flexShrink: 0, flexWrap: 'wrap' }}>
+        <div>
+          <button onClick={onClose} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', color: 'var(--t3)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5, padding: 0, marginBottom: 6, whiteSpace: 'nowrap' }}>
+            <Icon name="chevronLeft" size={14} />Back to sprint</button>
+          <h1 style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 24, letterSpacing: '0.01em', color: 'var(--t1)', margin: 0 }}>Plan {sid}</h1>
+          <span className="eyebrow" style={{ padding: 0, marginTop: 5, display: 'block' }}>{sprint.range} · drag from backlog</span>
+        </div>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <PrimaryBtn icon="zap" kind="ghost" onClick={autoPlan}>Auto-plan</PrimaryBtn>
+          <PrimaryBtn icon="check" onClick={commit}>Commit sprint</PrimaryBtn>
+        </div>
+      </div>
 
-          const cellStyle = isToday
-            ? { background: 'var(--s3)', border: '1px solid var(--b3)', borderRadius: 6, padding: 8, minHeight: 80 }
-            : isPast
-            ? { background: 'var(--s1)', borderRadius: 6, padding: 8, minHeight: 80 }
-            : { background: 'var(--s2)', borderRadius: 6, padding: 8, minHeight: 80 };
-
-          return (
-            <div key={i} style={cellStyle}>
-              {/* Day header */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                <span style={{ fontFamily: 'var(--head)', fontSize: 10, letterSpacing: '.1em', textTransform: 'uppercase', fontWeight: 500, color: isToday ? 'var(--text)' : 'var(--t3)' }}>
-                  {DAY_LABELS[i]}
-                </span>
-                <span style={{ fontFamily: 'var(--sans)', fontSize: 10, color: isToday ? 'var(--t2)' : 'var(--b2)' }}>
-                  {dayDate.getDate()}
-                </span>
-              </div>
-
-              {/* Tasks due this day */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                {dueTasks.map(task => {
-                  const priority = getPriorityConfig(task.priority);
-                  return (
-                    <div
-                      key={task.id}
-                      style={{ borderRadius: 3, padding: '2px 4px', backgroundColor: priority.color + '22', borderTop: `2px solid ${priority.color}` }}
-                    >
-                      <p style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.3 }} title={task.title}>
-                        {task.title}
-                      </p>
-                    </div>
-                  );
-                })}
-                {dueTasks.length === 0 && (
-                  <div style={{ height: 12 }} />
-                )}
-              </div>
+      <Card style={{ marginBottom: 16, flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
+          <div style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+              <span className="num" style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 28, color: meterColor, lineHeight: 1 }}>{pts}</span>
+              <span className="num" style={{ fontSize: 14, color: 'var(--t3)' }}>/ {PLAN_TOTAL} pts</span>
             </div>
+            <div className="eyebrow" style={{ padding: 0, marginTop: 5 }}>Committed · {committed.length} tasks</div>
+          </div>
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <div style={{ height: 12, borderRadius: 4, background: 'var(--surface-2)', overflow: 'hidden', display: 'flex' }}>
+              <div style={{ width: `${Math.min(100, (pts / PLAN_TOTAL) * 100)}%`, background: meterColor, transition: 'width .2s' }} />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6 }}>
+              <span style={{ fontSize: 11, color: 'var(--t4)' }}>{overCommitted ? 'Over team capacity' : `${Math.round((pts / PLAN_TOTAL) * 100)}% of capacity`}</span>
+              <span style={{ fontSize: 11, color: 'var(--t4)' }}>{PLAN_TOTAL} pts available</span>
+            </div>
+          </div>
+          {(overCommitted || anyoneOver) && <Pill tone="bad" dot>{overCommitted ? 'Over capacity' : 'Someone overloaded'}</Pill>}
+        </div>
+      </Card>
+
+      <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 1fr 230px', gap: 14, minHeight: 0 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          {colHead('Backlog', backlog.length, 'approved')}
+          {dropZone('backlog', backlog.map(t => <PlanCard key={t.id} task={t} where="backlog" onMove={add} />), 'All pulled in.')}
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          {colHead(sid, inSprint.length, pts + ' pts')}
+          {dropZone('sprint', inSprint.map(t => <PlanCard key={t.id} task={t} where="sprint" onMove={remove} />), 'Drag tasks here to commit them.')}
+        </div>
+        <Card pad={0} style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          <div style={{ padding: '13px 14px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}><span className="t-h3">Load</span></div>
+          <div style={{ padding: '8px 14px', overflowY: 'auto' }}>
+            {Object.keys(PLAN_CAPACITY).map((uid, i) => {
+              const u = teamById[uid]; const load = loadByPerson[uid] || 0; const cap = PLAN_CAPACITY[uid];
+              const ov = load > cap;
+              return (
+                <div key={uid} style={{ padding: '9px 0', borderTop: i ? '1px solid var(--border)' : 'none' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                    <Avatar id={uid} size={20} />
+                    <span style={{ flex: 1, fontSize: 12.5, color: 'var(--t1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u?.name.split(' ')[0]}</span>
+                    <span className="num" style={{ fontSize: 11.5, color: ov ? 'var(--bad-fg)' : 'var(--t3)', fontWeight: 600 }}>{load}/{cap}</span>
+                  </div>
+                  <div style={{ height: 6, borderRadius: 3, background: 'var(--surface-2)', overflow: 'hidden' }}>
+                    <div style={{ width: `${Math.min(100, (load / cap) * 100)}%`, height: '100%', background: ov ? 'var(--bad-fg)' : load === cap ? 'var(--warn-fg)' : 'var(--ok-fg)', transition: 'width .2s' }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function Burndown() {
+  const W = 560, H = 200, pad = { l: 28, r: 12, t: 14, b: 26 };
+  const iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
+  const { ideal, actual, days } = BURNDOWN;
+  const maxV = 21;
+  const xs = i => pad.l + (i / (ideal.length - 1)) * iw;
+  const ys = v => pad.t + (1 - v / maxV) * ih;
+  const idealPath = ideal.map((v, i) => (i ? 'L' : 'M') + xs(i).toFixed(1) + ' ' + ys(v).toFixed(1)).join(' ');
+  const actualPts = actual.map((v, i) => v == null ? null : [xs(i), ys(v)]).filter(Boolean);
+  const actualPath = actualPts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
+  const todayIdx = actualPts.length - 1;
+  return (
+    <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: 'block' }}>
+      {[0, 7, 14, 21].map(v => (
+        <g key={v}>
+          <line x1={pad.l} y1={ys(v)} x2={W - pad.r} y2={ys(v)} stroke="var(--border)" strokeWidth="1" strokeDasharray="2 4" />
+          <text x={pad.l - 7} y={ys(v) + 3} textAnchor="end" fontSize="9" fill="var(--t4)" fontFamily="var(--font-mono)">{v}</text>
+        </g>
+      ))}
+      {days.map((d, i) => d && <text key={i} x={xs(i)} y={H - 8} textAnchor="middle" fontSize="9" fill="var(--t4)" fontFamily="var(--font-mono)">{d}</text>)}
+      <path d={idealPath} fill="none" stroke="var(--t4)" strokeWidth="1.5" strokeDasharray="4 4" />
+      <path d={actualPath} fill="none" stroke="var(--yellow)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+      {actualPts[todayIdx] && <circle cx={actualPts[todayIdx][0]} cy={actualPts[todayIdx][1]} r="4" fill="var(--yellow)" stroke="var(--bg)" strokeWidth="2" />}
+    </svg>
+  );
+}
+
+function VelocityCard({ sprints }) {
+  const all = sprints || SPRINTS;
+  const hist = all.filter(s => s.status !== 'planned').slice(0, 3).reverse();
+  const closed = all.filter(s => s.status === 'closed');
+  const avg = Math.round(closed.reduce((a, b) => a + (b.done || 0), 0) / Math.max(1, closed.length));
+  const maxC = Math.max(1, ...hist.map(s => s.committed || 0));
+  return (
+    <Card pad={0}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
+        <Icon name="activity" size={15} style={{ color: 'var(--t3)' }} /><span className="t-h3">Velocity</span>
+        <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'baseline', gap: 6 }}>
+          <span className="num" style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 18, color: 'var(--yellow)' }}>{avg}</span>
+          <span className="eyebrow" style={{ padding: 0 }}>avg tasks / sprint</span>
+        </span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 28, padding: '20px 22px 10px', height: 188, justifyContent: 'center' }}>
+        {hist.map(s => (
+          <div key={s.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 9 }}>
+            <span className="num" style={{ fontSize: 12, color: 'var(--t1)', fontWeight: 700 }}>{s.done}<span style={{ color: 'var(--t4)', fontWeight: 400 }}>/{s.committed}</span></span>
+            <div style={{ position: 'relative', width: 46, height: 120, borderRadius: 4, background: 'var(--surface-2)', overflow: 'hidden' }}>
+              <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: `${((s.committed || 0) / maxC) * 100}%`, background: 'var(--p-wolf)', opacity: 0.3 }} />
+              <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: `${((s.done || 0) / maxC) * 100}%`, background: s.status === 'active' ? 'var(--yellow)' : 'var(--ok-fg)' }} />
+            </div>
+            <span className="num" style={{ fontSize: 11, color: s.status === 'active' ? 'var(--yellow)' : 'var(--t3)', fontWeight: 600 }}>{s.shortId || s.id}</span>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: 'flex', gap: 16, padding: '8px 16px 14px', borderTop: '1px solid var(--border)' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--t3)' }}><span style={{ width: 8, height: 8, borderRadius: 2, background: 'var(--ok-fg)' }} />Delivered</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--t3)' }}><span style={{ width: 8, height: 8, borderRadius: 2, background: 'var(--p-wolf)', opacity: 0.5 }} />Committed</span>
+      </div>
+    </Card>
+  );
+}
+
+function SprintsScreen() {
+  const { session } = useAuth();
+  const [planning, setPlanning] = useState(false);
+  const [sprints, setSprints] = useState(SPRINTS);
+  const [stats, setStats] = useState(null);
+  const plannedIds = lsGet('throttle_plan_s25', []);
+
+  useEffect(() => {
+    const onPlan = () => setPlanning(true);
+    window.addEventListener('throttle:plansprint', onPlan);
+    return () => window.removeEventListener('throttle:plansprint', onPlan);
+  }, []);
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const [s, st] = await Promise.all([fetchSprints(session), fetchDashboardStats(session)]);
+      if (cancelled) return;
+      if (s) setSprints(s);
+      if (st && typeof st.doneCount === 'number') setStats(st);
+    })();
+    return () => { cancelled = true; };
+  }, [session]);
+
+  if (planning) return <SprintPlanner onClose={() => setPlanning(false)} sprints={sprints} />;
+
+  const active = sprints.find(s => s.status === 'active') || SPRINTS.find(s => s.status === 'active');
+  const committed = stats ? (stats.totalEligible ?? active.committed) : active.committed;
+  const done = stats ? (stats.doneCount ?? active.done) : active.done;
+  const spill = stats ? (stats.spillovers ?? active.spill) : active.spill;
+  const pct = committed ? Math.round((done / committed) * 100) : 0;
+  const remaining = Math.max(0, committed - done);
+  const STAT = [
+    { label: 'Committed', value: committed, tone: 'info' },
+    { label: 'Completed', value: done, tone: 'ok' },
+    { label: 'Remaining', value: remaining, tone: 'warn' },
+    { label: 'Spill risk', value: spill, tone: 'bad' },
+    { label: 'Days left', value: 2, tone: 'brand' },
+  ];
+
+  return (
+    <div style={{ maxWidth: 1240, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16 }}>
+        <div>
+          <span className="eyebrow" style={{ padding: 0 }}>{active.range} · Active</span>
+          <h1 style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 24, letterSpacing: '0.01em', color: 'var(--t1)', margin: '7px 0 0' }}>{active.name}</h1>
+        </div>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <PrimaryBtn icon="target" kind="ghost" onClick={() => setPlanning(true)}>Plan from backlog</PrimaryBtn>
+          <PrimaryBtn icon="check">Close sprint</PrimaryBtn>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 14 }}>
+        {STAT.map(s => {
+          const t = TONE[s.tone];
+          return (
+            <Card key={s.label} style={{ borderTop: `2px solid ${t.fg}` }}>
+              <div className="num" style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 30, color: 'var(--t1)', lineHeight: 1 }}>{s.value}</div>
+              <div className="eyebrow" style={{ padding: 0, marginTop: 9 }}>{s.label}</div>
+            </Card>
           );
         })}
       </div>
 
-      {/* No due dates note */}
-      {sprintTasks.filter(t => t.due_date).length === 0 && (
-        <p style={{ fontFamily: 'var(--sans)', color: 'var(--t3)', fontSize: 12, marginTop: 8, textAlign: 'center' }}>
-          No due dates set — assign due dates to tasks to see them here
-        </p>
-      )}
-    </div>
-  );
-}
-
-// ── Task Row (for sprint and backlog lists) ───────────────────────────────────
-
-function getSprintTaskId(task) {
-  if (!task.task_number) return null;
-  return `T-${String(task.task_number).padStart(3, '0')}`;
-}
-
-function TaskRow({ task, actions, highlighted }) {
-  const priority = getPriorityConfig(task.priority);
-  const stage = getStageConfig(task.stage);
-  const [hovered, setHovered] = useState(false);
-
-  return (
-    <div
-      data-task-id={task.id}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={{
-        display: 'flex', alignItems: 'center', gap: 12, paddingTop: 10, paddingBottom: 10, paddingLeft: 12, paddingRight: 12,
-        borderRadius: 6, transition: 'background 0.3s',
-        background: highlighted ? 'rgba(242,205,26,0.08)' : (hovered ? 'var(--s2)' : 'transparent'),
-        outline: highlighted ? '1px solid rgba(242,205,26,0.25)' : 'none',
-      }}
-    >
-      <span
-        style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', flexShrink: 0, backgroundColor: priority.color }}
-      />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <p style={{ fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--text)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{task.title}</p>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2 }}>
-          {task.product_code && (
-            <span style={{ fontFamily: 'var(--sans)', color: 'var(--b2)', fontSize: 10 }}>{task.product_code}</span>
-          )}
-          <span style={{ fontFamily: 'var(--sans)', color: 'var(--b2)', fontSize: 10 }}>{stage.label}</span>
-          {task.is_spillover && (
-            <span style={{ fontFamily: 'var(--sans)', color: 'var(--amber)', fontSize: 10 }}>↩ spillover</span>
-          )}
-        </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 16, alignItems: 'stretch' }}>
+        <Card>
+          <SectionHead eyebrow={active.shortId || active.id} title="Burndown" style={{ marginBottom: 8 }}
+            action={<div style={{ display: 'flex', gap: 16 }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--t3)' }}><span style={{ width: 14, height: 0, borderTop: '2px solid var(--yellow)' }} />Actual</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--t3)' }}><span style={{ width: 14, height: 0, borderTop: '2px dashed var(--t4)' }} />Ideal</span>
+            </div>} />
+          <Burndown />
+        </Card>
+        <Card style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 }}>
+          <div style={{ position: 'relative', width: 130, height: 130 }}>
+            <svg width="130" height="130" viewBox="0 0 130 130">
+              <circle cx="65" cy="65" r="56" fill="none" stroke="var(--surface-2)" strokeWidth="9" />
+              <circle cx="65" cy="65" r="56" fill="none" stroke="var(--yellow)" strokeWidth="9" strokeLinecap="round"
+                strokeDasharray={`${2 * Math.PI * 56 * pct / 100} ${2 * Math.PI * 56}`} transform="rotate(-90 65 65)" />
+            </svg>
+            <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', flexDirection: 'column' }}>
+              <div style={{ textAlign: 'center' }}>
+                <div className="num" style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 34, color: 'var(--t1)', lineHeight: 1 }}>{pct}%</div>
+                <div className="eyebrow" style={{ padding: 0, marginTop: 4 }}>Complete</div>
+              </div>
+            </div>
+          </div>
+          <p style={{ fontSize: 12.5, color: 'var(--t3)', textAlign: 'center', margin: 0, lineHeight: 1.5 }}>
+            {done} of {committed} done · {remaining} to go.<br/>On pace, {spill} may spill.</p>
+        </Card>
       </div>
-      {task.due_date && (
-        <span style={{ fontFamily: 'var(--sans)', color: 'var(--t3)', fontSize: 10, flexShrink: 0 }}>
-          {new Date(task.due_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
-        </span>
-      )}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, opacity: hovered ? 1 : 0, transition: 'opacity 0.15s', flexShrink: 0 }}>
-        {actions}
-      </div>
-    </div>
-  );
-}
 
-// ── Remove / Add action buttons ──────────────────────────────────────────────
+      <VelocityCard sprints={sprints} />
 
-function RemoveButton({ onClick }) {
-  const [hovered, setHovered] = useState(false);
-  return (
-    <button
-      onClick={onClick}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={{ fontFamily: 'var(--sans)', fontSize: 11, color: hovered ? 'var(--red)' : 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer', transition: 'color 0.15s' }}
-      title="Remove from sprint"
-    >
-      ✕
-    </button>
-  );
-}
-
-function AddButton({ onClick }) {
-  const [hovered, setHovered] = useState(false);
-  return (
-    <button
-      onClick={onClick}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={{ fontFamily: 'var(--sans)', fontSize: 11, color: hovered ? 'var(--green)' : 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer', transition: 'color 0.15s' }}
-      title="Add to sprint"
-    >
-      + Add
-    </button>
-  );
-}
-
-// ── Person Filter ────────────────────────────────────────────────────────────
-
-function PersonFilter({ members, selected, onChange, taskCounts }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-      <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', letterSpacing: '.06em', textTransform: 'uppercase', fontWeight: 500 }}>Person</span>
-      <button onClick={() => onChange(null)} style={{ background: selected === null ? '#F2CD1A' : 'var(--s2)', color: selected === null ? 'var(--fg-accent)' : 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 10px', fontFamily: 'var(--sans)', fontSize: 12, cursor: 'pointer' }}>All</button>
-      {members.map(m => (
-        <button key={m.id} onClick={() => onChange(m.id)} style={{ background: selected === m.id ? '#F2CD1A' : 'var(--s2)', color: selected === m.id ? 'var(--fg-accent)' : 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 4, padding: '4px 10px', fontFamily: 'var(--sans)', fontSize: 12, cursor: 'pointer' }}>
-          {m.name.split(' ')[0]}{taskCounts && taskCounts[m.id] ? ` (${taskCounts[m.id]})` : ''}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-// ── Main Sprint Page ──────────────────────────────────────────────────────────
-
-export default function SprintsPage() {
-  const { session, brandUser } = useAuth();
-  const [activeSprint, setActiveSprint] = useState(null);
-  const [sprintTasks, setSprintTasks] = useState([]);
-  const [doneCount, setDoneCount] = useState(0);
-  const [backlogTasks, setBacklogTasks] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [dragOverSprint, setDragOverSprint] = useState(false);
-  const [dragOverBacklog, setDragOverBacklog] = useState(false);
-  const [error, setError] = useState(null);
-  const [selectedPerson, setSelectedPerson] = useState(null);
-  const [teamMembers, setTeamMembers] = useState([]);
-
-  // Create sprint form
-  const [showCreate, setShowCreate] = useState(false);
-  const [newSprintDate, setNewSprintDate] = useState(() => {
-    const next = getNextThursday();
-    return toDateString(next);
-  });
-  const [creating, setCreating] = useState(false);
-
-  // Due date modal
-  const [pendingAdd, setPendingAdd] = useState(null); // { task, sprint_id }
-  const [dueDate, setDueDate] = useState('');
-
-  // Close sprint
-  const [closing, setClosing] = useState(false);
-
-  // Search focus
-  const [searchFocused, setSearchFocused] = useState(false);
-
-  // "/" search overlay
-  const [sprintSearchOpen, setSprintSearchOpen] = useState(false);
-  const [sprintSearchQuery, setSprintSearchQuery] = useState('');
-  const [highlightedTaskId, setHighlightedTaskId] = useState(null);
-
-  // Stage breakdown bar tooltip
-  const [hoveredSegment, setHoveredSegment] = useState(null);
-
-  const isAdminLead = ['admin', 'lead'].includes(brandUser?.role);
-
-  useEffect(() => {
-    function onKey(e) {
-      if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey) {
-        const tag = document.activeElement?.tagName;
-        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-        e.preventDefault();
-        setSprintSearchOpen(o => !o);
-        setSprintSearchQuery('');
-      } else if (e.key === 'Escape' && sprintSearchOpen) {
-        setSprintSearchOpen(false);
-      }
-    }
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [sprintSearchOpen]);
-
-  function handleSearchResultClick(task) {
-    setSprintSearchOpen(false);
-    setSprintSearchQuery('');
-    setHighlightedTaskId(task.id);
-    setTimeout(() => {
-      document.querySelector(`[data-task-id="${task.id}"]`)
-        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, 50);
-    setTimeout(() => setHighlightedTaskId(null), 2000);
-  }
-
-  useEffect(() => {
-    if (brandUser) loadAll();
-  }, [brandUser]);
-
-  useEffect(() => {
-    if (isAdminLead && session) {
-      workerFetch('getTeamMembers', {}, session?.access_token)
-        .then(data => setTeamMembers(data.members || []))
-        .catch(() => {});
-    }
-  }, [isAdminLead, session]);
-
-  async function loadAll() {
-    setLoading(true);
-    await Promise.all([loadActiveSprint(), loadBacklog()]);
-    setLoading(false);
-  }
-
-  async function loadActiveSprint() {
-    const { data: sprints } = await supabase
-      .from('sprints')
-      .select('*')
-      .eq('status', 'active')
-      .limit(1);
-
-    const sprint = sprints?.[0] || null;
-    setActiveSprint(sprint);
-
-    if (sprint) {
-      const { data: tasks } = await supabase
-        .from('tasks')
-        .select('*, task_assignees(user_id, is_owner)')
-        .eq('sprint_id', sprint.id)
-        .not('stage', 'in', '("done","abandoned")')
-        .order('created_at', { ascending: false });
-      setSprintTasks(tasks || []);
-
-      // Count done tasks in this sprint for progress bar
-      const { count } = await supabase
-        .from('tasks')
-        .select('id', { count: 'exact', head: true })
-        .eq('sprint_id', sprint.id)
-        .eq('stage', 'done');
-      setDoneCount(count || 0);
-    } else {
-      setSprintTasks([]);
-      setDoneCount(0);
-    }
-  }
-
-  async function loadBacklog() {
-    const { data } = await supabase
-      .from('tasks')
-      .select('*, task_assignees(user_id, is_owner)')
-      .eq('stage', 'backlog')
-      .is('sprint_id', null)
-      .order('created_at', { ascending: false });
-    setBacklogTasks(data || []);
-  }
-
-  async function createSprint() {
-    if (!isThursday(newSprintDate)) {
-      setError('Sprint must start on a Thursday');
-      return;
-    }
-    setCreating(true);
-    setError(null);
-    try {
-      await workerFetch('createSprint', { start_date: newSprintDate }, session?.access_token);
-      setShowCreate(false);
-      await loadActiveSprint();
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setCreating(false);
-    }
-  }
-
-  async function addToSprint(task, sprint_id, due_date) {
-    setError(null);
-    try {
-      await workerFetch('addTaskToSprint', {
-        task_id: task.id,
-        sprint_id,
-        due_date: due_date || undefined,
-      }, session?.access_token);
-      setBacklogTasks(prev => prev.filter(t => t.id !== task.id));
-      setSprintTasks(prev => [...prev, { ...task, sprint_id, stage: 'in_sprint', due_date: due_date || null }]);
-      setPendingAdd(null);
-      setDueDate('');
-    } catch (e) {
-      setError(e.message);
-    }
-  }
-
-  async function removeFromSprint(task) {
-    setError(null);
-    try {
-      await workerFetch('removeTaskFromSprint', { task_id: task.id }, session?.access_token);
-      setSprintTasks(prev => prev.filter(t => t.id !== task.id));
-      setBacklogTasks(prev => [{ ...task, stage: 'backlog', sprint_id: null }, ...prev]);
-    } catch (e) {
-      setError(e.message);
-    }
-  }
-
-  async function closeSprint() {
-    if (!activeSprint) return;
-    if (!confirm(`Close "${activeSprint.name}"? Incomplete tasks will become spillovers and a new sprint will be created automatically.`)) return;
-    setClosing(true);
-    setError(null);
-    try {
-      await workerFetch('closeSprint', { sprint_id: activeSprint.id }, session?.access_token);
-      await loadAll();
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setClosing(false);
-    }
-  }
-
-  // Drag handlers
-  function handleDragFromBacklog(e, task) {
-    e.dataTransfer.setData('taskId', task.id);
-    e.dataTransfer.setData('taskJson', JSON.stringify(task));
-    e.dataTransfer.setData('source', 'backlog');
-  }
-
-  function handleDragFromSprint(e, task) {
-    e.dataTransfer.setData('taskId', task.id);
-    e.dataTransfer.setData('taskJson', JSON.stringify(task));
-    e.dataTransfer.setData('source', 'sprint');
-  }
-
-  function handleDropToSprint(e) {
-    e.preventDefault();
-    setDragOverSprint(false);
-    const source = e.dataTransfer.getData('source');
-    if (source !== 'backlog') return;
-    const task = JSON.parse(e.dataTransfer.getData('taskJson'));
-    if (!activeSprint) return;
-    // Ask for due date
-    setPendingAdd({ task, sprint_id: activeSprint.id });
-    setDueDate('');
-  }
-
-  function handleDropToBacklog(e) {
-    e.preventDefault();
-    setDragOverBacklog(false);
-    const source = e.dataTransfer.getData('source');
-    if (source !== 'sprint') return;
-    const task = JSON.parse(e.dataTransfer.getData('taskJson'));
-    removeFromSprint(task);
-  }
-
-  // Person filtering
-  const filteredSprintTasks = selectedPerson
-    ? sprintTasks.filter(t => t.task_assignees?.some(a => a.user_id === selectedPerson))
-    : sprintTasks;
-  const filteredBacklog = (selectedPerson
-    ? backlogTasks.filter(t => t.task_assignees?.some(a => a.user_id === selectedPerson))
-    : backlogTasks
-  ).filter(t => !search || t.title.toLowerCase().includes(search.toLowerCase()) || t.product_code?.toLowerCase().includes(search.toLowerCase()));
-
-  // Task counts per person
-  const personTaskCounts = {};
-  teamMembers.forEach(m => {
-    personTaskCounts[m.id] = sprintTasks.filter(t => t.task_assignees?.some(a => a.user_id === m.id)).length;
-  });
-
-  const statusLabel = getSprintStatusLabel(activeSprint);
-
-  return (
-    <Layout>
-      <div style={{ maxWidth: 960, margin: '0 auto', overflow: 'hidden' }}>
-
-        {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
-          <div>
-            <h1 style={{ fontFamily: 'var(--head)', fontWeight: 900, fontSize: 18, letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--text)', margin: 0 }}>Sprints</h1>
-            <p style={{ fontFamily: 'var(--sans)', color: 'var(--t3)', fontSize: 11, marginTop: 4 }}>
-              {activeSprint ? activeSprint.name : 'No active sprint'}
-              <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', marginLeft: 12 }}>
-                <kbd style={{ background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 3, padding: '2px 6px', fontSize: 11 }}>/</kbd> search
-              </span>
-            </p>
-            {activeSprint && (() => {
-              const total     = sprintTasks.length + doneCount;
-              const pct       = total > 0 ? Math.round((doneCount / total) * 100) : 0;
-              const barColor  = pct >= 80 ? '#30D158' : pct >= 40 ? '#F2CD1A' : '#213CE2';
-
-              const STAGE_ORDER = ['done', 'in_review', 'approved', 'in_progress', 'ext_blocked', 'in_sprint', 'backlog'];
-              const stageCounts = { done: doneCount };
-              for (const t of sprintTasks) {
-                stageCounts[t.stage] = (stageCounts[t.stage] || 0) + 1;
-              }
-              const activeStages = STAGE_ORDER.filter(s => (stageCounts[s] || 0) > 0);
-
-              return (
-                <div style={{ marginTop: 8, maxWidth: 320 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                    <span style={{ fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--t3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-                      {activeStages.map(s => `${stageCounts[s]} ${getStageConfig(s).label.toLowerCase()}`).join(' · ')}
-                    </span>
-                    <span style={{ fontFamily: 'var(--sans)', fontSize: 10, color: barColor, fontWeight: 600, flexShrink: 0 }}>
-                      {pct}%
-                    </span>
-                  </div>
-                  <div style={{ height: 4, background: 'var(--s3)', borderRadius: 2, overflow: 'hidden' }}>
-                    <div style={{
-                      height: '100%',
-                      width: pct === 0 ? '2px' : `${pct}%`,
-                      minWidth: pct === 0 ? 0 : undefined,
-                      background: barColor,
-                      borderRadius: 2,
-                      transition: 'width .4s ease',
-                    }} />
-                  </div>
-                  {total > 0 && (
-                    <div style={{ position: 'relative', marginTop: 4, height: 4, display: 'flex' }}>
-                      {activeStages.map((s, i) => {
-                        const cfg = getStageConfig(s);
-                        const count = stageCounts[s];
-                        const segPct = Math.round((count / total) * 100);
-                        const isFirst = i === 0;
-                        const isLast  = i === activeStages.length - 1;
-                        return (
-                          <div
-                            key={s}
-                            onMouseEnter={() => setHoveredSegment(s)}
-                            onMouseLeave={() => setHoveredSegment(null)}
-                            style={{
-                              position: 'relative',
-                              width: `${(count / total) * 100}%`,
-                              height: '100%',
-                              paddingTop: 6,
-                              paddingBottom: 6,
-                              marginTop: -6,
-                              marginBottom: -6,
-                              cursor: 'default',
-                            }}
-                          >
-                            <div style={{
-                              width: '100%',
-                              height: '100%',
-                              background: cfg.color,
-                              borderTopLeftRadius: isFirst ? 2 : 0,
-                              borderBottomLeftRadius: isFirst ? 2 : 0,
-                              borderTopRightRadius: isLast ? 2 : 0,
-                              borderBottomRightRadius: isLast ? 2 : 0,
-                            }} />
-                            {hoveredSegment === s && (
-                              <div style={{
-                                position: 'absolute', bottom: 10, left: '50%', transform: 'translateX(-50%)',
-                                background: '#1a1a1a', border: '1px solid var(--b2)', borderRadius: 4,
-                                padding: '4px 8px', fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--text)',
-                                whiteSpace: 'nowrap', zIndex: 10, pointerEvents: 'none',
-                              }}>
-                                {cfg.label} — {count} task{count === 1 ? '' : 's'} ({segPct}%)
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
+      <Card pad={0}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
+          <Icon name="users" size={15} style={{ color: 'var(--t3)' }} /><span className="t-h3">Capacity & commitment</span>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 14 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--t3)' }}><span style={{ width: 8, height: 8, borderRadius: 2, background: 'var(--ok-fg)' }} />Done</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--t3)' }}><span style={{ width: 8, height: 8, borderRadius: 2, background: 'var(--p-wolf)' }} />Committed</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--t3)' }}><span style={{ width: 8, height: 8, borderRadius: 2, background: 'var(--surface-3)' }} />Capacity</span>
           </div>
-
-          {isAdminLead && (
-            <div style={{ display: 'flex', gap: 12 }}>
-              {activeSprint && (
-                <button
-                  onClick={closeSprint}
-                  disabled={closing}
-                  style={{
-                    background: 'transparent', color: 'var(--t2)', border: '1px solid var(--b2)', borderRadius: 6,
-                    fontFamily: 'var(--sans)', fontSize: 11, fontWeight: 500,
-                    padding: '8px 16px', cursor: 'pointer', opacity: closing ? 0.4 : 1, transition: 'opacity 0.15s'
-                  }}
-                >
-                  {closing ? 'Closing...' : 'Close Sprint'}
-                </button>
-              )}
-              {!activeSprint && (
-                <button
-                  onClick={() => setShowCreate(true)}
-                  style={{
-                    background: '#F2CD1A', color: 'var(--fg-accent)', fontFamily: 'var(--head)', fontWeight: 700,
-                    fontSize: 11, letterSpacing: '.15em', textTransform: 'uppercase',
-                    borderRadius: 6, border: 'none', padding: '8px 16px', cursor: 'pointer'
-                  }}
-                >
-                  + Create Sprint
-                </button>
-              )}
-            </div>
-          )}
         </div>
-
-        {isAdminLead && teamMembers.length > 0 && (
-          <div style={{ marginBottom: 16 }}>
-            <PersonFilter members={teamMembers} selected={selectedPerson} onChange={setSelectedPerson} taskCounts={personTaskCounts} />
-          </div>
-        )}
-
-        {/* Error */}
-        {error && (
-          <div style={{ background: 'rgba(222,42,42,0.08)', border: '1px solid rgba(222,42,42,0.3)', borderRadius: 6, padding: '12px 16px', marginBottom: 20 }}>
-            <p style={{ fontFamily: 'var(--sans)', color: 'var(--red)', fontSize: 11, margin: 0 }}>{error}</p>
-          </div>
-        )}
-
-        {/* Create sprint form */}
-        {showCreate && isAdminLead && (
-          <div style={{ background: 'var(--s1)', border: '1px solid var(--b1)', borderRadius: 6, padding: 20, marginBottom: 24 }}>
-            <h2 style={{ fontFamily: 'var(--head)', fontSize: 13, fontWeight: 700, letterSpacing: '.15em', textTransform: 'uppercase', color: 'var(--text)', margin: 0, marginBottom: 16 }}>Create Sprint</h2>
-            <div style={{ display: 'flex', gap: 16, alignItems: 'flex-end' }}>
-              <div style={{ flex: 1 }}>
-                <label style={{ display: 'block', fontFamily: 'var(--sans)', fontSize: 11, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 6, fontWeight: 500 }}>
-                  Start Date (must be a Thursday)
-                </label>
-                <input
-                  type="date"
-                  value={newSprintDate}
-                  onChange={e => setNewSprintDate(e.target.value)}
-                  style={{
-                    width: '100%', boxSizing: 'border-box', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 6,
-                    padding: '8px 12px', fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--text)', outline: 'none'
-                  }}
-                />
-              </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button
-                  onClick={createSprint}
-                  disabled={creating}
-                  style={{
-                    background: '#F2CD1A', color: 'var(--fg-accent)', fontFamily: 'var(--head)', fontWeight: 700,
-                    fontSize: 11, letterSpacing: '.15em', textTransform: 'uppercase',
-                    borderRadius: 6, border: 'none', padding: '8px 20px', cursor: 'pointer',
-                    opacity: creating ? 0.4 : 1
-                  }}
-                >
-                  {creating ? 'Creating...' : 'Create'}
-                </button>
-                <button
-                  onClick={() => setShowCreate(false)}
-                  style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer', padding: '8px 12px' }}
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {loading ? (
-          <div style={{ padding: '80px 0', textAlign: 'center' }}>
-            <p style={{ fontFamily: 'var(--sans)', color: 'var(--t3)', fontSize: 11 }}>Loading...</p>
-          </div>
-        ) : (
-          <>
-            {/* Sprint timeline */}
-            {activeSprint && (
-              <SprintTimeline sprint={activeSprint} sprintTasks={sprintTasks} />
-            )}
-
-            {/* Split: Sprint tasks + Backlog */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, minWidth: 0 }}>
-
-              {/* Current Sprint */}
-              <div style={{ minWidth: 0, overflow: 'hidden' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-                  <div>
-                    <h2 style={{ fontFamily: 'var(--head)', fontSize: 13, fontWeight: 700, letterSpacing: '.15em', textTransform: 'uppercase', color: 'var(--text)', margin: 0 }}>
-                      {activeSprint ? 'Current Sprint' : 'No Active Sprint'}
-                    </h2>
-                    {activeSprint && (
-                      <p style={{ fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--t3)', marginTop: 2 }}>{statusLabel}</p>
-                    )}
-                  </div>
-                  <span style={{ fontFamily: 'var(--sans)', fontSize: 10, background: 'var(--s2)', color: 'var(--t3)', padding: '2px 6px', borderRadius: 3 }}>
-                    {filteredSprintTasks.length}
-                  </span>
-                </div>
-
-                <div
-                  onDragOver={e => { if (isAdminLead && activeSprint) { e.preventDefault(); setDragOverSprint(true); } }}
-                  onDragLeave={() => setDragOverSprint(false)}
-                  onDrop={handleDropToSprint}
-                  style={{
-                    minHeight: 192, borderRadius: 6, transition: 'background 0.15s, border-color 0.15s', padding: 8,
-                    ...(dragOverSprint
-                      ? { border: '1px dashed var(--b3)', background: 'var(--s2)' }
-                      : { border: '1px solid var(--b1)', background: 'var(--s1)' }
-                    )
-                  }}
-                >
-                  {!activeSprint ? (
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '40px 0' }}>
-                      <p style={{ fontFamily: 'var(--sans)', color: 'var(--b2)', fontSize: 10, textAlign: 'center' }}>
-                        {isAdminLead ? 'Create a sprint to get started' : 'No active sprint'}
-                      </p>
-                    </div>
-                  ) : filteredSprintTasks.length === 0 ? (
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '40px 0' }}>
-                      <p style={{ fontFamily: 'var(--sans)', color: 'var(--b2)', fontSize: 10 }}>
-                        {isAdminLead ? 'Drag tasks here from the backlog' : 'No tasks in sprint'}
-                      </p>
-                    </div>
-                  ) : (
-                    filteredSprintTasks.map(task => (
-                      <div
-                        key={task.id}
-                        draggable={isAdminLead}
-                        onDragStart={e => handleDragFromSprint(e, task)}
-                      >
-                        <TaskRow
-                          task={task}
-                          highlighted={highlightedTaskId === task.id}
-                          actions={isAdminLead ? (
-                            <RemoveButton onClick={() => removeFromSprint(task)} />
-                          ) : null}
-                        />
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-
-              {/* Backlog */}
-              <div style={{ minWidth: 0, overflow: 'hidden' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-                  <h2 style={{ fontFamily: 'var(--head)', fontSize: 13, fontWeight: 700, letterSpacing: '.15em', textTransform: 'uppercase', color: 'var(--text)', margin: 0 }}>Backlog</h2>
-                  <span style={{ fontFamily: 'var(--sans)', fontSize: 10, background: 'var(--s2)', color: 'var(--t3)', padding: '2px 6px', borderRadius: 3 }}>
-                    {filteredBacklog.length}
-                  </span>
-                </div>
-
-                {/* Search */}
-                <input
-                  type="text"
-                  placeholder="Search backlog..."
-                  value={search}
-                  onChange={e => setSearch(e.target.value)}
-                  onFocus={() => setSearchFocused(true)}
-                  onBlur={() => setSearchFocused(false)}
-                  style={{
-                    width: '100%', boxSizing: 'border-box', background: 'var(--s2)',
-                    border: searchFocused ? '1px solid var(--yellow)' : '1px solid var(--b2)',
-                    borderRadius: 6, padding: '8px 12px', fontFamily: 'var(--sans)', fontSize: 11,
-                    color: 'var(--text)', outline: 'none', marginBottom: 12
-                  }}
-                />
-
-                <div
-                  onDragOver={e => { if (isAdminLead) { e.preventDefault(); setDragOverBacklog(true); } }}
-                  onDragLeave={() => setDragOverBacklog(false)}
-                  onDrop={handleDropToBacklog}
-                  style={{
-                    minHeight: 192, borderRadius: 6, transition: 'background 0.15s, border-color 0.15s',
-                    overflowY: 'auto', maxHeight: 384, padding: 8,
-                    ...(dragOverBacklog
-                      ? { border: '1px dashed var(--b3)', background: 'var(--s2)' }
-                      : { border: '1px solid var(--b1)', background: 'var(--s1)' }
-                    )
-                  }}
-                >
-                  {filteredBacklog.length === 0 ? (
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '40px 0' }}>
-                      <p style={{ fontFamily: 'var(--sans)', color: 'var(--b2)', fontSize: 10 }}>
-                        {search ? 'No matching tasks' : 'Backlog is empty'}
-                      </p>
-                    </div>
-                  ) : (
-                    filteredBacklog.map(task => (
-                      <div
-                        key={task.id}
-                        draggable={isAdminLead && !!activeSprint}
-                        onDragStart={e => handleDragFromBacklog(e, task)}
-                        style={isAdminLead && activeSprint ? { cursor: 'grab' } : {}}
-                      >
-                        <TaskRow
-                          task={task}
-                          highlighted={highlightedTaskId === task.id}
-                          actions={isAdminLead && activeSprint ? (
-                            <AddButton onClick={() => setPendingAdd({ task, sprint_id: activeSprint.id })} />
-                          ) : null}
-                        />
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            </div>
-          </>
-        )}
-
-        {/* Due date modal */}
-        {pendingAdd && (
-          <>
-            <div
-              style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 40 }}
-              onClick={() => setPendingAdd(null)}
-            />
-            <div style={{
-              position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-              background: 'var(--s1)', border: '1px solid var(--b2)', borderRadius: 8,
-              padding: 24, zIndex: 50, width: 320
-            }}>
-              <h3 style={{ fontFamily: 'var(--head)', fontSize: 13, fontWeight: 700, letterSpacing: '.15em', textTransform: 'uppercase', color: 'var(--text)', margin: 0, marginBottom: 4 }}>Add to Sprint</h3>
-              <p style={{ fontFamily: 'var(--sans)', color: 'var(--t3)', fontSize: 10, marginBottom: 16, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{pendingAdd.task.title}</p>
-              <div style={{ marginBottom: 16 }}>
-                <label style={{ display: 'block', fontFamily: 'var(--sans)', fontSize: 11, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 6, fontWeight: 500 }}>Due Date (optional)</label>
-                <input
-                  type="date"
-                  value={dueDate}
-                  onChange={e => setDueDate(e.target.value)}
-                  min={activeSprint?.start_date}
-                  max={activeSprint?.end_date}
-                  style={{
-                    width: '100%', boxSizing: 'border-box', background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 6,
-                    padding: '8px 12px', fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--text)', outline: 'none'
-                  }}
-                />
-              </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button
-                  onClick={() => addToSprint(pendingAdd.task, pendingAdd.sprint_id, dueDate)}
-                  style={{
-                    flex: 1, background: '#F2CD1A', color: 'var(--fg-accent)', fontFamily: 'var(--head)', fontWeight: 700,
-                    fontSize: 11, letterSpacing: '.15em', textTransform: 'uppercase',
-                    padding: '8px 0', borderRadius: 6, border: 'none', cursor: 'pointer'
-                  }}
-                >
-                  Add to Sprint
-                </button>
-                <button
-                  onClick={() => { setPendingAdd(null); setDueDate(''); }}
-                  style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', background: 'none', border: 'none', cursor: 'pointer', padding: '8px 16px' }}
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </>
-        )}
-
-        {sprintSearchOpen && (() => {
-          const q = sprintSearchQuery.trim().toLowerCase();
-          const matchFn = t =>
-            !q ||
-            t.title.toLowerCase().includes(q) ||
-            t.product_code?.toLowerCase().includes(q);
-          const sprintMatches = q ? sprintTasks.filter(matchFn) : [];
-          const backlogMatches = q ? backlogTasks.filter(matchFn) : [];
-          const totalResults = sprintMatches.length + backlogMatches.length;
-
-          const renderRow = (t, source) => {
-            const stage = getStageConfig(t.stage);
-            const taskId = getSprintTaskId(t);
-            const isSprint = source === 'sprint';
+        <div style={{ padding: '8px 16px 14px' }}>
+          {CAPACITY.map((c, i) => {
+            const u = teamById[c.id];
             return (
-              <div
-                key={`${source}-${t.id}`}
-                onClick={() => handleSearchResultClick(t)}
-                style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', cursor: 'pointer', borderBottom: '1px solid var(--b1)', transition: 'background .1s' }}
-                onMouseEnter={e => e.currentTarget.style.background = 'var(--s2)'}
-                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-              >
-                <span style={{ width: 8, height: 8, borderRadius: '50%', background: stage?.color || 'var(--t3)', flexShrink: 0 }} />
-                {taskId && (
-                  <span style={{ fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--t3)', letterSpacing: '.06em', flexShrink: 0 }}>
-                    {taskId}
-                  </span>
-                )}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <p style={{ fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--text)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.title}</p>
+              <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '9px 0', borderTop: i ? '1px solid var(--border)' : 'none' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 9, width: 168, flexShrink: 0 }}>
+                  <Avatar id={c.id} size={24} />
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 13, color: 'var(--t1)', fontWeight: 500 }}>{u.name}</div>
+                    <div className="eyebrow" style={{ padding: 0, fontSize: 8.5 }}>{u.discipline}</div>
+                  </div>
                 </div>
-                {t.due_date && (
-                  <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)', flexShrink: 0 }}>
-                    {new Date(t.due_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
-                  </span>
-                )}
-                <span style={{
-                  fontFamily: 'var(--sans)', fontSize: 11, letterSpacing: '.04em',
-                  padding: '2px 8px', borderRadius: 3, flexShrink: 0,
-                  background: isSprint ? '#F2CD1A' : 'var(--s3)',
-                  color: isSprint ? 'var(--fg-accent)' : 'var(--t2)',
-                  fontWeight: isSprint ? 600 : 400,
-                }}>
-                  {isSprint ? 'Sprint' : 'Backlog'}
-                </span>
+                <div style={{ flex: 1, position: 'relative', height: 12, borderRadius: 3, background: 'var(--surface-3)', overflow: 'hidden' }}>
+                  <div style={{ position: 'absolute', inset: 0, width: `${(c.committed / c.cap) * 100}%`, background: 'var(--p-wolf)', opacity: 0.5 }} />
+                  <div style={{ position: 'absolute', inset: 0, width: `${(c.done / c.cap) * 100}%`, background: 'var(--ok-fg)' }} />
+                </div>
+                <span className="num" style={{ fontSize: 12, color: 'var(--t2)', width: 56, textAlign: 'right' }}>{c.done}/{c.committed} · {c.cap}</span>
               </div>
             );
-          };
+          })}
+        </div>
+      </Card>
 
-          return (
-            <>
-              <div
-                onClick={() => setSprintSearchOpen(false)}
-                style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 200 }}
-              />
-              <div style={{
-                position: 'fixed', top: '20%', left: '50%', transform: 'translateX(-50%)',
-                width: '100%', maxWidth: 560, background: '#1a1a1a', border: '1px solid var(--b2)',
-                borderRadius: 10, overflow: 'hidden', zIndex: 201, boxShadow: '0 20px 60px rgba(0,0,0,0.6)',
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderBottom: '1px solid var(--b1)' }}>
-                  <span style={{ color: 'var(--t3)', fontSize: 14 }}>⌕</span>
-                  <input
-                    autoFocus
-                    type="text"
-                    placeholder="Search sprint + backlog..."
-                    value={sprintSearchQuery}
-                    onChange={e => setSprintSearchQuery(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Escape') setSprintSearchOpen(false); }}
-                    style={{ flex: 1, background: 'none', border: 'none', outline: 'none', fontFamily: 'var(--sans)', fontSize: 13, color: 'var(--text)', caretColor: '#F2CD1A' }}
-                  />
-                  <span style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--t3)' }}>/ or ESC to close</span>
+      <Card pad={0}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
+          <Icon name="calendar" size={15} style={{ color: 'var(--t3)' }} /><span className="t-h3">All sprints</span>
+        </div>
+        <div>
+          {sprints.map((s, i) => {
+            const stTone = s.status === 'active' ? 'brand' : s.status === 'planned' ? 'info' : 'ok';
+            const committedN = s.status === 'planned' && plannedIds.length ? plannedIds.length : s.committed;
+            const p = committedN ? Math.round((s.done / committedN) * 100) : 0;
+            const isPlan = s.status === 'planned';
+            return (
+              <div key={s.id} onClick={() => isPlan && setPlanning(true)} className="t-row" style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '13px 16px', borderTop: i ? '1px solid var(--border)' : 'none', cursor: 'pointer' }}>
+                <span className="num" style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14, color: 'var(--t1)', width: 56 }}>{s.shortId || s.id}</span>
+                <span className="num" style={{ fontSize: 12.5, color: 'var(--t3)', width: 130 }}>{s.range}</span>
+                <Pill tone={stTone} dot>{s.status === 'active' ? 'Active' : isPlan ? 'Planned' : 'Closed'}</Pill>
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{ flex: 1, maxWidth: 240, height: 6, borderRadius: 3, background: 'var(--bg-2)', overflow: 'hidden' }}>
+                    <div style={{ width: `${p}%`, height: '100%', background: s.status === 'active' ? 'var(--yellow)' : 'var(--ok-fg)' }} /></div>
+                  {committedN > 0 && !isPlan && <span className="num" style={{ fontSize: 11.5, color: 'var(--t3)' }}>{s.done}/{committedN}{s.spill ? ` · ${s.spill} spill` : ''}</span>}
+                  {isPlan && <span className="num" style={{ fontSize: 11.5, color: plannedIds.length ? 'var(--info-fg)' : 'var(--t4)' }}>{plannedIds.length ? `${plannedIds.length} planned · tap to edit` : 'tap to plan'}</span>}
                 </div>
-                <div style={{ maxHeight: 360, overflowY: 'auto' }}>
-                  {!q ? null : totalResults === 0 ? (
-                    <div style={{ padding: '24px 16px', textAlign: 'center', fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--t3)' }}>
-                      No tasks found
-                    </div>
-                  ) : (
-                    <>
-                      {sprintMatches.length > 0 && (
-                        <>
-                          <div style={{ padding: '8px 16px', fontFamily: 'var(--sans)', fontSize: 11, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--t3)', background: 'var(--s2)', fontWeight: 500 }}>
-                            In Sprint
-                          </div>
-                          {sprintMatches.map(t => renderRow(t, 'sprint'))}
-                        </>
-                      )}
-                      {backlogMatches.length > 0 && (
-                        <>
-                          <div style={{ padding: '8px 16px', fontFamily: 'var(--sans)', fontSize: 11, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--t3)', background: 'var(--s2)', fontWeight: 500 }}>
-                            Backlog
-                          </div>
-                          {backlogMatches.map(t => renderRow(t, 'backlog'))}
-                        </>
-                      )}
-                    </>
-                  )}
-                </div>
-                <div style={{ padding: '8px 16px', borderTop: '1px solid var(--b1)' }}>
-                  <span style={{ fontFamily: 'var(--sans)', fontSize: 10, color: 'var(--t3)' }}>
-                    {q
-                      ? `${totalResults} result${totalResults === 1 ? '' : 's'}`
-                      : `${sprintTasks.length} sprint · ${backlogTasks.length} backlog — type to filter`}
-                  </span>
-                </div>
+                <Icon name="chevronRight" size={15} style={{ color: 'var(--t4)' }} />
               </div>
-            </>
-          );
-        })()}
-      </div>
-    </Layout>
+            );
+          })}
+        </div>
+      </Card>
+    </div>
   );
+}
+
+export default function SprintsPage() {
+  return <AppShell route="sprints"><SprintsScreen /></AppShell>;
 }
