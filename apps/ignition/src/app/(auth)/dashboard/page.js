@@ -5,6 +5,7 @@ import { useAuth } from '@throttle/auth';
 import { KpiCard, Spinner, useToast } from '@throttle/ui';
 import { AlertTriangle } from 'lucide-react';
 import { ignitionopsGet, ignitionopsPost } from '../../../lib/ignitionopsFetch.js';
+import { STAGE_LABELS } from '../../../lib/stages.js';
 
 const OVERDUE_DAYS = 7;
 
@@ -51,7 +52,7 @@ export default function DashboardPage() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12, maxWidth: 1100 }}>
         <KpiCard label="Active" value={kpis.active} />
         <KpiCard label="Live" value={kpis.live} accent="#FF6B00" />
-        <KpiCard label="Closed" value={kpis.closed} />
+        <KpiCard label="Completed" value={kpis.closed} />
         <KpiCard label="Ghosted" value={kpis.ghosted} accent="#ff7070" />
         <KpiCard label={`Overdue posts (>${OVERDUE_DAYS}d)`} value={kpis.overdue ?? 0} accent={kpis.overdue > 0 ? '#ff7070' : undefined} />
         <KpiCard label="Total views" value={(kpis.engagement_totals?.views ?? 0).toLocaleString()} />
@@ -113,7 +114,7 @@ export default function DashboardPage() {
                   <td style={td}><span style={{ color: '#FF6B00', fontWeight: 600 }}>{e.engagement_no}</span></td>
                   <td style={td}>{e.influencer?.channel_name || e.influencer?.person_name || e.influencer?.influencer_code || '—'}</td>
                   <td style={td}>{e.product_code || '—'}{e.product_variant ? ` · ${e.product_variant}` : ''}</td>
-                  <td style={td}>{e.stage}</td>
+                  <td style={td}>{STAGE_LABELS[e.stage] || e.stage}</td>
                   <td style={td}>{e.expected_post_date || '—'}</td>
                   <td style={{ ...td, color: '#ff7070', fontWeight: 600 }}>{e.days_overdue != null ? `${e.days_overdue}d` : '—'}</td>
                   <td style={td}><RatingDot rating={e.influencer?.quality_rating} /></td>

@@ -9,11 +9,11 @@ import DealTypeBadge from '../../../components/DealTypeBadge.js';
 import { STAGE_VALUES, STAGE_LABELS } from '../../../lib/stages.js';
 
 const TABS = [
-  { id: 'all',    label: 'All',      filter: null },
-  { id: 'live',   label: 'Live',     filter: 'live' },
-  { id: 'shipped',label: 'Shipped',  filter: 'shipped' },
-  { id: 'script', label: 'Script',   filter: 'script_review' },
-  { id: 'closed', label: 'Closed',   filter: 'closed' },
+  { id: 'all',       label: 'All',       filter: null },
+  { id: 'live',      label: 'Live',      filter: 'live' },
+  { id: 'posting',   label: 'Posting',   filter: 'posting' },
+  { id: 'delivered', label: 'Delivered', filter: 'delivered' },
+  { id: 'completed', label: 'Completed', filter: 'completed' },
 ];
 
 export default function EngagementsPage() {

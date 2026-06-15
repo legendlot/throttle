@@ -240,35 +240,20 @@ function requirePerm(perm, auth) {
 
 // ── Stage state machine ────────────────────────────────────────────────────
 
+// Stage model (Reann #8, S138). Free transitions — any stage to any other.
+// Main flow then side/terminal states; order here drives picker/stepper order.
 const STAGES = [
-  'identified','invited','engaged','negotiating','agreed',
-  'shipped','delivered','script_review','script_signed_off',
-  'scheduled','live','tracking','closed',
-  'declined','ghosted','dropped',
+  'planning','agreed','shipped','delivered','scheduled','posting','live','completed',
+  'delayed','on_hold','ghosted','dropped',
 ];
 
-const TERMINAL_FAIL = new Set(['declined','ghosted','dropped']);
+// Terminal stages — entering one stamps closed_at + closed_reason.
+const TERMINAL_FAIL = new Set(['ghosted','dropped']);
+const TERMINAL = new Set(['completed','ghosted','dropped']);
 
+// Free model: from any stage you may move to any other (terminals reopenable).
 function allowedTransitions(stage) {
-  switch (stage) {
-    case 'identified':         return ['invited','declined','dropped'];
-    case 'invited':            return ['engaged','ghosted','declined'];
-    case 'engaged':            return ['negotiating','ghosted','declined'];
-    case 'negotiating':        return ['agreed','declined','dropped'];
-    case 'agreed':             return ['shipped','dropped'];
-    case 'shipped':            return ['delivered','dropped'];
-    case 'delivered':          return ['script_review','dropped'];
-    case 'script_review':      return ['script_signed_off','dropped'];
-    case 'script_signed_off':  return ['scheduled','dropped'];
-    case 'scheduled':          return ['live','dropped'];
-    case 'live':               return ['tracking','dropped'];
-    case 'tracking':           return ['closed'];
-    case 'closed':             return [];
-    case 'declined':
-    case 'ghosted':
-    case 'dropped':            return ['closed'];
-    default:                   return [];
-  }
+  return STAGES.filter(s => s !== stage);
 }
 
 // ── Util ────────────────────────────────────────────────────────────────────
@@ -529,7 +514,7 @@ async function getRoster(url, auth, env) {
   );
   if (!r.ok) return err('db_error', 500);
   // Roster = influencers with at least one engagement in shipped+ stages.
-  const PROGRESSED = new Set(['shipped','delivered','script_review','script_signed_off','scheduled','live','tracking','closed']);
+  const PROGRESSED = new Set(['shipped','delivered','scheduled','posting','live','completed']);
   const rows = (r.data || []).filter(i => (i.engagements || []).some(e => PROGRESSED.has(e.stage)));
   return ok({ roster: rows, offset, limit });
 }
@@ -559,7 +544,7 @@ async function getDiscountCodes(url, auth, env) {
 function campaignRollup(c) {
   const engs = c.engagements || [];
   const num = v => Number(v) || 0;
-  const POSTED = new Set(['live', 'tracking', 'closed']);
+  const POSTED = new Set(['posting', 'live', 'completed']);
   const spend = engs.reduce((s, e) => s + (e.total_cost != null ? num(e.total_cost) : num(e.payment_amount)), 0);
   return {
     linked_count: engs.length,
@@ -619,11 +604,13 @@ async function getKpis(url, auth, env) {
     const m = cr.match(/\/(\d+)$/);
     return m ? Number(m[1]) : 0;
   }
-  const ACTIVE = "stage=in.(invited,engaged,negotiating,agreed,shipped,delivered,script_review,script_signed_off,scheduled,live,tracking)";
+  // Active = anything not terminal (completed/ghosted/dropped), incl. delayed/on_hold.
+  const ACTIVE = "stage=in.(planning,agreed,shipped,delivered,scheduled,posting,live,delayed,on_hold)";
+  // `closed` KPI now counts Completed deals (frontend key kept for compat).
   const [active, live, closed, ghosted, overdue] = await Promise.all([
     count(ACTIVE),
     count('stage=eq.live'),
-    count('stage=eq.closed'),
+    count('stage=eq.completed'),
     count('stage=eq.ghosted'),
     count(overdueFilter()),
   ]);
@@ -660,7 +647,9 @@ async function getKpis(url, auth, env) {
 // than `days` and it still hasn't gone live (no post_date, not in a posted/
 // terminal stage). Drives the dashboard signal + the flagOverdueRatings sweep.
 const OVERDUE_DEFAULT_DAYS = 7;
-const POSTED_OR_TERMINAL = ['live', 'tracking', 'closed', 'declined', 'ghosted', 'dropped'];
+// Don't flag as overdue if it's already posting/posted/done, terminal, or
+// deliberately paused/late (on_hold/delayed) — the team already knows about those.
+const POSTED_OR_TERMINAL = ['posting', 'live', 'completed', 'ghosted', 'dropped', 'on_hold', 'delayed'];
 
 function overdueCutoffDate(days) {
   const n = Number(days) || OVERDUE_DEFAULT_DAYS;
@@ -1109,10 +1098,11 @@ async function createEngagement(body, auth, env) {
   const eno = await mintEngagementNo(env);
   if (!eno) return err('failed_to_mint_engagement_no', 500);
 
+  const startStage = STAGES.includes(body.stage) ? body.stage : 'planning';
   const row = {
     engagement_no: eno,
     influencer_id: body.influencer_id,
-    stage: 'identified',
+    stage: startStage,
     created_by: auth.userId,
   };
   for (const k of ENGAGEMENT_FIELDS) if (k in body) row[k] = body[k];
@@ -1123,7 +1113,7 @@ async function createEngagement(body, auth, env) {
   });
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
   const eng = r.data?.[0];
-  await writeHistory(env, eng.id, 'create', null, 'identified', null, auth.userId);
+  await writeHistory(env, eng.id, 'create', null, startStage, null, auth.userId);
   return ok({ engagement_no: eno, id: eng.id });
 }
 
@@ -1158,9 +1148,14 @@ async function advanceStage(body, auth, env) {
   }
 
   const patch = { stage: body.to_stage, updated_at: nowIso() };
-  if (body.to_stage === 'closed') {
+  if (TERMINAL.has(body.to_stage)) {
     patch.closed_at = nowIso();
-    patch.closed_reason = body.closed_reason || (TERMINAL_FAIL.has(from) ? from : 'completed');
+    patch.closed_reason = body.closed_reason
+      || (TERMINAL_FAIL.has(body.to_stage) ? body.to_stage : 'completed');
+  } else {
+    // Moving back out of a terminal stage reopens the deal.
+    patch.closed_at = null;
+    patch.closed_reason = null;
   }
   // Allow incidental field updates in the same call (e.g. video_link on go-live).
   const extra = pickPatch(body, ENGAGEMENT_FIELDS);
@@ -1177,7 +1172,8 @@ async function advanceStage(body, auth, env) {
 }
 
 async function closeEngagement(body, auth, env) {
-  body.to_stage = 'closed';
+  // Default close = Completed; caller can pass to_stage ghosted/dropped instead.
+  if (!TERMINAL.has(body.to_stage)) body.to_stage = 'completed';
   return advanceStage(body, auth, env);
 }
 

@@ -1,14 +1,15 @@
 'use client';
-import { HAPPY_PATH, STAGE_LABELS, TERMINAL_FAIL } from '../lib/stages.js';
+import { HAPPY_PATH, STAGE_LABELS, STAGE_PALETTE } from '../lib/stages.js';
 
 /**
- * Linear stepper for the engagement happy path.
- * If current stage is a terminal failure, shows the path up to where it diverged
- * plus a red node.
+ * Stepper for the engagement happy path (Planning→…→Completed).
+ * A current stage that's off the happy path (Delayed / On hold / Ghosted /
+ * Dropped) is shown as a trailing badge in its own palette colour.
  */
 export default function StageStepper({ stage }) {
-  const isFail = TERMINAL_FAIL.has(stage);
   const currentIdx = HAPPY_PATH.indexOf(stage);
+  const offPath = currentIdx < 0;
+  const pal = STAGE_PALETTE[stage] || { fg: 'var(--text-2)', bg: 'var(--surface-2)' };
   return (
     <div style={{
       display: 'flex',
@@ -38,7 +39,7 @@ export default function StageStepper({ stage }) {
           </span>
         );
       })}
-      {isFail && (
+      {offPath && (
         <span style={{
           padding: '4px 10px',
           fontSize: 11,
@@ -46,13 +47,13 @@ export default function StageStepper({ stage }) {
           fontWeight: 700,
           letterSpacing: '0.04em',
           textTransform: 'uppercase',
-          color: 'var(--state-error-fg)',
-          background: 'var(--state-error-bg)',
-          border: '1px solid var(--state-error-fg)',
+          color: pal.fg,
+          background: pal.bg,
+          border: `1px solid ${pal.fg}`,
           borderRadius: 'var(--radius-sm)',
           marginLeft: 'var(--space-2)',
         }}>
-          {STAGE_LABELS[stage]}
+          {STAGE_LABELS[stage] || stage}
         </span>
       )}
     </div>
