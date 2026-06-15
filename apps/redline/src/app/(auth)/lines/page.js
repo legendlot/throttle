@@ -72,10 +72,18 @@ function LineCard({ l, crMap }) {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 12 }}>
           {FUNNEL.map(f => {
             const v = counts[f.key];
+            // INW cell big value is the car count (crMap INW:car); show the inwarded
+            // remote count beneath it so the floor can track the remote stations
+            // (Mrudula 06-15). Other cells unchanged.
+            const isInw = f.key === 'inw';
+            const rmt = isInw ? crMap[`${l.line}:INW:remote`] : undefined;
             return (
               <div key={f.key} style={{ background: 'var(--surface-2)', borderRadius: 'var(--r-sm)', padding: '9px 10px', borderTop: `2px solid ${f.color}` }}>
                 <div className="eyebrow">{f.label}</div>
-                <div className="num" style={{ fontSize: 17, fontWeight: 700, color: 'var(--t1)', marginTop: 4 }}>{fmt(v)}</div>
+                <div className="num" style={{ fontSize: 17, fontWeight: 700, color: 'var(--t1)', marginTop: 4 }}>{fmt(v)}{isInw ? <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--t4)', marginLeft: 4 }}>car</span> : null}</div>
+                {isInw && (
+                  <div className="num" style={{ fontSize: 12, fontWeight: 600, color: 'var(--t3)', marginTop: 2 }}>{fmt(rmt != null ? rmt : 0)}<span style={{ fontSize: 10, fontWeight: 600, color: 'var(--t4)', marginLeft: 4 }}>rmt</span></div>
+                )}
                 <div style={{ height: 3, borderRadius: 2, background: 'var(--bg-2)', marginTop: 6, overflow: 'hidden' }}>
                   <div style={{ height: '100%', width: `${(v / maxFunnel) * 100}%`, background: f.color, borderRadius: 2 }} />
                 </div>
