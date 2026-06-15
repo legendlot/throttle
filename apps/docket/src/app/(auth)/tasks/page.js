@@ -239,6 +239,19 @@ export default function TasksPage() {
   // Publish the active board count to the topbar; clear it when leaving the board.
   useEffect(() => { setCount?.(activeTop.length); return () => setCount?.(null); }, [activeTop.length, setCount]);
 
+  // Program mode: smart default space for new tasks = the space this program already lives
+  // in most (programs live in private spaces; General is rarely used). Falls back to General.
+  const programDefaultSpace = useMemo(() => {
+    if (!inProgramMode) return '';
+    const counts = {};
+    for (const t of tasks) { if (t.space_id) counts[t.space_id] = (counts[t.space_id] || 0) + 1; }
+    let best = '', n = -1;
+    for (const [sid, c] of Object.entries(counts)) { if (c > n) { n = c; best = sid; } }
+    if (best) return best;
+    const general = spaces.find(s => !s.is_private);
+    return general ? general.id : (spaces[0]?.id || '');
+  }, [inProgramMode, tasks, spaces]);
+
   const groups = useMemo(() => {
     if (groupBy === 'none') return [{ key: 'all', label: null, rows: boardRows }];
     const keyOf = (t) => groupBy === 'person' ? (t.owner_name || 'Unassigned')
@@ -300,7 +313,9 @@ export default function TasksPage() {
         </div>
       )}
 
-      {!inProgramMode && <QuickCapture session={session} spaceId={spaceId} onCreated={load} showToast={showToast} />}
+      {inProgramMode
+        ? <ProgramCapture session={session} programId={viewProgramId} spaces={spaces} defaultSpaceId={programDefaultSpace} onCreated={load} showToast={showToast} />
+        : <QuickCapture session={session} spaceId={spaceId} onCreated={load} showToast={showToast} />}
 
       <div className="toolbar">
         <div className="search">
@@ -826,6 +841,43 @@ function QuickCapture({ session, spaceId, onCreated, showToast }) {
         onKeyDown={e => { if (e.key === 'Enter') add(); }}
         placeholder="Capture a task. Type a title, press Enter — it lands in The Grid to finish later.   ( c )"
         disabled={saving} />
+      <button className="go" onClick={add} disabled={!title.trim() || saving}>{saving ? '…' : 'Add'}</button>
+    </div>
+  );
+}
+
+/* ---------------- Program quick capture (auto-tags the program) ---------------- */
+function ProgramCapture({ session, programId, spaces, defaultSpaceId, onCreated, showToast }) {
+  const [title, setTitle] = useState('');
+  const [spaceId, setSpaceId] = useState(defaultSpaceId || '');
+  const [saving, setSaving] = useState(false);
+  const ref = useRef(null);
+  // Re-sync the default space once the program's tasks load (default is computed from them).
+  useEffect(() => { setSpaceId(prev => prev || defaultSpaceId || ''); }, [defaultSpaceId]);
+  async function add() {
+    const t = title.trim();
+    if (!t || saving) return;
+    setSaving(true);
+    try {
+      await docketopsPost('createTask', { title: t, space_id: spaceId || undefined, program_id: programId }, session);
+      setTitle('');
+      await onCreated();
+      if (typeof window !== 'undefined') window.dispatchEvent(new Event('docket:programs-changed')); // refresh sidebar count
+      showToast('Added to program', 'success');
+      ref.current?.focus();
+    } catch (e) { showToast(e.message || 'Create failed', 'error'); }
+    finally { setSaving(false); }
+  }
+  return (
+    <div className="capture">
+      <Plus className="plus" />
+      <input ref={ref} data-create-primary value={title} onChange={e => setTitle(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') add(); }}
+        placeholder="Add a task to this program. Type a title, press Enter — it's tagged automatically.   ( c )"
+        disabled={saving} />
+      <select className="capture-space" value={spaceId} onChange={e => setSpaceId(e.target.value)} title="Space this task lives in" disabled={saving}>
+        {spaces.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+      </select>
       <button className="go" onClick={add} disabled={!title.trim() || saving}>{saving ? '…' : 'Add'}</button>
     </div>
   );

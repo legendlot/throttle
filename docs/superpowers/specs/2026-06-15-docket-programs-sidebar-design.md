@@ -108,8 +108,11 @@ public`.
   - Render an extra **Space** column (rows span spaces); header shows the program name + count.
   - Hide space-only chrome (New-space, SpaceSettings, space-dashboard button) and the now-redundant
     **Program** filter in Manage. All **other** Manage filters + group-by + client-side search still work.
-  - Hide inline **Quick-capture** in program mode (tasks are created inside a space, then tagged) — keeps
-    the cross-space aggregation read-clean.
+  - **Quick-capture in program mode auto-tags the program** (S138 follow-up). The capture bar gains a compact
+    **space picker** defaulting to the program's most-common existing space (computed client-side from the
+    loaded rows; General if the program is brand-new), since a task must live in exactly one space. Type a
+    title → `createTask({ title, space_id, program_id })` (worker access-checks the chosen space). Fires
+    `docket:programs-changed` to refresh the sidebar count.
   - Still publish the visible task count to the topbar (existing `lib/chrome.js` bridge).
   - Fire `docket:programs-changed` after a successful inline program-create (so a brand-new program lands
     in the sidebar) — this is additive to the existing `createAndAssignProgram` path.

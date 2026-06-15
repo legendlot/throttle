@@ -307,6 +307,8 @@ button { cursor: pointer; background: none; border: none; }
 .capture .go:hover { filter: brightness(1.06); }
 .capture .go:active { transform: scale(.97); }
 .capture .go:disabled { opacity: .4; cursor: default; }
+.capture .capture-space { flex-shrink: 0; max-width: 170px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text-2); font-size: 12px; padding: 7px 8px; cursor: pointer; outline: none; }
+.capture .capture-space:focus { border-color: var(--accent-line); }
 
 /* ============================================================
    THE GRID — triage zone
