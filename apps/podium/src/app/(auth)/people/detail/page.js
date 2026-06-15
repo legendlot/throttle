@@ -75,6 +75,7 @@ export default function PersonDetailPage() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 14, alignItems: 'start' }}>
           <Card title="Employment">
             <KV k="Job role" v={e.job_role?.title} />
+            <KV k="Grade" v={e.job_role?.level} />
             <KV k="Manager" v={e.manager?.full_name} />
             <KV k="Type" v={labelOf(EMPLOYMENT_TYPES, e.employment_type)} />
             <KV k="Legal entity" v={e.legal_entity} />
