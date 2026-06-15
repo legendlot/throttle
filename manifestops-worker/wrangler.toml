@@ -1,0 +1,19 @@
+name = "manifestops"
+main = "src/index.js"
+compatibility_date = "2026-05-28"
+workers_dev = true
+
+# Manifest — LOT ↔ Solve Factory China-import operating system worker.
+# service_role on the SAME Supabase project as lotopsproxy/snorkelops. Owns the
+# `manifest` schema (orders, shipments, charges, money engine, fx, documents) and
+# is the ONLY DB client for the Manifest app. The single cross-schema WRITE is the
+# Snorkel projection into store.purchase_orders + store.po_lines (source='China').
+# No cross-worker calls.
+
+# Daily FX cron — pulls a CNY→INR reference rate into manifest.fx_rates (source='auto').
+# 02:00 UTC = 07:30 IST. Reference only; the actual bank rate is entered manually.
+[triggers]
+crons = ["0 2 * * *"]
+
+# Secrets set via `wrangler secret put` — never stored in this file:
+# SUPABASE_SERVICE_KEY   (Supabase service_role key — same project as lotopsproxy)
