@@ -794,6 +794,65 @@ async function deleteInfluencer(body, auth, env) {
   return ok({ deleted: body.id });
 }
 
+// ── Slice C — influencer growth history (manual periodic reach snapshots) ─────
+
+async function getInfluencerMetrics(url, auth, env) {
+  const id = url.searchParams.get('id');
+  if (!id) return err('id required', 400);
+  const r = await sb(
+    `/rest/v1/influencer_metrics_history?influencer_id=eq.${id}&select=*&order=captured_on.asc`,
+    env,
+  );
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
+  return ok({ metrics: r.data || [] });
+}
+
+// Upsert one dated reach snapshot (one per influencer per day) and keep the
+// influencer's current `reach` synced to its latest-dated snapshot.
+async function addMetricSnapshot(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!body.influencer_id) return err('influencer_id required', 400);
+  if (!body.captured_on) return err('captured_on required', 400);
+  const reach = (body.reach === '' || body.reach == null) ? null : Math.round(Number(body.reach));
+  if (reach != null && !Number.isFinite(reach)) return err('valid reach required', 400);
+
+  const row = {
+    influencer_id: body.influencer_id,
+    captured_on: body.captured_on,
+    reach,
+    note: body.note || null,
+    created_by: auth.userId,
+  };
+  const r = await sb(`/rest/v1/influencer_metrics_history?on_conflict=influencer_id,captured_on`, env, {
+    method: 'POST',
+    body: JSON.stringify([row]),
+    prefer: 'resolution=merge-duplicates,return=representation',
+  });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+
+  const latest = await sb(
+    `/rest/v1/influencer_metrics_history?influencer_id=eq.${body.influencer_id}&reach=not.is.null&select=reach&order=captured_on.desc&limit=1`,
+    env,
+  );
+  const top = latest.data?.[0];
+  if (top && top.reach != null) {
+    await sb(`/rest/v1/influencers?id=eq.${body.influencer_id}`, env, {
+      method: 'PATCH',
+      body: JSON.stringify({ reach: top.reach, updated_at: nowIso() }),
+      prefer: 'return=minimal',
+    });
+  }
+  return ok(r.data?.[0]);
+}
+
+async function deleteMetricSnapshot(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!body.id) return err('id required', 400);
+  const r = await sb(`/rest/v1/influencer_metrics_history?id=eq.${body.id}`, env, { method: 'DELETE', prefer: 'return=minimal' });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  return ok({ deleted: body.id });
+}
+
 async function getPayments(url, auth, env) {
   const r = await sb(
     `/rest/v1/payments?select=*,influencer:influencer_id(influencer_code,channel_name,person_name),engagement:engagement_id(engagement_no,product_code)&order=paid_on.desc,created_at.desc&limit=2000`,
@@ -1485,6 +1544,7 @@ const GET_ACTIONS = {
   getCatalogs,
   getLocations,
   getPaymentProofUrl,
+  getInfluencerMetrics,
   getMe,
   searchShopifyCustomer,
   getInfluencerShopify,
@@ -1510,6 +1570,8 @@ const POST_ACTIONS = {
   addPayment,
   deletePayment,
   createPaymentProofUploadUrl,
+  addMetricSnapshot,
+  deleteMetricSnapshot,
   upsertMonthlyTarget,
 };
 

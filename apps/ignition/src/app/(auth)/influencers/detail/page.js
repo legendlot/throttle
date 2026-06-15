@@ -232,10 +232,152 @@ export default function InfluencerDetailPage() {
             )}
           </Card>
 
+          <GrowthCard inf={inf} session={session} canManage={canManage} onChanged={reload} />
+
           <ShopifyCard inf={inf} session={session} />
         </div>
       </div>
     </div>
+  );
+}
+
+// Slice C — manual reach/growth history. Sparkline + dated snapshots + add form.
+function GrowthCard({ inf, session, canManage, onChanged }) {
+  const { toast } = useToast();
+  const [metrics, setMetrics] = useState(null);
+  const [form, setForm] = useState({ captured_on: '', reach: '', note: '' });
+  const [busy, setBusy] = useState(false);
+
+  function load() {
+    if (!session || !inf?.id) return;
+    ignitionopsGet('getInfluencerMetrics', { id: inf.id }, session)
+      .then(r => setMetrics(r.metrics || [])).catch(() => setMetrics([]));
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(load, [inf?.id, session]);
+
+  async function add() {
+    if (!form.captured_on) { toast('Pick a date', 'error'); return; }
+    if (form.reach === '' || isNaN(Number(form.reach))) { toast('Enter a reach number', 'error'); return; }
+    setBusy(true);
+    try {
+      await ignitionopsPost('addMetricSnapshot', {
+        influencer_id: inf.id,
+        captured_on: form.captured_on,
+        reach: Number(form.reach),
+        note: form.note || undefined,
+      }, session);
+      toast('Snapshot saved', 'success');
+      setForm({ captured_on: '', reach: '', note: '' });
+      load();
+      onChanged && onChanged();   // refresh parent so current reach updates
+    } catch (e) { toast(e.message, 'error'); }
+    finally { setBusy(false); }
+  }
+
+  async function remove(id) {
+    if (!window.confirm('Delete this snapshot?')) return;
+    try {
+      await ignitionopsPost('deleteMetricSnapshot', { id }, session);
+      toast('Snapshot removed', 'success'); load(); onChanged && onChanged();
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  const rows = metrics || [];
+  const withReach = rows.filter(m => m.reach != null);
+  const first = withReach[0]?.reach;
+  const last = withReach[withReach.length - 1]?.reach;
+  const growthPct = (first != null && last != null && first > 0) ? Math.round(((last - first) / first) * 100) : null;
+
+  return (
+    <Card title="Growth (reach over time)">
+      {metrics == null ? (
+        <div style={{ color: 'var(--text-3)', fontSize: 13 }}>Loading…</div>
+      ) : (
+        <>
+          {withReach.length >= 2 ? (
+            <>
+              <Sparkline points={withReach.map(m => Number(m.reach))} />
+              <div style={{ display: 'flex', gap: 16, margin: '8px 0 4px', fontSize: 12, color: 'var(--text-3)' }}>
+                <span>From <b style={{ color: 'var(--text-1)' }}>{first.toLocaleString()}</b> → <b style={{ color: 'var(--text-1)' }}>{last.toLocaleString()}</b></span>
+                {growthPct != null && (
+                  <span style={{ color: growthPct >= 0 ? 'var(--state-success-fg)' : 'var(--state-error-fg)', fontWeight: 700 }}>
+                    {growthPct >= 0 ? '▲' : '▼'} {Math.abs(growthPct)}%
+                  </span>
+                )}
+              </div>
+            </>
+          ) : (
+            <div style={{ color: 'var(--text-3)', fontSize: 13, marginBottom: 8 }}>
+              {withReach.length === 1 ? 'One snapshot so far — add another to see the trend.' : 'No snapshots yet.'}
+            </div>
+          )}
+
+          {rows.length > 0 && (
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginTop: 4 }}>
+              <thead>
+                <tr style={{ background: 'var(--surface-2)', textAlign: 'left' }}>
+                  <th style={th}>Date</th><th style={{ ...th, textAlign: 'right' }}>Reach</th>
+                  <th style={{ ...th, textAlign: 'right' }}>Δ</th><th style={th}>Note</th><th style={th} />
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((m, i) => {
+                  const prev = i > 0 ? rows[i - 1].reach : null;
+                  const delta = (m.reach != null && prev != null) ? m.reach - prev : null;
+                  return (
+                    <tr key={m.id} style={{ borderTop: '1px solid var(--border)' }}>
+                      <td style={{ ...td, whiteSpace: 'nowrap' }}>{m.captured_on}</td>
+                      <td style={{ ...td, textAlign: 'right' }}>{m.reach != null ? m.reach.toLocaleString() : '—'}</td>
+                      <td style={{ ...td, textAlign: 'right', color: delta == null ? 'var(--text-3)' : delta >= 0 ? 'var(--state-success-fg)' : 'var(--state-error-fg)' }}>
+                        {delta == null ? '—' : `${delta >= 0 ? '+' : ''}${delta.toLocaleString()}`}
+                      </td>
+                      <td style={{ ...td, color: 'var(--text-3)' }}>{m.note || '—'}</td>
+                      <td style={{ ...td, textAlign: 'right' }}>
+                        {canManage && (
+                          <button onClick={() => remove(m.id)} title="Remove" style={{ background: 'transparent', border: 'none', color: 'var(--text-3)', cursor: 'pointer' }}>
+                            <Trash2 size={13} />
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+
+          {canManage && (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 12 }}>
+              <input type="date" value={form.captured_on} onChange={e => setForm(f => ({ ...f, captured_on: e.target.value }))} style={growthInp(140)} title="Snapshot date" />
+              <input type="number" placeholder="Reach" value={form.reach} onChange={e => setForm(f => ({ ...f, reach: e.target.value }))} style={growthInp(110)} />
+              <input placeholder="Note (optional)" value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))} style={growthInp(150)} />
+              <button onClick={add} disabled={busy} style={saveBtn}>{busy ? 'Saving…' : 'Add snapshot'}</button>
+            </div>
+          )}
+        </>
+      )}
+    </Card>
+  );
+}
+
+// Minimal hand-rolled SVG line chart (no chart lib) for the reach series.
+function Sparkline({ points }) {
+  const W = 320, H = 48, pad = 4;
+  const min = Math.min(...points), max = Math.max(...points);
+  const span = max - min || 1;
+  const stepX = points.length > 1 ? (W - pad * 2) / (points.length - 1) : 0;
+  const coords = points.map((v, i) => {
+    const x = pad + i * stepX;
+    const y = H - pad - ((v - min) / span) * (H - pad * 2);
+    return [x, y];
+  });
+  const line = coords.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+  return (
+    <svg width="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ display: 'block' }}>
+      <path d={line} fill="none" stroke="#FF6B00" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+      {coords.map(([x, y], i) => <circle key={i} cx={x} cy={y} r="2.5" fill="#FF6B00" />)}
+    </svg>
   );
 }
 
@@ -402,3 +544,4 @@ const deleteBtn = {
 };
 const th = { padding: '8px 10px', fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600 };
 const td = { padding: '8px 10px' };
+const growthInp = (w) => ({ background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 9px', fontFamily: 'var(--font-mono)', fontSize: 13, width: w, boxSizing: 'border-box' });
