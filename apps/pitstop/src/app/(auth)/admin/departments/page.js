@@ -5,8 +5,14 @@ import { EmptyState, Spinner, useEscapeClose } from '@throttle/ui';
 import { Plus } from 'lucide-react';
 import { csopsGet, csopsPost } from '../../../../lib/csopsFetch.js';
 
+const CS_ROLE_TIERS = [
+  { id: 'viewer',   label: 'Viewer (no CS access)' },
+  { id: 'cs_agent', label: 'Agent' },
+  { id: 'cs_lead',  label: 'Team Lead' },
+];
+
 export default function DepartmentsPage() {
-  const { perms, session } = useAuth();
+  const { perms, session, user } = useAuth();
   const [depts, setDepts] = useState([]);
   const [agents, setAgents] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -80,14 +86,18 @@ export default function DepartmentsPage() {
 
       <section>
         <h2 style={sectionH2}>Agents</h2>
+        <p style={{ margin: '0 0 10px', color: 'var(--t3)', fontSize: 12 }}>
+          Set CS role (Viewer / Agent / Team Lead) and department. Accounts with a non-CS role
+          (e.g. admin) are managed in Garage and can&rsquo;t be changed here.
+        </p>
         <div style={cardWrap}>
           <table style={tableStyle}>
             <thead style={theadStyle}>
-              <tr><Th>Name</Th><Th>Role</Th><Th>CS Perms</Th><Th>Department</Th></tr>
+              <tr><Th>Name</Th><Th>Role</Th><Th>CS Perms</Th><Th>Set Role</Th><Th>Department</Th></tr>
             </thead>
             <tbody>
               {agents.map(a => (
-                <AgentRow key={a.id} agent={a} depts={depts} session={session} onChanged={load} />
+                <AgentRow key={a.id} agent={a} depts={depts} session={session} onChanged={load} myId={user?.id} />
               ))}
             </tbody>
           </table>
@@ -105,7 +115,7 @@ export default function DepartmentsPage() {
   );
 }
 
-function AgentRow({ agent, depts, session, onChanged }) {
+function AgentRow({ agent, depts, session, onChanged, myId }) {
   const [busy, setBusy] = useState(false);
   async function changeDept(e) {
     const id = e.target.value || null;
@@ -114,9 +124,19 @@ function AgentRow({ agent, depts, session, onChanged }) {
     catch (err) { alert(err.message); }
     finally { setBusy(false); }
   }
+  async function changeRole(e) {
+    const role = e.target.value;
+    if (role === agent.role) return;
+    setBusy(true);
+    try { await csopsPost('setCsRole', { user_id: agent.id, role }, session); onChanged(); }
+    catch (err) { alert(err.message); }
+    finally { setBusy(false); }
+  }
   const csTags = [];
   if (agent.has_cs_admin) csTags.push('admin');
   else if (agent.has_cs_manage) csTags.push('manage');
+  const isCsTier = CS_ROLE_TIERS.some(t => t.id === agent.role);
+  const isSelf = myId && agent.id === myId;
   return (
     <tr style={{ borderTop: '1px solid var(--border-1)' }}>
       <Td>{agent.full_name}</Td>
@@ -129,6 +149,16 @@ function AgentRow({ agent, depts, session, onChanged }) {
               background: 'rgba(99,102,241,0.15)', color: '#4f46e5',
             }}>{t}</span>
           ))}
+      </Td>
+      <Td>
+        {!isCsTier ? (
+          <span style={{ color: 'var(--t3)', fontSize: 12 }} title="Non-CS role — manage in Garage">Garage-managed</span>
+        ) : (
+          <select value={agent.role} onChange={changeRole} disabled={busy || isSelf}
+            title={isSelf ? "You can't change your own role" : undefined} style={select}>
+            {CS_ROLE_TIERS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+          </select>
+        )}
       </Td>
       <Td>
         <select value={agent.cs_department_id || ''} onChange={changeDept} disabled={busy} style={select}>

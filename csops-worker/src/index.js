@@ -448,6 +448,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'createDepartment':     return createDepartment(body, auth, env);
     case 'updateDepartment':     return updateDepartment(body, auth, env);
     case 'assignUserDepartment': return assignUserDepartment(body, auth, env);
+    case 'setCsRole':            return setCsRole(body, auth, env);
     case 'setMyopDefaultDepartment': return setMyopDefaultDepartment(body, auth, env);
     case 'markCalledBack':           return markCalledBack(body, auth, env);
     case 'createTicketFromCall':     return createTicketFromCall(body, auth, env);
@@ -1785,6 +1786,36 @@ async function assignUserDepartment(body, auth, env) {
     body: JSON.stringify({ cs_department_id: department_id || null }),
   });
   if (!r.ok) return err(`assign failed: ${JSON.stringify(r.data)}`, r.status);
+  return ok({ user: r.data?.[0] });
+}
+
+// CS-tier roles a lead/admin may assign in-app. Deliberately EXCLUDES admin /
+// super_admin / production_manager / store_head etc. — `users_profile.role` is
+// the single GLOBAL cross-system role, so this control can NEVER set or overwrite
+// a non-CS role (no privilege escalation outside CS). See systems/pitstop.md.
+const CS_ROLE_TIERS = ['viewer', 'cs_agent', 'cs_lead'];
+
+async function setCsRole(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;   // cs_lead + admin carry this
+  const { user_id, role } = body;
+  if (!user_id) return err('user_id required');
+  if (!CS_ROLE_TIERS.includes(role)) return err('role must be one of: viewer, cs_agent, cs_lead', 400);
+  if (user_id === auth.userId) return err('You cannot change your own role', 400);
+
+  // Guardrail: only manage accounts that are already CS-tier (or unset). Refuse to
+  // touch an account holding any other global role (admin/super_admin/etc.).
+  const cur = await sb(`/rest/v1/users_profile?id=eq.${encodeURIComponent(user_id)}&select=role,full_name&limit=1`, env);
+  if (!cur.ok || !cur.data?.[0]) return err('user not found', 404);
+  const currentRole = cur.data[0].role || 'viewer';
+  if (!CS_ROLE_TIERS.includes(currentRole)) {
+    return err(`Cannot change ${cur.data[0].full_name || 'this user'} — they hold a non-CS role (${currentRole}). Change it in Garage.`, 409);
+  }
+
+  const r = await sb(`/rest/v1/users_profile?id=eq.${encodeURIComponent(user_id)}`, env, {
+    method: 'PATCH',
+    body: JSON.stringify({ role }),
+  });
+  if (!r.ok) return err(`role update failed: ${JSON.stringify(r.data)}`, r.status);
   return ok({ user: r.data?.[0] });
 }
 
