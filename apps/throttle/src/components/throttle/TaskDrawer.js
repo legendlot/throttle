@@ -8,7 +8,7 @@ import React, { useState, useEffect } from 'react';
 import { Icon } from '@/components/throttle/Icon';
 import { Avatar, ProductTag } from '@/components/throttle/ui';
 import { STAGES, PRIORITY, DTYPE, stageByVal, teamById, taskTag } from '@/lib/throttleData';
-import { fetchTaskActivity, postComment, relAge, setTaskOwner, selfAssignOwner, abandonTask } from '@/lib/throttleApi';
+import { fetchTaskActivity, postComment, relAge, setTaskOwner, selfAssignOwner, abandonTask, submitForReview } from '@/lib/throttleApi';
 
 const toast = (msg, tone = 'ok', icon) => window.dispatchEvent(new CustomEvent('throttle:toast', { detail: { msg, tone, icon: icon || (tone === 'bad' ? 'alert' : 'check') } }));
 
@@ -30,8 +30,10 @@ export function TaskDrawer({ task, onClose, onMove, session, members = [], role,
   const [busy, setBusy] = useState(false);
   const [abandoning, setAbandoning] = useState(false);
   const [abandonReason, setAbandonReason] = useState('');
+  const [reviewing, setReviewing] = useState(false);
+  const [reviewLink, setReviewLink] = useState('');
 
-  useEffect(() => { setComment(''); setComments(null); setAbandoning(false); setAbandonReason(''); }, [task?.id]);
+  useEffect(() => { setComment(''); setComments(null); setAbandoning(false); setAbandonReason(''); setReviewing(false); setReviewLink(''); }, [task?.id]);
   useEffect(() => {
     if (!task) return;
     const onKey = e => { if (e.key === 'Escape') onClose(); };
@@ -136,6 +138,31 @@ export function TaskDrawer({ task, onClose, onMove, session, members = [], role,
     setBusy(false);
   }
 
+  // Moving INTO in_review must capture a deliverable link — open the review form
+  // instead of a bare stage move (which would skip the upload + the approval record).
+  function handleMove(id, to) {
+    if (to === 'in_review' && task.stage !== 'in_review') { setReviewing(true); return; }
+    onMove(id, to);
+  }
+
+  async function confirmReview() {
+    const link = reviewLink.trim();
+    if (!link) { toast('A work link is required to submit for review', 'bad'); return; }
+    if (busy) return;
+    if (!session) { toast('Sign in to submit for review', 'bad'); return; }
+    setBusy(true);
+    try {
+      await submitForReview(session, task.id, link);
+      toast('Submitted for review');
+      setReviewing(false); setReviewLink('');
+      onChanged?.(task.id);
+      onClose();
+    } catch (e) {
+      toast('Could not submit: ' + (e.message || 'error'), 'bad');
+    }
+    setBusy(false);
+  }
+
   return (
     <div onClick={onClose} className="t-drawer-back" style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(8,8,10,0.55)',
       display: 'flex', justifyContent: 'flex-end' }}>
@@ -194,7 +221,7 @@ export function TaskDrawer({ task, onClose, onMove, session, members = [], role,
           <div className="eyebrow" style={{ padding: 0, marginBottom: 8 }}>Move to stage</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 22 }}>
             {STAGES.map(s => (
-              <button key={s.value} onClick={() => onMove(task.id, s.value)} className="t-chip" data-on={s.value === task.stage}>
+              <button key={s.value} onClick={() => handleMove(task.id, s.value)} className="t-chip" data-on={s.value === task.stage}>
                 <span style={{ width: 6, height: 6, borderRadius: '50%', background: s.color, display: 'inline-block', marginRight: 6 }} />{s.label}
               </button>
             ))}
@@ -253,10 +280,27 @@ export function TaskDrawer({ task, onClose, onMove, session, members = [], role,
           </div>
         </div>
 
-        {actions.length > 0 && (
+        {reviewing ? (
+          <div style={{ padding: '14px 18px', borderTop: '1px solid var(--border)', flexShrink: 0 }}>
+            <div className="eyebrow" style={{ padding: 0, marginBottom: 6 }}>Submit for review</div>
+            <div style={{ fontSize: 12.5, color: 'var(--t2)', marginBottom: 8 }}>Paste the link to your finished work (Drive, Figma, etc.) — required. The lead reviews this to approve.</div>
+            <input value={reviewLink} onChange={e => setReviewLink(e.target.value)} autoFocus placeholder="https://…"
+              onKeyDown={e => { if (e.key === 'Enter') confirmReview(); }}
+              style={{ width: '100%', boxSizing: 'border-box', background: 'var(--bg-2)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-sm)',
+                padding: '9px 12px', color: 'var(--t1)', fontFamily: 'var(--font-ui)', fontSize: 13, outline: 'none' }} />
+            <div style={{ display: 'flex', gap: 8, marginTop: 9 }}>
+              <button onClick={confirmReview} disabled={busy || !reviewLink.trim()}
+                style={{ flex: 1, justifyContent: 'center', display: 'inline-flex', alignItems: 'center', gap: 7, padding: '10px 15px', borderRadius: 'var(--r-sm)',
+                  cursor: busy || !reviewLink.trim() ? 'default' : 'pointer', background: 'var(--yellow)', color: '#15140b', border: '1px solid var(--yellow)',
+                  opacity: busy || !reviewLink.trim() ? 0.5 : 1, fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 11.5, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+                <Icon name="check" size={14} />Submit for review</button>
+              <button onClick={() => { setReviewing(false); setReviewLink(''); }} className="t-chip">Cancel</button>
+            </div>
+          </div>
+        ) : actions.length > 0 && (
           <div style={{ display: 'flex', gap: 10, padding: '14px 18px', borderTop: '1px solid var(--border)', flexShrink: 0 }}>
             {actions.map(a => (
-              <button key={a.to} onClick={() => { onMove(task.id, a.to); if (a.kind === 'primary') onClose(); }} className="t-btn"
+              <button key={a.to} onClick={() => { if (a.to === 'in_review') { setReviewing(true); return; } onMove(task.id, a.to); if (a.kind === 'primary') onClose(); }} className="t-btn"
                 style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '10px 15px', borderRadius: 'var(--r-sm)', cursor: 'pointer',
                   fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 11.5, letterSpacing: '0.06em', textTransform: 'uppercase',
                   ...(a.kind === 'primary' ? { background: 'var(--yellow)', color: '#15140b', border: '1px solid var(--yellow)', flex: 1, justifyContent: 'center' }

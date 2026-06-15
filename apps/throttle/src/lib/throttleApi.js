@@ -229,6 +229,12 @@ export async function moveTaskStage(session, taskId, stage, blockedReason) {
   if (blockedReason) body.blocked_reason = blockedReason;
   return workerFetch('updateTaskStage', body, session.access_token);
 }
+// Submit work for review: records the deliverable link (required) and moves the
+// task to in_review via the worker's submitForReview (NOT a bare stage move — the
+// link is what the lead approves against).
+export async function submitForReview(session, taskId, link, label) {
+  return workerFetch('submitForReview', { task_id: taskId, attachment_url: link, attachment_label: label || 'Deliverable' }, session.access_token);
+}
 export async function addTaskToSprint(session, taskId, sprintId) {
   return workerFetch('addTaskToSprint', { task_id: taskId, sprint_id: sprintId }, session.access_token);
 }
