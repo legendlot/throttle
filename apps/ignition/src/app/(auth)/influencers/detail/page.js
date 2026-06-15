@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState, Fragment } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { ArrowLeft, ExternalLink } from 'lucide-react';
+import { ArrowLeft, ExternalLink, Trash2 } from 'lucide-react';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
 import { ignitionopsGet, ignitionopsPost } from '../../../../lib/ignitionopsFetch.js';
@@ -36,6 +36,27 @@ export default function InfluencerDetailPage() {
       toast(`Rating set to ${rating}`, 'success');
       reload();
     } catch (e) { toast(e.message, 'error'); }
+  }
+
+  async function removeInfluencer() {
+    const engCount = data?.engagements?.length || 0;
+    if (engCount > 0) {
+      if (!window.confirm(`${inf.influencer_code} has ${engCount} engagement${engCount === 1 ? '' : 's'} and can't be deleted (history is kept). Archive it instead?`)) return;
+      try {
+        await ignitionopsPost('updateInfluencer', { influencer_id: data.influencer.id, list_status: 'archived' }, session);
+        toast('Influencer archived', 'success');
+        router.push('/influencers');
+      } catch (e) { toast(e.message, 'error'); }
+      return;
+    }
+    if (!window.confirm(`Permanently delete ${inf.influencer_code}? This cannot be undone.`)) return;
+    try {
+      await ignitionopsPost('deleteInfluencer', { id: data.influencer.id }, session);
+      toast('Influencer deleted', 'success');
+      router.push('/influencers');
+    } catch (e) {
+      toast(e.message === 'has_engagements' ? "Can't delete — this influencer has engagements. Archive instead." : e.message, 'error');
+    }
   }
 
   function startEdit() {
@@ -96,10 +117,15 @@ export default function InfluencerDetailPage() {
           {inf.channel_name || inf.person_name || '(no name)'}
         </h1>
         <RatingBadge rating={inf.quality_rating} />
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
           {['green','yellow','red','unrated'].map(r => (
             <button key={r} onClick={() => setRating(r)} style={ratingBtn}>{r}</button>
           ))}
+          {canManage && (
+            <button onClick={removeInfluencer} title="Delete influencer" style={deleteBtn}>
+              <Trash2 size={13} strokeWidth={2} /> Delete
+            </button>
+          )}
         </div>
       </div>
 
@@ -364,6 +390,13 @@ const backBtn = {
 const ratingBtn = {
   padding: '4px 8px', background: 'transparent', color: 'var(--text-2)',
   border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
+  fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer',
+  textTransform: 'uppercase', letterSpacing: '0.04em',
+};
+const deleteBtn = {
+  display: 'inline-flex', alignItems: 'center', gap: 5, marginLeft: 8,
+  padding: '4px 10px', background: 'transparent', color: 'var(--state-error-fg, #e5484d)',
+  border: '1px solid var(--state-error-fg, #e5484d)', borderRadius: 'var(--radius-sm)',
   fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer',
   textTransform: 'uppercase', letterSpacing: '0.04em',
 };

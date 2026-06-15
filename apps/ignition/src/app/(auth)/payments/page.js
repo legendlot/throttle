@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
-import { Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2, Paperclip } from 'lucide-react';
 import { ignitionopsGet, ignitionopsPost } from '../../../lib/ignitionopsFetch.js';
 import { NewPaymentModal } from '../../../components/NewPaymentModal.js';
 
@@ -30,6 +30,14 @@ export default function PaymentsPage() {
   async function del(id) {
     try { await ignitionopsPost('deletePayment', { id }, session); toast('Payment removed', 'success'); load(); }
     catch (e) { toast(e.message, 'error'); }
+  }
+
+  async function viewProof(id) {
+    try {
+      const r = await ignitionopsGet('getPaymentProofUrl', { id }, session);
+      if (r?.url) window.open(r.url, '_blank', 'noopener');
+      else toast('No screenshot on this payment', 'error');
+    } catch (e) { toast(e.message, 'error'); }
   }
 
   const s = data?.summary;
@@ -78,7 +86,12 @@ export default function PaymentsPage() {
                   <td style={td}><span style={kindChip(p.kind)}>{KIND_LABEL[p.kind] || p.kind}</span></td>
                   <td style={{ ...td, textAlign: 'right', fontWeight: 600 }}>{rupee(p.amount)}</td>
                   <td style={{ ...td, color: 'var(--text-3)' }}>{p.note || '—'}</td>
-                  <td style={{ ...td, textAlign: 'right' }}>
+                  <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    {p.proof_path && (
+                      <button onClick={() => viewProof(p.id)} title={p.proof_name || 'View screenshot'} style={{ background: 'transparent', border: 'none', color: '#FF6B00', cursor: 'pointer', marginRight: 6 }}>
+                        <Paperclip size={14} />
+                      </button>
+                    )}
                     {canManage && (
                       <button onClick={() => del(p.id)} title="Remove" style={{ background: 'transparent', border: 'none', color: 'var(--text-3)', cursor: 'pointer' }}>
                         <Trash2 size={14} />

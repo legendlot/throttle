@@ -74,6 +74,24 @@ async function sbStore(path, env, opts = {}) {
   return { ok: res.ok, status: res.status, data };
 }
 
+// Supabase Storage REST (service_role) — for private payment-proof bucket.
+async function storageFetch(path, env, opts = {}) {
+  const res = await fetch(`${env.SUPABASE_URL}/storage/v1${path}`, {
+    ...opts,
+    headers: {
+      'apikey':        env.SUPABASE_SERVICE_ROLE_KEY,
+      'Authorization': `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      ...(opts.headers || {}),
+    },
+  });
+  const text = await res.text();
+  let data;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  return { ok: res.ok, status: res.status, data };
+}
+
+const PAYMENT_PROOF_BUCKET = 'ignition-payment-proofs';
+
 // ── Shopify helpers (ported from csops — same Dev Dashboard app/store) ────────
 //
 // Ignition reuses the SAME Shopify Dev Dashboard app as Pitstop (one LOT store,
@@ -715,6 +733,9 @@ async function addPayment(body, auth, env) {
     amount: Math.round(amount * 100) / 100,
     paid_on: body.paid_on || undefined,   // omit → DB default current_date
     note: body.note || null,
+    proof_path: body.proof_path || null,  // payment screenshot (Reann #4)
+    proof_name: body.proof_name || null,
+    proof_mime: body.proof_mime || null,
     created_by: auth.userId,
   };
   const r = await sb(`/rest/v1/payments`, env, { method: 'POST', body: JSON.stringify([row]) });
@@ -725,7 +746,61 @@ async function addPayment(body, auth, env) {
 async function deletePayment(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
   if (!body.id) return err('id required', 400);
+  // Clean up the proof object too, if any.
+  const pr = await sb(`/rest/v1/payments?id=eq.${body.id}&select=proof_path&limit=1`, env);
+  const proofPath = pr.data?.[0]?.proof_path;
   const r = await sb(`/rest/v1/payments?id=eq.${body.id}`, env, { method: 'DELETE', prefer: 'return=minimal' });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  if (proofPath) {
+    const seg = String(proofPath).split('/').map(encodeURIComponent).join('/');
+    await storageFetch(`/object/${PAYMENT_PROOF_BUCKET}/${seg}`, env, { method: 'DELETE' });
+  }
+  return ok({ deleted: body.id });
+}
+
+// Reann #4 — payment proof: mint a signed upload URL into the private bucket. The
+// client PUTs the file (uploadToSignedUrl), then sends proof_path to addPayment.
+function safeSeg(s) { return encodeURIComponent(String(s || '').replace(/[^\w.\-]+/g, '_')); }
+
+async function createPaymentProofUploadUrl(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!body.engagement_id) return err('engagement_id required', 400);
+  if (!body.file_name) return err('file_name required', 400);
+  const path = `${safeSeg(body.engagement_id)}/${Date.now()}_${safeSeg(body.file_name)}`;
+  const sr = await storageFetch(`/object/upload/sign/${PAYMENT_PROOF_BUCKET}/${path}`, env, { method: 'POST' });
+  if (!sr.ok || !sr.data?.url) return err(`sign_failed: ${JSON.stringify(sr.data)}`, 502);
+  const tokenMatch = String(sr.data.url).match(/token=([^&]+)/);
+  return ok({ storage_path: path, token: tokenMatch ? decodeURIComponent(tokenMatch[1]) : null });
+}
+
+// Signed GET URL to view a payment proof (short-lived).
+async function getPaymentProofUrl(url, auth, env) {
+  const gate = requirePerm('ignition_view', auth); if (gate) return gate;
+  const id = url.searchParams.get('id');
+  if (!id) return err('id required', 400);
+  const pr = await sb(`/rest/v1/payments?id=eq.${id}&select=proof_path,proof_name,proof_mime&limit=1`, env);
+  const p = pr.data?.[0];
+  if (!p || !p.proof_path) return err('no_proof', 404);
+  const seg = String(p.proof_path).split('/').map(encodeURIComponent).join('/');
+  const sr = await storageFetch(`/object/sign/${PAYMENT_PROOF_BUCKET}/${seg}`, env, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ expiresIn: 120 }),
+  });
+  if (!sr.ok || !sr.data?.signedURL) return err(`sign_failed: ${JSON.stringify(sr.data)}`, 502);
+  return ok({ url: `${env.SUPABASE_URL}/storage/v1${sr.data.signedURL}`, file_name: p.proof_name, mime_type: p.proof_mime });
+}
+
+// Reann #3 — delete an influencer. Hard-delete only when it has NO engagements
+// (junk/duplicate cleanup); refuse otherwise so history stays intact (archive instead).
+async function deleteInfluencer(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!body.id) return err('id required', 400);
+  const er = await sb(`/rest/v1/engagements?influencer_id=eq.${body.id}&select=id&limit=1`, env);
+  if (er.ok && Array.isArray(er.data) && er.data.length > 0) {
+    return err('has_engagements', 409);
+  }
+  const r = await sb(`/rest/v1/influencers?id=eq.${body.id}`, env, { method: 'DELETE', prefer: 'return=minimal' });
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
   return ok({ deleted: body.id });
 }
@@ -1413,6 +1488,7 @@ const GET_ACTIONS = {
   getMonthlyTargets,
   getCatalogs,
   getLocations,
+  getPaymentProofUrl,
   getMe,
   searchShopifyCustomer,
   getInfluencerShopify,
@@ -1421,6 +1497,7 @@ const GET_ACTIONS = {
 const POST_ACTIONS = {
   createInfluencer,
   updateInfluencer,
+  deleteInfluencer,
   createEngagement,
   updateEngagement,
   advanceStage,
@@ -1436,6 +1513,7 @@ const POST_ACTIONS = {
   flagOverdueRatings,
   addPayment,
   deletePayment,
+  createPaymentProofUploadUrl,
   upsertMonthlyTarget,
 };
 

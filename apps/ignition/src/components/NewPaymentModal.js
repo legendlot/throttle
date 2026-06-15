@@ -1,7 +1,10 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { Modal, useToast } from '@throttle/ui';
+import { supabase } from '@throttle/db';
 import { ignitionopsGet, ignitionopsPost } from '../lib/ignitionopsFetch.js';
+
+const PROOF_BUCKET = 'ignition-payment-proofs';
 
 // Record a payment against a deal. Flow: search influencer → pick one of their
 // deals → kind (advance/final/other) + amount + date. Kept deliberately small.
@@ -14,11 +17,12 @@ export function NewPaymentModal({ open, onClose, session, onSaved }) {
   const [influencer, setInfluencer] = useState(null);
   const [engagements, setEngagements] = useState([]);
   const [form, setForm] = useState({ engagement_id: '', kind: 'advance', amount: '', paid_on: '', note: '' });
+  const [proofFile, setProofFile] = useState(null);
   const setField = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
   function reset() {
     setSearch(''); setResults([]); setInfluencer(null); setEngagements([]);
-    setForm({ engagement_id: '', kind: 'advance', amount: '', paid_on: '', note: '' }); setErr(null);
+    setForm({ engagement_id: '', kind: 'advance', amount: '', paid_on: '', note: '' }); setProofFile(null); setErr(null);
   }
   useEffect(() => { if (open) reset(); }, [open]);
 
@@ -44,12 +48,25 @@ export function NewPaymentModal({ open, onClose, session, onSaved }) {
     if (!(Number(form.amount) >= 0) || form.amount === '') { setErr('Enter an amount'); return; }
     setBusy(true); setErr(null);
     try {
+      let proof = {};
+      if (proofFile) {
+        const { storage_path, token } = await ignitionopsPost(
+          'createPaymentProofUploadUrl',
+          { engagement_id: form.engagement_id, file_name: proofFile.name },
+          session,
+        );
+        if (!token) throw new Error('Could not get an upload link for the screenshot');
+        const { error } = await supabase.storage.from(PROOF_BUCKET).uploadToSignedUrl(storage_path, token, proofFile);
+        if (error) throw error;
+        proof = { proof_path: storage_path, proof_name: proofFile.name, proof_mime: proofFile.type || null };
+      }
       await ignitionopsPost('addPayment', {
         engagement_id: form.engagement_id,
         kind: form.kind,
         amount: Number(form.amount),
         paid_on: form.paid_on || undefined,
         note: form.note || undefined,
+        ...proof,
       }, session);
       toast('Payment recorded', 'success');
       onClose?.(); onSaved?.();
@@ -118,6 +135,17 @@ export function NewPaymentModal({ open, onClose, session, onSaved }) {
         <Field label="Note">
           <input value={form.note} onChange={e => setField('note', e.target.value)} placeholder="UTR / ref (optional)" style={inp} />
         </Field>
+      </div>
+
+      <div style={{ marginTop: 14 }}>
+        <div style={lbl}>Payment screenshot (optional)</div>
+        <input
+          type="file"
+          accept="image/*,application/pdf"
+          onChange={e => setProofFile(e.target.files?.[0] || null)}
+          style={{ fontSize: 12, color: 'var(--text-2)' }}
+        />
+        {proofFile && <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--text-3)' }}>{proofFile.name}</span>}
       </div>
     </Modal>
   );
