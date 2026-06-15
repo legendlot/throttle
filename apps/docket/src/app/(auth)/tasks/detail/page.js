@@ -81,6 +81,7 @@ function DetailInner() {
       const prog = await docketopsPost('createProgram', { name }, session);
       setPrograms(ps => ps.some(p => p.id === prog.id) ? ps : [...ps, prog].sort((a, b) => a.name.localeCompare(b.name)));
       setForm(f => ({ ...f, program_id: prog.id }));
+      if (typeof window !== 'undefined') window.dispatchEvent(new Event('docket:programs-changed'));
     } catch (e) { showToast(e.message || 'Failed to add program', 'error'); }
   }
   // Space change is immediate (not part of the buffered form) — goes through moveTask.

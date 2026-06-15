@@ -21,6 +21,8 @@ import { useChrome } from '../../../lib/chrome.js';
 
 // Task(flex) · Owner(150) · Status(132) · Pri(76) · Deadline(140) · meta(46)
 const GRID_COLS = 'minmax(230px,1fr) 150px 132px 76px 140px 46px';
+// Program mode adds a Space column (rows span spaces): Task · Space(130) · Owner · Status · Pri · Deadline · meta
+const PROGRAM_GRID_COLS = 'minmax(230px,1fr) 130px 150px 132px 76px 140px 46px';
 
 export default function TasksPage() {
   const { session } = useAuth();
@@ -32,6 +34,9 @@ export default function TasksPage() {
   const spaceParam = search.get('space');
   const spaceId = spaceParam && spaceParam !== 'new' ? spaceParam : '';
   const lensParam = search.get('lens');
+  const viewProgramId = search.get('program') || '';
+  const inProgramMode = !!viewProgramId;
+  const gridCols = inProgramMode ? PROGRAM_GRID_COLS : GRID_COLS;
 
   const [tasks, setTasks] = useState([]);
   const [departments, setDepartments] = useState([]);
@@ -113,15 +118,18 @@ export default function TasksPage() {
     if (!session) return;
     setLoading(true);
     try {
-      const params = {
-        space_id: spaceId, status, department_id: departmentId, employee_id: employeeId, priority,
-        program_id: programId, overdue: overdue ? '1' : '', revised: revised ? '1' : '', lens: mine ? 'mine' : '',
+      const common = {
+        status, department_id: departmentId, employee_id: employeeId, priority,
+        overdue: overdue ? '1' : '', revised: revised ? '1' : '', lens: mine ? 'mine' : '',
       };
-      const r = await docketopsGet('getTasks', params, session);
+      // Program mode: cross-space aggregation of one program's tasks (no space scope, no program filter).
+      const r = inProgramMode
+        ? await docketopsGet('getProgramTasks', { program_id: viewProgramId, ...common }, session)
+        : await docketopsGet('getTasks', { space_id: spaceId, program_id: programId, ...common }, session);
       setTasks(Array.isArray(r) ? r : []);
     } catch (e) { showToast(e.message || 'Failed to load tasks', 'error'); }
     finally { setLoading(false); }
-  }, [session, spaceId, status, departmentId, employeeId, priority, programId, overdue, revised, mine, showToast]);
+  }, [session, inProgramMode, viewProgramId, spaceId, status, departmentId, employeeId, priority, programId, overdue, revised, mine, showToast]);
   useEffect(() => { load(); }, [load]);
 
   function refreshSpaces() {
@@ -271,6 +279,7 @@ export default function TasksPage() {
   const rowCtx = {
     saveField, abandonInline, reviseInline, addSubtask, addCollab, childrenByParent,
     openDrawer: setDrawerId, teamCellOpts, ownerCellOpts, prioOpts, empOpts, expanded, setExpanded, sortFn,
+    gridCols, showSpace: inProgramMode,
   };
 
   const groupOpts = [
@@ -291,7 +300,7 @@ export default function TasksPage() {
         </div>
       )}
 
-      <QuickCapture session={session} spaceId={spaceId} onCreated={load} showToast={showToast} />
+      {!inProgramMode && <QuickCapture session={session} spaceId={spaceId} onCreated={load} showToast={showToast} />}
 
       <div className="toolbar">
         <div className="search">
@@ -314,7 +323,7 @@ export default function TasksPage() {
             <ListFilter className="ic" /> Filter {activeFilterCount > 0 && <span className="badge">{activeFilterCount}</span>}
           </button>
           {filterOpen && (
-            <FilterPop onClose={() => setFilterOpen(false)}
+            <FilterPop onClose={() => setFilterOpen(false)} hideProgramFilter={inProgramMode}
               {...{ status, setStatus, departmentId, setDepartmentId, employeeId, setEmployeeId, priority, setPriority,
                 programId, setProgramId, overdue, setOverdue, revised, setRevised, mine, setMine,
                 teamOpts, empOpts, programOpts, activeFilterCount, clearFilters }} />
@@ -344,8 +353,9 @@ export default function TasksPage() {
 
             {boardRows.length > 0 && (
               <div className="board-scroll"><div className="board">
-                <div className="cols" style={{ '--grid-cols': GRID_COLS }}>
+                <div className="cols" style={{ '--grid-cols': gridCols }}>
                   <ColHead k="title" label="Task" sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
+                  {inProgramMode && <span className="ch">Space</span>}
                   <ColHead k="owner_name" label="Owner" sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
                   <ColHead k="status" label="Status" sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
                   <ColHead k="priority" label="Pri" sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
@@ -511,7 +521,7 @@ function DeadlineCell({ task, editable, onFirstSet, onRevise }) {
 
 /* ---------------- Task row ---------------- */
 function TaskRow({ task, ctx, isChild, hasKids, expanded }) {
-  const { saveField, abandonInline, reviseInline, addSubtask, addCollab, openDrawer, teamCellOpts, ownerCellOpts, prioOpts, empOpts, setExpanded } = ctx;
+  const { saveField, abandonInline, reviseInline, addSubtask, addCollab, openDrawer, teamCellOpts, ownerCellOpts, prioOpts, empOpts, setExpanded, gridCols, showSpace } = ctx;
   const ed = !!task._can_edit && task.status !== 'abandoned';
   const done = task.status === 'done';
   const collabs = (task.collaborators || []).map(c => c.full_name).filter(Boolean);
@@ -538,7 +548,7 @@ function TaskRow({ task, ctx, isChild, hasKids, expanded }) {
 
   return (
     <>
-      <div className={cls} style={{ '--grid-cols': GRID_COLS }} tabIndex={isChild ? undefined : 0}
+      <div className={cls} style={{ '--grid-cols': gridCols }} tabIndex={isChild ? undefined : 0}
         onKeyDown={(e) => {
           if (e.target !== e.currentTarget) return;
           if (e.key === 'Enter') { e.preventDefault(); openDrawer(isChild ? (task.parent_task_id || task.id) : task.id); }
@@ -575,6 +585,16 @@ function TaskRow({ task, ctx, isChild, hasKids, expanded }) {
           )}
           {!isChild && ed && <button className="subadd" title="Add sub-task" onClick={(e) => { e.stopPropagation(); startAddSub(); }}><Plus size={13} /></button>}
         </span>
+
+        {/* Space (program mode only — rows span spaces) */}
+        {showSpace && (
+          <span className="cell" onClick={() => openDrawer(isChild ? (task.parent_task_id || task.id) : task.id)}>
+            <span className="chip" style={{ maxWidth: 118 }} title={task.space_name || 'General'}>
+              <span className="dot" style={{ background: personColor(task.space_id) }} />
+              <span className="lbl">{task.space_name || 'General'}</span>
+            </span>
+          </span>
+        )}
 
         {/* Owner + collaborators */}
         <span className="cell cell-owner">
@@ -749,7 +769,7 @@ function ArchivedRow({ task, ctx }) {
 /* ---------------- Filter popover ---------------- */
 function FilterPop({ onClose, status, setStatus, departmentId, setDepartmentId, employeeId, setEmployeeId,
   priority, setPriority, programId, setProgramId, overdue, setOverdue, revised, setRevised, mine, setMine,
-  teamOpts, empOpts, programOpts, activeFilterCount, clearFilters }) {
+  teamOpts, empOpts, programOpts, activeFilterCount, clearFilters, hideProgramFilter }) {
   const ref = useRef(null);
   useEffect(() => {
     function down(e) { if (ref.current && !ref.current.contains(e.target)) onClose(); }
@@ -772,7 +792,7 @@ function FilterPop({ onClose, status, setStatus, departmentId, setDepartmentId, 
       <Sel label="Team" value={departmentId} set={setDepartmentId} any="Any team" options={teamOpts} />
       <Sel label="Owner" value={employeeId} set={setEmployeeId} any="Anyone" options={empOpts} />
       <Sel label="Priority" value={priority} set={setPriority} any="Any priority" options={PRIORITIES.map(p => ({ value: p.key, label: p.label }))} />
-      <Sel label="Program" value={programId} set={setProgramId} any="Any program" options={programOpts} />
+      {!hideProgramFilter && <Sel label="Program" value={programId} set={setProgramId} any="Any program" options={programOpts} />}
       <div className="fp-grp">
         <div className="fp-lbl">Quick</div>
         <div className="fp-toggles">

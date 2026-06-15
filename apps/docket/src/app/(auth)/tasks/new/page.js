@@ -45,6 +45,7 @@ function NewTaskInner() {
   async function createProgram(name) {
     const prog = await docketopsPost('createProgram', { name }, session);
     setPrograms(ps => ps.some(p => p.id === prog.id) ? ps : [...ps, prog].sort((a, b) => a.name.localeCompare(b.name)));
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event('docket:programs-changed'));
     return prog; // { id, name, color }
   }
 

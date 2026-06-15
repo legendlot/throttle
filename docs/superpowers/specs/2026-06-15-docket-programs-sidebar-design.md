@@ -65,9 +65,10 @@ p_department_id uuid default null, p_employee_filter uuid default null, p_priori
 p_overdue boolean default false, p_revised boolean default false, p_mine boolean default false,
 p_q text default null)`** → `setof docket.tasks`, `stable security definer set search_path = docket,
 public`.
-- Same visibility rule across spaces, `program_id = p_program_id`, `is_recurring = false`,
-  **`parent_task_id is null` (top-level only)** — so count == rows; sub-tasks surface via the board's
-  normal expand (they inherit the parent's program). Applies the same optional filters as `list_tasks`
+- Same visibility rule across spaces, `program_id = p_program_id`, `is_recurring = false`. Returns
+  **top-level tasks AND their sub-tasks** (the page nests children under parents, exactly like the space
+  board); the sidebar count badge counts **top-level only** (`programs_for_user`), which equals the
+  board's top-level rows. Applies the same optional filters as `list_tasks`
   (status/dept/owner/priority/overdue/revised/mine/q).
 - Same `ORDER BY` as `list_tasks` (P-priority, then `coalesce(revised_deadline, deadline)` asc nulls
   last, then `created_at desc`).

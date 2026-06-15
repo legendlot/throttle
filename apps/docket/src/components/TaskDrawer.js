@@ -123,6 +123,7 @@ export function TaskDrawer({ id, session, departments = [], employees = [], onCl
       const prog = await docketopsPost('createProgram', { name }, session);
       setPrograms(ps => ps.some(p => p.id === prog.id) ? ps : [...ps, prog].sort((a, b) => a.name.localeCompare(b.name)));
       await docketopsPost('updateTask', { id: task.id, program_id: prog.id }, session); await mutated();
+      if (typeof window !== 'undefined') window.dispatchEvent(new Event('docket:programs-changed'));
     } catch (e) { showToast(e.message || 'Failed to add program', 'error'); }
     finally { setBusy(false); }
   }

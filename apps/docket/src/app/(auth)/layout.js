@@ -25,6 +25,7 @@ function AuthLayoutInner({ children }) {
 
   const [collapsed, setCollapsed] = useState(false);
   const [spaces, setSpaces] = useState([]);
+  const [programs, setPrograms] = useState([]);
   const [canViewDashboard, setCanViewDashboard] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [count, setCount] = useState(null);   // board task count, published by the tasks page
@@ -39,20 +40,26 @@ function AuthLayoutInner({ children }) {
     setCollapsed(c => { const n = !c; try { localStorage.setItem('docket.sidebarCollapsed', n ? '1' : '0'); } catch { /* ignore */ } return n; });
   }, []);
 
-  // Accessible spaces drive the sidebar; getMe also returns can_view_dashboard (RULE-DOCKET-006).
-  const loadSpaces = useCallback(() => {
+  // getMe drives the sidebar: accessible spaces, programs (cross-space, with counts), and
+  // can_view_dashboard (RULE-DOCKET-006).
+  const loadMe = useCallback(() => {
     if (!session) return;
     docketopsGet('getMe', {}, session).then(me => {
       setSpaces(me?.spaces || []);
+      setPrograms(me?.programs || []);
       setCanViewDashboard(!!me?.can_view_dashboard);
     }).catch(() => {});
   }, [session]);
-  useEffect(() => { loadSpaces(); }, [loadSpaces]);
+  useEffect(() => { loadMe(); }, [loadMe]);
   useEffect(() => {
-    const h = () => loadSpaces();
+    const h = () => loadMe();
     window.addEventListener('docket:spaces-changed', h);
-    return () => window.removeEventListener('docket:spaces-changed', h);
-  }, [loadSpaces]);
+    window.addEventListener('docket:programs-changed', h);
+    return () => {
+      window.removeEventListener('docket:spaces-changed', h);
+      window.removeEventListener('docket:programs-changed', h);
+    };
+  }, [loadMe]);
 
   // App-chrome keyboard shortcuts: `[` toggles the sidebar, `?` toggles the help
   // sheet, Esc closes it. Ignored while typing (same guard as useHotkey).
@@ -72,10 +79,14 @@ function AuthLayoutInner({ children }) {
 
   // Active sidebar key + topbar title/context, derived from the route.
   const spaceParam = search.get('space');
+  const programParam = search.get('program');
   const lens = search.get('lens');
   const spaceId = spaceParam && spaceParam !== 'new' ? spaceParam : '';
+  const programId = programParam || '';
   const activeKey = pathname === '/tasks'
-    ? (spaceId ? `/tasks?space=${spaceId}` : lens === 'mine' ? '/tasks?lens=mine' : '/tasks')
+    ? (programId ? `/tasks?program=${programId}`
+      : spaceId ? `/tasks?space=${spaceId}`
+      : lens === 'mine' ? '/tasks?lens=mine' : '/tasks')
     : pathname;
 
   const chrome = useMemo(() => {
@@ -85,6 +96,10 @@ function AuthLayoutInner({ children }) {
     if (pathname === '/manual') return { title: 'Manual' };
     if (pathname.startsWith('/admin')) return { title: 'Admin' };
     if (pathname === '/tasks') {
+      if (programId) {
+        const p = programs.find(x => x.id === programId);
+        return { title: p?.name || 'Program', context: 'program · all spaces', showCount: true };
+      }
       if (spaceId) {
         const s = spaces.find(x => x.id === spaceId);
         return { title: s?.name || 'Space', context: 'private space', isSpace: true, showCount: true };
@@ -95,7 +110,7 @@ function AuthLayoutInner({ children }) {
     if (pathname.startsWith('/tasks/detail')) return { title: 'Task' };
     if (pathname.startsWith('/tasks/new')) return { title: 'New Task' };
     return { title: 'Docket' };
-  }, [pathname, spaceId, lens, spaces]);
+  }, [pathname, spaceId, programId, lens, spaces, programs]);
 
   if (loading && !user) return <Spinner />;
 
@@ -108,6 +123,7 @@ function AuthLayoutInner({ children }) {
         <DocketSidebar
           activeKey={activeKey}
           spaces={spaces}
+          programs={programs}
           canViewDashboard={canViewDashboard}
           isAdmin={!!perms?.docket_admin}
           collapsed={collapsed}

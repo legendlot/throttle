@@ -388,11 +388,29 @@ async function getMe(url, auth, env) {
     canViewDashboard(auth, env),
     touchActivity(auth, env),   // app-load presence ping (RULE-DOCKET-008 / last-seen)
   ]);
+  // Programs sidebar (cross-space): only programs the caller has >=1 visible task in, with counts.
+  const memberSpaceIds = spaces.filter(s => s.is_private).map(s => s.id);
+  const defaultId = (spaces.find(s => !s.is_private) || {}).id || await defaultSpaceId(env);
+  const programs = await programsForUser(auth, memberSpaceIds, defaultId, env);
   return ok({
     id: auth.userId, email: auth.email, role: auth.role, full_name: auth.fullName,
     permissions: auth.permissions || {}, employee_id: auth.employeeId, department_id: auth.departmentId,
-    spaces, can_view_dashboard,
+    spaces, programs, can_view_dashboard,
   });
+}
+// Cross-space program scope: the caller's accessible private spaces (owned+member) + General id.
+async function programScopeArgs(auth, env) {
+  const spaces = await accessibleSpaces(auth, env);
+  const memberSpaceIds = spaces.filter(s => s.is_private).map(s => s.id);
+  const defaultId = (spaces.find(s => !s.is_private) || {}).id || await defaultSpaceId(env);
+  return { memberSpaceIds, defaultId };
+}
+async function programsForUser(auth, memberSpaceIds, defaultId, env) {
+  const r = await sbDocket(`/rest/v1/rpc/programs_for_user`, env, { method: 'POST', body: JSON.stringify({
+    p_user: auth.userId, p_employee: auth.employeeId, p_dept: auth.departmentId,
+    p_view_all: canViewAll(auth), p_member_space_ids: memberSpaceIds, p_default_space_id: defaultId,
+  }) });
+  return (r.ok && r.data) || [];
 }
 async function getDepartments(url, auth, env) {
   const r = await sbPodium(`/rest/v1/departments?select=id,name&order=name.asc`, env);
@@ -508,6 +526,38 @@ async function getTasks(url, auth, env) {
   const r = await sbDocket(`/rest/v1/rpc/list_tasks`, env, { method: 'POST', body: JSON.stringify(params) });
   if (!r.ok) return err('db_error: ' + JSON.stringify(r.data), 500);
   const rows = await hydrateTasks(r.data || [], auth, env);
+  return ok(rows);
+}
+
+// Cross-space program view: every visible top-level task tagged to a program, across all
+// accessible spaces (membership-respecting). Hydrated like getTasks + a per-row space_name.
+async function getProgramTasks(url, auth, env) {
+  const q = url.searchParams;
+  const programId = q.get('program_id');
+  if (!programId) return err('program_id required', 400);
+  const { memberSpaceIds, defaultId } = await programScopeArgs(auth, env);
+  const params = {
+    p_user: auth.userId, p_employee: auth.employeeId, p_dept: auth.departmentId,
+    p_view_all: canViewAll(auth), p_member_space_ids: memberSpaceIds, p_default_space_id: defaultId,
+    p_program_id: programId,
+    p_status: q.get('status') || null,
+    p_department_id: q.get('department_id') || null,
+    p_employee_filter: q.get('employee_id') || null,
+    p_priority: q.get('priority') || null,
+    p_overdue: q.get('overdue') === '1' || q.get('overdue') === 'true',
+    p_revised: q.get('revised') === '1' || q.get('revised') === 'true',
+    p_mine: q.get('lens') === 'mine',
+    p_q: q.get('q') || null,
+  };
+  const r = await sbDocket(`/rest/v1/rpc/list_tasks_by_program`, env, { method: 'POST', body: JSON.stringify(params) });
+  if (!r.ok) return err('db_error: ' + JSON.stringify(r.data), 500);
+  let rows = await hydrateTasks(r.data || [], auth, env);
+  const spaceIds = uniq(rows.map(t => t.space_id));
+  if (spaceIds.length) {
+    const sr = await sbDocket(`/rest/v1/spaces?id=in.${inList(spaceIds)}&select=id,name`, env);
+    const sName = {}; (sr.ok ? sr.data : []).forEach(s => { sName[s.id] = s.name; });
+    rows = rows.map(t => ({ ...t, space_name: sName[t.space_id] || null }));
+  }
   return ok(rows);
 }
 
@@ -1657,7 +1707,7 @@ async function deleteScratchNote(body, auth, env) {
 // ════════════════════════════════════════════════════════════════════════════
 const GET_ACTIONS = {
   getMe, getDepartments, getEmployees,
-  getTasks, getTask, getDashboard,
+  getTasks, getProgramTasks, getTask, getDashboard,
   getChecklist, getChecklistTemplates, getChecklistTemplate, getChecklistOversight,
   getPrograms, getSpaces, getSpaceMembers, getAllSpaces,
   getScratchNotes,
