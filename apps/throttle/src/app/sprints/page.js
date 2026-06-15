@@ -13,15 +13,16 @@ import { useAuth } from '@throttle/auth';
 import { AppShell } from '@/components/throttle/AppShell';
 import { Icon } from '@/components/throttle/Icon';
 import { Card, Pill, Avatar, ProductTag, PrimaryBtn, SectionHead, TONE } from '@/components/throttle/ui';
+import { TaskDrawer } from '@/components/throttle/TaskDrawer';
 import { toast } from '@/components/throttle/ToastHost';
-import { SPRINTS, CAPACITY, PLAN_BACKLOG, DTYPE, PRIORITY, teamById } from '@/lib/throttleData';
-import { fetchSprints, fetchDashboardStats, fetchTeamWorkload, fetchUsers, fetchTasks, addTaskToSprint } from '@/lib/throttleApi';
+import { SPRINTS, CAPACITY, PLAN_BACKLOG, DTYPE, PRIORITY, teamById, TEAM } from '@/lib/throttleData';
+import { fetchSprints, fetchDashboardStats, fetchTeamWorkload, fetchUsers, fetchTasks, addTaskToSprint, moveTaskStage } from '@/lib/throttleApi';
 
-function PlanCard({ task, where, onMove }) {
+function PlanCard({ task, where, onStage, onOpen }) {
   const pr = PRIORITY[task.priority] || PRIORITY.medium;
   return (
     <div draggable onDragStart={e => { e.dataTransfer.setData('text/plain', task.id); e.dataTransfer.effectAllowed = 'move'; }}
-      onClick={() => onMove(task.id)}
+      onClick={() => onOpen(task)}
       className="t-card t-task" style={{ background: 'var(--card-bg)', border: '1px solid var(--card-bd)', borderRadius: 'var(--card-radius)',
         borderLeft: `2px solid ${pr.color}`, padding: '10px 11px', cursor: 'pointer', boxShadow: 'var(--card-shadow)' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9 }}>
@@ -35,19 +36,32 @@ function PlanCard({ task, where, onMove }) {
             </div>
           </div>
         </div>
-        <span style={{ color: 'var(--t4)', display: 'flex', flexShrink: 0 }}><Icon name={where === 'backlog' ? 'plus' : 'x'} size={14} /></span>
+        <button onClick={e => { e.stopPropagation(); onStage(task.id); }}
+          title={where === 'backlog' ? 'Add to sprint' : 'Remove from sprint'} className="t-iconbtn"
+          style={{ width: 26, height: 26, flexShrink: 0, color: 'var(--t3)' }}><Icon name={where === 'backlog' ? 'plus' : 'x'} size={14} /></button>
       </div>
     </div>
   );
 }
 
-function SprintPlanner({ onClose, sprint, backlog, usersById, canPlan, session, onCommitted }) {
+function SprintPlanner({ onClose, sprint, backlog, usersById, members = [], role, canPlan, session, onCommitted, onTaskChanged }) {
   const [staged, setStaged] = useState([]); // task ids selected for commit
   const [over, setOver] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [selected, setSelected] = useState(null); // task open in the drawer
   const byId = Object.fromEntries(backlog.map(t => [t.id, t]));
   const inSprint = staged.map(id => byId[id]).filter(Boolean);
   const available = backlog.filter(t => !staged.includes(t.id));
+
+  // Keep the open drawer fresh after a reload (e.g. owner just changed).
+  useEffect(() => { if (selected) { const fresh = byId[selected.id]; if (fresh) setSelected(fresh); } }, [backlog]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const drawerMove = async (id, stage) => {
+    setSelected(prev => prev && prev.id === id ? { ...prev, stage } : prev);
+    if (!session) return;
+    try { await moveTaskStage(session, id, stage, stage === 'ext_blocked' ? 'Flagged from planner' : undefined); onTaskChanged?.(); }
+    catch (e) { toast('Move failed: ' + (e.message || 'not allowed'), 'bad', 'alert'); }
+  };
 
   const loadByPerson = {};
   inSprint.forEach(t => { const k = t.ownerId || 'unassigned'; loadByPerson[k] = (loadByPerson[k] || 0) + 1; });
@@ -132,11 +146,11 @@ function SprintPlanner({ onClose, sprint, backlog, usersById, canPlan, session, 
       <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 1fr 230px', gap: 14, minHeight: 0 }}>
         <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           {colHead('Backlog', available.length, 'approved')}
-          {dropZone('backlog', available.map(t => <PlanCard key={t.id} task={t} where="backlog" onMove={add} />), backlog.length ? 'All pulled in.' : 'Backlog is empty.')}
+          {dropZone('backlog', available.map(t => <PlanCard key={t.id} task={t} where="backlog" onStage={add} onOpen={setSelected} />), backlog.length ? 'All pulled in.' : 'Backlog is empty.')}
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           {colHead(sid, inSprint.length, inSprint.length + ' tasks')}
-          {dropZone('sprint', inSprint.map(t => <PlanCard key={t.id} task={t} where="sprint" onMove={remove} />), 'Drag tasks here to commit them.')}
+          {dropZone('sprint', inSprint.map(t => <PlanCard key={t.id} task={t} where="sprint" onStage={remove} onOpen={setSelected} />), 'Drag tasks here to commit them.')}
         </div>
         <Card pad={0} style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           <div style={{ padding: '13px 14px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}><span className="t-h3">Load</span></div>
@@ -156,6 +170,9 @@ function SprintPlanner({ onClose, sprint, backlog, usersById, canPlan, session, 
           </div>
         </Card>
       </div>
+
+      <TaskDrawer task={selected} onClose={() => setSelected(null)} onMove={drawerMove} session={session}
+        members={members} role={role} onChanged={() => onTaskChanged?.()} />
     </div>
   );
 }
@@ -275,6 +292,7 @@ function SprintsScreen() {
   const [loadRows, setLoadRows] = useState(live ? [] : CAPACITY.map(c => { const u = teamById[c.id]; return { id: c.id, name: u.name, discipline: u.discipline, initial: u.initial, committed: c.committed, done: c.done }; }));
   const [backlog, setBacklog] = useState(live ? [] : PLAN_BACKLOG);
   const [usersById, setUsersById] = useState(teamById);
+  const [members, setMembers] = useState(live ? [] : TEAM.filter(t => t.role === 'member' || t.role === 'lead'));
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
@@ -293,7 +311,7 @@ function SprintsScreen() {
         fetchSprints(session), fetchDashboardStats(session), fetchTeamWorkload(session), fetchTasks(session, byId),
       ]);
       if (cancelled) return;
-      if (usersRes?.list?.length) setUsersById(byId);
+      if (usersRes?.list?.length) { setUsersById(byId); setMembers(usersRes.list.filter(u => u.role === 'member' || u.role === 'lead')); }
       if (s) setSprints(s);
       if (st && typeof st.doneCount === 'number') setStats(st);
       if (wl?.rows?.length) {
@@ -315,7 +333,8 @@ function SprintsScreen() {
 
   if (planning) {
     return <SprintPlanner onClose={() => setPlanning(false)} sprint={active || sprints.find(s => s.status === 'planned')}
-      backlog={backlog} usersById={usersById} canPlan={canPlan} session={session} onCommitted={() => setReloadKey(k => k + 1)} />;
+      backlog={backlog} usersById={usersById} members={members} role={role} canPlan={canPlan} session={session}
+      onCommitted={() => setReloadKey(k => k + 1)} onTaskChanged={() => setReloadKey(k => k + 1)} />;
   }
 
   if (live && !active) {
