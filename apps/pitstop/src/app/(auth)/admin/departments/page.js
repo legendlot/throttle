@@ -65,7 +65,7 @@ export default function DepartmentsPage() {
             </thead>
             <tbody>
               {depts.map(d => {
-                const count = agents.filter(a => a.cs_department_id === d.id).length;
+                const count = agents.filter(a => (a.department_ids || []).includes(d.id)).length;
                 return (
                   <tr key={d.id} style={{ borderTop: '1px solid var(--border-1)' }}>
                     <Td><code style={mono}>{d.slug}</code></Td>
@@ -93,7 +93,7 @@ export default function DepartmentsPage() {
         <div style={cardWrap}>
           <table style={tableStyle}>
             <thead style={theadStyle}>
-              <tr><Th>Name</Th><Th>Role</Th><Th>CS Perms</Th><Th>Set Role</Th><Th>Department</Th></tr>
+              <tr><Th>Name</Th><Th>Role</Th><Th>CS Perms</Th><Th>Set Role</Th><Th>Departments</Th></tr>
             </thead>
             <tbody>
               {agents.map(a => (
@@ -117,10 +117,11 @@ export default function DepartmentsPage() {
 
 function AgentRow({ agent, depts, session, onChanged, myId }) {
   const [busy, setBusy] = useState(false);
-  async function changeDept(e) {
-    const id = e.target.value || null;
+  const deptIds = agent.department_ids || [];
+  async function toggleDept(id) {
+    const next = deptIds.includes(id) ? deptIds.filter(x => x !== id) : [...deptIds, id];
     setBusy(true);
-    try { await csopsPost('assignUserDepartment', { user_id: agent.id, department_id: id }, session); onChanged(); }
+    try { await csopsPost('setUserDepartments', { user_id: agent.id, department_ids: next }, session); onChanged(); }
     catch (err) { alert(err.message); }
     finally { setBusy(false); }
   }
@@ -161,10 +162,15 @@ function AgentRow({ agent, depts, session, onChanged, myId }) {
         )}
       </Td>
       <Td>
-        <select value={agent.cs_department_id || ''} onChange={changeDept} disabled={busy} style={select}>
-          <option value="">— None —</option>
-          {depts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-        </select>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+          {depts.map(d => (
+            <label key={d.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1 }}>
+              <input type="checkbox" checked={deptIds.includes(d.id)} onChange={() => toggleDept(d.id)} disabled={busy} />
+              {d.name}
+            </label>
+          ))}
+          {depts.length === 0 && <span style={{ color: 'var(--t3)' }}>—</span>}
+        </div>
       </Td>
     </tr>
   );

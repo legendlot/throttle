@@ -245,10 +245,12 @@ function require(perm, auth) {
   return null;
 }
 
-// Resolve the effective department id to filter by. Non-admins are always
-// locked to their own department; admins may override via ?department=<slug>
-// (or pass ?department=all to disable the filter).
-// Returns { mode: 'none' | 'id', id?: uuid } or null if requested slug not found.
+// Resolve the effective department filter. Admins may override via
+// ?department=<slug> (or `all` to disable). Non-admins are locked to the
+// departments they belong to — the union of store.cs_user_departments and their
+// primary users_profile.cs_department_id (#2 multi-department, S138).
+// Returns { mode: 'none' | 'id' | 'ids', id?, ids? } or null if a requested
+// admin slug isn't found.
 async function resolveDeptFilter(slugParam, auth, env) {
   const isAdmin = !!auth?.permissions?.cs_ticket_admin;
   if (isAdmin) {
@@ -260,9 +262,25 @@ async function resolveDeptFilter(slugParam, auth, env) {
     const id = r.data?.[0]?.id;
     return id ? { mode: 'id', id } : null;
   }
-  // Non-admin: lock to own dept. If user has no dept assigned, fall through to no-filter.
-  if (auth?.cs_department_id) return { mode: 'id', id: auth.cs_department_id };
-  return { mode: 'none' };
+  // Non-admin: union of all departments the user belongs to.
+  const r = await sb(
+    `/rest/v1/cs_user_departments?user_id=eq.${auth.userId}&select=cs_department_id`,
+    env,
+  );
+  const ids = new Set((r.data || []).map(x => x.cs_department_id).filter(Boolean));
+  if (auth?.cs_department_id) ids.add(auth.cs_department_id);   // primary, back-compat
+  const arr = [...ids];
+  if (arr.length === 0) return { mode: 'none' };
+  if (arr.length === 1) return { mode: 'id', id: arr[0] };
+  return { mode: 'ids', ids: arr };
+}
+
+// PostgREST filter fragment for a resolved dept filter ('' when unfiltered).
+function buildDeptFilter(df) {
+  if (!df) return '';
+  if (df.mode === 'id') return `cs_department_id=eq.${df.id}`;
+  if (df.mode === 'ids') return `cs_department_id=in.(${df.ids.join(',')})`;
+  return '';
 }
 
 // ── Domain constants ─────────────────────────────────────────────────────────
@@ -449,6 +467,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'createDepartment':     return createDepartment(body, auth, env);
     case 'updateDepartment':     return updateDepartment(body, auth, env);
     case 'assignUserDepartment': return assignUserDepartment(body, auth, env);
+    case 'setUserDepartments':   return setUserDepartments(body, auth, env);
     case 'setCsRole':            return setCsRole(body, auth, env);
     case 'setMyopDefaultDepartment': return setMyopDefaultDepartment(body, auth, env);
     case 'markCalledBack':           return markCalledBack(body, auth, env);
@@ -475,7 +494,7 @@ async function getTickets(params, auth, env) {
   // Dept default-filter (admins can override via ?department=<slug>|all)
   const deptFilter = await resolveDeptFilter(params.get('department'), auth, env);
   if (!deptFilter) return err(`Unknown department slug`, 404);
-  if (deptFilter.mode === 'id') filters.push(`cs_department_id=eq.${deptFilter.id}`);
+  { const c = buildDeptFilter(deptFilter); if (c) filters.push(c); }
 
   // tab → preset filter
   if (tab === 'my')                filters.push(`assigned_agent_id=eq.${auth.userId}`, `closed_at=is.null`);
@@ -817,7 +836,7 @@ async function getCallReports(params, auth, env) {
 
   // Dept filter (non-admins locked to own)
   const deptFilter = await resolveDeptFilter(params.get('department'), auth, env);
-  const deptClause = (deptFilter?.mode === 'id') ? `&cs_department_id=eq.${deptFilter.id}` : '';
+  const deptClause = (() => { const c = buildDeptFilter(deptFilter); return c ? `&${c}` : ''; })();
 
   const select = 'created_at,direction,status,duration_seconds,agent_user_id,agent_name,myop_account_id,cs_department_id,ticket_id,called_back_at';
   const r = await sb(
@@ -1754,10 +1773,18 @@ async function getDeptAgents(_params, _auth, env) {
   const rolesMap = {};
   for (const r of (rolesRes.data || [])) rolesMap[r.role_id] = r.permissions || {};
 
+  // Multi-department membership (#2): department_ids per user from the join table.
+  const memRes = await sb(`/rest/v1/cs_user_departments?select=user_id,cs_department_id`, env);
+  const deptsByUser = {};
+  for (const m of (memRes.data || [])) {
+    (deptsByUser[m.user_id] = deptsByUser[m.user_id] || []).push(m.cs_department_id);
+  }
+
   const result = (u.data || []).map(p => ({
     ...p,
     has_cs_manage: !!rolesMap[p.role]?.cs_ticket_manage,
     has_cs_admin:  !!rolesMap[p.role]?.cs_ticket_admin,
+    department_ids: deptsByUser[p.id] || (p.cs_department_id ? [p.cs_department_id] : []),
   }));
   return ok(result);
 }
@@ -1800,6 +1827,34 @@ async function assignUserDepartment(body, auth, env) {
   });
   if (!r.ok) return err(`assign failed: ${JSON.stringify(r.data)}`, r.status);
   return ok({ user: r.data?.[0] });
+}
+
+// Set the full department membership for a user (#2 multi-department). Replaces
+// the join-table set and keeps users_profile.cs_department_id as the primary
+// (first by the given order, or null). Admin-gated.
+async function setUserDepartments(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const { user_id } = body;
+  const department_ids = Array.isArray(body.department_ids) ? body.department_ids.filter(Boolean) : [];
+  if (!user_id) return err('user_id required');
+
+  // Replace the membership set.
+  const del = await sb(`/rest/v1/cs_user_departments?user_id=eq.${encodeURIComponent(user_id)}`, env, {
+    method: 'DELETE', prefer: 'return=minimal',
+  });
+  if (!del.ok) return err(`clear failed: ${JSON.stringify(del.data)}`, del.status);
+  if (department_ids.length > 0) {
+    const rows = department_ids.map(d => ({ user_id, cs_department_id: d }));
+    const ins = await sb(`/rest/v1/cs_user_departments`, env, { method: 'POST', body: JSON.stringify(rows), prefer: 'return=minimal' });
+    if (!ins.ok) return err(`assign failed: ${JSON.stringify(ins.data)}`, ins.status);
+  }
+  // Keep primary (home) dept in sync: first selected, or null.
+  const primary = department_ids[0] || null;
+  const up = await sb(`/rest/v1/users_profile?id=eq.${encodeURIComponent(user_id)}`, env, {
+    method: 'PATCH', body: JSON.stringify({ cs_department_id: primary }), prefer: 'return=minimal',
+  });
+  if (!up.ok) return err(`primary update failed: ${JSON.stringify(up.data)}`, up.status);
+  return ok({ user_id, department_ids });
 }
 
 // CS-tier roles a lead/admin may assign in-app. Deliberately EXCLUDES admin /
@@ -1850,7 +1905,7 @@ async function getCalls(params, auth, env) {
   // Dept default-filter (admins can override via ?department=<slug>|all)
   const deptFilter = await resolveDeptFilter(params.get('department'), auth, env);
   if (!deptFilter) return err('Unknown department slug', 404);
-  if (deptFilter.mode === 'id') filters.push(`cs_department_id=eq.${deptFilter.id}`);
+  { const c = buildDeptFilter(deptFilter); if (c) filters.push(c); }
 
   // tab presets
   if (tab === 'my')          filters.push(`agent_user_id=eq.${auth.userId}`);
@@ -1896,7 +1951,7 @@ async function getCallsKpis(_params, auth, env) {
 
   // Dept filter for non-admins
   const deptFilter = await resolveDeptFilter(null, auth, env);
-  const deptClause = (deptFilter?.mode === 'id') ? `&cs_department_id=eq.${deptFilter.id}` : '';
+  const deptClause = (() => { const c = buildDeptFilter(deptFilter); return c ? `&${c}` : ''; })();
 
   const [today, answered, missed, myOpen, unansweredAwaitingCallback] = await Promise.all([
     sb(`/rest/v1/cs_calls?created_at=gte.${encodeURIComponent(startOfTodayIso)}${deptClause}&select=id&limit=5000`, env),
