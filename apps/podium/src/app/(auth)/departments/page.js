@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useAuth } from '@throttle/auth';
-import { Spinner, useToast, Modal } from '@throttle/ui';
+import { Spinner, useToast, Modal, Combobox } from '@throttle/ui';
 import { Plus, Pencil } from 'lucide-react';
 import { podiumopsGet, podiumopsPost } from '../../../lib/podiumopsFetch.js';
 
@@ -67,8 +67,8 @@ export default function DepartmentsPage() {
         {edit && <>
           <Field label="Name *"><input style={inp} value={edit.name || ''} onChange={e => setEdit(s => ({ ...s, name: e.target.value }))} /></Field>
           <Field label="Code"><input style={inp} value={edit.code || ''} onChange={e => setEdit(s => ({ ...s, code: e.target.value }))} /></Field>
-          <Field label="Head"><select style={inp} value={edit.head_employee_id || ''} onChange={e => setEdit(s => ({ ...s, head_employee_id: e.target.value }))}><option value="">—</option>{people.map(p => <option key={p.id} value={p.id}>{p.full_name}</option>)}</select></Field>
-          <Field label="Parent department"><select style={inp} value={edit.parent_department_id || ''} onChange={e => setEdit(s => ({ ...s, parent_department_id: e.target.value }))}><option value="">—</option>{rows.filter(r => r.id !== edit.id).map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select></Field>
+          <Field label="Head"><Combobox value={edit.head_employee_id || ''} onChange={v => setEdit(s => ({ ...s, head_employee_id: v }))} inputStyle={comboInp} placeholder="Search person…" options={people.map(p => ({ value: p.id, label: p.full_name, hint: p.employee_code || '' }))} /></Field>
+          <Field label="Parent department"><Combobox value={edit.parent_department_id || ''} onChange={v => setEdit(s => ({ ...s, parent_department_id: v }))} inputStyle={comboInp} placeholder="Search department…" options={rows.filter(r => r.id !== edit.id).map(r => ({ value: r.id, label: r.name }))} /></Field>
           <Field label="Description"><input style={inp} value={edit.description || ''} onChange={e => setEdit(s => ({ ...s, description: e.target.value }))} /></Field>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}><input type="checkbox" checked={edit.active !== false} onChange={e => setEdit(s => ({ ...s, active: e.target.checked }))} /> Active</label>
         </>}
@@ -83,4 +83,5 @@ const td = { padding: '10px 12px' };
 const newBtn = { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--podium-accent)', color: '#1f1f1f', border: 'none', borderRadius: 'var(--radius-sm)', padding: '8px 14px', fontWeight: 700, fontSize: 12, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer' };
 const iconBtn = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, background: 'var(--surface-2)', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', cursor: 'pointer' };
 const inp = { width: '100%', background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '7px 10px', fontFamily: 'var(--font-mono)', fontSize: 13 };
+const comboInp = { fontFamily: 'var(--font-mono)', fontSize: 13, padding: '7px 10px' };
 function Field({ label, children }) { return <label style={{ display: 'block', marginBottom: 10 }}><div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>{label}</div>{children}</label>; }

@@ -2,7 +2,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { Spinner, useToast } from '@throttle/ui';
+import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { ArrowLeft, Plus, Trash2, Save } from 'lucide-react';
 import { podiumopsGet, podiumopsPost } from '../../../../lib/podiumopsFetch.js';
 import { fmtMoney } from '../../../../lib/format.js';
@@ -82,7 +82,7 @@ export default function RoleDetailPage() {
           <Row><F label="Title"><input style={inp} disabled={!canManage} value={jd.title} onChange={e => setJd(s => ({ ...s, title: e.target.value }))} /></F>
             <F label="Code"><input style={inp} disabled={!canManage} value={jd.role_code} onChange={e => setJd(s => ({ ...s, role_code: e.target.value }))} /></F></Row>
           <Row><F label="Level"><input style={inp} disabled={!canManage} value={jd.level} onChange={e => setJd(s => ({ ...s, level: e.target.value }))} /></F>
-            <F label="Department"><select style={inp} disabled={!canManage} value={jd.department_id} onChange={e => setJd(s => ({ ...s, department_id: e.target.value }))}><option value="">—</option>{depts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></F></Row>
+            <F label="Department"><Combobox value={jd.department_id || ''} disabled={!canManage} onChange={v => setJd(s => ({ ...s, department_id: v }))} inputStyle={comboInp} placeholder="Search department…" options={depts.map(d => ({ value: d.id, label: d.name }))} /></F></Row>
           <F label="Summary"><input style={inp} disabled={!canManage} value={jd.summary} onChange={e => setJd(s => ({ ...s, summary: e.target.value }))} /></F>
           <F label="Job description (markdown)"><textarea rows={6} style={{ ...inp, resize: 'vertical' }} disabled={!canManage} value={jd.job_description} onChange={e => setJd(s => ({ ...s, job_description: e.target.value }))} /></F>
           <F label="Responsibilities (one per line)"><textarea rows={5} style={{ ...inp, resize: 'vertical' }} disabled={!canManage} value={jd.responsibilities} onChange={e => setJd(s => ({ ...s, responsibilities: e.target.value }))} /></F>
@@ -154,6 +154,7 @@ function Row3({ children }) { return <div style={{ display: 'flex', gap: 10 }}>{
 const card = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '14px 16px' };
 const backBtn = { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 12px', fontSize: 12, cursor: 'pointer' };
 const inp = { width: '100%', background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '7px 10px', fontFamily: 'var(--font-mono)', fontSize: 13 };
+const comboInp = { fontFamily: 'var(--font-mono)', fontSize: 13, padding: '7px 10px' };
 const primaryBtn = { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--podium-accent)', color: '#1f1f1f', border: 'none', borderRadius: 'var(--radius-sm)', padding: '8px 16px', fontWeight: 700, fontSize: 12, letterSpacing: '0.04em', textTransform: 'uppercase', cursor: 'pointer' };
 const ghostBtn = { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '8px 16px', fontSize: 12, cursor: 'pointer' };
 const iconBtn = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, flex: '0 0 auto', background: 'var(--surface-2)', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', cursor: 'pointer' };

@@ -2,7 +2,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { Spinner } from '@throttle/ui';
+import { Spinner, Combobox } from '@throttle/ui';
 import { MessageSquarePlus, X } from 'lucide-react';
 import { podiumopsGet } from '../../../lib/podiumopsFetch.js';
 import { fmtDate } from '../../../lib/format.js';
@@ -56,16 +56,14 @@ export default function TeamFeedPage() {
         <select value={kind} onChange={e => setKind(e.target.value)} style={sel(150)}>
           {KINDS.map(k => <option key={k.id} value={k.id}>{k.label}</option>)}
         </select>
-        <select value={person} onChange={e => setPerson(e.target.value)} style={sel(200)}>
-          <option value="">Everyone</option>
-          {team.map(p => <option key={p.id} value={p.id}>{p.full_name}</option>)}
-        </select>
+        <Combobox value={person} onChange={v => setPerson(v)} style={{ width: 200 }} inputStyle={comboInp} placeholder="Everyone"
+          options={team.map(p => ({ value: p.id, label: p.full_name, hint: p.employee_code || '' }))} />
         <span style={{ flex: 1 }} />
         {!logFor && (
-          <select value="" onChange={e => e.target.value && setLogFor(e.target.value)} style={{ ...sel(220), background: 'var(--podium-accent)', color: '#1f1f1f', fontWeight: 600 }}>
-            <option value="">＋ Log observation for…</option>
-            {team.map(p => <option key={p.id} value={p.id}>{p.full_name}</option>)}
-          </select>
+          <Combobox value="" onChange={v => v && setLogFor(v)} style={{ width: 220 }} allowClear={false}
+            inputStyle={{ ...comboInp, background: 'var(--podium-accent)', color: '#1f1f1f', fontWeight: 600 }}
+            placeholder="＋ Log observation for…"
+            options={team.map(p => ({ value: p.id, label: p.full_name, hint: p.employee_code || '' }))} />
         )}
       </div>
 
@@ -112,6 +110,7 @@ function ActivityCard({ it, person, onOpen }) {
 
 const h1 = { fontFamily: 'var(--font-cond)', fontSize: 24, fontWeight: 700, letterSpacing: '0.03em', marginBottom: 16 };
 const sel = (w) => ({ background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '7px 9px', fontSize: 13, width: w });
+const comboInp = { fontSize: 13, padding: '7px 9px' };
 const card = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '11px 14px', marginBottom: 9, cursor: 'pointer' };
 const logCard = { background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 14, marginBottom: 18 };
 const kindBadge = { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' };

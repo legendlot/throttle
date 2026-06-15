@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { Spinner, useToast } from '@throttle/ui';
+import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { X, RefreshCw, UserPlus, UserMinus, Ban } from 'lucide-react';
 import { podiumopsGet, podiumopsPost } from '../lib/podiumopsFetch.js';
 
@@ -109,16 +109,14 @@ export default function DirectorySyncModal({ session, onClose, onDone }) {
                           </td>
                           <td style={{ ...td, fontSize: 11, color: 'var(--text-3)' }}>{r.org_unit || '—'}</td>
                           <td style={td}>
-                            <select value={r.department_id} disabled={r.action !== 'import'} onChange={e => setRow(r.email, { department_id: e.target.value })} style={sel}>
-                              <option value="">— none —</option>
-                              {(data.departments || []).map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                            </select>
+                            <Combobox value={r.department_id || ''} disabled={r.action !== 'import'} onChange={v => setRow(r.email, { department_id: v })}
+                              style={comboCell} inputStyle={comboCellInp} placeholder="Search…"
+                              options={(data.departments || []).map(d => ({ value: d.id, label: d.name }))} />
                           </td>
                           <td style={td}>
-                            <select value={r.manager_id} disabled={r.action !== 'import'} onChange={e => setRow(r.email, { manager_id: e.target.value })} style={sel}>
-                              <option value="">— none —</option>
-                              {(data.managers || []).map(m => <option key={m.id} value={m.id}>{m.full_name}</option>)}
-                            </select>
+                            <Combobox value={r.manager_id || ''} disabled={r.action !== 'import'} onChange={v => setRow(r.email, { manager_id: v })}
+                              style={comboCell} inputStyle={comboCellInp} placeholder="Search…"
+                              options={(data.managers || []).map(m => ({ value: m.id, label: m.full_name }))} />
                           </td>
                           <td style={{ ...td, fontSize: 11 }}>{r.has_login ? <span style={{ color: 'var(--state-success-fg)' }}>linked</span> : <span style={{ color: 'var(--text-3)' }}>none</span>}</td>
                         </tr>
@@ -173,6 +171,8 @@ const table = { width: '100%', borderCollapse: 'collapse', fontSize: 13 };
 const th = { textAlign: 'left', padding: '7px 8px', fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border)', fontWeight: 700 };
 const td = { padding: '7px 8px', borderBottom: '1px solid var(--border)', verticalAlign: 'top' };
 const sel = { background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '4px 6px', fontSize: 12, minWidth: 130, maxWidth: 170 };
+const comboCell = { minWidth: 130, maxWidth: 180 };
+const comboCellInp = { fontSize: 12, padding: '4px 6px' };
 const iconBtn = { background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', display: 'inline-flex' };
 const btnBase = { borderRadius: 'var(--radius-sm)', padding: '7px 14px', fontFamily: 'var(--font-cond)', fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', cursor: 'pointer' };
 const btnPrimary = { ...btnBase, background: 'var(--podium-accent)', color: '#1f1f1f', border: '1px solid var(--podium-accent)' };

@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { Spinner, Chip, useListNav } from '@throttle/ui';
+import { Spinner, Chip, useListNav, Combobox } from '@throttle/ui';
 import { UserPlus, RefreshCw } from 'lucide-react';
 import { podiumopsGet } from '../../../lib/podiumopsFetch.js';
 import StatusBadge from '../../../components/StatusBadge.js';
@@ -77,10 +77,8 @@ export default function PeoplePage() {
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
         <input data-search-primary placeholder="Search name, code, title, email…" value={search} onChange={e => setSearch(e.target.value)} style={inputStyle(280)} />
-        <select value={dept} onChange={e => setDept(e.target.value)} style={inputStyle(180)}>
-          <option value="">All departments</option>
-          {depts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-        </select>
+        <Combobox value={dept} onChange={v => setDept(v)} style={{ width: 180 }} inputStyle={{ fontFamily: 'var(--font-mono)', fontSize: 13, padding: '6px 10px' }}
+          placeholder="All departments" options={depts.map(d => ({ value: d.id, label: d.name }))} />
       </div>
 
       {loading ? <Spinner /> : (
