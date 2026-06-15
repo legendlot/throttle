@@ -14,6 +14,9 @@ Deploy: push to `main` → GitHub Actions builds → pushes to gh-pages of targe
 | Garage | garage.legendoftoys.com | legendlot/Stores (gh-pages) |
 | Redline | redline.legendoftoys.com | legendlot/dashboard (gh-pages) |
 | Throttle | throttle.legendoftoys.com | legendlot/throttle (gh-pages) |
+| Depot | depot.legendoftoys.com | legendlot/depot (gh-pages) |
+
+> Note: more apps exist than this original table lists (garage/redline/throttle + ignition/pitstop/podium/snorkel/docket/**depot**). Depot is a dispatch-only back-office app on the **shared lotopsproxy** worker (no own worker) — added Session 140. Full system map lives in the workspace-root `CORE.md`.
 
 ## Monorepo structure
 
