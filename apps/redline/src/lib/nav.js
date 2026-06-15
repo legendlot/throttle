@@ -5,7 +5,7 @@ import {
   Network, Send, ArrowLeftRight, FileText, RefreshCw, PackageCheck,
   Undo2, ScanLine, Edit3, Wrench,
   CalendarClock, LayoutGrid, ClipboardList, Tag, QrCode, Printer,
-  BookOpen,
+  BookOpen, History,
 } from 'lucide-react';
 
 /* ════════════════════════════════════════════════════════════
@@ -23,6 +23,7 @@ export const NAV_PRIMARY = [
     children: [
       { id: 'new-run',     label: 'New Run',    route: '/new-run',            icon: FilePlus2 },
       { id: 'hourly',      label: 'Hourly',     route: '/hourly',             icon: Clock },
+      { id: 'prod-history',label: 'Production History', route: '/production-history', icon: History },
       { id: 'qc',          label: 'QC',         route: '/qc',                 icon: ShieldCheck },
       { id: 'lines',       label: 'Lines',      route: '/lines',              icon: GitBranch },
       { id: 'audit',       label: 'Audit',      route: '/audit',              icon: ClipboardCheck },
