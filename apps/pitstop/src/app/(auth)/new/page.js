@@ -69,9 +69,17 @@ export default function NewTicketPage() {
   const [pastCases, setPastCases] = useState([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
+  const [catalog, setCatalog] = useState([]);
 
   // Autofocus UPC field on mount
   useEffect(() => { upcRef.current?.focus(); }, []);
+
+  // Sellable product catalogue for the cascading product/model/colour dropdowns.
+  useEffect(() => {
+    if (!session) return;
+    csopsGet('getProductCatalog', {}, session)
+      .then(r => setCatalog(r?.items || [])).catch(() => setCatalog([]));
+  }, [session]);
 
   // Debounced UPC lookup
   useEffect(() => {
@@ -198,12 +206,7 @@ export default function NewTicketPage() {
             </Hint>
           )}
 
-          <Row>
-            <Field label="Product"><input value={form.product} onChange={set('product')} style={inputStyle} /></Field>
-            <Field label="Model"><input value={form.product_model} onChange={set('product_model')} style={inputStyle} /></Field>
-            <Field label="Colour"><input value={form.product_color} onChange={set('product_color')} style={inputStyle} /></Field>
-            <Field label="SKU"><input value={form.product_sku} onChange={set('product_sku')} style={inputStyle} /></Field>
-          </Row>
+          <ProductCascade form={form} setForm={setForm} catalog={catalog} />
         </Section>
 
         {/* ── Customer ──────────────────────────────────────────────────── */}
@@ -371,6 +374,62 @@ function Field({ label, wide, children }) {
       <span style={labelStyle}>{label}</span>
       {children}
     </label>
+  );
+}
+
+// Cascading product → model → colour dropdowns from the live catalogue; SKU
+// auto-fills from the matching row. Current form values are preserved as options
+// even if absent from the catalogue (UPC-autofilled or legacy values).
+function ProductCascade({ form, setForm, catalog }) {
+  const uniq = (arr) => [...new Set(arr.filter(Boolean))];
+  const withCurrent = (list, val) => (val && !list.includes(val) ? [val, ...list] : list);
+  const resolveSku = (product, model, color) =>
+    (catalog.find(c => c.product === product && c.model === model && c.color === color)?.sku) || '';
+
+  const products = withCurrent(uniq(catalog.map(c => c.product)), form.product);
+  const models = withCurrent(uniq(catalog.filter(c => c.product === form.product).map(c => c.model)), form.product_model);
+  const colors = withCurrent(uniq(catalog.filter(c => c.product === form.product && c.model === form.product_model).map(c => c.color)), form.product_color);
+
+  function selProduct(p) {
+    const ms = uniq(catalog.filter(c => c.product === p).map(c => c.model));
+    const model = ms.length === 1 ? ms[0] : '';
+    const cs = uniq(catalog.filter(c => c.product === p && c.model === model).map(c => c.color));
+    const color = cs.length === 1 ? cs[0] : '';
+    setForm(s => ({ ...s, product: p, product_model: model, product_color: color, product_sku: resolveSku(p, model, color) }));
+  }
+  function selModel(m) {
+    const cs = uniq(catalog.filter(c => c.product === form.product && c.model === m).map(c => c.color));
+    const color = cs.length === 1 ? cs[0] : '';
+    setForm(s => ({ ...s, product_model: m, product_color: color, product_sku: resolveSku(form.product, m, color) }));
+  }
+  function selColor(c) {
+    setForm(s => ({ ...s, product_color: c, product_sku: resolveSku(form.product, form.product_model, c) }));
+  }
+
+  return (
+    <Row>
+      <Field label="Product">
+        <select value={form.product} onChange={e => selProduct(e.target.value)} style={inputStyle}>
+          <option value="">— Select —</option>
+          {products.map(p => <option key={p} value={p}>{p}</option>)}
+        </select>
+      </Field>
+      <Field label="Model">
+        <select value={form.product_model} onChange={e => selModel(e.target.value)} style={inputStyle} disabled={!form.product}>
+          <option value="">{form.product ? '— Select —' : '—'}</option>
+          {models.map(m => <option key={m} value={m}>{m}</option>)}
+        </select>
+      </Field>
+      <Field label="Colour">
+        <select value={form.product_color} onChange={e => selColor(e.target.value)} style={inputStyle} disabled={!form.product_model}>
+          <option value="">{form.product_model ? '— Select —' : '—'}</option>
+          {colors.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+      </Field>
+      <Field label="SKU">
+        <input value={form.product_sku} readOnly style={{ ...inputStyle, opacity: 0.7 }} placeholder="auto" />
+      </Field>
+    </Row>
   );
 }
 

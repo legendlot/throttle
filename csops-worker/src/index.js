@@ -416,6 +416,7 @@ async function handleGet(action, params, auth, env) {
     case 'getIssueCatalog':  return getIssueCatalog(env);
     case 'getDepartments':   return getDepartments(params, auth, env);
     case 'getDeptAgents':    return getDeptAgents(params, auth, env);
+    case 'getProductCatalog': return getProductCatalog(params, auth, env);
     case 'getMyopAccounts':  return getMyopAccounts(params, auth, env);
     case 'getCalls':         return getCalls(params, auth, env);
     case 'getCall':          return getCall(params, auth, env);
@@ -943,6 +944,18 @@ async function getAgents(params, auth, env) {
   const eligible = (res.data || []).filter(u => rolesMap[u.role]?.cs_ticket_manage);
 
   return ok(eligible);
+}
+
+// Sellable product catalogue for the New-ticket cascading dropdowns (Pruthvi #4).
+// Active cars + drones from public.product_master; the UI derives product→model→
+// colour→sku from the flat rows.
+async function getProductCatalog(_params, _auth, env) {
+  const r = await sbPublic(
+    `/rest/v1/product_master?is_active=eq.true&component_type=in.(car,drone)&select=product,model,color,sku&order=product.asc,model.asc,color.asc`,
+    env,
+  );
+  if (!r.ok) return err('failed to load product catalog', 500);
+  return ok({ items: r.data || [] });
 }
 
 // ── Writes ───────────────────────────────────────────────────────────────────
