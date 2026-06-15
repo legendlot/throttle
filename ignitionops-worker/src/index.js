@@ -341,9 +341,18 @@ function influencerTypeFilter(type) {
   return `influencer_type=eq.${encodeURIComponent(type)}`;
 }
 
+// Sort options for the influencer list. 'code' = "arranged in sequence" (Reann
+// ask #2) — by code prefix then numeric seq via the generated sort columns.
+const INFLUENCER_SORTS = {
+  recent: 'updated_at.desc',
+  code:   'code_prefix.asc,code_seq.asc.nullslast',
+  reach:  'reach.desc.nullslast',
+};
+
 async function getInfluencers(url, auth, env) {
   const limit = Math.min(Number(url.searchParams.get('limit') || 50), 200);
   const offset = Math.max(Number(url.searchParams.get('offset') || 0), 0);
+  const order = INFLUENCER_SORTS[url.searchParams.get('sort')] || INFLUENCER_SORTS.recent;
 
   const filters = influencerScopeFilters(url);
   const typeF = influencerTypeFilter(url.searchParams.get('type'));
@@ -351,7 +360,7 @@ async function getInfluencers(url, auth, env) {
 
   const qs = filters.join('&');
   const r = await sb(
-    `/rest/v1/influencers?${qs}&select=*&order=updated_at.desc&limit=${limit}&offset=${offset}`,
+    `/rest/v1/influencers?${qs}&select=*&order=${order}&limit=${limit}&offset=${offset}`,
     env,
   );
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
@@ -379,16 +388,27 @@ async function countInfluencers(filters, env) {
 // Type breakdown for the type cards. Honours every scope filter EXCEPT type, so
 // the cards always show the full type distribution you can drill into. Untyped
 // is derived (total − sum of known types) to save a query.
+// Sum of reach across the scoped set (Reann ask #7 — "total reach"). Fetches the
+// reach-only projection (small int column) and sums in JS; aggregate functions
+// are not relied on (may be disabled in PostgREST).
+async function sumReach(filters, env) {
+  const qs = [...filters, 'reach=not.is.null', 'select=reach', 'limit=20000'].join('&');
+  const r = await sb(`/rest/v1/influencers?${qs}`, env);
+  if (!r.ok || !Array.isArray(r.data)) return 0;
+  return r.data.reduce((acc, row) => acc + (Number(row.reach) || 0), 0);
+}
+
 async function getInfluencerCounts(url, auth, env) {
   const base = influencerScopeFilters(url);
-  const [total, ...typeCounts] = await Promise.all([
+  const [total, totalReach, ...typeCounts] = await Promise.all([
     countInfluencers(base, env),
+    sumReach(base, env),
     ...INFLUENCER_TYPES.map(t => countInfluencers([...base, `influencer_type=eq.${t}`], env)),
   ]);
   const counts = {};
   let known = 0;
   INFLUENCER_TYPES.forEach((t, i) => { counts[t] = typeCounts[i]; known += typeCounts[i]; });
-  return ok({ total, counts, untyped: Math.max(total - known, 0) });
+  return ok({ total, total_reach: totalReach, counts, untyped: Math.max(total - known, 0) });
 }
 
 async function getInfluencer(url, auth, env) {
@@ -863,6 +883,22 @@ async function getReports(url, auth, env) {
     engagement_totals,
     ugc,
   });
+}
+
+// Distinct non-empty influencer locations for the master-list location filter
+// (Reann ask #1). Deduped + trimmed + sorted in JS.
+async function getLocations(url, auth, env) {
+  const r = await sb(
+    `/rest/v1/influencers?location=not.is.null&select=location&limit=20000`,
+    env,
+  );
+  if (!r.ok || !Array.isArray(r.data)) return ok({ locations: [] });
+  const set = new Set();
+  for (const row of r.data) {
+    const v = (row.location || '').trim();
+    if (v) set.add(v);
+  }
+  return ok({ locations: [...set].sort((a, b) => a.localeCompare(b)) });
 }
 
 async function getCatalogs(url, auth, env) {
@@ -1376,6 +1412,7 @@ const GET_ACTIONS = {
   getReports,
   getMonthlyTargets,
   getCatalogs,
+  getLocations,
   getMe,
   searchShopifyCustomer,
   getInfluencerShopify,

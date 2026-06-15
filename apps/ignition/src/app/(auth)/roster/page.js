@@ -46,6 +46,14 @@ export default function RosterPage() {
         {FILTERS.map(f => <Chip key={f.id} active={rating === f.value} onClick={() => setRating(f.value)}>{f.label}</Chip>)}
       </div>
 
+      {!loading && rows.length > 0 && (
+        <div style={{ fontSize: 12, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginBottom: 12 }}>
+          {rows.length.toLocaleString()} influencer{rows.length === 1 ? '' : 's'}
+          {' · '}
+          {rows.reduce((a, r) => a + (Number(r.reach) || 0), 0).toLocaleString()} total reach
+        </div>
+      )}
+
       {loading ? <Spinner /> : (
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>

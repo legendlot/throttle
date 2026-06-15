@@ -25,6 +25,22 @@ const REACH_BUCKETS = [
   { id: '1000000-',        label: '1M+',       min: 1000000 },
 ];
 
+const SORTS = [
+  { id: 'recent', label: 'Recently updated' },
+  { id: 'code',   label: 'Code (sequence)' },
+  { id: 'reach',  label: 'Reach (high → low)' },
+];
+
+const PAGE = 100;
+
+function fmtReach(n) {
+  if (n == null) return '–';
+  if (n >= 1e7) return (n / 1e7).toFixed(n % 1e7 === 0 ? 0 : 1) + 'Cr';
+  if (n >= 1e5) return (n / 1e5).toFixed(n % 1e5 === 0 ? 0 : 1) + 'L';
+  if (n >= 1e3) return (n / 1e3).toFixed(n % 1e3 === 0 ? 0 : 1) + 'K';
+  return n.toLocaleString();
+}
+
 export default function InfluencersPage() {
   const { session } = useAuth();
   const router = useRouter();
@@ -32,10 +48,14 @@ export default function InfluencersPage() {
   const [type, setType] = useState('');
   const [rating, setRating] = useState('');
   const [reach, setReach] = useState('');
+  const [location, setLocation] = useState('');
+  const [sort, setSort] = useState('recent');
   const [search, setSearch] = useState('');
   const [rows, setRows] = useState([]);
   const [counts, setCounts] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [locations, setLocations] = useState([]);
   const [modal, setModal] = useState(null);     // 'influencer' | 'deal' | null
   const [menuOpen, setMenuOpen] = useState(false);
   const { focusedIdx, setFocusedIdx } = useListNav(rows.length, (i) => {
@@ -47,29 +67,48 @@ export default function InfluencersPage() {
     const p = { tab };
     if (rating) p.rating = rating;
     if (search) p.search = search;
+    if (location) p.location = location;
     const b = REACH_BUCKETS.find(x => x.id === reach);
     if (b?.min != null) p.reach_min = b.min;
     if (b?.max != null) p.reach_max = b.max;
     return p;
   }
 
+  // First page (replaces rows) whenever a filter/sort changes.
   useEffect(() => {
     if (!session) return;
     setLoading(true);
-    const params = { ...scopeParams(), limit: 100, offset: 0 };
+    const params = { ...scopeParams(), sort, limit: PAGE, offset: 0 };
     if (type) params.type = type;
     ignitionopsGet('getInfluencers', params, session)
       .then(r => setRows(r.influencers || []))
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, type, rating, reach, search, session]);
+  }, [tab, type, rating, reach, location, sort, search, session]);
 
   useEffect(() => {
     if (!session) return;
     ignitionopsGet('getInfluencerCounts', scopeParams(), session)
       .then(setCounts).catch(() => setCounts(null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, rating, reach, search, session]);
+  }, [tab, rating, reach, location, search, session]);
+
+  // Location options for the filter dropdown — fetched once.
+  useEffect(() => {
+    if (!session) return;
+    ignitionopsGet('getLocations', {}, session)
+      .then(r => setLocations(r.locations || [])).catch(() => setLocations([]));
+  }, [session]);
+
+  function loadMore() {
+    if (!session || loadingMore) return;
+    setLoadingMore(true);
+    const params = { ...scopeParams(), sort, limit: PAGE, offset: rows.length };
+    if (type) params.type = type;
+    ignitionopsGet('getInfluencers', params, session)
+      .then(r => setRows(prev => [...prev, ...(r.influencers || [])]))
+      .finally(() => setLoadingMore(false));
+  }
 
   function toggleType(t) { setType(prev => (prev === t ? '' : t)); }
 
@@ -136,6 +175,21 @@ export default function InfluencersPage() {
             </button>
           );
         })}
+        <div
+          style={{
+            flex: '1 1 120px', minWidth: 110, textAlign: 'left',
+            background: 'var(--surface)', border: '1px solid var(--border)',
+            borderRadius: 'var(--radius-md)', padding: '12px 14px',
+          }}
+          title={counts?.total_reach != null ? `${counts.total_reach.toLocaleString()} total reach` : undefined}
+        >
+          <div style={{ fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600 }}>
+            Total reach
+          </div>
+          <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--text-1)', fontFamily: 'var(--font-cond)', marginTop: 2 }}>
+            {counts?.total_reach == null ? '–' : fmtReach(counts.total_reach)}
+          </div>
+        </div>
       </div>
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
@@ -156,9 +210,17 @@ export default function InfluencersPage() {
         <select value={reach} onChange={e => setReach(e.target.value)} style={inputStyle(150)}>
           {REACH_BUCKETS.map(b => <option key={b.id || 'all'} value={b.id}>{b.label}</option>)}
         </select>
+        <select value={location} onChange={e => setLocation(e.target.value)} style={inputStyle(170)}>
+          <option value="">All locations</option>
+          {locations.map(l => <option key={l} value={l}>{l}</option>)}
+        </select>
+        <select value={sort} onChange={e => setSort(e.target.value)} style={inputStyle(180)}>
+          {SORTS.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+        </select>
       </div>
 
       {loading ? <Spinner /> : (
+        <>
         <div style={{
           background: 'var(--surface)', border: '1px solid var(--border)',
           borderRadius: 'var(--radius-md)', overflow: 'hidden',
@@ -205,6 +267,25 @@ export default function InfluencersPage() {
             </tbody>
           </table>
         </div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 12, gap: 12 }}>
+          <span style={{ fontSize: 12, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+            {counts?.total != null
+              ? `Showing ${rows.length.toLocaleString()} of ${counts.total.toLocaleString()}`
+              : `Showing ${rows.length.toLocaleString()}`}
+          </span>
+          {counts?.total != null && rows.length < counts.total && (
+            <button onClick={loadMore} disabled={loadingMore} style={{
+              background: 'var(--surface-2)', color: 'var(--text-1)',
+              border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
+              padding: '8px 16px', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700,
+              letterSpacing: '0.06em', textTransform: 'uppercase',
+              cursor: loadingMore ? 'default' : 'pointer', opacity: loadingMore ? 0.6 : 1,
+            }}>
+              {loadingMore ? 'Loading…' : 'Load more'}
+            </button>
+          )}
+        </div>
+        </>
       )}
 
       <NewInfluencerModal open={modal === 'influencer'} onClose={() => setModal(null)} session={session} />
