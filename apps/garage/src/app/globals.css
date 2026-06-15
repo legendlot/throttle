@@ -236,16 +236,22 @@ button { font-family: inherit; }
 
 /* ══════════════════════════════════════════════════════════
    STICKY TABLE HEADERS (S137)
-   Garage tables render raw <table><thead>; the page scroll
-   container is <main> (overflowY:auto) and the topbar is a
-   non-overlapping flex sibling above it — so a sticky header
-   with top:0 pins to the top of the scroll area while rows
-   scroll under it, keeping column labels visible on long lists.
+   Column header row stays visible while scrolling long lists.
    Opaque bg so rows don't bleed through; box-shadow hairline
    survives border-collapse (a plain border-bottom on a sticky
-   cell drops out while scrolling). Pages that set their own
-   inline th background keep it (inline wins); position/top still
-   apply, so stickiness is universal. No-scroll tables: no-op.
+   cell drops out while scrolling). Inline th backgrounds win;
+   position/top still apply, so stickiness is universal.
+
+   The catch: ~28 Garage table pages wrap the table in
+   `<div style={{overflowX:'auto'}}>` for wide-table horizontal
+   scroll. The browser computes overflow-y:auto on that div too,
+   making it a SCROLL CONTAINER — which captures the sticky
+   header (it pins to that div, not <main>). The div has no
+   height cap, so it never scrolls vertically and the header just
+   scrolls away with the page. Fix: bound those wrappers so they
+   scroll vertically themselves → the sticky thead locks inside
+   them. Short tables stay under the cap → no scrollbar, no
+   change. :has() is supported in all current browsers.
    ══════════════════════════════════════════════════════════ */
 thead th {
   position: sticky;
@@ -253,6 +259,10 @@ thead th {
   z-index: 2;
   background: var(--surface-2);
   box-shadow: inset 0 -1px 0 var(--border);
+}
+main div:has(> table) {
+  max-height: calc(100dvh - 160px);
+  overflow-y: auto;
 }
 
 /* ── Scrollbars — match dark theme ───────────────────────── */
