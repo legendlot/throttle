@@ -3,6 +3,17 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.1.0] - 2026-06-15
+### Changed
+- Departments: now also where you set a teammate's CS role. Documented the new
+  **Set Role** dropdown (Viewer / Agent / Team Lead), the rule that only CS roles are
+  set here (wider company roles show as "Garage-managed"), and that you cannot change
+  your own role. "Who" updated to Lead + Admin (Team Leads can open this screen).
+- Departments: a person can now belong to **multiple departments** (tick boxes) and
+  sees the tickets and calls of all of them; replaces the single-department dropdown.
+- New Ticket: product, model and colour are now cascading **dropdowns** that auto-fill
+  the SKU, as an alternative to the UPC lookup.
+
 ## [1.0.1] - 2026-06-06
 ### Changed
 - Content freshness pass for changes since 1.0.0:

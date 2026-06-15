@@ -1,16 +1,28 @@
-<p class="lead">Departments define the CS teams (Inbound, Outbound, Confirmation, Messaging and so on) and which agent belongs to each. Departments control visibility: a non-admin only sees the tickets and calls in their own team.</p>
+<p class="lead">Departments define the CS teams (Inbound, Outbound, Confirmation, Messaging and so on) and which agents belong to each. Departments control visibility: a non-admin only sees the tickets and calls in the teams they belong to. This screen is also where you set a teammate&rsquo;s CS role.</p>
 
 <div class="glance">
-  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Teams and who is in them.</div></div>
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Teams, who is in them, and CS roles.</div></div>
   <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: create, toggle, assign.</div></div>
-  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role adm">Admin</span></div></div>
-  <div class="g-cell"><div class="g-lbl">Effect</div><div class="g-val">Scopes everyone&rsquo;s view.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role lead">Lead</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Effect</div><div class="g-val">Scopes everyone&rsquo;s access.</div></div>
 </div>
 
-<h2 class="sec">Using it</h2>
-<p>The <strong>Departments</strong> table lists each team with its slug, name, sort order, agent count and an Active toggle. <strong>Add Department</strong> creates one (a URL-safe slug, a name, a sort order). The <strong>Agents</strong> table lists everyone with a per-row department dropdown: pick a team to move an agent into it (or &ldquo;None&rdquo; to remove them).</p>
+<h2 class="sec">Departments</h2>
+<p>The <strong>Departments</strong> table lists each team with its slug, name, sort order, agent count and an Active toggle. <strong>Add Department</strong> creates one (a URL-safe slug, a name, a sort order).</p>
+
+<h2 class="sec">Agents: role and departments</h2>
+<p>The <strong>Agents</strong> table lists everyone. For each person you can set two things:</p>
+<ol class="steps">
+  <li><span class="s-title">Set Role.</span> Pick <strong>Viewer</strong>, <strong>Agent</strong> or <strong>Team Lead</strong>. A Viewer can open the queue but not work tickets; an Agent works tickets and calls; a Team Lead can also assign across the team, approve refunds and replacements, and see reports.</li>
+  <li><span class="s-title">Departments.</span> Tick every team the person belongs to. A person can be in more than one team and will then see the tickets and calls of all of them. Untick every box to remove them from all team views.</li>
+</ol>
+
+<div class="callout note">
+  <div class="c-title">&#9432; You can only set CS roles here</div>
+  <p>The role options are limited to the CS tiers (Viewer, Agent, Team Lead). Anyone who holds a wider company role, such as a Garage admin, shows as <strong>Garage-managed</strong> with no dropdown and is changed in Garage, not here. You also cannot change your own role, to avoid locking yourself out.</p>
+</div>
 
 <div class="callout warn">
   <div class="c-title">&#9888; Changes apply instantly, no confirm</div>
-  <p>Toggling a department active and reassigning an agent both take effect the moment you click, with no confirmation, so a misclick is live immediately. Setting an agent to &ldquo;None&rdquo; drops their tickets and calls out of every department view. A slug is fixed once the department is created.</p>
+  <p>Toggling a department active, changing a role, and ticking or unticking departments all take effect the moment you click, with no confirmation, so a misclick is live immediately. Removing someone from every department drops their tickets and calls out of all team views. A slug is fixed once the department is created. The person may need to refresh the page for a new role or team to take effect.</p>
 </div>
