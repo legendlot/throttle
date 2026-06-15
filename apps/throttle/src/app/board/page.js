@@ -9,7 +9,10 @@ import { AppShell } from '@/components/throttle/AppShell';
 import { Icon } from '@/components/throttle/Icon';
 import { Card, Pill, Avatar, ProductTag, PrimaryBtn } from '@/components/throttle/ui';
 import { STAGES, PRIORITY, DTYPE, TASKS, TEAM, stageByVal, teamById, taskTag } from '@/lib/throttleData';
-import { fetchUsers, fetchTasks, fetchTaskActivity, postComment, moveTaskStage, relAge } from '@/lib/throttleApi';
+import { fetchUsers, fetchTasks, fetchTaskActivity, postComment, moveTaskStage, relAge,
+  setTaskOwner, selfAssignOwner, abandonTask } from '@/lib/throttleApi';
+
+const toast = (msg, tone = 'ok', icon) => window.dispatchEvent(new CustomEvent('throttle:toast', { detail: { msg, tone, icon: icon || (tone === 'bad' ? 'alert' : 'check') } }));
 
 const NEXT = {
   backlog:     [{ to: 'in_sprint',   label: 'Add to sprint', kind: 'primary' }],
@@ -79,12 +82,15 @@ function Column({ stage, tasks, onOpen, onDropTask, over, setOver }) {
   );
 }
 
-function TaskDrawer({ task, onClose, onMove, session }) {
+function TaskDrawer({ task, onClose, onMove, session, members = [], role, meId, onChanged }) {
   const [comment, setComment] = useState('');
   const [comments, setComments] = useState(null); // null = loading/seed
   const [posting, setPosting] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [abandoning, setAbandoning] = useState(false);
+  const [abandonReason, setAbandonReason] = useState('');
 
-  useEffect(() => { setComment(''); setComments(null); }, [task?.id]);
+  useEffect(() => { setComment(''); setComments(null); setAbandoning(false); setAbandonReason(''); }, [task?.id]);
   useEffect(() => {
     if (!task) return;
     const onKey = e => { if (e.key === 'Escape') onClose(); };
@@ -107,7 +113,10 @@ function TaskDrawer({ task, onClose, onMove, session }) {
   if (!task) return null;
   const st = stageByVal[task.stage] || { label: task.stage, color: 'var(--t3)' };
   const pr = PRIORITY[task.priority] || PRIORITY.medium;
-  const ownerName = task.ownerName || teamById[task.ownerId]?.name || 'Owner';
+  const hasOwner = !!task.ownerId;
+  const ownerName = hasOwner ? (task.ownerName || teamById[task.ownerId]?.name || 'Owner') : 'Unassigned';
+  const canManage = role === 'admin' || role === 'lead';
+  const isClosed = task.stage === 'done' || task.stage === 'abandoned';
   const actions = NEXT[task.stage] || [];
   const SEED_COMMENTS = [
     { who: ownerName, t: '2h ago', text: 'First pass uploaded. Went with the wet-tarmac grade on the hero frame.' },
@@ -137,6 +146,53 @@ function TaskDrawer({ task, onClose, onMove, session }) {
     } else {
       setComments(c => [...(c || []), { who: 'You', t: 'now', text }]);
     }
+  }
+
+  async function changeOwner(userId) {
+    if (!userId || busy) return;
+    if (!session) { toast('Sign in to assign an owner', 'bad'); return; }
+    setBusy(true);
+    try {
+      await setTaskOwner(session, task.id, userId);
+      const m = members.find(x => x.id === userId);
+      toast(`Owner set to ${m ? m.name.split(' ')[0] : 'member'}`);
+      onChanged?.(task.id);
+    } catch (e) {
+      toast('Could not set owner: ' + (e.message || 'not allowed'), 'bad');
+    }
+    setBusy(false);
+  }
+
+  async function assignSelf() {
+    if (busy) return;
+    if (!session) { toast('Sign in to assign yourself', 'bad'); return; }
+    setBusy(true);
+    try {
+      await selfAssignOwner(session, task.id);
+      toast('Assigned to you');
+      onChanged?.(task.id);
+    } catch (e) {
+      toast('Could not assign: ' + (e.message || 'not allowed'), 'bad');
+    }
+    setBusy(false);
+  }
+
+  async function confirmAbandon() {
+    const reason = abandonReason.trim();
+    if (!reason) { toast('A reason is required to abandon', 'bad'); return; }
+    if (busy) return;
+    if (!session) { toast('Sign in to abandon a task', 'bad'); return; }
+    setBusy(true);
+    try {
+      await abandonTask(session, task.id, reason);
+      toast('Task abandoned');
+      setAbandoning(false); setAbandonReason('');
+      onChanged?.(task.id);
+      onClose();
+    } catch (e) {
+      toast('Could not abandon: ' + (e.message || 'not allowed'), 'bad');
+    }
+    setBusy(false);
   }
 
   return (
@@ -169,11 +225,23 @@ function TaskDrawer({ task, onClose, onMove, session }) {
               <ProductTag code={task.product} size="lg" />
             </div>
             <div>
-              <div className="eyebrow" style={{ padding: 0, marginBottom: 5 }}>Assignees</div>
+              <div className="eyebrow" style={{ padding: 0, marginBottom: 5 }}>Owner</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                <Avatar id={task.ownerId} name={task.ownerName} initial={task.ownerInitial} size={24} />
-                <span style={{ fontSize: 13, color: 'var(--t2)' }}>{ownerName.split(' ')[0]}{task.collabs > 0 ? ` +${task.collabs}` : ''}</span>
+                <Avatar id={task.ownerId} name={task.ownerName} initial={hasOwner ? task.ownerInitial : '+'} size={24} />
+                <span style={{ fontSize: 13, color: hasOwner ? 'var(--t2)' : 'var(--t4)' }}>{hasOwner ? ownerName.split(' ')[0] : 'Unassigned'}{task.collabs > 0 ? ` +${task.collabs}` : ''}</span>
               </div>
+              {!isClosed && canManage && (
+                <select value={task.ownerId || ''} disabled={busy}
+                  onChange={e => changeOwner(e.target.value)}
+                  style={{ marginTop: 7, width: '100%', background: 'var(--bg-2)', border: '1px solid var(--border-2)',
+                    borderRadius: 'var(--r-sm)', padding: '6px 8px', color: 'var(--t1)', fontFamily: 'var(--font-ui)', fontSize: 12.5, outline: 'none', cursor: 'pointer' }}>
+                  <option value="">{hasOwner ? 'Change owner…' : 'Set owner…'}</option>
+                  {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+              )}
+              {!isClosed && !canManage && !hasOwner && (
+                <button onClick={assignSelf} disabled={busy} className="t-chip" style={{ marginTop: 7 }}>Assign to me</button>
+              )}
             </div>
           </div>
 
@@ -190,6 +258,34 @@ function TaskDrawer({ task, onClose, onMove, session }) {
               </button>
             ))}
           </div>
+
+          {!isClosed && canManage && (
+            <div style={{ marginBottom: 22 }}>
+              {!abandoning ? (
+                <button onClick={() => setAbandoning(true)}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '7px 12px', borderRadius: 'var(--r-sm)', cursor: 'pointer',
+                    background: 'transparent', color: 'var(--bad-fg)', border: '1px solid var(--bad-bd, var(--border-2))',
+                    fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+                  <Icon name="x" size={13} />Abandon task
+                </button>
+              ) : (
+                <div style={{ padding: '12px', borderRadius: 'var(--r-sm)', background: 'var(--bad-bg, var(--surface-2))', border: '1px solid var(--bad-bd, var(--border-2))' }}>
+                  <div style={{ fontSize: 12.5, color: 'var(--t2)', marginBottom: 8 }}>Abandoning is permanent. A reason is required.</div>
+                  <textarea value={abandonReason} onChange={e => setAbandonReason(e.target.value)} autoFocus rows={2}
+                    placeholder="Why is this being abandoned?"
+                    style={{ width: '100%', background: 'var(--bg-2)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-sm)', padding: '8px 10px',
+                      color: 'var(--t1)', fontFamily: 'var(--font-ui)', fontSize: 13, outline: 'none', resize: 'vertical', boxSizing: 'border-box' }} />
+                  <div style={{ display: 'flex', gap: 8, marginTop: 9 }}>
+                    <button onClick={confirmAbandon} disabled={busy || !abandonReason.trim()}
+                      style={{ padding: '7px 14px', borderRadius: 'var(--r-sm)', cursor: busy || !abandonReason.trim() ? 'default' : 'pointer',
+                        background: 'var(--bad-fg)', color: '#fff', border: 'none', opacity: busy || !abandonReason.trim() ? 0.5 : 1,
+                        fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Confirm abandon</button>
+                    <button onClick={() => { setAbandoning(false); setAbandonReason(''); }} className="t-chip">Cancel</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="eyebrow" style={{ padding: 0, marginBottom: 10 }}>Activity</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginBottom: 16 }}>
@@ -235,7 +331,7 @@ function TaskDrawer({ task, onClose, onMove, session }) {
 }
 
 function BoardScreen() {
-  const { session } = useAuth();
+  const { session, role, brandUser } = useAuth();
   // Logged in → show real data or empty; seed only in the no-session dev preview.
   const [tasks, setTasks] = useState(session ? [] : TASKS);
   const [usersById, setUsersById] = useState(session ? {} : teamById);
@@ -245,22 +341,24 @@ function BoardScreen() {
   const [selected, setSelected] = useState(null);
   const [over, setOver] = useState(null);
 
-  useEffect(() => {
+  // Reusable loader — also called after assign/abandon to refresh the board.
+  // reselectId keeps the drawer open on the freshly-loaded copy of that task
+  // (e.g. after an owner change); if the task left the board it closes.
+  const reload = React.useCallback(async (reselectId) => {
     if (!session) return;
-    let cancelled = false;
-    (async () => {
-      const usersRes = await fetchUsers(session);
-      const byId = usersRes?.byId || {};
-      const t = await fetchTasks(session, byId);
-      if (cancelled) return;
-      if (usersRes?.list?.length) {
-        setUsersById(byId);
-        setMembers(usersRes.list.filter(u => u.role === 'member' || u.role === 'lead'));
-      }
-      setTasks(t || []);
-    })();
-    return () => { cancelled = true; };
+    const usersRes = await fetchUsers(session);
+    const byId = usersRes?.byId || {};
+    const t = await fetchTasks(session, byId);
+    if (usersRes?.list?.length) {
+      setUsersById(byId);
+      setMembers(usersRes.list.filter(u => u.role === 'member' || u.role === 'lead'));
+    }
+    const list = t || [];
+    setTasks(list);
+    if (reselectId) setSelected(list.find(x => x.id === reselectId) || null);
   }, [session]);
+
+  useEffect(() => { reload(); }, [reload]);
 
   const move = async (id, stage) => {
     const prevTasks = tasks;
@@ -350,7 +448,8 @@ function BoardScreen() {
         </div>
       )}
 
-      <TaskDrawer task={selected} onClose={() => setSelected(null)} onMove={move} session={session} />
+      <TaskDrawer task={selected} onClose={() => setSelected(null)} onMove={move} session={session}
+        members={members} role={role} meId={brandUser?.id} onChanged={reload} />
     </div>
   );
 }

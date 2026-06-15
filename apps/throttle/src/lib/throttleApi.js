@@ -232,6 +232,24 @@ export async function moveTaskStage(session, taskId, stage, blockedReason) {
 export async function addTaskToSprint(session, taskId, sprintId) {
   return workerFetch('addTaskToSprint', { task_id: taskId, sprint_id: sprintId }, session.access_token);
 }
+// ── assignment / abandon ─────────────────────────────────────────
+// NB worker routes by URL ?action=assignTask; the sub-action travels as body.action
+// (workerFetch's `{ action, ...body }` spread lets our body.action win — see workerFetch.js).
+export async function setTaskOwner(session, taskId, userId) {
+  return workerFetch('assignTask', { action: 'set_owner', taskId, userId }, session.access_token);
+}
+export async function selfAssignOwner(session, taskId) {
+  return workerFetch('assignTask', { action: 'self_assign_owner', taskId }, session.access_token);
+}
+export async function addCollaborator(session, taskId, userId) {
+  return workerFetch('assignTask', { action: 'add_collaborator', taskId, userId }, session.access_token);
+}
+export async function removeAssignee(session, taskId, userId) {
+  return workerFetch('assignTask', { action: 'remove_assignee', taskId, userId }, session.access_token);
+}
+export async function abandonTask(session, taskId, reason) {
+  return workerFetch('abandonTask', { task_id: taskId, reason }, session.access_token);
+}
 
 // ── request actions ──────────────────────────────────────────────
 export async function actOnRequest(session, requestId, status, note) {
