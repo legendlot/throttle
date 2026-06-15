@@ -234,6 +234,27 @@ button { font-family: inherit; }
   color: var(--text-1);
 }
 
+/* ══════════════════════════════════════════════════════════
+   STICKY TABLE HEADERS (S137)
+   Garage tables render raw <table><thead>; the page scroll
+   container is <main> (overflowY:auto) and the topbar is a
+   non-overlapping flex sibling above it — so a sticky header
+   with top:0 pins to the top of the scroll area while rows
+   scroll under it, keeping column labels visible on long lists.
+   Opaque bg so rows don't bleed through; box-shadow hairline
+   survives border-collapse (a plain border-bottom on a sticky
+   cell drops out while scrolling). Pages that set their own
+   inline th background keep it (inline wins); position/top still
+   apply, so stickiness is universal. No-scroll tables: no-op.
+   ══════════════════════════════════════════════════════════ */
+thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface-2);
+  box-shadow: inset 0 -1px 0 var(--border);
+}
+
 /* ── Scrollbars — match dark theme ───────────────────────── */
 ::-webkit-scrollbar       { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
