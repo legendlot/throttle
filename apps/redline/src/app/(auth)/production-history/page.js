@@ -2,14 +2,18 @@
 /* Production History & Totals — daily PKG-OUT output by product, segregated
    Fresh (RTE/RTR) vs Returns (RTD_RETURN), with a running total for the chosen
    period. Reads getProductionHistory (→ get_production_history RPC). Cars only.
+   Search a product to drill into its day-by-day history by variant + colour.
    Spec: docs/superpowers/specs/2026-06-15-redline-production-history-design.md */
 import { useState, useEffect, useMemo } from 'react';
-import { Download } from 'lucide-react';
+import { Download, Search, X } from 'lucide-react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { useRefreshState } from '../layout.js';
 import { Icon, Panel, KpiTile, FilterChip, fmt } from '../../../components/kit/index.js';
+
+const N = (v) => Number(v) || 0;
+const variantLabel = (r) => [r.model, r.color].filter(Boolean).join(' ') || '—';
 
 // ── date helpers ──────────────────────────────────────────────
 function pad(n) { return String(n).padStart(2, '0'); }
@@ -26,8 +30,7 @@ function presetRange(p) {
   if (p === 'today') return { from: to, to };
   if (p === 'thisweek') {
     const d = new Date(today);
-    const back = (d.getDay() + 6) % 7; // Mon=0 … Sun=6
-    d.setDate(d.getDate() - back);
+    d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); // back to Monday
     return { from: fmtISO(d), to };
   }
   if (p === 'thismonth') return { from: `${today.getFullYear()}-${pad(today.getMonth() + 1)}-01`, to };
@@ -66,6 +69,7 @@ export default function ProductionHistoryPage() {
 
   const [preset, setPreset] = useState('thisweek');
   const [{ from, to }, setRange] = useState(() => presetRange('thisweek'));
+  const [search, setSearch] = useState('');
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -92,37 +96,51 @@ export default function ProductionHistoryPage() {
     return () => { cancelled = true; };
   }, [session, from, to, setRefreshing, setLastRefreshed]);
 
-  // period totals + day grouping (newest day first; products by total desc)
-  const { totals, days } = useMemo(() => {
-    const t = { fresh: 0, returns: 0, total: 0 };
+  const products = useMemo(() => [...new Set(rows.map(r => r.product))].sort(), [rows]);
+
+  // Filter + group. Empty/multi-match → product-level rows. Exactly one product
+  // matched → that product's days broken down by variant + colour.
+  const view = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const matched = q ? products.filter(p => p.toLowerCase().includes(q)) : products;
+    const single = (q && matched.length === 1) ? matched[0] : null;
+    const inScope = q ? rows.filter(r => matched.includes(r.product)) : rows;
+
+    const totals = { fresh: 0, returns: 0, total: 0 };
     const byDay = {};
-    for (const r of rows) {
-      const fresh = Number(r.fresh_qty) || 0, ret = Number(r.return_qty) || 0, tot = Number(r.total_qty) || 0;
-      t.fresh += fresh; t.returns += ret; t.total += tot;
-      if (!byDay[r.day]) byDay[r.day] = { day: r.day, products: [], fresh: 0, returns: 0, total: 0 };
-      byDay[r.day].products.push({ product: r.product, fresh, returns: ret, total: tot });
-      byDay[r.day].fresh += fresh; byDay[r.day].returns += ret; byDay[r.day].total += tot;
+    for (const r of inScope) {
+      const fresh = N(r.fresh_qty), ret = N(r.return_qty), tot = N(r.total_qty);
+      totals.fresh += fresh; totals.returns += ret; totals.total += tot;
+      const label = single ? variantLabel(r) : r.product;
+      if (!byDay[r.day]) byDay[r.day] = { day: r.day, items: {}, fresh: 0, returns: 0, total: 0 };
+      const d = byDay[r.day];
+      if (!d.items[label]) d.items[label] = { label, fresh: 0, returns: 0, total: 0 };
+      d.items[label].fresh += fresh; d.items[label].returns += ret; d.items[label].total += tot;
+      d.fresh += fresh; d.returns += ret; d.total += tot;
     }
     const days = Object.values(byDay).sort((a, b) => (a.day < b.day ? 1 : -1));
-    days.forEach(d => d.products.sort((a, b) => b.total - a.total));
-    return { totals: t, days };
-  }, [rows]);
+    days.forEach(d => { d.items = Object.values(d.items).sort((a, b) => b.total - a.total); });
+    return { matched, single, noMatch: q && matched.length === 0, totals, days, inScope };
+  }, [rows, products, search]);
 
   function exportCsv() {
-    const flat = rows.map(r => ({
-      date: r.day, product: r.product,
-      fresh: Number(r.fresh_qty) || 0, returns: Number(r.return_qty) || 0, total: Number(r.total_qty) || 0,
+    const flat = view.inScope.map(r => ({
+      date: r.day, product: r.product, variant: r.model || '', colour: r.color || '',
+      fresh: N(r.fresh_qty), returns: N(r.return_qty), total: N(r.total_qty),
     })).sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : b.total - a.total));
-    const ok = downloadCsv(`production-history-${from}-to-${to}.csv`, flat, ['date', 'product', 'fresh', 'returns', 'total']);
+    const tag = view.single ? view.single.toLowerCase().replace(/\s+/g, '-') + '-' : '';
+    const ok = downloadCsv(`production-history-${tag}${from}-to-${to}.csv`, flat, ['date', 'product', 'variant', 'colour', 'fresh', 'returns', 'total']);
     showToast(ok ? `Downloaded ${flat.length} rows` : 'Nothing to download', ok ? 'success' : 'warning');
   }
 
   if (loading) return <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 60 }}><Spinner /></div>;
 
+  const labelHeader = view.single ? 'Variant + Colour' : 'Product';
+
   return (
     <div style={{ maxWidth: 1100, margin: '0 auto', fontFamily: 'var(--font-ui)' }}>
       {/* filter bar */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 18, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
         <FilterChip active={preset === 'today'}     onClick={() => applyPreset('today')}>Today</FilterChip>
         <FilterChip active={preset === 'thisweek'}  onClick={() => applyPreset('thisweek')}>This Week</FilterChip>
         <FilterChip active={preset === 'thismonth'} onClick={() => applyPreset('thismonth')}>This Month</FilterChip>
@@ -136,27 +154,50 @@ export default function ProductionHistoryPage() {
           </span>
         )}
         <div style={{ marginLeft: 'auto' }}>
-          <button style={dlBtn} onClick={exportCsv} disabled={!rows.length}><Download size={14} />Download CSV</button>
+          <button style={dlBtn} onClick={exportCsv} disabled={!view.inScope.length}><Download size={14} />Download CSV</button>
         </div>
+      </div>
+
+      {/* product search */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 18, flexWrap: 'wrap' }}>
+        <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
+          <Search size={14} style={{ position: 'absolute', left: 10, color: 'var(--t3)', pointerEvents: 'none' }} />
+          <input
+            list="ph-products" value={search} onChange={e => setSearch(e.target.value)}
+            placeholder="Search a product…"
+            style={{ ...dateInputStyle, fontFamily: 'var(--font-ui)', width: 240, padding: '7px 30px 7px 30px' }} />
+          {search && (
+            <button onClick={() => setSearch('')} title="Clear"
+              style={{ position: 'absolute', right: 6, display: 'inline-flex', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--t3)' }}>
+              <X size={14} />
+            </button>
+          )}
+          <datalist id="ph-products">{products.map(p => <option key={p} value={p} />)}</datalist>
+        </div>
+        {view.single && (
+          <span style={{ fontSize: 12.5, color: 'var(--t3)' }}>
+            Showing <strong style={{ color: 'var(--t1)' }}>{view.single}</strong> by variant + colour · {from} → {to}
+          </span>
+        )}
       </div>
 
       {error && (
         <div style={{ background: 'var(--bad-bg)', border: '1px solid var(--bad-bd)', borderRadius: 'var(--r-sm)', padding: '12px 14px', fontSize: 13, color: 'var(--bad-fg)', marginBottom: 18 }}>{error}</div>
       )}
 
-      {/* running totals for the period */}
+      {/* running totals for the period (reflect the active filter) */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 20 }}>
-        <KpiTile label="Produced (fresh)" value={fmt(totals.fresh)}   tone="brand" />
-        <KpiTile label="Re-dispatched"    value={fmt(totals.returns)} tone="warn" />
-        <KpiTile label="Total packed out" value={fmt(totals.total)}   tone="ok" />
+        <KpiTile label="Produced (fresh)" value={fmt(view.totals.fresh)}   tone="brand" />
+        <KpiTile label="Re-dispatched"    value={fmt(view.totals.returns)} tone="warn" />
+        <KpiTile label="Total packed out" value={fmt(view.totals.total)}   tone="ok" />
       </div>
 
       {/* daily breakdown, newest first */}
-      {days.length === 0 ? (
+      {view.days.length === 0 ? (
         <Panel pad={36}>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, color: 'var(--t3)' }}>
             <Icon name="package" size={22} />
-            <span style={{ fontSize: 13 }}>Nothing produced in this period.</span>
+            <span style={{ fontSize: 13 }}>{view.noMatch ? `No product matches "${search}".` : 'Nothing produced in this period.'}</span>
           </div>
         </Panel>
       ) : (
@@ -164,26 +205,26 @@ export default function ProductionHistoryPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
-                <th style={thStyle}>Product</th>
+                <th style={thStyle}>{labelHeader}</th>
                 <th style={numTh}>Fresh</th>
                 <th style={numTh}>Returns</th>
                 <th style={numTh}>Total</th>
               </tr>
             </thead>
             <tbody>
-              {days.map(d => [
+              {view.days.map(d => [
                 <tr key={d.day + '-h'} style={{ background: 'var(--surface-2)' }}>
                   <td style={{ ...tdStyle, fontFamily: 'var(--font-display)', fontWeight: 700, letterSpacing: '0.03em', color: 'var(--t1)' }}>{fmtDay(d.day)}</td>
                   <td style={{ ...numTd, color: 'var(--t2)', fontWeight: 700 }}>{fmt(d.fresh)}</td>
                   <td style={{ ...numTd, color: 'var(--t2)', fontWeight: 700 }}>{fmt(d.returns)}</td>
                   <td style={{ ...numTd, color: 'var(--t1)', fontWeight: 700 }}>{fmt(d.total)}</td>
                 </tr>,
-                ...d.products.map((p, i) => (
-                  <tr key={d.day + '-' + p.product + i}>
-                    <td style={{ ...tdStyle, paddingLeft: 28, color: 'var(--t2)' }}>{p.product}</td>
-                    <td style={numTd}>{p.fresh ? fmt(p.fresh) : '—'}</td>
-                    <td style={{ ...numTd, color: p.returns ? 'var(--warn-fg)' : 'var(--t3)' }}>{p.returns ? fmt(p.returns) : '—'}</td>
-                    <td style={{ ...numTd, fontWeight: 600 }}>{fmt(p.total)}</td>
+                ...d.items.map((it, i) => (
+                  <tr key={d.day + '-' + it.label + i}>
+                    <td style={{ ...tdStyle, paddingLeft: 28, color: 'var(--t2)' }}>{it.label}</td>
+                    <td style={numTd}>{it.fresh ? fmt(it.fresh) : '—'}</td>
+                    <td style={{ ...numTd, color: it.returns ? 'var(--warn-fg)' : 'var(--t3)' }}>{it.returns ? fmt(it.returns) : '—'}</td>
+                    <td style={{ ...numTd, fontWeight: 600 }}>{fmt(it.total)}</td>
                   </tr>
                 )),
               ])}
