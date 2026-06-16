@@ -118,6 +118,29 @@ async function nextSeq(name, prefix, pad = 4) {
   return prefix + String(r.data).padStart(pad, '0');
 }
 
+// SF invoice number — derived from the existing VWINV series, never fed manually.
+// Format: VWINV-<FY><runningN>, FY = Indian financial year (Apr–Mar) as 4 digits
+// e.g. FY2026-27 → "2627"; tail = literal "00" + plain integer (3→…→18 today).
+// So VWINV-2627003 … VWINV-26270018; next = max(N)+1 within the current FY.
+function invoiceFyCode(iso) {
+  const [y, m] = String(iso || todayISO()).split('-').map(Number);
+  const start = m >= 4 ? y : y - 1;                  // FY starts in April
+  return String(start % 100).padStart(2, '0') + String((start + 1) % 100).padStart(2, '0');
+}
+async function nextInvoiceNo() {
+  const fy = invoiceFyCode(todayISO());
+  const prefix = `VWINV-${fy}`;                       // e.g. VWINV-2627
+  const r = await query('sf_invoices', '?select=invoice_no');
+  let maxN = 0;
+  (r.ok ? r.data : []).forEach((row) => {
+    const no = String(row.invoice_no || '');
+    if (!no.startsWith(prefix)) return;
+    const n = parseInt(no.slice(prefix.length), 10);  // "003"→3, "0018"→18
+    if (!isNaN(n) && n > maxN) maxN = n;
+  });
+  return `${prefix}00${maxN + 1}`;                    // VWINV-2627 + "00" + N
+}
+
 // ── FX helpers ─────────────────────────────────────────────────
 async function fxForDate(dateISO) {
   const d = dateISO || todayISO();
@@ -397,7 +420,8 @@ export default {
             const payments = (pmR.ok ? pmR.data : []).map(p => ({
               ref: p.payment_no, date: fmtDay(p.paid_date), inr: Number(p.amount_inr) || 0,
               rmb: p.amount_rmb != null ? Number(p.amount_rmb) : null, rate: p.fx_rate_used != null ? Number(p.fx_rate_used) : null,
-              method: p.method || 'Bank', against: p.subentity_code || (p.drawdown_id ? 'Draw-down' : 'Advance'), status: 'cleared',
+              method: p.method || 'Bank', against: p.subentity_code || (p.drawdown_id ? 'Draw-down' : 'Advance'),
+              utr: p.utr || null, status: 'cleared',
             }));
             const drawdowns = (ddR.ok ? ddR.data : []).map(d => ({
               no: d.drawdown_no, phase: d.phase, order: d.order_id ? (orderNoById[d.order_id] || null) : null,
@@ -520,8 +544,11 @@ export default {
             const allocations = allocR.ok ? allocR.data : [];
             const schedule = schedR.ok ? schedR.data : [];
             const money = stripCost(computePoMoney(o, allocations, schedule, eff), P);
+            // auto invoice number preview (read-only in the UI; never typed)
+            const suggestedInvoiceNo = o.cost_state === 'invoiced' ? null : await nextInvoiceNo();
             return ok({
               order: stripCost(o, P),
+              suggestedInvoiceNo,
               lines: (lR.ok ? lR.data : []).map(l => stripCost(l, P)),
               documents: dR.ok ? dR.data : [],
               costRows: stripCost({ rows: costRows }, P).rows || costRows,
@@ -781,30 +808,35 @@ export default {
           case 'invoiceOrder': {
             // LOT finance records the SF invoice → locks the order + accrues 2.5% commission.
             if (!canRecordPayment(P) && !canManageCharges(P)) return err('No permission (LOT finance only)', 403);
-            if (!d.order_id || !d.invoice_no) return err('order_id and invoice_no required');
+            if (!d.order_id) return err('order_id required');
             const oR = await query('orders', `?id=eq.${encodeURIComponent(d.order_id)}&select=*&limit=1`);
             if (!oR.ok || !oR.data[0]) return err('Order not found', 404);
             const o = oR.data[0];
             if (o.cost_state === 'invoiced') return err('Order already invoiced', 422);
             if (o.status === 'cancelled') return err('Order is cancelled', 422);
+            // invoice number is auto-derived from the VWINV series (never fed manually);
+            // an explicit invoice_no is still honoured (e.g. attaching to an existing invoice).
+            const invoice_no = (d.invoice_no && String(d.invoice_no).trim()) || await nextInvoiceNo();
             const invDate = d.invoice_date || todayISO();
             // 1) flip the order to invoiced
-            const upd = await update('orders', { invoice_no: d.invoice_no, invoice_date: invDate, cost_state: 'invoiced', updated_at: nowISO() }, `id=eq.${encodeURIComponent(d.order_id)}`);
+            const upd = await update('orders', { invoice_no, invoice_date: invDate, cost_state: 'invoiced', updated_at: nowISO() }, `id=eq.${encodeURIComponent(d.order_id)}`);
             if (!upd.ok) return err('Order invoice update failed: ' + JSON.stringify(upd.data), 502);
             // 2) (re)compute the SF invoice = sum of all orders carrying this invoice_no (multi-order invoices supported)
-            const grp = await query('orders', `?invoice_no=eq.${encodeURIComponent(d.invoice_no)}&select=total_inr,billing_subentity`);
+            const grp = await query('orders', `?invoice_no=eq.${encodeURIComponent(invoice_no)}&select=total_inr,billing_subentity`);
             const invTotal = (grp.ok ? grp.data : []).reduce((s, x) => s + (Number(x.total_inr) || 0), 0);
             const commission = +(invTotal * 0.025).toFixed(2);
             const sub = o.billing_subentity || ((grp.ok && grp.data[0]) ? grp.data[0].billing_subentity : null);
-            const exist = await query('sf_invoices', `?invoice_no=eq.${encodeURIComponent(d.invoice_no)}&select=id&limit=1`);
-            const invRow = { period: d.period || 'FY2026-27', invoice_date: invDate, billing_subentity: sub, total_inr: invTotal, commission_rate: 2.5, commission_inr: commission, status: 'received' };
+            const fy = invoiceFyCode(invDate);
+            const period = d.period || `FY20${fy.slice(0, 2)}-${fy.slice(2)}`;
+            const exist = await query('sf_invoices', `?invoice_no=eq.${encodeURIComponent(invoice_no)}&select=id&limit=1`);
+            const invRow = { period, invoice_date: invDate, billing_subentity: sub, total_inr: invTotal, commission_rate: 2.5, commission_inr: commission, status: 'received' };
             if (exist.ok && exist.data[0]) {
-              await update('sf_invoices', invRow, `invoice_no=eq.${encodeURIComponent(d.invoice_no)}`);
+              await update('sf_invoices', invRow, `invoice_no=eq.${encodeURIComponent(invoice_no)}`);
             } else {
-              await insert('sf_invoices', { invoice_no: d.invoice_no, ...invRow, notes: d.notes || null, created_by: userId }, 'return=minimal');
+              await insert('sf_invoices', { invoice_no, ...invRow, notes: d.notes || null, created_by: userId }, 'return=minimal');
             }
-            await logActivity(auth, 'order_invoiced', { scope: 'order', order_id: d.order_id, detail: d.invoice_no });
-            return ok({ order_id: d.order_id, invoice_no: d.invoice_no, invoice_total_inr: invTotal, commission_inr: commission });
+            await logActivity(auth, 'order_invoiced', { scope: 'order', order_id: d.order_id, detail: invoice_no });
+            return ok({ order_id: d.order_id, invoice_no, invoice_total_inr: invTotal, commission_inr: commission });
           }
 
           // ── PO money layer: per-PO allocations + schedule + container move ──
@@ -1030,7 +1062,7 @@ export default {
             const row = {
               payment_no, amount_inr: +amt.toFixed(2), paid_date: d.paid_date || todayISO(),
               method: d.method || null, fx_rate_used: num(d.fx_rate_used), drawdown_id: d.drawdown_id || null,
-              subentity_code: d.subentity_code || null,
+              subentity_code: d.subentity_code || null, utr: (d.utr && String(d.utr).trim()) || null,
               note: d.note || null, recorded_by: userId, recorded_by_name: auth.fullName,
             };
             const r = await insert('payments', row);

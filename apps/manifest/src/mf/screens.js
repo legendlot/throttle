@@ -235,6 +235,52 @@ function MoneyCard({ order, money, schedule, allocations, payments, run, session
   );
 }
 
+// searchable single-select — value-bound; options [{ value, label, sub }]
+function SelectSearch({ value, onChange, options, placeholder }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const sel = options.find((o) => o.value === value);
+  const query = q.trim().toLowerCase();
+  const matches = query ? options.filter((o) => `${o.value} ${o.label} ${o.sub || ''}`.toLowerCase().includes(query)) : options;
+  const pick = (o) => { onChange(o.value); setOpen(false); setQ(''); };
+  return (
+    <div style={{ position: 'relative' }}>
+      <button type="button" className="mf-input" onClick={() => setOpen((v) => !v)}
+        style={{ ...selectBtnStyle }}>
+        <span style={{ flex: 1, minWidth: 0, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: sel ? 'var(--t1)' : 'var(--t3)' }}>
+          {sel ? <>{sel.label}{sel.sub ? <span style={{ color: 'var(--t3)' }}> · {sel.sub}</span> : null}</> : (placeholder || 'Select…')}
+        </span>
+        <ChevronDown size={14} color="var(--t3)" style={{ flexShrink: 0 }} />
+      </button>
+      {open && (
+        <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, zIndex: 50, maxHeight: 320, overflow: 'hidden',
+          background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', boxShadow: 'var(--shadow)', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 11px', borderBottom: '1px solid var(--border)' }}>
+            <Search size={13} color="var(--t3)" />
+            <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search by ID or title…"
+              onKeyDown={(e) => { if (e.key === 'Escape') { setOpen(false); setQ(''); } }}
+              style={{ flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', color: 'var(--t1)', fontFamily: MONO, fontSize: 11.5 }} />
+          </div>
+          <div style={{ overflowY: 'auto' }}>
+            {matches.length ? matches.map((o) => (
+              <div key={o.value} className="mf-tr click" onMouseDown={(e) => { e.preventDefault(); pick(o); }}
+                style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 13px', cursor: 'pointer',
+                  background: o.value === value ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'transparent',
+                  borderBottom: '1px solid color-mix(in srgb, var(--border) 55%, transparent)' }}>
+                <Mono color="var(--t1)" weight={600} size={11.5}>{o.label}</Mono>
+                {o.sub && <span style={{ flex: 1, minWidth: 0, color: 'var(--t2)', fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.sub}</span>}
+              </div>
+            )) : <div style={{ padding: '12px 13px', fontFamily: MONO, fontSize: 11, color: 'var(--t3)' }}>No match</div>}
+          </div>
+        </div>
+      )}
+      {open && <div onMouseDown={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 49 }} />}
+    </div>
+  );
+}
+const selectBtnStyle = { width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderRadius: 8,
+  background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--t1)', fontFamily: DISP, fontSize: 13, cursor: 'pointer' };
+
 // ════════════════════════════════════════════════════════════════
 function Dashboard({ data, onNav }) {
   const s = data.summary;
@@ -393,7 +439,6 @@ function OrderDetail({ detailId, session, onNav, reload, data }) {
   const [edit, setEdit] = useState(false);
   const [form, setForm] = useState(null);
   const [lines, setLines] = useState([]);
-  const [invNo, setInvNo] = useState('');
   const [moveTo, setMoveTo] = useState('');
 
   const load = () => {
@@ -412,6 +457,9 @@ function OrderDetail({ detailId, session, onNav, reload, data }) {
   const stamps = {};
   (resp.orderEvents || []).forEach((e) => { stamps[e.stage] = e.occurred_at; });
   (resp.legs || []).forEach((l) => (l.events || []).forEach((e) => { stamps[e.stage] = e.occurred_at; }));
+  // real-date fallbacks for seeded/historical orders that carry no stage_events
+  if (!stamps.placed && o.created_at) stamps.placed = o.created_at;
+  if (o.cost_state === 'invoiced' && o.invoice_date && !stamps.received) stamps.received = o.invoice_date;
 
   const startEdit = () => {
     setForm({ purchase_inr: o.purchase_inr ?? '', shipping_inr: o.shipping_inr ?? '', customs_inr: o.customs_inr ?? '', gst_percent: o.gst_percent ?? 18 });
@@ -553,9 +601,13 @@ function OrderDetail({ detailId, session, onNav, reload, data }) {
                 {resp.commission && <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}><Mono size={11} color="var(--t3)">Commission · {resp.commission.rate}%</Mono><Mono color="var(--t1)">{D.inr(resp.commission.inr)}</Mono></div>}
               </Card>
             : editable && !edit && <Card title="Invoice" bodyPad="16px 20px 18px">
-                <Field label="SF invoice number"><Input value={invNo} onChange={(e) => setInvNo(e.target.value)} placeholder="VWINV-…" /></Field>
-                <Mono size={10} color="var(--t3)" style={{ display: 'block', margin: '8px 0 12px' }}>Locks edits + accrues 2.5% commission (~{D.inr(commPreview)}).</Mono>
-                <Btn onClick={() => { if (invNo.trim()) run(() => act('invoiceOrder', { order_id: o.id, invoice_no: invNo.trim() }, session)); }} style={{ width: '100%' }}>Mark invoiced</Btn>
+                <Eyebrow style={{ marginBottom: 7 }}>SF invoice number · auto-assigned</Eyebrow>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', borderRadius: 8, background: 'var(--surface2)', border: '1px solid var(--border)' }}>
+                  <Mono color="var(--t1)" weight={600} size={13}>{resp.suggestedInvoiceNo || 'VWINV-…'}</Mono>
+                  <Mono size={9} color="var(--t3)" style={{ letterSpacing: '.1em' }}>NEXT IN SERIES</Mono>
+                </div>
+                <Mono size={10} color="var(--t3)" style={{ display: 'block', margin: '8px 0 12px' }}>Assigned automatically on invoicing. Locks edits + accrues 2.5% commission (~{D.inr(commPreview)}).</Mono>
+                <Btn onClick={() => run(() => act('invoiceOrder', { order_id: o.id }, session))} style={{ width: '100%' }}>Mark invoiced</Btn>
               </Card>}
           {o.status !== 'draft' && <MoneyCard order={o} money={resp.money} schedule={resp.schedule || []} allocations={resp.allocations || []} payments={data?.payments || []} run={run} session={session} />}
         </Stack>
@@ -608,10 +660,30 @@ function Drawdowns({ data, onNav }) {
 }
 
 // ════════════════════════════════════════════════════════════════
-function Payments({ data }) {
+function Payments({ data, session, reload }) {
   const s = data.summary;
   const rated = data.payments.filter((p) => p.rate);
   const avg = rated.length ? (rated.reduce((a, p) => a + p.rate * p.inr, 0) / rated.reduce((a, p) => a + p.inr, 0)).toFixed(2) : '—';
+  const channels = (data.subentities || []).map((x) => x.subentity_code).filter(Boolean);
+  const [show, setShow] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const blank = { amount_inr: '', utr: '', paid_date: '', subentity_code: channels[0] || 'SF', method: 'bank_transfer', fx_rate_used: '', note: '' };
+  const [f, setF] = useState(blank);
+  const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
+  const submit = async () => {
+    if (busy) return;
+    if (!(Number(f.amount_inr) > 0)) { alert('Enter the wire amount (INR)'); return; }
+    if (!f.utr.trim()) { alert('Bank UTR is required for every wire'); return; }
+    setBusy(true);
+    try {
+      await act('recordPayment', {
+        amount_inr: Number(f.amount_inr), utr: f.utr.trim(), paid_date: f.paid_date || null,
+        subentity_code: f.subentity_code, method: f.method || null,
+        fx_rate_used: f.fx_rate_used === '' ? null : Number(f.fx_rate_used), note: f.note || null,
+      }, session);
+      setF(blank); setShow(false); reload && reload();
+    } catch (e) { alert(e?.message || 'Record failed'); } finally { setBusy(false); }
+  };
   return (
     <Stack>
       <Grid cols="repeat(3,1fr)">
@@ -619,13 +691,28 @@ function Payments({ data }) {
         <Kpi eyebrow="SUB-ENTITIES" value={data.subentities.length} sub="payout channels" size={24} />
         <Kpi eyebrow="AVG. RATE PAID" value={avg} color="var(--t1)" sub="CNY/INR · weighted" size={24} />
       </Grid>
-      <Card title="Outgoing wires" action={<Btn variant="secondary" style={{ padding: '7px 12px', fontSize: 11 }}><Plus size={13} style={{ marginRight: 5, verticalAlign: -2 }} />Record Wire</Btn>}>
+      {show && (
+        <Card title="Record a wire → Solve Factory" bodyPad="18px 20px 20px"
+          action={<Btn variant="secondary" style={{ padding: '6px 12px', fontSize: 11 }} onClick={() => setShow(false)}>Cancel</Btn>}>
+          <Grid cols="repeat(3,1fr)">
+            <Field label="Amount (₹)"><Input value={f.amount_inr} onChange={(e) => set('amount_inr', e.target.value)} placeholder="0" /></Field>
+            <Field label="Bank UTR *"><Input value={f.utr} onChange={(e) => set('utr', e.target.value)} placeholder="UTR / bank ref" /></Field>
+            <Field label="Paid date"><Input type="date" value={f.paid_date} onChange={(e) => set('paid_date', e.target.value)} /></Field>
+            <Field label="Channel"><Select value={f.subentity_code} onChange={(e) => set('subentity_code', e.target.value)} options={channels.length ? channels : ['SF']} /></Field>
+            <Field label="Method"><Select value={f.method} onChange={(e) => set('method', e.target.value)} options={['bank_transfer', 'alipay', 'cash', 'other']} /></Field>
+            <Field label="Rate (CNY/INR, optional)"><Input value={f.fx_rate_used} onChange={(e) => set('fx_rate_used', e.target.value)} placeholder="—" /></Field>
+          </Grid>
+          <div style={{ marginTop: 12 }}><Field label="Note"><Input value={f.note} onChange={(e) => set('note', e.target.value)} placeholder="optional" /></Field></div>
+          <Btn onClick={submit} style={{ marginTop: 14 }}>{busy ? 'Recording…' : 'Record wire'}</Btn>
+        </Card>
+      )}
+      <Card title="Outgoing wires" action={<Btn variant="secondary" style={{ padding: '7px 12px', fontSize: 11 }} onClick={() => setShow((v) => !v)}><Plus size={13} style={{ marginRight: 5, verticalAlign: -2 }} />Record Wire</Btn>}>
         {data.payments.length ? (
           <Table rows={data.payments} rowKey={(r) => r.ref} cols={[
             { label: 'Ref', render: (r) => <Mono color="var(--t1)" weight={600}>{r.ref}</Mono> },
             { label: 'Date', render: (r) => <Mono size={11} color="var(--t3)">{r.date}</Mono> },
             { label: 'Amount INR', align: 'right', render: (r) => <Mono color="var(--green)" weight={600}>{D.inr(r.inr)}</Mono> },
-            { label: 'Amount RMB', align: 'right', render: (r) => <Mono>{r.rmb != null ? D.rmb(r.rmb) : '—'}</Mono> },
+            { label: 'UTR', render: (r) => r.utr ? <Mono size={11} color="var(--t2)">{r.utr}</Mono> : <Mono size={11} color="var(--t3)">—</Mono> },
             { label: 'Rate', align: 'right', render: (r) => <Mono>{r.rate ?? '—'}</Mono> },
             { label: 'Method', render: (r) => <span style={{ color: 'var(--t2)' }}>{r.method}</span> },
             { label: 'Channel', render: (r) => <Mono size={11} color="var(--t3)">{r.against}</Mono> },
@@ -837,7 +924,7 @@ function NewDrawdown({ data, onNav, session, reload }) {
         <Card title="Draw-down request" bodyPad="20px">
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
             <Field label="Phase"><Select value={f.phase} onChange={(e) => setF((x) => ({ ...x, phase: e.target.value }))} options={['Goods advance', 'Shipping & customs', 'Local', 'Other']} /></Field>
-            <Field label="Against order"><Select value={f.order} onChange={(e) => setF((x) => ({ ...x, order: e.target.value }))} options={['— none —', ...data.orders.map((o) => o.no)]} /></Field>
+            <Field label="Against order"><SelectSearch value={f.order} onChange={(v) => setF((x) => ({ ...x, order: v }))} options={[{ value: '— none —', label: '— none —' }, ...data.orders.map((o) => ({ value: o.no, label: o.no, sub: o.title }))]} /></Field>
             <Field label="Amount (INR)"><Input value={f.amount} onChange={(e) => setF((x) => ({ ...x, amount: e.target.value }))} placeholder="0" /></Field>
             <Field label="Rate (CNY/INR)"><Input value={f.rate} onChange={(e) => setF((x) => ({ ...x, rate: e.target.value }))} /></Field>
             <div style={{ gridColumn: '1 / -1' }}><Field label="Notes"><Textarea value={f.notes} onChange={(e) => setF((x) => ({ ...x, notes: e.target.value }))} placeholder="Add context for this request…" /></Field></div>
