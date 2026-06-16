@@ -3,6 +3,15 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.1.0] - 2026-06-16
+### Changed
+- Rewrote "Signing In & Navigation" for the front-end redesign: the auto-collapsing
+  sidebar (only the active section stays open) with an icon-rail collapse, the
+  in-sidebar global search (with the `/` shortcut) that spans every record type, the
+  slim top strip (area breadcrumb + segmented sub-tabs + LIVE dot), and the new
+  page layout where the title sits in the page above its summary cards. Clarified the
+  two kinds of search (system-wide vs in-panel filter) and added the HELP nav group.
+
 ## [1.0.0] - 2026-06-06
 ### Added
 - Complete self-serve manual for Snorkel: 7 parts, 23 chapters (Getting Started;
