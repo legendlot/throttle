@@ -1,15 +1,21 @@
 'use client';
 /* ════════════════════════════════════════════════════════════
-   Depot Overview — live warehouse cockpit (Phase 2, Session 141).
-   Built entirely on existing cheap lotopsproxy reads (NO worker
-   change): getDispatchDashboard (counts), getDispatchLineView
-   (today's floor), getAllocatedByChannel, getDispatchPipeline
-   (on-hand finished goods by product), getShippedByChannel.
+   Depot Overview — live warehouse cockpit.
+   Phase 2 (S141): built on cheap lotopsproxy reads.
+   S147 redesign: the 3-bar funnel → 5 individual Redline-style
+   pipeline stat cards (With Production · With Dispatch · Allocated
+   · Dispatched today · Shipments today); operators-on-floor added
+   to the hero; line cards now show rostered manpower per line.
+   Reads: getDispatchDashboard (live counts) · getDispatchLineView
+   (today's floor) · getDispatchScanSummary (today DOUT + shipments)
+   · getManpowerLog (per-line roster) · getOperatorAttendance
+   (on-floor headcount) · getAllocatedByChannel · getDispatchPipeline
+   · getShippedByChannel.
    ════════════════════════════════════════════════════════════ */
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useAuth } from '@throttle/auth';
-import { garageFetch } from '@throttle/db';
-import { KpiCard, Panel, Chip, EmptyState, Spinner, StatusBadge, ProgressBar } from '@throttle/ui';
+import { garageFetch, workerFetch } from '@throttle/db';
+import { Panel, Chip, EmptyState, Spinner, StatusBadge } from '@throttle/ui';
 import { useAutoRefresh } from '../../../hooks/useAutoRefresh.js';
 import { useRefreshState } from '../layout.js';
 
@@ -23,9 +29,10 @@ function fmtClock(ts) {
     return new Date(ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' });
   } catch { return '—'; }
 }
+function istToday() { return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); }
 
 // ── Shared style constants (Pit Wall tokens) ──────────────────
-const sectionLabel = { margin: '0 0 14px 0', fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t2)' };
+const sectionLabel = { margin: 0, fontFamily: 'var(--cond)', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t2)' };
 const thStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontWeight: 600, textAlign: 'left' };
 const tdStyle = { padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 13, borderBottom: '1px solid rgba(64,64,64,.5)', whiteSpace: 'nowrap', color: 'var(--t1)' };
 const numTd = { ...tdStyle, textAlign: 'right' };
@@ -35,6 +42,22 @@ function ChannelTypeBadge({ type }) {
   const t = (type || 'other').toLowerCase();
   const variant = t === 'ecom' ? 'info' : t === 'retail' ? 'brand' : 'neutral';
   return <StatusBadge variant={variant}>{type || '—'}</StatusBadge>;
+}
+
+// ── Pipeline stat card (Redline summary-tile style) ───────────
+function StatCard({ label, value, sub, color, tag }) {
+  return (
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)',
+      padding: 16, position: 'relative', overflow: 'hidden' }}>
+      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: color || 'var(--border)' }} />
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 6 }}>
+        <span style={{ fontFamily: 'var(--cond)', fontSize: 12.5, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--t2)' }}>{label}</span>
+        {tag && <span style={{ fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t4)', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 5px' }}>{tag}</span>}
+      </div>
+      <div style={{ fontFamily: 'var(--cond)', fontSize: 34, fontWeight: 800, color: color || 'var(--t1)', lineHeight: 1, marginTop: 10 }}>{fmt(value)}</div>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginTop: 8, letterSpacing: '0.03em' }}>{sub}</div>
+    </div>
+  );
 }
 
 // ── Allocated / shipped channel card ──────────────────────────
@@ -59,13 +82,16 @@ function ChannelCard({ row }) {
 }
 
 // ── Today's line card (D1/D2) ─────────────────────────────────
-function LineCard({ row }) {
+function LineCard({ row, rostered }) {
   return (
     <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', padding: 16 }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 12, gap: 8 }}>
         <div style={{ fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 800, letterSpacing: '0.05em', color: 'var(--t1)' }}>{row.line}</div>
-        <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>
-          {row.active_operators || 0} op{(row.active_operators || 0) === 1 ? '' : 's'} · last {fmtClock(row.last_scan_at)}
+        <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', textAlign: 'right' }}>
+          {rostered != null
+            ? <><span style={{ color: 'var(--t1)' }}>{rostered}</span> rostered · {row.active_operators || 0} active</>
+            : <>{row.active_operators || 0} op{(row.active_operators || 0) === 1 ? '' : 's'}</>}
+          <br />last {fmtClock(row.last_scan_at)}
         </div>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 12 }}>
@@ -98,6 +124,9 @@ export default function DepotOverview() {
 
   const [counts,    setCounts]    = useState(null);
   const [lines,     setLines]     = useState([]);
+  const [today,     setToday]     = useState(null);   // getDispatchScanSummary
+  const [allocByLine, setAllocByLine] = useState({}); // { D1: n, D2: n } rostered
+  const [floorOps,  setFloorOps]  = useState(null);   // distinct present dispatch operators
   const [alloc,     setAlloc]     = useState([]);
   const [stock,     setStock]     = useState(null);   // pipeline products
   const [stockLoad, setStockLoad] = useState(false);
@@ -114,15 +143,18 @@ export default function DepotOverview() {
   const loadLive = useCallback(async () => {
     if (!session) return;
     setRefreshing(true);
+    const tdy = istToday();
     try {
-      const [dash, lv, ab] = await Promise.allSettled([
+      const [dash, lv, ab, dss] = await Promise.allSettled([
         garageFetch('getDispatchDashboard',  { limit: '1' }, session),
         garageFetch('getDispatchLineView',   {}, session),
         garageFetch('getAllocatedByChannel', {}, session),
+        garageFetch('getDispatchScanSummary', { date: tdy }, session),
       ]);
       if (dash.status === 'fulfilled') setCounts(dash.value?.counts || null);
       if (lv.status   === 'fulfilled') setLines(Array.isArray(lv.value?.dispatch_lines) ? lv.value.dispatch_lines : []);
       if (ab.status   === 'fulfilled') setAlloc(Array.isArray(ab.value) ? ab.value : []);
+      if (dss.status  === 'fulfilled') setToday(dss.value || null);
     } finally {
       setRefreshing(false);
       setLastRefreshed(new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' }));
@@ -130,6 +162,35 @@ export default function DepotOverview() {
   }, [session, setRefreshing, setLastRefreshed]);
 
   useAutoRefresh(loadLive, 30000, !session);
+
+  // ── Floor people (roster per line + on-floor headcount) ─────
+  // workerFetch / canManageFloor-gated; degrade silently if the
+  // viewer lacks the permission (manpower figures just show —).
+  const loadFloorPeople = useCallback(async () => {
+    if (!session) return;
+    const tdy = istToday();
+    const [logRes, attRes] = await Promise.allSettled([
+      workerFetch('getManpowerLog',         { data: { shift_date: tdy } }, session),
+      workerFetch('getOperatorAttendance',  { data: { date_from: tdy, date_to: tdy, team: 'dispatch' } }, session),
+    ]);
+    if (logRes.status === 'fulfilled') {
+      const log = logRes.value?.data;
+      if (log && typeof log === 'object' && !Array.isArray(log)) {
+        setAllocByLine({
+          D1: Array.isArray(log.D1) ? log.D1.length : 0,
+          D2: Array.isArray(log.D2) ? log.D2.length : 0,
+        });
+      }
+    }
+    if (attRes.status === 'fulfilled') {
+      const rows = Array.isArray(attRes.value?.data) ? attRes.value.data
+        : Array.isArray(attRes.value) ? attRes.value : [];
+      const present = new Set(rows.filter(r => !r.clock_out).map(r => r.operator_id));
+      setFloorOps(present.size);
+    }
+  }, [session]);
+
+  useAutoRefresh(loadFloorPeople, 60000, !session);
 
   // ── On-hand stock by product (heavier pipeline read) — once + manual ──
   const loadStock = useCallback(async () => {
@@ -187,10 +248,9 @@ export default function DepotOverview() {
   const c = counts || {};
   const inArea = (c.rtd_count || 0) + (c.handed_over_count || 0) + (c.allocated_count || 0);
 
-  const todayPacked     = lines.reduce((s, l) => s + (l.pack_count  || 0), 0);
-  const todayAllocated  = lines.reduce((s, l) => s + (l.alloc_count || 0), 0);
-  const todayDispatched = lines.reduce((s, l) => s + (l.dout_count  || 0), 0);
-  const todayOperators  = lines.reduce((s, l) => s + (l.active_operators || 0), 0);
+  const todayPacked = lines.reduce((s, l) => s + (l.pack_count || 0), 0);
+  const dispatchedToday = today?.DOUT != null ? Number(today.DOUT) : lines.reduce((s, l) => s + (l.dout_count || 0), 0);
+  const shipmentsToday  = today?.shipments_out != null ? Number(today.shipments_out) : null;
 
   const allocTotal = alloc.reduce((s, r) => s + (r.unit_count || 0), 0);
   const allocSorted = [...alloc].sort((a, b) => (b.unit_count || 0) - (a.unit_count || 0));
@@ -211,61 +271,57 @@ export default function DepotOverview() {
     .sort((a, b) => (b.onHand + b.allocated) - (a.onHand + a.allocated));
   const stockOnHandTotal = stockRows.reduce((s, r) => s + r.onHand, 0);
 
-  // funnel proportions
-  const funnelMax = Math.max(c.rtd_count || 0, c.handed_over_count || 0, c.allocated_count || 0, 1);
+  // ── Pipeline stat cards (live state + today throughput) ─────
+  const statCards = [
+    { label: 'With Production', value: c.rtd_count,         sub: 'Awaiting handover',   color: 'var(--amber)',  tag: 'now' },
+    { label: 'With Dispatch',   value: c.handed_over_count, sub: 'Awaiting allocation', color: 'var(--yellow)', tag: 'now' },
+    { label: 'Allocated',       value: c.allocated_count,   sub: 'Awaiting ship',       color: 'var(--blue)',   tag: 'now' },
+    { label: 'Dispatched',      value: dispatchedToday,     sub: 'Sent out (DOUT)',     color: 'var(--green)',  tag: 'today' },
+    { label: 'Shipments',       value: shipmentsToday,      sub: 'Manifests sent out',  color: '#14b8a6',       tag: 'today' },
+  ];
 
   return (
     <div style={{ maxWidth: 1180, margin: '0 auto' }}>
-      {/* ── Hero: in the dispatch area ─────────────────────── */}
-      <section style={{ marginBottom: 30 }}>
-        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16, marginBottom: 16 }}>
+      {/* ── Hero: in the dispatch area + on-floor headcount ──── */}
+      <section style={{ marginBottom: 24 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
           <div>
             <h1 className="font-display" style={{ fontSize: 26, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--t1)', margin: 0 }}>Depot</h1>
             <div style={{ fontFamily: 'var(--font-ui)', fontSize: 13.5, color: 'var(--t3)' }}>Warehouse · finished goods · dispatch</div>
           </div>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontFamily: 'var(--cond)', fontSize: 40, fontWeight: 800, color: 'var(--yellow)', lineHeight: 1 }}>{fmt(inArea)}</div>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--t3)', marginTop: 4 }}>units in the dispatch area</div>
+          <div style={{ display: 'flex', gap: 28, alignItems: 'flex-end' }}>
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontFamily: 'var(--cond)', fontSize: 40, fontWeight: 800, color: 'var(--yellow)', lineHeight: 1 }}>{fmt(inArea)}</div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--t3)', marginTop: 4 }}>units in the dispatch area</div>
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontFamily: 'var(--cond)', fontSize: 40, fontWeight: 800, color: floorOps ? 'var(--green)' : 'var(--t2)', lineHeight: 1 }}>{floorOps != null ? fmt(floorOps) : '—'}</div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--t3)', marginTop: 4 }}>operators on the floor</div>
+            </div>
           </div>
         </div>
+      </section>
 
-        {/* funnel */}
-        <Panel padding={18}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 18 }}>
-            {[
-              { label: 'PKG Out',       sub: 'Awaiting handover', val: c.rtd_count,         tone: 'warn',  color: 'var(--amber)' },
-              { label: 'With Dispatch', sub: 'Awaiting allocation', val: c.handed_over_count, tone: 'brand', color: 'var(--yellow)' },
-              { label: 'Allocated',     sub: 'Awaiting ship',     val: c.allocated_count,   tone: 'info',  color: 'var(--blue)' },
-            ].map((s, i) => (
-              <div key={s.label} style={{ position: 'relative' }}>
-                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <span style={{ fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--t2)' }}>
-                    {i + 1}. {s.label}
-                  </span>
-                  <span style={{ fontFamily: 'var(--cond)', fontSize: 24, fontWeight: 800, color: s.color, lineHeight: 1 }}>{fmt(s.val)}</span>
-                </div>
-                <ProgressBar value={s.val || 0} target={funnelMax} tone={s.tone} height={8} />
-                <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginTop: 6 }}>{s.sub}</div>
-              </div>
-            ))}
-          </div>
-        </Panel>
+      {/* ── Pipeline stat cards (replaces the funnel) ────────── */}
+      <section style={{ marginBottom: 30 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+          {statCards.map(s => <StatCard key={s.label} {...s} />)}
+        </div>
       </section>
 
       {/* ── Today on the floor ─────────────────────────────── */}
       <section style={{ marginBottom: 30 }}>
-        <h2 style={sectionLabel}>Today on the Floor</h2>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 12, marginBottom: 14 }}>
-          <KpiCard label="Packed Today"     value={fmt(todayPacked)}     sub="Boxed on dispatch lines" />
-          <KpiCard label="Allocated Today"  value={fmt(todayAllocated)}  sub="Assigned to channels" color={todayAllocated > 0 ? 'blue' : undefined} />
-          <KpiCard label="Dispatched Today" value={fmt(todayDispatched)} sub="Sent out (DOUT)"      color="green" />
-          <KpiCard label="Active Operators" value={fmt(todayOperators)}  sub="Across dispatch lines" />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+          <h2 style={sectionLabel}>Today on the Floor</h2>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>
+            {fmt(todayPacked)} packed{floorOps != null ? ` · ${fmt(floorOps)} on floor` : ''}
+          </span>
         </div>
         {lines.length === 0 ? (
           <Panel padding={0}><EmptyState message="No dispatch line activity yet today" /></Panel>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
-            {lines.map(l => <LineCard key={l.line} row={l} />)}
+            {lines.map(l => <LineCard key={l.line} row={l} rostered={allocByLine[l.line]} />)}
           </div>
         )}
       </section>
@@ -273,7 +329,7 @@ export default function DepotOverview() {
       {/* ── Allocated — awaiting ship ──────────────────────── */}
       <section style={{ marginBottom: 30 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-          <h2 style={{ ...sectionLabel, marginBottom: 0 }}>Allocated — Awaiting Ship</h2>
+          <h2 style={{ ...sectionLabel }}>Allocated — Awaiting Ship</h2>
           <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--blue)' }}>{fmt(allocTotal)} units</span>
         </div>
         {allocSorted.length === 0 ? (
@@ -288,7 +344,7 @@ export default function DepotOverview() {
       {/* ── On-hand finished goods by product ──────────────── */}
       <section style={{ marginBottom: 30 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-          <h2 style={{ ...sectionLabel, marginBottom: 0 }}>On-Hand Finished Goods</h2>
+          <h2 style={{ ...sectionLabel }}>On-Hand Finished Goods</h2>
           <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>{fmt(stockOnHandTotal)} unallocated on hand</span>
         </div>
         <Panel padding={0}>
@@ -328,7 +384,7 @@ export default function DepotOverview() {
       {/* ── Sent out by channel (throughput) ───────────────── */}
       <section style={{ marginBottom: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-          <h2 style={{ ...sectionLabel, marginBottom: 0 }}>Sent Out by Channel</h2>
+          <h2 style={{ ...sectionLabel }}>Sent Out by Channel</h2>
           <div style={{ flex: 1 }} />
           <Chip active={preset === '10days'}    onClick={() => applyPreset('10days')}>10 Days</Chip>
           <Chip active={preset === 'thisweek'}  onClick={() => applyPreset('thisweek')}>This Week</Chip>

@@ -1,44 +1,60 @@
 import {
-  Gauge, Truck, Users,
-  Network, Send, ArrowLeftRight, FileText, RefreshCw, PackageCheck,
-  BarChart3, GitBranch, Tag,
+  Gauge, Send, Network, FileText, PackageCheck,
+  Undo2, RefreshCw, ArrowLeftRight, BarChart3,
+  LayoutGrid, Truck, GitBranch, ScanLine, ClipboardList, Users, Tag,
 } from 'lucide-react';
 
 /* ════════════════════════════════════════════════════════════
-   Depot IA — dispatch is the PRIMARY destination here (it was a
-   cramped group inside Redline). Phase 1: Overview (placeholder)
-   + the full Dispatch group + Manpower, with Channels in the
-   Setup drawer and the two live floor-views (Dispatch Overview /
-   Lines) as ⌘K-only destinations. No System Manual yet.
+   Depot IA (Session 147 reorg) — Depot IS the dispatch system,
+   so a single catch-all "Dispatch" group was redundant + heavy.
+   Pages are now grouped by purpose:
+     • Outbound — the ship-out flow (pipeline → shipments → challans → counts)
+     • Returns  — reverse logistics (restock + repack*)
+     • Floor    — live floor views, the dispatch scan feed, roster + manpower
+     • Setup    — done-once config (channels)
+   The two live floor views (Live Floor / Lines) + the new Scan
+   Feed are surfaced in the Floor group (previously ⌘K-only).
+   * Repack is parked to move back to Redline (production activity);
+     it stays here until the handover mechanism is decided.
    ════════════════════════════════════════════════════════════ */
 
 export const NAV_PRIMARY = [
   { id: 'overview', label: 'Overview', icon: Gauge, route: '/dashboard' },
   {
-    id: 'dispatch', label: 'Dispatch', icon: Truck,
+    id: 'outbound', label: 'Outbound', icon: Send,
     children: [
-      { id: 'pipeline',        label: 'Pipeline',        route: '/dispatch-pipeline',   icon: Network },
-      { id: 'shipments',       label: 'Shipments',       route: '/dispatch-shipments',  icon: Send },
-      { id: 'repack',          label: 'Repack',          route: '/repack-runs',         icon: ArrowLeftRight },
-      { id: 'repack-reports',  label: 'Repack Reports',  route: '/repack-runs/reports', icon: BarChart3 },
-      { id: 'challans',        label: 'Challans',        route: '/dispatch-challans',   icon: FileText },
-      { id: 'restock',         label: 'Unit Restock',    route: '/restock',             icon: RefreshCw },
-      { id: 'dispatch-roster', label: 'Dispatch Roster', route: '/dispatch-roster',     icon: Users },
-      { id: 'dispatch-counts', label: 'Dispatch Counts', route: '/dispatch-counts',     icon: PackageCheck },
+      { id: 'pipeline',        label: 'Pipeline',        route: '/dispatch-pipeline',  icon: Network },
+      { id: 'shipments',       label: 'Shipments',       route: '/dispatch-shipments', icon: Send },
+      { id: 'challans',        label: 'Challans',        route: '/dispatch-challans',  icon: FileText },
+      { id: 'dispatch-counts', label: 'Dispatch Counts', route: '/dispatch-counts',    icon: PackageCheck },
     ],
   },
-  { id: 'manpower', label: 'Manpower', icon: Users, route: '/manpower' },
+  {
+    id: 'returns', label: 'Returns', icon: Undo2,
+    children: [
+      { id: 'restock',        label: 'Unit Restock',   route: '/restock',             icon: RefreshCw },
+      { id: 'repack',         label: 'Repack',         route: '/repack-runs',         icon: ArrowLeftRight },
+      { id: 'repack-reports', label: 'Repack Reports', route: '/repack-runs/reports', icon: BarChart3 },
+    ],
+  },
+  {
+    id: 'floor', label: 'Floor', icon: LayoutGrid,
+    children: [
+      { id: 'live-floor',      label: 'Live Floor',      route: '/dispatch',        icon: Truck },
+      { id: 'lines',           label: 'Lines',           route: '/dispatch/lines',  icon: GitBranch },
+      { id: 'scans',           label: 'Scan Feed',       route: '/scans',           icon: ScanLine },
+      { id: 'dispatch-roster', label: 'Dispatch Roster', route: '/dispatch-roster', icon: ClipboardList },
+      { id: 'manpower',        label: 'Manpower',        route: '/manpower',        icon: Users },
+    ],
+  },
 ];
 
 export const NAV_SETUP = [
   { id: 'channels', label: 'Channels', route: '/dispatch-channels', icon: Tag },
 ];
 
-/* ⌘K-only destinations — live floor views that exist outside the sidebar */
-export const NAV_HIDDEN = [
-  { id: 'dispatch-overview', label: 'Dispatch Overview', route: '/dispatch',       icon: Truck },
-  { id: 'dispatch-lines',    label: 'Dispatch Lines',    route: '/dispatch/lines', icon: GitBranch },
-];
+/* All live floor views now live in the Floor group; nothing is ⌘K-only. */
+export const NAV_HIDDEN = [];
 
 /* ── breadcrumb/title resolution for the topbar ─────────────── */
 export function resolveNav(pathname) {
@@ -49,7 +65,7 @@ export function resolveNav(pathname) {
     for (const c of g.children || []) all.push({ crumb: g.label, item: c, group: g });
   }
   for (const s of NAV_SETUP) all.push({ crumb: 'Setup', item: s, group: { id: '__setup' } });
-  for (const h of NAV_HIDDEN) all.push({ crumb: 'Dispatch', item: h, group: { id: 'dispatch' } });
+  for (const h of NAV_HIDDEN) all.push({ crumb: 'Floor', item: h, group: { id: 'floor' } });
 
   // longest matching route wins (handles /dispatch-challans/new etc.)
   let best = null;
