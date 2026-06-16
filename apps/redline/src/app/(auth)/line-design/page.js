@@ -5,8 +5,8 @@ import { garageFetch, workerFetch } from '@throttle/db';
 import { EmptyState, Modal, Spinner, useToast, Panel, Chip, StatusBadge } from '@throttle/ui';
 import { Icon as KitIcon } from '../../../components/kit/index.js';
 
-const DEPT_ORDER  = ['Prep', 'Assembly', 'QC', 'Packaging'];
-const DEPT_PREFIX = { Prep: 'PR', Assembly: 'AS', QC: 'QC', Packaging: 'PK' };
+const DEPT_ORDER  = ['Prep', 'Assembly', 'QC', 'Packaging', 'Workshop'];
+const DEPT_PREFIX = { Prep: 'PR', Assembly: 'AS', QC: 'QC', Packaging: 'PK', Workshop: 'WS' };
 
 function getStationCode(department, position) {
   const prefix = DEPT_PREFIX[department] || department.substring(0, 2).toUpperCase();
@@ -33,7 +33,7 @@ function tomorrowISO() {
 
 // Normalise a versions[] entry into editor state: { Prep:[{capacity,notes,unit_type}], ... }
 function buildEditorState(version) {
-  const out = { Prep: [], Assembly: [], QC: [], Packaging: [] };
+  const out = { Prep: [], Assembly: [], QC: [], Packaging: [], Workshop: [] };
   for (const d of (version?.departments || [])) {
     if (!out[d.department]) out[d.department] = [];
     out[d.department] = (d.stations || []).map(s => ({
@@ -829,7 +829,7 @@ function CreateDesignModal({ open, onClose, catalogue, existingProducts, session
   const [effectiveFrom, setEffectiveFrom] = useState(istToday());
   const [notes, setNotes]                 = useState('');
   const [copyFrom, setCopyFrom]           = useState('');
-  const [draft, setDraft]                 = useState({ Prep: [], Assembly: [], QC: [], Packaging: [] });
+  const [draft, setDraft]                 = useState({ Prep: [], Assembly: [], QC: [], Packaging: [], Workshop: [] });
   const [submitting, setSubmitting]       = useState(false);
 
   useEffect(() => {
@@ -841,7 +841,7 @@ function CreateDesignModal({ open, onClose, catalogue, existingProducts, session
       setEffectiveFrom(istToday());
       setNotes('');
       setCopyFrom('');
-      setDraft({ Prep: [], Assembly: [], QC: [], Packaging: [] });
+      setDraft({ Prep: [], Assembly: [], QC: [], Packaging: [], Workshop: [] });
     }
   }, [open]);
 
