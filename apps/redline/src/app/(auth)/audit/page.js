@@ -7,7 +7,7 @@ import { FilterChip } from '../../../components/kit/index.js'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const LINES = ['L1', 'L2', 'L3', 'D1', 'D2', 'Store', 'Other']
+const LINES = ['L1', 'L2', 'L3', 'L4', 'L5', 'D1', 'D2', 'Store', 'Other']
 
 const CATEGORIES = [
   'QC Pass — Damage',
@@ -504,8 +504,8 @@ function TrackerTab({ session, userId, perms }) {
       </div>
 
       {/* Per-line scorecards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 16 }}>
-        {['L1', 'L2', 'L3', 'All'].map(line => {
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 10, marginBottom: 16 }}>
+        {['L1', 'L2', 'L3', 'L4', 'L5', 'All'].map(line => {
           const sc = scorecard(line)
           const openTotal  = sc.critical + sc.high + sc.medium + sc.low
           const overdueAge = sc.oldest ? (Date.now() - sc.oldest) / 3600000 : 0

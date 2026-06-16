@@ -165,6 +165,25 @@ async function logActivity(auth, event, { scope, order_id, shipment_id, detail, 
   } catch (e) { console.error('activity log failed:', e); }
 }
 
+// Append a stage-transition event to the timeline log.
+async function logStageEvent(auth, { entity, order_id, shipment_id, stage, from_stage, note }) {
+  try {
+    await insert('stage_events', {
+      entity, order_id: order_id || null, shipment_id: shipment_id || null,
+      stage, from_stage: from_stage || null, note: note || null,
+      actor: auth?.userId || null, actor_name: auth?.fullName || null, party: auth?.party || null,
+    }, 'return=minimal');
+  } catch (e) { console.error('stage event log failed:', e); }
+}
+// Distinct shipment legs (+status) carrying a given order.
+async function orderLegs(orderId) {
+  const r = await query('shipment_lines', `?select=shipment_id,shipments(shipment_no,status),order_lines!inner(order_id)&order_lines.order_id=eq.${encodeURIComponent(orderId)}`);
+  if (!r.ok) return [];
+  const seen = {};
+  (r.data || []).forEach(l => { if (l.shipment_id && !seen[l.shipment_id]) seen[l.shipment_id] = l.shipments || {}; });
+  return Object.entries(seen).map(([id, s]) => ({ shipment_id: Number(id), shipment_no: s.shipment_no, status: s.status }));
+}
+
 // Category → Snorkel PO order_type + po_number type code.
 const CATEGORY_TO_PO = {
   product:   { order_type: 'Product',   code: 'PRD' },
@@ -220,6 +239,32 @@ const activityTone = (ev) => {
   if (e.includes('order') || e.includes('shipment') || e.includes('projected')) return 'blue';
   return 'gray';
 };
+
+// ── order lifecycle: stages + shipment milestone mapping ──────────
+const ORDER_PROD_STAGES = ['draft', 'placed', 'confirmed', 'produced', 'picked_up'];
+const SHIP_STAGES = ['planned', 'loaded', 'sailing', 'docked', 'cleared', 'local_transport', 'received'];
+const SHIP_DATE_COL = {
+  loaded: 'loading_date', sailing: 'etd', docked: 'port_arrival_date',
+  cleared: 'clearance_date', local_transport: 'local_dispatch_date', received: 'warehouse_delivery_date',
+};
+// recompute order INR cost rollup from its components (base = purchase+shipping+customs; +GST)
+function recomputeOrderCost(o) {
+  const purchase = Number(o.purchase_inr) || 0, shipping = Number(o.shipping_inr) || 0, customs = Number(o.customs_inr) || 0;
+  const base = purchase + shipping + customs;
+  const gstPct = o.gst_percent != null ? Number(o.gst_percent) : 18;
+  const gst = +(base * gstPct / 100).toFixed(2);
+  return { base_inr: +base.toFixed(2), gst_inr: gst, total_inr: +(base + gst).toFixed(2) };
+}
+// Effective (display) stage: production stages pass through; a 'shipped' order
+// refines to its least-advanced leg's shipping stage; all-legs-received → received.
+function effStage(status, legs) {
+  if (status !== 'shipped') return status;
+  if (!legs.length) return 'shipped';
+  if (legs.every(l => l.status === 'received')) return 'received';
+  const idx = legs.map(l => SHIP_STAGES.indexOf(l.status)).filter(i => i >= 0);
+  return idx.length ? SHIP_STAGES[Math.min(...idx)] : 'shipped';
+}
+const orderEditable = (o) => o.cost_state !== 'invoiced' && o.status !== 'cancelled';
 
 // ============================================================
 export default {
