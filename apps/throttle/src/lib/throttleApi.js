@@ -192,8 +192,11 @@ export async function fetchRecentActivity(session, limit = 12) {
 export async function fetchProducts(session) {
   try {
     const r = await workerFetch('getProducts', {}, session.access_token);
-    const list = r?.products || r?.data?.products;
-    const codes = (list || []).map(p => String(p).toUpperCase()).filter(Boolean);
+    const list = r?.products || r?.data?.products || [];
+    // Handler returns rows like { product_code, product, sku }. Reduce to
+    // distinct UPPERCASE product names (matching existing brand task codes).
+    const names = list.map(p => (typeof p === 'string' ? p : p?.product)).filter(Boolean);
+    const codes = [...new Set(names.map(n => String(n).toUpperCase()))];
     return codes.length ? codes : PRODUCTS.map(p => p.code);
   } catch (_) {
     return PRODUCTS.map(p => p.code);
