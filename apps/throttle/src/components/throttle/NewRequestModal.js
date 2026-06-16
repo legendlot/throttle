@@ -7,7 +7,8 @@ import { useAuth } from '@throttle/auth';
 import { workerFetch } from '@throttle/db';
 import { Icon } from './Icon';
 import { PrimaryBtn } from './ui';
-import { PRODUCTS, PRIORITY, REQ_TYPES } from '@/lib/throttleData';
+import { PRODUCTS, PRIORITY, REQ_TYPES, productChip } from '@/lib/throttleData';
+import { fetchProducts } from '@/lib/throttleApi';
 
 const REQ_CHANNELS = ['Amazon', 'Flipkart', 'Website', 'Social', 'Email', 'WhatsApp', 'Offline'];
 const PRODUCT_SCOPED = { launch_pack: true, product_creative: true, motion_3d: true };
@@ -19,8 +20,16 @@ export function NewRequestModal({ open, onClose }) {
   const [form, setForm] = useState({ title: '', products: [], priority: 'medium', channels: [], deadline: '', notes: '' });
   const [busy, setBusy] = useState(false);
   const [filedId, setFiledId] = useState('R-242');
+  const [productCodes, setProductCodes] = useState(() => PRODUCTS.map(p => p.code));
 
   useEffect(() => { if (open) { setStep(0); setType(null); setBusy(false); setFiledId('R-242'); setForm({ title: '', products: [], priority: 'medium', channels: [], deadline: '', notes: '' }); } }, [open]);
+  // Live product list from product_master (falls back to seed list on error)
+  useEffect(() => {
+    if (!open || !session) return;
+    let alive = true;
+    fetchProducts(session).then(codes => { if (alive && codes?.length) setProductCodes(codes); });
+    return () => { alive = false; };
+  }, [open, session]);
   useEffect(() => {
     if (!open) return;
     const onKey = e => { if (e.key === 'Escape') onClose(); };
@@ -120,10 +129,13 @@ export function NewRequestModal({ open, onClose }) {
               <div>
                 <label style={label}>Product{scoped ? '' : ' (optional)'}</label>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                  {PRODUCTS.map(p => (
-                    <button key={p.code} onClick={() => toggleArr('products', p.code)} className="t-chip" data-on={form.products.includes(p.code)}>
-                      <span style={{ width: 7, height: 7, borderRadius: 2, background: p.accent, display: 'inline-block', marginRight: 6 }} />{p.code}</button>
-                  ))}
+                  {productCodes.map(code => {
+                    const p = productChip(code);
+                    return (
+                      <button key={code} onClick={() => toggleArr('products', code)} className="t-chip" data-on={form.products.includes(code)}>
+                        <span style={{ width: 7, height: 7, borderRadius: 2, background: p.accent, display: 'inline-block', marginRight: 6 }} />{code}</button>
+                    );
+                  })}
                 </div>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>

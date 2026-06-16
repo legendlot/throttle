@@ -5,7 +5,7 @@
    error or empty result the caller falls back to seed data, so a screen is
    never blank or broken. */
 import { supabaseBrand, workerFetch } from '@throttle/db';
-import { STAGES, REQ_TYPES, initialsOf } from './throttleData';
+import { STAGES, REQ_TYPES, initialsOf, PRODUCTS } from './throttleData';
 
 const ACTIVE_STAGES = STAGES.map(s => s.value);
 
@@ -184,6 +184,20 @@ export async function fetchRecentActivity(session, limit = 12) {
       };
     });
   } catch (_) { return null; }
+}
+
+// ── live product list (product_master, the single source of truth) ──
+// Returns UPPERCASE product codes (matching existing brand task/request codes).
+// Falls back to the curated seed list on any error/empty.
+export async function fetchProducts(session) {
+  try {
+    const r = await workerFetch('getProducts', {}, session.access_token);
+    const list = r?.products || r?.data?.products;
+    const codes = (list || []).map(p => String(p).toUpperCase()).filter(Boolean);
+    return codes.length ? codes : PRODUCTS.map(p => p.code);
+  } catch (_) {
+    return PRODUCTS.map(p => p.code);
+  }
 }
 
 // ── deliverables-shipped chart (admin/lead) ──────────────────────

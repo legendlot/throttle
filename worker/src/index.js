@@ -274,6 +274,7 @@ export default {
       case 'updateRequest':       return handleUpdateRequest(body, ctx, env);
       case 'getTaskActivity':     return handleGetTaskActivity(body, ctx, env);
       case 'getRecentActivity':   return handleGetRecentActivity(body, ctx, env);
+      case 'getProducts':         return handleGetProducts(env);
       case 'addComment':          return handleAddComment(body, ctx, env);
       case 'getTeamMembers':      return handleGetTeamMembers(body, ctx, env);
       case 'updateTaskMeta':     return handleUpdateTaskMeta(body, ctx, env);
@@ -1433,6 +1434,20 @@ async function handleGetTaskActivity(body, ctx, env) {
 // Recent activity across all tasks — powers the Dashboard activity feed.
 // admin/lead see the whole org; members are scoped to their assigned tasks;
 // requesters get nothing. Joins user names + task titles/product.
+// Live product list from public.product_master (single source of truth, like
+// every other LOT system). Replaces the hardcoded PRODUCTS chip list in Throttle.
+async function handleGetProducts(env) {
+  const res = await sbFetch(
+    `product_master?is_active=eq.true&select=product&order=product.asc`,
+    { method: 'GET', headers: { 'Accept-Profile': 'public', 'Content-Profile': 'public' } },
+    env,
+  );
+  if (!res.ok) return json({ products: [] });
+  const rows = await res.json();
+  const products = [...new Set(rows.map(r => r.product).filter(Boolean))];
+  return json({ products });
+}
+
 async function handleGetRecentActivity(body, ctx, env) {
   const limit = Math.min(Number(body.limit) || 12, 40);
   if (ctx.role === 'requester') return json({ activity: [] });

@@ -21,6 +21,18 @@ export const PRODUCTS = [
 ];
 export const productByCode = Object.fromEntries(PRODUCTS.map(p => [p.code, p]));
 
+// Chip metadata (accent/short/sub) for any product code. The curated PRODUCTS
+// above keep their hand-picked styling; live products pulled from product_master
+// that aren't curated get a deterministic accent + a 3-letter short code.
+const _CHIP_ACCENTS = ['#F2CD1A','#6d83ff','#9aa0ad','#4ade80','#f97316','#fbbf24','#b46bff','#22d3ee','#ef4444','#10b981','#ec4899','#14b8a6'];
+export function productChip(code) {
+  const curated = productByCode[code];
+  if (curated) return curated;
+  let h = 0;
+  for (let i = 0; i < code.length; i++) h = (h * 31 + code.charCodeAt(i)) >>> 0;
+  return { code, sub: '', accent: _CHIP_ACCENTS[h % _CHIP_ACCENTS.length], short: code.slice(0, 3) };
+}
+
 // ── Brand team (seed) ────────────────────────────────────────────
 export const TEAM = [
   { id: 'u1', name: 'Meera Krishnan', role: 'admin',  discipline: 'Brand Lead',  initial: 'M' },
