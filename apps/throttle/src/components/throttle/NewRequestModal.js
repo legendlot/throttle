@@ -10,7 +10,7 @@ import { PrimaryBtn } from './ui';
 import { PRODUCTS, PRIORITY, REQ_TYPES, productChip } from '@/lib/throttleData';
 import { fetchProducts } from '@/lib/throttleApi';
 
-const REQ_CHANNELS = ['Amazon', 'Flipkart', 'Website', 'Social', 'Email', 'WhatsApp', 'Offline'];
+const REQ_CHANNELS = ['Amazon', 'Flipkart', 'Quick Commerce', 'Website', 'Social', 'Email', 'WhatsApp', 'Offline'];
 const PRODUCT_SCOPED = { launch_pack: true, product_creative: true, motion_3d: true };
 
 export function NewRequestModal({ open, onClose }) {
