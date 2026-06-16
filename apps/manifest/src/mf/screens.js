@@ -2,7 +2,7 @@
 // Manifest "Pit Wall" — all screens, wired to live getBootstrap data.
 import React, { useState, useEffect } from 'react';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { ArrowLeft, ArrowRight, Plus, ChevronDown, FileText, Check, Truck, Ship as ShipIcon } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Plus, ChevronDown, FileText, Check, Truck, Ship as ShipIcon, Search, X } from 'lucide-react';
 import {
   Card, Table, Badge, Btn, Field, Input, Select, Textarea, Eyebrow, Mono,
   BalanceChart, Sparkline, MONO, DISP, toneVar,
@@ -43,6 +43,42 @@ const Dropdown = ({ children }) => (
     {children}<ChevronDown size={13} color="var(--t3)" /></span>
 );
 const Empty = ({ children }) => <div style={{ padding: '28px 20px', fontFamily: MONO, fontSize: 11.5, color: 'var(--t3)', textAlign: 'center' }}>{children}</div>;
+
+// searchable combobox — type to filter `items` by `label`, click a match to onPick(item)
+function SearchBox({ value, onChange, items, onPick, placeholder, width = 360 }) {
+  const [open, setOpen] = useState(false);
+  const q = value.trim().toLowerCase();
+  const matches = q ? items.filter((it) => it.label.toLowerCase().includes(q)).slice(0, 8) : [];
+  return (
+    <div style={{ position: 'relative', flex: 1, maxWidth: width }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface2)', border: '1px solid var(--border)',
+        borderRadius: 8, padding: '7px 11px', fontFamily: MONO, fontSize: 11.5 }}>
+        <Search size={13} color="var(--t3)" style={{ flexShrink: 0 }} />
+        <input value={value} placeholder={placeholder || 'Search…'}
+          onChange={(e) => { onChange(e.target.value); setOpen(true); }}
+          onFocus={() => setOpen(true)}
+          onBlur={() => setTimeout(() => setOpen(false), 140)}
+          onKeyDown={(e) => { if (e.key === 'Escape') { onChange(''); setOpen(false); e.target.blur(); } }}
+          style={{ flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', color: 'var(--t1)', fontFamily: MONO, fontSize: 11.5 }} />
+        {value && <button className="mf-icobtn" onMouseDown={(e) => { e.preventDefault(); onChange(''); }}
+          style={{ display: 'flex', background: 'transparent', border: 'none', color: 'var(--t3)', cursor: 'pointer', padding: 0 }}><X size={13} /></button>}
+      </div>
+      {open && q && (
+        <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, zIndex: 40,
+          background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', boxShadow: 'var(--shadow)', overflow: 'hidden' }}>
+          {matches.length ? matches.map((it) => (
+            <div key={it.key} className="mf-tr click" onMouseDown={(e) => { e.preventDefault(); onPick(it); setOpen(false); }}
+              style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 13px', cursor: 'pointer',
+                borderBottom: '1px solid color-mix(in srgb, var(--border) 55%, transparent)' }}>
+              <Mono color="var(--t1)" weight={600} size={11.5}>{it.no}</Mono>
+              <span style={{ flex: 1, minWidth: 0, color: 'var(--t2)', fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.title}</span>
+            </div>
+          )) : <div style={{ padding: '12px 13px', fontFamily: MONO, fontSize: 11, color: 'var(--t3)' }}>No match</div>}
+        </div>
+      )}
+    </div>
+  );
+}
 const initials = (name) => (name || '?').split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase();
 
 const act = async (action, data, session) => { const r = await workerFetch(action, { data }, session); return r?.data; };
@@ -165,14 +201,24 @@ function MoneyCard({ order, money, schedule, allocations, payments, run, session
         </div>
       )}
       {/* allocate form */}
-      {mode === 'allocate' && (
+      {mode === 'allocate' && (() => {
+        const balance = Math.round(money?.balanceDue ?? total);
+        return (
         <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
           <Field label="Amount (₹)"><Input value={amt} onChange={(e) => setAmt(e.target.value)} placeholder="0" /></Field>
+          {balance > 0 && (
+            <button className="mf-chip" onMouseDown={(e) => { e.preventDefault(); setAmt(String(balance)); }}
+              style={{ alignSelf: 'flex-start', padding: '6px 11px', borderRadius: 8, fontFamily: MONO, fontSize: 10.5, cursor: 'pointer',
+                background: 'color-mix(in srgb, var(--accent) 14%, transparent)', border: '1px solid color-mix(in srgb, var(--accent) 30%, transparent)', color: 'var(--accent)' }}>
+              Allocate full balance · {D.inr(balance)}
+            </button>
+          )}
           <Field label="Against wire (optional)"><Select value={wire} onChange={(e) => setWire(e.target.value)} options={['', ...(payments || []).map((p) => p.ref)]} /></Field>
           <Field label="Note"><Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="optional" /></Field>
           <Btn onClick={allocate}>Record allocation</Btn>
         </div>
-      )}
+        );
+      })()}
       {/* allocations list */}
       {allocations.length > 0 && (
         <div style={{ marginTop: 14 }}>
@@ -306,17 +352,22 @@ function Recon({ data, openDrill }) {
 
 // ════════════════════════════════════════════════════════════════
 function Orders({ data, onNav }) {
+  const [q, setQ] = useState('');
+  const items = data.orders.map((o) => ({ ...o, key: o.no, label: `${o.no} ${o.title || ''}` }));
+  const query = q.trim().toLowerCase();
+  const rows = query ? items.filter((it) => it.label.toLowerCase().includes(query)) : data.orders;
   return (
     <Stack>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <Dropdown>All states</Dropdown>
         <Dropdown>All categories</Dropdown>
+        <SearchBox value={q} onChange={setQ} items={items} onPick={(it) => onNav('orderDetail', it.id)} placeholder="Search orders by title or number…" />
         <div style={{ flex: 1 }} />
         <Btn onClick={() => onNav('newOrder')}><Plus size={14} style={{ marginRight: 6, verticalAlign: -2 }} />New Order</Btn>
       </div>
       <Card>
-        {data.orders.length ? (
-          <Table onRowClick={(r) => onNav('orderDetail', r.id)} rows={data.orders} rowKey={(r) => r.no} cols={[
+        {rows.length ? (
+          <Table onRowClick={(r) => onNav('orderDetail', r.id)} rows={rows} rowKey={(r) => r.no} cols={[
             { label: 'Order', render: (r) => <Mono color="var(--t1)" weight={600}>{r.no}</Mono> },
             { label: 'Title', render: (r) => <span style={{ color: 'var(--t2)' }}>{r.title}</span> },
             { label: 'Category', render: (r) => <Mono size={11} color="var(--t3)">{D.label(r.category)}</Mono> },
@@ -328,7 +379,7 @@ function Orders({ data, onNav }) {
               : <Mono color="var(--t3)">—</Mono>) },
             { label: 'Date', align: 'right', render: (r) => <Mono size={11} color="var(--t3)">{r.date}</Mono> },
           ]} />
-        ) : <Empty>No orders yet</Empty>}
+        ) : <Empty>{query ? `No orders match “${q.trim()}”` : 'No orders yet'}</Empty>}
       </Card>
     </Stack>
   );
