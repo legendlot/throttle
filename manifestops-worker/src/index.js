@@ -199,6 +199,28 @@ function pick(src, fields) {
   return out;
 }
 
+// ── display formatters for the Pit Wall UI ─────────────────────────
+const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function fmtDay(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso); if (isNaN(d)) return String(iso);
+  return String(d.getUTCDate()).padStart(2, '0') + ' ' + MON[d.getUTCMonth()];
+}
+function relTime(iso) {
+  if (!iso) return '';
+  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 3600) return Math.max(1, Math.floor(s / 60)) + 'm ago';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+  return Math.floor(s / 86400) + 'd ago';
+}
+const activityTone = (ev) => {
+  const e = (ev || '').toLowerCase();
+  if (e.includes('payment')) return 'green';
+  if (e.includes('drawdown')) return 'yellow';
+  if (e.includes('order') || e.includes('shipment') || e.includes('projected')) return 'blue';
+  return 'gray';
+};
+
 // ============================================================
 export default {
   async scheduled(event, env, ctx) {
@@ -233,6 +255,130 @@ export default {
               manifest_role: auth.manifestRole, party, permissions: P,
             });
 
+          // ── Bootstrap: one round-trip powering the whole SPA ──
+          case 'getBootstrap': {
+            const [oR, raR, ddR, pmR, shR, fxR, docR, actR, invR, subR] = await Promise.all([
+              query('orders', '?order=invoice_date.desc.nullslast,created_at.desc&select=*'),
+              query('running_account', '?select=*'),
+              query('drawdowns', '?order=requested_at.desc&select=*'),
+              query('payments', '?order=paid_date.desc.nullslast,created_at.desc&select=*'),
+              query('shipments', '?order=created_at.desc&select=*'),
+              query('fx_rates', '?order=rate_date.desc,source.asc&limit=120&select=*'),
+              query('documents', '?order=created_at.desc&limit=500&select=*'),
+              query('activity', '?order=created_at.desc&limit=40&select=*'),
+              query('sf_invoices', '?select=invoice_no,commission_inr,total_inr'),
+              query('sf_subentities', '?order=sort_order.asc&select=*'),
+            ]);
+
+            // order_no → number map for FK display
+            const orderRows = oR.ok ? oR.data : [];
+            const orderNoById = {}; orderRows.forEach(o => { orderNoById[o.id] = o.order_no; });
+
+            // ── ledger (running_account view), chronological ──
+            const led = (raR.ok ? raR.data : []).slice().sort((a, b) =>
+              String(a.entry_date || a.created_at).localeCompare(String(b.entry_date || b.created_at)) ||
+              String(a.created_at).localeCompare(String(b.created_at)));
+            const ledger = led.map(e => ({
+              date: e.entry_date, kind: e.kind, ref: e.ref_no, desc: e.description,
+              amt: Number(e.signed_inr) || 0, balance: Number(e.running_balance) || 0,
+            }));
+            const sumKind = (k) => led.filter(e => e.kind === k).reduce((s, e) => s + (Number(e.signed_inr) || 0), 0);
+            const net = ledger.length ? ledger[ledger.length - 1].balance : 0;
+            const credits = sumKind('payment');
+            const debits = -(sumKind('order_cost') + sumKind('commission') + sumKind('charge'));
+            const reservedLien = -sumKind('reserved_lien');
+            const commissionPayable = -(sumKind('commission') + sumKind('commission_base'));
+            const openingBalance = sumKind('opening_balance');
+            const peak = ledger.reduce((m, r) => Math.max(m, r.balance), net);
+            const openDd = (ddR.ok ? ddR.data : []).filter(d => ['requested', 'partially_paid'].includes(d.status));
+            const openDrawdowns = openDd.reduce((s, d) => s + (Number(d.est_amount_inr) || 0), 0);
+            const counts = {
+              total: orderRows.length,
+              inFlight: orderRows.filter(o => o.cost_state === 'in_flight').length,
+              invoiced: orderRows.filter(o => o.cost_state === 'invoiced').length,
+              delivered: orderRows.filter(o => o.cost_state === 'delivered').length,
+            };
+            const shipmentsInTransit = (shR.ok ? shR.data : []).filter(s => s.status === 'in_transit').length;
+
+            const summary = stripCost({
+              net, owes: net < 0, gross: net + reservedLien,
+              reservedLien, commissionPayable, openingBalance,
+              credits, debits, bufferPct: credits ? Math.round((debits / credits) * 100) : 0,
+              openDrawdowns, openDrawCount: openDd.length, peak, counts, shipmentsInTransit,
+            }, P);
+
+            // ── orders (UI shape) ──
+            const orders = orderRows.map(o => stripCost({
+              id: o.id, no: o.order_no, title: o.title, category: o.category,
+              valueRmb: (o.qty != null && o.per_unit_rmb != null) ? Math.round(Number(o.qty) * Number(o.per_unit_rmb)) : null,
+              totalInr: Number(o.total_inr) || 0, purchaseInr: Number(o.purchase_inr) || 0,
+              recognized: Number(o.recognized_cost_inr) || 0,
+              po: o.linked_po_number || null, status: o.status, costState: o.cost_state,
+              label: o.order_label, invoiceNo: o.invoice_no, date: fmtDay(o.invoice_date || o.created_at),
+            }, P));
+
+            // ── payments / drawdowns / shipments / fx / docs / activity ──
+            const payments = (pmR.ok ? pmR.data : []).map(p => ({
+              ref: p.payment_no, date: fmtDay(p.paid_date), inr: Number(p.amount_inr) || 0,
+              rmb: p.amount_rmb != null ? Number(p.amount_rmb) : null, rate: p.fx_rate_used != null ? Number(p.fx_rate_used) : null,
+              method: p.method || 'Bank', against: p.subentity_code || (p.drawdown_id ? 'Draw-down' : 'Advance'), status: 'cleared',
+            }));
+            const drawdowns = (ddR.ok ? ddR.data : []).map(d => ({
+              no: d.drawdown_no, phase: d.phase, order: d.order_id ? (orderNoById[d.order_id] || null) : null,
+              estInr: Number(d.est_amount_inr) || 0, rate: d.est_fx_rate != null ? Number(d.est_fx_rate) : null,
+              by: d.requested_by_name || '—', date: fmtDay(d.requested_at), status: d.status,
+            }));
+            const shipments = (shR.ok ? shR.data : []).map(s => ({
+              no: s.shipment_no, mode: s.mode || '—', blAwb: s.bl_awb_no || '—',
+              eta: fmtDay(s.eta), status: s.status, order: s.notes || '—',
+            }));
+            const fxRows = (fxR.ok ? fxR.data : []);
+            const fxChrono = fxRows.slice().sort((a, b) => String(a.rate_date).localeCompare(String(b.rate_date)));
+            const fxHistory = fxRows.map((r, i) => {
+              const prevSameOlder = fxRows.find((x, j) => j > i && Number(x.rate) !== Number(r.rate));
+              const delta = prevSameOlder ? +(Number(r.rate) - Number(prevSameOlder.rate)).toFixed(2) : null;
+              return { date: fmtDay(r.rate_date), rate: Number(r.rate), delta, by: r.source === 'manual' ? 'Manual' : 'Auto', applied: r.note || '—' };
+            });
+            const fxCurrent = await fxForDate(todayISO());
+            const fx = { current: fxCurrent, spark: fxChrono.slice(-10).map(r => Number(r.rate)), history: fxHistory };
+            const documents = (docR.ok ? docR.data : []).map(d => ({
+              filename: d.file_name || d.storage_path, type: d.doc_type, ref: d.order_id ? orderNoById[d.order_id] : (d.shipment_id || '—'),
+              date: fmtDay(d.created_at), size: d.mime_type || '', storage_path: d.storage_path,
+            }));
+            const activity = (actR.ok ? actR.data : []).map(a => ({
+              event: (a.event || '').replace(/_/g, ' '), detail: a.detail || '', who: a.actor_name || a.party || '—',
+              when: relTime(a.created_at), tone: activityTone(a.event),
+            }));
+
+            // ── admin org groups (admin only) ──
+            let orgGroups = [];
+            if (canAdmin(P)) {
+              const [urR, rolesR, profR] = await Promise.all([
+                query('manifest_user_roles', '?select=user_id,role_key'),
+                query('manifest_roles', '?select=role_key,label,party'),
+                queryStore('users_profile', '?select=id,full_name,active&order=full_name.asc'),
+              ]);
+              const roleMeta = {}; (rolesR.ok ? rolesR.data : []).forEach(r => { roleMeta[r.role_key] = r; });
+              const urByUser = {}; (urR.ok ? urR.data : []).forEach(u => { urByUser[u.user_id] = u.role_key; });
+              const lot = [], sf = [];
+              (profR.ok ? profR.data : []).forEach(u => {
+                const rk = urByUser[u.id]; if (!rk) return; const rm = roleMeta[rk]; if (!rm) return;
+                const m = { name: u.full_name || '—', email: '', role: rm.label || rk, last: u.active ? 'active' : '—', status: u.active ? 'active' : 'invited' };
+                (rm.party === 'SF' ? sf : lot).push(m);
+              });
+              orgGroups = [
+                { org: 'Legend of Toys', tag: 'L', tagTone: 'yellow', members: lot },
+                { org: 'Solve Factory', tag: 'S', tagTone: 'blue', members: sf },
+              ];
+            }
+
+            return ok({
+              me: { id: userId, email: auth.email, role: auth.role, full_name: auth.fullName, manifest_role: auth.manifestRole, party, permissions: P },
+              summary, ledger, orders, payments, drawdowns, shipments, fx, documents, activity,
+              subentities: subR.ok ? subR.data : [], orgGroups,
+            });
+          }
+
           // ── Masters (store) ──
           case 'getVendors': {
             const r = await queryStore('vendors', '?order=vendor_name.asc&select=vendor_code,vendor_name,source_country,currency,active');
@@ -258,16 +404,36 @@ export default {
           }
           case 'getOrder': {
             const id = qp('id'); if (!id) return err('id required');
-            const [oR, lR, dR] = await Promise.all([
+            const [oR, lR, dR, ddR] = await Promise.all([
               query('orders', `?id=eq.${encodeURIComponent(id)}&select=*&limit=1`),
               query('order_lines', `?order_id=eq.${encodeURIComponent(id)}&order=line_no.asc&select=*`),
               query('documents', `?order_id=eq.${encodeURIComponent(id)}&order=created_at.desc&select=*`),
+              query('drawdowns', `?order_id=eq.${encodeURIComponent(id)}&order=requested_at.desc&select=*&limit=1`),
             ]);
             if (!oR.ok || !oR.data[0]) return err('Order not found', 404);
+            const o = oR.data[0];
+            // commission for this order's invoice (2.5% of the invoice total)
+            let commission = null;
+            if (o.invoice_no) {
+              const inv = await query('sf_invoices', `?invoice_no=eq.${encodeURIComponent(o.invoice_no)}&select=commission_rate,commission_inr&limit=1`);
+              if (inv.ok && inv.data[0]) commission = { rate: Number(inv.data[0].commission_rate), inr: Number(inv.data[0].commission_inr) };
+            }
+            const costRows = [
+              { label: 'Goods value', amt: Number(o.purchase_inr) || 0 },
+              { label: 'Shipping', amt: Number(o.shipping_inr) || 0 },
+              { label: 'Customs', amt: Number(o.customs_inr) || 0 },
+              ...(commission ? [{ label: `SF commission · ${commission.rate}%`, amt: commission.inr }] : []),
+              { label: 'GST', amt: Number(o.gst_inr) || 0 },
+            ].filter(r => r.amt > 0);
+            const dd = (ddR.ok && ddR.data[0]) ? ddR.data[0] : null;
             return ok({
-              order: stripCost(oR.data[0], P),
+              order: stripCost(o, P),
               lines: (lR.ok ? lR.data : []).map(l => stripCost(l, P)),
               documents: dR.ok ? dR.data : [],
+              costRows: stripCost({ rows: costRows }, P).rows || costRows,
+              landed: Number(o.total_inr) || 0,
+              commission,
+              drawdown: dd ? { no: dd.drawdown_no, amt: Number(dd.est_amount_inr) || 0, status: dd.status } : null,
             });
           }
 
