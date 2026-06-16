@@ -267,6 +267,21 @@ function effStage(status, legs) {
 }
 const orderEditable = (o) => o.cost_state !== 'invoiced' && o.status !== 'cancelled';
 
+// full 10-step pipeline for schedule "due-stage reached" comparison
+const MONEY_PIPELINE = ['draft', 'placed', 'confirmed', 'produced', 'picked_up', 'loaded', 'sailing', 'docked', 'cleared', 'local_transport', 'received'];
+// per-PO money: allocated (Σ allocations), balance due (landed − allocated), scheduled-due-now (reached milestones − allocated)
+function computePoMoney(order, allocations, schedule, eff) {
+  const total = Number(order.total_inr) || 0;
+  const allocated = (allocations || []).reduce((s, a) => s + (Number(a.amount_inr) || 0), 0);
+  const ei = MONEY_PIPELINE.indexOf(eff);
+  let reached = 0;
+  (schedule || []).forEach((m) => {
+    const due = m.amount_inr != null ? Number(m.amount_inr) : (m.pct != null ? total * Number(m.pct) / 100 : 0);
+    if (ei >= 0 && MONEY_PIPELINE.indexOf(m.due_stage) <= ei) reached += due;
+  });
+  return { allocated: +allocated.toFixed(2), balanceDue: +(total - allocated).toFixed(2), scheduledDueNow: Math.max(0, +(reached - allocated).toFixed(2)) };
+}
+
 // ============================================================
 export default {
   async scheduled(event, env, ctx) {
@@ -327,6 +342,10 @@ export default {
               legsByOrder[oid] = legsByOrder[oid] || [];
               if (!legsByOrder[oid].some(x => x.shipment_id === l.shipment_id)) legsByOrder[oid].push({ shipment_id: l.shipment_id, status: l.shipments?.status });
             });
+            // per-order allocated total (for balance-due column)
+            const allocAll = await query('po_allocations', '?select=order_id,amount_inr');
+            const allocByOrder = {};
+            (allocAll.ok ? allocAll.data : []).forEach(a => { allocByOrder[a.order_id] = (allocByOrder[a.order_id] || 0) + (Number(a.amount_inr) || 0); });
 
             // ── ledger (running_account view), chronological ──
             const led = (raR.ok ? raR.data : []).slice().sort((a, b) =>
@@ -369,6 +388,8 @@ export default {
               recognized: Number(o.recognized_cost_inr) || 0,
               po: o.linked_po_number || null, status: o.status, costState: o.cost_state,
               effectiveStage: effStage(o.status, legsByOrder[o.id] || []),
+              allocated: +(allocByOrder[o.id] || 0).toFixed(2),
+              balanceDue: +((Number(o.total_inr) || 0) - (allocByOrder[o.id] || 0)).toFixed(2),
               label: o.order_label, invoiceNo: o.invoice_no, date: fmtDay(o.invoice_date || o.created_at),
             }, P));
 
@@ -490,6 +511,15 @@ export default {
               const seR = await query('stage_events', `?entity=eq.shipment&shipment_id=in.(${ids})&order=occurred_at.asc&select=shipment_id,stage,from_stage,note,actor_name,party,occurred_at`);
               (seR.ok ? seR.data : []).forEach(e => { (legEvents[e.shipment_id] = legEvents[e.shipment_id] || []).push(e); });
             }
+            const eff = effStage(o.status, legs);
+            // per-PO money: schedule + allocations + computed balance
+            const [allocR, schedR] = await Promise.all([
+              query('po_allocations', `?order_id=eq.${encodeURIComponent(id)}&order=allocated_date.desc,created_at.desc&select=*`),
+              query('po_payment_schedule', `?order_id=eq.${encodeURIComponent(id)}&order=seq.asc&select=*`),
+            ]);
+            const allocations = allocR.ok ? allocR.data : [];
+            const schedule = schedR.ok ? schedR.data : [];
+            const money = stripCost(computePoMoney(o, allocations, schedule, eff), P);
             return ok({
               order: stripCost(o, P),
               lines: (lR.ok ? lR.data : []).map(l => stripCost(l, P)),
@@ -498,10 +528,11 @@ export default {
               landed: Number(o.total_inr) || 0,
               commission,
               drawdown: dd ? { no: dd.drawdown_no, amt: Number(dd.est_amount_inr) || 0, status: dd.status } : null,
-              effectiveStage: effStage(o.status, legs),
+              effectiveStage: eff,
               editable: orderEditable(o),
               orderEvents: oEvR.ok ? oEvR.data : [],
               legs: legs.map(l => ({ ...l, events: legEvents[l.shipment_id] || [] })),
+              schedule, allocations, money,
             });
           }
 
@@ -776,6 +807,60 @@ export default {
             return ok({ order_id: d.order_id, invoice_no: d.invoice_no, invoice_total_inr: invTotal, commission_inr: commission });
           }
 
+          // ── PO money layer: per-PO allocations + schedule + container move ──
+          case 'allocateToPo': {
+            if (!canRecordPayment(P)) return err('No permission', 403);
+            const amt = num(d.amount_inr);
+            if (!d.order_id || !(amt > 0)) return err('order_id and amount_inr > 0 required', 422);
+            const row = { order_id: d.order_id, amount_inr: +amt.toFixed(2), payment_id: d.payment_id || null,
+              allocated_date: d.allocated_date || todayISO(), note: d.note || null, created_by: userId, created_by_name: auth.fullName };
+            const r = await insert('po_allocations', row);
+            if (!r.ok) return err('Allocation failed: ' + JSON.stringify(r.data), 502);
+            await logActivity(auth, 'po_allocation', { scope: 'order', order_id: d.order_id, detail: `₹${amt}` });
+            return ok(Array.isArray(r.data) ? r.data[0] : r.data);
+          }
+          case 'deleteAllocation': {
+            if (!canRecordPayment(P)) return err('No permission', 403);
+            if (!d.id) return err('id required');
+            const r = await del('po_allocations', `id=eq.${encodeURIComponent(d.id)}`);
+            if (!r.ok) return err('Delete failed: ' + JSON.stringify(r.data), 502);
+            return ok({ deleted: d.id });
+          }
+          case 'setPoSchedule': {
+            if (!canManageOrders(P) && !canRecordPayment(P)) return err('No permission', 403);
+            if (!d.order_id) return err('order_id required');
+            await del('po_payment_schedule', `order_id=eq.${encodeURIComponent(d.order_id)}`);
+            const ms = Array.isArray(d.milestones) ? d.milestones : [];
+            if (ms.length) {
+              const rows = ms.map((m, i) => ({ order_id: d.order_id, seq: m.seq || i + 1, label: m.label || `Milestone ${i + 1}`,
+                pct: (m.pct != null && m.pct !== '') ? num(m.pct) : null,
+                amount_inr: (m.amount_inr != null && m.amount_inr !== '') ? num(m.amount_inr) : null,
+                due_stage: m.due_stage || 'placed' }));
+              const r = await insert('po_payment_schedule', rows, 'return=minimal');
+              if (!r.ok) return err('Schedule save failed: ' + JSON.stringify(r.data), 502);
+            }
+            await logActivity(auth, 'po_schedule_set', { scope: 'order', order_id: d.order_id });
+            return ok({ saved: ms.length });
+          }
+          case 'moveOrderToShipment': {
+            // container reassignment: re-point this order's shipment_lines to to_shipment_id (or detach if absent)
+            if (!canManageShipments(P)) return err('No permission', 403);
+            if (!d.order_id) return err('order_id required');
+            const slR = await query('shipment_lines', `?select=id,order_lines!inner(order_id)&order_lines.order_id=eq.${encodeURIComponent(d.order_id)}`);
+            const rows = slR.ok ? slR.data : [];
+            if (d.to_shipment_id) {
+              for (const sl of rows) await update('shipment_lines', { shipment_id: d.to_shipment_id }, `id=eq.${sl.id}`);
+              await update('orders', { status: 'shipped', updated_at: nowISO() }, `id=eq.${encodeURIComponent(d.order_id)}`);
+              await logStageEvent(auth, { entity: 'order', order_id: d.order_id, stage: 'shipped', from_stage: 'shipped', note: 'Moved to shipment ' + d.to_shipment_id });
+            } else {
+              for (const sl of rows) await del('shipment_lines', `id=eq.${sl.id}`);
+              await update('orders', { status: 'picked_up', updated_at: nowISO() }, `id=eq.${encodeURIComponent(d.order_id)}`);
+              await logStageEvent(auth, { entity: 'order', order_id: d.order_id, stage: 'picked_up', from_stage: 'shipped', note: 'Detached from shipment' });
+            }
+            await logActivity(auth, 'order_container_moved', { scope: 'order', order_id: d.order_id, detail: d.to_shipment_id ? '→ ' + d.to_shipment_id : 'detached' });
+            return ok({ order_id: d.order_id, moved: rows.length, to_shipment_id: d.to_shipment_id || null });
+          }
+
           // ── Shipments + consolidation ──
           case 'createShipment': {
             if (!canManageShipments(P)) return err('No permission', 403);
@@ -945,6 +1030,7 @@ export default {
             const row = {
               payment_no, amount_inr: +amt.toFixed(2), paid_date: d.paid_date || todayISO(),
               method: d.method || null, fx_rate_used: num(d.fx_rate_used), drawdown_id: d.drawdown_id || null,
+              subentity_code: d.subentity_code || null,
               note: d.note || null, recorded_by: userId, recorded_by_name: auth.fullName,
             };
             const r = await insert('payments', row);
