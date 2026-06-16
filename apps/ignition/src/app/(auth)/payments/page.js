@@ -12,7 +12,7 @@ const KIND_LABEL = { advance: 'Advance', final: 'Final', other: 'Other' };
 
 export default function PaymentsPage() {
   const { session } = useAuth();
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
   const router = useRouter();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);

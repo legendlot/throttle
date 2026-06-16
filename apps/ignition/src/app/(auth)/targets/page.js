@@ -42,7 +42,7 @@ export default function TargetsPage() {
   const [rows, setRows] = useState(null);
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
 
   const [month, setMonth] = useState(curMonth());
   const [targetViews, setTargetViews] = useState('');

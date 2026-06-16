@@ -10,7 +10,7 @@ function inr(n) { return n == null || isNaN(n) ? '—' : `₹${Number(n).toLocal
 
 export default function CampaignsPage() {
   const { session, perms } = useAuth();
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
   const router = useRouter();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -98,7 +98,7 @@ function StatusPill({ status }) {
 }
 
 function NewCampaignModal({ session, onClose, onCreated }) {
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
   const [search, setSearch] = useState('');
   const [results, setResults] = useState([]);
   const [selected, setSelected] = useState(null);

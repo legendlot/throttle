@@ -9,7 +9,7 @@ const PROOF_BUCKET = 'ignition-payment-proofs';
 // Record a payment against a deal. Flow: search influencer → pick one of their
 // deals → kind (advance/final/other) + amount + date. Kept deliberately small.
 export function NewPaymentModal({ open, onClose, session, onSaved }) {
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const [search, setSearch] = useState('');

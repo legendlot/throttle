@@ -16,7 +16,7 @@ export default function InfluencerDetailPage() {
   const code = sp.get('code');
   const { session, perms } = useAuth();
   const canManage = !!perms?.ignition_manage;
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
   const [editing, setEditing] = useState(false);
@@ -243,7 +243,7 @@ export default function InfluencerDetailPage() {
 
 // Slice C — manual reach/growth history. Sparkline + dated snapshots + add form.
 function GrowthCard({ inf, session, canManage, onChanged }) {
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
   const [metrics, setMetrics] = useState(null);
   const [form, setForm] = useState({ captured_on: '', reach: '', note: '' });
   const [busy, setBusy] = useState(false);

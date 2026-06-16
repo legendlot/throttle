@@ -8,7 +8,7 @@ const DISPOSITIONS = ['replacement','refund','repair'];
 
 export default function OpenPitstopButton({ engagement, onLinked }) {
   const { session } = useAuth();
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [description, setDescription] = useState('');

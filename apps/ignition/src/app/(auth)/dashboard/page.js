@@ -11,7 +11,7 @@ const OVERDUE_DAYS = 7;
 
 export default function DashboardPage() {
   const { session, perms } = useAuth();
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
   const router = useRouter();
   const canManage = !!perms?.ignition_manage;
   const [kpis, setKpis] = useState(null);

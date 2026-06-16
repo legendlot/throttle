@@ -10,7 +10,7 @@ const TYPES = ['nano', 'micro', 'macro', 'brand', 'store'];
 // Quick-add influencer. Code auto-mints worker-side (IN<n>); only essentials
 // here — the rest are filled on the influencer detail page after creation.
 export function NewInfluencerModal({ open, onClose, session, onCreated }) {
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);

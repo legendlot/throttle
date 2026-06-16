@@ -7,7 +7,7 @@ import { ignitionopsGet, ignitionopsPost } from '../../../../lib/ignitionopsFetc
 
 export default function NewEngagementPage() {
   const { session } = useAuth();
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
   const router = useRouter();
   const [influencerSearch, setInfluencerSearch] = useState('');
   const [searchResults, setSearchResults] = useState([]);

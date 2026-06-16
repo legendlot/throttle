@@ -13,7 +13,7 @@ export default function CampaignDetailPage() {
   const params = useSearchParams();
   const id = params.get('id');
   const { session, perms } = useAuth();
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
   const router = useRouter();
   const canManage = !!perms?.ignition_manage;
 
@@ -120,7 +120,7 @@ export default function CampaignDetailPage() {
 }
 
 function AttachModal({ session, campaign, onClose, onAttached }) {
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
   const [search, setSearch] = useState('');
   const [results, setResults] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -169,7 +169,7 @@ function AttachModal({ session, campaign, onClose, onAttached }) {
 }
 
 function EditCampaignModal({ session, campaign, onClose, onSaved }) {
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
   const [videoCount, setVideoCount] = useState(campaign.video_count);
   const [agreedTotal, setAgreedTotal] = useState(campaign.agreed_total ?? '');
   const [status, setStatus] = useState(campaign.status);

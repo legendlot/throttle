@@ -1,9 +1,10 @@
 // Shared disposition constants — import from here, never redefine locally.
 
+// 'no_action' retired from selection (Pruthvi — redundant with 'query'); its
+// label + palette below are kept so existing no_action tickets still render.
 export const DISPOSITION_VALUES = [
   'pending',
   'query',
-  'no_action',
   'awaiting_info',
   'replacement',
   'refund',

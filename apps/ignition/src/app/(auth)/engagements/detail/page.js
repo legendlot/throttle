@@ -15,7 +15,7 @@ export default function EngagementDetailPage() {
   const id = sp.get('id');
   const eno = sp.get('engagement_no');
   const { session } = useAuth();
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
   const [advOpen, setAdvOpen] = useState(false);

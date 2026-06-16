@@ -9,7 +9,7 @@ import { ignitionopsGet, ignitionopsPost } from '../lib/ignitionopsFetch.js';
 // fill metrics/links later. `presetInfluencer` prefills when launched from a
 // specific influencer.
 export function NewDealModal({ open, onClose, session, presetInfluencer, onCreated }) {
-  const { toast } = useToast();
+  const { showToast: toast } = useToast();
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
