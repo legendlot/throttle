@@ -1505,9 +1505,37 @@ function parseMyOp(body) {
   };
 }
 
+// MyOperator delivers one leg per routing hop. On a ROUTED call (first agent
+// misses → it rings the next, who answers) the FIRST agent leg is the one who
+// did NOT take the call; the agent who actually connected is the answered /
+// positive-duration leg, typically the terminal hop. Pick that one — not the
+// first. Falls back to the last agent-bearing leg, then the first, so a plain
+// single-agent call is unchanged. (Pruthvi S144 — Maria missed → Sunitha
+// answered, but the ticket was being attributed to Maria.)
+function pickConnectedLeg(legs) {
+  const arr = (Array.isArray(legs) ? legs : []).filter(l => l && l.agent && l.agent.email);
+  if (!arr.length) return null;
+  // status field name varies; treat as connected only when it positively says so
+  const isConnected = (l) => {
+    const s = String(l.status || l.leg_status || l.disposition || l.call_status || '').toLowerCase();
+    if (!s) return null; // no status signal
+    if (/no.?answer|missed|fail|reject|cancel|abandon|busy|unanswer/.test(s)) return false;
+    return /answer|connect|complet|success|talk|bridge/.test(s);
+  };
+  const dur = (l) => Number(l.duration ?? l.duration_seconds ?? l.billsec ?? l.talk_time ?? 0) || 0;
+  // 1) explicit connected leg → prefer the terminal one
+  const connected = arr.filter(l => isConnected(l) === true);
+  if (connected.length) return connected[connected.length - 1];
+  // 2) positive-duration leg → prefer the terminal one
+  const talked = arr.filter(l => dur(l) > 0);
+  if (talked.length) return talked[talked.length - 1];
+  // 3) no status/duration signal → the LAST agent leg beats the first for routed calls
+  return arr[arr.length - 1];
+}
+
 function agentEmailFromLegs(legs) {
-  for (const l of (legs || [])) { const e = l && l.agent && l.agent.email; if (e) return e; }
-  return null;
+  const l = pickConnectedLeg(legs);
+  return (l && l.agent && l.agent.email) || null;
 }
 
 // Best-effort agent resolution by email via the GoTrue admin API. Never throws.
@@ -1704,14 +1732,31 @@ async function webhookCallSummary(body, env, account) {
   const c = parseMyOp(body);
   if (!c.session_id) return json({ ok: true, skipped: 'no session_id' });
   const agentEmail = agentEmailFromLegs(c.legs);
-  if (!agentEmail) return json({ ok: true, skipped: 'no agent email in summary' });
+
+  // Instrument (step 1): persist the raw legs so the next real routed call
+  // confirms the per-leg shape (status/duration field names) and pickConnectedLeg
+  // can be refined if needed. Captured even when no agent matches. (Pruthvi S144.)
+  const callMeta = {
+    last_event: 'summary',
+    legs: Array.isArray(c.legs) ? c.legs : [],
+    chosen_agent_email: agentEmail || null,
+  };
+  const callQ = `/rest/v1/cs_calls?myop_account_id=eq.${account.id}&call_session_id=eq.${encodeURIComponent(c.session_id)}`;
+
+  if (!agentEmail) {
+    await sb(callQ, env, { method: 'PATCH', body: JSON.stringify({ raw_meta: callMeta }) });
+    return json({ ok: true, skipped: 'no agent email in summary' });
+  }
   const agent = await resolveAgentByEmail(agentEmail, env);
-  if (!agent.id) return json({ ok: true, skipped: 'agent email not matched: ' + agentEmail });
+  if (!agent.id) {
+    await sb(callQ, env, { method: 'PATCH', body: JSON.stringify({ raw_meta: callMeta }) });
+    return json({ ok: true, skipped: 'agent email not matched: ' + agentEmail });
+  }
 
   // cs_calls — always backfill (works for both answered and missed calls)
-  await sb(`/rest/v1/cs_calls?myop_account_id=eq.${account.id}&call_session_id=eq.${encodeURIComponent(c.session_id)}`, env, {
+  await sb(callQ, env, {
     method: 'PATCH',
-    body: JSON.stringify({ agent_user_id: agent.id, agent_name: agent.name }),
+    body: JSON.stringify({ agent_user_id: agent.id, agent_name: agent.name, raw_meta: callMeta }),
   });
 
   // cs_tickets — only if a ticket exists (answered calls only)
