@@ -1,15 +1,16 @@
 'use client';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
-import {
-  panelStyle, panelHeaderStyle, tableThStyle, tableTdStyle, btnPrimary, btnSecondary,
-  pageH1, pageSub, tabBtn, fmtDate, StatusBadge,
-} from '@/lib/snorkelui';
+import { PageHead, Kpi, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
+import { fmtDateShort, money, inrCompact } from '@/components/format.js';
 
 const PAY_TONE = { none: 'gray', requested: 'yellow', paid: 'green' };
+const PAY_LABEL = { none: 'To route', requested: 'Requested', paid: 'Paid' };
+const FX = { INR: 1, USD: 84, RMB: 11.6, CNY: 11.6 };
+const toInr = (v, cur) => (Number(v) || 0) * (FX[cur] || 1);
 
 export default function PaymentsPage() {
   const { session, perms } = useAuth();
@@ -28,9 +29,7 @@ export default function PaymentsPage() {
       setRows(Array.isArray(data) ? data : []);
     } catch (e) {
       showToast(e.message || 'Failed to load payment queue', 'error');
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   }, [session, showToast]);
 
   useEffect(() => { load(); }, [load]);
@@ -51,78 +50,60 @@ export default function PaymentsPage() {
   }
 
   const canPay = !!perms?.payment_route;
+  const count = (s) => rows.filter((r) => (r.payment_status || 'none') === s).length;
   const filtered = rows.filter((r) => {
     const ps = r.payment_status || 'none';
     if (tab === 'to_route') return ps === 'none';
     if (tab === 'requested') return ps === 'requested';
-    if (tab === 'paid')      return ps === 'paid';
+    if (tab === 'paid') return ps === 'paid';
     return true;
   });
-  const count = (s) => rows.filter((r) => (r.payment_status || 'none') === s).length;
+
+  const kpi = useMemo(() => ({
+    toRoute: rows.filter((r) => (r.payment_status || 'none') === 'none').reduce((s, r) => s + toInr(r.invoice_value, r.currency), 0),
+    requested: count('requested'),
+    paid: rows.filter((r) => r.payment_status === 'paid').reduce((s, r) => s + toInr(r.invoice_value, r.currency), 0),
+  }), [rows]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const tabs = [['to_route', 'To Route', count('none')], ['requested', 'Requested', count('requested')], ['paid', 'Paid', count('paid')], ['all', 'All', rows.length]];
 
   return (
-    <div style={{ color: 'var(--t1)' }}>
-      <div style={{ marginBottom: 16 }}>
-        <h1 style={pageH1}>Payment Queue</h1>
-        <p style={pageSub}>Approved POs — route payment to Finance or the Requester, then mark paid.</p>
+    <div className="pg">
+      <PageHead title="Payment Queue" sub="Approved POs. Route to Finance or the requester, then mark paid." />
+
+      <div className="kpi-row kpi-3">
+        <Kpi label="To route" value={kpi.toRoute} sub={`${count('none')} POs waiting`} tone="yellow" format={(v) => inrCompact(v)} />
+        <Kpi label="Requested" value={kpi.requested} sub="awaiting payment" tone="blue" />
+        <Kpi label="Paid · cycle" value={kpi.paid} sub={`${count('paid')} POs settled`} tone="green" format={(v) => inrCompact(v)} />
       </div>
 
-      <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
-        <button style={tabBtn(tab === 'to_route')} onClick={() => setTab('to_route')}>To Route ({count('none')})</button>
-        <button style={tabBtn(tab === 'requested')} onClick={() => setTab('requested')}>Requested ({count('requested')})</button>
-        <button style={tabBtn(tab === 'paid')} onClick={() => setTab('paid')}>Paid ({count('paid')})</button>
-        <button style={tabBtn(tab === 'all')} onClick={() => setTab('all')}>All ({rows.length})</button>
+      <div className="seg">
+        {tabs.map(([id, lbl, n]) => (
+          <button key={id} className={`seg-btn ${tab === id ? 'on' : ''}`} onClick={() => setTab(id)}>{lbl} <span className="seg-n">{n}</span></button>
+        ))}
       </div>
 
-      <div style={panelStyle}>
-        <div style={panelHeaderStyle}>
-          <span>Approved POs</span>
-          <button style={btnSecondary} onClick={load} disabled={loading}>↻ Refresh</button>
-        </div>
-        <div style={{ overflowX: 'auto' }}>
-          {loading ? (
-            <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
-          ) : filtered.length === 0 ? (
-            <div style={{ padding: 24, textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>Nothing here.</div>
-          ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead><tr>
-                <th style={tableThStyle}>PO</th>
-                <th style={tableThStyle}>Vendor</th>
-                <th style={tableThStyle}>Value</th>
-                <th style={tableThStyle}>Approved</th>
-                <th style={tableThStyle}>Payment</th>
-                <th style={{ ...tableThStyle, textAlign: 'right' }}>Actions</th>
-              </tr></thead>
+      <Panel title="Approved POs" count={filtered.length}
+        action={<Btn onClick={load} disabled={loading}>Refresh</Btn>}>
+        {loading ? <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+          : filtered.length === 0 ? <EmptyState icon="check-check" title="Nothing in this queue" hint="Routed and paid POs move out of here automatically." />
+          : (
+            <table className="dt">
+              <thead><tr><th>PO</th><th>Vendor</th><th className="num">Value</th><th>Approved</th><th>Payment</th><th className="num">Actions</th></tr></thead>
               <tbody>
                 {filtered.map((r) => {
                   const ps = r.payment_status || 'none';
                   return (
                     <tr key={r.po_number}>
-                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)', cursor: 'pointer' }}
-                          onClick={() => router.push(`/procurement/pos/detail/?po_number=${encodeURIComponent(r.po_number)}`)}>
-                        {r.po_number}
-                      </td>
-                      <td style={{ ...tableTdStyle, whiteSpace: 'normal' }}>{r.vendor_name}</td>
-                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>
-                        {r.invoice_value != null ? `${r.currency || ''} ${Number(r.invoice_value).toLocaleString('en-IN')}` : '—'}
-                      </td>
-                      <td style={tableTdStyle}>{fmtDate(r.approved_at)}</td>
-                      <td style={tableTdStyle}>
-                        <StatusBadge label={ps} tone={PAY_TONE[ps]} />
-                        {r.payment_routed_to && <div style={{ fontSize: 9, color: 'var(--t3)', marginTop: 2 }}>{r.payment_routed_to}</div>}
-                      </td>
-                      <td style={{ ...tableTdStyle, textAlign: 'right' }}>
-                        {canPay && ps === 'none' && (
-                          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                            <button style={btnSecondary} disabled={busy === r.po_number} onClick={() => route(r.po_number, 'finance')}>→ Finance</button>
-                            <button style={btnSecondary} disabled={busy === r.po_number} onClick={() => route(r.po_number, 'requester')}>→ Requester</button>
-                          </div>
-                        )}
-                        {canPay && ps === 'requested' && (
-                          <button style={btnPrimary} disabled={busy === r.po_number} onClick={() => markPaid(r.po_number)}>Mark Paid</button>
-                        )}
-                        {ps === 'paid' && <span style={{ fontSize: 10, color: 'var(--t3)' }}>{r.paid_by || ''} · {fmtDate(r.paid_at)}</span>}
+                      <td className="mono accent row-click" onClick={() => router.push(`/procurement/pos/detail?po_number=${encodeURIComponent(r.po_number)}`)}>{r.po_number}</td>
+                      <td>{r.vendor_name}</td>
+                      <td className="num mono">{r.invoice_value != null ? money(r.currency, r.invoice_value) : '—'}</td>
+                      <td className="mono">{fmtDateShort(r.approved_at)}</td>
+                      <td><Badge label={PAY_LABEL[ps]} tone={PAY_TONE[ps]} dot />{r.payment_routed_to && <span className="pay-to"> · {r.payment_routed_to}</span>}</td>
+                      <td className="num">
+                        {canPay && ps === 'none' && <span className="act-grp"><Btn onClick={() => route(r.po_number, 'finance')} disabled={busy === r.po_number}>→ Finance</Btn><Btn onClick={() => route(r.po_number, 'requester')} disabled={busy === r.po_number}>→ Requester</Btn></span>}
+                        {canPay && ps === 'requested' && <Btn kind="primary" onClick={() => markPaid(r.po_number)} disabled={busy === r.po_number}>Mark paid</Btn>}
+                        {ps === 'paid' && <span className="dim pay-done mono">{r.paid_by || ''} · {fmtDateShort(r.paid_at)}</span>}
                       </td>
                     </tr>
                   );
@@ -130,8 +111,7 @@ export default function PaymentsPage() {
               </tbody>
             </table>
           )}
-        </div>
-      </div>
+      </Panel>
     </div>
   );
 }

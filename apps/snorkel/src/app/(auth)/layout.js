@@ -1,9 +1,13 @@
 'use client';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { RequireAuth, useAuth } from '@throttle/auth';
-import { Sidebar, Spinner, Topbar, useSearchShortcut } from '@throttle/ui';
+import { Spinner, useSearchShortcut } from '@throttle/ui';
 import { NAV_GROUPS, filterNavByPerms } from '../../lib/nav.js';
+import { Sidebar } from '../../components/chrome/Sidebar.js';
+import { ContextBar } from '../../components/chrome/ContextBar.js';
+import { GlobalSearch } from '../../components/chrome/GlobalSearch.js';
+import { useGlobalSearch } from '../../components/chrome/useGlobalSearch.js';
 
 export default function AuthLayout({ children }) {
   return (
@@ -14,49 +18,69 @@ export default function AuthLayout({ children }) {
 }
 
 function AuthLayoutInner({ children }) {
-  const { user, role, perms, signOut, loading } = useAuth();
-  const pathname  = usePathname();
-  const router    = useRouter();
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
+  const { user, role, perms, session, signOut, loading } = useAuth();
+  const pathname = usePathname();
+  const router = useRouter();
+  const [collapsed, setCollapsed] = useState(false);
+  const [search, setSearch] = useState('');
 
-  useSearchShortcut();
+  useSearchShortcut(); // "/" focuses the sidebar search ([data-search-primary])
 
-  const navGroups = useMemo(
-    () => filterNavByPerms(NAV_GROUPS, perms || {}),
-    [perms]
-  );
+  const navGroups = useMemo(() => filterNavByPerms(NAV_GROUPS, perms || {}), [perms]);
+  const { ensureLoaded, runSearch, ready } = useGlobalSearch(session, perms);
+
+  // load the cross-entity index the first time the user searches
+  useEffect(() => { if (search.trim()) ensureLoaded(); }, [search, ensureLoaded]);
+  // Escape clears search
+  useEffect(() => {
+    const h = (e) => { if (e.key === 'Escape') setSearch(''); };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, []);
+
+  const groups = useMemo(() => (search.trim() ? runSearch(search) : []), [search, runSearch, ready]);
 
   if (loading && !user) return <Spinner />;
 
   const displayName = user?.full_name || user?.email || '';
-  const initial     = displayName ? displayName[0].toUpperCase() : '?';
+  const initial = displayName ? displayName[0].toUpperCase() : '?';
+
+  function onNav(route) {
+    if (!route) return;
+    setSearch('');
+    router.push(route);
+  }
 
   return (
-    <div style={{ display:'flex', height:'100dvh', overflow:'hidden' }}>
+    <div className="app mo">
       <Sidebar
         groups={navGroups}
-        activeTab={pathname}
-        onTabSelect={(item) => router.push(item.route)}
+        pathname={pathname}
+        onNav={onNav}
+        appIcon={<img src="/favicon.svg" alt="Snorkel" style={{ height: 18, width: 'auto', display: 'block' }} />}
         userLabel={displayName}
         userInitial={initial}
         userRole={role || ''}
         onLogout={signOut}
-        collapsed={sidebarCollapsed}
-        onToggle={() => setSidebarCollapsed(c => !c)}
-        appLabel="SNORKEL"
-        appShortLabel="SN"
-        appIcon={<img src="/favicon.svg" alt="Snorkel" style={{ height: 20, width: 'auto', display: 'block' }} />}
+        collapsed={collapsed}
+        onToggle={() => setCollapsed(c => !c)}
+        search={search}
+        onSearch={setSearch}
       />
-      <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
-        <Topbar
-          navGroups={navGroups}
-          pathname={pathname}
-          onTabSelect={(item) => router.push(item.route)}
-        />
-        <main style={{ flex:1, overflowY:'auto', padding:'16px 24px' }}>
-          {children}
-        </main>
+      <div className="main-wrap">
+        <ContextBar groups={navGroups} pathname={pathname} onNav={onNav} />
+        <main className="main">{children}</main>
       </div>
+
+      {search.trim() && (
+        <GlobalSearch
+          query={search}
+          groups={groups}
+          onNav={onNav}
+          onPick={() => setSearch('')}
+          collapsed={collapsed}
+        />
+      )}
     </div>
   );
 }

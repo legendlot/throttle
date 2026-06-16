@@ -3,10 +3,8 @@ import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
-import {
-  panelStyle, panelHeaderStyle, panelBodyStyle, inputStyle, labelStyle,
-  btnPrimary, btnSecondary, btnDanger, pageH1, pageSub, StatusBadge,
-} from '@/lib/snorkelui';
+import { Plus, ArrowLeft, Check, Pencil } from 'lucide-react';
+import { PageHead, Panel, Badge, Btn } from '@/components/ui.js';
 
 // Snorkel permission matrix — all keys are boolean toggles.
 const PERM_DEFS = [
@@ -36,20 +34,13 @@ const PERM_DEFS = [
   ] },
 ];
 
-const toggleBtn = (on) => ({
-  background: on ? 'var(--yellow)' : 'var(--surface2)', color: on ? '#000' : 'var(--t3)',
-  border: `1px solid ${on ? 'var(--yellow)' : 'var(--border)'}`, borderRadius: 3,
-  padding: '4px 12px', fontFamily: 'var(--cond)', fontSize: 11, fontWeight: 700, cursor: 'pointer',
-  textTransform: 'uppercase', letterSpacing: '.05em',
-});
-
 export default function RolesPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
   const [roles, setRoles] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState('list');     // list | form
-  const [editKey, setEditKey] = useState(null);  // role_key when editing
+  const [view, setView] = useState('list');
+  const [editKey, setEditKey] = useState(null);
   const [roleKey, setRoleKey] = useState('');
   const [label, setLabel] = useState('');
   const [desc, setDesc] = useState('');
@@ -95,96 +86,75 @@ export default function RolesPage() {
     } catch (e) { showToast(e.message || 'Delete failed', 'error'); }
   }
 
-  if (perms && !perms.snorkel_admin) return <div style={{ padding: 24, color: 'var(--t3)' }}>Admin only.</div>;
+  if (perms && !perms.snorkel_admin) return <div style={{ padding: 24, color: 'var(--text-3)' }}>Admin only.</div>;
+
+  if (view === 'form') {
+    return (
+      <div className="pg">
+        <div className="po-head">
+          <div className="po-head-l">
+            <Btn onClick={() => setView('list')}><ArrowLeft size={14} /> Back to roles</Btn>
+            <span className="po-head-no" style={{ fontSize: 18 }}>{editKey ? label || editKey : 'New Role'}</span>
+          </div>
+          <div className="po-head-r"><Btn kind="primary" onClick={save} disabled={saving}><Check size={14} /> {saving ? 'Saving…' : 'Save role'}</Btn></div>
+        </div>
+
+        <Panel title="Role details" pad>
+          <div className="kv-grid">
+            {!editKey && <div><div className="kv-k">Role key</div><input className="f-inp mono" value={roleKey} onChange={(e) => setRoleKey(e.target.value)} placeholder="e.g. buyer" disabled={saving} /></div>}
+            <div><div className="kv-k">Label</div><input className="f-inp" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Buyer" disabled={saving} /></div>
+          </div>
+          <div style={{ marginTop: 12 }}><div className="kv-k">Description</div><input className="f-inp" value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="What this role can do" disabled={saving} /></div>
+        </Panel>
+
+        {PERM_DEFS.map(g => (
+          <Panel title={g.group} key={g.group} pad>
+            <div className="perm-list">
+              {g.items.map(it => (
+                <div className="perm-row" key={it.key}>
+                  <div className="perm-l"><span className="perm-lbl">{it.label}</span><span className="perm-key mono">{it.key}</span></div>
+                  <button className={`tgl ${perm[it.key] ? 'on' : ''}`} onClick={() => toggle(it.key)} disabled={saving}>
+                    <span className="tgl-knob" /><span className="tgl-txt">{perm[it.key] ? 'ON' : 'OFF'}</span>
+                  </button>
+                </div>
+              ))}
+            </div>
+          </Panel>
+        ))}
+      </div>
+    );
+  }
 
   return (
-    <div style={{ color: 'var(--t1)', maxWidth: 900 }}>
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap' }}>
-        <div>
-          <h1 style={pageH1}>Roles & Permissions</h1>
-          <p style={pageSub}>Snorkel-only permission roles. Assign people to roles on the Users page.</p>
-        </div>
-        {view === 'list'
-          ? <button style={btnPrimary} onClick={startNew}>+ New Role</button>
-          : <button style={btnSecondary} onClick={() => setView('list')}>← Back to roles</button>}
-      </div>
-
-      {view === 'list' ? (
-        loading ? <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+    <div className="pg">
+      <PageHead title="Roles & Permissions" sub="Snorkel-only permission roles. Assign people to roles on the Users page."
+        actions={<Btn kind="primary" onClick={startNew}><Plus size={14} /> New role</Btn>} />
+      {loading ? <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
         : (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            {roles.map((r) => (
-              <div key={r.role_key} style={panelStyle}>
-                <div style={panelHeaderStyle}>
-                  <span>{r.label} {r.is_system && <StatusBadge label="system" tone="gray" />}</span>
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>{r.role_key}</span>
-                </div>
-                <div style={panelBodyStyle}>
-                  {r.description && <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 8 }}>{r.description}</div>}
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 10 }}>
-                    {Object.entries(r.permissions || {}).filter(([, v]) => v).map(([k]) => (
-                      <StatusBadge key={k} label={k} tone="blue" />
-                    ))}
-                    {Object.values(r.permissions || {}).filter(Boolean).length === 0 && (
-                      <span style={{ fontSize: 11, color: 'var(--t3)' }}>No elevated permissions (request-only)</span>
-                    )}
+          <div className="role-grid">
+            {roles.map((r) => {
+              const on = Object.entries(r.permissions || {}).filter(([, v]) => v).map(([k]) => k);
+              return (
+                <div className="role-card" key={r.role_key}>
+                  <div className="role-head">
+                    <span className="role-name">{r.label}{r.is_system && <Badge label="system" tone="gray" />}</span>
+                    <span className="role-key mono">{r.role_key}</span>
                   </div>
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    <button style={btnSecondary} onClick={() => startEdit(r)}>Edit</button>
-                    {!r.is_system && <button style={btnDanger} onClick={() => del(r)}>Delete</button>}
+                  {r.description && <div className="role-desc">{r.description}</div>}
+                  <div className="role-perms">
+                    {on.length === 0
+                      ? <span className="dim">Request-only access</span>
+                      : <><span className="role-pcount mono">{on.length}</span><span className="role-plabel">permission{on.length === 1 ? '' : 's'} granted</span></>}
+                  </div>
+                  <div className="role-foot">
+                    <Btn onClick={() => startEdit(r)}><Pencil size={14} /> Edit</Btn>
+                    {!r.is_system && <Btn onClick={() => del(r)}>Delete</Btn>}
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
-        )
-      ) : (
-        <div style={panelStyle}>
-          <div style={panelHeaderStyle}><span>{editKey ? `Edit ${editKey}` : 'New Role'}</span></div>
-          <div style={panelBodyStyle}>
-            <div style={{ display: 'grid', gridTemplateColumns: editKey ? '1fr' : '1fr 1fr', gap: 12, marginBottom: 12 }}>
-              {!editKey && (
-                <div>
-                  <span style={labelStyle}>Role Key *</span>
-                  <input value={roleKey} onChange={(e) => setRoleKey(e.target.value)} placeholder="e.g. buyer"
-                         style={{ ...inputStyle, width: '100%', fontFamily: 'var(--mono)' }} disabled={saving} />
-                </div>
-              )}
-              <div>
-                <span style={labelStyle}>Label *</span>
-                <input value={label} onChange={(e) => setLabel(e.target.value)} style={{ ...inputStyle, width: '100%' }} disabled={saving} />
-              </div>
-            </div>
-            <div style={{ marginBottom: 16 }}>
-              <span style={labelStyle}>Description</span>
-              <input value={desc} onChange={(e) => setDesc(e.target.value)} style={{ ...inputStyle, width: '100%' }} disabled={saving} />
-            </div>
-
-            {PERM_DEFS.map((g) => (
-              <div key={g.group} style={{ marginBottom: 14 }}>
-                <div style={{ ...labelStyle, marginBottom: 6 }}>{g.group}</div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {g.items.map((it) => (
-                    <div key={it.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 3, padding: '8px 10px' }}>
-                      <span style={{ fontSize: 12 }}>{it.label} <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>· {it.key}</span></span>
-                      <button type="button" style={toggleBtn(!!perm[it.key])} onClick={() => toggle(it.key)} disabled={saving}>
-                        {perm[it.key] ? 'On' : 'Off'}
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
-              <button style={btnSecondary} onClick={() => setView('list')} disabled={saving}>Cancel</button>
-              <button style={{ ...btnPrimary, opacity: saving ? 0.6 : 1 }} onClick={save} disabled={saving}>
-                {saving ? 'Saving…' : (editKey ? 'Save Role' : 'Create Role')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+        )}
     </div>
   );
 }

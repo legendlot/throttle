@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Tomorrow:wght@400;500;600;700;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Tomorrow:wght@400;500;600;700;900&family=Rubik:wght@300;400;500;600&display=swap');
 
 *, *::before, *::after {
   margin: 0;
@@ -17,19 +17,21 @@
    ════════════════════════════════════════════════════════════ */
 
 :root {
-  /* ── Surface ramp (lifted dark, 4 steps) ─────────────── */
-  --bg:         #1f1f1f;   /* body */
-  --surface:    #2a2a2a;   /* cards, panels, sidebar, modals */
-  --surface-2:  #333333;   /* inputs, table-row hover, raised inner */
-  --surface-3:  #3c3c3c;   /* active fills, chip-neutral bg, hover */
-  --border:     #404040;   /* default 1px border */
-  --border-2:   #4a4a4a;   /* emphasized border, focus, raised secondary */
+  /* ── Surface ramp (Snorkel Redesign — cooler/darker, 4 steps) ─────────
+     Adopted from the redesign source-of-truth (snorkel-redesign.css :root).
+     Slightly cooler + darker than the old Garage-mirror ramp. ────────── */
+  --bg:         #16181a;   /* body */
+  --surface:    #1e2023;   /* cards, panels, sidebar, modals */
+  --surface-2:  #26282c;   /* inputs, table-row hover, raised inner */
+  --surface-3:  #30343a;   /* active fills, chip-neutral bg, hover */
+  --border:     #2c2f33;   /* default 1px border */
+  --border-2:   #3a3e44;   /* emphasized border, focus, raised secondary */
 
   /* ── Text ramp (4 steps, AA-conformant on --bg) ──────── */
-  --text-1:     #f5f5f5;   /* primary */
-  --text-2:     #b0b0b0;   /* secondary (AAA on --bg) */
-  --text-3:     #888888;   /* tertiary (AA on --bg, replaces #555) */
-  --text-4:     #666666;   /* decorative-only — icons, dividers; sub-AA */
+  --text-1:     #f3f4f5;   /* primary */
+  --text-2:     #a7acb2;   /* secondary */
+  --text-3:     #71767c;   /* tertiary */
+  --text-4:     #565b61;   /* decorative-only — icons, dividers */
 
   /* ── Brand colors ────────────────────────────────────── */
   --brand-yellow:      #F2CD1A;
@@ -38,6 +40,14 @@
   --brand-red:         #DE2A2A;
   --brand-green:       #22c55e;
   --brand-orange:      #f97316;
+
+  /* ── Redesign foreground variants (lighter text/badge fills on dark) ── */
+  --blue-fg:    #9aabff;
+  --green-fg:   #5fe08a;
+  --red-fg:     #ff7a7a;
+  --orange-fg:  #ffa459;
+  --blue-bright: #4d68ff;   /* redesign's brighter blue solid */
+  --blue-solid:  #213CE2;
 
   /* ── Semantic state ───────────────────────────────────── */
   --state-warning:    #fbbf24;
@@ -54,9 +64,11 @@
   --state-info-bg:    rgba(33, 60, 226, 0.20);
 
   /* Accent (primary action) */
-  --accent:    var(--brand-yellow);
-  --accent-fg: #0a0a0a;
-  --accent-bg: rgba(242, 205, 26, 0.08);
+  --accent:      var(--brand-yellow);
+  --accent-fg:   #0a0a0a;
+  --accent-bg:   rgba(242, 205, 26, 0.08);
+  --accent-soft: rgba(242, 205, 26, 0.13);  /* tinted fill (active nav, soft badges) */
+  --accent-bd:   rgba(242, 205, 26, 0.32);  /* tinted border */
 
   /* ── Type scale ──────────────────────────────────────── */
   --text-2xs:  11px;
@@ -89,15 +101,24 @@
   --radius-lg:   8px;
   --radius-full: 9999px;
 
-  /* ── Fonts ───────────────────────────────────────────── */
+  /* ── Fonts (LOT design system — three type roles) ─────────
+     Display = Tomorrow, Body/UI = Rubik (NEW), Data/mono = JetBrains Mono */
   --font-mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
   --font-cond: 'Tomorrow', system-ui, sans-serif;
+  --font-ui:   'Rubik', system-ui, sans-serif;
 
   /* ── Motion ──────────────────────────────────────────── */
   --duration-fast:    120ms;
   --duration-default: 180ms;
   --duration-slow:    260ms;
   --ease-out:         cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* ── Redesign layout primitives (from snorkel-redesign.css) ── */
+  --ease:       cubic-bezier(0.22, 1, 0.36, 1);
+  --radius:     7px;
+  --row-pad:    11px 12px;
+  --panel-pad:  16px 18px;
+  --shadow:     0 1px 0 rgba(255,255,255,.025) inset, 0 8px 24px -12px rgba(0,0,0,.6);
 
   /* ════════════════════════════════════════════════════════
      LEGACY ALIASES — Existing pages reference these names.
@@ -110,14 +131,18 @@
   --t1:       var(--text-1);
   --t2:       var(--text-2);
   --t3:       var(--text-3);
-  --yellow:   var(--brand-yellow);
-  --yellow2:  var(--brand-yellow-deep);
-  --blue:     var(--brand-blue);
+  --yellow:      var(--brand-yellow);
+  --yellow2:     var(--brand-yellow-deep);
+  --yellow-deep: var(--brand-yellow-deep);
+  /* --blue used by redesign components (spend bars, GT chip) = the brighter blue */
+  --blue:     var(--blue-bright);
   --red:      var(--brand-red);
   --green:    var(--brand-green);
   --orange:   var(--brand-orange);
   --mono:     var(--font-mono);
   --cond:     var(--font-cond);
+  --disp:     var(--font-cond);
+  --body:     var(--font-ui);
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -127,9 +152,9 @@
 html, body {
   background: var(--bg);
   color: var(--text-1);
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);   /* Rubik — body/UI default (LOT type roles) */
   font-size: var(--text-base);
-  line-height: 1.45;
+  line-height: 1.5;
   height: 100%;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;

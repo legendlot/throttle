@@ -4,10 +4,12 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { workerFetch } from '@throttle/db';
 import { useToast } from '@throttle/ui';
-import {
-  panelStyle, panelHeaderStyle, panelBodyStyle, inputStyle, selectStyle, labelStyle,
-  btnPrimary, btnSecondary, pageH1, pageSub,
-} from '@/lib/snorkelui';
+import { Send } from 'lucide-react';
+import { PageHead, Panel, Btn } from '@/components/ui.js';
+
+function FormField({ label, children, full }) {
+  return <div className={`ff ${full ? 'ff-full' : ''}`}><label className="kv-k">{label}</label>{children}</div>;
+}
 
 export default function NewRequestPage() {
   const { session } = useAuth();
@@ -43,7 +45,7 @@ export default function NewRequestPage() {
       }, session);
       const result = res.data || res;
       showToast(`${result.request_no} submitted`, 'success');
-      router.push(`/requests/detail/?request_no=${encodeURIComponent(result.request_no)}`);
+      router.push(`/requests/detail?request_no=${encodeURIComponent(result.request_no)}`);
     } catch (e) {
       showToast(e.message || 'Failed to submit request', 'error');
       setSubmitting(false);
@@ -51,80 +53,33 @@ export default function NewRequestPage() {
   }
 
   return (
-    <div style={{ color: 'var(--t1)', maxWidth: 760 }}>
-      <div style={{ marginBottom: 16 }}>
-        <h1 style={pageH1}>New PO Request</h1>
-        <p style={pageSub}>Tell procurement what you need. Be specific — quantities, links, specs all help.</p>
-      </div>
-
-      <div style={panelStyle}>
-        <div style={panelHeaderStyle}><span>Request Details</span></div>
-        <div style={panelBodyStyle}>
-          <div style={{ marginBottom: 12 }}>
-            <span style={labelStyle}>Title *</span>
-            <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. 20× ceiling fans for the new floor"
-                   style={{ ...inputStyle, width: '100%' }} disabled={submitting} />
-          </div>
-
-          <div style={{ marginBottom: 12 }}>
-            <span style={labelStyle}>What do you need? *</span>
-            <textarea value={details} onChange={(e) => setDetails(e.target.value)} rows={6}
-                      placeholder="Describe the item(s), quantity, specs, links, and why. The more detail, the faster procurement can act."
-                      style={{ ...inputStyle, width: '100%', resize: 'vertical' }} disabled={submitting} />
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
-            <div>
-              <span style={labelStyle}>Category</span>
-              <input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="Office / Consumable / Component / Machine…"
-                     style={{ ...inputStyle, width: '100%' }} disabled={submitting} />
-            </div>
-            <div>
-              <span style={labelStyle}>Suggested Vendor (optional)</span>
-              <input value={suggestedVendor} onChange={(e) => setSuggestedVendor(e.target.value)}
-                     style={{ ...inputStyle, width: '100%' }} disabled={submitting} />
-            </div>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
-            <div>
-              <span style={labelStyle}>Est. Cost</span>
-              <input type="number" min="0" value={estCost} onChange={(e) => setEstCost(e.target.value)}
-                     style={{ ...inputStyle, width: '100%', fontFamily: 'var(--mono)' }} disabled={submitting} />
-            </div>
-            <div>
-              <span style={labelStyle}>Currency</span>
-              <select value={currency} onChange={(e) => setCurrency(e.target.value)} style={{ ...selectStyle, width: '100%' }} disabled={submitting}>
-                <option>INR</option><option>USD</option><option>CNY</option><option>EUR</option>
-              </select>
-            </div>
-            <div>
-              <span style={labelStyle}>Urgency</span>
-              <select value={urgency} onChange={(e) => setUrgency(e.target.value)} style={{ ...selectStyle, width: '100%' }} disabled={submitting}>
-                <option>Low</option><option>Normal</option><option>High</option><option>Urgent</option>
-              </select>
-            </div>
-            <div>
-              <span style={labelStyle}>Needed By</span>
-              <input type="date" value={neededBy} onChange={(e) => setNeededBy(e.target.value)}
-                     style={{ ...inputStyle, width: '100%', fontFamily: 'var(--mono)' }} disabled={submitting} />
-            </div>
-          </div>
-
-          <div style={{ marginBottom: 16 }}>
-            <span style={labelStyle}>Notes (optional)</span>
-            <input value={notes} onChange={(e) => setNotes(e.target.value)} style={{ ...inputStyle, width: '100%' }} disabled={submitting} />
-          </div>
-
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
-            <button style={btnSecondary} onClick={() => router.push('/requests')} disabled={submitting}>Cancel</button>
-            <button style={{ ...btnPrimary, opacity: submitting ? 0.6 : 1, cursor: submitting ? 'wait' : 'pointer' }}
-                    onClick={submit} disabled={submitting}>
-              {submitting ? 'Submitting…' : 'Submit Request'}
-            </button>
-          </div>
+    <div className="pg" style={{ maxWidth: 760 }}>
+      <PageHead title="New PO Request" sub="Tell procurement what you need. The more context, the faster they can raise a PO." />
+      <Panel title="Request details" pad>
+        <div className="form-grid">
+          <FormField label="Title" full><input className="f-inp" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. 20× ceiling fans for the new floor" disabled={submitting} /></FormField>
+          <FormField label="What do you need?" full><textarea className="f-inp" rows="5" value={details} onChange={(e) => setDetails(e.target.value)} placeholder="Item(s), quantity, specs, links, and why. The more detail, the faster procurement can act." disabled={submitting} /></FormField>
+          <FormField label="Category"><input className="f-inp" value={category} onChange={(e) => setCategory(e.target.value)} placeholder="Office / Consumable / Component / Machine…" disabled={submitting} /></FormField>
+          <FormField label="Suggested vendor (optional)"><input className="f-inp" value={suggestedVendor} onChange={(e) => setSuggestedVendor(e.target.value)} disabled={submitting} /></FormField>
+          <FormField label="Estimated cost"><input className="f-inp mono" type="number" min="0" value={estCost} onChange={(e) => setEstCost(e.target.value)} placeholder="0" disabled={submitting} /></FormField>
+          <FormField label="Currency">
+            <select className="sel f-inp" value={currency} onChange={(e) => setCurrency(e.target.value)} disabled={submitting}>
+              <option>INR</option><option>USD</option><option>CNY</option><option>EUR</option>
+            </select>
+          </FormField>
+          <FormField label="Urgency">
+            <select className="sel f-inp" value={urgency} onChange={(e) => setUrgency(e.target.value)} disabled={submitting}>
+              <option>Low</option><option>Normal</option><option>High</option><option>Urgent</option>
+            </select>
+          </FormField>
+          <FormField label="Needed by"><input className="f-inp mono" type="date" value={neededBy} onChange={(e) => setNeededBy(e.target.value)} disabled={submitting} /></FormField>
+          <FormField label="Notes (optional)" full><input className="f-inp" value={notes} onChange={(e) => setNotes(e.target.value)} disabled={submitting} /></FormField>
         </div>
-      </div>
+        <div className="form-foot">
+          <Btn onClick={() => router.push('/requests')} disabled={submitting}>Cancel</Btn>
+          <Btn kind="primary" onClick={submit} disabled={submitting}><Send size={14} /> {submitting ? 'Submitting…' : 'Submit request'}</Btn>
+        </div>
+      </Panel>
     </div>
   );
 }

@@ -4,6 +4,9 @@ import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { useProducts } from '../../../../hooks/useProducts.js';
+import { PageHead, Kpi, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
+import { countryTone } from '@/components/format.js';
+import { Plus, ArrowRight } from 'lucide-react';
 
 const PO_SOURCES = ['China', 'India', 'USA', 'Germany', 'Taiwan', 'Vietnam', 'Bangladesh', 'Japan', 'South Korea', 'UK', 'Italy', 'Turkey', 'Other'];
 const PO_CURRENCIES = ['INR', 'USD', 'RMB'];
@@ -268,109 +271,62 @@ export default function VendorsPage() {
   }
 
   if (view === 'list') {
+    const tokens = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const filtered = tokens.length === 0 ? vendors : vendors.filter(v => {
+      const hay = `${v.vendor_code || ''} ${v.vendor_name || ''} ${v.category || ''} ${v.source_country || ''} ${v.location || ''} ${v.contact_name || ''} ${v.contact_phone || ''} ${v.contact_email || ''} ${v.gstin || ''}`.toLowerCase();
+      return tokens.every(t => hay.includes(t));
+    });
+    const activeCount = vendors.filter(v => v.active).length;
+    const chinaCount = vendors.filter(v => v.source_country === 'China').length;
+    const indiaCount = vendors.filter(v => v.source_country === 'India').length;
     return (
-      <div style={{ color: 'var(--t1)' }}>
-        <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
-          <div>
-            <h1 style={{ fontFamily: 'var(--cond)', fontSize: 28, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.03em', margin: 0 }}>
-              Vendors
-            </h1>
-            <p style={{ color: 'var(--t3)', fontSize: 11, marginTop: 4, fontFamily: 'var(--mono)' }}>
-              Vendor master — drives PO auto-fill.
-            </p>
-          </div>
-          {perms?.vendor_manage && (
-            <button style={btnPrimary} onClick={startCreate}>+ New Vendor</button>
-          )}
+      <div className="pg">
+        <PageHead title="Vendors" sub="Supplier directory — drives PO auto-fill."
+          actions={perms?.vendor_manage && <Btn kind="primary" onClick={startCreate}><Plus size={14} /> New Vendor</Btn>} />
+
+        <div className="kpi-row">
+          <Kpi label="Vendors" value={vendors.length} sub="on file" tone="blue" />
+          <Kpi label="Active" value={activeCount} sub="bookable" tone="green" />
+          <Kpi label="China" value={chinaCount} sub="suppliers" tone="blue" />
+          <Kpi label="India" value={indiaCount} sub="suppliers" tone="green" />
         </div>
 
-        {(() => {
-        const tokens = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
-        const filtered = tokens.length === 0 ? vendors : vendors.filter(v => {
-          const hay = `${v.vendor_code || ''} ${v.vendor_name || ''} ${v.category || ''} ${v.source_country || ''} ${v.location || ''} ${v.contact_name || ''} ${v.contact_phone || ''} ${v.contact_email || ''} ${v.gstin || ''}`.toLowerCase();
-          return tokens.every(t => hay.includes(t));
-        });
-        return (
-        <div style={panelStyle}>
-          <div style={panelHeaderStyle}>
-            <span>
-              All Vendors {vendors.length > 0 && (
-                <span style={{ color: 'var(--t3)', marginLeft: 6, fontSize: 11 }}>
-                  ({tokens.length > 0 ? `${filtered.length} of ${vendors.length}` : vendors.length})
-                </span>
-              )}
-            </span>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <div style={{ position: 'relative' }}>
-                <input
-                  data-search-primary
-                  type="text"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search code, name, category, country, contact, GSTIN…  · /"
-                  style={{ ...inputStyle, width: 360, paddingRight: search ? 26 : 10 }}
-                  autoComplete="off"
-                />
-                {search && (
-                  <button
-                    onClick={() => setSearch('')}
-                    style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: 'var(--t3)', cursor: 'pointer', fontSize: 14, padding: '2px 6px', lineHeight: 1 }}
-                    title="Clear search"
-                  >×</button>
-                )}
-              </div>
-              <button style={btnSecondary} onClick={loadList} disabled={loading}>↻ Refresh</button>
+        <Panel title="Directory" count={tokens.length > 0 ? `${filtered.length} of ${vendors.length}` : vendors.length}
+          action={
+            <div className="filters">
+              <input className="sel" data-search-primary type="text" value={search} onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search code, name, category… · /" autoComplete="off" style={{ minWidth: 240 }} />
+              {search && <button className="chip-clear" onClick={() => setSearch('')}>Clear ✕</button>}
             </div>
-          </div>
-          <div style={{ overflowX: 'auto' }}>
-            {loading ? (
-              <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
-            ) : vendors.length === 0 ? (
-              <div style={{ padding: 24, textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>No vendors yet</div>
-            ) : filtered.length === 0 ? (
-              <div style={{ padding: 24, textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>
-                No vendors match <span style={{ fontFamily: 'var(--mono)', color: 'var(--t2)' }}>{search}</span>
-              </div>
-            ) : (
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead><tr>
-                  <th style={tableThStyle}>Code</th>
-                  <th style={tableThStyle}>Vendor Name</th>
-                  <th style={tableThStyle}>Category</th>
-                  <th style={tableThStyle}>Country</th>
-                  <th style={tableThStyle}>Contact</th>
-                  <th style={tableThStyle}>Payment Terms</th>
-                  <th style={tableThStyle}>Lead Time</th>
-                  <th style={tableThStyle}>Status</th>
-                  <th style={{ ...tableThStyle, textAlign: 'right' }}></th>
-                </tr></thead>
-                <tbody>
-                  {filtered.map((v) => (
-                    <tr key={v.vendor_code}>
-                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{v.vendor_code}</td>
-                      <td style={tableTdStyle}>{v.vendor_name}</td>
-                      <td style={tableTdStyle}>{v.category || '—'}</td>
-                      <td style={tableTdStyle}>{v.source_country || '—'}</td>
-                      <td style={tableTdStyle}>{v.contact_name || '—'}{v.contact_phone ? ` · ${v.contact_phone}` : ''}</td>
-                      <td style={tableTdStyle}>{v.payment_terms || '—'}</td>
-                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{v.lead_time_days != null ? `${v.lead_time_days}d` : '—'}</td>
-                      <td style={tableTdStyle}>
-                        <StatusBadge label={v.active ? 'Active' : 'Inactive'} tone={v.active ? 'green' : 'red'} />
-                      </td>
-                      <td style={{ ...tableTdStyle, textAlign: 'right' }}>
-                        {perms?.vendor_manage && (
-                          <button style={btnSecondary} onClick={() => startEdit(v.vendor_code)}>Edit</button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </div>
-        );
-        })()}
+          }>
+          {loading ? (
+            <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+          ) : filtered.length === 0 ? (
+            <EmptyState icon="building-2" title="No vendors match" hint={vendors.length === 0 ? 'No vendors yet.' : 'Clear the search to see all suppliers.'} />
+          ) : (
+            <table className="dt">
+              <thead><tr>
+                <th>Code</th><th>Vendor</th><th>Category</th><th>Country</th><th>Contact</th>
+                <th>Terms</th><th className="num">Lead</th><th>Status</th><th className="num"></th>
+              </tr></thead>
+              <tbody>
+                {filtered.map((v) => (
+                  <tr key={v.vendor_code} className={perms?.vendor_manage ? 'row-click' : ''} onClick={() => perms?.vendor_manage && startEdit(v.vendor_code)}>
+                    <td className="mono accent">{v.vendor_code}</td>
+                    <td>{v.vendor_name}</td>
+                    <td className="dim">{v.category || '—'}</td>
+                    <td><Badge label={v.source_country || '—'} tone={countryTone(v.source_country)} soft={false} /></td>
+                    <td className="dim">{v.contact_name || '—'}{v.contact_phone ? ` · ${v.contact_phone}` : ''}</td>
+                    <td className="mono dim">{v.payment_terms || '—'}</td>
+                    <td className="num mono">{v.lead_time_days != null ? `${v.lead_time_days}d` : '—'}</td>
+                    <td><Badge label={v.active ? 'Active' : 'Inactive'} tone={v.active ? 'green' : 'gray'} dot /></td>
+                    <td className="num">{perms?.vendor_manage && <span className="row-go"><ArrowRight size={14} /></span>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Panel>
       </div>
     );
   }

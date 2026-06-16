@@ -5,6 +5,9 @@ import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast, Combobox, useEscapeClose } from '@throttle/ui';
 import { useProducts } from '../../../../hooks/useProducts.js';
+import { PageHead, Kpi, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
+import { fmtDateShort, urgencyTone } from '@/components/format.js';
+import { Plus, X, ArrowRight } from 'lucide-react';
 
 const TONE_STYLES = {
   yellow: { bg: 'rgba(242,205,26,.12)', fg: '#f2cd1a', border: 'rgba(242,205,26,.2)' },
@@ -227,26 +230,22 @@ export default function ReordersPage() {
 
   const canRaise = perms?.po_create || perms?.reorder_raise;
   const variants = product ? (PRODUCT_VARIANTS[product] || []) : [];
+  const critCount = rows.filter((r) => (r.urgency || '').toLowerCase() === 'critical').length;
+  const chinaCount = rows.filter((r) => r.source === 'China').length;
 
   return (
-    <div style={{ color: 'var(--t1)' }}>
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
-        <div>
-          <h1 style={{ fontFamily: 'var(--cond)', fontSize: 28, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.03em', margin: 0 }}>
-            Reorder Requests
-          </h1>
-          <p style={{ color: 'var(--t3)', fontSize: 11, marginTop: 4, fontFamily: 'var(--mono)' }}>
-            Raise requests for short-stock items — convert to PO when ready.
-          </p>
-        </div>
-        {canRaise && (
-          <button
-            style={formOpen ? btnSecondary : btnPrimary}
-            onClick={() => { setFormOpen((v) => !v); if (formOpen) resetForm(); }}
-          >
-            {formOpen ? '✕ Cancel' : '+ New Request'}
-          </button>
-        )}
+    <div className="pg">
+      <PageHead title="Reorder Requests" sub="Raise requests for short-stock items — convert to PO when ready."
+        actions={canRaise && (
+          <Btn kind={formOpen ? 'ghost' : 'primary'} onClick={() => { setFormOpen((v) => !v); if (formOpen) resetForm(); }}>
+            {formOpen ? <><X size={14} /> Cancel</> : <><Plus size={14} /> New Request</>}
+          </Btn>
+        )} />
+
+      <div className="kpi-row kpi-3">
+        <Kpi label="Open reorders" value={rows.length} sub="waiting to convert" tone="yellow" />
+        <Kpi label="Critical" value={critCount} sub="raise today" tone="red" />
+        <Kpi label="China sourced" value={chinaCount} sub="of open reorders" tone="blue" />
       </div>
 
       {formOpen && canRaise && (
@@ -360,78 +359,52 @@ export default function ReordersPage() {
         </div>
       )}
 
-      <div style={panelStyle}>
-        <div style={panelHeaderStyle}>
-          <span>All Requests {rows.length > 0 && <span style={{ color: 'var(--t3)', marginLeft: 6, fontSize: 11 }}>({rows.length})</span>}</span>
-          <button style={btnSecondary} onClick={load} disabled={loading}>↻ Refresh</button>
-        </div>
-        <div style={{ overflowX: 'auto' }}>
-          {loading ? (
-            <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
-          ) : rows.length === 0 ? (
-            <div style={{ padding: 24, textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>No reorder requests yet</div>
-          ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead><tr>
-                <th style={tableThStyle}>ID</th>
-                <th style={tableThStyle}>Type</th>
-                <th style={tableThStyle}>Part / Product</th>
-                <th style={tableThStyle}>Qty</th>
-                <th style={tableThStyle}>Urgency</th>
-                <th style={tableThStyle}>Requested By</th>
-                <th style={tableThStyle}>Date</th>
-                <th style={tableThStyle}>Status</th>
-                <th style={{ ...tableThStyle, textAlign: 'right' }}></th>
-              </tr></thead>
-              <tbody>
-                {rows.map((r) => {
-                  const label = r.request_type === 'part'
-                    ? `${r.part_code || ''} ${r.part_name ? '· ' + r.part_name : ''}`.trim() || '—'
-                    : [r.product, r.variant, r.color].filter(Boolean).join(' · ') || '—';
-                  return (
-                    <tr key={r.request_id}>
-                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{r.request_id}</td>
-                      <td style={tableTdStyle}><StatusBadge label={r.request_type || '—'} tone="gray" /></td>
-                      <td style={{ ...tableTdStyle, whiteSpace: 'normal' }}>{label}</td>
-                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{r.requested_qty} {r.unit || ''}</td>
-                      <td style={{ ...tableTdStyle, color: urgencyColor(r.urgency), fontWeight: 600 }}>{r.urgency || '—'}</td>
-                      <td style={tableTdStyle}>{r.requested_by || '—'}</td>
-                      <td style={tableTdStyle}>{formatDate(r.created_at)}</td>
-                      <td style={tableTdStyle}>
-                        <StatusBadge label={r.status || '—'} tone={RR_STATUS_TONES[r.status] || 'gray'} />
-                        {r.status === 'Converted' && r.po_number && (
-                          <div style={{ fontSize: 9, color: 'var(--t3)', fontFamily: 'var(--mono)', marginTop: 2 }}>{r.po_number}</div>
-                        )}
-                        {r.status === 'Rejected' && r.rejection_note && (
-                          <div style={{ fontSize: 9, color: 'var(--t3)', marginTop: 2, fontStyle: 'italic' }}>{r.rejection_note}</div>
-                        )}
-                      </td>
-                      <td style={{ ...tableTdStyle, textAlign: 'right' }}>
-                        {r.status === 'Pending' && perms?.po_create && (
-                          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                            <button
-                              style={btnPrimary}
-                              onClick={() => router.push(`/procurement/pos/new?rr=${encodeURIComponent(r.request_id)}`)}
-                            >
-                              Convert →
-                            </button>
-                            <button
-                              style={btnDanger}
-                              onClick={() => { setRejectingId(r.request_id); setRejectNote(''); }}
-                            >
-                              Reject
-                            </button>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </div>
+      <Panel title="All Requests" count={rows.length}
+        action={<Btn onClick={load} disabled={loading}>Refresh</Btn>}>
+        {loading ? (
+          <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+        ) : rows.length === 0 ? (
+          <EmptyState icon="check-check" title="Queue is clear" hint="New reorder requests will appear here." />
+        ) : (
+          <table className="dt">
+            <thead><tr>
+              <th>ID</th><th>Type</th><th>Part / Product</th><th className="num">Qty</th><th>Urgency</th>
+              <th>Requested By</th><th>Date</th><th>Status</th><th className="num"></th>
+            </tr></thead>
+            <tbody>
+              {rows.map((r) => {
+                const label = r.request_type === 'part'
+                  ? `${r.part_code || ''} ${r.part_name ? '· ' + r.part_name : ''}`.trim() || '—'
+                  : [r.product, r.variant, r.color].filter(Boolean).join(' · ') || '—';
+                return (
+                  <tr key={r.request_id}>
+                    <td className="mono accent">{r.request_id}</td>
+                    <td><Badge label={r.request_type || '—'} tone="gray" /></td>
+                    <td style={{ whiteSpace: 'normal' }}>{label}</td>
+                    <td className="num mono">{r.requested_qty} {r.unit || ''}</td>
+                    <td><Badge label={r.urgency || 'Normal'} tone={urgencyTone(r.urgency)} dot /></td>
+                    <td className="dim">{r.requested_by || '—'}</td>
+                    <td className="mono dim">{fmtDateShort(r.created_at)}</td>
+                    <td>
+                      <Badge label={r.status || '—'} tone={RR_STATUS_TONES[r.status] || 'gray'} />
+                      {r.status === 'Converted' && r.po_number && <div className="mono dim" style={{ fontSize: 9, marginTop: 2 }}>{r.po_number}</div>}
+                      {r.status === 'Rejected' && r.rejection_note && <div className="dim" style={{ fontSize: 9, marginTop: 2, fontStyle: 'italic' }}>{r.rejection_note}</div>}
+                    </td>
+                    <td className="num">
+                      {r.status === 'Pending' && perms?.po_create && (
+                        <div className="act-grp">
+                          <Btn onClick={() => { setRejectingId(r.request_id); setRejectNote(''); }}>Reject</Btn>
+                          <Btn kind="primary" onClick={() => router.push(`/procurement/pos/new?rr=${encodeURIComponent(r.request_id)}`)}>Convert <ArrowRight size={14} /></Btn>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </Panel>
 
       {rejectingId !== null && (
         <div

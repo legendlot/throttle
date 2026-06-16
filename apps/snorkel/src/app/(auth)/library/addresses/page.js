@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useAuth, hasPermission } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Modal, Spinner, useToast, EmptyState } from '@throttle/ui';
+import { PageHead, Panel, Badge as RBadge, Btn } from '@/components/ui.js';
 
 const panelStyle       = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, marginBottom: 16 };
 const panelHeaderStyle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid var(--border)', fontFamily: 'var(--cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--t2)' };
@@ -140,79 +141,52 @@ export default function AddressesPage() {
   const fld = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
   return (
-    <div style={{ padding: 16 }}>
-      <div style={panelStyle}>
-        <div style={panelHeaderStyle}>
-          <span>Company Addresses</span>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', letterSpacing: '0.06em' }}>
-              {stats.active} active · {stats.total} total
-            </span>
-            <button onClick={openAdd} style={btnSecondary}>+ ADD ADDRESS</button>
-          </div>
-        </div>
-        <div style={panelBodyStyle}>
-          <div style={{ marginBottom: 10, padding: '8px 10px', background: 'rgba(33,60,226,.06)', border: '1px solid rgba(33,60,226,.18)', borderRadius: 3, fontSize: 11, color: 'var(--t2)' }}>
-            These are LOT&apos;s own addresses. The <strong>Registered Office</strong> is the buyer/bill-to on every PO; the <strong>Default Delivery</strong> is pre-selected as the ship-to on new POs (each PO can still pick any active address). Deactivate to retire an address without losing it from past POs.
-          </div>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr>
-                  <th style={tableThStyle}>Label</th>
-                  <th style={tableThStyle}>Legal Name</th>
-                  <th style={tableThStyle}>Address</th>
-                  <th style={tableThStyle}>GSTIN</th>
-                  <th style={tableThStyle}>Roles</th>
-                  <th style={tableThStyle}>Status</th>
-                  <th style={{ ...tableThStyle, textAlign: 'right' }}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.length === 0 ? (
-                  <tr><td colSpan={7} style={{ ...tableTdStyle, textAlign: 'center', color: 'var(--t3)' }}>No addresses yet — add one.</td></tr>
-                ) : rows.map(r => (
-                  <tr key={r.id} style={{ opacity: r.active ? 1 : 0.5 }}>
-                    <td style={{ ...tableTdStyle, fontWeight: 700 }}>{r.label || '—'}</td>
-                    <td style={tableTdStyle}>{r.legal_name || '—'}</td>
-                    <td style={{ ...tableTdStyle, color: 'var(--t2)', lineHeight: 1.45, whiteSpace: 'normal', maxWidth: 280 }}>
-                      {r.line1}{r.line2 ? <>,<br />{r.line2}</> : null}<br />
-                      {[r.city, r.state, r.pincode].filter(Boolean).join(', ')}
-                      {r.country && r.country !== 'India' ? `, ${r.country}` : ''}
-                    </td>
-                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>{r.gstin || '—'}</td>
-                    <td style={tableTdStyle}>
-                      {r.is_registered_office && <Badge label="Registered Office" tone="blue" />}
-                      {r.is_default_delivery && <Badge label="Default Delivery" tone="green" />}
-                      {!r.is_registered_office && !r.is_default_delivery && <span style={{ color: 'var(--t3)' }}>—</span>}
-                    </td>
-                    <td style={tableTdStyle}>
-                      {r.active ? <Badge label="Active" tone="green" /> : <Badge label="Inactive" tone="gray" />}
-                    </td>
-                    <td style={{ ...tableTdStyle, textAlign: 'right', whiteSpace: 'nowrap' }}>
-                      <button onClick={() => openEdit(r)} style={btnSecondary} disabled={busyId === r.id}>EDIT</button>{' '}
-                      {r.active && !r.is_registered_office && (
-                        <button onClick={() => setRegistered(r)} style={btnSecondary} disabled={busyId === r.id} title="Make this the PO buyer/bill-to">SET REG. OFFICE</button>
-                      )}{' '}
-                      {r.active && !r.is_default_delivery && (
-                        <button onClick={() => setDefault(r)} style={btnSecondary} disabled={busyId === r.id} title="Make this the default PO ship-to">SET DEFAULT</button>
-                      )}{' '}
-                      <button
-                        onClick={() => toggleActive(r)}
-                        style={btnSecondary}
-                        disabled={busyId === r.id || (r.active && (r.is_registered_office || r.is_default_delivery))}
-                        title={r.active && (r.is_registered_office || r.is_default_delivery) ? 'Reassign its role before deactivating' : ''}
-                      >
-                        {r.active ? 'DEACTIVATE' : 'ACTIVATE'}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+    <div className="pg">
+      <PageHead title="Company Addresses" sub="LOT's own addresses. The Registered Office is the bill-to on every PO; Default Delivery is the pre-filled ship-to."
+        actions={<Btn kind="primary" onClick={openAdd}>+ Add address</Btn>} />
+
+      <div className="info-bar">
+        <span>These are LOT&apos;s own addresses. The <strong>Registered Office</strong> is the buyer/bill-to on every PO; the <strong>Default Delivery</strong> is pre-selected as the ship-to on new POs. Deactivate to retire an address without losing it from past POs.</span>
       </div>
+
+      <Panel title="Addresses" count={`${stats.active} active · ${stats.total} total`}>
+        <table className="dt">
+          <thead><tr>
+            <th>Label</th><th>Legal name</th><th>Address</th><th>GSTIN</th><th>Roles</th><th>Status</th><th className="num">Actions</th>
+          </tr></thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr><td colSpan={7} style={{ textAlign: 'center' }} className="dim">No addresses yet — add one.</td></tr>
+            ) : rows.map(r => (
+              <tr key={r.id} style={{ opacity: r.active ? 1 : 0.5 }}>
+                <td style={{ fontWeight: 600 }}>{r.label || '—'}</td>
+                <td className="dim">{r.legal_name || '—'}</td>
+                <td className="dim addr-cell">
+                  {r.line1}{r.line2 ? `, ${r.line2}` : ''}<br />
+                  {[r.city, r.state, r.pincode].filter(Boolean).join(', ')}{r.country && r.country !== 'India' ? `, ${r.country}` : ''}
+                </td>
+                <td className="mono dim" style={{ fontSize: 10 }}>{r.gstin || '—'}</td>
+                <td>
+                  <span className="role-tags">
+                    {r.is_registered_office && <RBadge label="Registered Office" tone="blue" />}
+                    {r.is_default_delivery && <RBadge label="Default Delivery" tone="green" />}
+                    {!r.is_registered_office && !r.is_default_delivery && <span className="dim">—</span>}
+                  </span>
+                </td>
+                <td><RBadge label={r.active ? 'Active' : 'Inactive'} tone={r.active ? 'green' : 'gray'} dot /></td>
+                <td className="num">
+                  <span className="act-grp">
+                    <Btn onClick={() => openEdit(r)} disabled={busyId === r.id}>Edit</Btn>
+                    {r.active && !r.is_registered_office && <Btn onClick={() => setRegistered(r)} disabled={busyId === r.id}>Set reg.</Btn>}
+                    {r.active && !r.is_default_delivery && <Btn onClick={() => setDefault(r)} disabled={busyId === r.id}>Set default</Btn>}
+                    <Btn onClick={() => toggleActive(r)} disabled={busyId === r.id || (r.active && (r.is_registered_office || r.is_default_delivery))}>{r.active ? 'Deactivate' : 'Activate'}</Btn>
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Panel>
 
       {formOpen && (
         <Modal open onClose={() => setFormOpen(false)} size="md" title={editId ? 'Edit address' : 'Add address'}>

@@ -517,6 +517,8 @@ async function getTickets(params, auth, env) {
   if (stage) filters.push(`stage=eq.${encodeURIComponent(stage)}`);
   const agent = params.get('agent');
   if (agent) filters.push(`assigned_agent_id=eq.${encodeURIComponent(agent)}`);
+  const createdBy = params.get('created_by');
+  if (createdBy) filters.push(`created_by_user_id=eq.${encodeURIComponent(createdBy)}`);
 
   // Multi-token AND-of-OR search
   if (search) {

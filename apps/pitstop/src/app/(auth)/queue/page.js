@@ -107,7 +107,11 @@ export default function QueuePage() {
   const dispositionFilter = searchParams.get('disposition') || '';
   const categoryFilter = searchParams.get('category') || '';
   const platformFilter = searchParams.get('platform') || '';
+  const createdByFilter = searchParams.get('created_by') || '';
   const searchQ = searchParams.get('q') || '';
+
+  // Agent filter is for oversight roles only (admins + dept leads who can reassign).
+  const canFilterByAgent = !!(perms?.cs_ticket_admin || perms?.cs_ticket_reassign);
 
   // Effective department filter — admins can switch via topbar; others are
   // locked to their own. Worker also enforces this; sending it explicitly
@@ -126,6 +130,7 @@ export default function QueuePage() {
   const [error, setError] = useState(null);
   const [searchInput, setSearchInput] = useState(searchQ);
   const [catalogCategories, setCatalogCategories] = useState([]);
+  const [agents, setAgents] = useState([]);
 
   // ↑/↓ navigates the visible row; Enter opens it. Skipped while typing.
   const { focusedIdx, setFocusedIdx } = useListNav(
@@ -169,6 +174,22 @@ export default function QueuePage() {
     return () => { alive = false; };
   }, [session]);
 
+  // Agents list for the "created by" filter (oversight roles only)
+  useEffect(() => {
+    if (!session || !canFilterByAgent) return;
+    let alive = true;
+    csopsGet('getDeptAgents', {}, session)
+      .then(list => {
+        if (!alive) return;
+        const creators = (list || [])
+          .filter(a => a.has_cs_manage || a.has_cs_admin)
+          .sort((a, b) => (a.full_name || '').localeCompare(b.full_name || ''));
+        setAgents(creators);
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [session, canFilterByAgent]);
+
   // Tickets — refetch on tab/filter/search change
   useEffect(() => {
     if (!session) return;
@@ -178,6 +199,7 @@ export default function QueuePage() {
     if (dispositionFilter) params.disposition = dispositionFilter;
     if (categoryFilter)    params.category    = categoryFilter;
     if (platformFilter)    params.platform    = platformFilter;
+    if (createdByFilter)   params.created_by  = createdByFilter;
     if (searchQ)           params.search      = searchQ;
     if (perms?.cs_ticket_admin) params.department = deptSlug || 'all';
 
@@ -186,7 +208,7 @@ export default function QueuePage() {
       .catch(e => { if (alive) setError(e.message); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [session, activeTab, dispositionFilter, categoryFilter, platformFilter, searchQ, deptSlug, perms?.cs_ticket_admin]);
+  }, [session, activeTab, dispositionFilter, categoryFilter, platformFilter, createdByFilter, searchQ, deptSlug, perms?.cs_ticket_admin]);
 
   // Submit search on Enter
   function submitSearch(e) {
@@ -395,6 +417,29 @@ export default function QueuePage() {
           <option value="">All platforms</option>
           {PLATFORMS.map(p => <option key={p} value={p}>{p}</option>)}
         </select>
+
+        {/* Agent (created-by) select — oversight roles only */}
+        {canFilterByAgent && (
+          <>
+            <span style={{ color: 'var(--t4)', padding: '0 4px' }}>|</span>
+            <select
+              value={createdByFilter}
+              onChange={e => setParam('created_by', e.target.value)}
+              title="Filter by the agent who created the ticket"
+              style={{
+                background: 'var(--surface)',
+                color: 'var(--t1)',
+                border: '1px solid var(--border)',
+                borderRadius: 'var(--radius-md)',
+                padding: '5px 8px',
+                fontFamily: 'var(--font-mono)', fontSize: 'var(--text-sm)',
+              }}
+            >
+              <option value="">All agents</option>
+              {agents.map(a => <option key={a.id} value={a.id}>{a.full_name}</option>)}
+            </select>
+          </>
+        )}
       </div>
 
       {/* ── Error / loading ────────────────────────── */}

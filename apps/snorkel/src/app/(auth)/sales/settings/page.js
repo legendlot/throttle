@@ -3,10 +3,8 @@ import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
-import {
-  panelStyle, panelHeaderStyle, panelBodyStyle, tableThStyle, tableTdStyle, inputStyle, selectStyle, labelStyle,
-  btnPrimary, btnSecondary, pageH1, pageSub, StatusBadge,
-} from '@/lib/snorkelui';
+import { labelStyle } from '@/lib/snorkelui';
+import { PageHead, Panel, Badge, Btn } from '@/components/ui.js';
 
 export default function SalesSettingsPage() {
   const { session, perms } = useAuth();
@@ -36,7 +34,7 @@ export default function SalesSettingsPage() {
   useEffect(() => { load(); }, [load]);
 
   if (perms && !perms.sales_partner_manage) {
-    return <div style={{ padding: 24, color: 'var(--t3)' }}>Access restricted.</div>;
+    return <div style={{ padding: 24, color: 'var(--text-3)' }}>Access restricted.</div>;
   }
 
   const dcName = (id) => dispatch.find(d => d.id === id)?.name || (id ? '(unknown)' : '—');
@@ -65,66 +63,56 @@ export default function SalesSettingsPage() {
   }
 
   return (
-    <div style={{ color: 'var(--t1)' }}>
-      <div style={{ marginBottom: 16 }}>
-        <h1 style={pageH1}>Sales Channels</h1>
-        <p style={pageSub}>Offline channels (GT / MT / …) and which dispatch channel each hands off to.</p>
-      </div>
+    <div className="pg">
+      <PageHead title="Sales Channels" sub="Offline channels (GT / MT and more) and which dispatch channel each hands off to." />
 
-      <div style={panelStyle}>
-        <div style={panelHeaderStyle}><span>Channels</span><button style={btnSecondary} onClick={load} disabled={loading}>↻ Refresh</button></div>
-        {loading ? (
-          <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
-        ) : (
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr>
-              <th style={tableThStyle}>Key</th><th style={tableThStyle}>Label</th>
-              <th style={tableThStyle}>Dispatch channel</th><th style={{ ...tableThStyle, textAlign: 'right' }}>Sort</th><th style={tableThStyle}>Active</th>
-            </tr></thead>
-            <tbody>
-              {channels.map(c => (
-                <tr key={c.id}>
-                  <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{c.channel_key}</td>
-                  <td style={tableTdStyle}>{c.label}</td>
-                  <td style={tableTdStyle}>
-                    {canManage ? (
-                      <select style={{ ...selectStyle, minWidth: 160 }} value={c.dispatch_channel_id || ''} onChange={e => patchChannel(c.id, { dispatch_channel_id: e.target.value || null })} disabled={busy}>
-                        <option value="">— none —</option>
-                        {dispatch.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                      </select>
-                    ) : dcName(c.dispatch_channel_id)}
-                  </td>
-                  <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)' }}>{c.sort_order}</td>
-                  <td style={tableTdStyle}>
-                    {canManage ? (
-                      <button style={btnSecondary} onClick={() => patchChannel(c.id, { is_active: !c.is_active })} disabled={busy}>
-                        <StatusBadge label={c.is_active ? 'Active' : 'Inactive'} tone={c.is_active ? 'green' : 'gray'} />
-                      </button>
-                    ) : <StatusBadge label={c.is_active ? 'Active' : 'Inactive'} tone={c.is_active ? 'green' : 'gray'} />}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      <Panel title="Channels" count={channels.length}
+        action={<Btn onClick={load} disabled={loading}>Refresh</Btn>}>
+        {loading ? <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+          : (
+            <table className="dt">
+              <thead><tr><th>Key</th><th>Label</th><th>Dispatch channel</th><th className="num">Sort</th><th>Status</th></tr></thead>
+              <tbody>
+                {channels.map(c => (
+                  <tr key={c.id} style={{ opacity: c.is_active ? 1 : 0.55 }}>
+                    <td><Badge label={c.channel_key} tone="blue" /></td>
+                    <td>{c.label}</td>
+                    <td className="dim">
+                      {canManage ? (
+                        <select className="sel" value={c.dispatch_channel_id || ''} onChange={e => patchChannel(c.id, { dispatch_channel_id: e.target.value || null })} disabled={busy} style={{ minWidth: 160 }}>
+                          <option value="">— none —</option>
+                          {dispatch.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                        </select>
+                      ) : dcName(c.dispatch_channel_id)}
+                    </td>
+                    <td className="num mono">{c.sort_order}</td>
+                    <td>
+                      {canManage
+                        ? <button className="badge-btn" onClick={() => patchChannel(c.id, { is_active: !c.is_active })} disabled={busy}><Badge label={c.is_active ? 'Active' : 'Inactive'} tone={c.is_active ? 'green' : 'gray'} dot /></button>
+                        : <Badge label={c.is_active ? 'Active' : 'Inactive'} tone={c.is_active ? 'green' : 'gray'} dot />}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+      </Panel>
 
       {canManage && (
-        <div style={panelStyle}>
-          <div style={panelHeaderStyle}><span>Add channel</span></div>
-          <div style={{ ...panelBodyStyle, display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-            <div><label style={labelStyle}>Key</label><input style={{ ...inputStyle, width: 90, fontFamily: 'var(--mono)' }} value={adding.channel_key} onChange={e => setAdding(a => ({ ...a, channel_key: e.target.value.toUpperCase() }))} placeholder="GT" /></div>
-            <div><label style={labelStyle}>Label</label><input style={{ ...inputStyle, width: 180 }} value={adding.label} onChange={e => setAdding(a => ({ ...a, label: e.target.value }))} placeholder="General Trade" /></div>
+        <Panel title="Add channel" pad>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            <div><label style={labelStyle}>Key</label><input className="f-inp mono" style={{ width: 90 }} value={adding.channel_key} onChange={e => setAdding(a => ({ ...a, channel_key: e.target.value.toUpperCase() }))} placeholder="GT" /></div>
+            <div><label style={labelStyle}>Label</label><input className="f-inp" style={{ width: 180 }} value={adding.label} onChange={e => setAdding(a => ({ ...a, label: e.target.value }))} placeholder="General Trade" /></div>
             <div><label style={labelStyle}>Dispatch channel</label>
-              <select style={{ ...selectStyle, minWidth: 160 }} value={adding.dispatch_channel_id} onChange={e => setAdding(a => ({ ...a, dispatch_channel_id: e.target.value }))}>
+              <select className="sel f-inp" style={{ minWidth: 160 }} value={adding.dispatch_channel_id} onChange={e => setAdding(a => ({ ...a, dispatch_channel_id: e.target.value }))}>
                 <option value="">— none —</option>
                 {dispatch.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
               </select>
             </div>
-            <div><label style={labelStyle}>Sort</label><input type="number" style={{ ...inputStyle, width: 70 }} value={adding.sort_order} onChange={e => setAdding(a => ({ ...a, sort_order: e.target.value }))} /></div>
-            <button style={btnPrimary} onClick={addChannel} disabled={busy}>Add</button>
+            <div><label style={labelStyle}>Sort</label><input type="number" className="f-inp mono" style={{ width: 70 }} value={adding.sort_order} onChange={e => setAdding(a => ({ ...a, sort_order: e.target.value }))} /></div>
+            <Btn kind="primary" onClick={addChannel} disabled={busy}>Add</Btn>
           </div>
-        </div>
+        </Panel>
       )}
     </div>
   );

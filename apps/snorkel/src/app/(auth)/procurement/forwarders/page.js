@@ -3,6 +3,9 @@ import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
+import { PageHead, Kpi, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
+import { countryTone } from '@/components/format.js';
+import { Plus, ArrowRight } from 'lucide-react';
 
 const PO_SOURCES = ['China', 'India', 'USA', 'Germany', 'Taiwan', 'Vietnam', 'Bangladesh', 'Japan', 'South Korea', 'UK', 'Italy', 'Turkey', 'Other'];
 
@@ -181,81 +184,58 @@ export default function ForwardersPage() {
   }
 
   if (view === 'list') {
+    const activeCount = forwarders.filter(f => f.active).length;
+    const seaCount = forwarders.filter(f => Array.isArray(f.modes_supported) && f.modes_supported.includes('Sea')).length;
+    const airCount = forwarders.filter(f => Array.isArray(f.modes_supported) && f.modes_supported.includes('Air')).length;
     return (
-      <div style={{ color: 'var(--t1)' }}>
-        <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
-          <div>
-            <h1 style={{ fontFamily: 'var(--cond)', fontSize: 28, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.03em', margin: 0 }}>
-              Forwarders
-            </h1>
-            <p style={{ color: 'var(--t3)', fontSize: 11, marginTop: 4, fontFamily: 'var(--mono)' }}>
-              Freight forwarder master — drives expected-arrival calc on POs.
-            </p>
-          </div>
-          {perms?.vendor_manage && (
-            <button style={btnPrimary} onClick={startCreate}>+ New Forwarder</button>
-          )}
+      <div className="pg">
+        <PageHead title="Forwarders" sub="Freight forwarder master — drives the expected-arrival calc on every PO."
+          actions={perms?.vendor_manage && <Btn kind="primary" onClick={startCreate}><Plus size={14} /> New Forwarder</Btn>} />
+
+        <div className="kpi-row">
+          <Kpi label="Forwarders" value={forwarders.length} sub="on file" tone="blue" />
+          <Kpi label="Active" value={activeCount} sub="bookable" tone="green" />
+          <Kpi label="Sea-capable" value={seaCount} sub="ocean freight" tone="blue" />
+          <Kpi label="Air-capable" value={airCount} sub="air freight" tone="yellow" />
         </div>
 
-        <div style={panelStyle}>
-          <div style={panelHeaderStyle}>
-            <span>All Forwarders {forwarders.length > 0 && <span style={{ color: 'var(--t3)', marginLeft: 6, fontSize: 11 }}>({forwarders.length})</span>}</span>
-            <button style={btnSecondary} onClick={loadList} disabled={loading}>↻ Refresh</button>
-          </div>
-          <div style={{ overflowX: 'auto' }}>
-            {loading ? (
-              <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
-            ) : forwarders.length === 0 ? (
-              <div style={{ padding: 24, textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>No forwarders yet</div>
-            ) : (
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead><tr>
-                  <th style={tableThStyle}>Code</th>
-                  <th style={tableThStyle}>Company</th>
-                  <th style={tableThStyle}>Country</th>
-                  <th style={tableThStyle}>Modes</th>
-                  <th style={tableThStyle}>Sea</th>
-                  <th style={tableThStyle}>Air</th>
-                  <th style={tableThStyle}>Land</th>
-                  <th style={tableThStyle}>IATA</th>
-                  <th style={tableThStyle}>SCAC</th>
-                  <th style={tableThStyle}>Contact</th>
-                  <th style={tableThStyle}>Status</th>
-                  <th style={{ ...tableThStyle, textAlign: 'right' }}></th>
-                </tr></thead>
-                <tbody>
-                  {forwarders.map((f) => {
-                    const modes = Array.isArray(f.modes_supported) ? f.modes_supported : [];
-                    return (
-                      <tr key={f.forwarder_code}>
-                        <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{f.forwarder_code}</td>
-                        <td style={tableTdStyle}>{f.company_name}</td>
-                        <td style={tableTdStyle}>{f.country || '—'}</td>
-                        <td style={tableTdStyle}>
-                          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                            {modes.map((m) => <StatusBadge key={m} label={m} tone={MODE_TONE[m] || 'gray'} />)}
-                          </div>
-                        </td>
-                        <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: MODE_COLOR.Sea }}>{f.sea_days != null ? `${f.sea_days}d` : '—'}</td>
-                        <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: MODE_COLOR.Air }}>{f.air_days != null ? `${f.air_days}d` : '—'}</td>
-                        <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: MODE_COLOR.Land }}>{f.land_days != null ? `${f.land_days}d` : '—'}</td>
-                        <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{f.iata_code || '—'}</td>
-                        <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{f.scac_code || '—'}</td>
-                        <td style={tableTdStyle}>{f.contact_name || '—'}</td>
-                        <td style={tableTdStyle}><StatusBadge label={f.active ? 'Active' : 'Inactive'} tone={f.active ? 'green' : 'red'} /></td>
-                        <td style={{ ...tableTdStyle, textAlign: 'right' }}>
-                          {perms?.vendor_manage && (
-                            <button style={btnSecondary} onClick={() => startEdit(f.forwarder_code)}>Edit</button>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </div>
+        <Panel title="All Forwarders" count={forwarders.length}
+          action={<Btn onClick={loadList} disabled={loading}>Refresh</Btn>}>
+          {loading ? (
+            <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+          ) : forwarders.length === 0 ? (
+            <EmptyState icon="truck" title="No forwarders yet" hint="Add a forwarder to drive PO arrival estimates." />
+          ) : (
+            <table className="dt">
+              <thead><tr>
+                <th>Code</th><th>Company</th><th>Country</th><th>Modes</th>
+                <th className="num">Sea</th><th className="num">Air</th><th className="num">Land</th>
+                <th>IATA</th><th>SCAC</th><th>Contact</th><th>Status</th><th className="num"></th>
+              </tr></thead>
+              <tbody>
+                {forwarders.map((f) => {
+                  const modes = Array.isArray(f.modes_supported) ? f.modes_supported : [];
+                  return (
+                    <tr key={f.forwarder_code} className={perms?.vendor_manage ? 'row-click' : ''} onClick={() => perms?.vendor_manage && startEdit(f.forwarder_code)}>
+                      <td className="mono accent">{f.forwarder_code}</td>
+                      <td>{f.company_name}<div className="dim dr-pd">{f.location}</div></td>
+                      <td><Badge label={f.country || '—'} tone={countryTone(f.country)} soft={false} /></td>
+                      <td><span className="mode-chips">{modes.map((m) => <Badge key={m} label={m} tone={MODE_TONE[m] || 'gray'} />)}</span></td>
+                      <td className="num mono" style={{ color: f.sea_days != null ? 'var(--blue-fg)' : 'var(--text-4)' }}>{f.sea_days != null ? `${f.sea_days}d` : '—'}</td>
+                      <td className="num mono" style={{ color: f.air_days != null ? 'var(--yellow)' : 'var(--text-4)' }}>{f.air_days != null ? `${f.air_days}d` : '—'}</td>
+                      <td className="num mono" style={{ color: f.land_days != null ? 'var(--green-fg)' : 'var(--text-4)' }}>{f.land_days != null ? `${f.land_days}d` : '—'}</td>
+                      <td className="mono dim">{f.iata_code || '—'}</td>
+                      <td className="mono dim">{f.scac_code || '—'}</td>
+                      <td className="dim">{f.contact_name || '—'}</td>
+                      <td><Badge label={f.active ? 'Active' : 'Inactive'} tone={f.active ? 'green' : 'gray'} dot /></td>
+                      <td className="num">{perms?.vendor_manage && <span className="row-go"><ArrowRight size={14} /></span>}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </Panel>
       </div>
     );
   }

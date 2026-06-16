@@ -4,11 +4,9 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
-import {
-  panelStyle, panelHeaderStyle, tableThStyle, tableTdStyle, selectStyle, inputStyle,
-  btnPrimary, btnSecondary, pageH1, pageSub, StatusBadge,
-} from '@/lib/snorkelui';
+import { Plus, Download, ArrowRight } from 'lucide-react';
 import { csvCell } from '@/lib/sales';
+import { PageHead, Kpi, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 
 export default function SalesPartnersPage() {
   const { session, perms } = useAuth();
@@ -44,17 +42,20 @@ export default function SalesPartnersPage() {
   }, [session]);
 
   if (perms && !perms.sales_view && !perms.sales_order_manage && !perms.sales_partner_manage) {
-    return <div style={{ padding: 24, color: 'var(--t3)' }}>Access restricted.</div>;
+    return <div style={{ padding: 24, color: 'var(--text-3)' }}>Access restricted.</div>;
   }
 
   const filtered = !search.trim() ? rows : (() => {
     const tokens = search.toLowerCase().split(/\s+/).filter(Boolean);
     return rows.filter(r => {
-      const fields = [r.partner_code, r.name, r.gstin, r.state, r.city, r.contact_person, r.phone]
-        .map(v => (v || '').toString().toLowerCase());
+      const fields = [r.partner_code, r.name, r.gstin, r.state, r.city, r.contact_person, r.phone].map(v => (v || '').toString().toLowerCase());
       return tokens.every(t => fields.some(f => f.includes(t)));
     });
   })();
+
+  const activeCount = rows.filter(p => p.is_active).length;
+  const gtCount = rows.filter(p => p.channel_key === 'GT').length;
+  const mtCount = rows.filter(p => p.channel_key === 'MT').length;
 
   function exportCsv() {
     const cols = ['Code', 'Name', 'Channel', 'Type', 'State', 'City', 'GSTIN', 'Contact', 'Phone', 'Credit Days', 'Active'];
@@ -69,68 +70,58 @@ export default function SalesPartnersPage() {
   }
 
   return (
-    <div style={{ color: 'var(--t1)' }}>
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
-        <div>
-          <h1 style={pageH1}>Partners</h1>
-          <p style={pageSub}>GT / MT stores &amp; distributors — credit terms live here.</p>
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button style={btnSecondary} onClick={exportCsv} disabled={!filtered.length}>↓ Export CSV</button>
-          {canManage && <button style={btnPrimary} onClick={() => router.push('/sales/partners/new')}>+ New Partner</button>}
-        </div>
+    <div className="pg">
+      <PageHead title="Partners" sub="Retail accounts across general and modern trade. Credit terms live here."
+        actions={<>
+          <Btn onClick={exportCsv} disabled={!filtered.length}><Download size={14} /> Export</Btn>
+          {canManage && <Btn kind="primary" onClick={() => router.push('/sales/partners/new')}><Plus size={14} /> Add partner</Btn>}
+        </>} />
+
+      <div className="kpi-row">
+        <Kpi label="Partners" value={rows.length} sub="GT + MT accounts" tone="blue" />
+        <Kpi label="Active" value={activeCount} sub="bookable" tone="green" />
+        <Kpi label="GT" value={gtCount} sub="general trade" tone="blue" />
+        <Kpi label="MT" value={mtCount} sub="modern trade" tone="orange" />
       </div>
 
-      <div style={panelStyle}>
-        <div style={panelHeaderStyle}>
-          <span>Partners {search.trim() && <span style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontWeight: 400, fontSize: 11 }}>· {filtered.length} of {rows.length}</span>}</span>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-            <input type="text" data-search-primary placeholder="Search name / GSTIN / state · /" value={search} onChange={e => setSearch(e.target.value)} style={{ ...inputStyle, fontFamily: 'var(--mono)', minWidth: 200 }} />
-            <select value={channel} onChange={e => setChannel(e.target.value)} style={selectStyle}>
-              <option value="">All Channels</option>
+      <Panel title="Accounts" count={search.trim() ? `${filtered.length} of ${rows.length}` : rows.length}
+        action={
+          <div className="filters">
+            <input className="sel" data-search-primary type="text" placeholder="Search name / GSTIN / state · /" value={search} onChange={e => setSearch(e.target.value)} style={{ minWidth: 180 }} />
+            <select value={channel} onChange={e => setChannel(e.target.value)} className="sel">
+              <option value="">All channels</option>
               {channels.map(c => <option key={c.channel_key} value={c.channel_key}>{c.label}</option>)}
             </select>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--t2)', fontFamily: 'var(--mono)', cursor: 'pointer' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: 'var(--text-2)', cursor: 'pointer' }}>
               <input type="checkbox" checked={activeOnly} onChange={e => setActiveOnly(e.target.checked)} /> Active only
             </label>
-            <button style={btnSecondary} onClick={load} disabled={loading}>↻ Refresh</button>
           </div>
-        </div>
-        <div style={{ overflowX: 'auto' }}>
-          {loading ? (
-            <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
-          ) : filtered.length === 0 ? (
-            <div style={{ padding: 24, textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>No partners match the filter</div>
-          ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        }>
+        {loading ? <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+          : filtered.length === 0 ? <EmptyState icon="building-2" title="No partners match the filter" hint="Clear a filter to see all accounts." />
+          : (
+            <table className="dt">
               <thead><tr>
-                <th style={tableThStyle}>Code</th>
-                <th style={tableThStyle}>Name</th>
-                <th style={tableThStyle}>Channel</th>
-                <th style={tableThStyle}>State</th>
-                <th style={tableThStyle}>GSTIN</th>
-                <th style={tableThStyle}>Contact</th>
-                <th style={{ ...tableThStyle, textAlign: 'right' }}>Credit</th>
-                <th style={tableThStyle}>Active</th>
+                <th>Code</th><th>Name</th><th>Channel</th><th>State</th><th>GSTIN</th><th>Contact</th><th className="num">Credit</th><th>Active</th><th className="num"></th>
               </tr></thead>
               <tbody>
                 {filtered.map(p => (
-                  <tr key={p.id} style={{ cursor: 'pointer' }} onClick={() => router.push(`/sales/partners/detail?id=${encodeURIComponent(p.id)}`)}>
-                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{p.partner_code}</td>
-                    <td style={tableTdStyle}>{p.name}</td>
-                    <td style={tableTdStyle}>{p.channel_key || '—'}</td>
-                    <td style={tableTdStyle}>{p.state || '—'}</td>
-                    <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontSize: 11 }}>{p.gstin || '—'}</td>
-                    <td style={tableTdStyle}>{p.contact_person || '—'}{p.phone ? ` · ${p.phone}` : ''}</td>
-                    <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)' }}>{p.default_credit_days}d</td>
-                    <td style={tableTdStyle}><StatusBadge label={p.is_active ? 'Active' : 'Inactive'} tone={p.is_active ? 'green' : 'gray'} /></td>
+                  <tr key={p.id} className="row-click" onClick={() => router.push(`/sales/partners/detail?id=${encodeURIComponent(p.id)}`)}>
+                    <td className="mono accent">{p.partner_code}</td>
+                    <td>{p.name}</td>
+                    <td><Badge label={p.channel_key || '—'} tone="blue" /></td>
+                    <td className="dim">{p.state || '—'}</td>
+                    <td className="mono dim" style={{ fontSize: 11 }}>{p.gstin || '—'}</td>
+                    <td className="dim">{p.contact_person || '—'}{p.phone ? ` · ${p.phone}` : ''}</td>
+                    <td className="num mono">{p.default_credit_days}d</td>
+                    <td><Badge label={p.is_active ? 'Active' : 'Inactive'} tone={p.is_active ? 'green' : 'gray'} dot /></td>
+                    <td className="num"><span className="row-go"><ArrowRight size={14} /></span></td>
                   </tr>
                 ))}
               </tbody>
             </table>
           )}
-        </div>
-      </div>
+      </Panel>
     </div>
   );
 }

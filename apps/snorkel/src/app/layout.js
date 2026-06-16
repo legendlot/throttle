@@ -1,4 +1,5 @@
 import './globals.css';
+import './redesign.css';
 import { AuthProvider } from '@throttle/auth';
 import { ToastProvider } from '@throttle/ui';
 

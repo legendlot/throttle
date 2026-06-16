@@ -4,15 +4,10 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
-import {
-  panelStyle, panelHeaderStyle, tableThStyle, tableTdStyle, selectStyle, inputStyle,
-  btnPrimary, btnSecondary, pageH1, pageSub, StatusBadge, fmtDate,
-} from '@/lib/snorkelui';
+import { Plus, Download } from 'lucide-react';
+import { PageHead, Kpi, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
+import { fmtDateShort, inrCompact } from '@/components/format.js';
 import { orderStatusLabel, ORDER_STATUS_TONES, fulfilmentMeta, paymentMeta, inr, fyLabel, csvCell } from '@/lib/sales';
-
-const tileStyle = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: '10px 14px', minWidth: 120 };
-const tileNum   = { fontFamily: 'var(--cond)', fontSize: 22, fontWeight: 900, lineHeight: 1 };
-const tileLbl   = { fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 4 };
 
 export default function SalesOrdersPage() {
   const { session, perms } = useAuth();
@@ -47,7 +42,7 @@ export default function SalesOrdersPage() {
   }, [session]);
 
   if (perms && !perms.sales_view && !perms.sales_order_manage && !perms.sales_partner_manage) {
-    return <div style={{ padding: 24, color: 'var(--t3)' }}>Access restricted.</div>;
+    return <div style={{ padding: 24, color: 'var(--text-3)' }}>Access restricted.</div>;
   }
 
   let filtered = rows;
@@ -64,11 +59,9 @@ export default function SalesOrdersPage() {
   const thisFy = fyLabel(new Date().toISOString().slice(0, 10));
   const kpi = {
     open: rows.filter(r => r.status === 'confirmed' && r.fulfilment_status !== 'fulfilled').length,
-    toDispatch: rows.filter(r => r.status === 'confirmed' && (r.fulfilment_status === 'pending' || r.fulfilment_status === 'in_progress'))
-      .reduce((s, r) => s + Number(r.grand_total || 0), 0),
+    toDispatch: rows.filter(r => r.status === 'confirmed' && (r.fulfilment_status === 'pending' || r.fulfilment_status === 'in_progress')).reduce((s, r) => s + Number(r.grand_total || 0), 0),
     overdue: rows.filter(r => r.overdue).reduce((s, r) => s + Number(r.balance || 0), 0),
-    fySales: rows.filter(r => r.status !== 'cancelled' && r.invoice_date && fyLabel(r.invoice_date) === thisFy)
-      .reduce((s, r) => s + Number(r.grand_total || 0), 0),
+    fySales: rows.filter(r => r.status !== 'cancelled' && r.invoice_date && fyLabel(r.invoice_date) === thisFy).reduce((s, r) => s + Number(r.grand_total || 0), 0),
   };
 
   function exportCsv() {
@@ -84,92 +77,71 @@ export default function SalesOrdersPage() {
     URL.revokeObjectURL(url);
   }
 
+  const filtersActive = search.trim() || filters.fulfilment || filters.overdue;
+
   return (
-    <div style={{ color: 'var(--t1)' }}>
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
-        <div>
-          <h1 style={pageH1}>Sales Orders</h1>
-          <p style={pageSub}>Offline channel orders (GT / MT) — capture, dispatch handoff, collections.</p>
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button style={btnSecondary} onClick={exportCsv} disabled={!filtered.length}>↓ Export CSV</button>
-          {canManage && <button style={btnPrimary} onClick={() => router.push('/sales/orders/new')}>+ New Order</button>}
-        </div>
+    <div className="pg">
+      <PageHead title="Sales Orders" sub="Offline channel orders (GT / MT). Capture, dispatch handoff, collections."
+        actions={<>
+          <Btn onClick={exportCsv} disabled={!filtered.length}><Download size={14} /> Export</Btn>
+          {canManage && <Btn kind="primary" onClick={() => router.push('/sales/orders/new')}><Plus size={14} /> New order</Btn>}
+        </>} />
+
+      <div className="kpi-row">
+        <Kpi label="Open orders" value={kpi.open} sub="confirmed · unfulfilled" tone="yellow" />
+        <Kpi label="To Dispatch" value={kpi.toDispatch} sub="pending + in progress" tone="blue" format={(v) => inrCompact(v)} />
+        <Kpi label="Overdue" value={kpi.overdue} sub="click to filter" tone="red" format={(v) => inrCompact(v)} onClick={() => setFilters(f => ({ ...f, overdue: !f.overdue }))} />
+        <Kpi label={`FY ${thisFy} Sales`} value={kpi.fySales} sub="all channels" tone="green" format={(v) => inrCompact(v)} />
       </div>
 
-      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
-        <div style={tileStyle}><div style={tileNum}>{kpi.open}</div><div style={tileLbl}>Open orders</div></div>
-        <div style={tileStyle}><div style={{ ...tileNum, color: '#7b93ff' }}>{inr(kpi.toDispatch)}</div><div style={tileLbl}>Value to dispatch</div></div>
-        <div style={{ ...tileStyle, cursor: 'pointer', borderColor: filters.overdue ? 'var(--yellow)' : 'var(--border)' }} onClick={() => setFilters(f => ({ ...f, overdue: !f.overdue }))} title="Click to filter overdue">
-          <div style={{ ...tileNum, color: '#ff7070' }}>{inr(kpi.overdue)}</div><div style={tileLbl}>Overdue ⚠</div>
-        </div>
-        <div style={tileStyle}><div style={{ ...tileNum, color: '#4ade80' }}>{inr(kpi.fySales)}</div><div style={tileLbl}>FY {thisFy} sales</div></div>
-      </div>
-
-      <div style={panelStyle}>
-        <div style={panelHeaderStyle}>
-          <span>Orders {(search.trim() || filters.fulfilment || filters.overdue) && <span style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontWeight: 400, fontSize: 11 }}>· {filtered.length} of {rows.length}</span>}</span>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-            <input type="text" data-search-primary placeholder="Search order / partner / invoice · /" value={search} onChange={e => setSearch(e.target.value)} style={{ ...inputStyle, fontFamily: 'var(--mono)', minWidth: 200 }} />
-            <select value={filters.status} onChange={e => setFilters(f => ({ ...f, status: e.target.value }))} style={selectStyle}>
-              <option value="">All Statuses</option>
-              <option value="draft">Draft</option><option value="confirmed">Confirmed</option><option value="cancelled">Cancelled</option>
+      <Panel title="Orders" count={filtersActive ? `${filtered.length} of ${rows.length}` : rows.length}
+        action={
+          <div className="filters">
+            {filters.overdue && <button className="chip-clear" onClick={() => setFilters(f => ({ ...f, overdue: false }))}>Overdue ✕</button>}
+            <input className="sel" data-search-primary type="text" placeholder="Search order / partner · /" value={search} onChange={e => setSearch(e.target.value)} style={{ minWidth: 180 }} />
+            <select value={filters.status} onChange={e => setFilters(f => ({ ...f, status: e.target.value }))} className="sel">
+              <option value="">All statuses</option><option value="draft">Draft</option><option value="confirmed">Confirmed</option><option value="cancelled">Cancelled</option>
             </select>
-            <select value={filters.fulfilment} onChange={e => setFilters(f => ({ ...f, fulfilment: e.target.value }))} style={selectStyle}>
-              <option value="">All Fulfilment</option>
-              <option value="not_dispatched">Not dispatched</option><option value="pending">Pending</option>
-              <option value="in_progress">In progress</option><option value="fulfilled">Fulfilled</option>
+            <select value={filters.fulfilment} onChange={e => setFilters(f => ({ ...f, fulfilment: e.target.value }))} className="sel">
+              <option value="">All fulfilment</option><option value="not_dispatched">Not dispatched</option><option value="pending">Pending</option><option value="in_progress">In progress</option><option value="fulfilled">Fulfilled</option>
             </select>
-            <select value={filters.channel_key} onChange={e => setFilters(f => ({ ...f, channel_key: e.target.value }))} style={selectStyle}>
-              <option value="">All Channels</option>
+            <select value={filters.channel_key} onChange={e => setFilters(f => ({ ...f, channel_key: e.target.value }))} className="sel">
+              <option value="">All channels</option>
               {channels.map(c => <option key={c.channel_key} value={c.channel_key}>{c.label}</option>)}
             </select>
-            <button style={btnSecondary} onClick={load} disabled={loading}>↻ Refresh</button>
           </div>
-        </div>
-        <div style={{ overflowX: 'auto' }}>
-          {loading ? (
-            <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
-          ) : filtered.length === 0 ? (
-            <div style={{ padding: 24, textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>No orders match the filter</div>
-          ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        }>
+        {loading ? <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+          : filtered.length === 0 ? <EmptyState icon="package-search" title="No orders match the filter" hint="Clear a filter to see all channel orders." />
+          : (
+            <table className="dt">
               <thead><tr>
-                <th style={tableThStyle}>Order</th>
-                <th style={tableThStyle}>Date</th>
-                <th style={tableThStyle}>Partner</th>
-                <th style={tableThStyle}>Channel</th>
-                <th style={tableThStyle}>Status</th>
-                <th style={tableThStyle}>Fulfilment</th>
-                <th style={{ ...tableThStyle, textAlign: 'right' }}>Total</th>
-                <th style={{ ...tableThStyle, textAlign: 'right' }}>Balance</th>
-                <th style={tableThStyle}>Due</th>
-                <th style={tableThStyle}>Payment</th>
+                <th>Order</th><th>Date</th><th>Partner</th><th>Ch</th><th>Status</th><th>Fulfilment</th>
+                <th className="num">Total</th><th className="num">Balance</th><th>Due</th><th>Payment</th>
               </tr></thead>
               <tbody>
                 {filtered.map(o => {
                   const fm = fulfilmentMeta(o.fulfilment_status);
                   const pm = paymentMeta(o.payment_status);
                   return (
-                    <tr key={o.id} style={{ cursor: 'pointer' }} onClick={() => router.push(`/sales/orders/detail?id=${encodeURIComponent(o.id)}`)}>
-                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{o.order_no}</td>
-                      <td style={tableTdStyle}>{fmtDate(o.order_date)}</td>
-                      <td style={tableTdStyle}>{o.partner_name || '—'}</td>
-                      <td style={tableTdStyle}>{o.channel_key || '—'}</td>
-                      <td style={tableTdStyle}><StatusBadge label={orderStatusLabel(o.status)} tone={ORDER_STATUS_TONES[o.status] || 'gray'} /></td>
-                      <td style={tableTdStyle}><StatusBadge label={fm.label} tone={fm.tone} /></td>
-                      <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)' }}>{inr(o.grand_total)}</td>
-                      <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)', color: Number(o.balance) > 0 ? '#ff7070' : 'var(--t3)' }}>{inr(o.balance)}</td>
-                      <td style={tableTdStyle}>{o.due_date ? <span style={{ color: o.overdue ? '#ff7070' : 'var(--t2)' }}>{fmtDate(o.due_date)}{o.overdue ? ' ⚠' : ''}</span> : <span style={{ color: 'var(--t3)' }}>—</span>}</td>
-                      <td style={tableTdStyle}><StatusBadge label={pm.label} tone={pm.tone} /></td>
+                    <tr key={o.id} className="row-click" onClick={() => router.push(`/sales/orders/detail?id=${encodeURIComponent(o.id)}`)}>
+                      <td className="mono accent">{o.order_no}</td>
+                      <td className="mono">{fmtDateShort(o.order_date)}</td>
+                      <td>{o.partner_name || '—'}</td>
+                      <td><Badge label={o.channel_key || '—'} tone="blue" /></td>
+                      <td><Badge label={orderStatusLabel(o.status)} tone={ORDER_STATUS_TONES[o.status] || 'gray'} /></td>
+                      <td><Badge label={fm.label} tone={fm.tone} dot /></td>
+                      <td className="num mono">{inr(o.grand_total)}</td>
+                      <td className="num mono" style={{ color: Number(o.balance) > 0 ? 'var(--red-fg)' : 'var(--text-3)' }}>{inr(o.balance)}</td>
+                      <td className="mono" style={{ color: o.overdue ? 'var(--red-fg)' : 'var(--text-2)' }}>{o.due_date ? fmtDateShort(o.due_date) + (o.overdue ? ' ⚠' : '') : '—'}</td>
+                      <td><Badge label={pm.label} tone={pm.tone} /></td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
           )}
-        </div>
-      </div>
+      </Panel>
     </div>
   );
 }
