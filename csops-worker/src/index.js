@@ -283,6 +283,32 @@ function buildDeptFilter(df) {
   return '';
 }
 
+// ── Visibility scope (agent-only dashboard, Pruthvi S144) ─────────────────────
+// The operator tier — a role with cs_ticket_manage but WITHOUT cs_ticket_reassign
+// or cs_ticket_admin (i.e. cs_agent) — is restricted to its OWN tickets: assigned
+// to them, created by them, or still unassigned (so they can self-claim from the
+// pool). Leads/admins are unaffected — they keep the full department view + the
+// agent filter. Mirrors the oversight gating already used for the agent dropdown.
+function isOperatorScope(auth) {
+  const p = auth?.permissions || {};
+  return !!p.cs_ticket_manage && !p.cs_ticket_reassign && !p.cs_ticket_admin;
+}
+
+// PostgREST filter fragments scoping a ticket list/count to what `auth` may see:
+// the existing dept filter, plus the operator self-scope when applicable. Returns
+// null when the requested department slug is unknown (caller should 404).
+async function visibilityFilters(params, auth, env) {
+  const out = [];
+  const deptFilter = await resolveDeptFilter(params.get('department'), auth, env);
+  if (!deptFilter) return null;
+  const dc = buildDeptFilter(deptFilter);
+  if (dc) out.push(dc);
+  if (isOperatorScope(auth)) {
+    out.push(`or=(assigned_agent_id.eq.${auth.userId},created_by_user_id.eq.${auth.userId},assigned_agent_id.is.null)`);
+  }
+  return out;
+}
+
 // ── Domain constants ─────────────────────────────────────────────────────────
 
 const SLA_DAYS = { pending: 7, query: 1, no_action: 1, awaiting_info: 7, replacement: 5, refund: 7, repair: 14 };
@@ -491,10 +517,11 @@ async function getTickets(params, auth, env) {
 
   const filters = [];
 
-  // Dept default-filter (admins can override via ?department=<slug>|all)
-  const deptFilter = await resolveDeptFilter(params.get('department'), auth, env);
-  if (!deptFilter) return err(`Unknown department slug`, 404);
-  { const c = buildDeptFilter(deptFilter); if (c) filters.push(c); }
+  // Visibility scope: dept default-filter (admins override via ?department=<slug>|all)
+  // + operator self-scope (own + unassigned). 404 on unknown slug.
+  const scope = await visibilityFilters(params, auth, env);
+  if (!scope) return err(`Unknown department slug`, 404);
+  filters.push(...scope);
 
   // tab → preset filter
   if (tab === 'my')                filters.push(`assigned_agent_id=eq.${auth.userId}`, `closed_at=is.null`);
@@ -641,6 +668,10 @@ async function getQueueCounts(params, auth, env) {
   // 7 counts; uses HEAD + Prefer: count=exact pattern via PostgREST returns count via Content-Range
   // Simpler: SELECT count(*) FROM cs_tickets WHERE ... via a single RPC OR multiple cheap queries
   // We'll use a single SQL function via /rest/v1/rpc to keep subrequests low.
+  // Scope counts to what the caller may see, so tab badges match the list.
+  const scope = await visibilityFilters(params, auth, env);
+  if (!scope) return err(`Unknown department slug`, 404);
+  const scopeQs = scope.length ? `&${scope.join('&')}` : '';
   const tabs = {
     my:         `?assigned_agent_id=eq.${auth.userId}&closed_at=is.null&select=id`,
     open:       `?closed_at=is.null&select=id`,
@@ -654,7 +685,7 @@ async function getQueueCounts(params, auth, env) {
   const entries = Object.entries(tabs);
   // Parallel — 7 subrequests, well under budget
   const responses = await Promise.all(entries.map(([_, qs]) =>
-    sb(`/rest/v1/cs_tickets${qs}&limit=1`, env, {
+    sb(`/rest/v1/cs_tickets${qs}${scopeQs}&limit=1`, env, {
       headers: { Prefer: 'count=exact' },
     })
   ));
@@ -675,12 +706,18 @@ async function getKpis(params, auth, env) {
   startOfMonth.setDate(1);
   startOfMonth.setHours(0, 0, 0, 0);
 
+  // Scope tiles to what the caller may see (dept + operator self-scope), so an
+  // operator's Overdue / Awaiting / Closed counts reflect only their own tickets.
+  const scope = await visibilityFilters(params, auth, env);
+  if (!scope) return err(`Unknown department slug`, 404);
+  const scopeQs = scope.length ? `&${scope.join('&')}` : '';
+
   const [myOpen, overdue, awaitingOld, closedToday, mtdClosed] = await Promise.all([
     sb(`/rest/v1/cs_tickets?assigned_agent_id=eq.${auth.userId}&closed_at=is.null&select=id&limit=5000`, env),
-    sb(`/rest/v1/cs_tickets?closed_at=is.null&due_at=lt.${encodeURIComponent(nowIso)}&select=id&limit=5000`, env),
-    sb(`/rest/v1/cs_tickets?stage=eq.awaiting_evidence&closed_at=is.null&stage_changed_at=lt.${encodeURIComponent(new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString())}&select=id&limit=5000`, env),
-    sb(`/rest/v1/cs_tickets?closed_at=gte.${encodeURIComponent(startOfTodayIso)}&select=id&limit=5000`, env),
-    sb(`/rest/v1/cs_tickets?closed_at=gte.${encodeURIComponent(startOfMonth.toISOString())}&select=created_at,closed_at&limit=5000`, env),
+    sb(`/rest/v1/cs_tickets?closed_at=is.null&due_at=lt.${encodeURIComponent(nowIso)}&select=id&limit=5000${scopeQs}`, env),
+    sb(`/rest/v1/cs_tickets?stage=eq.awaiting_evidence&closed_at=is.null&stage_changed_at=lt.${encodeURIComponent(new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString())}&select=id&limit=5000${scopeQs}`, env),
+    sb(`/rest/v1/cs_tickets?closed_at=gte.${encodeURIComponent(startOfTodayIso)}&select=id&limit=5000${scopeQs}`, env),
+    sb(`/rest/v1/cs_tickets?closed_at=gte.${encodeURIComponent(startOfMonth.toISOString())}&select=created_at,closed_at&limit=5000${scopeQs}`, env),
   ]);
 
   // Avg close days MTD
