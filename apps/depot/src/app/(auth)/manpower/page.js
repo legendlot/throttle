@@ -1,17 +1,18 @@
 'use client';
 /* ════════════════════════════════════════════════════════════
-   MANPOWER — Pit Wall v2 reskin (redesign-reference/app/
-   manpower.jsx). Four tabs: Live View (floor map, line → station
-   presence, 60s auto-refresh) · Attendance · Daily Roster
-   (drag-and-drop assignment — every handler preserved exactly:
-   assignManpower upsert, removeManpower, bulkAssignManpower,
-   pickers, multi-select, auto-assign, target seeding from
-   getLineSetup) · Performance. All garageFetch/workerFetch calls,
-   params and business rules unchanged; chrome only.
+   MANPOWER (Depot) — DISPATCH-ONLY. Dispatch has two lines D1/D2
+   and its own activities (logged on Dispatch → Dispatch Roster),
+   no production lines/stations. Four tabs, all scoped to the
+   dispatch team: Attendance (team=dispatch) · Daily Roster (assign
+   dispatch operators to D1/D2 — assignManpower/removeManpower/
+   bulkAssignManpower, pickers, multi-select, drag-drop, auto-assign)
+   · Analytics (team=dispatch) · Shifts (dispatch dept only).
+   The production-only components (Live floor map / Performance /
+   production attendance) remain defined but are not surfaced here.
    ════════════════════════════════════════════════════════════ */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@throttle/auth';
-import { garageFetch, workerFetch } from '@throttle/db';
+import { workerFetch } from '@throttle/db';
 import { ConfirmModal, Modal, Spinner, useToast } from '@throttle/ui';
 import { useAutoRefresh } from '../../../hooks/useAutoRefresh.js';
 import { useRefreshState } from '../layout.js';
@@ -1034,34 +1035,23 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
   const pickerRefs = useRef({});
   const highlightedPickerRef = useRef(null);
 
-  const [targets, setTargets] = useState({
-    L1: { Assembly: '', QC: '', Packaging: '' },
-    L2: { Assembly: '', QC: '', Packaging: '' },
-    L3: { Assembly: '', QC: '', Packaging: '' },
-    D1: '',
-    D2: '',
-    Others: '',
-  });
-  // null = no active run for that line; { product, run_no } = run that seeded its targets
-  const [targetHints, setTargetHints] = useState({ L1: null, L2: null, L3: null });
+  // Dispatch-only: two flat lines D1/D2, no production stations.
+  const [targets, setTargets] = useState({ D1: '', D2: '' });
   const [selectedOpIds, setSelectedOpIds] = useState(() => new Set());
 
+  // Pool = dispatch-team operators only (Depot is dispatch-only).
   const activeOperators = useMemo(
-    () => (operators || []).filter((o) => o.status !== 'inactive'),
+    () => (operators || []).filter(
+      (o) => o.status !== 'inactive' && (o.team || '').toLowerCase() === 'dispatch'
+    ),
     [operators]
   );
 
   const assignedOpIds = useMemo(() => {
     const s = new Set();
-    for (const line of ['L1', 'L2', 'L3']) {
-      const sections = grouped[line] || {};
-      for (const section of Object.keys(sections)) {
-        for (const row of sections[section] || []) s.add(row.operator_id);
-      }
+    for (const line of DISPATCH_LINE_ORDER) {
+      for (const row of grouped[line] || []) s.add(row.operator_id);
     }
-    for (const row of grouped.D1 || []) s.add(row.operator_id);
-    for (const row of grouped.D2 || []) s.add(row.operator_id);
-    for (const row of grouped.Others || []) s.add(row.operator_id);
     return s;
   }, [grouped]);
 
@@ -1078,61 +1068,24 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
     [activeOperators, clockedInIds, assignedOpIds]
   );
 
-  const totalAssigned = useMemo(() => {
-    let n = 0;
-    for (const line of ['L1', 'L2', 'L3']) {
-      const sections = grouped[line] || {};
-      for (const section of Object.keys(sections)) n += (sections[section] || []).length;
-    }
-    n += (grouped.D1 || []).length;
-    n += (grouped.D2 || []).length;
-    n += (grouped.Others || []).length;
-    return n;
-  }, [grouped]);
+  const totalAssigned = useMemo(
+    () => DISPATCH_LINE_ORDER.reduce((n, line) => n + (grouped[line] || []).length, 0),
+    [grouped]
+  );
 
   const load = useCallback(async () => {
     if (!session || !canManageFloor || !date) return;
     setLoading(true);
     try {
-      // getLineSetup is parallel-fetched purely to seed the TARGETS row from the
-      // active production run's line design; .catch swallow keeps a failure here
-      // from breaking the roster itself.
-      const [rosterRes, attRes, lineSetupRes] = await Promise.all([
+      const [rosterRes, attRes] = await Promise.all([
         workerFetch('getManpowerLog', { data: { shift_date: date } }, session),
-        workerFetch('getOperatorAttendance', { data: { date_from: date, date_to: date } }, session),
-        garageFetch('getLineSetup', { date }, session).catch(() => null),
+        workerFetch('getOperatorAttendance', { data: { date_from: date, date_to: date, team: 'dispatch' } }, session),
       ]);
       const inner = rosterRes?.data;
       const obj = inner && typeof inner === 'object' && !Array.isArray(inner) ? inner : {};
       setGrouped(obj);
       const attList = Array.isArray(attRes?.data) ? attRes.data : Array.isArray(attRes) ? attRes : [];
       setAttendanceRows(attList);
-
-      // Seed TARGETS from active run line designs; preserve Others (not run-driven).
-      // garageFetch unwraps { data: ... } already, but tolerate both shapes.
-      const lineSetupPayload = (lineSetupRes && lineSetupRes.lines) ? lineSetupRes : (lineSetupRes?.data || {});
-      const lineDesigns = lineSetupPayload.lines || {};
-      const lineTargets = {
-        L1: { Assembly: '', QC: '', Packaging: '' },
-        L2: { Assembly: '', QC: '', Packaging: '' },
-        L3: { Assembly: '', QC: '', Packaging: '' },
-      };
-      const newHints = { L1: null, L2: null, L3: null };
-      for (const line of ['L1', 'L2', 'L3']) {
-        const lineData = lineDesigns[line];
-        if (!lineData?.run || !Array.isArray(lineData?.design?.departments)) continue;
-        newHints[line] = {
-          product: lineData.run.product,
-          run_no:  lineData.run.run_no,
-        };
-        for (const dept of lineData.design.departments) {
-          if (dept.department === 'Assembly')  lineTargets[line].Assembly  = String(dept.total_headcount || '');
-          if (dept.department === 'QC')        lineTargets[line].QC        = String(dept.total_headcount || '');
-          if (dept.department === 'Packaging') lineTargets[line].Packaging = String(dept.total_headcount || '');
-        }
-      }
-      setTargets((prev) => ({ ...lineTargets, D1: prev.D1, D2: prev.D2, Others: prev.Others }));
-      setTargetHints(newHints);
     } catch (e) {
       showToast(e.message || 'Failed to load roster', 'error');
       setGrouped({});
@@ -1172,16 +1125,12 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
     }
   }, [pickerHighlight]);
 
-  async function handleAssign(operatorId, line, station) {
+  async function handleAssign(operatorId, line) {
     if (!canManageFloor || !operatorId || !line) return;
-    if (line !== 'Others' && !station) return;
     try {
-      const data = { operator_id: operatorId, line, shift_date: date };
-      if (line !== 'Others') data.station = station;
-      await workerFetch('assignManpower', { data }, session);
+      await workerFetch('assignManpower', { data: { operator_id: operatorId, line, shift_date: date } }, session);
       const op = activeOperators.find((o) => o.id === operatorId);
-      const label = line === 'Others' ? line : `${line} · ${station}`;
-      showToast(`Assigned ${op?.name || 'operator'} to ${label}`, 'success');
+      showToast(`Assigned ${op?.name || 'operator'} to ${line}`, 'success');
       load();
     } catch (e) {
       showToast(e.message || 'Assign failed', 'error');
@@ -1223,25 +1172,17 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
     return single ? [single] : [];
   }
 
-  async function handleBulkAssign(opIds, line, station) {
-    if (!canManageFloor || !opIds.length) return;
-    if (line !== 'Others' && !station) return;
+  async function handleBulkAssign(opIds, line) {
+    if (!canManageFloor || !opIds.length || !line) return;
     try {
       if (opIds.length === 1) {
-        const data = { operator_id: opIds[0], line, shift_date: date };
-        if (line !== 'Others') data.station = station;
-        await workerFetch('assignManpower', { data }, session);
+        await workerFetch('assignManpower', { data: { operator_id: opIds[0], line, shift_date: date } }, session);
       } else {
-        const assignments = opIds.map((id) => ({
-          operator_id: id,
-          line,
-          station: line === 'Others' ? null : station,
-        }));
+        const assignments = opIds.map((id) => ({ operator_id: id, line }));
         await workerFetch('bulkAssignManpower', { data: { assignments, shift_date: date } }, session);
       }
-      const label = line === 'Others' ? line : `${line} · ${station}`;
-      const noun  = opIds.length === 1 ? 'operator' : `${opIds.length} operators`;
-      showToast(`Assigned ${noun} to ${label}`, 'success');
+      const noun = opIds.length === 1 ? 'operator' : `${opIds.length} operators`;
+      showToast(`Assigned ${noun} to ${line}`, 'success');
       setSelectedOpIds(new Set());
       load();
     } catch (e) {
@@ -1249,10 +1190,10 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
     }
   }
 
-  function onDropToSection(e, line, station) {
+  function onDropToLine(e, line) {
     e.preventDefault();
     const opIds = readDropOpIds(e);
-    if (opIds.length) handleBulkAssign(opIds, line, station);
+    if (opIds.length) handleBulkAssign(opIds, line);
   }
 
   async function handleAutoAssign() {
@@ -1263,32 +1204,20 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
     }
 
     const slots = [];
-    for (const line of ['L1', 'L2', 'L3']) {
-      for (const section of ROSTER_SECTIONS) {
-        const n = Math.max(0, parseInt(targets[line][section], 10) || 0);
-        for (let i = 0; i < n; i++) slots.push({ line, station: section });
-      }
-    }
-    for (const line of ['D1', 'D2']) {
+    for (const line of DISPATCH_LINE_ORDER) {
       const n = Math.max(0, parseInt(targets[line], 10) || 0);
-      for (let i = 0; i < n; i++) slots.push({ line, station: null });
+      for (let i = 0; i < n; i++) slots.push(line);
     }
-    const othersN = Math.max(0, parseInt(targets.Others, 10) || 0);
-    for (let i = 0; i < othersN; i++) slots.push({ line: 'Others', station: null });
 
     if (slots.length === 0) {
-      showToast('Enter target headcounts before auto-assigning', 'error');
+      showToast('Enter a D1/D2 target headcount before auto-assigning', 'error');
       return;
     }
 
     const pairCount = Math.min(availableOperators.length, slots.length);
     const assignments = [];
     for (let i = 0; i < pairCount; i++) {
-      assignments.push({
-        operator_id: availableOperators[i].id,
-        line:        slots[i].line,
-        station:     slots[i].station,
-      });
+      assignments.push({ operator_id: availableOperators[i].id, line: slots[i] });
     }
 
     const skipped  = availableOperators.length - assignments.length;
@@ -1328,7 +1257,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
   }
 
   // shared picker dropdown (assign fallback) — logic identical, restyled
-  function Picker({ pkey, line, station, ops }) {
+  function Picker({ pkey, line, ops }) {
     const open = !!pickerOpen[pkey];
     return (
       <div ref={(el) => { pickerRefs.current[pkey] = el; }} style={{ position: 'relative' }}>
@@ -1340,7 +1269,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
             setPickerOpen((s) => ({ ...s, [pkey]: !s[pkey] }));
             setPickerQuery((s) => ({ ...s, [pkey]: '' }));
           }}
-          title={open ? 'Close' : `Assign to ${station || line}`}
+          title={open ? 'Close' : `Assign to ${line}`}
         >
           <Icon name={open ? 'x' : 'plus'} size={13} />
         </button>
@@ -1373,7 +1302,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                 } else if (e.key === 'Enter') {
                   if (hi >= 0 && visible[hi]) {
                     e.preventDefault();
-                    handleAssign(visible[hi].id, line, station);
+                    handleAssign(visible[hi].id, line);
                     setPickerOpen((s) => ({ ...s, [pkey]: false }));
                     setPickerQuery((s) => ({ ...s, [pkey]: '' }));
                     setPickerHighlight((s) => ({ ...s, [pkey]: -1 }));
@@ -1399,7 +1328,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                       ref={isHi ? highlightedPickerRef : null}
                       onMouseDown={(e) => {
                         e.preventDefault();
-                        handleAssign(op.id, line, station);
+                        handleAssign(op.id, line);
                         setPickerOpen((s) => ({ ...s, [pkey]: false }));
                         setPickerQuery((s) => ({ ...s, [pkey]: '' }));
                         setPickerHighlight((s) => ({ ...s, [pkey]: -1 }));
@@ -1485,42 +1414,26 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
         </div>
       </div>
 
-      {/* targets */}
+      {/* targets — optional D1/D2 headcounts for auto-assign */}
       <Panel pad={0} style={{ marginBottom: 14 }}>
         <div style={{ padding: '12px 15px', display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
           <span className="eyebrow">Targets</span>
-          {['L1', 'L2', 'L3'].map((line) => (
-            <div key={line} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span className="num" style={{ fontSize: 11.5, color: lineColor(line), minWidth: 18, fontWeight: 700 }}>{line}</span>
-              {ROSTER_SECTIONS.map((section) => (
-                <label key={section} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <span className="eyebrow" style={{ fontSize: 9 }}>{section.slice(0, 3)}</span>
-                  <input
-                    type="number"
-                    min="0"
-                    className="num"
-                    value={targets[line][section]}
-                    onChange={(e) => setTargets((prev) => ({
-                      ...prev,
-                      [line]: { ...prev[line], [section]: e.target.value },
-                    }))}
-                    style={{ ...inputStyle, width: 48, textAlign: 'center', padding: '3px 6px', fontSize: 12 }}
-                  />
-                </label>
-              ))}
-            </div>
+          {DISPATCH_LINE_ORDER.map((line) => (
+            <label key={line} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span className="num" style={{ fontSize: 11.5, color: BUCKET_COLOR[line], minWidth: 18, fontWeight: 700 }}>{line}</span>
+              <input
+                type="number"
+                min="0"
+                className="num"
+                value={targets[line]}
+                onChange={(e) => setTargets((prev) => ({ ...prev, [line]: e.target.value }))}
+                style={{ ...inputStyle, width: 48, textAlign: 'center', padding: '3px 6px', fontSize: 12 }}
+              />
+            </label>
           ))}
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span className="num" style={{ fontSize: 11.5, color: BUCKET_COLOR.Others, fontWeight: 700 }}>OTHERS</span>
-            <input
-              type="number"
-              min="0"
-              className="num"
-              value={targets.Others}
-              onChange={(e) => setTargets((prev) => ({ ...prev, Others: e.target.value }))}
-              style={{ ...inputStyle, width: 48, textAlign: 'center', padding: '3px 6px', fontSize: 12 }}
-            />
-          </label>
+          <span style={{ fontFamily: 'var(--font-ui)', fontSize: 11, color: 'var(--t3)' }}>
+            Auto-assign fills D1 then D2 from the available pool.
+          </span>
           <button
             onClick={handleAutoAssign}
             disabled={availableOperators.length === 0}
@@ -1534,23 +1447,6 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
           >
             Auto-assign ({availableOperators.length} available)
           </button>
-        </div>
-        {/* Hint row — shows which active run seeded each line's targets, or "no run". */}
-        <div style={{ padding: '0 15px 11px', display: 'flex', gap: 18, flexWrap: 'wrap',
-          fontFamily: 'var(--font-ui)', fontSize: 11, color: 'var(--t3)' }}>
-          {['L1', 'L2', 'L3'].map((line) => (
-            targetHints[line] ? (
-              <span key={line}>
-                <span className="num" style={{ color: lineColor(line), fontWeight: 700, marginRight: 4 }}>{line}</span>
-                seeded from {targetHints[line].product} · <span className="num">{targetHints[line].run_no}</span>
-              </span>
-            ) : (
-              <span key={line} style={{ opacity: 0.55 }}>
-                <span className="num" style={{ color: lineColor(line), fontWeight: 700, marginRight: 4 }}>{line}</span>
-                no active run
-              </span>
-            )
-          ))}
         </div>
       </Panel>
 
@@ -1622,112 +1518,16 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
         </div>
       </Panel>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12 }}>
-          {['L1', 'L2', 'L3'].map((line) => {
-            const sections = grouped[line] || {};
-            const accent = lineColor(line);
-            const lineCount = Object.values(sections).reduce((s, arr) => s + (Array.isArray(arr) ? arr.length : 0), 0);
-            return (
-              <div key={line} style={{ background: 'var(--surface)', border: '1px solid var(--border)',
-                borderTop: `3px solid ${accent}`, borderRadius: 'var(--r-md)', boxShadow: 'var(--shadow-card)', minHeight: 220 }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  padding: '11px 13px', borderBottom: '1px solid var(--border)' }}>
-                  <span className="font-display" style={{ fontSize: 14, fontWeight: 700, letterSpacing: '0.04em', color: accent }}>
-                    {line}
-                  </span>
-                  <span className="num" style={{ fontSize: 11.5, fontWeight: 600, padding: '1px 8px',
-                    borderRadius: 'var(--r-full)', background: 'var(--surface-2)', color: 'var(--t2)' }}>
-                    {lineCount}
-                  </span>
-                </div>
-                <div style={{ padding: 6 }}>
-                  {[...ROSTER_SECTIONS, ...Object.keys(sections).filter((k) => !ROSTER_SECTIONS.includes(k) && k !== 'Unassigned')].map((station, idx) => {
-                    const sectionRows = sections[station] || [];
-                    const key = `${line}-${station}`;
-                    const q = (pickerQuery[key] || '').trim().toLowerCase();
-                    const pickerOps = activeOperators.filter((op) => {
-                      if (assignedOpIds.has(op.id)) return false;
-                      if (!q) return true;
-                      return (op.name || '').toLowerCase().includes(q) ||
-                             (op.employee_id || '').toLowerCase().includes(q);
-                    });
-                    return (
-                      <div
-                        key={station}
-                        onDragOver={(e) => e.preventDefault()}
-                        onDrop={(e) => onDropToSection(e, line, station)}
-                        style={{
-                          borderTop: idx === 0 ? 'none' : '1px solid var(--border)',
-                          padding: '8px 8px 10px',
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7 }}>
-                          <span className="eyebrow">
-                            {station} <span className="num" style={{ color: 'var(--t4)' }}>({sectionRows.length})</span>
-                          </span>
-                          <Picker pkey={key} line={line} station={station} ops={pickerOps} />
-                        </div>
-                        {loading && idx === 0 ? (
-                          <div style={{ padding: 12, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
-                        ) : sectionRows.length === 0 ? (
-                          <div style={dropZone}>
-                            <span className="eyebrow" style={{ fontSize: 9 }}>Drop operator here</span>
-                          </div>
-                        ) : (
-                          sectionRows.map((row) => (
-                            <AssignedCard
-                              key={row.id}
-                              row={row}
-                              accent={accent}
-                              onRemove={() => handleUnassign(row, line)}
-                              removeTitle={`Remove ${row.operator_name || 'operator'} from ${line}`}
-                            />
-                          ))
-                        )}
-                      </div>
-                    );
-                  })}
-                  {(sections.Unassigned || []).length > 0 && (
-                    <div style={{ borderTop: '1px solid var(--border)', padding: '8px 8px 10px' }}>
-                      <span className="eyebrow" style={{ color: 'var(--orange)' }}>
-                        Unassigned <span className="num">({sections.Unassigned.length})</span>
-                      </span>
-                      <div style={{ marginTop: 6 }}>
-                        {sections.Unassigned.map((row) => (
-                          <AssignedCard
-                            key={row.id}
-                            row={row}
-                            accent={accent}
-                            dashed
-                            onRemove={() => handleUnassign(row, line)}
-                            removeTitle={`Remove ${row.operator_name || 'operator'} from ${line}`}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+      <div style={{ fontFamily: 'var(--font-ui)', fontSize: 11.5, color: 'var(--t3)', marginBottom: 10 }}>
+        Assign dispatch operators to a line. Log what each one is doing (Order Packing · Returns ·
+        Admin) on <strong style={{ color: 'var(--t2)' }}>Dispatch → Dispatch Roster</strong>.
+      </div>
 
-          {/* D1, D2, Admin, Store — all flat (no station sub-sections). D1/D2
-              map to line='D1'/'D2' in store.manpower_assignments. Admin and
-              Store are a visual department-based split of line='Others' rows
-              (no schema change — option γ from the scope diagnostic). */}
-          {([
-            { key: 'D1',    label: 'D1',    accent: BUCKET_COLOR.D1,    rows: grouped.D1 || [],    assignLine: 'D1' },
-            { key: 'D2',    label: 'D2',    accent: BUCKET_COLOR.D2,    rows: grouped.D2 || [],    assignLine: 'D2' },
-            { key: 'Admin', label: 'Admin', accent: BUCKET_COLOR.Admin,
-              rows: (grouped.Others || []).filter((r) => (r.operator_department || '').toLowerCase() === 'admin'),
-              assignLine: 'Others' },
-            { key: 'Store', label: 'Store', accent: BUCKET_COLOR.Store,
-              rows: (grouped.Others || []).filter((r) => (r.operator_department || '').toLowerCase() !== 'admin'),
-              assignLine: 'Others' },
-          ]).map((bucket) => {
-            const accent = bucket.accent;
-            const bucketRows = bucket.rows;
-            const key = bucket.key;
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
+          {DISPATCH_LINE_ORDER.map((line) => {
+            const lineRows = grouped[line] || [];
+            const accent = BUCKET_COLOR[line];
+            const key = line;
             const q = (pickerQuery[key] || '').trim().toLowerCase();
             const pickerOps = activeOperators.filter((op) => {
               if (assignedOpIds.has(op.id)) return false;
@@ -1736,47 +1536,43 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
                      (op.employee_id || '').toLowerCase().includes(q);
             });
             return (
-              <div key={key} style={{ background: 'var(--surface)', border: '1px solid var(--border)',
+              <div key={line} style={{ background: 'var(--surface)', border: '1px solid var(--border)',
                 borderTop: `3px solid ${accent}`, borderRadius: 'var(--r-md)', boxShadow: 'var(--shadow-card)', minHeight: 220 }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                   padding: '11px 13px', borderBottom: '1px solid var(--border)' }}>
-                  <span className="font-display" style={{ fontSize: 14, fontWeight: 700, letterSpacing: '0.04em', color: accent, textTransform: 'uppercase' }}>
-                    {bucket.label}
+                  <span className="font-display" style={{ fontSize: 16, fontWeight: 700, letterSpacing: '0.04em', color: accent }}>
+                    {line}
                   </span>
                   <span className="num" style={{ fontSize: 11.5, fontWeight: 600, padding: '1px 8px',
                     borderRadius: 'var(--r-full)', background: 'var(--surface-2)', color: 'var(--t2)' }}>
-                    {bucketRows.length}
+                    {lineRows.length}
                   </span>
                 </div>
                 <div
                   onDragOver={(e) => e.preventDefault()}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    const opIds = readDropOpIds(e);
-                    if (opIds.length) handleBulkAssign(opIds, bucket.assignLine, null);
-                  }}
+                  onDrop={(e) => onDropToLine(e, line)}
                   style={{ padding: '8px 8px 10px' }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7 }}>
                     <span className="eyebrow">
-                      Operators <span className="num" style={{ color: 'var(--t4)' }}>({bucketRows.length})</span>
+                      Operators <span className="num" style={{ color: 'var(--t4)' }}>({lineRows.length})</span>
                     </span>
-                    <Picker pkey={key} line={bucket.assignLine} station={null} ops={pickerOps} />
+                    <Picker pkey={key} line={line} ops={pickerOps} />
                   </div>
                   {loading ? (
                     <div style={{ padding: 12, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
-                  ) : bucketRows.length === 0 ? (
+                  ) : lineRows.length === 0 ? (
                     <div style={dropZone}>
                       <span className="eyebrow" style={{ fontSize: 9 }}>Drop operator here</span>
                     </div>
                   ) : (
-                    bucketRows.map((row) => (
+                    lineRows.map((row) => (
                       <AssignedCard
                         key={row.id}
                         row={row}
                         accent={accent}
-                        onRemove={() => handleUnassign(row, bucket.assignLine)}
-                        removeTitle={`Remove ${row.operator_name || 'operator'} from ${bucket.label}`}
+                        onRemove={() => handleUnassign(row, line)}
+                        removeTitle={`Remove ${row.operator_name || 'operator'} from ${line}`}
                       />
                     ))
                   )}
@@ -2187,7 +1983,9 @@ function Field({ label, full, children }) {
 // audit trail. Worker: getShifts / createShift / renameShift / setShiftActive /
 // addShiftVersion / getShiftHistory. Read by the recordAttendance resolver.
 // ═══════════════════════════════════════════════════════════════════════════
-const SHIFT_DEPTS = ['assembly', 'qc', 'packaging', 'admin', 'dispatch']; // store lives in Garage
+// Depot is dispatch-only — it manages dispatch shifts here. Production
+// (assembly/qc/packaging/admin) shifts live in Redline; store in Garage.
+const SHIFT_DEPTS = ['dispatch'];
 const modalInput = { ...kitInput, width: '100%', fontSize: 13, padding: '8px 11px' };
 const shTd = { padding: '9px 10px', fontSize: 13, color: 'var(--t2)', borderBottom: '1px solid var(--border)' };
 const shTh = { textAlign: 'left', padding: '8px 10px', fontSize: 11, textTransform: 'uppercase',
@@ -2242,9 +2040,10 @@ function ShiftsTab({ session, canManageFloor }) {
   return (
     <div style={{ display: 'grid', gap: 14 }}>
       <div style={{ fontSize: 13, color: 'var(--t3)', maxWidth: 700 }}>
-        Shift timings drive attendance — the clock-in window, the end time, and overtime.
+        Dispatch shift timings drive attendance — the clock-in window, the end time, and overtime.
         Changing a time takes effect from the date you pick and is saved as a new version;
-        older versions stay for the record. Names are yours to set. (Store shifts are managed in Garage.)
+        older versions stay for the record. Names are yours to set. (Production shifts are managed
+        in Redline; store in Garage.)
       </div>
       {SHIFT_DEPTS.map((dept) => (
         <Panel key={dept} title={capitalize(dept)}
