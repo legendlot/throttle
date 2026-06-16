@@ -405,7 +405,7 @@ export default {
               by: d.requested_by_name || '—', date: fmtDay(d.requested_at), status: d.status,
             }));
             const shipments = (shR.ok ? shR.data : []).map(s => ({
-              no: s.shipment_no, mode: s.mode || '—', blAwb: s.bl_awb_no || '—',
+              id: s.id, no: s.shipment_no, mode: s.mode || '—', blAwb: s.bl_awb_no || '—',
               eta: fmtDay(s.eta), status: s.status, order: s.notes || '—',
             }));
             const fxRows = (fxR.ok ? fxR.data : []);

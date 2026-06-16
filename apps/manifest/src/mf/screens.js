@@ -89,6 +89,106 @@ function Timeline({ current, stampByStage = {} }) {
   );
 }
 
+// PO money: schedule + allocations + balance-due + allocate action
+function MoneyCard({ order, money, schedule, allocations, payments, run, session }) {
+  const [mode, setMode] = useState(null); // 'allocate' | 'schedule'
+  const [amt, setAmt] = useState('');
+  const [wire, setWire] = useState('');
+  const [note, setNote] = useState('');
+  const [sched, setSched] = useState(null);
+  const total = Number(order.total_inr) || 0;
+  const dueNow = money?.scheduledDueNow || 0;
+
+  const allocate = () => {
+    const a = Number(amt); if (!(a > 0)) return;
+    run(() => act('allocateToPo', { order_id: order.id, amount_inr: a, payment_id: wire || null, note: note || null }, session));
+    setMode(null); setAmt(''); setWire(''); setNote('');
+  };
+  const startSched = () => {
+    setSched(schedule.length ? schedule.map((m) => ({ label: m.label, basis: m.pct != null ? 'pct' : 'amount', value: m.pct != null ? m.pct : m.amount_inr, due_stage: m.due_stage }))
+      : [{ label: 'Advance', basis: 'pct', value: 30, due_stage: 'placed' }, { label: 'Balance', basis: 'pct', value: 70, due_stage: 'docked' }]);
+    setMode('schedule');
+  };
+  const saveSched = () => {
+    run(() => act('setPoSchedule', { order_id: order.id, milestones: sched.map((m, i) => ({ seq: i + 1, label: m.label, due_stage: m.due_stage, pct: m.basis === 'pct' ? m.value : null, amount_inr: m.basis === 'amount' ? m.value : null })) }, session));
+    setMode(null);
+  };
+  const Row = ({ k, v, color, big }) => (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: big ? '12px 0 4px' : '8px 0', borderBottom: big ? 'none' : '1px solid color-mix(in srgb, var(--border) 55%, transparent)' }}>
+      <span style={{ fontFamily: big ? MONO : DISP, fontSize: big ? 10 : 12.5, letterSpacing: big ? '.1em' : 0, textTransform: big ? 'uppercase' : 'none', color: big ? 'var(--t3)' : 'var(--t2)' }}>{k}</span>
+      <span style={{ fontFamily: big ? DISP : MONO, fontWeight: big ? 700 : 500, fontSize: big ? 20 : 12.5, color: color || 'var(--t1)' }}>{v}</span>
+    </div>
+  );
+  return (
+    <Card title="Payments & balance" bodyPad="16px 20px 18px"
+      action={<span style={{ display: 'flex', gap: 8 }}>
+        <Btn variant="secondary" style={{ padding: '6px 12px', fontSize: 11 }} onClick={startSched}>Schedule</Btn>
+        <Btn style={{ padding: '6px 12px', fontSize: 11 }} onClick={() => setMode(mode === 'allocate' ? null : 'allocate')}>Allocate</Btn>
+      </span>}>
+      <Row k="Landed total" v={D.inr(total)} />
+      <Row k="Allocated / paid" v={D.inr(money?.allocated || 0)} color="var(--green)" />
+      <Row k="Balance due" v={D.inr(money?.balanceDue ?? total)} color={(money?.balanceDue ?? total) > 0 ? 'var(--red)' : 'var(--green)'} big />
+      {dueNow > 0 && (
+        <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 9, background: 'color-mix(in srgb, var(--accent) 12%, transparent)', border: '1px solid color-mix(in srgb, var(--accent) 28%, transparent)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Mono size={10.5} color="var(--accent)" style={{ letterSpacing: '.08em' }}>DUE NOW (stage reached)</Mono>
+          <Mono color="var(--accent)" weight={700}>{D.inr(dueNow)}</Mono>
+        </div>
+      )}
+      {/* schedule */}
+      {schedule.length > 0 && mode !== 'schedule' && (
+        <div style={{ marginTop: 14 }}>
+          <Eyebrow style={{ marginBottom: 8 }}>Schedule</Eyebrow>
+          {schedule.map((m) => (
+            <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', fontSize: 12 }}>
+              <span style={{ color: 'var(--t2)' }}>{m.label} <Mono size={10} color="var(--t3)">@ {D.label(m.due_stage)}</Mono></span>
+              <Mono color="var(--t1)">{m.pct != null ? `${m.pct}%` : D.inr(m.amount_inr)}</Mono>
+            </div>
+          ))}
+        </div>
+      )}
+      {/* schedule editor */}
+      {mode === 'schedule' && (
+        <div style={{ marginTop: 14 }}>
+          <Eyebrow style={{ marginBottom: 8 }}>Set schedule</Eyebrow>
+          {sched.map((m, i) => (
+            <div key={i} style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.9fr 0.7fr 1.1fr', gap: 6, marginBottom: 7, alignItems: 'center' }}>
+              <Input value={m.label} onChange={(e) => setSched((s) => s.map((x, j) => j === i ? { ...x, label: e.target.value } : x))} style={{ padding: '7px 9px', fontSize: 12 }} />
+              <Input value={m.value} onChange={(e) => setSched((s) => s.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} style={{ padding: '7px 9px', fontSize: 12 }} />
+              <Select value={m.basis} onChange={(e) => setSched((s) => s.map((x, j) => j === i ? { ...x, basis: e.target.value } : x))} options={['pct', 'amount']} style={{ padding: '7px 9px', fontSize: 12 }} />
+              <Select value={m.due_stage} onChange={(e) => setSched((s) => s.map((x, j) => j === i ? { ...x, due_stage: e.target.value } : x))} options={['placed', 'confirmed', 'produced', 'picked_up', 'loaded', 'sailing', 'docked', 'cleared', 'local_transport', 'received']} style={{ padding: '7px 9px', fontSize: 12 }} />
+            </div>
+          ))}
+          <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+            <Btn variant="secondary" style={{ padding: '6px 12px', fontSize: 11 }} onClick={() => setMode(null)}>Cancel</Btn>
+            <Btn style={{ padding: '6px 12px', fontSize: 11 }} onClick={saveSched}>Save schedule</Btn>
+          </div>
+        </div>
+      )}
+      {/* allocate form */}
+      {mode === 'allocate' && (
+        <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <Field label="Amount (₹)"><Input value={amt} onChange={(e) => setAmt(e.target.value)} placeholder="0" /></Field>
+          <Field label="Against wire (optional)"><Select value={wire} onChange={(e) => setWire(e.target.value)} options={['', ...(payments || []).map((p) => p.ref)]} /></Field>
+          <Field label="Note"><Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="optional" /></Field>
+          <Btn onClick={allocate}>Record allocation</Btn>
+        </div>
+      )}
+      {/* allocations list */}
+      {allocations.length > 0 && (
+        <div style={{ marginTop: 14 }}>
+          <Eyebrow style={{ marginBottom: 6 }}>Allocations</Eyebrow>
+          {allocations.map((a) => (
+            <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 0', borderBottom: '1px solid color-mix(in srgb, var(--border) 55%, transparent)' }}>
+              <span><Mono color="var(--green)" weight={600}>{D.inr(a.amount_inr)}</Mono> <Mono size={10} color="var(--t3)">{fmtDay(a.allocated_date)}{a.note ? ` · ${a.note}` : ''}</Mono></span>
+              <button className="mf-icobtn" onClick={() => run(() => act('deleteAllocation', { id: a.id }, session))} style={{ width: 22, height: 22, borderRadius: 6, background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--t3)', fontSize: 13, lineHeight: 1 }}>×</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 // ════════════════════════════════════════════════════════════════
 function Dashboard({ data, onNav }) {
   const s = data.summary;
@@ -223,6 +323,9 @@ function Orders({ data, onNav }) {
             { label: 'Value (RMB)', align: 'right', render: (r) => r.valueRmb ? <Mono>{D.rmb(r.valueRmb)}</Mono> : <Mono color="var(--t3)">—</Mono> },
             { label: 'Snorkel PO', render: (r) => PO(r.po) },
             { label: 'State', render: (r) => <Badge tone={D.costStateTone(r.costState)}>{D.label(r.costState)}</Badge> },
+            { label: 'Balance', align: 'right', render: (r) => (r.totalInr > 0
+              ? (r.balanceDue > 0 ? <Mono color="var(--red)" weight={600}>{D.inr(r.balanceDue)}</Mono> : <Mono color="var(--green)">paid</Mono>)
+              : <Mono color="var(--t3)">—</Mono>) },
             { label: 'Date', align: 'right', render: (r) => <Mono size={11} color="var(--t3)">{r.date}</Mono> },
           ]} />
         ) : <Empty>No orders yet</Empty>}
@@ -232,7 +335,7 @@ function Orders({ data, onNav }) {
 }
 
 // ════════════════════════════════════════════════════════════════
-function OrderDetail({ detailId, session, onNav, reload }) {
+function OrderDetail({ detailId, session, onNav, reload, data }) {
   const [resp, setResp] = useState(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
@@ -240,6 +343,7 @@ function OrderDetail({ detailId, session, onNav, reload }) {
   const [form, setForm] = useState(null);
   const [lines, setLines] = useState([]);
   const [invNo, setInvNo] = useState('');
+  const [moveTo, setMoveTo] = useState('');
 
   const load = () => {
     if (!detailId) { setErr('No order selected'); return; }
@@ -251,6 +355,8 @@ function OrderDetail({ detailId, session, onNav, reload }) {
   if (err) return <div><BackChip onClick={() => onNav('orders')}>Orders</BackChip><Empty>{err}</Empty></div>;
   if (!resp) return <div><BackChip onClick={() => onNav('orders')}>Orders</BackChip><Empty>Loading…</Empty></div>;
   const o = resp.order, eff = resp.effectiveStage, editable = resp.editable;
+  const legIds = (resp.legs || []).map((l) => l.shipment_id);
+  const moveTargets = (data?.shipments || []).filter((s) => !legIds.includes(s.id));
 
   const stamps = {};
   (resp.orderEvents || []).forEach((e) => { stamps[e.stage] = e.occurred_at; });
@@ -319,6 +425,13 @@ function OrderDetail({ detailId, session, onNav, reload }) {
                     </div>
                   );
                 })}
+                {moveTargets.length > 0 && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 12, marginTop: 4, borderTop: '1px solid color-mix(in srgb, var(--border) 55%, transparent)' }}>
+                    <Mono size={10} color="var(--t3)" style={{ flex: 1 }}>Move this PO to another container</Mono>
+                    <Select value={moveTo} onChange={(e) => setMoveTo(e.target.value)} options={['', ...moveTargets.map((t) => t.no)]} style={{ width: 150, padding: '6px 9px', fontSize: 11 }} />
+                    <Btn variant="secondary" style={{ padding: '6px 12px', fontSize: 11 }} onClick={() => { const t = moveTargets.find((x) => x.no === moveTo); if (t) run(() => act('moveOrderToShipment', { order_id: o.id, to_shipment_id: t.id }, session)); }}>Move</Btn>
+                  </div>
+                )}
               </div>
             </Card>
           )}
@@ -393,6 +506,7 @@ function OrderDetail({ detailId, session, onNav, reload }) {
                 <Mono size={10} color="var(--t3)" style={{ display: 'block', margin: '8px 0 12px' }}>Locks edits + accrues 2.5% commission (~{D.inr(commPreview)}).</Mono>
                 <Btn onClick={() => { if (invNo.trim()) run(() => act('invoiceOrder', { order_id: o.id, invoice_no: invNo.trim() }, session)); }} style={{ width: '100%' }}>Mark invoiced</Btn>
               </Card>}
+          {o.status !== 'draft' && <MoneyCard order={o} money={resp.money} schedule={resp.schedule || []} allocations={resp.allocations || []} payments={data?.payments || []} run={run} session={session} />}
         </Stack>
       </Grid>
     </div>
@@ -647,29 +761,46 @@ function NewOrder({ onNav, session, reload }) {
 }
 
 // ════════════════════════════════════════════════════════════════
-function NewDrawdown({ data, onNav }) {
+const PHASE_MAP = { 'Goods advance': 'goods_advance', 'Shipping & customs': 'shipping_customs', 'Local': 'local', 'Other': 'other' };
+function NewDrawdown({ data, onNav, session, reload }) {
+  const [busy, setBusy] = useState(false);
+  const [f, setF] = useState({ phase: 'Goods advance', order: '— none —', amount: '', rate: data.fx.current ?? '', notes: '' });
+  const amtNum = Number(String(f.amount).replace(/,/g, '')) || 0;
+  const rateNum = Number(f.rate) || 0;
+  const rmb = rateNum ? Math.round(amtNum / rateNum) : 0;
+  const submit = async () => {
+    if (busy) return;
+    if (!(amtNum > 0)) { alert('Enter an amount'); return; }
+    setBusy(true);
+    try {
+      const ord = data.orders.find((o) => o.no === f.order);
+      await act('createDrawdown', { phase: PHASE_MAP[f.phase] || 'other', order_id: ord ? ord.id : null, est_amount_inr: amtNum, est_fx_rate: rateNum || null, note: f.notes || null }, session);
+      reload && reload();
+      onNav('drawdowns');
+    } catch (e) { alert(e?.message || 'Request failed'); } finally { setBusy(false); }
+  };
   return (
     <div>
       <BackChip onClick={() => onNav('drawdowns')}>Draw-downs</BackChip>
       <Grid cols="1.5fr 1fr" style={{ alignItems: 'start' }}>
         <Card title="Draw-down request" bodyPad="20px">
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-            <Field label="Phase"><Select options={['Goods advance', 'Shipping & customs', 'Local', 'Other']} /></Field>
-            <Field label="Against order"><Select options={['— none —', ...data.orders.map((o) => o.no)]} /></Field>
-            <Field label="Amount (INR)"><Input placeholder="0" /></Field>
-            <Field label="Rate (CNY/INR)"><Input defaultValue={data.fx.current ?? ''} /></Field>
-            <div style={{ gridColumn: '1 / -1' }}><Field label="Notes"><Textarea placeholder="Add context for this request…" /></Field></div>
-            <div style={{ gridColumn: '1 / -1' }}><Field label="Requested by"><Input placeholder="Name" /></Field></div>
+            <Field label="Phase"><Select value={f.phase} onChange={(e) => setF((x) => ({ ...x, phase: e.target.value }))} options={['Goods advance', 'Shipping & customs', 'Local', 'Other']} /></Field>
+            <Field label="Against order"><Select value={f.order} onChange={(e) => setF((x) => ({ ...x, order: e.target.value }))} options={['— none —', ...data.orders.map((o) => o.no)]} /></Field>
+            <Field label="Amount (INR)"><Input value={f.amount} onChange={(e) => setF((x) => ({ ...x, amount: e.target.value }))} placeholder="0" /></Field>
+            <Field label="Rate (CNY/INR)"><Input value={f.rate} onChange={(e) => setF((x) => ({ ...x, rate: e.target.value }))} /></Field>
+            <div style={{ gridColumn: '1 / -1' }}><Field label="Notes"><Textarea value={f.notes} onChange={(e) => setF((x) => ({ ...x, notes: e.target.value }))} placeholder="Add context for this request…" /></Field></div>
           </div>
         </Card>
         <Card title="Conversion preview" bodyPad="18px 20px 20px">
           <Eyebrow>Amount requested</Eyebrow>
-          <div style={{ fontFamily: DISP, fontWeight: 700, fontSize: 30, color: 'var(--t1)', margin: '6px 0 12px' }}>₹0</div>
+          <div style={{ fontFamily: DISP, fontWeight: 700, fontSize: 30, color: 'var(--t1)', margin: '6px 0 12px' }}>{D.inr(amtNum)}</div>
+          {rmb > 0 && <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontFamily: MONO, fontSize: 14, color: 'var(--t2)', marginBottom: 12 }}><ArrowRight size={16} color="var(--t3)" /><span style={{ color: 'var(--t1)' }}>{D.rmb(rmb)}</span><span style={{ fontSize: 11, color: 'var(--t3)' }}>at {f.rate}</span></div>}
           <div style={{ marginTop: 4, padding: 14, borderRadius: 10, background: 'var(--surface2)', border: '1px solid var(--border)', fontSize: 12, color: 'var(--t2)', lineHeight: 1.5 }}>
-            Posts as a <span style={{ color: 'var(--red)', fontWeight: 600 }}>debit</span> once paid, converted at the rate above.
+            Raised against the pool{f.order !== '— none —' ? <> · earmarked for <span style={{ color: 'var(--t1)', fontFamily: MONO }}>{f.order}</span></> : ''}. Settle with wire allocations on the PO.
           </div>
           <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
-            <Btn onClick={() => onNav('drawdowns')} style={{ flex: 1 }}>Submit Request</Btn>
+            <Btn onClick={submit} style={{ flex: 1 }}>{busy ? 'Submitting…' : 'Submit Request'}</Btn>
             <Btn variant="secondary" onClick={() => onNav('drawdowns')}>Cancel</Btn>
           </div>
         </Card>
