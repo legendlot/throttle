@@ -1,4 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="512" height="512" role="img" aria-label="Snorkel">
-  <rect x="0" y="0" width="48" height="48" rx="10" fill="#F2CD1A"></rect>
-  <g transform="translate(24 24) scale(0.78) translate(-18 -26)"><rect x="18" y="21" width="9" height="24" rx="2" fill="#282828"></rect><path d="M28 7 L14 7 L8 13 L8 23 L28 23 Z" fill="#282828"></path><g stroke="#F2CD1A" stroke-width="2.1" stroke-linecap="round" fill="none"><path d="M9.5 14.5 L18.5 14.5"></path><path d="M9.5 18 L18.5 18"></path><path d="M9.5 21.5 L18.5 21.5"></path></g></g>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+  <rect x="9" y="9" width="30" height="30" rx="2.5" fill="#282828"></rect>
+  <path d="M11.5 9 H23 V39 H11.5 Q9 39 9 36.5 V11.5 Q9 9 11.5 9 Z" fill="#F2CD1A"></path>
+  <path d="M25 9 H36.5 Q39 9 39 11.5 V36.5 Q39 39 36.5 39 H25 Z" fill="#DE2A2A"></path>
+  <rect x="12.5" y="15" width="8" height="2.2" rx="1" fill="#282828"></rect>
+  <rect x="27.5" y="15" width="8" height="2.2" rx="1" fill="#ffffff"></rect>
+  <rect x="12.5" y="20" width="8" height="2.2" rx="1" fill="#282828"></rect>
+  <rect x="27.5" y="20" width="8" height="2.2" rx="1" fill="#ffffff"></rect>
+  <rect x="12.5" y="25" width="8" height="2.2" rx="1" fill="#282828"></rect>
+  <rect x="27.5" y="25" width="8" height="2.2" rx="1" fill="#ffffff"></rect>
+  <rect x="12.5" y="31" width="8" height="3" fill="#282828"></rect>
+  <rect x="27.5" y="31" width="8" height="3" fill="#ffffff"></rect>
 </svg>
