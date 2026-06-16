@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { supabase } from '@throttle/db';
 
-const COND = "'Tomorrow', system-ui, -apple-system, 'Helvetica Neue', sans-serif";
+const COND = "'Space Grotesk', system-ui, -apple-system, 'Helvetica Neue', sans-serif";
 const MONO = "'JetBrains Mono', ui-monospace, Menlo, monospace";
 
 export default function LoginPage() {

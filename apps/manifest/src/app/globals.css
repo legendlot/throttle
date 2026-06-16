@@ -1,174 +1,111 @@
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Tomorrow:wght@400;500;600;700;900&display=swap');
-
-*, *::before, *::after {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 /* ════════════════════════════════════════════════════════════
-   DESIGN TOKENS — Garage
-   Mirrors apps/redline/src/app/globals.css 1:1 for cross-app
-   consistency ("The Polished Pit Wall" → "The Stocked Workshop").
-   Same lifted-dark surface scale, same text ramp with AA-conformant
-   --t3, same semantic state colors, same focus ring. Legacy aliases
-   at the bottom preserve existing pages while migration proceeds
-   (PATTERN-052: token migration via legacy aliasing).
+   MANIFEST — "Pit Wall" design tokens (dark-only, telemetry)
+   Exact values from design_handoff_manifest/README.md.
+   Accent + density are runtime-tweakable: ManifestApp sets
+   --accent / --gap / --cardpad / --rowpy as inline vars on the
+   theme root, overriding the defaults below.
+   Legacy aliases at the bottom keep /login working unedited.
    ════════════════════════════════════════════════════════════ */
 
 :root {
-  /* ── Surface ramp (lifted dark, 4 steps) ─────────────── */
-  --bg:         #1f1f1f;   /* body */
-  --surface:    #2a2a2a;   /* cards, panels, sidebar, modals */
-  --surface-2:  #333333;   /* inputs, table-row hover, raised inner */
-  --surface-3:  #3c3c3c;   /* active fills, chip-neutral bg, hover */
-  --border:     #404040;   /* default 1px border */
-  --border-2:   #4a4a4a;   /* emphasized border, focus, raised secondary */
+  /* surfaces */
+  --bg:            #161519;
+  --surface:       #1F1E24;
+  --surface2:      #27262E;
+  --border:        #34333D;
+  --border-strong: #4A4954;
+  /* text ramp */
+  --t1:            #F3F2F0;
+  --t2:            #A6A4AE;
+  --t3:            #6F6E79;
+  /* accent (tweakable) + semantic money colors */
+  --accent:        #F2CD1A;
+  --accent-fg:     #161519;
+  --green:         #34D27B;
+  --red:           #FF6B6B;
+  --blue:          #8198FF;
+  /* shape */
+  --radius:        12px;
+  --shadow:        0 18px 44px -20px rgba(0,0,0,.7);
+  /* density (default = comfortable; ManifestApp overrides on compact) */
+  --gap:           16px;
+  --cardpad:       18px 20px;
+  --rowpy:         11px;
+  /* fonts */
+  --font-display:  'Space Grotesk', system-ui, -apple-system, sans-serif;
+  --font-mono:     'JetBrains Mono', ui-monospace, Menlo, monospace;
 
-  /* ── Text ramp (4 steps, AA-conformant on --bg) ──────── */
-  --text-1:     #f5f5f5;   /* primary */
-  --text-2:     #b0b0b0;   /* secondary (AAA on --bg) */
-  --text-3:     #888888;   /* tertiary (AA on --bg, replaces #555) */
-  --text-4:     #666666;   /* decorative-only — icons, dividers; sub-AA */
-
-  /* ── Brand colors ────────────────────────────────────── */
-  --brand-yellow:      #F2CD1A;
-  --brand-yellow-deep: #d4b200;
-  --brand-blue:        #213CE2;
-  --brand-red:         #DE2A2A;
-  --brand-green:       #22c55e;
-  --brand-orange:      #f97316;
-
-  /* ── Semantic state ───────────────────────────────────── */
-  --state-warning:    #fbbf24;
-  --state-warning-fg: #fbbf24;
-  --state-warning-bg: rgba(251, 191, 36, 0.12);
-  --state-error:      #DE2A2A;
-  --state-error-fg:   #ff7070;
-  --state-error-bg:   rgba(222, 42, 42, 0.15);
-  --state-success:    #22c55e;
-  --state-success-fg: #4ade80;
-  --state-success-bg: rgba(34, 197, 94, 0.12);
-  --state-info:       #7b93ff;
-  --state-info-fg:    #7b93ff;
-  --state-info-bg:    rgba(33, 60, 226, 0.20);
-
-  /* Accent (primary action) */
-  --accent:    var(--brand-yellow);
-  --accent-fg: #0a0a0a;
-  --accent-bg: rgba(242, 205, 26, 0.08);
-
-  /* ── Type scale ──────────────────────────────────────── */
-  --text-2xs:  11px;
-  --text-xs:   12px;
-  --text-sm:   13px;
-  --text-base: 14px;
-  --text-md:   16px;
-  --text-lg:   18px;
-  --text-xl:   22px;
-  --text-2xl:  28px;
-  --text-3xl:  36px;
-
-  --tracking-tight:  0.04em;
-  --tracking-mid:    0.06em;
-  --tracking-wide:   0.08em;
-
-  /* ── Spacing scale ───────────────────────────────────── */
-  --space-1:  4px;
-  --space-2:  8px;
-  --space-3:  12px;
-  --space-4:  16px;
-  --space-5:  20px;
-  --space-6:  24px;
-  --space-8:  32px;
-  --space-10: 40px;
-
-  /* ── Radius scale ────────────────────────────────────── */
-  --radius-sm:   3px;
-  --radius-md:   4px;
-  --radius-lg:   8px;
-  --radius-full: 9999px;
-
-  /* ── Fonts ───────────────────────────────────────────── */
-  --font-mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
-  --font-cond: 'Tomorrow', system-ui, sans-serif;
-
-  /* ── Motion ──────────────────────────────────────────── */
-  --duration-fast:    120ms;
-  --duration-default: 180ms;
-  --duration-slow:    260ms;
-  --ease-out:         cubic-bezier(0.22, 1, 0.36, 1);
-
-  /* ════════════════════════════════════════════════════════
-     LEGACY ALIASES — Existing pages reference these names.
-     Aliased to the new values so the lift is inherited without
-     a per-page edit. Migrate page-by-page to the new tokens.
-     ════════════════════════════════════════════════════════ */
-  --surface2: var(--surface-2);
-  --surface3: var(--surface-3);
-  --border2:  var(--border-2);
-  --t1:       var(--text-1);
-  --t2:       var(--text-2);
-  --t3:       var(--text-3);
-  --yellow:   var(--brand-yellow);
-  --yellow2:  var(--brand-yellow-deep);
-  --blue:     var(--brand-blue);
-  --red:      var(--brand-red);
-  --green:    var(--brand-green);
-  --orange:   var(--brand-orange);
-  --mono:     var(--font-mono);
-  --cond:     var(--font-cond);
+  /* ── legacy aliases so /login keeps working unchanged ── */
+  --text-1: var(--t1);
+  --text-2: var(--t2);
+  --text-3: var(--t3);
+  --text-4: var(--border-strong);
+  --surface-2: var(--surface2);
+  --state-error-fg: var(--red);
 }
 
-/* ══════════════════════════════════════════════════════════
-   BASE
-   ══════════════════════════════════════════════════════════ */
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
 html, body {
-  background: var(--bg);
-  color: var(--text-1);
-  font-family: var(--font-mono);
-  font-size: var(--text-base);
-  line-height: 1.45;
   height: 100%;
+  background: var(--bg);
+  color: var(--t1);
+  font-family: var(--font-display);
+  font-size: 13px;
+  line-height: 1.45;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 a { color: inherit; text-decoration: none; }
 button { font-family: inherit; }
 
-/* ── Focus ring — keyboard only ──────────────────────────── */
 :focus { outline: none; }
 :focus-visible {
-  outline: 2px solid rgba(242, 205, 26, 0.6);
+  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
   outline-offset: 2px;
   border-radius: 2px;
 }
+::selection { background: color-mix(in srgb, var(--accent) 35%, transparent); color: var(--t1); }
 
-/* ── Selection ───────────────────────────────────────────── */
-::selection {
-  background: rgba(242, 205, 26, 0.35);
-  color: var(--text-1);
-}
-
-/* ── Scrollbars — match dark theme ───────────────────────── */
-::-webkit-scrollbar       { width: 6px; height: 6px; }
+/* thin dark scrollbars to match the telemetry shell */
+::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--border-2); }
-* { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+::-webkit-scrollbar-thumb { background: var(--surface2); border-radius: 999px; border: 2px solid var(--bg); }
+::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+* { scrollbar-width: thin; scrollbar-color: var(--surface2) transparent; }
 
-/* ══════════════════════════════════════════════════════════
-   ACCESSIBILITY
-   ══════════════════════════════════════════════════════════ */
+@keyframes mfpulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+@keyframes mfblink { 0%,50% { opacity: 1; } 50.01%,100% { opacity: 0; } }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
-    animation-duration: 0.01ms !important;
+    animation-duration: .01ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
+    transition-duration: .01ms !important;
   }
 }
+
+/* ── interaction helpers (hover states that need real CSS) ── */
+.mf-tr { transition: background .12s ease; }
+.mf-tr.click { cursor: pointer; }
+.mf-tr.click:hover { background: var(--surface2); }
+.mf-sidehdr { transition: background .12s ease; cursor: pointer; }
+.mf-sidehdr:hover { background: var(--surface2); }
+.mf-navrow { transition: background .12s ease, color .12s ease; }
+.mf-navrow:hover:not(.active) { background: var(--surface2); color: var(--t1); }
+.mf-doccard { transition: border-color .15s ease; }
+.mf-doccard:hover { border-color: var(--border-strong); }
+.mf-btn { transition: filter .12s ease, background .12s ease, border-color .12s ease; }
+.mf-btn:hover { filter: brightness(1.06); }
+.mf-chip { transition: background .12s ease, border-color .12s ease, color .12s ease; cursor: pointer; }
+.mf-chip:hover { border-color: var(--border-strong); }
+.mf-icobtn { transition: background .12s ease, border-color .12s ease; cursor: pointer; }
+.mf-icobtn:hover { background: var(--surface2); border-color: var(--border-strong); }
+.mf-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.mf-link { color: var(--blue); cursor: pointer; }
+.mf-link:hover { text-decoration: underline; }
