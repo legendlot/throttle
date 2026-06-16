@@ -726,6 +726,55 @@ export default {
             await logActivity(auth, 'order_deleted', { detail: String(d.id) });
             return ok({ deleted: d.id });
           }
+          case 'advanceOrderStage': {
+            // Production-half stages (placed/confirmed/produced/picked_up) + cancel. LOT or SF.
+            if (!canUpdateOrder(P)) return err('No permission', 403);
+            if (!d.order_id || !d.stage) return err('order_id and stage required');
+            const target = d.stage;
+            if (!ORDER_PROD_STAGES.includes(target) && target !== 'cancelled') return err('Invalid order stage: ' + target, 422);
+            const oR = await query('orders', `?id=eq.${encodeURIComponent(d.order_id)}&select=status&limit=1`);
+            if (!oR.ok || !oR.data[0]) return err('Order not found', 404);
+            const from = oR.data[0].status;
+            if (from === 'cancelled') return err('Order is cancelled', 422);
+            if (['shipped', 'received'].includes(from) && target !== 'cancelled') return err('Order is in shipping — advance its shipment legs instead', 422);
+            if (target === 'placed') {
+              const lc = await query('order_lines', `?order_id=eq.${encodeURIComponent(d.order_id)}&select=id&limit=1`);
+              if (!lc.ok || !lc.data[0]) return err('Add at least one line item before placing the order', 422);
+            }
+            const r = await update('orders', { status: target, updated_at: nowISO() }, `id=eq.${encodeURIComponent(d.order_id)}`);
+            if (!r.ok) return err('Stage update failed: ' + JSON.stringify(r.data), 502);
+            await logStageEvent(auth, { entity: 'order', order_id: d.order_id, stage: target, from_stage: from, note: d.note });
+            await logActivity(auth, 'order_stage', { scope: 'order', order_id: d.order_id, detail: target });
+            return ok({ order_id: d.order_id, status: target });
+          }
+          case 'invoiceOrder': {
+            // LOT finance records the SF invoice → locks the order + accrues 2.5% commission.
+            if (!canRecordPayment(P) && !canManageCharges(P)) return err('No permission (LOT finance only)', 403);
+            if (!d.order_id || !d.invoice_no) return err('order_id and invoice_no required');
+            const oR = await query('orders', `?id=eq.${encodeURIComponent(d.order_id)}&select=*&limit=1`);
+            if (!oR.ok || !oR.data[0]) return err('Order not found', 404);
+            const o = oR.data[0];
+            if (o.cost_state === 'invoiced') return err('Order already invoiced', 422);
+            if (o.status === 'cancelled') return err('Order is cancelled', 422);
+            const invDate = d.invoice_date || todayISO();
+            // 1) flip the order to invoiced
+            const upd = await update('orders', { invoice_no: d.invoice_no, invoice_date: invDate, cost_state: 'invoiced', updated_at: nowISO() }, `id=eq.${encodeURIComponent(d.order_id)}`);
+            if (!upd.ok) return err('Order invoice update failed: ' + JSON.stringify(upd.data), 502);
+            // 2) (re)compute the SF invoice = sum of all orders carrying this invoice_no (multi-order invoices supported)
+            const grp = await query('orders', `?invoice_no=eq.${encodeURIComponent(d.invoice_no)}&select=total_inr,billing_subentity`);
+            const invTotal = (grp.ok ? grp.data : []).reduce((s, x) => s + (Number(x.total_inr) || 0), 0);
+            const commission = +(invTotal * 0.025).toFixed(2);
+            const sub = o.billing_subentity || ((grp.ok && grp.data[0]) ? grp.data[0].billing_subentity : null);
+            const exist = await query('sf_invoices', `?invoice_no=eq.${encodeURIComponent(d.invoice_no)}&select=id&limit=1`);
+            const invRow = { period: d.period || 'FY2026-27', invoice_date: invDate, billing_subentity: sub, total_inr: invTotal, commission_rate: 2.5, commission_inr: commission, status: 'received' };
+            if (exist.ok && exist.data[0]) {
+              await update('sf_invoices', invRow, `invoice_no=eq.${encodeURIComponent(d.invoice_no)}`);
+            } else {
+              await insert('sf_invoices', { invoice_no: d.invoice_no, ...invRow, notes: d.notes || null, created_by: userId }, 'return=minimal');
+            }
+            await logActivity(auth, 'order_invoiced', { scope: 'order', order_id: d.order_id, detail: d.invoice_no });
+            return ok({ order_id: d.order_id, invoice_no: d.invoice_no, invoice_total_inr: invTotal, commission_inr: commission });
+          }
 
           // ── Shipments + consolidation ──
           case 'createShipment': {
@@ -773,6 +822,38 @@ export default {
             }
             await logActivity(auth, 'shipment_lines_set', { scope: 'shipment', shipment_id: d.shipment_id });
             return ok({ saved: lines.length });
+          }
+          case 'advanceShipmentStage': {
+            // Shipping-half stages; stamps the matching milestone date; rolls up to orders on 'received'.
+            if (!canManageShipments(P)) return err('No permission', 403);
+            if (!d.shipment_id || !d.stage) return err('shipment_id and stage required');
+            const target = d.stage;
+            if (!SHIP_STAGES.includes(target) && target !== 'cancelled') return err('Invalid shipment stage: ' + target, 422);
+            const enc = encodeURIComponent(d.shipment_id);
+            const sR = await query('shipments', `?id=eq.${enc}&select=status&limit=1`);
+            if (!sR.ok || !sR.data[0]) return err('Shipment not found', 404);
+            const from = sR.data[0].status;
+            const patch = { status: target, updated_at: nowISO() };
+            if (SHIP_DATE_COL[target]) patch[SHIP_DATE_COL[target]] = d.date || todayISO();
+            const r = await update('shipments', patch, `id=eq.${enc}`);
+            if (!r.ok) return err('Shipment stage update failed: ' + JSON.stringify(r.data), 502);
+            await logStageEvent(auth, { entity: 'shipment', shipment_id: d.shipment_id, stage: target, from_stage: from, note: d.note });
+            if (target === 'received') {
+              const slR = await query('shipment_lines', `?shipment_id=eq.${enc}&select=order_lines!inner(order_id)`);
+              const orderIds = [...new Set((slR.ok ? slR.data : []).map(l => l.order_lines?.order_id).filter(Boolean))];
+              for (const oid of orderIds) {
+                const legs = await orderLegs(oid);
+                if (legs.length && legs.every(l => l.status === 'received')) {
+                  const p2 = { status: 'received', updated_at: nowISO() };
+                  const oc = await query('orders', `?id=eq.${oid}&select=cost_state&limit=1`);
+                  if (oc.ok && oc.data[0]?.cost_state === 'in_flight') p2.cost_state = 'delivered';
+                  await update('orders', p2, `id=eq.${oid}`);
+                  await logStageEvent(auth, { entity: 'order', order_id: oid, stage: 'received', from_stage: 'shipped', note: 'All shipment legs received' });
+                }
+              }
+            }
+            await logActivity(auth, 'shipment_stage', { scope: 'shipment', shipment_id: d.shipment_id, detail: target });
+            return ok({ shipment_id: d.shipment_id, status: target });
           }
 
           // ── Charges (non-goods cost lines) ──
