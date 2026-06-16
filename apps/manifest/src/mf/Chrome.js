@@ -3,11 +3,12 @@
 import React, { useState } from 'react';
 import { ChevronsLeft, ChevronsRight, Search, ArrowLeftRight, Sliders, Check } from 'lucide-react';
 import { NAV, activeNav, CRUMB, ACCENTS } from './nav.js';
-import { FX } from './data.js';
 import { MONO, DISP } from './ui.js';
 
+const initials = (s) => (s || '?').trim().split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
+
 // ── Sidebar ──────────────────────────────────────────────────────
-export function Sidebar({ collapsed, onToggle, screen, onNav }) {
+export function Sidebar({ collapsed, onToggle, screen, onNav, badges = {}, fx, me }) {
   const active = activeNav(screen);
   return (
     <aside style={{ width: collapsed ? 76 : 244, flexShrink: 0, background: 'var(--surface)',
@@ -56,6 +57,7 @@ export function Sidebar({ collapsed, onToggle, screen, onNav }) {
           }
           const Icon = row.icon;
           const isActive = active === row.id;
+          const badge = badges[row.id];
           return (
             <div key={i} className={'mf-navrow' + (isActive ? ' active' : '')} title={collapsed ? row.label : undefined}
               onClick={() => onNav(row.id)}
@@ -68,11 +70,11 @@ export function Sidebar({ collapsed, onToggle, screen, onNav }) {
                 background: isActive ? 'color-mix(in srgb, var(--accent) 16%, transparent)' : 'transparent' }}>
               <Icon size={17} strokeWidth={1.7} color={isActive ? 'var(--accent)' : 'var(--t3)'} style={{ flexShrink: 0 }} />
               {!collapsed && <span style={{ flex: 1 }}>{row.label}</span>}
-              {!collapsed && row.badge != null && (
+              {!collapsed && badge > 0 && (
                 <span style={{ fontFamily: MONO, fontSize: 10, fontWeight: 600, padding: '1px 7px', borderRadius: 999,
-                  background: 'color-mix(in srgb, var(--accent) 18%, transparent)', color: 'var(--accent)' }}>{row.badge}</span>
+                  background: 'color-mix(in srgb, var(--accent) 18%, transparent)', color: 'var(--accent)' }}>{badge}</span>
               )}
-              {collapsed && row.badge != null && (
+              {collapsed && badge > 0 && (
                 <span style={{ position: 'absolute', top: 7, right: 9, width: 6, height: 6, borderRadius: 999, background: 'var(--accent)' }} />
               )}
             </div>
@@ -86,18 +88,18 @@ export function Sidebar({ collapsed, onToggle, screen, onNav }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{ width: 34, height: 34, borderRadius: 8, background: 'var(--surface2)', flexShrink: 0,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontFamily: MONO, fontSize: 12, fontWeight: 600, color: 'var(--t2)' }}>AM</div>
+            fontFamily: MONO, fontSize: 12, fontWeight: 600, color: 'var(--t2)' }}>{initials(me?.full_name)}</div>
           {!collapsed && (
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontFamily: DISP, fontSize: 13, fontWeight: 600, color: 'var(--t1)' }}>Arjun Mehta</div>
-              <div style={{ fontFamily: MONO, fontSize: 10, color: 'var(--t3)' }}>LOT · Finance Admin</div>
+              <div style={{ fontFamily: DISP, fontSize: 13, fontWeight: 600, color: 'var(--t1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{me?.full_name || 'Manifest'}</div>
+              <div style={{ fontFamily: MONO, fontSize: 10, color: 'var(--t3)' }}>{me ? `${me.party || 'LOT'} · ${me.manifest_role || ''}` : '—'}</div>
             </div>
           )}
         </div>
         {!collapsed && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontFamily: MONO, fontSize: 9.5, color: 'var(--green)', letterSpacing: '.05em' }}>
             <span style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--green)', animation: 'mfpulse 2s infinite' }} />
-            SYNC OK · CNY/INR {FX}
+            SYNC OK · CNY/INR {fx ?? '—'}
           </div>
         )}
       </div>
@@ -106,7 +108,7 @@ export function Sidebar({ collapsed, onToggle, screen, onNav }) {
 }
 
 // ── Topbar ───────────────────────────────────────────────────────
-export function Topbar({ screen }) {
+export function Topbar({ screen, fx }) {
   const c = CRUMB[screen] || { eyebrow: '', title: '' };
   return (
     <header style={{ height: 66, flexShrink: 0, display: 'flex', alignItems: 'center',
@@ -128,7 +130,7 @@ export function Topbar({ screen }) {
           <span>LOT</span>
           <ArrowLeftRight size={13} color="var(--t3)" />
           <span>SF</span>
-          <span style={{ borderLeft: '1px solid color-mix(in srgb, var(--accent) 26%, transparent)', paddingLeft: 8, color: 'var(--accent)' }}>{FX}</span>
+          <span style={{ borderLeft: '1px solid color-mix(in srgb, var(--accent) 26%, transparent)', paddingLeft: 8, color: 'var(--accent)' }}>{fx ?? '—'}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontFamily: MONO, fontSize: 10, fontWeight: 600, color: 'var(--green)', letterSpacing: '.08em' }}>
           <span style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--green)', animation: 'mfpulse 2s infinite' }} />
