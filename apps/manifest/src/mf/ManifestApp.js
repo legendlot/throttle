@@ -72,7 +72,7 @@ export default function ManifestApp() {
           ) : !data ? (
             <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--t3)', padding: 24 }}>Loading…</div>
           ) : (
-            <Screen data={data} onNav={nav} openDrill={setDrill} detailId={detailId} session={session} />
+            <Screen data={data} onNav={nav} openDrill={setDrill} detailId={detailId} session={session} reload={reload} />
           )}
         </main>
       </div>

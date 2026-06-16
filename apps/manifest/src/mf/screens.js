@@ -1,8 +1,8 @@
 'use client';
 // Manifest "Pit Wall" — all screens, wired to live getBootstrap data.
 import React, { useState, useEffect } from 'react';
-import { garageFetch } from '@throttle/db';
-import { ArrowLeft, ArrowRight, Plus, ChevronDown, FileText } from 'lucide-react';
+import { garageFetch, workerFetch } from '@throttle/db';
+import { ArrowLeft, ArrowRight, Plus, ChevronDown, FileText, Check, Truck, Ship as ShipIcon } from 'lucide-react';
 import {
   Card, Table, Badge, Btn, Field, Input, Select, Textarea, Eyebrow, Mono,
   BalanceChart, Sparkline, MONO, DISP, toneVar,
@@ -44,6 +44,50 @@ const Dropdown = ({ children }) => (
 );
 const Empty = ({ children }) => <div style={{ padding: '28px 20px', fontFamily: MONO, fontSize: 11.5, color: 'var(--t3)', textAlign: 'center' }}>{children}</div>;
 const initials = (name) => (name || '?').split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase();
+
+const act = async (action, data, session) => { const r = await workerFetch(action, { data }, session); return r?.data; };
+
+// canonical 10-step pipeline (production half + shipping half)
+const PIPELINE = [
+  { key: 'placed', label: 'Placed', phase: 'order' },
+  { key: 'confirmed', label: 'Confirmed', phase: 'order' },
+  { key: 'produced', label: 'Produced', phase: 'order' },
+  { key: 'picked_up', label: 'Picked up', phase: 'order' },
+  { key: 'loaded', label: 'Loaded', phase: 'ship' },
+  { key: 'sailing', label: 'Sailing', phase: 'ship' },
+  { key: 'docked', label: 'Docked', phase: 'ship' },
+  { key: 'cleared', label: 'Cleared', phase: 'ship' },
+  { key: 'local_transport', label: 'Local transit', phase: 'ship' },
+  { key: 'received', label: 'Received', phase: 'ship' },
+];
+const SHIP_STAGES = ['loaded', 'sailing', 'docked', 'cleared', 'local_transport', 'received'];
+const PROD_NEXT = { placed: 'confirmed', confirmed: 'produced', produced: 'picked_up' };
+
+// horizontal stepper showing the composed timeline; stampByStage = { stage: isoDate }
+function Timeline({ current, stampByStage = {} }) {
+  const curIdx = PIPELINE.findIndex((s) => s.key === current);
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 0, overflowX: 'auto', paddingBottom: 4 }}>
+      {PIPELINE.map((s, i) => {
+        const done = curIdx >= 0 && i < curIdx;
+        const here = i === curIdx;
+        const c = (done || here) ? 'var(--accent)' : 'var(--surface2)';
+        const tc = here ? 'var(--t1)' : (done ? 'var(--t2)' : 'var(--t3)');
+        return (
+          <div key={s.key} style={{ flex: 1, minWidth: 64, display: 'flex', flexDirection: 'column', alignItems: 'center', position: 'relative' }}>
+            {i > 0 && <div style={{ position: 'absolute', top: 9, right: '50%', width: '100%', height: 2, background: i <= curIdx ? 'var(--accent)' : 'var(--border)' }} />}
+            <div style={{ width: 20, height: 20, borderRadius: 999, background: done ? 'var(--accent)' : 'var(--surface)', border: `2px solid ${c}`, zIndex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              {done && <Check size={11} color="var(--accent-fg)" strokeWidth={3} />}
+              {here && <span style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--accent)' }} />}
+            </div>
+            <div style={{ fontFamily: MONO, fontSize: 8.5, letterSpacing: '.04em', textTransform: 'uppercase', color: tc, marginTop: 7, textAlign: 'center', lineHeight: 1.3 }}>{s.label}</div>
+            {stampByStage[s.key] && <div style={{ fontFamily: MONO, fontSize: 8, color: 'var(--t3)', marginTop: 2 }}>{fmtDay(stampByStage[s.key])}</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 // ════════════════════════════════════════════════════════════════
 function Dashboard({ data, onNav }) {
@@ -188,43 +232,114 @@ function Orders({ data, onNav }) {
 }
 
 // ════════════════════════════════════════════════════════════════
-function OrderDetail({ detailId, session, onNav }) {
+function OrderDetail({ detailId, session, onNav, reload }) {
   const [resp, setResp] = useState(null);
   const [err, setErr] = useState('');
-  useEffect(() => {
-    let alive = true;
+  const [busy, setBusy] = useState(false);
+  const [edit, setEdit] = useState(false);
+  const [form, setForm] = useState(null);
+  const [lines, setLines] = useState([]);
+  const [invNo, setInvNo] = useState('');
+
+  const load = () => {
     if (!detailId) { setErr('No order selected'); return; }
-    garageFetch('getOrder', { id: detailId }, session).then((d) => { if (alive) setResp(d); }).catch((e) => alive && setErr(e?.message || 'Load failed'));
-    return () => { alive = false; };
-  }, [detailId, session]);
+    garageFetch('getOrder', { id: detailId }, session).then((d) => { setResp(d); setErr(''); }).catch((e) => setErr(e?.message || 'Load failed'));
+  };
+  useEffect(() => { setResp(null); setEdit(false); load(); /* eslint-disable-next-line */ }, [detailId, session]);
+  const run = async (fn) => { if (busy) return; setBusy(true); try { await fn(); load(); reload && reload(); } catch (e) { alert(e?.message || 'Action failed'); } finally { setBusy(false); } };
 
   if (err) return <div><BackChip onClick={() => onNav('orders')}>Orders</BackChip><Empty>{err}</Empty></div>;
   if (!resp) return <div><BackChip onClick={() => onNav('orders')}>Orders</BackChip><Empty>Loading…</Empty></div>;
-  const o = resp.order;
+  const o = resp.order, eff = resp.effectiveStage, editable = resp.editable;
+
+  const stamps = {};
+  (resp.orderEvents || []).forEach((e) => { stamps[e.stage] = e.occurred_at; });
+  (resp.legs || []).forEach((l) => (l.events || []).forEach((e) => { stamps[e.stage] = e.occurred_at; }));
+
+  const startEdit = () => {
+    setForm({ purchase_inr: o.purchase_inr ?? '', shipping_inr: o.shipping_inr ?? '', customs_inr: o.customs_inr ?? '', gst_percent: o.gst_percent ?? 18 });
+    setLines((resp.lines || []).map((l) => ({ ...l }))); setEdit(true);
+  };
+  const saveEdit = () => run(async () => {
+    await act('updateOrder', { id: o.id, ...form }, session);
+    await act('saveOrderLines', { order_id: o.id, lines: lines.map((l, i) => ({ line_no: i + 1, product: l.product, variant: l.variant, color: l.color, item_type: l.item_type || 'product', qty: Number(l.qty) || 0, unit: l.unit, unit_price_rmb: l.unit_price_rmb === '' ? null : Number(l.unit_price_rmb), receive_format: l.receive_format })) }, session);
+    setEdit(false);
+  });
+  const createLeg = () => run(async () => {
+    const sh = await act('createShipment', { mode: 'Sea FCL' }, session);
+    await act('setShipmentLines', { shipment_id: sh.id, lines: (resp.lines || []).map((l) => ({ order_line_id: l.id, qty_in_shipment: Number(l.qty) || 0 })) }, session);
+  });
+  const nextShip = (st) => st === 'planned' ? 'loaded' : SHIP_STAGES[SHIP_STAGES.indexOf(st) + 1];
+  const commPreview = Math.round((Number(o.total_inr) || 0) * 0.025);
+
   return (
     <div>
       <BackChip onClick={() => onNav('orders')}>Orders</BackChip>
+      <Card bodyPad="20px 24px 22px" style={{ marginBottom: gap }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 14, marginBottom: o.status === 'draft' ? 14 : 20 }}>
+          <div>
+            <div style={{ fontFamily: DISP, fontWeight: 700, fontSize: 24, color: 'var(--t1)' }}>{o.order_no}</div>
+            <div style={{ fontSize: 12.5, color: 'var(--t2)', marginTop: 4 }}>{o.title} · {o.vendor_name || 'Solve Factory'}{o.order_label ? ` · ${o.order_label}` : ''}</div>
+            <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
+              <Badge tone={D.costStateTone(o.cost_state)}>{D.label(o.cost_state)}</Badge>
+              {!editable && <Mono size={9.5} color="var(--t3)" style={{ letterSpacing: '.1em' }}>LOCKED</Mono>}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            {o.status === 'draft' && <Btn onClick={() => run(() => act('advanceOrderStage', { order_id: o.id, stage: 'placed' }, session))}>Place order</Btn>}
+            {PROD_NEXT[o.status] && <Btn onClick={() => run(() => act('advanceOrderStage', { order_id: o.id, stage: PROD_NEXT[o.status] }, session))}>Advance → {D.label(PROD_NEXT[o.status])}</Btn>}
+            {o.status === 'picked_up' && <Btn onClick={createLeg}><ShipIcon size={13} style={{ marginRight: 6, verticalAlign: -2 }} />Create shipment leg</Btn>}
+          </div>
+        </div>
+        {o.status === 'draft'
+          ? <Mono size={11} color="var(--t3)">Draft — fill in line items and costs below, then Place to start the timeline.</Mono>
+          : <Timeline current={eff} stampByStage={stamps} />}
+      </Card>
+
       <Grid cols="1.5fr 1fr" style={{ alignItems: 'start' }}>
         <Stack>
-          <Card bodyPad="20px">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 14 }}>
-              <div>
-                <div style={{ fontFamily: DISP, fontWeight: 700, fontSize: 24, color: 'var(--t1)' }}>{o.order_no}</div>
-                <div style={{ fontSize: 12.5, color: 'var(--t2)', marginTop: 4 }}>{o.title} · {o.vendor_name || 'Solve Factory'}{o.order_label ? ` · ${o.order_label}` : ''}</div>
-                <div style={{ marginTop: 10 }}><Badge tone={D.costStateTone(o.cost_state)}>{D.label(o.cost_state)}</Badge></div>
-              </div>
-              {o.linked_po_number && <Btn variant="secondary">Re-sync {o.linked_po_number}</Btn>}
-            </div>
-            <div style={{ marginTop: 16, padding: '11px 14px', borderRadius: 9, fontFamily: MONO, fontSize: 11.5,
-              background: o.linked_po_number ? 'color-mix(in srgb, var(--green) 12%, transparent)' : 'var(--surface2)',
-              border: '1px solid ' + (o.linked_po_number ? 'color-mix(in srgb, var(--green) 28%, transparent)' : 'var(--border)'), color: 'var(--t2)' }}>
-              {o.linked_po_number
-                ? <>Linked Snorkel China PO: <span style={{ color: 'var(--green)', fontWeight: 600 }}>{o.linked_po_number}</span></>
-                : 'Not yet projected to Snorkel'}
-            </div>
+          <Card bodyPad="13px 20px">
+            <span style={{ fontFamily: MONO, fontSize: 11.5, color: 'var(--t2)' }}>
+              {o.linked_po_number ? <>Linked Snorkel China PO: <span style={{ color: 'var(--green)', fontWeight: 600 }}>{o.linked_po_number}</span></> : 'Not yet projected to Snorkel'}
+            </span>
           </Card>
-          <Card title={`Line items · ${resp.lines.length}`}>
-            {resp.lines.length ? (
+          {(resp.legs || []).length > 0 && (
+            <Card title={`Shipment legs · ${resp.legs.length}`}>
+              <div style={{ padding: '4px 20px 12px' }}>
+                {resp.legs.map((l) => {
+                  const next = nextShip(l.status);
+                  return (
+                    <div key={l.shipment_id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '11px 0', borderBottom: '1px solid color-mix(in srgb, var(--border) 55%, transparent)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <Truck size={15} color="var(--t3)" />
+                        <Mono color="var(--t1)" weight={600}>{l.shipment_no || `SHM #${l.shipment_id}`}</Mono>
+                        <Badge tone={D.shipTone(l.status)}>{D.label(l.status)}</Badge>
+                      </div>
+                      {next && <Btn variant="secondary" style={{ padding: '6px 12px', fontSize: 11 }} onClick={() => run(() => act('advanceShipmentStage', { shipment_id: l.shipment_id, stage: next }, session))}>Advance → {D.label(next)}</Btn>}
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+          )}
+          <Card title={`Line items · ${resp.lines.length}`} action={editable ? (edit
+            ? <span style={{ display: 'flex', gap: 8 }}><Btn variant="secondary" style={{ padding: '6px 12px', fontSize: 11 }} onClick={() => setEdit(false)}>Cancel</Btn><Btn style={{ padding: '6px 12px', fontSize: 11 }} onClick={saveEdit}>Save</Btn></span>
+            : <Btn variant="secondary" style={{ padding: '6px 12px', fontSize: 11 }} onClick={startEdit}>Edit</Btn>) : null}>
+            {edit ? (
+              <div style={{ padding: '12px 20px 16px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 8, marginBottom: 8 }}>
+                  {['Product', 'Qty', 'Unit ¥'].map((h) => <div key={h} style={{ fontFamily: MONO, fontSize: 9, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--t3)' }}>{h}</div>)}
+                </div>
+                {lines.map((l, i) => (
+                  <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 8, marginBottom: 8 }}>
+                    <Input value={l.product || ''} onChange={(e) => setLines((ls) => ls.map((x, j) => j === i ? { ...x, product: e.target.value } : x))} />
+                    <Input value={l.qty ?? ''} onChange={(e) => setLines((ls) => ls.map((x, j) => j === i ? { ...x, qty: e.target.value } : x))} />
+                    <Input value={l.unit_price_rmb ?? ''} onChange={(e) => setLines((ls) => ls.map((x, j) => j === i ? { ...x, unit_price_rmb: e.target.value } : x))} />
+                  </div>
+                ))}
+                <button className="mf-chip" onClick={() => setLines((ls) => [...ls, { product: '', qty: '', unit_price_rmb: '', item_type: 'product' }])} style={{ width: '100%', padding: '8px 0', borderRadius: 8, fontFamily: MONO, fontSize: 11, background: 'transparent', border: '1px dashed var(--border-strong)', color: 'var(--t3)' }}>+ Add line</button>
+              </div>
+            ) : resp.lines.length ? (
               <Table rows={resp.lines} rowKey={(r) => r.line_no} cols={[
                 { label: '#', render: (r) => <Mono size={11} color="var(--t3)">{r.line_no}</Mono> },
                 { label: 'Product', render: (r) => <span style={{ color: 'var(--t1)' }}>{r.product || '—'}</span> },
@@ -237,26 +352,48 @@ function OrderDetail({ detailId, session, onNav }) {
             ) : <Empty>No line items</Empty>}
           </Card>
         </Stack>
-        <Card title="Cost breakdown" bodyPad="18px 20px 20px">
-          {resp.costRows.map((r, i) => (
-            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid color-mix(in srgb, var(--border) 55%, transparent)' }}>
-              <span style={{ fontSize: 12.5, color: 'var(--t2)' }}>{r.label}</span><Mono color="var(--t1)">{D.inr(r.amt)}</Mono>
-            </div>
-          ))}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 0 4px' }}>
-            <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--t3)' }}>{o.cost_state === 'in_flight' ? 'Purchase (in-flight)' : 'Landed total'}</span>
-            <span style={{ fontFamily: DISP, fontWeight: 700, fontSize: 20, color: 'var(--t1)' }}>{D.inr(o.cost_state === 'in_flight' ? o.purchase_inr : resp.landed)}</span>
-          </div>
-          {resp.drawdown && (
-            <div style={{ marginTop: 14, padding: 14, borderRadius: 10, background: 'var(--surface2)', border: '1px solid var(--border)' }}>
-              <Eyebrow style={{ marginBottom: 8 }}>Draw-down against this order</Eyebrow>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <Mono color="var(--t1)" weight={600}>{resp.drawdown.no} · {D.inr(resp.drawdown.amt)}</Mono>
-                <Badge tone={D.ddTone(resp.drawdown.status)}>{D.label(resp.drawdown.status)}</Badge>
+
+        <Stack>
+          <Card title="Cost breakdown" bodyPad="18px 20px 20px">
+            {edit ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {[['Goods value (₹)', 'purchase_inr'], ['Shipping (₹)', 'shipping_inr'], ['Customs (₹)', 'customs_inr'], ['GST %', 'gst_percent']].map(([lbl, key]) => (
+                  <Field key={key} label={lbl}><Input value={form[key] ?? ''} onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))} /></Field>
+                ))}
+                <Mono size={10} color="var(--t3)">Base + GST total recomputes on save.</Mono>
               </div>
-            </div>
-          )}
-        </Card>
+            ) : <>
+              {resp.costRows.map((r, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid color-mix(in srgb, var(--border) 55%, transparent)' }}>
+                  <span style={{ fontSize: 12.5, color: 'var(--t2)' }}>{r.label}</span><Mono color="var(--t1)">{D.inr(r.amt)}</Mono>
+                </div>
+              ))}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 0 4px' }}>
+                <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--t3)' }}>{o.cost_state === 'in_flight' ? 'Purchase (in-flight)' : 'Landed total'}</span>
+                <span style={{ fontFamily: DISP, fontWeight: 700, fontSize: 20, color: 'var(--t1)' }}>{D.inr(o.cost_state === 'in_flight' ? o.purchase_inr : resp.landed)}</span>
+              </div>
+            </>}
+            {resp.drawdown && (
+              <div style={{ marginTop: 14, padding: 14, borderRadius: 10, background: 'var(--surface2)', border: '1px solid var(--border)' }}>
+                <Eyebrow style={{ marginBottom: 8 }}>Draw-down against this order</Eyebrow>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <Mono color="var(--t1)" weight={600}>{resp.drawdown.no} · {D.inr(resp.drawdown.amt)}</Mono>
+                  <Badge tone={D.ddTone(resp.drawdown.status)}>{D.label(resp.drawdown.status)}</Badge>
+                </div>
+              </div>
+            )}
+          </Card>
+          {o.cost_state === 'invoiced'
+            ? <Card title="Invoiced" bodyPad="16px 20px 18px">
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}><Mono size={11} color="var(--t3)">Invoice</Mono><Mono color="var(--t1)">{o.invoice_no}</Mono></div>
+                {resp.commission && <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}><Mono size={11} color="var(--t3)">Commission · {resp.commission.rate}%</Mono><Mono color="var(--t1)">{D.inr(resp.commission.inr)}</Mono></div>}
+              </Card>
+            : editable && !edit && <Card title="Invoice" bodyPad="16px 20px 18px">
+                <Field label="SF invoice number"><Input value={invNo} onChange={(e) => setInvNo(e.target.value)} placeholder="VWINV-…" /></Field>
+                <Mono size={10} color="var(--t3)" style={{ display: 'block', margin: '8px 0 12px' }}>Locks edits + accrues 2.5% commission (~{D.inr(commPreview)}).</Mono>
+                <Btn onClick={() => { if (invNo.trim()) run(() => act('invoiceOrder', { order_id: o.id, invoice_no: invNo.trim() }, session)); }} style={{ width: '100%' }}>Mark invoiced</Btn>
+              </Card>}
+        </Stack>
       </Grid>
     </div>
   );
@@ -441,7 +578,31 @@ function Admin({ data }) {
 }
 
 // ════════════════════════════════════════════════════════════════
-function NewOrder({ onNav }) {
+const CAT_MAP = { Product: 'product', Part: 'part', 'Sub-part': 'sub_part', Mould: 'mould', Sample: 'sample', Other: 'other' };
+function NewOrder({ onNav, session, reload }) {
+  const [busy, setBusy] = useState(false);
+  const [f, setF] = useState({ title: '', category: 'Product', expected: '' });
+  const [lines, setLines] = useState([{ product: '', qty: '', unit_price_rmb: '' }]);
+  const setLine = (i, k, v) => setLines((ls) => ls.map((x, j) => j === i ? { ...x, [k]: v } : x));
+
+  const create = async (goDetail) => {
+    if (busy) return;
+    if (!f.title.trim()) { alert('Title is required'); return; }
+    setBusy(true);
+    try {
+      const order = await act('createOrder', {
+        title: f.title.trim(), category: CAT_MAP[f.category] || 'product',
+        vendor_name: 'Solve Factory', currency: 'CNY', placed_via: 'SF',
+        lines: lines.filter((l) => l.product.trim()).map((l, i) => ({
+          line_no: i + 1, product: l.product.trim(), qty: Number(l.qty) || 0,
+          unit_price_rmb: l.unit_price_rmb === '' ? null : Number(l.unit_price_rmb), item_type: 'product',
+        })),
+      }, session);
+      reload && reload();
+      onNav(goDetail ? 'orderDetail' : 'orders', goDetail ? order.id : undefined);
+    } catch (e) { alert(e?.message || 'Create failed'); } finally { setBusy(false); }
+  };
+
   return (
     <div>
       <BackChip onClick={() => onNav('orders')}>Orders</BackChip>
@@ -449,33 +610,35 @@ function NewOrder({ onNav }) {
         <Stack>
           <Card title="Order details" bodyPad="20px">
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-              <div style={{ gridColumn: '1 / -1' }}><Field label="Title"><Input placeholder="e.g. Night Wolf RC — full build" /></Field></div>
-              <Field label="Category"><Select options={['Product', 'Part', 'Sub-part', 'Mould', 'Sample', 'Other']} /></Field>
+              <div style={{ gridColumn: '1 / -1' }}><Field label="Title"><Input value={f.title} onChange={(e) => setF((x) => ({ ...x, title: e.target.value }))} placeholder="e.g. Night Wolf RC — full build" /></Field></div>
+              <Field label="Category"><Select value={f.category} onChange={(e) => setF((x) => ({ ...x, category: e.target.value }))} options={['Product', 'Part', 'Sub-part', 'Mould', 'Sample', 'Other']} /></Field>
               <Field label="Vendor"><Select options={['Solve Factory · Shenzhen']} /></Field>
               <Field label="Currency"><Select options={['RMB (¥)']} /></Field>
-              <Field label="Expected ready date"><Input placeholder="e.g. 18 Jan" /></Field>
+              <Field label="Expected ready date"><Input value={f.expected} onChange={(e) => setF((x) => ({ ...x, expected: e.target.value }))} placeholder="e.g. 18 Jan" /></Field>
             </div>
           </Card>
           <Card title="Line items" bodyPad="16px 20px 20px">
             <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 10, marginBottom: 10 }}>
               {['Product', 'Qty', 'Unit ¥'].map((l) => <div key={l} style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--t3)' }}>{l}</div>)}
             </div>
-            {[0, 1].map((i) => (
+            {lines.map((l, i) => (
               <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 10, marginBottom: 10 }}>
-                <Input placeholder="Product" /><Input placeholder="0" /><Input placeholder="0" />
+                <Input value={l.product} onChange={(e) => setLine(i, 'product', e.target.value)} placeholder="Product" />
+                <Input value={l.qty} onChange={(e) => setLine(i, 'qty', e.target.value)} placeholder="0" />
+                <Input value={l.unit_price_rmb} onChange={(e) => setLine(i, 'unit_price_rmb', e.target.value)} placeholder="0" />
               </div>
             ))}
-            <button className="mf-chip" style={{ width: '100%', padding: '9px 0', borderRadius: 8, fontFamily: MONO, fontSize: 11, background: 'transparent', border: '1px dashed var(--border-strong)', color: 'var(--t3)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+            <button className="mf-chip" onClick={() => setLines((ls) => [...ls, { product: '', qty: '', unit_price_rmb: '' }])} style={{ width: '100%', padding: '9px 0', borderRadius: 8, fontFamily: MONO, fontSize: 11, background: 'transparent', border: '1px dashed var(--border-strong)', color: 'var(--t3)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
               <Plus size={13} />Add line</button>
           </Card>
         </Stack>
-        <Card title="Estimated cost" bodyPad="18px 20px 20px">
+        <Card title="Create" bodyPad="18px 20px 20px">
           <div style={{ fontFamily: MONO, fontSize: 11.5, color: 'var(--t3)', lineHeight: 1.6 }}>
-            Goods (¥ × FX) + 2.5% SF commission + logistics. Live estimate appears as you add lines.
+            Creates a <span style={{ color: 'var(--t1)' }}>draft</span>. Fill costs + shipping on the detail page, then Place it to start the timeline. Goods priced in ¥; landed cost (shipping/customs/GST) added as it ships.
           </div>
           <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
-            <Btn onClick={() => onNav('orders')} style={{ flex: 1 }}>Create Order</Btn>
-            <Btn variant="secondary" onClick={() => onNav('orders')}>Save draft</Btn>
+            <Btn onClick={() => create(true)} style={{ flex: 1 }}>{busy ? 'Creating…' : 'Create Order'}</Btn>
+            <Btn variant="secondary" onClick={() => create(false)}>Save draft</Btn>
           </div>
         </Card>
       </Grid>
