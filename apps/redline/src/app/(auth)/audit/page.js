@@ -12,6 +12,7 @@ const LINES = ['L1', 'L2', 'L3', 'L4', 'L5', 'D1', 'D2', 'Store', 'Other']
 const CATEGORIES = [
   'QC Pass — Damage',
   'QC Pass — Missing Part',
+  'QC Pass — Wrong Part',
   'QC Pass — Wrong/Missing Sticker',
   'Assembly — Torque Issue',
   'Assembly — Wrong/Missing Part',

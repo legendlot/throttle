@@ -207,6 +207,7 @@ function num(v) { const n = Number(v); return Number.isFinite(n) ? n : null; }
 
 // Writable order columns (code/audit/link excluded).
 const ORDER_FIELDS = ['title','category','vendor_code','vendor_name','placed_via','currency','est_value_rmb','incoterms','notes'];
+const ORDER_COST_FIELDS = ['qty','per_unit_rmb','purchase_inr','shipping_inr','customs_inr','gst_percent','order_label','billing_subentity','invoice_date'];
 const LINE_FIELDS  = ['line_no','product','variant','color','item_type','part_code','description','qty','unit',
   'unit_price_rmb','hsn_code','gst_percent','component_type','receive_format','remote_qty','weight_kg','cbm'];
 const SHIPMENT_FIELDS = ['shipment_no','mode','container_type','container_no','bl_awb_no','forwarder_code','forwarder_name',
@@ -318,6 +319,14 @@ export default {
             // order_no → number map for FK display
             const orderRows = oR.ok ? oR.data : [];
             const orderNoById = {}; orderRows.forEach(o => { orderNoById[o.id] = o.order_no; });
+            // order → shipment legs (for effective stage)
+            const slAll = await query('shipment_lines', '?select=shipment_id,shipments(status),order_lines!inner(order_id)');
+            const legsByOrder = {};
+            (slAll.ok ? slAll.data : []).forEach(l => {
+              const oid = l.order_lines?.order_id; if (!oid) return;
+              legsByOrder[oid] = legsByOrder[oid] || [];
+              if (!legsByOrder[oid].some(x => x.shipment_id === l.shipment_id)) legsByOrder[oid].push({ shipment_id: l.shipment_id, status: l.shipments?.status });
+            });
 
             // ── ledger (running_account view), chronological ──
             const led = (raR.ok ? raR.data : []).slice().sort((a, b) =>
@@ -359,6 +368,7 @@ export default {
               totalInr: Number(o.total_inr) || 0, purchaseInr: Number(o.purchase_inr) || 0,
               recognized: Number(o.recognized_cost_inr) || 0,
               po: o.linked_po_number || null, status: o.status, costState: o.cost_state,
+              effectiveStage: effStage(o.status, legsByOrder[o.id] || []),
               label: o.order_label, invoiceNo: o.invoice_no, date: fmtDay(o.invoice_date || o.created_at),
             }, P));
 
@@ -471,6 +481,15 @@ export default {
               { label: 'GST', amt: Number(o.gst_inr) || 0 },
             ].filter(r => r.amt > 0);
             const dd = (ddR.ok && ddR.data[0]) ? ddR.data[0] : null;
+            // timeline: order production events + per-leg shipment events
+            const legs = await orderLegs(id);
+            const oEvR = await query('stage_events', `?entity=eq.order&order_id=eq.${encodeURIComponent(id)}&order=occurred_at.asc&select=stage,from_stage,note,actor_name,party,occurred_at`);
+            const legEvents = {};
+            if (legs.length) {
+              const ids = legs.map(l => l.shipment_id).join(',');
+              const seR = await query('stage_events', `?entity=eq.shipment&shipment_id=in.(${ids})&order=occurred_at.asc&select=shipment_id,stage,from_stage,note,actor_name,party,occurred_at`);
+              (seR.ok ? seR.data : []).forEach(e => { (legEvents[e.shipment_id] = legEvents[e.shipment_id] || []).push(e); });
+            }
             return ok({
               order: stripCost(o, P),
               lines: (lR.ok ? lR.data : []).map(l => stripCost(l, P)),
@@ -479,6 +498,10 @@ export default {
               landed: Number(o.total_inr) || 0,
               commission,
               drawdown: dd ? { no: dd.drawdown_no, amt: Number(dd.est_amount_inr) || 0, status: dd.status } : null,
+              effectiveStage: effStage(o.status, legs),
+              editable: orderEditable(o),
+              orderEvents: oEvR.ok ? oEvR.data : [],
+              legs: legs.map(l => ({ ...l, events: legEvents[l.shipment_id] || [] })),
             });
           }
 
@@ -640,7 +663,7 @@ export default {
             const order_no = await nextSeq('mf_order', 'MF-');
             const row = {
               ...pick(d, ORDER_FIELDS), order_no,
-              status: d.status || 'intent',
+              status: d.status || 'draft',
               created_by: userId, created_by_name: auth.fullName, created_party: party,
             };
             const r = await insert('orders', row);
@@ -658,7 +681,13 @@ export default {
           case 'updateOrder': {
             if (!canManageOrders(P)) return err('No permission', 403);
             if (!d.id) return err('id required');
-            const r = await update('orders', { ...pick(d, ORDER_FIELDS), updated_at: nowISO() }, `id=eq.${encodeURIComponent(d.id)}`);
+            const curR = await query('orders', `?id=eq.${encodeURIComponent(d.id)}&select=*&limit=1`);
+            if (!curR.ok || !curR.data[0]) return err('Order not found', 404);
+            const cur = curR.data[0];
+            if (!orderEditable(cur)) return err('Order is invoiced or cancelled — edits are locked', 422);
+            const patch = { ...pick(d, ORDER_FIELDS), ...pick(d, ORDER_COST_FIELDS), updated_at: nowISO() };
+            Object.assign(patch, recomputeOrderCost({ ...cur, ...patch }));
+            const r = await update('orders', patch, `id=eq.${encodeURIComponent(d.id)}`);
             if (!r.ok) return err('Update failed: ' + JSON.stringify(r.data), 502);
             await logActivity(auth, 'order_updated', { scope: 'order', order_id: d.id });
             return ok(Array.isArray(r.data) ? r.data[0] : r.data);
@@ -675,6 +704,8 @@ export default {
             // Replace the order's lines (full set) — LOT edit.
             if (!canManageOrders(P)) return err('No permission', 403);
             if (!d.order_id) return err('order_id required');
+            const lockR = await query('orders', `?id=eq.${encodeURIComponent(d.order_id)}&select=cost_state,status&limit=1`);
+            if (lockR.ok && lockR.data[0] && !orderEditable(lockR.data[0])) return err('Order is invoiced or cancelled — line edits are locked', 422);
             await del('order_lines', `order_id=eq.${encodeURIComponent(d.order_id)}`);
             const lines = Array.isArray(d.lines) ? d.lines : [];
             if (lines.length) {
@@ -725,6 +756,20 @@ export default {
               const rows = lines.map(l => ({ shipment_id: d.shipment_id, order_line_id: l.order_line_id, qty_in_shipment: num(l.qty_in_shipment) || 0 }));
               const r = await insert('shipment_lines', rows, 'return=minimal');
               if (!r.ok) return err('Shipment lines failed: ' + JSON.stringify(r.data), 502);
+              // hand the linked orders from production → shipping
+              const olIds = [...new Set(lines.map(l => l.order_line_id).filter(Boolean))];
+              if (olIds.length) {
+                const olR = await query('order_lines', `?id=in.(${olIds.join(',')})&select=order_id`);
+                const orderIds = [...new Set((olR.ok ? olR.data : []).map(x => x.order_id).filter(Boolean))];
+                for (const oid of orderIds) {
+                  const oR = await query('orders', `?id=eq.${oid}&select=status&limit=1`);
+                  const st = oR.ok && oR.data[0] ? oR.data[0].status : null;
+                  if (st && ORDER_PROD_STAGES.includes(st)) {
+                    await update('orders', { status: 'shipped', updated_at: nowISO() }, `id=eq.${oid}`);
+                    await logStageEvent(auth, { entity: 'order', order_id: oid, stage: 'shipped', from_stage: st, note: 'Attached to shipment ' + (d.shipment_id) });
+                  }
+                }
+              }
             }
             await logActivity(auth, 'shipment_lines_set', { scope: 'shipment', shipment_id: d.shipment_id });
             return ok({ saved: lines.length });
