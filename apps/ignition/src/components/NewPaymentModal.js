@@ -46,6 +46,7 @@ export function NewPaymentModal({ open, onClose, session, onSaved }) {
   async function submit() {
     if (!form.engagement_id) { setErr('Pick the deal this payment is for'); return; }
     if (!(Number(form.amount) >= 0) || form.amount === '') { setErr('Enter an amount'); return; }
+    if (!proofFile) { setErr('A payment screenshot is required'); return; }   // #12
     setBusy(true); setErr(null);
     try {
       let proof = {};
@@ -138,7 +139,7 @@ export function NewPaymentModal({ open, onClose, session, onSaved }) {
       </div>
 
       <div style={{ marginTop: 14 }}>
-        <div style={lbl}>Payment screenshot (optional)</div>
+        <div style={lbl}>Payment screenshot *</div>
         <input
           type="file"
           accept="image/*,application/pdf"

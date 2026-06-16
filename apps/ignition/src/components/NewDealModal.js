@@ -19,8 +19,11 @@ export function NewDealModal({ open, onClose, session, presetInfluencer, onCreat
   const [form, setForm] = useState({
     engagement_type: 'video_tracking', deal_type: 'paid',
     product_code: '', product_variant: '', expected_post_date: '',
+    payment_amount: '', payment_terms: 'advance', affiliate_pct: '',
   });
   const setField = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const isPaid      = form.deal_type === 'paid' || form.deal_type === 'paid_plus_affiliate';
+  const isAffiliate = form.deal_type === 'affiliate' || form.deal_type === 'paid_plus_affiliate';
 
   useEffect(() => { setSelected(presetInfluencer || null); }, [presetInfluencer, open]);
 
@@ -37,6 +40,11 @@ export function NewDealModal({ open, onClose, session, presetInfluencer, onCreat
     try {
       const payload = { influencer_id: selected.id, ...form };
       if (!payload.expected_post_date) delete payload.expected_post_date;
+      // Compensation only applies to paid deals; affiliate % only to affiliate deals.
+      if (isPaid && payload.payment_amount !== '') payload.payment_amount = Number(payload.payment_amount);
+      else { delete payload.payment_amount; delete payload.payment_terms; }
+      if (isAffiliate && payload.affiliate_pct !== '') payload.affiliate_pct = Number(payload.affiliate_pct);
+      else delete payload.affiliate_pct;
       const res = await ignitionopsPost('createEngagement', payload, session);
       toast(`Created ${res.engagement_no}`, 'success');
       onClose?.();
@@ -93,6 +101,28 @@ export function NewDealModal({ open, onClose, session, presetInfluencer, onCreat
             <option value="paid_plus_affiliate">Paid + Affiliate</option>
           </select>
         </Field>
+        {isPaid && (
+          <>
+            <Field label="Compensation (₹)">
+              <input type="number" min="0" value={form.payment_amount}
+                onChange={e => setField('payment_amount', e.target.value)} placeholder="e.g. 5000" style={inp} />
+            </Field>
+            <Field label="Payment terms">
+              <select value={form.payment_terms} onChange={e => setField('payment_terms', e.target.value)} style={inp}>
+                <option value="advance">Advance</option>
+                <option value="on_draft">On Draft</option>
+                <option value="on_release">On Release</option>
+                <option value="n_a">N/A</option>
+              </select>
+            </Field>
+          </>
+        )}
+        {isAffiliate && (
+          <Field label="Affiliate % agreed">
+            <input type="number" min="0" max="100" step="0.1" value={form.affiliate_pct}
+              onChange={e => setField('affiliate_pct', e.target.value)} placeholder="e.g. 10" style={inp} />
+          </Field>
+        )}
         <Field label="Product code">
           <input value={form.product_code} onChange={e => setField('product_code', e.target.value)} placeholder="e.g. Shadow" style={inp} />
         </Field>

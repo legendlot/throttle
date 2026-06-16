@@ -14,7 +14,7 @@ export default function EngagementDetailPage() {
   const sp = useSearchParams();
   const id = sp.get('id');
   const eno = sp.get('engagement_no');
-  const { session } = useAuth();
+  const { session, perms } = useAuth();
   const { showToast: toast } = useToast();
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
@@ -118,6 +118,7 @@ export default function EngagementDetailPage() {
           <KV label="Shipping order" value={e.shipping_order_id || '—'} />
           <KV label="Tracking" value={e.tracking_id || '—'} />
           <KV label="Shipping date" value={e.shipping_date || '—'} />
+          <KV label="Delivered" value={e.delivered_date || '—'} />
           {e.cs_ticket_no && <KV label="Pitstop ticket" value={<span style={{ color: 'var(--state-error-fg)' }}>{e.cs_ticket_no}</span>} />}
         </Card>
 
@@ -128,16 +129,12 @@ export default function EngagementDetailPage() {
           <KV label="UTM link" value={e.utm_link ? <a href={e.utm_link} target="_blank" rel="noreferrer" style={{ color: '#FF6B00' }}>open</a> : '—'} />
         </Card>
 
-        <Card title="Performance">
-          <KV label="Views" value={(e.views || 0).toLocaleString()} />
-          <KV label="Likes" value={(e.likes || 0).toLocaleString()} />
-          <KV label="Comments" value={(e.comments || 0).toLocaleString()} />
-          <KV label="Shares" value={(e.shares || 0).toLocaleString()} />
-          <KV label="Sessions" value={(e.sessions || 0).toLocaleString()} />
-          <KV label="Orders" value={(e.orders || 0).toLocaleString()} />
-          <KV label="Conversions ₹" value={`₹${Number(e.conversions_value || 0).toLocaleString()}`} />
-          {e.actual_roas != null && <KV label="Actual ROAS" value={Number(e.actual_roas).toFixed(2)} />}
-        </Card>
+        <PerformanceCard
+          e={e}
+          canEdit={!!perms?.ignition_manage && ['live', 'completed'].includes(e.stage)}
+          session={session}
+          onSaved={reload}
+        />
       </div>
 
       <Card title="Notes">
@@ -200,6 +197,76 @@ export default function EngagementDetailPage() {
         onAdvance={doAdvance}
       />
     </div>
+  );
+}
+
+// #13 — editable performance stats once the deal is live/completed.
+const METRIC_FIELDS = [
+  ['views', 'Views'], ['likes', 'Likes'], ['comments', 'Comments'], ['shares', 'Shares'],
+  ['impressions', 'Impressions'], ['sessions', 'Sessions'], ['orders', 'Orders'],
+  ['conversions_value', 'Conversions ₹'],
+];
+
+function PerformanceCard({ e, canEdit, session, onSaved }) {
+  const { showToast: toast } = useToast();
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState({});
+  const [busy, setBusy] = useState(false);
+
+  function startEdit() {
+    const f = {};
+    for (const [k] of METRIC_FIELDS) f[k] = e[k] ?? '';
+    setForm(f); setEditing(true);
+  }
+  async function save() {
+    setBusy(true);
+    try {
+      const patch = { engagement_id: e.id };
+      for (const [k] of METRIC_FIELDS) patch[k] = form[k] === '' ? null : Number(form[k]);
+      await ignitionopsPost('updateEngagement', patch, session);
+      toast('Performance updated', 'success');
+      setEditing(false);
+      onSaved?.();
+    } catch (err) { toast(err.message, 'error'); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <section style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <h2 style={{ fontSize: 12, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Performance</h2>
+        {canEdit && !editing && (
+          <button onClick={startEdit} style={{ padding: '4px 10px', background: 'var(--surface-3)', color: 'var(--text-1)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer' }}>Edit</button>
+        )}
+      </div>
+      {editing ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {METRIC_FIELDS.map(([k, label]) => (
+            <div key={k} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span style={{ width: 130, color: 'var(--text-3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</span>
+              <input type="number" value={form[k]} onChange={ev => setForm(f => ({ ...f, [k]: ev.target.value }))}
+                style={{ flex: 1, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 8px', fontFamily: 'var(--font-mono)', fontSize: 13 }} />
+            </div>
+          ))}
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
+            <button onClick={() => setEditing(false)} style={{ padding: '6px 12px', background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, cursor: 'pointer' }}>Cancel</button>
+            <button onClick={save} disabled={busy} style={{ padding: '6px 12px', background: '#FF6B00', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }}>{busy ? 'Saving…' : 'Save'}</button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <KV label="Views" value={(e.views || 0).toLocaleString()} />
+          <KV label="Likes" value={(e.likes || 0).toLocaleString()} />
+          <KV label="Comments" value={(e.comments || 0).toLocaleString()} />
+          <KV label="Shares" value={(e.shares || 0).toLocaleString()} />
+          <KV label="Impressions" value={(e.impressions || 0).toLocaleString()} />
+          <KV label="Sessions" value={(e.sessions || 0).toLocaleString()} />
+          <KV label="Orders" value={(e.orders || 0).toLocaleString()} />
+          <KV label="Conversions ₹" value={`₹${Number(e.conversions_value || 0).toLocaleString()}`} />
+          {e.actual_roas != null && <KV label="Actual ROAS" value={Number(e.actual_roas).toFixed(2)} />}
+        </>
+      )}
+    </section>
   );
 }
 

@@ -15,10 +15,16 @@ export function NewInfluencerModal({ open, onClose, session, onCreated }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const [form, setForm] = useState({
-    channel_name: '', channel_platform: 'instagram', influencer_type: 'micro',
-    reach: '', contact_number: '', email: '', channel_link: '', location: '',
+    channel_name: '', channel_platforms: ['instagram'], influencer_type: 'micro',
+    reach: '', follower_count: '', contact_number: '', email: '', channel_link: '', location: '',
   });
   const setField = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const togglePlatform = (p) => setForm(f => ({
+    ...f,
+    channel_platforms: f.channel_platforms.includes(p)
+      ? f.channel_platforms.filter(x => x !== p)
+      : [...f.channel_platforms, p],
+  }));
 
   async function submit() {
     if (!form.channel_name.trim()) { setErr('Channel / handle name is required'); return; }
@@ -26,6 +32,8 @@ export function NewInfluencerModal({ open, onClose, session, onCreated }) {
     try {
       const payload = { ...form, channel_name: form.channel_name.trim(), list_status: 'master' };
       payload.reach = form.reach === '' ? null : Number(form.reach);
+      payload.follower_count = form.follower_count === '' ? null : Number(form.follower_count);
+      // worker derives the legacy single channel_platform from channel_platforms[0]
       const row = await ignitionopsPost('createInfluencer', payload, session);
       toast(`Added ${row.influencer_code}`, 'success');
       onClose?.();
@@ -42,10 +50,22 @@ export function NewInfluencerModal({ open, onClose, session, onCreated }) {
         <Field label="Channel / handle *" full>
           <input autoFocus value={form.channel_name} onChange={e => setField('channel_name', e.target.value)} placeholder="e.g. aki_d_hotpistonz" style={inp} />
         </Field>
-        <Field label="Platform">
-          <select value={form.channel_platform} onChange={e => setField('channel_platform', e.target.value)} style={inp}>
-            {PLATFORMS.map(p => <option key={p} value={p}>{p}</option>)}
-          </select>
+        <Field label="Platforms" full>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {PLATFORMS.map(p => {
+              const on = form.channel_platforms.includes(p);
+              return (
+                <button type="button" key={p} onClick={() => togglePlatform(p)}
+                  style={{
+                    padding: '6px 12px', cursor: 'pointer',
+                    background: on ? 'rgba(255,107,0,0.12)' : 'var(--surface-2)',
+                    color: on ? '#FF6B00' : 'var(--text-2)',
+                    border: `1px solid ${on ? '#FF6B00' : 'var(--border)'}`,
+                    borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12,
+                  }}>{p}</button>
+              );
+            })}
+          </div>
         </Field>
         <Field label="Type">
           <select value={form.influencer_type} onChange={e => setField('influencer_type', e.target.value)} style={inp}>
@@ -54,6 +74,9 @@ export function NewInfluencerModal({ open, onClose, session, onCreated }) {
         </Field>
         <Field label="Reach">
           <input type="number" value={form.reach} onChange={e => setField('reach', e.target.value)} placeholder="e.g. 50000" style={inp} />
+        </Field>
+        <Field label="Follower count">
+          <input type="number" value={form.follower_count} onChange={e => setField('follower_count', e.target.value)} placeholder="e.g. 48000" style={inp} />
         </Field>
         <Field label="Location">
           <input value={form.location} onChange={e => setField('location', e.target.value)} placeholder="e.g. Karnataka" style={inp} />

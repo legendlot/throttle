@@ -16,7 +16,7 @@ export const STAGE_LABELS = {
   shipped:   'Shipped',
   delivered: 'Delivered',
   scheduled: 'Scheduled',
-  posting:   'Posting',
+  posting:   'Draft received',
   live:      'Live',
   completed: 'Completed',
   delayed:   'Delayed',
@@ -45,7 +45,8 @@ export function allowedTransitions(stage) {
   return STAGE_VALUES.filter(s => s !== stage);
 }
 
-/** Main happy-path order used by the StageStepper. */
+/** Main happy-path order used by the StageStepper. "Draft received" (posting)
+ *  sits before "Scheduled": influencer sends the draft → it's scheduled → goes live. */
 export const HAPPY_PATH = [
-  'planning','agreed','shipped','delivered','scheduled','posting','live','completed',
+  'planning','agreed','shipped','delivered','posting','scheduled','live','completed',
 ];

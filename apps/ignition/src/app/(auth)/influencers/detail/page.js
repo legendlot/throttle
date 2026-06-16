@@ -63,9 +63,11 @@ export default function InfluencerDetailPage() {
     const i = data.influencer;
     setForm({
       channel_name: i.channel_name || '', person_name: i.person_name || '',
-      channel_link: i.channel_link || '', channel_platform: i.channel_platform || '',
+      channel_link: i.channel_link || '',
+      channel_platforms: i.channel_platforms || (i.channel_platform ? [i.channel_platform] : []),
       influencer_type: i.influencer_type || '', categories: (i.categories || []).join(', '),
-      reach: i.reach ?? '', audience: i.audience || '', location: i.location || '',
+      reach: i.reach ?? '', follower_count: i.follower_count ?? '',
+      audience: i.audience || '', location: i.location || '',
       contact_poc_type: i.contact_poc_type || '', contact_poc_name: i.contact_poc_name || '',
       contact_number: i.contact_number || '', email: i.email || '', address: i.address || '',
     });
@@ -76,15 +78,17 @@ export default function InfluencerDetailPage() {
     setSaving(true);
     try {
       const rn = Number(form.reach);
+      const fc = Number(form.follower_count);
       const payload = {
         influencer_id: data.influencer.id,
         channel_name: form.channel_name.trim() || null,
         person_name: form.person_name.trim() || null,
         channel_link: form.channel_link.trim() || null,
-        channel_platform: form.channel_platform || null,
+        channel_platforms: form.channel_platforms,   // worker derives channel_platform from [0]
         influencer_type: form.influencer_type || null,
         categories: form.categories.split(',').map(s => s.trim()).filter(Boolean),
         reach: (form.reach === '' || isNaN(rn)) ? null : Math.round(rn),
+        follower_count: (form.follower_count === '' || isNaN(fc)) ? null : Math.round(fc),
         audience: form.audience.trim() || null,
         location: form.location.trim() || null,
         contact_poc_type: form.contact_poc_type || null,
@@ -146,20 +150,33 @@ export default function InfluencerDetailPage() {
                 <Field label="Name"><input style={editInput} value={form.channel_name} onChange={e => setF('channel_name', e.target.value)} placeholder="Channel name" /></Field>
                 <Field label="Person"><input style={editInput} value={form.person_name} onChange={e => setF('person_name', e.target.value)} /></Field>
                 <Field label="Channel link"><input style={editInput} value={form.channel_link} onChange={e => setF('channel_link', e.target.value)} /></Field>
-                <Field label="Platform"><select style={editInput} value={form.channel_platform} onChange={e => setF('channel_platform', e.target.value)}><option value="">—</option>{['instagram', 'youtube', 'tiktok', 'other'].map(o => <option key={o} value={o}>{o}</option>)}</select></Field>
+                <Field label="Platforms">
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {['instagram', 'youtube', 'facebook', 'twitter', 'tiktok', 'other'].map(o => {
+                      const on = (form.channel_platforms || []).includes(o);
+                      return (
+                        <button type="button" key={o}
+                          onClick={() => setF('channel_platforms', on ? form.channel_platforms.filter(x => x !== o) : [...(form.channel_platforms || []), o])}
+                          style={{ padding: '4px 10px', cursor: 'pointer', background: on ? 'rgba(255,107,0,0.12)' : 'var(--surface-2)', color: on ? '#FF6B00' : 'var(--text-2)', border: `1px solid ${on ? '#FF6B00' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>{o}</button>
+                      );
+                    })}
+                  </div>
+                </Field>
                 <Field label="Type"><select style={editInput} value={form.influencer_type} onChange={e => setF('influencer_type', e.target.value)}><option value="">—</option>{['nano', 'micro', 'macro', 'brand', 'store'].map(o => <option key={o} value={o}>{o}</option>)}</select></Field>
                 <Field label="Categories"><input style={editInput} value={form.categories} onChange={e => setF('categories', e.target.value)} placeholder="comma, separated" /></Field>
                 <Field label="Reach"><input style={editInput} type="number" value={form.reach} onChange={e => setF('reach', e.target.value)} /></Field>
+                <Field label="Follower count"><input style={editInput} type="number" value={form.follower_count} onChange={e => setF('follower_count', e.target.value)} /></Field>
                 <Field label="Audience"><input style={editInput} value={form.audience} onChange={e => setF('audience', e.target.value)} /></Field>
                 <Field label="Location"><input style={editInput} value={form.location} onChange={e => setF('location', e.target.value)} /></Field>
               </>
             ) : (
               <>
                 <KV label="Channel link" value={inf.channel_link ? <a href={inf.channel_link} target="_blank" rel="noreferrer" style={{ color: '#FF6B00' }}>{inf.channel_link}</a> : '—'} />
-                <KV label="Platform" value={inf.channel_platform || '—'} />
+                <KV label="Platforms" value={(inf.channel_platforms?.length ? inf.channel_platforms.join(', ') : inf.channel_platform) || '—'} />
                 <KV label="Type" value={inf.influencer_type || '—'} />
                 <KV label="Categories" value={(inf.categories || []).join(', ') || '—'} />
                 <KV label="Reach" value={inf.reach?.toLocaleString() || '—'} />
+                <KV label="Followers" value={inf.follower_count?.toLocaleString() || '—'} />
                 <KV label="Audience" value={inf.audience || '—'} />
                 <KV label="Location" value={inf.location || '—'} />
                 <KV label="Onboarded" value={

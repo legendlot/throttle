@@ -710,6 +710,8 @@ async function addPayment(body, auth, env) {
   if (!body.engagement_id) return err('engagement_id required', 400);
   const amount = Number(body.amount);
   if (!(amount >= 0)) return err('valid amount required', 400);
+  // Payment screenshot is mandatory (Reann #12).
+  if (!body.proof_path) return err('payment_proof_required', 400);
   const kind = PAYMENT_KINDS.includes(body.kind) ? body.kind : 'advance';
 
   const er = await sb(`/rest/v1/engagements?id=eq.${body.engagement_id}&select=influencer_id&limit=1`, env);
@@ -1090,8 +1092,8 @@ async function getInfluencerShopify(url, auth, env) {
 // ────────────────────────────────────────────────────────────────────────────
 
 const INFLUENCER_FIELDS = [
-  'channel_name','person_name','channel_link','channel_platform',
-  'influencer_type','categories','reach','audience','location',
+  'channel_name','person_name','channel_link','channel_platform','channel_platforms',
+  'influencer_type','categories','reach','follower_count','audience','location',
   'contact_number','address','email','contact_poc_type','contact_poc_name',
   'first_invite_sent_at','list_status','quality_rating','rating_notes',
   'onboarded','onboarded_at',
@@ -1101,7 +1103,7 @@ const ENGAGEMENT_FIELDS = [
   'engagement_type','campaign_id','product_code','product_variant',
   'deal_type','payment_terms','payment_amount','affiliate_pct','commission_amount',
   'ad_spend','goodies_cost','shipping_cost','return_cost','cpm',
-  'expected_post_date','post_date','video_link','utm_link',
+  'expected_post_date','post_date','delivered_date','video_link','utm_link',
   'utm_source','utm_medium','utm_campaign',
   'views','likes','comments','shares','impressions','sessions','orders',
   'conversions_value','roas_on_ad_spend','actual_roas','orders_cc',
@@ -1123,6 +1125,11 @@ async function createInfluencer(body, auth, env) {
   for (const k of INFLUENCER_FIELDS) {
     if (k in body) row[k] = body[k];
   }
+  // Keep the legacy single channel_platform synced to the first multi-platform
+  // entry so existing single-platform readers (cards/detail) keep working (#5).
+  if (Array.isArray(row.channel_platforms) && row.channel_platforms.length) {
+    row.channel_platform = row.channel_platforms[0];
+  }
   const r = await sb(`/rest/v1/influencers`, env, {
     method: 'POST',
     body: JSON.stringify([row]),
@@ -1138,6 +1145,10 @@ async function updateInfluencer(body, auth, env) {
   patch.updated_at = nowIso();
   // influencer_code is immutable: strip even if it sneaks in via patch.
   delete patch.influencer_code;
+  // Keep legacy single channel_platform synced to the multi-platform list (#5).
+  if (Array.isArray(patch.channel_platforms) && patch.channel_platforms.length) {
+    patch.channel_platform = patch.channel_platforms[0];
+  }
   if (Object.keys(patch).length === 1 /* only updated_at */) return err('no_patch', 400);
 
   const r = await sb(`/rest/v1/influencers?id=eq.${body.influencer_id}`, env, {
@@ -1197,13 +1208,20 @@ async function advanceStage(body, auth, env) {
   if (!body.to_stage) return err('to_stage required', 400);
 
   const cur = await sb(
-    `/rest/v1/engagements?id=eq.${body.engagement_id}&select=stage&limit=1`, env,
+    `/rest/v1/engagements?id=eq.${body.engagement_id}&select=stage,video_link&limit=1`, env,
   );
   if (!cur.ok || !cur.data?.[0]) return err('not_found', 404);
   const from = cur.data[0].stage;
   const allowed = allowedTransitions(from);
   if (!allowed.includes(body.to_stage)) {
     return err(`illegal_transition: ${from} → ${body.to_stage}`, 422);
+  }
+
+  // Going live requires a video link (Reann #4) — accepted inline or already set.
+  if (body.to_stage === 'live') {
+    const incomingLink = (body.video_link != null ? String(body.video_link) : '').trim();
+    const existingLink = (cur.data[0].video_link || '').trim();
+    if (!incomingLink && !existingLink) return err('video_link_required_for_live', 422);
   }
 
   const patch = { stage: body.to_stage, updated_at: nowIso() };
