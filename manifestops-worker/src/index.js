@@ -909,9 +909,15 @@ export default {
             const invDate = d.invoice_date || todayISO();
             const fx = await fxForDate(invDate) || 0;
             const gstBy = d.gst_by_line || {};
+            // header-fallback: lines with no per-unit ¥ (lump/historical orders) bill the order's
+            // stored INR base, split across such lines — so a lump order is still closeable.
+            const orderBase = Number(o.base_inr) || ((Number(o.purchase_inr) || 0) + (Number(o.shipping_inr) || 0) + (Number(o.customs_inr) || 0));
+            const zeroValLines = billable.filter((l) => !(Number(l.qty || 0) * Number(l.unit_price_rmb || 0) * fx));
+            const fallbackEach = zeroValLines.length ? +(orderBase / zeroValLines.length).toFixed(2) : 0;
             let goodsInr = 0, gstInr = 0; const stamped = [];
             for (const l of billable) {
-              const lineInr = +(Number(l.qty || 0) * Number(l.unit_price_rmb || 0) * fx).toFixed(2);
+              let lineInr = +(Number(l.qty || 0) * Number(l.unit_price_rmb || 0) * fx).toFixed(2);
+              if (!lineInr) lineInr = fallbackEach;
               const gstPct = gstBy[l.id] != null ? Number(gstBy[l.id]) : (l.gst_percent != null ? Number(l.gst_percent) : 18);
               goodsInr += lineInr; gstInr += +(lineInr * gstPct / 100).toFixed(2);
               stamped.push({ id: l.id, gstPct });
