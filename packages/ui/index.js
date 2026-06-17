@@ -24,4 +24,5 @@ export { Chip } from './Chip.js';
 export { StatusBadge } from './StatusBadge.js';
 export { ProgressBar } from './ProgressBar.js';
 export { ProductTag } from './ProductTag.js';
+export { AppLauncher } from './AppLauncher.js';
 export { useEscapeClose, useSearchShortcut, useListNav } from './hooks.js';

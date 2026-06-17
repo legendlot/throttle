@@ -3,6 +3,7 @@
 // Single source of the page name (screens no longer repeat it), a context label
 // and a count pill on board views, plus the "?" shortcuts button and Live dot.
 import { PanelLeft, Lock } from 'lucide-react';
+import { AppLauncher } from '@throttle/ui';
 
 export function DocketTopbar({ title, context, count, isSpace, onToggleSidebar, onHelp }) {
   return (
@@ -17,6 +18,7 @@ export function DocketTopbar({ title, context, count, isSpace, onToggleSidebar, 
       <div className="tb-spacer" />
       <button className="kbd-btn" title="Keyboard shortcuts  ( ? )" onClick={onHelp}>?</button>
       <span className="tb-live"><span className="pulse" />Live</span>
+      <AppLauncher current="docket" />
     </div>
   );
 }

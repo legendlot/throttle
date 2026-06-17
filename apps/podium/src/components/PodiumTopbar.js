@@ -3,6 +3,7 @@
 // Podium ONLY. Left = group eyebrow + screen title (Tomorrow uppercase);
 // right = "Updated h:mm" with a pulsing green live dot + the user avatar.
 import { Avatar } from './ui.js';
+import { AppLauncher } from '@throttle/ui';
 
 function fmtTime(d) {
   try { return new Date(d).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true }); }
@@ -25,6 +26,7 @@ export function PodiumTopbar({ crumb, title, lastRefreshed, userLabel }) {
         <span className="num">{lastRefreshed ? `Updated ${fmtTime(lastRefreshed)}` : 'Live'}</span>
       </div>
       <Avatar name={userLabel || '?'} size={32} radius={8} />
+      <AppLauncher current="podium" />
     </div>
   );
 }

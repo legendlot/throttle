@@ -5,6 +5,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Icon } from './Icon';
 import { MANUAL, TASKS, taskTag } from '@/lib/throttleData';
+import { AppLauncher } from '@throttle/ui';
 
 export const ROUTE_OF = {
   dashboard: '/dashboard', requests: '/requests', board: '/board',
@@ -171,6 +172,8 @@ export function Topbar({ route, onPalette, sprint }) {
         fontWeight: 700, letterSpacing: '0.14em', color: 'var(--ok-fg)', textTransform: 'uppercase' }}>
         <span className="t-pulse" style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--ok-fg)' }} />Live
       </span>
+
+      <AppLauncher current="throttle" />
     </header>
   );
 }

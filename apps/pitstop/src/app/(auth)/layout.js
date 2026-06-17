@@ -2,7 +2,7 @@
 import { createContext, useContext, useMemo, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { RequireAuth, useAuth } from '@throttle/auth';
-import { Sidebar, Spinner, Topbar, useSearchShortcut } from '@throttle/ui';
+import { Sidebar, Spinner, Topbar, useSearchShortcut, AppLauncher } from '@throttle/ui';
 import { NAV_GROUPS, filterNavByPerms } from '../../lib/nav.js';
 import { PitstopIcon } from '../../components/PitstopIcon.js';
 import DeptSwitcher from '../../components/DeptSwitcher.js';
@@ -83,6 +83,7 @@ function AuthLayoutInner({ children }) {
           refreshing={refreshing}
           lastRefreshed={lastRefreshed}
         >
+          <AppLauncher current="pitstop" />
           <DeptSwitcher />
         </Topbar>
         <main style={{ flex:1, overflowY:'auto', padding:'16px 24px' }}>

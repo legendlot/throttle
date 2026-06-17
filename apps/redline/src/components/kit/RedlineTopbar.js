@@ -6,6 +6,7 @@
    config; updated time comes from the page RefreshContext.
    ════════════════════════════════════════════════════════════ */
 import { usePathname } from 'next/navigation';
+import { AppLauncher } from '@throttle/ui';
 import { resolveNav } from '../../lib/nav.js';
 
 function fmtTime(d) {
@@ -42,6 +43,7 @@ export function RedlineTopbar({ refreshing = false, lastRefreshed = null, right 
             background: refreshing ? 'var(--amber)' : 'var(--green)' }} />
           <span className="label" style={{ fontSize: 10, color: 'var(--t2)' }}>{refreshing ? 'Sync' : 'Live'}</span>
         </span>
+        <AppLauncher current="redline" />
       </div>
     </header>
   );

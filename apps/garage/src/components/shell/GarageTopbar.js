@@ -1,5 +1,6 @@
 'use client';
 import { Search, Pin, RefreshCw, ChevronRight } from 'lucide-react';
+import { AppLauncher } from '@throttle/ui';
 import { groupLabelForRoute, titleForRoute, matchRoute } from '../../lib/nav.js';
 
 // ════════════════════════════════════════════════════════════════════
@@ -60,6 +61,8 @@ export function GarageTopbar({ nav, pathname, onOpenPalette, pins, onTogglePin, 
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font-display)', fontSize: 10, fontWeight: 600, letterSpacing: '0.12em', color: 'var(--ok-fg)', textTransform: 'uppercase' }}>
         <span className="g-pulse" style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--ok-fg)' }} />Live
       </span>
+
+      <AppLauncher current="garage" />
     </header>
   );
 }

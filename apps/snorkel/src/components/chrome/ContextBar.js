@@ -2,6 +2,7 @@
 // Slim top strip: area breadcrumb + segmented sub-tabs + LIVE dot.
 // The page title lives in each page (PageHead), not here.
 import { matchActive } from './navMatch.js';
+import { AppLauncher } from '@throttle/ui';
 
 export function ContextBar({ groups, pathname, onNav }) {
   const match = matchActive(groups, pathname);
@@ -30,7 +31,10 @@ export function ContextBar({ groups, pathname, onNav }) {
           </div>
         )}
       </div>
-      <span className="tb-live"><span className="tb-dot" />LIVE</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexShrink: 0 }}>
+        <span className="tb-live"><span className="tb-dot" />LIVE</span>
+        <AppLauncher current="snorkel" />
+      </div>
     </div>
   );
 }
