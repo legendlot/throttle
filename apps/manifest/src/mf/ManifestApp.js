@@ -45,7 +45,7 @@ export default function ManifestApp() {
   useEffect(() => { reload(); }, [reload]);
 
   const persist = (k, v) => { try { window.localStorage.setItem(k, v); } catch {} };
-  const nav = (s, arg) => { setDrill(null); if (s === 'orderDetail' && arg != null) setDetailId(arg); setScreen(s); persist('mf_screen', s); };
+  const nav = (s, arg) => { setDrill(null); if ((s === 'orderDetail' || s === 'shipmentDetail') && arg != null) setDetailId(arg); setScreen(s); persist('mf_screen', s); };
   const toggle = () => setCollapsed((c) => { persist('mf_sb', c ? '0' : '1'); return !c; });
   const chooseAccent = (c) => { setAccent(c); persist('mf_accent', c); };
   const chooseDensity = (d) => { setDensity(d); persist('mf_density', d); };

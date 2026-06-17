@@ -745,20 +745,172 @@ function OrderDetail({ detailId, session, onNav, reload, data }) {
 }
 
 // ════════════════════════════════════════════════════════════════
-function Shipments({ data }) {
+const SHIP_PIPE = ['planned', 'loaded', 'sailing', 'docked', 'cleared', 'local_transport', 'received'];
+function Shipments({ data, onNav, session, reload }) {
+  const [forwarders, setForwarders] = useState([]);
+  const [show, setShow] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const blank = { mode: 'sea', forwarder_code: '', container_type: '', container_no: '', bl_awb_no: '', anchor_date: '' };
+  const [f, setF] = useState(blank);
+  useEffect(() => { garageFetch('getForwarders', {}, session).then(setForwarders).catch(() => setForwarders([])); /* eslint-disable-next-line */ }, [session]);
+  const fwdOpts = ['', ...forwarders.filter((x) => (x.modes_supported || []).map((m) => String(m).toLowerCase()).includes(f.mode)).map((x) => x.forwarder_code)];
+  const create = async () => {
+    if (busy) return; setBusy(true);
+    try {
+      const fwd = forwarders.find((x) => x.forwarder_code === f.forwarder_code);
+      const sh = await act('createShipment', { mode: f.mode, forwarder_code: f.forwarder_code || null, forwarder_name: fwd ? fwd.company_name : null, container_type: f.container_type || null, container_no: f.container_no || null, bl_awb_no: f.bl_awb_no || null, anchor_date: f.anchor_date || null }, session);
+      setF(blank); setShow(false); reload && reload();
+      if (sh && sh.id) onNav('shipmentDetail', sh.id);
+    } catch (e) { alert(e?.message || 'Create failed'); } finally { setBusy(false); }
+  };
+  const blAwbLbl = f.mode === 'air' ? 'Air Waybill (AWB)' : 'Bill of Lading (BL)';
   return (
-    <Card>
-      {data.shipments.length ? (
-        <Table rows={data.shipments} rowKey={(r) => r.no} cols={[
-          { label: 'Shipment', render: (r) => <Mono color="var(--t1)" weight={600}>{r.no}</Mono> },
-          { label: 'Mode', render: (r) => <span style={{ color: 'var(--t2)' }}>{r.mode}</span> },
-          { label: 'BL · AWB', render: (r) => <Mono size={11} color="var(--t3)">{r.blAwb}</Mono> },
-          { label: 'Order', render: (r) => <Mono size={11} color="var(--t3)">{r.order}</Mono> },
-          { label: 'ETA', align: 'right', render: (r) => <Mono size={11} color="var(--t3)">{r.eta}</Mono> },
-          { label: 'Status', render: (r) => <Badge tone={D.shipTone(r.status)}>{D.label(r.status)}</Badge> },
-        ]} />
-      ) : <Empty>No shipments yet</Empty>}
-    </Card>
+    <Stack>
+      {show && (
+        <Card title="New shipment" bodyPad="18px 20px 20px" action={<Btn variant="secondary" style={{ padding: '6px 12px', fontSize: 11 }} onClick={() => setShow(false)}>Cancel</Btn>}>
+          <Grid cols="repeat(3,1fr)">
+            <Field label="Mode"><Select value={f.mode} onChange={(e) => setF((x) => ({ ...x, mode: e.target.value, forwarder_code: '' }))} options={['sea', 'air']} /></Field>
+            <Field label="Carrier / forwarder"><Select value={f.forwarder_code} onChange={(e) => setF((x) => ({ ...x, forwarder_code: e.target.value }))} options={fwdOpts} /></Field>
+            <Field label="Anchor date (pre-fills ETAs)"><Input type="date" value={f.anchor_date} onChange={(e) => setF((x) => ({ ...x, anchor_date: e.target.value }))} /></Field>
+            <Field label="Container type"><Input value={f.container_type} onChange={(e) => setF((x) => ({ ...x, container_type: e.target.value }))} placeholder={f.mode === 'air' ? 'ULD / loose' : 'FCL / LCL / 40ft'} /></Field>
+            <Field label="Container no."><Input value={f.container_no} onChange={(e) => setF((x) => ({ ...x, container_no: e.target.value }))} /></Field>
+            <Field label={blAwbLbl}><Input value={f.bl_awb_no} onChange={(e) => setF((x) => ({ ...x, bl_awb_no: e.target.value }))} /></Field>
+          </Grid>
+          <Mono size={10} color="var(--t3)" style={{ display: 'block', marginTop: 10 }}>No carrier listed? Add it in Admin → Logistics partners. Expected dates pre-fill from the {f.mode} timeline defaults — editable after.</Mono>
+          <Btn onClick={create} style={{ marginTop: 14 }}>{busy ? 'Creating…' : 'Create shipment'}</Btn>
+        </Card>
+      )}
+      <Card title="Shipments" action={<Btn variant="secondary" style={{ padding: '7px 12px', fontSize: 11 }} onClick={() => setShow((v) => !v)}><Plus size={13} style={{ marginRight: 5, verticalAlign: -2 }} />New shipment</Btn>}>
+        {data.shipments.length ? (
+          <Table onRowClick={(r) => onNav('shipmentDetail', r.id)} rows={data.shipments} rowKey={(r) => r.no} cols={[
+            { label: 'Shipment', render: (r) => <Mono color="var(--t1)" weight={600}>{r.no}</Mono> },
+            { label: 'Mode', render: (r) => <Badge tone={r.mode === 'air' ? 'blue' : 'gray'}>{r.mode}</Badge> },
+            { label: 'BL · AWB', render: (r) => <Mono size={11} color="var(--t3)">{r.blAwb}</Mono> },
+            { label: 'Order', render: (r) => <Mono size={11} color="var(--t3)">{r.order}</Mono> },
+            { label: 'ETA', align: 'right', render: (r) => <Mono size={11} color="var(--t3)">{r.eta}</Mono> },
+            { label: 'Status', render: (r) => <Badge tone={D.shipTone(r.status)}>{D.label(r.status)}</Badge> },
+          ]} />
+        ) : <Empty>No shipments yet — create one above.</Empty>}
+      </Card>
+    </Stack>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+function ShipmentDetail({ detailId, session, onNav, reload, data }) {
+  const [resp, setResp] = useState(null);
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [edit, setEdit] = useState(false);
+  const [form, setForm] = useState(null);
+  const [forwarders, setForwarders] = useState([]);
+  const [attach, setAttach] = useState('');
+  const load = () => { if (!detailId) { setErr('No shipment selected'); return; } garageFetch('getShipment', { id: detailId }, session).then((d) => { setResp(d); setErr(''); }).catch((e) => setErr(e?.message || 'Load failed')); };
+  useEffect(() => { setResp(null); setEdit(false); load(); /* eslint-disable-next-line */ }, [detailId, session]);
+  useEffect(() => { garageFetch('getForwarders', {}, session).then(setForwarders).catch(() => setForwarders([])); /* eslint-disable-next-line */ }, [session]);
+  const run = async (fn) => { if (busy) return; setBusy(true); try { await fn(); load(); reload && reload(); } catch (e) { alert(e?.message || 'Action failed'); } finally { setBusy(false); } };
+  if (err) return <div><BackChip onClick={() => onNav('shipments')}>Shipments</BackChip><Empty>{err}</Empty></div>;
+  if (!resp) return <div><BackChip onClick={() => onNav('shipments')}>Shipments</BackChip><Empty>Loading…</Empty></div>;
+  const s = resp.shipment;
+  const labels = resp.stageLabels || {};
+  const lbl = (st) => st === 'planned' ? 'Planned' : (labels[st] || D.label(st));
+  const idx = SHIP_PIPE.indexOf(s.status);
+  const nextStage = idx >= 0 && idx < SHIP_PIPE.length - 1 ? SHIP_PIPE[idx + 1] : null;
+  const departed = ['sailing', 'docked', 'cleared', 'local_transport', 'received'].includes(s.status);
+  const fwdOpts = ['', ...forwarders.filter((x) => (x.modes_supported || []).map((m) => String(m).toLowerCase()).includes(s.mode)).map((x) => x.forwarder_code)];
+  const attachable = (data?.orders || []).filter((o) => ['confirmed', 'produced', 'picked_up'].includes(o.status));
+  const startEdit = () => { setForm({ mode: s.mode, forwarder_code: s.forwarder_code || '', container_type: s.container_type || '', container_no: s.container_no || '', bl_awb_no: s.bl_awb_no || '', etd: s.etd || '', eta: s.eta || '', loading_date: s.loading_date || '', port_arrival_date: s.port_arrival_date || '', clearance_date: s.clearance_date || '', local_dispatch_date: s.local_dispatch_date || '', warehouse_delivery_date: s.warehouse_delivery_date || '' }); setEdit(true); };
+  const saveEdit = () => run(async () => { const fwd = forwarders.find((x) => x.forwarder_code === form.forwarder_code); await act('updateShipment', { id: s.id, ...form, forwarder_name: fwd ? fwd.company_name : null }, session); setEdit(false); });
+  const attachOrder = () => { const o = attachable.find((x) => x.no === attach); if (!o) return; run(async () => { const od = await garageFetch('getOrder', { id: o.id }, session); const items = (od.lines || []).map((l) => ({ order_line_id: l.id, qty: Number(l.qty) || 0 })); if (items.length) await act('allocateItemsToShipment', { shipment_id: s.id, items }, session); }); setAttach(''); };
+  const dateFields = [['etd', 'ETD'], ['eta', 'ETA'], ['loading_date', 'Loaded'], ['port_arrival_date', 'Arrived'], ['clearance_date', 'Cleared'], ['local_dispatch_date', 'Local dispatch'], ['warehouse_delivery_date', 'Delivered']];
+
+  return (
+    <div>
+      <BackChip onClick={() => onNav('shipments')}>Shipments</BackChip>
+      <Card bodyPad="20px 24px 22px" style={{ marginBottom: gap }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 14, marginBottom: 18 }}>
+          <div>
+            <div style={{ fontFamily: DISP, fontWeight: 700, fontSize: 24, color: 'var(--t1)' }}>{s.shipment_no}</div>
+            <div style={{ fontSize: 12.5, color: 'var(--t2)', marginTop: 4 }}>{resp.blAwbLabel}: {s.bl_awb_no || '—'} · {s.forwarder_name || 'no carrier'}{s.container_no ? ` · ${s.container_no}` : ''}</div>
+            <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
+              <Badge tone={s.mode === 'air' ? 'blue' : 'gray'}>{s.mode}</Badge>
+              <Badge tone={D.shipTone(s.status)}>{lbl(s.status)}</Badge>
+              {departed && <Mono size={9.5} color="var(--t3)" style={{ letterSpacing: '.1em' }}>CONTENTS LOCKED</Mono>}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {nextStage && <Btn onClick={() => run(() => act('advanceShipmentStage', { shipment_id: s.id, stage: nextStage }, session))}>Advance → {lbl(nextStage)}</Btn>}
+            {edit ? <span style={{ display: 'flex', gap: 8 }}><Btn variant="secondary" style={{ padding: '8px 14px' }} onClick={() => setEdit(false)}>Cancel</Btn><Btn onClick={saveEdit}>Save</Btn></span>
+                  : <Btn variant="secondary" onClick={startEdit}>Edit</Btn>}
+          </div>
+        </div>
+        {/* stage strip */}
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {SHIP_PIPE.map((st, i) => (
+            <span key={st} style={{ padding: '5px 10px', borderRadius: 7, fontFamily: MONO, fontSize: 10,
+              background: i <= idx ? 'color-mix(in srgb, var(--accent) 16%, transparent)' : 'var(--surface2)',
+              border: '1px solid ' + (i <= idx ? 'color-mix(in srgb, var(--accent) 30%, transparent)' : 'var(--border)'),
+              color: i <= idx ? 'var(--accent)' : 'var(--t3)' }}>{lbl(st)}</span>
+          ))}
+        </div>
+      </Card>
+
+      <Grid cols="1.5fr 1fr" style={{ alignItems: 'start' }}>
+        <Stack>
+          {edit && (
+            <Card title="Edit shipment" bodyPad="18px 20px 20px">
+              <Grid cols="repeat(2,1fr)">
+                <Field label="Mode"><Select value={form.mode} onChange={(e) => setForm((x) => ({ ...x, mode: e.target.value }))} options={['sea', 'air']} /></Field>
+                <Field label="Carrier"><Select value={form.forwarder_code} onChange={(e) => setForm((x) => ({ ...x, forwarder_code: e.target.value }))} options={fwdOpts} /></Field>
+                <Field label="Container type"><Input value={form.container_type} onChange={(e) => setForm((x) => ({ ...x, container_type: e.target.value }))} /></Field>
+                <Field label="Container no."><Input value={form.container_no} onChange={(e) => setForm((x) => ({ ...x, container_no: e.target.value }))} /></Field>
+                <div style={{ gridColumn: '1 / -1' }}><Field label={resp.blAwbLabel}><Input value={form.bl_awb_no} onChange={(e) => setForm((x) => ({ ...x, bl_awb_no: e.target.value }))} /></Field></div>
+              </Grid>
+              <Eyebrow style={{ margin: '14px 0 8px' }}>Expected dates (revisions are logged)</Eyebrow>
+              <Grid cols="repeat(3,1fr)">
+                {dateFields.map(([k, l]) => <Field key={k} label={l}><Input type="date" value={form[k]} onChange={(e) => setForm((x) => ({ ...x, [k]: e.target.value }))} /></Field>)}
+              </Grid>
+            </Card>
+          )}
+          <Card title={`Allocated items · ${resp.lines.length}`} action={!departed ? (
+            <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <Select value={attach} onChange={(e) => setAttach(e.target.value)} options={['', ...attachable.map((o) => o.no)]} style={{ width: 150, padding: '6px 9px', fontSize: 11 }} />
+              <Btn variant="secondary" style={{ padding: '6px 12px', fontSize: 11 }} onClick={attachOrder}>Add order</Btn>
+            </span>) : <Mono size={10} color="var(--t3)">locked — departed</Mono>}>
+            {resp.lines.length ? (
+              <Table rows={resp.lines} rowKey={(r) => r.id} cols={[
+                { label: 'Order', render: (r) => <Mono size={11} color="var(--t3)">{r.order_lines?.orders?.order_no || '—'}</Mono> },
+                { label: 'Product', render: (r) => <span style={{ color: 'var(--t1)' }}>{r.order_lines?.product || r.order_lines?.description || '—'}</span> },
+                { label: 'Vendor code', render: (r) => <Mono size={11} color="var(--t3)">{r.order_lines?.vendor_item_code || '—'}</Mono> },
+                { label: 'Qty', align: 'right', render: (r) => <Mono>{Number(r.qty_in_shipment || 0).toLocaleString('en-US')}</Mono> },
+              ]} />
+            ) : <Empty>No items allocated — add an order above.</Empty>}
+          </Card>
+        </Stack>
+        <Stack>
+          <Card title="Logistics costs & last-mile" bodyPad="16px 20px 18px">
+            <Mono size={11} color="var(--t3)" style={{ display: 'block', marginBottom: 6 }}>Record shipping / customs / fees (deducts the pool), and the last-mile partner + vehicle for the store team.</Mono>
+            <LegCosts leg={{ shipment_id: s.id, last_mile_forwarder_code: s.last_mile_forwarder_code, last_mile_vehicle_no: s.last_mile_vehicle_no }} forwarders={forwarders} run={run} session={session} />
+            {(s.last_mile_forwarder_name || s.last_mile_vehicle_no) && (
+              <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid color-mix(in srgb, var(--border) 55%, transparent)' }}>
+                <Eyebrow style={{ marginBottom: 6 }}>Last-mile</Eyebrow>
+                <Mono size={12} color="var(--t1)">{s.last_mile_forwarder_name || s.last_mile_forwarder_code || '—'}{s.last_mile_vehicle_no ? ` · ${s.last_mile_vehicle_no}` : ''}</Mono>
+              </div>
+            )}
+          </Card>
+          {(resp.events || []).length > 0 && (
+            <Card title="Timeline" bodyPad="12px 20px 16px">
+              {resp.events.map((e, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: '7px 0', borderBottom: i < resp.events.length - 1 ? '1px solid color-mix(in srgb, var(--border) 55%, transparent)' : 'none' }}>
+                  <span style={{ fontSize: 12, color: 'var(--t2)' }}>{D.label(e.stage)}{e.note ? <Mono size={10} color="var(--t3)"> · {String(e.note).slice(0, 40)}</Mono> : ''}</span>
+                  <Mono size={10} color="var(--t3)">{fmtDay(e.occurred_at)}</Mono>
+                </div>
+              ))}
+            </Card>
+          )}
+        </Stack>
+      </Grid>
+    </div>
   );
 }
 
@@ -1163,6 +1315,6 @@ function NewDrawdown({ data, onNav, session, reload }) {
 
 export const SCREENS = {
   dashboard: Dashboard, recon: Recon, orders: Orders, orderDetail: OrderDetail,
-  shipments: Shipments, drawdowns: Drawdowns, payments: Payments, fx: Fx,
+  shipments: Shipments, shipmentDetail: ShipmentDetail, drawdowns: Drawdowns, payments: Payments, fx: Fx,
   documents: Documents, admin: Admin, newOrder: NewOrder, newDrawdown: NewDrawdown,
 };

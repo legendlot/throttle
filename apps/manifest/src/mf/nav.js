@@ -23,6 +23,7 @@ export const NAV = [
 export function activeNav(screen) {
   if (screen === 'orderDetail' || screen === 'newOrder') return 'orders';
   if (screen === 'newDrawdown') return 'drawdowns';
+  if (screen === 'shipmentDetail') return 'shipments';
   return screen;
 }
 
@@ -34,6 +35,7 @@ export const CRUMB = {
   recon:       { eyebrow: 'FINANCE',  title: 'Running Account' },
   drawdowns:   { eyebrow: 'FINANCE',  title: 'Draw-downs' },
   shipments:   { eyebrow: 'ORDERS',   title: 'Shipments' },
+  shipmentDetail: { eyebrow: 'ORDERS', title: 'Shipment' },
   payments:    { eyebrow: 'FINANCE',  title: 'Payments → Solve Factory' },
   fx:          { eyebrow: 'FINANCE',  title: 'Exchange Rates' },
   documents:   { eyebrow: 'WORKSPACE', title: 'Documents' },
