@@ -27,9 +27,8 @@ export function Sidebar({ collapsed, onToggle, screen, onNav, badges = {}, fx, m
         ) : (
           <>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-              <div style={{ width: 30, height: 30, borderRadius: 8, background: 'var(--accent)', flexShrink: 0,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontFamily: DISP, fontWeight: 700, fontSize: 16, color: 'var(--accent-fg)' }}>M</div>
+              <img src="/favicon.svg" alt="Manifest" width={30} height={30}
+                style={{ borderRadius: 8, flexShrink: 0, display: 'block' }} />
               <div style={{ minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                   <span style={{ fontFamily: MONO, fontWeight: 700, fontSize: 13, letterSpacing: '.07em', color: 'var(--t1)' }}>MANIFEST</span>
