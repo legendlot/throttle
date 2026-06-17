@@ -431,6 +431,123 @@ function Orders({ data, onNav }) {
   );
 }
 
+// invoice & close — line selection + per-line GST + optional commission (payment-driven: only commission hits pool)
+function InvoiceCard({ order, lines, suggestedInvoiceNo, fx, run, session }) {
+  const billable = (lines || []).filter((l) => !l.invoice_no);
+  const billed = (lines || []).filter((l) => l.invoice_no);
+  const [sel, setSel] = useState(() => Object.fromEntries(billable.map((l) => [l.id, true])));
+  const [gst, setGst] = useState(() => Object.fromEntries(billable.map((l) => [l.id, l.gst_percent ?? 18])));
+  const [comm, setComm] = useState(false);
+  const rate = Number(fx) || 0;
+  const chosen = billable.filter((l) => sel[l.id]);
+  let goods = 0, gstTotal = 0;
+  chosen.forEach((l) => { const v = (Number(l.qty) || 0) * (Number(l.unit_price_rmb) || 0) * rate; goods += v; gstTotal += v * (Number(gst[l.id]) || 0) / 100; });
+  const sub = goods + gstTotal, commission = comm ? sub * 0.025 : 0, total = sub + commission;
+  const submit = () => { if (!chosen.length) return; run(() => act('invoiceOrder', { order_id: order.id, line_ids: chosen.map((l) => l.id), gst_by_line: Object.fromEntries(chosen.map((l) => [l.id, Number(gst[l.id]) || 0])), include_commission: comm }, session)); };
+  return (
+    <Card title="Invoice & close" bodyPad="16px 20px 18px">
+      <Eyebrow style={{ marginBottom: 7 }}>SF invoice number · auto-assigned</Eyebrow>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '9px 12px', borderRadius: 8, background: 'var(--surface2)', border: '1px solid var(--border)', marginBottom: 12 }}>
+        <Mono color="var(--t1)" weight={600} size={13}>{suggestedInvoiceNo || 'VWINV-…'}</Mono>
+        <Mono size={9} color="var(--t3)" style={{ letterSpacing: '.1em' }}>NEXT IN SERIES</Mono>
+      </div>
+      {billed.length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          <Eyebrow style={{ marginBottom: 6 }}>Already billed</Eyebrow>
+          {billed.map((l) => <div key={l.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 12 }}><span style={{ color: 'var(--t2)' }}>{l.product || `Line ${l.line_no}`}</span><Mono size={11} color="var(--green)">{l.invoice_no}</Mono></div>)}
+        </div>
+      )}
+      {billable.length ? <>
+        <Eyebrow style={{ marginBottom: 6 }}>Goods lines to bill</Eyebrow>
+        {billable.map((l) => (
+          <div key={l.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', borderBottom: '1px solid color-mix(in srgb, var(--border) 55%, transparent)' }}>
+            <input type="checkbox" checked={!!sel[l.id]} onChange={(e) => setSel((s) => ({ ...s, [l.id]: e.target.checked }))} />
+            <span style={{ flex: 1, color: 'var(--t2)', fontSize: 12 }}>{l.product || `Line ${l.line_no}`} <Mono size={10} color="var(--t3)">×{Number(l.qty) || 0}</Mono></span>
+            <Mono size={10} color="var(--t3)">GST%</Mono>
+            <Input value={gst[l.id]} onChange={(e) => setGst((g) => ({ ...g, [l.id]: e.target.value }))} style={{ width: 56, padding: '5px 7px', fontSize: 11 }} />
+          </div>
+        ))}
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, fontSize: 12, color: 'var(--t2)' }}>
+          <input type="checkbox" checked={comm} onChange={(e) => setComm(e.target.checked)} /> Add SF commission (2.5%)
+        </label>
+        <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 9, background: 'var(--surface2)', border: '1px solid var(--border)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}><span style={{ color: 'var(--t3)' }}>Goods</span><Mono color="var(--t1)">{D.inr(goods)}</Mono></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginTop: 4 }}><span style={{ color: 'var(--t3)' }}>GST</span><Mono color="var(--t1)">{D.inr(gstTotal)}</Mono></div>
+          {comm && <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginTop: 4 }}><span style={{ color: 'var(--t3)' }}>Commission 2.5%</span><Mono color="var(--t1)">{D.inr(commission)}</Mono></div>}
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 7, paddingTop: 7, borderTop: '1px solid var(--border)' }}><Mono size={10} color="var(--t3)" style={{ letterSpacing: '.08em' }}>INVOICE TOTAL</Mono><Mono color="var(--t1)" weight={700}>{D.inr(total)}</Mono></div>
+        </div>
+        <Mono size={9.5} color="var(--t3)" style={{ display: 'block', margin: '8px 0 10px' }}>Line value = ¥ × qty × FX ({rate || '—'}). Only commission hits the pool; GST is a document figure.</Mono>
+        <Btn onClick={submit} style={{ width: '100%' }}>{chosen.length === billable.length ? 'Invoice & close' : `Invoice ${chosen.length} line(s)`}</Btn>
+      </> : <Empty>All goods lines billed.</Empty>}
+    </Card>
+  );
+}
+
+// vendor payment (advance / pickup balance) — deducts the shared pool on record
+function VendorPayCard({ order, fx, run, session }) {
+  const [open, setOpen] = useState(false);
+  const [ptype, setPtype] = useState('advance');
+  const [rmb, setRmb] = useState('');
+  const [rate, setRate] = useState(fx || '');
+  const inr = (Number(rmb) || 0) * (Number(rate) || 0);
+  const submit = () => {
+    if (!(Number(rmb) > 0) || !(Number(rate) > 0)) { alert('Enter ¥ amount and bank rate'); return; }
+    setOpen(false);
+    run(async () => { const r = await act('recordVendorPayment', { order_id: order.id, payment_type: ptype, amount_rmb: Number(rmb), amount_inr_debited: Math.round(inr), vendor_name: order.vendor_name || null }, session); if (r?.shortfall > 0) alert(`Pool is now short by ${D.inr(r.shortfall)} — consider raising a draw-down.`); });
+    setRmb('');
+  };
+  return (
+    <Card title="Vendor payment" bodyPad="16px 20px 18px"
+      action={<Btn variant="secondary" style={{ padding: '6px 12px', fontSize: 11 }} onClick={() => setOpen((v) => !v)}>{open ? 'Close' : 'Record'}</Btn>}>
+      {open ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <Field label="Type"><Select value={ptype} onChange={(e) => setPtype(e.target.value)} options={['advance', 'pickup_balance', 'other']} /></Field>
+          <Field label="Amount (¥)"><Input value={rmb} onChange={(e) => setRmb(e.target.value)} placeholder="0" /></Field>
+          <Field label="Bank rate (CNY/INR)"><Input value={rate} onChange={(e) => setRate(e.target.value)} /></Field>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}><span style={{ color: 'var(--t3)' }}>Debits pool</span><Mono color="var(--red)" weight={600}>{D.inr(inr)}</Mono></div>
+          <Btn onClick={submit}>Record payment</Btn>
+        </div>
+      ) : <Mono size={11} color="var(--t3)">Advance (after PI) + pickup balance. Each deducts the shared pool immediately.</Mono>}
+    </Card>
+  );
+}
+
+// per-leg shipment costs (shipping/customs/other/last-mile) + last-mile partner + vehicle
+function LegCosts({ leg, forwarders, run, session }) {
+  const [tab, setTab] = useState(null); // 'cost' | 'lastmile'
+  const [ctype, setCtype] = useState('shipping');
+  const [amt, setAmt] = useState('');
+  const [fwd, setFwd] = useState(leg.last_mile_forwarder_code || '');
+  const [veh, setVeh] = useState(leg.last_mile_vehicle_no || '');
+  const recordCost = () => { if (!(Number(amt) > 0)) { alert('Enter amount'); return; } run(async () => { const r = await act('recordShipmentCost', { shipment_id: leg.shipment_id, charge_type: ctype, amount_inr: Number(amt) }, session); if (r?.shortfall > 0) alert(`Pool is now short by ${D.inr(r.shortfall)} — consider raising a draw-down.`); }); setAmt(''); setTab(null); };
+  const saveLastMile = () => { const f = forwarders.find((x) => x.forwarder_code === fwd); run(() => act('updateShipment', { id: leg.shipment_id, last_mile_forwarder_code: fwd || null, last_mile_forwarder_name: f ? f.company_name : null, last_mile_vehicle_no: veh || null }, session)); setTab(null); };
+  return (
+    <div style={{ paddingTop: 8 }}>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <button className="mf-chip" onClick={() => setTab(tab === 'cost' ? null : 'cost')} style={{ padding: '5px 10px', borderRadius: 7, fontFamily: MONO, fontSize: 10, background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--t2)' }}>+ Record cost</button>
+        <button className="mf-chip" onClick={() => setTab(tab === 'lastmile' ? null : 'lastmile')} style={{ padding: '5px 10px', borderRadius: 7, fontFamily: MONO, fontSize: 10, background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--t2)' }}>Last-mile</button>
+      </div>
+      {tab === 'cost' && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr auto', gap: 6, marginTop: 8, alignItems: 'center' }}>
+          <Select value={ctype} onChange={(e) => setCtype(e.target.value)} options={['shipping', 'customs', 'other_fees', 'last_mile']} style={{ padding: '6px 8px', fontSize: 11 }} />
+          <Input value={amt} onChange={(e) => setAmt(e.target.value)} placeholder="₹ amount" style={{ padding: '6px 8px', fontSize: 11 }} />
+          <Btn style={{ padding: '6px 12px', fontSize: 11 }} onClick={recordCost}>Pay</Btn>
+        </div>
+      )}
+      {tab === 'lastmile' && (
+        <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 7 }}>
+          <Select value={fwd} onChange={(e) => setFwd(e.target.value)} options={['', ...forwarders.map((x) => x.forwarder_code)]} style={{ padding: '6px 8px', fontSize: 11 }} />
+          <Input value={veh} onChange={(e) => setVeh(e.target.value)} placeholder="Vehicle number (for the store team)" style={{ padding: '6px 8px', fontSize: 11 }} />
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Btn style={{ padding: '6px 12px', fontSize: 11 }} onClick={saveLastMile}>Save</Btn>
+            <Mono size={9.5} color="var(--t3)" style={{ alignSelf: 'center' }}>No partner? Add it in Admin → Logistics partners.</Mono>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ════════════════════════════════════════════════════════════════
 function OrderDetail({ detailId, session, onNav, reload, data }) {
   const [resp, setResp] = useState(null);
@@ -440,12 +557,15 @@ function OrderDetail({ detailId, session, onNav, reload, data }) {
   const [form, setForm] = useState(null);
   const [lines, setLines] = useState([]);
   const [moveTo, setMoveTo] = useState('');
+  const [legMode, setLegMode] = useState('sea');
+  const [forwarders, setForwarders] = useState([]);
 
   const load = () => {
     if (!detailId) { setErr('No order selected'); return; }
     garageFetch('getOrder', { id: detailId }, session).then((d) => { setResp(d); setErr(''); }).catch((e) => setErr(e?.message || 'Load failed'));
   };
   useEffect(() => { setResp(null); setEdit(false); load(); /* eslint-disable-next-line */ }, [detailId, session]);
+  useEffect(() => { garageFetch('getForwarders', {}, session).then(setForwarders).catch(() => setForwarders([])); /* eslint-disable-next-line */ }, [session]);
   const run = async (fn) => { if (busy) return; setBusy(true); try { await fn(); load(); reload && reload(); } catch (e) { alert(e?.message || 'Action failed'); } finally { setBusy(false); } };
 
   if (err) return <div><BackChip onClick={() => onNav('orders')}>Orders</BackChip><Empty>{err}</Empty></div>;
@@ -471,11 +591,13 @@ function OrderDetail({ detailId, session, onNav, reload, data }) {
     setEdit(false);
   });
   const createLeg = () => run(async () => {
-    const sh = await act('createShipment', { mode: 'Sea FCL' }, session);
+    const sh = await act('createShipment', { mode: legMode }, session);
     await act('setShipmentLines', { shipment_id: sh.id, lines: (resp.lines || []).map((l) => ({ order_line_id: l.id, qty_in_shipment: Number(l.qty) || 0 })) }, session);
   });
+  const convert = () => run(() => act('convertToPo', { order_id: o.id }, session));
+  const cancelOrder = () => { const reason = window.prompt('Cancel this order — reason?'); if (reason && reason.trim()) run(() => act('cancelOrder', { order_id: o.id, reason: reason.trim() }, session)); };
+  const cancellable = ['requested', 'draft', 'placed', 'confirmed', 'produced'].includes(o.status);
   const nextShip = (st) => st === 'planned' ? 'loaded' : SHIP_STAGES[SHIP_STAGES.indexOf(st) + 1];
-  const commPreview = Math.round((Number(o.total_inr) || 0) * 0.025);
 
   return (
     <div>
@@ -490,14 +612,23 @@ function OrderDetail({ detailId, session, onNav, reload, data }) {
               {!editable && <Mono size={9.5} color="var(--t3)" style={{ letterSpacing: '.1em' }}>LOCKED</Mono>}
             </div>
           </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center' }}>
+            {o.status === 'requested' && <Btn onClick={convert}>Convert to PO</Btn>}
             {o.status === 'draft' && <Btn onClick={() => run(() => act('advanceOrderStage', { order_id: o.id, stage: 'placed' }, session))}>Place order</Btn>}
             {PROD_NEXT[o.status] && <Btn onClick={() => run(() => act('advanceOrderStage', { order_id: o.id, stage: PROD_NEXT[o.status] }, session))}>Advance → {D.label(PROD_NEXT[o.status])}</Btn>}
-            {o.status === 'picked_up' && <Btn onClick={createLeg}><ShipIcon size={13} style={{ marginRight: 6, verticalAlign: -2 }} />Create shipment leg</Btn>}
+            {o.status === 'picked_up' && <>
+              <Select value={legMode} onChange={(e) => setLegMode(e.target.value)} options={['sea', 'air']} style={{ width: 84, padding: '7px 9px', fontSize: 11 }} />
+              <Btn onClick={createLeg}><ShipIcon size={13} style={{ marginRight: 6, verticalAlign: -2 }} />Create {legMode} leg</Btn>
+            </>}
+            {cancellable && <Btn variant="secondary" onClick={cancelOrder}>Cancel</Btn>}
           </div>
         </div>
-        {o.status === 'draft'
+        {o.status === 'requested'
+          ? <Mono size={11} color="var(--t3)">Requested by LOT — SF reviews and converts this to a PO (vendor + ¥ pricing), then places it.</Mono>
+          : o.status === 'draft'
           ? <Mono size={11} color="var(--t3)">Draft — fill in line items and costs below, then Place to start the timeline.</Mono>
+          : o.status === 'cancelled'
+          ? <Mono size={11} color="var(--red)">This order was cancelled.</Mono>
           : <Timeline current={eff} stampByStage={stamps} />}
       </Card>
 
@@ -514,13 +645,16 @@ function OrderDetail({ detailId, session, onNav, reload, data }) {
                 {resp.legs.map((l) => {
                   const next = nextShip(l.status);
                   return (
-                    <div key={l.shipment_id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '11px 0', borderBottom: '1px solid color-mix(in srgb, var(--border) 55%, transparent)' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <Truck size={15} color="var(--t3)" />
-                        <Mono color="var(--t1)" weight={600}>{l.shipment_no || `SHM #${l.shipment_id}`}</Mono>
-                        <Badge tone={D.shipTone(l.status)}>{D.label(l.status)}</Badge>
+                    <div key={l.shipment_id} style={{ padding: '11px 0', borderBottom: '1px solid color-mix(in srgb, var(--border) 55%, transparent)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <Truck size={15} color="var(--t3)" />
+                          <Mono color="var(--t1)" weight={600}>{l.shipment_no || `SHM #${l.shipment_id}`}</Mono>
+                          <Badge tone={D.shipTone(l.status)}>{D.label(l.status)}</Badge>
+                        </div>
+                        {next && <Btn variant="secondary" style={{ padding: '6px 12px', fontSize: 11 }} onClick={() => run(() => act('advanceShipmentStage', { shipment_id: l.shipment_id, stage: next }, session))}>Advance → {D.label(next)}</Btn>}
                       </div>
-                      {next && <Btn variant="secondary" style={{ padding: '6px 12px', fontSize: 11 }} onClick={() => run(() => act('advanceShipmentStage', { shipment_id: l.shipment_id, stage: next }, session))}>Advance → {D.label(next)}</Btn>}
+                      <LegCosts leg={l} forwarders={forwarders} run={run} session={session} />
                     </div>
                   );
                 })}
@@ -595,21 +729,15 @@ function OrderDetail({ detailId, session, onNav, reload, data }) {
               </div>
             )}
           </Card>
+          {!['draft', 'requested', 'cancelled'].includes(o.status) && <VendorPayCard order={o} fx={data?.fx?.current} run={run} session={session} />}
           {o.cost_state === 'invoiced'
             ? <Card title="Invoiced" bodyPad="16px 20px 18px">
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}><Mono size={11} color="var(--t3)">Invoice</Mono><Mono color="var(--t1)">{o.invoice_no}</Mono></div>
                 {resp.commission && <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}><Mono size={11} color="var(--t3)">Commission · {resp.commission.rate}%</Mono><Mono color="var(--t1)">{D.inr(resp.commission.inr)}</Mono></div>}
               </Card>
-            : editable && !edit && <Card title="Invoice" bodyPad="16px 20px 18px">
-                <Eyebrow style={{ marginBottom: 7 }}>SF invoice number · auto-assigned</Eyebrow>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', borderRadius: 8, background: 'var(--surface2)', border: '1px solid var(--border)' }}>
-                  <Mono color="var(--t1)" weight={600} size={13}>{resp.suggestedInvoiceNo || 'VWINV-…'}</Mono>
-                  <Mono size={9} color="var(--t3)" style={{ letterSpacing: '.1em' }}>NEXT IN SERIES</Mono>
-                </div>
-                <Mono size={10} color="var(--t3)" style={{ display: 'block', margin: '8px 0 12px' }}>Assigned automatically on invoicing. Locks edits + accrues 2.5% commission (~{D.inr(commPreview)}).</Mono>
-                <Btn onClick={() => run(() => act('invoiceOrder', { order_id: o.id }, session))} style={{ width: '100%' }}>Mark invoiced</Btn>
-              </Card>}
-          {o.status !== 'draft' && <MoneyCard order={o} money={resp.money} schedule={resp.schedule || []} allocations={resp.allocations || []} payments={data?.payments || []} run={run} session={session} />}
+            : editable && !edit && !['draft', 'requested'].includes(o.status) &&
+                <InvoiceCard order={o} lines={resp.lines} suggestedInvoiceNo={resp.suggestedInvoiceNo} fx={data?.fx?.current} run={run} session={session} />}
+          {!['draft', 'requested', 'cancelled'].includes(o.status) && <MoneyCard order={o} money={resp.money} schedule={resp.schedule || []} allocations={resp.allocations || []} payments={data?.payments || []} run={run} session={session} />}
         </Stack>
       </Grid>
     </div>
@@ -802,12 +930,92 @@ function Documents({ data }) {
   );
 }
 
+// editable per-mode shipment timeline defaults (suggest-not-lock)
+function ShipmentDefaults({ session, reload }) {
+  const [rows, setRows] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const STAGES = ['loaded', 'sailing', 'docked', 'cleared', 'local_transport', 'received'];
+  useEffect(() => { garageFetch('getStageDefaults', {}, session).then(setRows).catch(() => setRows([])); /* eslint-disable-next-line */ }, [session]);
+  const byMode = (m) => STAGES.map((st) => (rows || []).find((r) => r.mode === m && r.stage === st) || { mode: m, stage: st, offset_days: 0 });
+  const setVal = (m, st, v) => setRows((rs) => { const out = (rs || []).slice(); const i = out.findIndex((r) => r.mode === m && r.stage === st); if (i >= 0) out[i] = { ...out[i], offset_days: v }; else out.push({ mode: m, stage: st, offset_days: v }); return out; });
+  const stLabel = (m, st) => (m === 'air' && st === 'sailing') ? 'In flight' : (m === 'air' && st === 'docked') ? 'Landed' : D.label(st);
+  const save = async () => { setBusy(true); try { await act('setStageDefaults', { rows: (rows || []).map((r) => ({ mode: r.mode, stage: r.stage, offset_days: Number(r.offset_days) || 0 })) }, session); reload && reload(); } catch (e) { alert(e?.message || 'Save failed'); } finally { setBusy(false); } };
+  if (!rows) return <Card title="Shipment timeline defaults"><Empty>Loading…</Empty></Card>;
+  return (
+    <Card title="Shipment timeline defaults" bodyPad="16px 20px 18px" action={<Btn style={{ padding: '6px 12px', fontSize: 11 }} onClick={save}>{busy ? 'Saving…' : 'Save'}</Btn>}>
+      <Mono size={10.5} color="var(--t3)" style={{ display: 'block', marginBottom: 12 }}>Days after the previous milestone. These pre-fill a new shipment's expected dates per mode — suggestions only, editable on each shipment.</Mono>
+      {['sea', 'air'].map((m) => (
+        <div key={m} style={{ marginBottom: 14 }}>
+          <Eyebrow style={{ marginBottom: 8 }}>{m === 'air' ? 'Air' : 'Sea'} · offset days</Eyebrow>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 6 }}>
+            {byMode(m).map((r) => (
+              <div key={r.stage}>
+                <div style={{ fontFamily: MONO, fontSize: 8.5, letterSpacing: '.05em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 4 }}>{stLabel(m, r.stage)}</div>
+                <Input value={r.offset_days} onChange={(e) => setVal(m, r.stage, e.target.value)} style={{ padding: '7px 8px', fontSize: 12 }} />
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </Card>
+  );
+}
+
+// logistics partners master (store.forwarders) — list + inline create (no free-text partners)
+function Forwarders({ session }) {
+  const [rows, setRows] = useState(null);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [f, setF] = useState({ company_name: '', country: 'China', country_iso: 'CN', modes: { sea: true, air: false, land: false }, iata_code: '', scac_code: '', tracking_url: '' });
+  const load = () => garageFetch('getForwarders', {}, session).then(setRows).catch(() => setRows([]));
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [session]);
+  const create = async () => {
+    if (!f.company_name.trim()) { alert('Company name required'); return; }
+    const modes = Object.entries(f.modes).filter(([, v]) => v).map(([k]) => k);
+    if (!modes.length) { alert('Pick at least one mode'); return; }
+    setBusy(true);
+    try { await act('createForwarder', { company_name: f.company_name.trim(), country: f.country, country_iso: f.country_iso, modes_supported: modes, iata_code: f.iata_code || null, scac_code: f.scac_code || null, tracking_url: f.tracking_url || null }, session); setOpen(false); setF((x) => ({ ...x, company_name: '', iata_code: '', scac_code: '', tracking_url: '' })); load(); }
+    catch (e) { alert(e?.message || 'Create failed'); } finally { setBusy(false); }
+  };
+  return (
+    <Card title="Logistics partners" action={<Btn variant="secondary" style={{ padding: '6px 12px', fontSize: 11 }} onClick={() => setOpen((v) => !v)}><Plus size={13} style={{ marginRight: 5, verticalAlign: -2 }} />Add partner</Btn>}>
+      {open && (
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+          <Field label="Company"><Input value={f.company_name} onChange={(e) => setF((x) => ({ ...x, company_name: e.target.value }))} /></Field>
+          <Field label="Country"><Input value={f.country} onChange={(e) => setF((x) => ({ ...x, country: e.target.value }))} /></Field>
+          <Field label="ISO"><Input value={f.country_iso} onChange={(e) => setF((x) => ({ ...x, country_iso: e.target.value }))} /></Field>
+          <Field label="IATA (air)"><Input value={f.iata_code} onChange={(e) => setF((x) => ({ ...x, iata_code: e.target.value }))} /></Field>
+          <Field label="SCAC (sea)"><Input value={f.scac_code} onChange={(e) => setF((x) => ({ ...x, scac_code: e.target.value }))} /></Field>
+          <Field label="Tracking URL"><Input value={f.tracking_url} onChange={(e) => setF((x) => ({ ...x, tracking_url: e.target.value }))} /></Field>
+          <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: 14 }}>
+            {['sea', 'air', 'land'].map((m) => <label key={m} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--t2)' }}><input type="checkbox" checked={f.modes[m]} onChange={(e) => setF((x) => ({ ...x, modes: { ...x.modes, [m]: e.target.checked } }))} />{m}</label>)}
+            <div style={{ flex: 1 }} />
+            <Btn style={{ padding: '6px 12px', fontSize: 11 }} onClick={create}>{busy ? 'Creating…' : 'Create partner'}</Btn>
+          </div>
+        </div>
+      )}
+      {!rows ? <Empty>Loading…</Empty> : rows.length ? (
+        <Table rows={rows} rowKey={(r) => r.forwarder_code} cols={[
+          { label: 'Code', render: (r) => <Mono color="var(--t1)" weight={600} size={11}>{r.forwarder_code}</Mono> },
+          { label: 'Company', render: (r) => <span style={{ color: 'var(--t2)' }}>{r.company_name}</span> },
+          { label: 'Modes', render: (r) => <Mono size={11} color="var(--t3)">{(r.modes_supported || []).join(', ')}</Mono> },
+          { label: 'Country', render: (r) => <Mono size={11} color="var(--t3)">{r.country}</Mono> },
+        ]} />
+      ) : <Empty>No partners yet</Empty>}
+    </Card>
+  );
+}
+
 // ════════════════════════════════════════════════════════════════
-function Admin({ data }) {
+function Admin({ data, session, reload }) {
   const groups = (data.orgGroups || []).filter((g) => g.members.length);
   return (
     <Stack>
       <div style={{ display: 'flex' }}><div style={{ flex: 1 }} /><Btn><Plus size={14} style={{ marginRight: 6, verticalAlign: -2 }} />Invite User</Btn></div>
+      <Grid cols="1fr 1fr" style={{ alignItems: 'start' }}>
+        <ShipmentDefaults session={session} reload={reload} />
+        <Forwarders session={session} />
+      </Grid>
       {groups.length ? groups.map((g) => (
         <Card key={g.org} title={
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
@@ -833,7 +1041,7 @@ function Admin({ data }) {
 const CAT_MAP = { Product: 'product', Part: 'part', 'Sub-part': 'sub_part', Mould: 'mould', Sample: 'sample', Other: 'other' };
 function NewOrder({ onNav, session, reload }) {
   const [busy, setBusy] = useState(false);
-  const [f, setF] = useState({ title: '', category: 'Product', expected: '' });
+  const [f, setF] = useState({ title: '', category: 'Product', expected: '', kind: 'request' });
   const [lines, setLines] = useState([{ product: '', qty: '', unit_price_rmb: '' }]);
   const setLine = (i, k, v) => setLines((ls) => ls.map((x, j) => j === i ? { ...x, [k]: v } : x));
 
@@ -844,6 +1052,7 @@ function NewOrder({ onNav, session, reload }) {
     try {
       const order = await act('createOrder', {
         title: f.title.trim(), category: CAT_MAP[f.category] || 'product',
+        status: f.kind === 'request' ? 'requested' : 'draft',
         vendor_name: 'Solve Factory', currency: 'CNY', placed_via: 'SF',
         lines: lines.filter((l) => l.product.trim()).map((l, i) => ({
           line_no: i + 1, product: l.product.trim(), qty: Number(l.qty) || 0,
@@ -885,12 +1094,17 @@ function NewOrder({ onNav, session, reload }) {
           </Card>
         </Stack>
         <Card title="Create" bodyPad="18px 20px 20px">
-          <div style={{ fontFamily: MONO, fontSize: 11.5, color: 'var(--t3)', lineHeight: 1.6 }}>
-            Creates a <span style={{ color: 'var(--t1)' }}>draft</span>. Fill costs + shipping on the detail page, then Place it to start the timeline. Goods priced in ¥; landed cost (shipping/customs/GST) added as it ships.
+          <Field label="Create as">
+            <Select value={f.kind} onChange={(e) => setF((x) => ({ ...x, kind: e.target.value }))} options={['request', 'draft']} />
+          </Field>
+          <div style={{ fontFamily: MONO, fontSize: 11.5, color: 'var(--t3)', lineHeight: 1.6, marginTop: 12 }}>
+            {f.kind === 'request'
+              ? <><span style={{ color: 'var(--t1)' }}>Request</span> (LOT) — records what LOT needs. SF then converts it to a PO (vendor + ¥ pricing) and drives the lifecycle.</>
+              : <><span style={{ color: 'var(--t1)' }}>Draft PO</span> (SF) — fill costs + shipping on the detail page, then Place to start the timeline.</>}
           </div>
           <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
-            <Btn onClick={() => create(true)} style={{ flex: 1 }}>{busy ? 'Creating…' : 'Create Order'}</Btn>
-            <Btn variant="secondary" onClick={() => create(false)}>Save draft</Btn>
+            <Btn onClick={() => create(true)} style={{ flex: 1 }}>{busy ? 'Creating…' : (f.kind === 'request' ? 'Create request' : 'Create order')}</Btn>
+            <Btn variant="secondary" onClick={() => create(false)}>Save</Btn>
           </div>
         </Card>
       </Grid>
