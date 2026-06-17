@@ -579,8 +579,8 @@ export default function OverviewPage() {
 
       {/* KPI rail */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginBottom: 22 }}>
-        <KpiTile label="Dispatched" value={k.dispatched} sub={k.subR} tone="ok"
-          proj={projOf(mtdDispatched)} projTitle={projNote(mtdDispatched, 'dispatched')} />
+        <KpiTile label="Packed" value={k.dispatched} sub={k.subR} tone="ok"
+          proj={projOf(mtdDispatched)} projTitle={projNote(mtdDispatched, 'packed')} />
         <KpiTile label="QC Pass" value={k.qcPass} sub="First-pass yield" tone="brand"
           proj={projOf(s.mtd_pass)} projTitle={projNote(s.mtd_pass, 'passed QC')} />
         <KpiTile label="Pass Rate" value={k.passRate} sub="Target 95%" tone={k.passTone} />
@@ -641,17 +641,6 @@ export default function OverviewPage() {
                   No line targets set for today.
                 </div>
               )}
-            </div>
-          </Panel>
-
-          <Panel title="Packed" icon="box">
-            <div style={{ display: 'flex', gap: 10 }}>
-              {[['Retail', s.today_rtr, 'var(--yellow)'], ['Ecom', s.today_rte, 'var(--blue-bright)'], ['Pkg out', s.dispatch_stock, 'var(--t2)']].map(([l, v, c]) => (
-                <div key={l} style={{ flex: 1, background: 'var(--surface-2)', borderRadius: 'var(--r-sm)', padding: '11px 13px', borderTop: `2px solid ${c}` }}>
-                  <div className="eyebrow">{l}</div>
-                  <div className="num" style={{ fontSize: 21, fontWeight: 700, color: 'var(--t1)', marginTop: 5 }}>{fmt(v)}</div>
-                </div>
-              ))}
             </div>
           </Panel>
         </div>
