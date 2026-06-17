@@ -1,13 +1,18 @@
 'use client';
 import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAuth, hasPermission } from '@throttle/auth';
-import { garageFetch } from '@throttle/db';
+import { useAuth } from '@throttle/auth';
+import { garageFetch, workerFetch } from '@throttle/db';
 import { Panel, KpiCard, ProductTag, ProgressBar, StatusBadge, EmptyState, Spinner } from '@throttle/ui';
 import {
-  ListChecks, Inbox, Send, Undo2, AlertTriangle, Boxes,
+  ListChecks, Inbox, Send, Undo2, AlertTriangle, Users,
   Zap, Target, Activity as ActivityIcon, ArrowRight, Route, TrendingUp,
 } from 'lucide-react';
+
+// Today's date in IST (YYYY-MM-DD) — the store attendance day.
+function istToday() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
 import { useAutoRefresh } from '../../../hooks/useAutoRefresh.js';
 import { useRefreshState } from '../layout.js';
 import { useProducts } from '../../../hooks/useProducts.js';
@@ -43,7 +48,7 @@ const SEV_FG = { bad: 'var(--bad-fg)', warn: 'var(--warn-fg)', info: 'var(--info
 const SEV_BADGE = { bad: 'error', warn: 'warning', info: 'info', ok: 'success' };
 
 export default function OverviewPage() {
-  const { session, perms } = useAuth();
+  const { session } = useAuth();
   const router = useRouter();
   const { setRefreshing } = useRefreshState();
   const { PRODUCTS, loading: productsLoading } = useProducts();
@@ -53,6 +58,7 @@ export default function OverviewPage() {
   const [submittedRuns, setSubmittedRuns] = useState([]);
   const [producible, setProducible] = useState([]);
   const [activity, setActivity] = useState([]);
+  const [storeOps, setStoreOps] = useState(null); // distinct store operators present today (null = unknown/no access)
   const [mainLoading, setMainLoading] = useState(true);
   const [mainError, setMainError] = useState(null);
 
@@ -110,9 +116,21 @@ export default function OverviewPage() {
     } catch { setActivity([]); }
   }
 
+  async function loadStoreOps() {
+    // Distinct store-team operators with an attendance row today. Gated by
+    // canManageFloor in the worker — degrade to null (shows "—") on no-access.
+    try {
+      const today = istToday();
+      const res = await workerFetch('getOperatorAttendance', { data: { date_from: today, date_to: today, team: 'store' } }, session);
+      if (!res.ok) { setStoreOps(null); return; }
+      const rows = Array.isArray(res.data) ? res.data : [];
+      setStoreOps(new Set(rows.map(r => r.operator_id)).size);
+    } catch { setStoreOps(null); }
+  }
+
   function loadAll() {
     if (!session || productsLoading) return;
-    loadMain(); loadProducible(); loadActivity();
+    loadMain(); loadProducible(); loadActivity(); loadStoreOps();
   }
 
   useAutoRefresh(loadAll, 60000, !session || productsLoading);
@@ -126,7 +144,6 @@ export default function OverviewPage() {
 
   const reorderFlags = Array.isArray(kpis?.reorder_flags) ? kpis.reorder_flags : [];
   const reorderCount = kpis?.reorder_count ?? reorderFlags.length;
-  const showFinance = hasPermission(perms, 'reports_finance');
 
   // ── Needs Attention Now — folds the old Alerts page ──────────────────
   const attention = useMemo(() => {
@@ -194,9 +211,7 @@ export default function OverviewPage() {
             <KpiCard eyebrow="WOs Issued Today" value={kpis?.today_wo_count ?? '—'} tone="ok" icon={Send} sub="store issues" onClick={() => router.push('/store-history')} />
             <KpiCard eyebrow="Pending Returns" value={kpis?.pending_returns ?? '—'} tone="warn" icon={Undo2} sub="to process" onClick={() => router.push('/returns/shipments')} />
             <KpiCard eyebrow="Reorder Flags" value={reorderCount ?? '—'} tone={reorderCount > 0 ? 'bad' : 'ok'} icon={AlertTriangle} sub="parts at reorder" onClick={() => router.push('/stock')} />
-            {showFinance && (
-              <KpiCard eyebrow="Stock Value" value={kpis?.total_stock_value !== undefined ? '₹' + Number(kpis.total_stock_value).toLocaleString('en-IN') : '—'} tone="brand" icon={Boxes} onClick={() => router.push('/stock')} />
-            )}
+            <KpiCard eyebrow="Store Present" value={storeOps ?? '—'} tone="info" icon={Users} sub="operators today" onClick={() => router.push('/manpower')} />
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.7fr) minmax(0,1fr)', gap: 16, alignItems: 'start' }}>
