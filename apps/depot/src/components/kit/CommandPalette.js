@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Search } from 'lucide-react';
-import { NAV_PRIMARY, NAV_SETUP, NAV_HIDDEN } from '../../lib/nav.js';
+import { NAV_PRIMARY, NAV_SETUP, NAV_HIDDEN, NAV_MANUAL } from '../../lib/nav.js';
 import { Icon } from './Kit.js';
 
 function buildCommands() {
@@ -22,6 +22,7 @@ function buildCommands() {
   }
   for (const s of NAV_SETUP) cmds.push({ k: `Setup · ${s.label}`, grp: 'Setup', icon: s.icon, route: s.route, s: 'Go to' });
   for (const h of NAV_HIDDEN) cmds.push({ k: h.label, grp: 'Screens', icon: h.icon, route: h.route, s: 'Go to' });
+  cmds.push({ k: NAV_MANUAL.label, grp: 'Help', icon: NAV_MANUAL.icon, route: NAV_MANUAL.route, s: 'Go to' });
   // actions — jump straight into the doing surface
   cmds.unshift(
     { k: 'New shipment', grp: 'Action', icon: 'send', route: '/dispatch-shipments', s: 'Open' },

@@ -7,8 +7,8 @@
    ════════════════════════════════════════════════════════════ */
 import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { Search, ChevronDown, ChevronRight, ChevronLeft, SlidersHorizontal, LogOut } from 'lucide-react';
-import { NAV_PRIMARY, NAV_SETUP } from '../../lib/nav.js';
+import { Search, ChevronDown, ChevronRight, ChevronLeft, SlidersHorizontal, LogOut, BookOpen } from 'lucide-react';
+import { NAV_PRIMARY, NAV_SETUP, NAV_MANUAL } from '../../lib/nav.js';
 import { DepotIcon } from '../DepotIcon.js';
 
 const routeMatch = (pathname, route) => {
@@ -183,6 +183,18 @@ export function DepotSidebar({ onCmdK, userLabel = '', userRole = '', onLogout }
               })}
             </>
           )}
+
+          {/* System Manual (Help) */}
+          <div onClick={() => go(NAV_MANUAL.route)} title="System Manual" style={{ display: 'flex', alignItems: 'center', gap: 11,
+            padding: '8px 11px', borderRadius: 'var(--r-sm)', cursor: 'pointer', marginTop: 4,
+            justifyContent: collapsed ? 'center' : 'flex-start',
+            color: routeMatch(pathname, NAV_MANUAL.route) ? 'var(--yellow)' : 'var(--t3)',
+            fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 500 }}
+            onMouseEnter={e => { if (!routeMatch(pathname, NAV_MANUAL.route)) e.currentTarget.style.color = 'var(--t1)'; }}
+            onMouseLeave={e => { if (!routeMatch(pathname, NAV_MANUAL.route)) e.currentTarget.style.color = 'var(--t3)'; }}>
+            <BookOpen size={17} strokeWidth={1.75} />
+            {!collapsed && <span style={{ flex: 1 }}>System Manual</span>}
+          </div>
         </div>
       </nav>
 

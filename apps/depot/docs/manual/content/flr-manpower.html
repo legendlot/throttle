@@ -1,0 +1,26 @@
+<p class="lead">Manpower is where supervisors see who is on the dispatch team today, assign people to the two dispatch lines, and track attendance and reliability over time. Everything here is scoped to dispatch: it deals in lines D1 and D2 and the dispatch team only, not the production lines.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Dispatch attendance, rostering and reliability.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Mostly action (supervisors).</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sup">Supervisor</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Lines</div><div class="g-val">D1 and D2 (dispatch), not L1&ndash;L3.</div></div>
+</div>
+
+<p>This screen is for floor management; if your account does not have floor-management rights it shows a restricted notice instead. There are four tabs.</p>
+
+<h2 class="sec">Attendance</h2>
+<p>Pick a date to see the dispatch team&rsquo;s clock-ins and clock-outs for that day: clock-in time (with a late flag if applicable), clock-out time (an <strong>Auto</strong> tag means the system auto-closed a forgotten shift at 1 AM), duration, a present streak, days absent this month, and a day-status dropdown (Normal, Half day, Absent, Leave, Holiday) that feeds payroll later. If someone is still clocked in you can <strong>Close shift</strong> to stamp their clock-out at the current time. Working days are counted Monday to Saturday.</p>
+
+<h2 class="sec">Daily roster</h2>
+<p>This is where you put people on lines. The pool on the left is the dispatch operators who are <strong>clocked in today and not yet assigned</strong>. Drag one (or several, using multi-select) into the <strong>D1</strong> or <strong>D2</strong> bucket, or use the small plus button to search and assign. An operator can only be on one line per day; reassigning moves them.</p>
+<div class="callout note">
+  <div class="c-title">&#9432; Daily roster feeds the rest of Depot</div>
+  <p>Who you place on D1 and D2 here is what the Overview shows as the rostered manpower per line, and it is the list of people who appear on the <strong>Dispatch Roster</strong> screen for activity logging. To fill lines quickly, enter a target headcount for D1 and D2 and use <strong>Auto-assign</strong>; it fills D1 first, then D2, from the clocked-in pool. The lines themselves are stationless: there are no Assembly or QC sub-stations as on the production side.</p>
+</div>
+
+<h2 class="sec">Analytics</h2>
+<p>A read-only reliability view over a window you choose (30, 60, 90 days, or this month). Each dispatch operator gets an attendance rate and a tier: <strong style="color:#1a8f43">Reliable</strong> (90% and up), <strong style="color:#2138c0">Steady</strong> (75% and up), <strong style="color:#b45309">Irregular</strong> (50% and up), and <strong style="color:#c01f1f">Critical</strong> below that. A day-by-day strip shows present and absent days, alongside current and longest streaks and a trend arrow. Use it to spot who is slipping and to plan cover.</p>
+
+<h2 class="sec">Shifts</h2>
+<p>The dispatch shift definitions (start, end, the early clock-in and late grace windows). Dispatch runs two overlapping shifts, so a person can be tied to a home shift. Editing a shift writes a new version dated today and never rewrites past attendance; old days keep the shift they were counted under. Production and store shifts are managed in their own apps and do not appear here.</p>

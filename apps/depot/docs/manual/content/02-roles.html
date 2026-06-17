@@ -1,0 +1,52 @@
+<p class="lead">Depot shows each person the screens and buttons that match their job. Operators stay focused on the floor work, supervisors run the dispatch operation, and managers configure it. This chapter explains the three roles used throughout this manual and what each one can see and do.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Roles</div><div class="g-val">Three: Operator, Supervisor, Admin.</div></div>
+  <div class="g-cell"><div class="g-lbl">Set by</div><div class="g-val">An admin, on your account.</div></div>
+  <div class="g-cell"><div class="g-lbl">Buttons</div><div class="g-val">Appear or hide based on your permissions.</div></div>
+  <div class="g-cell"><div class="g-lbl">Key idea</div><div class="g-val">Some actions need a second person to approve.</div></div>
+</div>
+
+<h2 class="sec">The three roles</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key"><span class="role op">Dispatch Operator</span></div><div class="a-val"><p><strong>Works the floor.</strong> Packs and allocates units, dispatches boxes, restocks returns and scans during a stock audit. Mostly works from the scanner; in Depot, reads the live screens to see how the day is going.</p></div></div>
+  <div class="a-row"><div class="a-key"><span class="role sup">Supervisor</span></div><div class="a-val"><p><strong>Floor manager.</strong> Everything an operator does, plus manages shipments, channels, the roster and manpower, runs dispatch counts, opens and submits stock audits, and approves the audits of others.</p></div></div>
+  <div class="a-row"><div class="a-key"><span class="role adm">Admin</span></div><div class="a-val"><p><strong>Manager / Admin.</strong> Full access: everything above, plus all configuration.</p></div></div>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; How access actually works</div>
+  <p>Depot does not have its own separate permissions; it uses the same account roles as the other Legend of Toys apps. Your access is decided by the <strong>role on your account</strong>, set by an admin. The three tags in this manual are plain-language groupings of those roles; they describe <em>who a screen is for</em>, not a literal setting. Buttons and actions simply <strong>appear or hide</strong> based on what your account is allowed to do, so you will only see the controls that are yours to use. If you should be able to do something but the button is not there, your account role needs changing; ask an admin.</p>
+</div>
+
+<h2 class="sec">What each role can do</h2>
+<p>Most write actions (allocating, shipping, managing channels, running counts) need floor-management rights, which supervisors and admins have. A few specific actions are gated more tightly: packing and boxing, restock, repacks, and recording or approving a stock count each need their own permission. Operators read the live screens and do their hands-on work mainly through the scanner.</p>
+
+<table class="tbl">
+  <thead><tr><th>Screen or action</th><th style="text-align:center">Op</th><th style="text-align:center">Sup</th><th style="text-align:center">Adm</th></tr></thead>
+  <tbody>
+    <tr><td>Overview, Live Floor, Lines, Scan Feed</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>Pipeline (on-hand finished goods)</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>Shipments, Challans</td><td style="text-align:center"></td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>Dispatch Counts</td><td style="text-align:center"></td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>Unit Restock</td><td style="text-align:center"></td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>Repack, Repack Reports</td><td style="text-align:center"></td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>Stock Audit (open, scan, submit)</td><td style="text-align:center"></td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>Stock Audit (approve)</td><td style="text-align:center"></td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>Dispatch Roster, Manpower</td><td style="text-align:center"></td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
+    <tr><td>Setup &rarr; Channels</td><td style="text-align:center"></td><td style="text-align:center">&bull;</td><td style="text-align:center">&bull;</td></tr>
+  </tbody>
+</table>
+
+<div class="callout tip">
+  <div class="c-title">&#10003; Tip</div>
+  <p>This table is a guide, not a rulebook; some people wear more than one hat and will have a role that combines access. The dots show the <em>primary</em> owner of each screen so you know who to ask about it.</p>
+</div>
+
+<h2 class="sec">Checks and balances</h2>
+<p>Some actions are deliberately split between two people so no single person can both make a change and bless it. The clearest example is the <strong>stock audit</strong>: the person who counts the floor cannot be the person who approves the result. One supervisor opens the audit and submits the count; a <em>different</em> supervisor reviews and approves it before the system corrects the records. This is built in, not just a convention.</p>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; Important</div>
+  <p>An approved stock audit changes real records: missing units are written off and extra units are added back. Because of that, the approval must come from someone other than the counter. If you counted it, you will not be allowed to approve it; hand it to another supervisor. See the <strong>Stock Audit</strong> chapter for the full flow.</p>
+</div>

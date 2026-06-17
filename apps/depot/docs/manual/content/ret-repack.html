@@ -1,0 +1,33 @@
+<p class="lead">Repack Runs track &ldquo;channel swaps&rdquo;: when already-packed units need re-doing for a different sales channel (say retail to ecom). A run sets a target number of units to repack; operators then physically scan boxes at the Repack In and Repack Out stations, and progress accrues against the run. This screen opens, tracks and closes those runs; the actual repacking happens on the scanner.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Tracking channel-swap repacks.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Create, complete or cancel runs.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role op">Operator</span> <span class="role sup">Supervisor</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Repacking</div><div class="g-val">Done at the scanner stations.</div></div>
+</div>
+
+<h2 class="sec">How a channel swap works</h2>
+<p>A repack run is a counter for how many boxes the floor plans to redo. The physical work happens on the scanner, on a production line:</p>
+<ol class="steps">
+  <li><span class="s-title">Scan the old box at Repack In.</span> Every unit in that box rolls back to QC&nbsp;Pass and everything downstream is wiped, ready to re-box for the new channel.</li>
+  <li><span class="s-title">Re-pair at Repack Out.</span> The operator re-confirms the car and remote pair, picks the new channel (ecom or retail), and a fresh sticker prints.</li>
+  <li><span class="s-title">The unit rejoins dispatch.</span> From there it flows through the normal pipeline (PKG&nbsp;Out, allocate, pack, dispatch) unchanged.</li>
+</ol>
+
+<h2 class="sec">Starting a run</h2>
+<p><strong>New Run</strong> opens a short form: a <strong>target quantity</strong> (how many units the floor will repack, required) and optional <strong>notes</strong> (for example &ldquo;Flare retail to ecom&rdquo;, useful for daily ops visibility). Creating the run gives it a run number and opens its detail page.</p>
+
+<h2 class="sec">Tracking it from the list</h2>
+<p>The list shows each run&rsquo;s progress (<code>repacked / target</code> with a bar and percentage) and its status: <strong style="color:#2138c0">Open</strong>, <strong style="color:#b45309">In Progress</strong>, <strong style="color:#1a8f43">Completed</strong>, or <strong>Cancelled</strong>. Filter chips along the top narrow the list by status, each with a live count. Click any row to open its detail page.</p>
+
+<h2 class="sec">The detail page</h2>
+<p>A run&rsquo;s detail page tracks the run as it fills up: the progress against target, each unit as it is scanned in and re-packed out, and the run&rsquo;s timestamps. <strong>Complete</strong> closes the run; <strong>Cancel</strong> stops it. Units already repacked stay repacked either way.</p>
+
+<h2 class="sec">Reports</h2>
+<p>From the runs list, <strong>Reports</strong> opens the channel-swap analytics view: totals, breakdowns by direction, product, line, operator and time, with CSV export. See the Repack Reports chapter for the full breakdown.</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Repack may move back to Redline later</div>
+  <p>Repack is really a production activity (the units are physically re-boxed on a production line); dispatch only hands the units over. It lives in Depot for now, but it may move back to Redline in a later phase. The way you open, track and close runs would stay the same.</p>
+</div>

@@ -1,0 +1,34 @@
+<p class="lead">Dispatch Counts is a quick scratchpad for re-checking a pile of finished, dispatch-ready units. You snapshot every unit currently in a chosen status, print a checklist, the counter marks each present or missing, and on completion the system auto-raises stock adjustments for any discrepancy. Use it when a count has strayed and you want to rebuild it fast.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">A quick scratchpad count of staged units.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role op">Operator</span> <span class="role sup">Supervisor</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Then</div><div class="g-val">Auto-creates adjustments.</div></div>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Not the same as a Stock Audit</div>
+  <p>For a governed, reviewed stock count that corrects the system of record, see the <strong>Stock Audit</strong> chapter. Dispatch Counts is a quick scratchpad: a fast random-scan of a pile to rebuild a strayed count, not a controlled audit.</p>
+</div>
+
+<h2 class="sec">Running a count</h2>
+<ol class="steps">
+  <li><span class="s-title">+ New Unit Count.</span> Pick the <strong>scope status</strong> (which units to verify: <code>handed_over</code>, <code>allocated</code>, <code>packed</code>, <code>rtd</code> or <code>pending_rtd</code>), name the area or zone and the counter, and create. Every matching unit is snapshotted into the count.</li>
+  <li><span class="s-title">Print the sheet</span> and walk the staging area.</li>
+  <li><span class="s-title">Mark each unit</span> present or missing; paste any UPCs found that were not on the sheet into the <strong>Extra</strong> box and click Add. Marks are staged as drafts, then saved with <strong>Apply Marks</strong>.</li>
+  <li><span class="s-title">Complete</span> once nothing is pending. Missing and extra units automatically become stock adjustments, queued for L1 approval.</li>
+</ol>
+
+<h2 class="sec">Reading the count</h2>
+<p>Once you open a count, the tiles across the top track it at a glance: <strong>Expected</strong> (how many were snapshotted), <strong>Present</strong>, <strong>Missing</strong>, <strong>Extra</strong> and <strong>Pending</strong> (not yet marked). The Complete button only appears once Pending reaches zero.</p>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; There is no list of counts</div>
+  <p>This screen does not show past counts. To reopen one, type its number (<span class="mono">UCN-NNN</span>) into the search box and press Enter, so note the number when you create a count. Completing a count auto-raises adjustments for missing and extra units; those still need approving and posting on Garage&rsquo;s Stock Adjustments screen.</p>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Who can record</div>
+  <p>Creating a count and applying marks needs the count-record permission; without it you can still open a count by number and view it, but the New, Apply Marks and Complete actions stay hidden.</p>
+</div>

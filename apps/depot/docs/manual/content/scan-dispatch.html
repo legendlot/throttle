@@ -1,0 +1,104 @@
+<p class="lead">These are the floor scanner stations on the Dispatch side, the ones that feed everything you watch in Depot. The <strong>Dispatch Flow</strong> stations walk a finished unit out the door in order: Dispatch In, Allocate, Pack, then Dispatch Out. Alongside them sit Repack Release and Restock, the new Stock Audit station, and two utilities. Dispatch stations bind to a dispatch line, D1 or D2.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Recording each physical dispatch move on the floor.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: each scan moves a real unit.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role op">Operator</span> <span class="role sup">Supervisor</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">You scan</div><div class="g-val">Box labels (<code>LOT-&hellip;-E/R</code>), box refs and channels.</div></div>
+</div>
+
+<h2 class="sec">The Dispatch Flow, in floor order</h2>
+<p>The four flow stations run left to right. A unit reaches Dispatch In once production has packed it, then it gets a channel at Allocate, goes into a shipment box at Pack, and finally ships at Dispatch Out. Each station only accepts a unit at the right earlier stage, so you cannot skip a step.</p>
+
+<table class="tbl">
+  <thead>
+    <tr><th>Station</th><th>What you scan</th><th>What it does</th><th>What it rejects</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Dispatch In</strong> (DTK)</td>
+      <td>The box label, <code>LOT-&hellip;-E/R</code>.</td>
+      <td>Takes a packed unit into the dispatch area, ready to allocate.</td>
+      <td>Anything that has not come through production&rsquo;s final pack step (not yet ready to dispatch).</td>
+    </tr>
+    <tr>
+      <td><strong>Allocate</strong> (ALLOC)</td>
+      <td>Pick the channel first, then the box label.</td>
+      <td>Assigns the unit to a sales channel. Re-allocating to a different channel is free.</td>
+      <td>A unit not yet at Dispatch In, or already shipped.</td>
+    </tr>
+    <tr>
+      <td><strong>Pack</strong> (PACK)</td>
+      <td>Pick the shipment, then each unit&rsquo;s box label into it.</td>
+      <td>Builds the physical shipment box. The dropdown lists all open shipments, so you can pack ahead.</td>
+      <td>A unit that does not belong to that shipment&rsquo;s channel or stage.</td>
+    </tr>
+    <tr>
+      <td><strong>Dispatch Out</strong> (DOUT)</td>
+      <td>The box ref (<code>BOX-&hellip;</code>) or a box label.</td>
+      <td>The final out-the-door scan. After this the unit is shipped.</td>
+      <td>Anything not packed and ready to ship.</td>
+    </tr>
+    <tr>
+      <td><strong>Repack Release</strong> (REPACK_RELEASE)</td>
+      <td>Pick the repack run, then each box label.</td>
+      <td>Hands a held unit back to a repack run so production can re-box it for a different channel. This is the signed hand-over.</td>
+      <td>A unit not currently held at Dispatch In or Allocated. A unit still on the production side does not need releasing here.</td>
+    </tr>
+    <tr>
+      <td><strong>Restock</strong> (RESTOCK)</td>
+      <td>Pick a reason, then the unit&rsquo;s code.</td>
+      <td>Returns an unused unit to sellable stock (for example one pulled from an over-packed box).</td>
+      <td>A unit that has been out to a customer. That is a return, not a restock.</td>
+    </tr>
+    <tr>
+      <td><strong>Stock Audit</strong> (STOCK_AUDIT)</td>
+      <td>Every held car box label, <code>LOT-&hellip;-E/R</code>.</td>
+      <td>Feeds the open audit&rsquo;s count. Re-scans of the same car are ignored, so multi-pass and two people scanning is safe.</td>
+      <td>Soft by design: it warns but does not stop you (see below).</td>
+    </tr>
+    <tr>
+      <td><strong>Lookup</strong> (LOOKUP)</td>
+      <td>Any unit or box label.</td>
+      <td>Tells you what a unit is and where it sits. Read-only, records nothing.</td>
+      <td>Nothing; it is just a check.</td>
+    </tr>
+    <tr>
+      <td><strong>Legacy Reg</strong> (LEGACY_REG)</td>
+      <td>An older unit&rsquo;s code.</td>
+      <td>Registers a pre-system unit so it can flow normally. A utility, used rarely.</td>
+      <td>A code that is already known to the system.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 class="sec">Repack Release, the controlled hand-over</h2>
+<p>When production raises a repack run, the units it needs show up as a release list. Select the run, then scan each unit&rsquo;s box label to release it. Releasing locks the unit out of the normal dispatch flow and lets production scan it in to be re-boxed.</p>
+<div class="callout warn">
+  <div class="c-title">&#9888; Release is the proper hand-over, one box at a time</div>
+  <p>Nobody should walk into the dispatch area, grab a unit and start repacking it. Production&rsquo;s repack-in step rejects any dispatch-held unit that was not released here first. Scanning it out at Repack Release is the signed hand-over.</p>
+</div>
+
+<h2 class="sec">Restock, unused units only</h2>
+<div class="callout warn">
+  <div class="c-title">&#9888; A courier-touched return never goes through Restock</div>
+  <p>If a unit has been out to a customer and come back, it is a return, not a restock. It belongs in the Returns process, which decides whether it is re-dispatched, repaired or written off. Restock is only for unused units that never left.</p>
+</div>
+
+<h2 class="sec">Stock Audit, the soft station</h2>
+<p>Stock Audit is the floor half of a full dispatch stock count. A supervisor opens an audit in Depot (under <strong>Floor &rarr; Stock Audit</strong>), then the floor scans <strong>every held car box label</strong> into it at this station. Hold means a car currently with dispatch, either handed over or allocated; remotes ride along with their car and are not scanned separately. Each car only counts once, so two people can scan the same shelf and a second pass just merges in.</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; This station does not red-screen</div>
+  <p>Unlike every other station, Stock Audit is <strong>soft</strong>. If you scan an unknown label, or a car that is not currently held, it shows a quick warning but <strong>stays green and lets you carry on</strong>. That is on purpose: during an audit every scan is just data for the count, and the variance the supervisor reviews afterwards is where any oddity gets sorted out. You do not need to stop and fix a warning the way you would at a flow station.</p>
+</div>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; You need an open audit first</div>
+  <p>If no audit is open, the station tells you to open one in Depot before scanning. Nothing is counted until an audit exists to count it into. One audit is open at a time across the whole floor.</p>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; The full count flow lives in the Stock Audit chapter</div>
+  <p>This station only gathers the scans. Opening an audit, reading the live variance and missing labels, submitting it, and the separate-supervisor review that self-corrects the stock are all covered in the <strong>Stock Audit</strong> chapter.</p>
+</div>

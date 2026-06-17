@@ -1,0 +1,26 @@
+<p class="lead">The Scan Feed is the live stream of every dispatch scan as it happens on the floor. Open it when you want to see what just moved, confirm a unit was scanned at the right step, or trace one box by its UPC. It is read-only; nothing here changes a record.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Watching the dispatch scan stream live.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read-only.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role op">Operator</span> <span class="role sup">Supervisor</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Scope</div><div class="g-val">Dispatch scan activities only.</div></div>
+</div>
+
+<h2 class="sec">What it shows</h2>
+<p>This is the dispatch slice of the wider scan log: it lists only the scan steps that belong to dispatch, so it stays uncluttered by production scans. Those steps are returned-to-ecom (RTE), returned-to-retail (RTR), DTK, Allocate, Pack, Dispatch out (DOut), returns in (RTO In), RTD Return, and the two repack steps (Repack In and Repack Out).</p>
+<p>The table reads newest first. Each row shows the time, the unit&rsquo;s UPC, the activity, the line (D1 or D2), the product, the operator who scanned it, the loop count, and whether the scan is OK or has been voided.</p>
+
+<h2 class="sec">Reading and filtering</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Date and presets</div><div class="a-val"><p>Pick a single day, or use <strong>Today</strong>, <strong>This Week</strong>, <strong>This Month</strong>. Choosing a range shows a From and To field.</p></div></div>
+  <div class="a-row"><div class="a-key">Summary tiles</div><div class="a-val"><p>The cards across the top count the day&rsquo;s scans per activity (Total, RTE, RTR, DTK, Allocated, Packed, Dispatched, Returns In, RTD Return, Voided). Click a tile to filter the table to that activity; click Total to clear.</p></div></div>
+  <div class="a-row"><div class="a-key">Activity chips</div><div class="a-val"><p>The row of chips does the same filtering as the tiles, and also covers the Repack In / Repack Out steps that are kept off the headline tiles.</p></div></div>
+  <div class="a-row"><div class="a-key">Search UPC</div><div class="a-val"><p>Type at least four characters of a UPC to switch into search mode: the table then shows that one unit&rsquo;s full dispatch history across time, not just the chosen day. Clear the box to return to the live feed.</p></div></div>
+  <div class="a-row"><div class="a-key">Show Voided</div><div class="a-val"><p>Off by default. Tick it to include scans that were later voided (they appear dimmed and tagged Voided).</p></div></div>
+</div>
+
+<div class="callout tip">
+  <div class="c-title">&#10003; Tip</div>
+  <p>Use the UPC search to settle a &ldquo;where did this box go?&rdquo; question: search the UPC and you get its trail of dispatch scans (packed, allocated, dispatched, returned) in order, with the operator and time on each. The list loads in pages; click <strong>Load More</strong> at the bottom to pull older scans for the selected day.</p>
+</div>

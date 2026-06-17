@@ -1,7 +1,7 @@
 import {
   Gauge, Send, Network, FileText, PackageCheck,
   Undo2, RefreshCw, ArrowLeftRight, BarChart3,
-  LayoutGrid, Truck, GitBranch, ScanLine, ClipboardList, Users, Tag, ClipboardCheck,
+  LayoutGrid, Truck, GitBranch, ScanLine, ClipboardList, Users, Tag, ClipboardCheck, BookOpen,
 } from 'lucide-react';
 
 /* ════════════════════════════════════════════════════════════
@@ -54,6 +54,9 @@ export const NAV_SETUP = [
   { id: 'channels', label: 'Channels', route: '/dispatch-channels', icon: Tag },
 ];
 
+/* Help — the in-app System Manual (also downloadable as PDF). */
+export const NAV_MANUAL = { id: 'manual', label: 'System Manual', icon: BookOpen, route: '/manual' };
+
 /* All live floor views now live in the Floor group; nothing is ⌘K-only. */
 export const NAV_HIDDEN = [];
 
@@ -66,6 +69,7 @@ export function resolveNav(pathname) {
     for (const c of g.children || []) all.push({ crumb: g.label, item: c, group: g });
   }
   for (const s of NAV_SETUP) all.push({ crumb: 'Setup', item: s, group: { id: '__setup' } });
+  all.push({ crumb: 'Help', item: NAV_MANUAL, group: { id: '__manual' } });
   for (const h of NAV_HIDDEN) all.push({ crumb: 'Floor', item: h, group: { id: 'floor' } });
 
   // longest matching route wins (handles /dispatch-challans/new etc.)

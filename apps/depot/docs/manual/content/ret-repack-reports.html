@@ -1,0 +1,38 @@
+<p class="lead">Repack Reports is the read-only analytics view for channel swaps. It counts only <strong>completed</strong> swaps in the chosen date range and breaks them down by direction, product, line, operator and time, so you can see how much repack work was done and where it went.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Channel-swap analytics.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read-only, with CSV export.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role op">Operator</span> <span class="role sup">Supervisor</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Counts</div><div class="g-val">Completed swaps only.</div></div>
+</div>
+
+<h2 class="sec">Picking a date range</h2>
+<p>Use the preset chips: <strong>7 days</strong>, <strong>30 days</strong>, <strong>This month</strong>, <strong>All time</strong>, or <strong>Custom</strong>. Custom shows two date pickers (from and to). Everything below the range follows your choice. <strong>Runs</strong> takes you back to the repack runs list.</p>
+
+<h2 class="sec">The summary cards</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Swaps</div><div class="a-val">Total completed channel swaps in the range.</div></div>
+  <div class="a-row"><div class="a-key">Products</div><div class="a-val">How many distinct products were swapped.</div></div>
+  <div class="a-row"><div class="a-key">Lines</div><div class="a-val">How many production lines did repack work.</div></div>
+  <div class="a-row"><div class="a-key">Operators</div><div class="a-val">How many people did the repacking.</div></div>
+</div>
+
+<h2 class="sec">The charts</h2>
+<p>Four bar charts break the swaps down: <strong>by direction</strong> (retail to ecom, ecom to retail), <strong>by product</strong>, <strong>by line</strong>, and <strong>by hour of day</strong> (IST). They are a quick read of where the volume sits.</p>
+
+<h2 class="sec">The tables</h2>
+<p>Three tables give the detail, each with its own <strong>CSV</strong> export of exactly what is shown:</p>
+<table class="tbl">
+  <thead><tr><th>Table</th><th>What it lists</th></tr></thead>
+  <tbody>
+    <tr><td>By product / colour</td><td>Each product, model and colour with its swap count.</td></tr>
+    <tr><td>By operator</td><td>Each operator with how many swaps they did.</td></tr>
+    <tr><td>By day</td><td>Swaps per day (IST) across the range.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Completed swaps only</div>
+  <p>Open and in-progress runs do not show here. A unit counts once it has been re-packed out for its new channel, so an empty report just means nothing has finished in the chosen range yet.</p>
+</div>

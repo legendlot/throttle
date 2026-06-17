@@ -1,0 +1,50 @@
+<p class="lead">Stock Audit is the trustworthy count of the finished cars that dispatch physically holds. It is not the quick Dispatch Counts scratchpad; this is a governed count that, once approved, corrects the system to match the floor. You open one when you want a real reconciliation of what is on the shelves against what the system thinks is there.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">A governed, self-correcting count of held cars.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action (open, scan, submit, approve).</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role op">Operator</span> <span class="role sup">Supervisor</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Key fact</div><div class="g-val">The counter cannot approve their own audit.</div></div>
+</div>
+
+<h2 class="sec">What it counts, and why</h2>
+<p>An audit measures the cars dispatch is <strong>holding</strong>: every unit whose status is <code>handed_over</code> (with dispatch, not yet allocated) or <code>allocated</code> (set aside for a channel, not yet shipped). Cars that are still with production, already dispatched, or shipped are out of scope. It counts <em>cars only</em>; you never scan remotes separately, because a remote rides along with the car through their box pairing.</p>
+<p>The point of the audit is to find the gaps honestly and then fix them. After a different supervisor approves, cars the system says you hold but nobody could find are marked <strong>lost</strong>, and cars you scanned that the system had written off come back into your holding. So the count is self-correcting: it does not just report a number, it repairs the records.</p>
+
+<h2 class="sec">Reading the screen</h2>
+<p>The first screen is the <strong>register</strong>: every audit ever run, with its status, who opened it and when, and the headline numbers (present, missing, extra, corrected). Use the status tabs (Open, In Review, Completed, Cancelled, All) to filter. Click any row to open it.</p>
+<p>Inside an open audit you watch four live tiles and a per-product table.</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Scanned</div><div class="a-val"><p>How many car labels have been scanned into this audit so far (re-scans do not double-count).</p></div></div>
+  <div class="a-row"><div class="a-key">Present</div><div class="a-val"><p>Scanned <em>and</em> held: the system and the floor agree these cars are here.</p></div></div>
+  <div class="a-row"><div class="a-key">Missing</div><div class="a-val"><p>Held by the system but not yet scanned. These are the cars to go and find. The screen lists the exact batch labels.</p></div></div>
+  <div class="a-row"><div class="a-key">Extra</div><div class="a-val"><p>Scanned but not currently held by the system (for example, a car the system had marked lost). These come back on approval.</p></div></div>
+</div>
+<div class="callout note">
+  <div class="c-title">&#9432; Variance is only ever about products you scanned</div>
+  <p>The variance table shows one row per product that was scanned at least once, comparing held against scanned. A product you never scan at all is not flagged as missing; the audit does not assume you meant to count a product you never touched. So if you are auditing only one shelf, scan that shelf and the numbers stay about that shelf.</p>
+</div>
+
+<h2 class="sec">Running an audit</h2>
+<ol class="steps">
+  <li><span class="s-title">Open the audit.</span> A supervisor clicks <strong>Open new audit</strong>, optionally names the area (for example, &ldquo;D1 racks&rdquo;) and adds a note. Only <strong>one audit can be open at a time</strong>; if one is already open you must submit or cancel it first.</li>
+  <li><span class="s-title">Scan the floor.</span> On the floor scanner go to <code>Dispatch &rarr; Stock Audit</code> and scan every car box label you physically hold (the <code>LOT-&hellip;-E</code> or <code>LOT-&hellip;-R</code> labels). Scan in any order, in as many passes as you like; re-scanning the same label is safe and simply merges. Nobody has to hunt for a specific car mid-count: you just sweep everything you have.</li>
+  <li><span class="s-title">Watch the variance.</span> Back on this screen the tiles and the per-product table update as scans land. The <strong>Missing</strong> list gives you the exact batch labels still unaccounted for, so you can go look for them before you finish. A desk fallback, <strong>Add scans (paste)</strong>, lets a supervisor paste labels or UPCs if a few need adding by hand; pasted scans dedupe with the floor scans.</li>
+  <li><span class="s-title">Submit for review.</span> When the count is settled, click <strong>Submit for review</strong>. This freezes the variance into a fixed list of discrepancies and stops further scanning. The audit moves to In Review.</li>
+  <li><span class="s-title">A different supervisor reviews.</span> The reviewer opens the In Review audit, looks down the frozen discrepancy lines, and may <strong>skip</strong> any individual line they do not want corrected (tick its Skip box). When satisfied they click <strong>Approve &amp; correct</strong>.</li>
+  <li><span class="s-title">The system self-corrects.</span> On approval, each missing line (not skipped) marks its car <strong>lost</strong>, and each extra line brings its car back to <code>handed_over</code>. The audit becomes Completed and the corrected count is recorded. This is reversible: a later audit that scans a car previously marked lost will pick it up as an extra and restore it.</li>
+</ol>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; The counter cannot approve their own count</div>
+  <p>This is a real check-and-balance, enforced by the system, not just a convention. Whoever <strong>opened</strong> or <strong>submitted</strong> an audit is blocked from approving it; the Approve button will not work for them. Approval must come from a <em>different</em> supervisor. Because approving an audit changes real inventory (writing cars off as lost and adding others back), one person must never be able to both run the count and bless it. If you counted it, hand it to someone else to approve.</p>
+</div>
+
+<h2 class="sec">Who can do what</h2>
+<p>Opening, scanning and submitting an audit need the count-record right; approving needs the count-approve right, held by a different person.</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key"><span class="role op">Operator</span></div><div class="a-val"><p>Scans the held car labels at the scanner Stock Audit station during a count. Reads the audit screen.</p></div></div>
+  <div class="a-row"><div class="a-key"><span class="role sup">Supervisor</span></div><div class="a-val"><p>Opens, scans, submits an audit, and (a <em>different</em> supervisor) reviews and approves it.</p></div></div>
+  <div class="a-row"><div class="a-key"><span class="role adm">Admin</span></div><div class="a-val"><p>Full access to the whole flow.</p></div></div>
+</div>
+<p>If an audit is sitting In Review and no one with approval rights is available, it simply waits; nothing is corrected until someone approves it. To abandon a count without touching any records, use <strong>Cancel</strong>: no corrections are applied.</p>

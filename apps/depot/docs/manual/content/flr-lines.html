@@ -1,0 +1,28 @@
+<p class="lead">Lines is today&rsquo;s dispatch productivity board: how many scans happened at each stage per line, which channels each line is working, and who is doing the work. It covers today only and refreshes every 30 seconds.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Live line &amp; operator output.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read-only.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role op">Operator</span> <span class="role sup">Supervisor</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Covers</div><div class="g-val">Today only, refreshed every 30s.</div></div>
+</div>
+
+<h2 class="sec">The four dispatch stages</h2>
+<p>Every figure on this board breaks down into the four dispatch-floor scan stages. Knowing them makes the numbers readable:</p>
+<table class="tbl">
+  <thead><tr><th>Stage</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Alloc</strong></td><td>Unit allocated (committed) to a sales channel.</td></tr>
+    <tr><td><strong>DTK</strong></td><td>Dispatch take: pulled to be boxed.</td></tr>
+    <tr><td><strong>Pack</strong></td><td>Packed into a shipment box.</td></tr>
+    <tr><td><strong style="color:#1a8f43">Dout</strong></td><td>Dispatched out: shipped.</td></tr>
+  </tbody>
+</table>
+
+<h2 class="sec">Reading it</h2>
+<p><strong>Dispatch Line Performance</strong> gives one card per line (D1 and D2): its active channels, a big total-scans number, the four-stage grid, the operator count, and the day&rsquo;s first-to-last scan time. <strong>Operator Output</strong> is a table of each operator&rsquo;s Alloc, DTK, Pack, Dout and total, sorted by who has done the most.</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; &ldquo;Test Operator&rdquo; is hidden</div>
+  <p>A non-production &ldquo;Test Operator&rdquo; account is deliberately left out of the operator table so it does not skew the rankings.</p>
+</div>

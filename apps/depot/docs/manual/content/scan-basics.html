@@ -1,0 +1,38 @@
+<p class="lead">Depot is the desk side of dispatch; the floor side runs on a separate handheld scanner. It is its own little app you open on a phone or floor tablet, and it is where the physical work gets recorded: a unit only moves through the pipeline you see in Depot because someone scanned it at a station. This chapter covers how you get into the scanner, sign in, and reach a Dispatch station. The Dispatch station chapter that follows covers each scan in detail.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Where</div><div class="g-val"><span class="mono">scanner.legendoftoys.com</span>, on a phone or floor tablet (not inside Depot).</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: every scan records a real move.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role op">Operator</span> <span class="role sup">Supervisor</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Gets you in</div><div class="g-val">Dispatch PIN, then your QR badge.</div></div>
+</div>
+
+<h2 class="sec">The scanner is a separate app</h2>
+<p>Depot (the back office) and the floor scanner are two different things on two different screens. Depot is the dashboard where you watch the pipeline, build shipments and run audits. The scanner at <span class="mono">scanner.legendoftoys.com</span> is the handheld your team taps to record each physical move on the floor. They share the same data, so a scan on the floor shows up in Depot within a minute, but you sign into each one separately.</p>
+
+<h2 class="sec">Departments, not a free-for-all</h2>
+<p>The scanner opens on a <strong>Department Select</strong> screen with four tiles: <strong>Production</strong>, <strong>Store</strong>, <strong>Dispatch</strong> and <strong>Attendance</strong>. As dispatch, you pick <strong>Dispatch</strong>; it leads only to dispatch stations. A Dispatch device cannot be switched to a Production or Store station by mistake, and the reverse. This walling-off is deliberate: it removes the wrong-station mis-scans that used to cause real damage, like a fresh production car being scanned through a dispatch station.</p>
+
+<ol class="steps">
+  <li><span class="s-title">Tap Dispatch.</span> A 6-digit PIN keypad appears on screen (not the phone keyboard, so the PIN is never remembered by the device).</li>
+  <li><span class="s-title">Enter the Dispatch PIN.</span> A wrong PIN just says &ldquo;try again&rdquo;; there is no lockout. The unlock then sticks until <strong>1 AM</strong>, even if the app is closed and reopened. Logout clears it, so you re-enter the PIN after a logout.</li>
+  <li><span class="s-title">Sign in with your QR badge.</span> Scan your operator card (or tap <strong>Type ID</strong> and enter your employee ID). This runs once per device per shift and also expires at 1 AM. Every station that touches a unit needs this, so your name is on each scan.</li>
+  <li><span class="s-title">Pick a category, then line and station.</span> Choose your dispatch line (<strong>D1</strong> or <strong>D2</strong>) and the station you are working, then tap <strong>Launch Scanner</strong>.</li>
+</ol>
+
+<h2 class="sec">On the scanner screen</h2>
+<p>Once launched, the top bar shows your <strong>line and station</strong> (and your name) on the left and <strong>Logout</strong> on the right. The camera fills the middle; your recent scans run along the bottom. There is <strong>no settings button and no way to switch station in-app</strong>. To change line or station, tap <strong>Logout</strong>, which takes you all the way back to Department Select, then come in again through the same flow. That friction is intentional: it stops a station drifting onto the wrong job mid-shift.</p>
+
+<h2 class="sec">Shift is automatic</h2>
+<p>There are no Regular or OT buttons. The scanner reads the device clock and tags each scan&rsquo;s shift for you: dispatch stations count Regular from 09:00 to 18:00 and anything outside that window as OT. You never set it.</p>
+
+<h2 class="sec">When a scan is rejected</h2>
+<div class="callout danger">
+  <div class="c-title">&#9940; A wrong scan stops you with a full red screen and a buzz</div>
+  <p>For almost every station, if a unit is at the wrong stage, belongs somewhere else, or the code is the wrong kind, the scanner shows a <strong>full red reject screen with a distinct buzz</strong> and states the exact reason (for example &ldquo;not ready to dispatch&rdquo;). Nothing is recorded. Read the reason, fix it, and rescan. Each reject is logged, so a pattern of them is visible to a supervisor.</p>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; One station is gentler on purpose</div>
+  <p>The new <strong>Stock Audit</strong> station does not red-screen the way the others do; during a count it just warns and keeps going, because every scan is only data for the count. The Dispatch station chapter explains exactly how that one differs.</p>
+</div>

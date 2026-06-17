@@ -1,0 +1,55 @@
+<p class="lead">The Overview is Depot&rsquo;s live warehouse cockpit: open it first thing and it tells you, at a glance, how much finished stock is sitting in the dispatch area, how many people are on the floor, where every unit is in the pipeline, what each line has done today, what is committed but not yet shipped, and what has gone out. It is a read-only monitor; you act on the screens it points you to.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">The dispatch day, top to bottom.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read-only monitor.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role op">Operator</span> <span class="role sup">Supervisor</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Updates</div><div class="g-val">Live counts every 30s; floor people every 60s.</div></div>
+</div>
+
+<h2 class="sec">The hero: two headline numbers</h2>
+<p>The top of the screen carries the two figures you most want to know the second you walk in:</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Units in the dispatch area</div><div class="a-val">Everything finished goods currently holds: stock still with production awaiting handover, stock with dispatch, and stock already allocated to a channel but not yet shipped. This is your &ldquo;how full are we&rdquo; number.</div></div>
+  <div class="a-row"><div class="a-key">Operators on the floor</div><div class="a-val">How many dispatch operators are clocked in right now. Shows a dash (&mdash;) if you do not have floor-viewing rights (see the note at the foot of this chapter).</div></div>
+</div>
+
+<h2 class="sec">The five pipeline cards</h2>
+<p>A unit moves left to right through these stages. The first three cards are a live snapshot of how much sits at each stage right now; the last two count today&rsquo;s throughput.</p>
+<table class="tbl">
+  <thead><tr><th>Card</th><th>Tag</th><th>What it counts</th></tr></thead>
+  <tbody>
+    <tr><td><strong>With Production</strong></td><td>now</td><td>Packed on the line, awaiting handover to dispatch.</td></tr>
+    <tr><td><strong>With Dispatch</strong></td><td>now</td><td>Handed over to dispatch, awaiting allocation to a channel.</td></tr>
+    <tr><td><strong style="color:#2138c0">Allocated</strong></td><td>now</td><td>Committed to a channel, awaiting ship.</td></tr>
+    <tr><td><strong style="color:#1a8f43">Dispatched</strong></td><td>today</td><td>Units sent out today (the DOUT scan).</td></tr>
+    <tr><td><strong>Shipments</strong></td><td>today</td><td>How many shipment manifests have gone out today.</td></tr>
+  </tbody>
+</table>
+
+<h2 class="sec">Today on the Floor</h2>
+<p>One card per dispatch line, <strong>D1</strong> and <strong>D2</strong>. Each card shows what that line has done today and who is on it:</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Rostered &middot; active</div><div class="a-val">How many operators are rostered to the line today (from the Daily roster) and how many are actually scanning. If you lack floor rights the rostered figure is hidden and you just see the active count.</div></div>
+  <div class="a-row"><div class="a-key">Packed / Allocated / Dispatched</div><div class="a-val">The line&rsquo;s counts for the day at each of those three stages.</div></div>
+  <div class="a-row"><div class="a-key">Active channels</div><div class="a-val">The channels the line has touched today; &ldquo;No channel yet&rdquo; if it has not started.</div></div>
+  <div class="a-row"><div class="a-key">last &hellip;</div><div class="a-val">The time of the line&rsquo;s most recent scan, so you can spot a line that has gone quiet.</div></div>
+</div>
+<div class="callout tip">
+  <div class="c-title">&#10003; Rostered comes from the Daily roster</div>
+  <p>The rostered number is whoever you assigned to D1 and D2 in Manpower &rarr; Daily roster. If a line shows zero rostered but people are scanning on it, the roster has not been set for today.</p>
+</div>
+
+<h2 class="sec">Allocated: Awaiting Ship</h2>
+<p>One card per channel showing how many committed units are waiting to go out, biggest first. Sale channels are shown in full colour; non-sale channels are dimmed. The figure beside the heading is the total across all channels. This is the work still owed to customers.</p>
+
+<h2 class="sec">On-Hand Finished Goods</h2>
+<p>A by-product table of stock physically in the dispatch area. For each product you see <strong>PKG Out</strong> (still with production), <strong>With Dispatch</strong>, <strong>Allocated</strong>, and an <strong>On Hand</strong> total. Sorted by the largest holding. This is the heavier read on the page, so it loads once when you open the screen rather than refreshing on a timer; reopen the screen to pull fresh figures.</p>
+
+<h2 class="sec">Sent Out by Channel</h2>
+<p>What has actually shipped over a window you choose. Pick a preset (<strong>10 Days</strong>, <strong>This Week</strong>, <strong>This Month</strong>) or <strong>Custom</strong> for your own From and To dates. The summary line reads <span class="kbd">sold</span> &middot; <span class="kbd">non-sale</span> &middot; <span class="kbd">total</span>; revenue channels are highlighted, cost and non-sale channels dimmed.</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Floor people may show a dash</div>
+  <p>The two people figures (operators on the floor, and the rostered count on each line card) need floor-management rights. If you do not have them the rest of the cockpit still works in full, those two readings simply show a dash (&mdash;) rather than a number.</p>
+</div>
