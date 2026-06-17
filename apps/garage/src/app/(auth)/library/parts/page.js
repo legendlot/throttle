@@ -1,9 +1,11 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
-import { garageFetch } from '@throttle/db';
-import { Spinner, Combobox, Modal } from '@throttle/ui';
+import { garageFetch, workerFetch, supabase } from '@throttle/db';
+import { Spinner, Combobox, Modal, useToast } from '@throttle/ui';
 import { useProducts } from '../../../../hooks/useProducts.js';
+
+const PART_IMAGES_BUCKET = 'part-images';
 
 const TONE_STYLES = {
   yellow: { bg: 'rgba(242,205,26,.12)', fg: '#f2cd1a', border: 'rgba(242,205,26,.2)' },
@@ -45,61 +47,86 @@ const btnSecondary     = { background: 'transparent', border: '1px solid var(--b
 
 export default function LibraryPartsPage() {
   const { session } = useAuth();
+  const { showToast } = useToast();
   const { PRODUCTS, loading: productsLoading } = useProducts();
 
   const [partsDB, setPartsDB] = useState([]);
-  const [loadStatus, setLoadStatus] = useState('Loading BOM data…');
+  const [loadStatus, setLoadStatus] = useState('Loading parts…');
 
   const [search, setSearch] = useState('');
   const [filterProduct, setFilterProduct] = useState('');
   const [filterTier, setFilterTier] = useState('');
   const [filterCat, setFilterCat] = useState('');
-  const [imgView, setImgView] = useState(null); // { part_code, part_name, image_url } | null
+
+  // Photo manager
+  const [photoPart, setPhotoPart] = useState(null); // the part row being managed
+  const [photos, setPhotos] = useState([]);
+  const [photosLoading, setPhotosLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [enlarge, setEnlarge] = useState(null);     // a single photo for the lightbox
+  const [delId, setDelId] = useState(null);         // inline 2-step delete confirm
 
   useEffect(() => {
     if (!session || productsLoading || !PRODUCTS.length) return;
     let cancelled = false;
-    setLoadStatus('Loading BOM data…');
+    setLoadStatus('Loading parts…');
     (async () => {
       try {
-        const results = await Promise.all(
-          PRODUCTS.map((p) => garageFetch('getBOM', { product: p }, session).catch(() => []))
-        );
+        // Catalogue is the spine (ALL active parts incl. those not in any BOM, with
+        // photo counts). BOMs only enrich product / variant / qty usage.
+        const [bomResults, catalog] = await Promise.all([
+          Promise.all(PRODUCTS.map((p) => garageFetch('getBOM', { product: p }, session).catch(() => []))),
+          garageFetch('getPartsCatalog', {}, session).catch(() => []),
+        ]);
         if (cancelled) return;
-        const map = {};
-        results.forEach((rows, i) => {
+
+        const bomMap = {};
+        bomResults.forEach((rows, i) => {
           const product = PRODUCTS[i];
           (Array.isArray(rows) ? rows : []).forEach((r) => {
-            if (!map[r.part_code]) {
-              map[r.part_code] = {
-                part_code:    r.part_code,
-                part_name:    r.part_name,
-                category:     r.part_category || '—',
-                part_type:    r.part_type || '—',
-                tier:         r.common_variant || '—',
-                products:     [],
-                variants:     [],
-                qty_per_unit: r.qty_per_unit || 1,
-                image_url:    r.image_url || null,
+            if (!bomMap[r.part_code]) {
+              bomMap[r.part_code] = {
+                part_name: r.part_name, category: r.part_category || '', part_type: r.part_type || '',
+                tier: r.common_variant || '', products: [], variants: [],
               };
             }
-            const entry = map[r.part_code];
-            // image_url is keyed per part_code in material_master (identical
-            // across products) — backfill if the first-seen row lacked it.
-            if (!entry.image_url && r.image_url) entry.image_url = r.image_url;
-            if (!entry.products.includes(product)) entry.products.push(product);
-            entry.variants.push({
-              product,
-              variant_model: r.variant_model || 'Common',
-              qty_per_unit:  r.qty_per_unit || 1,
-            });
+            const e = bomMap[r.part_code];
+            if (!e.products.includes(product)) e.products.push(product);
+            e.variants.push({ product, variant_model: r.variant_model || 'Common', qty_per_unit: r.qty_per_unit || 1 });
           });
         });
-        const list = Object.values(map).sort((a, b) => a.part_code.localeCompare(b.part_code));
+
+        const map = {};
+        // 1) every catalogue part
+        (Array.isArray(catalog) ? catalog : []).forEach((c) => {
+          const b = bomMap[c.part_code];
+          map[c.part_code] = {
+            part_code:   c.part_code,
+            part_name:   c.part_name || b?.part_name || '—',
+            category:    c.part_category || b?.category || '—',
+            part_type:   c.part_type || b?.part_type || '—',
+            tier:        c.tier || b?.tier || '—',
+            products:    b?.products || [],
+            variants:    b?.variants || [],
+            image_url:   c.image_url || null,
+            photo_count: c.photo_count || 0,
+          };
+        });
+        // 2) any BOM part missing from the catalogue (name mismatch / not yet in material_master)
+        Object.entries(bomMap).forEach(([code, b]) => {
+          if (map[code]) return;
+          map[code] = {
+            part_code: code, part_name: b.part_name || '—', category: b.category || '—',
+            part_type: b.part_type || '—', tier: b.tier || '—',
+            products: b.products, variants: b.variants, image_url: null, photo_count: 0,
+          };
+        });
+
+        const list = Object.values(map).sort((a, b) => a.part_code.localeCompare(b.part_code, undefined, { numeric: true }));
         setPartsDB(list);
         setLoadStatus('');
       } catch {
-        if (!cancelled) setLoadStatus('Failed to load BOM data');
+        if (!cancelled) setLoadStatus('Failed to load parts');
       }
     })();
     return () => { cancelled = true; };
@@ -112,19 +139,13 @@ export default function LibraryPartsPage() {
   }, [partsDB]);
 
   // Multi-token AND-of-OR search across product / part_code / part_name /
-  // category / part_type / tier. Mirrors the Stock Ledger pattern so users
-  // can type "Flare metal" or "Apex electronic" and get intuitive results.
+  // category / part_type / tier. Mirrors the Stock Ledger pattern.
   const filtered = useMemo(() => {
     const tokens = (search || '').toLowerCase().trim().split(/\s+/).filter(Boolean);
     return partsDB.filter((r) => {
       if (tokens.length) {
         const fields = [
-          r.part_code,
-          r.part_name,
-          r.category,
-          r.part_type,
-          r.tier,
-          (r.products || []).join(' '),
+          r.part_code, r.part_name, r.category, r.part_type, r.tier, (r.products || []).join(' '),
         ].map((v) => (v || '').toLowerCase());
         for (const t of tokens) {
           if (!fields.some((f) => f.includes(t))) return false;
@@ -138,14 +159,74 @@ export default function LibraryPartsPage() {
   }, [partsDB, search, filterProduct, filterTier, filterCat]);
 
   function clearFilters() {
-    setSearch('');
-    setFilterProduct('');
-    setFilterTier('');
-    setFilterCat('');
+    setSearch(''); setFilterProduct(''); setFilterTier(''); setFilterCat('');
   }
 
   const isFiltered = !!(search || filterProduct || filterTier || filterCat);
   const capped = filtered.slice(0, 300);
+
+  // ── Photo manager ──────────────────────────────────────────
+  function syncRow(part_code, list) {
+    const primary = list.find((p) => p.is_primary) || list[0] || null;
+    setPartsDB((prev) => prev.map((r) =>
+      r.part_code === part_code ? { ...r, photo_count: list.length, image_url: primary?.url || null } : r));
+  }
+
+  async function loadPhotos(part_code) {
+    setPhotosLoading(true);
+    try {
+      const data = await garageFetch('getPartPhotos', { part_code }, session);
+      const list = Array.isArray(data?.photos) ? data.photos : [];
+      setPhotos(list);
+      syncRow(part_code, list);
+      return list;
+    } catch { setPhotos([]); return []; }
+    finally { setPhotosLoading(false); }
+  }
+
+  async function openPhotos(row) {
+    setPhotoPart(row); setPhotos([]); setEnlarge(null); setDelId(null);
+    await loadPhotos(row.part_code);
+  }
+  function closePhotos() { setPhotoPart(null); setPhotos([]); setEnlarge(null); setDelId(null); }
+
+  async function onFiles(e) {
+    const files = [...(e.target.files || [])];
+    e.target.value = '';
+    if (!files.length || !photoPart) return;
+    setUploading(true);
+    let added = 0;
+    for (const file of files) {
+      try {
+        if (!file.type.startsWith('image/')) { showToast(`"${file.name}" is not an image`, 'error'); continue; }
+        const r1 = await workerFetch('createPartPhotoUploadUrl', { data: { part_code: photoPart.part_code, file_name: file.name } }, session);
+        if (!r1.ok || !r1.data?.token) throw new Error(r1.error || 'No upload token');
+        const { storage_path, token } = r1.data;
+        const up = await supabase.storage.from(PART_IMAGES_BUCKET).uploadToSignedUrl(storage_path, token, file);
+        if (up.error) throw up.error;
+        const r2 = await workerFetch('recordPartPhoto', { data: { part_code: photoPart.part_code, storage_path, file_name: file.name, mime_type: file.type || null } }, session);
+        if (!r2.ok) throw new Error(r2.error || 'Record failed');
+        added++;
+      } catch (err) { showToast(`"${file.name}" failed: ${err.message || err}`, 'error'); }
+    }
+    if (added) { showToast(`${added} photo${added > 1 ? 's' : ''} added`, 'success'); await loadPhotos(photoPart.part_code); }
+    setUploading(false);
+  }
+
+  async function setCover(photo) {
+    const r = await workerFetch('setPrimaryPartPhoto', { data: { id: photo.id } }, session);
+    if (!r.ok) { showToast(r.error || 'Failed to set cover', 'error'); return; }
+    await loadPhotos(photoPart.part_code);
+    showToast('Cover photo updated', 'success');
+  }
+
+  async function doDelete(photo) {
+    const r = await workerFetch('deletePartPhoto', { data: { id: photo.id } }, session);
+    setDelId(null);
+    if (!r.ok) { showToast(r.error || 'Delete failed', 'error'); return; }
+    await loadPhotos(photoPart.part_code);
+    showToast('Photo deleted', 'success');
+  }
 
   return (
     <div style={{ color: 'var(--t1)' }}>
@@ -154,7 +235,7 @@ export default function LibraryPartsPage() {
           Library — Parts Database
         </h1>
         <p style={{ color: 'var(--t3)', fontSize: 11, marginTop: 4, fontFamily: 'var(--mono)' }}>
-          Cross-product part catalogue derived from all BOMs.
+          Full parts catalogue. Add or manage photos on any part — click its Photos button.
         </p>
       </div>
 
@@ -201,7 +282,7 @@ export default function LibraryPartsPage() {
         <span>
           {isFiltered
             ? `${filtered.length.toLocaleString()} of ${partsDB.length.toLocaleString()} parts`
-            : `${partsDB.length.toLocaleString()} unique parts across ${PRODUCTS.length} products`}
+            : `${partsDB.length.toLocaleString()} parts in catalogue`}
         </span>
         <span>{loadStatus}</span>
       </div>
@@ -223,7 +304,7 @@ export default function LibraryPartsPage() {
                 <th style={tableThStyle}>Products</th>
                 <th style={tableThStyle}>Variant / Model</th>
                 <th style={tableThStyle}>Qty / Unit</th>
-                <th style={tableThStyle}>Image</th>
+                <th style={tableThStyle}>Photos</th>
               </tr></thead>
               <tbody>
                 {capped.map((r) => {
@@ -234,7 +315,7 @@ export default function LibraryPartsPage() {
                   });
                   const qtys = [...new Set(r.variants.map((v) => v.qty_per_unit))];
                   qtys.sort((a, b) => a - b);
-                  const qtyDisplay = qtys.length === 1 ? qtys[0] : `${qtys[0]}–${qtys[qtys.length - 1]}`;
+                  const qtyDisplay = qtys.length === 0 ? '—' : qtys.length === 1 ? qtys[0] : `${qtys[0]}–${qtys[qtys.length - 1]}`;
                   return (
                     <tr key={r.part_code}>
                       <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--yellow)' }}>{r.part_code}</td>
@@ -243,21 +324,21 @@ export default function LibraryPartsPage() {
                       <td style={tableTdStyle}>{r.part_type}</td>
                       <td style={tableTdStyle}><StatusBadge label={r.tier} tone={tierTone(r.tier)} /></td>
                       <td style={{ ...tableTdStyle, whiteSpace: 'normal', maxWidth: 240, fontSize: 11 }}>
-                        {[...r.products].sort().join(', ')}
+                        {r.products.length ? [...r.products].sort().join(', ') : <span style={{ color: 'var(--t3)' }}>— not in any BOM</span>}
                       </td>
                       <td style={{ ...tableTdStyle, whiteSpace: 'normal', maxWidth: 220, fontSize: 11, color: 'var(--t2)' }}>
                         {variantSet.size === 0 ? '—' : [...variantSet].join(', ')}
                       </td>
                       <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{qtyDisplay}</td>
                       <td style={tableTdStyle}>
-                        {r.image_url ? (
-                          <button
-                            onClick={() => setImgView(r)}
-                            style={{ ...btnSecondary, padding: '4px 10px', fontSize: 10, color: 'var(--t1)', whiteSpace: 'nowrap' }}
-                          >View image</button>
-                        ) : (
-                          <span style={{ color: 'var(--t3)' }}>—</span>
-                        )}
+                        <button
+                          onClick={() => openPhotos(r)}
+                          style={{
+                            ...btnSecondary, padding: '4px 10px', fontSize: 10, whiteSpace: 'nowrap',
+                            color: r.photo_count > 0 ? 'var(--t1)' : 'var(--t2)',
+                            borderColor: r.photo_count > 0 ? 'var(--border)' : 'rgba(80,80,80,.4)',
+                          }}
+                        >{r.photo_count > 0 ? `Photos (${r.photo_count})` : '+ Add photos'}</button>
                       </td>
                     </tr>
                   );
@@ -275,25 +356,75 @@ export default function LibraryPartsPage() {
         </div>
       </div>
 
+      {/* Photo manager */}
       <Modal
-        open={!!imgView}
-        onClose={() => setImgView(null)}
+        open={!!photoPart}
+        onClose={closePhotos}
         size="lg"
-        title={imgView ? `${imgView.part_code} — ${imgView.part_name || ''}`.trim() : ''}
+        title={photoPart ? `${photoPart.part_code} — ${photoPart.part_name || ''}`.trim() : ''}
       >
-        {imgView && (
+        {photoPart && (
+          <div>
+            {/* Upload control */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
+              <label style={{
+                ...btnSecondary, display: 'inline-flex', alignItems: 'center', gap: 6,
+                color: 'var(--t1)', borderColor: 'var(--yellow)', cursor: uploading ? 'wait' : 'pointer',
+                opacity: uploading ? 0.6 : 1,
+              }}>
+                {uploading ? 'Uploading…' : '⬆ Upload photos'}
+                <input type="file" accept="image/*" multiple disabled={uploading} onChange={onFiles} style={{ display: 'none' }} />
+              </label>
+              <span style={{ fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>
+                JPG / PNG · multiple at once · first photo becomes the cover
+              </span>
+            </div>
+
+            {photosLoading ? (
+              <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+            ) : photos.length === 0 ? (
+              <div style={{ padding: 24, textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>
+                No photos yet — upload the first one.
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 12 }}>
+                {photos.map((p) => (
+                  <div key={p.id} style={{ border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden', background: 'var(--surface2)' }}>
+                    <div
+                      onClick={() => setEnlarge(p)}
+                      style={{ height: 120, background: '#000', cursor: 'zoom-in', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                    >
+                      <img src={p.url} alt={p.file_name || p.part_code} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+                    </div>
+                    <div style={{ padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+                        {p.is_primary
+                          ? <StatusBadge label="Cover" tone="green" />
+                          : <button onClick={() => setCover(p)} style={{ ...btnSecondary, padding: '2px 8px', fontSize: 9 }}>Set cover</button>}
+                        {delId === p.id ? (
+                          <span style={{ display: 'flex', gap: 4 }}>
+                            <button onClick={() => doDelete(p)} style={{ ...btnSecondary, padding: '2px 8px', fontSize: 9, color: '#ff7070', borderColor: 'rgba(222,42,42,.4)' }}>Confirm</button>
+                            <button onClick={() => setDelId(null)} style={{ ...btnSecondary, padding: '2px 8px', fontSize: 9 }}>✕</button>
+                          </span>
+                        ) : (
+                          <button onClick={() => setDelId(p.id)} style={{ ...btnSecondary, padding: '2px 8px', fontSize: 9, color: 'var(--t3)' }}>Delete</button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
+
+      {/* Lightbox */}
+      <Modal open={!!enlarge} onClose={() => setEnlarge(null)} size="lg" title={enlarge ? (enlarge.file_name || photoPart?.part_code || '') : ''}>
+        {enlarge && (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
-            <img
-              src={imgView.image_url}
-              alt={imgView.part_code}
-              style={{ maxWidth: '100%', maxHeight: '70dvh', borderRadius: 4, background: '#000' }}
-            />
-            <a
-              href={imgView.image_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}
-            >Open original ↗</a>
+            <img src={enlarge.url} alt={enlarge.part_code} style={{ maxWidth: '100%', maxHeight: '70dvh', borderRadius: 4, background: '#000' }} />
+            <a href={enlarge.url} target="_blank" rel="noopener noreferrer" style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>Open original ↗</a>
           </div>
         )}
       </Modal>
