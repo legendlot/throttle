@@ -2,8 +2,8 @@
   "title": "Redline",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to the production floor, QC, dispatch and admin screens that run Legend of Toys.",
-  "version": "1.6.0",
-  "date": "2026-06-14",
+  "version": "1.7.0",
+  "date": "2026-06-18",
   "app_url": "redline.legendoftoys.com",
   "owner": "Legend of Toys",
   "roles": {
@@ -199,6 +199,17 @@
             "sup",
             "adm"
           ]
+        },
+        {
+          "id": "repack-runs",
+          "title": "Repack Runs",
+          "route": "/repack-runs",
+          "file": "disp-repack.html",
+          "roles": [
+            "dis",
+            "sup",
+            "adm"
+          ]
         }
       ]
     },
@@ -255,7 +266,7 @@
     },
     {
       "part": "Scanner",
-      "subtitle": "The production and dispatch stations on the floor scanner: how to get in, and what each station does.",
+      "subtitle": "The production stations on the floor scanner: how to get in, and what each station does. (Dispatch stations now live in the Depot manual.)",
       "chapters": [
         {
           "id": "scan-basics",
@@ -287,15 +298,6 @@
           ]
         },
         {
-          "id": "scan-dispatch",
-          "title": "Dispatch Stations",
-          "file": "scan-dispatch.html",
-          "roles": [
-            "dis",
-            "sup"
-          ]
-        },
-        {
           "id": "scan-utilities",
           "title": "Attendance & Lookup",
           "file": "scan-utilities.html",
@@ -304,114 +306,6 @@
             "sup",
             "dis"
           ]
-        }
-      ]
-    },
-    {
-      "part": "Dispatch",
-      "subtitle": "From open inventory through shipments, channels, challans and channel-swap repacks.",
-      "chapters": [
-        {
-          "id": "dispatch",
-          "title": "Dispatch Overview",
-          "route": "/dispatch",
-          "file": "disp-overview.html",
-          "roles": [
-            "dis",
-            "adm"
-          ]
-        },
-        {
-          "id": "dispatch-lines",
-          "title": "Dispatch Lines",
-          "route": "/dispatch/lines",
-          "file": "disp-lines.html",
-          "roles": [
-            "dis",
-            "adm"
-          ]
-        },
-        {
-          "id": "dispatch-pipeline",
-          "title": "Dispatch Pipeline",
-          "route": "/dispatch-pipeline",
-          "file": "disp-pipeline.html",
-          "roles": [
-            "dis",
-            "sup",
-            "adm"
-          ]
-        },
-        {
-          "id": "dispatch-shipments",
-          "title": "Shipments",
-          "route": "/dispatch-shipments",
-          "file": "disp-shipments.html",
-          "roles": [
-            "dis",
-            "adm"
-          ]
-        },
-        {
-          "id": "dispatch-challans",
-          "title": "Delivery Challans",
-          "route": "/dispatch-challans",
-          "file": "disp-challans.html",
-          "roles": [
-            "dis",
-            "adm"
-          ]
-        },
-        {
-          "id": "dispatch-channels",
-          "title": "Channel Master",
-          "route": "/dispatch-channels",
-          "file": "disp-channels.html",
-          "roles": [
-            "adm"
-          ]
-        },
-        {
-          "id": "repack-runs",
-          "title": "Repack Runs",
-          "route": "/repack-runs",
-          "file": "disp-repack.html",
-          "roles": [
-            "dis",
-            "sup",
-            "adm"
-          ]
-        },
-        {
-          "id": "restock",
-          "title": "Unit Restock",
-          "route": "/restock",
-          "roles": [
-            "dis",
-            "adm"
-          ],
-          "file": "disp-restock.html"
-        },
-        {
-          "id": "dispatch-roster",
-          "title": "Dispatch Roster",
-          "route": "/dispatch-roster",
-          "roles": [
-            "dis",
-            "sup",
-            "adm"
-          ],
-          "file": "disp-roster.html"
-        },
-        {
-          "id": "dispatch-counts",
-          "title": "Dispatch Counts",
-          "route": "/dispatch-counts",
-          "roles": [
-            "dis",
-            "adm"
-          ],
-          "file": "disp-counts.html"
         }
       ]
     },
