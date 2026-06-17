@@ -12,7 +12,7 @@
 <table class="tbl">
   <thead><tr><th>Card</th><th>Meaning</th></tr></thead>
   <tbody>
-    <tr><td><strong>Dispatched</strong></td><td>Units shipped; the sub-line splits retail vs ecom.</td></tr>
+    <tr><td><strong>Packed</strong></td><td>Units packed out (PKG&nbsp;Out flow for the period); the sub-line splits retail vs ecom.</td></tr>
     <tr><td><strong>QC Pass</strong></td><td>Units checked-and-passed (first-pass yield).</td></tr>
     <tr><td><strong>Pass Rate</strong></td><td>First-pass yield percentage against the 95% target (green at or above 95%, yellow below).</td></tr>
     <tr><td><strong>QC Fail</strong></td><td>Failed QC (turns red when above zero); the sub-line splits cars vs remotes.</td></tr>
@@ -22,7 +22,7 @@
 </table>
 
 <h2 class="sec">The monthly projection chip</h2>
-<p>The <strong>Dispatched</strong> and <strong>QC Pass</strong> cards carry a small <span class="mono">&#8593; ~N proj / mo</span> line at the top. It takes what has actually happened so far this month and extends it to a whole-month estimate at today&rsquo;s pace: month-to-date total, divided by the day of the month, times the number of days in the month. So on the 12th, a month-to-date figure is scaled up by 30/12. Hover it for the exact basis. It is a pace estimate, not a promise, and it only sits on the two cards that count a running monthly total. The other cards are either a percentage or a live snapshot, where a monthly projection would not mean anything.</p>
+<p>The <strong>Packed</strong> and <strong>QC Pass</strong> cards carry a small <span class="mono">&#8593; ~N proj / mo</span> line at the top. It takes what has actually happened so far this month and extends it to a whole-month estimate at today&rsquo;s pace: month-to-date total, divided by the day of the month, times the number of days in the month. So on the 12th, a month-to-date figure is scaled up by 30/12. Hover it for the exact basis. It is a pace estimate, not a promise, and it only sits on the two cards that count a running monthly total. The other cards are either a percentage or a live snapshot, where a monthly projection would not mean anything.</p>
 
 <h2 class="sec">On floor today</h2>
 <p>A strip under the cards shows the day&rsquo;s manpower: how many people are on the floor against the plan, the present percentage and the absent count, then a per-line crew breakdown with a short marker (for example <span class="mono">&minus;2</span>) when a line is below its planned headcount. The <strong>Manpower</strong> button opens the full Manpower screen.</p>
@@ -35,8 +35,8 @@
 </div>
 <p>When nothing needs you, the list shows an <strong>All clear</strong> message.</p>
 
-<h2 class="sec">Shift progress &amp; dispatch today</h2>
-<p>On the right, <strong>Shift progress</strong> shows one battery per line filling toward its daily target, with a pace marker for where you should be by now (green when on pace, red when behind). <strong>Dispatch today</strong> shows retail, ecom and pkg-out tallies, with a link to the dispatch Pipeline.</p>
+<h2 class="sec">Shift progress</h2>
+<p>On the right, <strong>Shift progress</strong> shows one battery per line filling toward its daily target, with a pace marker for where you should be by now (green when on pace, red when behind).</p>
 
 <h2 class="sec">Tomorrow&rsquo;s runs</h2>
 <p>At the bottom, a table of the production runs already lined up for tomorrow: those requested, submitted or in-flight (closed and cancelled runs are left out). Columns are Run, Product, Line, Target (with the retail / ecom split) and Status. Click a row to open New Run. Use it at end of shift to see what the floor is set up to build next.</p>
