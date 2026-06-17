@@ -622,7 +622,7 @@ export default function ReceivingPage() {
   async function raiseGRN() {
     if (!shipmentData) return;
     const ids = (shipmentData.lines || [])
-      .filter(l => (parseInt(l.qty_counted) || 0) > 0 && !l.grn_no)
+      .filter(l => (parseInt(l.qty_counted) || 0) > (parseInt(l.qty_grn) || 0))
       .map(l => l.line_id);
     if (!ids.length) { showToast('No counted lines ready for GRN', 'error'); return; }
     try {
@@ -641,7 +641,7 @@ export default function ReceivingPage() {
   const marks    = shipmentData?.marks    || [];
   const lines    = shipmentData?.lines    || [];
 
-  const hasQtyForGRN   = lines.some(l => (parseInt(l.qty_counted) || 0) > 0 && !l.grn_no);
+  const hasQtyForGRN   = lines.some(l => (parseInt(l.qty_counted) || 0) > (parseInt(l.qty_grn) || 0));
   const showBagButtons = !isFbu && lines.some(l => l.status === 'Counted' || l.status === 'GRN Raised');
 
   // ── RENDER: permission guard ──────────────────────────────────────────────────
@@ -1233,7 +1233,9 @@ export default function ReceivingPage() {
                           : (l.part_code ? l.part_code + ' · ' + (l.part_name || '') : (l.part_name || '—'));
 
                         let statusTone = 'gray', statusLabel = 'Pending';
-                        if (l.grn_no)              { statusLabel = 'GRN Raised'; statusTone = 'green'; }
+                        const grnQty = parseInt(l.qty_grn) || 0;
+                        if (grnQty > 0 && grnQty >= totalCounted) { statusLabel = 'GRN Raised'; statusTone = 'green'; }
+                        else if (grnQty > 0)        { statusLabel = `GRN'd ${grnQty}/${totalCounted}`; statusTone = 'orange'; }
                         else if (totalCounted === 0){ statusLabel = 'Pending';    statusTone = 'gray';  }
                         else if (short > 0)         { statusLabel = 'Short';      statusTone = 'red';   }
                         else if (over  > 0)         { statusLabel = 'Over';       statusTone = 'orange';}
