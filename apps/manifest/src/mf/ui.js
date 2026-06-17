@@ -76,9 +76,14 @@ export function Textarea(props) {
   return <textarea {...props} className="mf-input" style={{ ...inputStyle, minHeight: 70, resize: 'vertical', lineHeight: 1.5, ...(props.style || {}) }} />;
 }
 export function Select({ options = [], ...props }) {
+  // options may be plain strings, or { value, label } objects (value submitted, label shown)
   return (
     <select {...props} className="mf-input" style={{ ...inputStyle, appearance: 'none', cursor: 'pointer', ...(props.style || {}) }}>
-      {options.map((o) => <option key={o} value={o}>{o}</option>)}
+      {options.map((o) => {
+        const val = (o && typeof o === 'object') ? o.value : o;
+        const lbl = (o && typeof o === 'object') ? o.label : o;
+        return <option key={val} value={val}>{lbl}</option>;
+      })}
     </select>
   );
 }

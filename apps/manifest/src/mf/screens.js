@@ -536,7 +536,7 @@ function LegCosts({ leg, forwarders, run, session }) {
       )}
       {tab === 'lastmile' && (
         <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 7 }}>
-          <Select value={fwd} onChange={(e) => setFwd(e.target.value)} options={['', ...forwarders.map((x) => x.forwarder_code)]} style={{ padding: '6px 8px', fontSize: 11 }} />
+          <Select value={fwd} onChange={(e) => setFwd(e.target.value)} options={[{ value: '', label: '— none —' }, ...forwarders.map((x) => ({ value: x.forwarder_code, label: `${x.forwarder_code} · ${x.company_name}` }))]} style={{ padding: '6px 8px', fontSize: 11 }} />
           <Input value={veh} onChange={(e) => setVeh(e.target.value)} placeholder="Vehicle number (for the store team)" style={{ padding: '6px 8px', fontSize: 11 }} />
           <div style={{ display: 'flex', gap: 8 }}>
             <Btn style={{ padding: '6px 12px', fontSize: 11 }} onClick={saveLastMile}>Save</Btn>
@@ -753,7 +753,7 @@ function Shipments({ data, onNav, session, reload }) {
   const blank = { mode: 'sea', forwarder_code: '', loading_date: '', etd: '', container_type: '', container_no: '', bl_awb_no: '' };
   const [f, setF] = useState(blank);
   useEffect(() => { garageFetch('getForwarders', {}, session).then(setForwarders).catch(() => setForwarders([])); /* eslint-disable-next-line */ }, [session]);
-  const fwdOpts = ['', ...forwarders.filter((x) => (x.modes_supported || []).map((m) => String(m).toLowerCase()).includes(f.mode)).map((x) => x.forwarder_code)];
+  const fwdOpts = [{ value: '', label: '— none —' }, ...forwarders.filter((x) => (x.modes_supported || []).map((m) => String(m).toLowerCase()).includes(f.mode)).map((x) => ({ value: x.forwarder_code, label: `${x.forwarder_code} · ${x.company_name}` }))];
   const create = async () => {
     if (busy) return; setBusy(true);
     try {
@@ -819,7 +819,7 @@ function ShipmentDetail({ detailId, session, onNav, reload, data }) {
   const idx = SHIP_PIPE.indexOf(s.status);
   const nextStage = idx >= 0 && idx < SHIP_PIPE.length - 1 ? SHIP_PIPE[idx + 1] : null;
   const departed = ['sailing', 'docked', 'cleared', 'local_transport', 'received'].includes(s.status);
-  const fwdOpts = ['', ...forwarders.filter((x) => (x.modes_supported || []).map((m) => String(m).toLowerCase()).includes(s.mode)).map((x) => x.forwarder_code)];
+  const fwdOpts = [{ value: '', label: '— none —' }, ...forwarders.filter((x) => (x.modes_supported || []).map((m) => String(m).toLowerCase()).includes(s.mode)).map((x) => ({ value: x.forwarder_code, label: `${x.forwarder_code} · ${x.company_name}` }))];
   const attachable = (data?.orders || []).filter((o) => ['confirmed', 'produced', 'picked_up'].includes(o.status));
   const startEdit = () => { setForm({ mode: s.mode, forwarder_code: s.forwarder_code || '', container_type: s.container_type || '', container_no: s.container_no || '', bl_awb_no: s.bl_awb_no || '', etd: s.etd || '', eta: s.eta || '', loading_date: s.loading_date || '', port_arrival_date: s.port_arrival_date || '', clearance_date: s.clearance_date || '', local_dispatch_date: s.local_dispatch_date || '', warehouse_delivery_date: s.warehouse_delivery_date || '' }); setEdit(true); };
   const saveEdit = () => run(async () => { const fwd = forwarders.find((x) => x.forwarder_code === form.forwarder_code); await act('updateShipment', { id: s.id, ...form, forwarder_name: fwd ? fwd.company_name : null }, session); setEdit(false); });
