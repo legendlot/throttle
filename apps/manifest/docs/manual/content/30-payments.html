@@ -1,0 +1,28 @@
+<p class="lead">LOT funds the shared pool by recording its wires to Solve Factory. When the pool runs low, SF (or LOT) raises a draw-down: a request for LOT to top it up.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role lot">LOT</span> records wires &middot; <span class="role sf">SF</span> raises draw-downs</div></div>
+  <div class="g-cell"><div class="g-lbl">Where</div><div class="g-val">Payments &middot; Draw-downs</div></div>
+  <div class="g-cell"><div class="g-lbl">Wire effect</div><div class="g-val">Pool goes up (a credit).</div></div>
+  <div class="g-cell"><div class="g-lbl">UTR</div><div class="g-val">Required on every new wire.</div></div>
+</div>
+
+<h2 class="sec">Recording a LOT to SF wire</h2>
+<ol class="steps">
+  <li><span class="s-title">Open Payments.</span> Click <strong>Record Wire</strong>.</li>
+  <li><span class="s-title">Enter the amount and UTR.</span> The rupee amount and the bank <strong>UTR</strong> (reference) are both required.</li>
+  <li><span class="s-title">Set the channel and method.</span> Which SF payout channel received it, and how it was sent.</li>
+  <li><span class="s-title">Record wire.</span> The pool goes up by that amount; SF is now holding more of LOT&rsquo;s money.</li>
+</ol>
+
+<div class="callout danger"><div class="c-title">&#9940; Important</div><p>Every <strong>new</strong> wire must carry a UTR. This is how the wire is matched to the bank later. Older historical payments may not have one, but all new ones do.</p></div>
+
+<h2 class="sec">Raising a draw-down</h2>
+<p>A draw-down is a request for LOT to put money into the pool, usually because an upcoming payment (an advance, a balance, shipping) would otherwise push the pool negative.</p>
+<ol class="steps">
+  <li><span class="s-title">Raise Draw-down.</span> From the Draw-downs screen, or from the prompt that appears after a payment runs the pool low.</li>
+  <li><span class="s-title">Pick the phase and order.</span> Goods advance, shipping &amp; customs, local, or other; optionally tag it to a specific order.</li>
+  <li><span class="s-title">Enter the amount.</span> Manifest shows the Yuan equivalent at the current rate. Submit.</li>
+</ol>
+
+<div class="callout note"><div class="c-title">&#9432; Note</div><p>A draw-down is a <strong>funding prompt</strong>, not a payment and not a gate. It does not move the pool by itself; LOT settles it by recording a wire. SF can always pay from its own pocket and let the pool go negative.</p></div>

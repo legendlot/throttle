@@ -1,0 +1,38 @@
+<p class="lead">An order in Manifest flows through one continuous, party-owned lifecycle. LOT starts it with a request; Solve Factory drives it the rest of the way to a closed invoice. This chapter is the map; the next chapters are the steps.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Starts with</div><div class="g-val">LOT raises a request.</div></div>
+  <div class="g-cell"><div class="g-lbl">Driven by</div><div class="g-val">SF, all the way to invoice.</div></div>
+  <div class="g-cell"><div class="g-lbl">Ends with</div><div class="g-val">Invoiced (closed).</div></div>
+  <div class="g-cell"><div class="g-lbl">History</div><div class="g-val">Every move is timestamped.</div></div>
+</div>
+
+<h2 class="sec">The journey, end to end</h2>
+<ol class="steps">
+  <li><span class="s-title">LOT requests it.</span> The order is <code>Requested</code>. This is the only thing LOT does to the order itself.</li>
+  <li><span class="s-title">SF converts it to a PO.</span> SF fills the vendor, the vendor&rsquo;s product codes and the prices in Yuan. The order becomes <code>Draft</code>.</li>
+  <li><span class="s-title">SF places the PO.</span> The order becomes <code>Placed</code> and a printable PO document unlocks. SF sends it to the vendor.</li>
+  <li><span class="s-title">Vendor sends the PI; SF attaches it.</span> Stored as evidence and stamped on the timeline.</li>
+  <li><span class="s-title">SF pays the advance.</span> Deducts the pool.</li>
+  <li><span class="s-title">Production to pickup.</span> <code>Confirmed</code>, <code>Produced</code>, <code>Picked up</code>. At pickup SF pays any balance. Goods purchase is now wrapped up.</li>
+  <li><span class="s-title">SF ships it.</span> Onto a shipment (air or sea), then sailing, docking, customs, last-mile. Costs paid along the way.</li>
+  <li><span class="s-title">Delivered.</span> The goods reach the warehouse.</li>
+  <li><span class="s-title">SF invoices LOT.</span> <code>Partially invoiced</code>, then <code>Invoiced</code> once everything is billed.</li>
+</ol>
+
+<h2 class="sec">The states an order moves through</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Lifecycle</div><div class="a-val"><p><code>Requested</code> &rarr; <code>Draft</code> &rarr; <code>Placed</code> &rarr; <code>Confirmed</code> &rarr; <code>Produced</code> &rarr; <code>Picked up</code> &rarr; <code>Shipped</code> &rarr; <code>Received</code> &rarr; <code>Delivered</code>, plus <code>Cancelled</code>.</p></div></div>
+  <div class="a-row"><div class="a-key">Billing</div><div class="a-val"><p>Runs in parallel near the end: <code>In flight</code> &rarr; <code>Delivered</code> &rarr; <code>Partially invoiced</code> &rarr; <code>Invoiced</code>.</p></div></div>
+</div>
+
+<h2 class="sec">The short version (cheat sheet)</h2>
+<ol class="steps">
+  <li><span class="s-title">LOT requests, LOT funds the pool.</span> Everything else is SF.</li>
+  <li><span class="s-title">One shared pool.</span> Every SF payment deducts it the moment it&rsquo;s recorded.</li>
+  <li><span class="s-title">SF flow.</span> Convert, place (PO PDF), attach PI, pay advance, produce, pickup (pay balance), ship, clear customs (pay shipping/customs/fees), deliver (pay last-mile), invoice.</li>
+  <li><span class="s-title">Cancellable until pickup, never after.</span></li>
+  <li><span class="s-title">Invoice is a close-out record.</span> Partial allowed; GST editable per line; optional 2.5% commission.</li>
+</ol>
+
+<div class="callout danger"><div class="c-title">&#9940; Important</div><p><strong>An order can be cancelled at any time up to and including Produced. Once it is Picked up, it can no longer be cancelled</strong>, because the goods are paid for and on their way.</p></div>

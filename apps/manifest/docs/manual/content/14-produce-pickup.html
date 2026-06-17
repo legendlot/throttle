@@ -1,0 +1,25 @@
+<p class="lead">After the advance, SF moves the order through production and pays the balance at pickup. This is also the last point at which an order can be cancelled.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sf">Solve Factory</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Stages</div><div class="g-val"><code>Confirmed</code> &rarr; <code>Produced</code> &rarr; <code>Picked up</code></div></div>
+  <div class="g-cell"><div class="g-lbl">At pickup</div><div class="g-val">Pay the balance / extra services.</div></div>
+  <div class="g-cell"><div class="g-lbl">Cancel cut-off</div><div class="g-val">Up to <code>Produced</code>, never after pickup.</div></div>
+</div>
+
+<h2 class="sec">Advancing production</h2>
+<ol class="steps">
+  <li><span class="s-title">Advance the stage.</span> On the order detail, use the <strong>Advance</strong> button to move <code>Confirmed</code> &rarr; <code>Produced</code> &rarr; <code>Picked up</code> as the vendor progresses. Each step is date-stamped automatically.</li>
+  <li><span class="s-title">Pay the pickup balance.</span> At pickup, record any <strong>remaining balance or extra services</strong> as a vendor payment with type <code>pickup balance</code>. It deducts the pool right away.</li>
+</ol>
+<p>At this point the <strong>goods purchase is fully wrapped up</strong>: advance plus pickup balance. What follows is logistics.</p>
+
+<h2 class="sec">Cancelling an order</h2>
+<div class="callout danger"><div class="c-title">&#9940; Important</div><p>An order can be cancelled at any time up to and including <code>Produced</code>. <strong>Once it is Picked up, it can no longer be cancelled</strong>, because the goods are paid for and on their way.</p></div>
+<ol class="steps">
+  <li><span class="s-title">Open the order.</span> While it is <code>Requested</code>, <code>Draft</code>, <code>Placed</code>, <code>Confirmed</code> or <code>Produced</code>, a <strong>Cancel</strong> button is shown.</li>
+  <li><span class="s-title">Give a reason.</span> A reason is required and is logged on the timeline.</li>
+  <li><span class="s-title">Confirm.</span> The order moves to <code>Cancelled</code>.</li>
+</ol>
+
+<div class="callout warn"><div class="c-title">&#9888; Watch out</div><p>Cancelling does <strong>not</strong> automatically reverse any payments already made on the order. Those stay as pool debits and are reconciled by hand. This is deliberate; the system stays honest about money that actually moved.</p></div>

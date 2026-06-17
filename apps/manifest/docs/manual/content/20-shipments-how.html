@@ -1,0 +1,35 @@
+<p class="lead">A shipment is one physical container with its own schedule. Once goods are picked up, SF puts them on a shipment and tracks it from the factory to the LOT warehouse. Every shipment is either Air or Sea.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sf">Solve Factory</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Two modes</div><div class="g-val">Air and Sea, same steps.</div></div>
+  <div class="g-cell"><div class="g-lbl">Lock point</div><div class="g-val">Contents lock once it departs.</div></div>
+  <div class="g-cell"><div class="g-lbl">Mixing</div><div class="g-val">One container can carry several POs.</div></div>
+</div>
+
+<h2 class="sec">The shipment journey</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Sea</div><div class="a-val"><p><code>Planned</code> &rarr; <code>Loaded</code> &rarr; <code>Sailing</code> &rarr; <code>Docked</code> &rarr; <code>Cleared</code> &rarr; <code>Local transport</code> &rarr; <code>Received</code>.</p></div></div>
+  <div class="a-row"><div class="a-key">Air</div><div class="a-val"><p>The same steps, read as <code>Planned</code> &rarr; <code>Loaded</code> &rarr; <code>In Flight</code> &rarr; <code>Landed</code> &rarr; <code>Cleared</code> &rarr; <code>Local transport</code> &rarr; <code>Received</code>.</p></div></div>
+</div>
+<p>Each milestone is date-stamped automatically as SF advances it.</p>
+
+<h2 class="sec">Air vs Sea, what&rsquo;s different</h2>
+<table class="tbl">
+  <thead><tr><th>Aspect</th><th>Sea</th><th>Air</th></tr></thead>
+  <tbody>
+    <tr><td>Speed (door to door)</td><td>roughly 30 to 40 days</td><td>roughly 5 to 8 days</td></tr>
+    <tr><td>Freight basis</td><td>per container or volume</td><td>chargeable weight</td></tr>
+    <tr><td>Carrier document</td><td>Bill of Lading (BL)</td><td>Air Waybill (AWB)</td></tr>
+    <tr><td>Wording</td><td>Sailing / Docked</td><td>In Flight / Landed</td></tr>
+  </tbody>
+</table>
+<p>The steps are identical; the labels, the costs you record, and the suggested timeline differ by mode. The suggested timeline per mode is editable by SF or Admin in the settings (see Admin chapter).</p>
+
+<h2 class="sec">Allocation and the departure lock</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Allocation</div><div class="a-val"><p>SF allocates an order&rsquo;s items to a shipment. Usually one PO travels on one shipment, but a shipment often carries several POs, and one PO can split across more than one shipment.</p></div></div>
+  <div class="a-row"><div class="a-key">Departure lock</div><div class="a-val"><p>Items can be moved between shipments while the container has not left. <strong>Once it departs (Sailing for sea, In Flight for air), the contents lock</strong>: nothing can be added, removed or moved.</p></div></div>
+</div>
+
+<div class="callout tip"><div class="c-title">&#10003; Tip</div><p>A single PO can split across an air shipment and a sea shipment, for example urgent units fly while the bulk sails. Just create two shipments and allocate the right items to each.</p></div>

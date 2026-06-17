@@ -1,0 +1,33 @@
+<p class="lead">Admin is where LOT manages who can use Manifest, tunes the shipment timeline defaults, and keeps the logistics-partner master. Three small settings that keep the whole system accurate.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Where</div><div class="g-val">Admin</div></div>
+  <div class="g-cell"><div class="g-lbl">Manages</div><div class="g-val">Users, timeline defaults, partners.</div></div>
+  <div class="g-cell"><div class="g-lbl">Audit</div><div class="g-val">No audit on defaults; direct edits.</div></div>
+</div>
+
+<h2 class="sec">Users &amp; roles</h2>
+<p>The Admin screen lists members grouped by organisation (Legend of Toys and Solve Factory) with their role and status.</p>
+<ol class="steps">
+  <li><span class="s-title">Onboard a Solve Factory owner.</span> The SF owner first requests a login link on the sign-in screen (this creates their account). Then an admin adds them here and assigns the SF role.</li>
+  <li><span class="s-title">Assign or change a role.</span> LOT finance / founder, SF owner, or admin. Roles control exactly what each person sees and can do.</li>
+</ol>
+
+<h2 class="sec">Shipment timeline defaults</h2>
+<p>These are the day-offsets Manifest uses to pre-fill a new shipment&rsquo;s expected dates, set separately for sea and air.</p>
+<ol class="steps">
+  <li><span class="s-title">Edit the offsets.</span> For each mode, set how many days after the previous milestone each leg usually takes (loaded, sailing, docked, cleared, local transport, received).</li>
+  <li><span class="s-title">Save.</span> New shipments now pre-fill from these. They are <strong>suggestions only</strong>; SF can change any date on a shipment.</li>
+</ol>
+<div class="callout note"><div class="c-title">&#9432; Note</div><p>These defaults are edited directly with no audit trail, on purpose; they are tuning knobs, not records. Adjust them whenever your real lead times change.</p></div>
+
+<h2 class="sec">Logistics partners</h2>
+<p>The shared list of carriers and last-mile transporters (freight forwarders, shipping lines, couriers). Every carrier and last-mile picker in Manifest reads from this master.</p>
+<ol class="steps">
+  <li><span class="s-title">Add a partner.</span> Click <strong>Add partner</strong>, enter the company, country and the modes it supports (sea, air, land), plus IATA or SCAC codes and a tracking URL where relevant.</li>
+  <li><span class="s-title">Create.</span> Manifest assigns the partner code. It is now selectable everywhere.</li>
+</ol>
+<div class="callout danger"><div class="c-title">&#9940; Important</div><p>Partners are <strong>never typed as free text</strong> anywhere in Manifest. If a needed carrier or transporter is missing, add it here once. This keeps the master clean and the pickers reliable.</p></div>
+
+<div class="callout note"><div class="c-title">&#9432; Note</div><p>Vendors come from the shared LOT vendor master and already cover China, international and domestic suppliers, so there is nothing to set up here for vendors.</p></div>

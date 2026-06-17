@@ -1,0 +1,66 @@
+{
+  "title": "Manifest",
+  "title_accent": "Operations Manual",
+  "subtitle": "How Legend of Toys and Solve Factory run every China import together, and how to do it on the system.",
+  "version": "1.0.0",
+  "date": "2026-06-17",
+  "app_url": "manifest.legendoftoys.com",
+  "owner": "Legend of Toys",
+  "accent": "#213CE2",
+  "accent_soft": "#213CE2",
+  "roles": {
+    "lot": { "label": "LOT", "name": "Legend of Toys", "desc": "Raises the request and funds the shared pool. Sees everything; never sees SF's internal cost lens." },
+    "sf":  { "label": "Solve Factory", "name": "Solve Factory", "desc": "Owns the whole order lifecycle after the request: PO, vendor, shipping, customs, delivery, invoicing." },
+    "adm": { "label": "Admin", "name": "Admin", "desc": "Manages users and roles, the shipment timeline defaults, and the logistics-partner master." }
+  },
+  "parts": [
+    {
+      "part": "Getting Started",
+      "subtitle": "What Manifest is, how to sign in and get around, who does what, and the one shared pool of money.",
+      "chapters": [
+        { "id": "intro",      "title": "Welcome to Manifest",            "file": "00-introduction.html", "roles": ["lot","sf","adm"] },
+        { "id": "navigation", "title": "Signing In & Getting Around",    "file": "01-navigation.html",   "roles": ["lot","sf","adm"] },
+        { "id": "roles",      "title": "Who Does What",                  "file": "02-roles.html",        "roles": ["lot","sf","adm"] },
+        { "id": "pool",       "title": "The Shared Pool, in Plain English", "file": "03-pool.html",      "roles": ["lot","sf","adm"] }
+      ]
+    },
+    {
+      "part": "The Order Lifecycle",
+      "subtitle": "One continuous flow: LOT requests, SF builds the PO and drives it all the way to an invoice.",
+      "chapters": [
+        { "id": "lifecycle",      "title": "How an Order Flows",                   "file": "10-lifecycle.html",     "roles": ["lot","sf","adm"] },
+        { "id": "request",        "title": "Step 1 - LOT Requests an Order",       "route": "/orders", "file": "11-request.html", "roles": ["lot","adm"] },
+        { "id": "convert",        "title": "Step 2 - SF Converts to a PO & Places It", "route": "/orders", "file": "12-convert.html", "roles": ["sf","adm"] },
+        { "id": "pi-advance",     "title": "Step 3 - Vendor PI & the Advance",     "file": "13-pi-advance.html",    "roles": ["sf","adm"] },
+        { "id": "produce-pickup", "title": "Step 4 - Production, Pickup & Cancelling", "file": "14-produce-pickup.html", "roles": ["sf","adm"] }
+      ]
+    },
+    {
+      "part": "Shipments",
+      "subtitle": "Getting the goods from the Chinese vendor to the LOT warehouse, by air or by sea.",
+      "chapters": [
+        { "id": "ship-how",    "title": "How Shipments Work (Air vs Sea)", "file": "20-shipments-how.html",  "roles": ["sf","adm"] },
+        { "id": "ship-create", "title": "Creating a Shipment",             "route": "/shipments", "file": "21-shipment-create.html", "roles": ["sf","adm"] },
+        { "id": "ship-manage", "title": "Managing a Shipment",             "route": "/shipments", "file": "22-shipment-manage.html", "roles": ["sf","adm"] },
+        { "id": "ship-costs",  "title": "Shipping Costs & Last-Mile Delivery", "file": "23-shipment-costs.html", "roles": ["sf","adm"] }
+      ]
+    },
+    {
+      "part": "Money",
+      "subtitle": "Funding the pool, asking for funds, invoicing, and reading the running account.",
+      "chapters": [
+        { "id": "payments",  "title": "LOT to SF Payments & Draw-downs", "route": "/payments", "file": "30-payments.html", "roles": ["lot","sf","adm"] },
+        { "id": "invoicing", "title": "Invoicing & Closing an Order",     "file": "31-invoicing.html", "roles": ["sf","adm"] },
+        { "id": "recon",     "title": "The Running Account & Exchange Rates", "route": "/recon", "file": "32-recon-fx.html", "roles": ["lot","sf","adm"] }
+      ]
+    },
+    {
+      "part": "Workspace & Admin",
+      "subtitle": "Finding orders, the evidence vault, and the settings that keep the system tuned.",
+      "chapters": [
+        { "id": "orders-docs", "title": "Orders List, Search & Documents", "route": "/orders", "file": "40-orders-docs.html", "roles": ["lot","sf","adm"] },
+        { "id": "admin",       "title": "Admin - Users, Timeline Defaults & Partners", "route": "/admin", "file": "41-admin.html", "roles": ["adm"] }
+      ]
+    }
+  ]
+}

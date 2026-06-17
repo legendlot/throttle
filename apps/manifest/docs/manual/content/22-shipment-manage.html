@@ -1,0 +1,30 @@
+<p class="lead">The shipment detail page is where SF runs a container: advance its milestones, edit its details, attach the orders it carries, and (before it sails) move items around.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sf">Solve Factory</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Where</div><div class="g-val">Shipments &rarr; click a shipment</div></div>
+  <div class="g-cell"><div class="g-lbl">Do</div><div class="g-val">Advance, edit, allocate, move.</div></div>
+  <div class="g-cell"><div class="g-lbl">Locks</div><div class="g-val">Contents freeze once it departs.</div></div>
+</div>
+
+<h2 class="sec">Advancing the journey</h2>
+<ol class="steps">
+  <li><span class="s-title">Advance.</span> The header shows the current stage and a stage strip. Click <strong>Advance</strong> to move to the next milestone (mode-aware: Sailing/Docked for sea, In Flight/Landed for air). Each advance date-stamps automatically.</li>
+  <li><span class="s-title">Received couples the order.</span> When all of an order&rsquo;s shipment legs reach <code>Received</code>, the order is recognised as delivered.</li>
+</ol>
+
+<h2 class="sec">Editing details</h2>
+<ol class="steps">
+  <li><span class="s-title">Edit.</span> Opens the carrier, container, BL/AWB and all expected dates for change. Any date change is logged as a revision; the original plan is kept.</li>
+  <li><span class="s-title">Mode lock.</span> You can change the mode only while the shipment is still <code>Planned</code>. Once it is loaded, the mode is fixed.</li>
+</ol>
+
+<h2 class="sec">Allocating and moving items</h2>
+<ol class="steps">
+  <li><span class="s-title">Add an order.</span> In <strong>Allocated items</strong>, pick an order and click <strong>Add order</strong>; its lines join this container.</li>
+  <li><span class="s-title">Move between containers (before departure).</span> While both shipments are pre-departure, items can be re-allocated. The order&rsquo;s detail page also has a &ldquo;Move this PO to another container&rdquo; control.</li>
+</ol>
+
+<div class="callout danger"><div class="c-title">&#9940; Important</div><p><strong>Once the shipment departs (Sailing or In Flight), its contents lock.</strong> Add and move are disabled and the page shows &ldquo;contents locked&rdquo;. This mirrors reality: a sailed container cannot be changed.</p></div>
+
+<div class="callout note"><div class="c-title">&#9432; Note</div><p>The Timeline card lists every event on the shipment, planned dates, revisions, stage advances and payments, with timestamps, so the full history is always visible.</p></div>

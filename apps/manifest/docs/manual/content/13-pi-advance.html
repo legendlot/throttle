@@ -1,0 +1,28 @@
+<p class="lead">Once the PO is placed and sent, the vendor replies with a Proforma Invoice (PI). SF attaches it as evidence and then pays the vendor advance out of the shared pool.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sf">Solve Factory</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">PI</div><div class="g-val">Uploaded as evidence, stamped on the timeline.</div></div>
+  <div class="g-cell"><div class="g-lbl">Advance</div><div class="g-val">Paid from the pool, after the PI.</div></div>
+  <div class="g-cell"><div class="g-lbl">Pool</div><div class="g-val">Drops the moment the advance is recorded.</div></div>
+</div>
+
+<h2 class="sec">Attaching the vendor PI</h2>
+<ol class="steps">
+  <li><span class="s-title">Open the order.</span> Go to the order&rsquo;s detail page.</li>
+  <li><span class="s-title">Upload the PI.</span> Add the vendor&rsquo;s Proforma Invoice as a document of type <code>PI</code>.</li>
+  <li><span class="s-title">It becomes a milestone.</span> Manifest stamps a timestamped <strong>PI attached</strong> event on the order timeline, so everyone can see when it landed.</li>
+</ol>
+<div class="callout note"><div class="c-title">&#9432; Note</div><p>Manifest never generates the PI. It only stores the vendor&rsquo;s, as evidence.</p></div>
+
+<h2 class="sec">Paying the advance</h2>
+<ol class="steps">
+  <li><span class="s-title">Open Vendor payment.</span> On the order detail, click <strong>Record</strong> in the Vendor payment card.</li>
+  <li><span class="s-title">Choose the type.</span> Set it to <code>advance</code>.</li>
+  <li><span class="s-title">Enter the amount.</span> The amount in Yuan and the actual bank rate you paid at. Manifest shows the rupee value it will deduct.</li>
+  <li><span class="s-title">Record payment.</span> The pool drops immediately by that amount.</li>
+</ol>
+
+<div class="callout danger"><div class="c-title">&#9940; Important</div><p>Always enter the <strong>actual bank rate</strong> you paid at, not the reference rate. The vendor advance is real money leaving the pool on LOT&rsquo;s behalf.</p></div>
+
+<div class="callout tip"><div class="c-title">&#10003; Tip</div><p>If recording the advance pushes the pool negative, Manifest nudges you to <strong>raise a draw-down</strong> so LOT can top the pool up. It is a prompt, not a block: SF can still pay from its own pocket.</p></div>

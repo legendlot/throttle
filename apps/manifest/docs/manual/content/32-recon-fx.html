@@ -1,0 +1,26 @@
+<p class="lead">The Running Account is the single source of truth for who owes whom. It is the shared pool, shown as a ledger with a live balance. Exchange Rates is the reference rate Manifest uses; the actual bank rate is always set per payment.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role lot">LOT</span> <span class="role sf">SF</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Where</div><div class="g-val">Running Account &middot; Exchange Rates</div></div>
+  <div class="g-cell"><div class="g-lbl">Net</div><div class="g-val">Positive = SF holds LOT funds; negative = LOT owes SF.</div></div>
+  <div class="g-cell"><div class="g-lbl">FX</div><div class="g-val">Reference only; bank rate is per payment.</div></div>
+</div>
+
+<h2 class="sec">Reading the running account</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Net position</div><div class="a-val"><p>The headline balance. <strong>Positive</strong> means Solve Factory holds LOT&rsquo;s money; <strong>negative</strong> means LOT owes SF.</p></div></div>
+  <div class="a-row"><div class="a-key">Credits</div><div class="a-val"><p>LOT to SF wires paid in.</p></div></div>
+  <div class="a-row"><div class="a-key">Debits</div><div class="a-val"><p>Goods, logistics charges and commission that SF has spent.</p></div></div>
+  <div class="a-row"><div class="a-key">Ledger</div><div class="a-val"><p>Every entry in order, with a running balance. Click a row to see its detail and jump to the linked record.</p></div></div>
+</div>
+<p>Opening balance and any carried-forward adjustments from prior years sit in the ledger as their own entries, so the net always reconciles.</p>
+
+<h2 class="sec">Exchange rates</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Reference rate</div><div class="a-val"><p>Manifest pulls a daily CNY to INR rate automatically. It is shown in the top bar and on the Exchange Rates screen for reference.</p></div></div>
+  <div class="a-row"><div class="a-key">Manual override</div><div class="a-val"><p>An LOT user with FX rights can set a manual rate for a date when needed.</p></div></div>
+  <div class="a-row"><div class="a-key">Actual bank rate</div><div class="a-val"><p>The rate that matters for money is the one you enter on each vendor payment. The reference rate never overrides it.</p></div></div>
+</div>
+
+<div class="callout danger"><div class="c-title">&#9940; Important</div><p>When you record a vendor payment, always enter the <strong>actual bank rate</strong> you paid at. The reference rate is only a guide.</p></div>

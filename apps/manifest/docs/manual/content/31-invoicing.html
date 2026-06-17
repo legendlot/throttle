@@ -1,0 +1,29 @@
+<p class="lead">Invoicing is how SF closes an order out, with a formal SF to LOT invoice for LOT&rsquo;s books and GST. It is a record, not the thing that moves the money: goods and logistics already left the pool as they were paid.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sf">Solve Factory</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Where</div><div class="g-val">Order detail &rarr; Invoice &amp; close</div></div>
+  <div class="g-cell"><div class="g-lbl">Partial</div><div class="g-val">Bill some lines now, the rest later.</div></div>
+  <div class="g-cell"><div class="g-lbl">Pool impact</div><div class="g-val">Only the optional commission.</div></div>
+</div>
+
+<h2 class="sec">Raising an invoice</h2>
+<ol class="steps">
+  <li><span class="s-title">Open Invoice &amp; close.</span> On a delivered (or partly invoiced) order, the Invoice card lists the goods lines.</li>
+  <li><span class="s-title">Tick the lines to bill.</span> Partial invoicing is allowed: bill some now and the rest later. Already-billed lines show their invoice number and cannot be billed twice.</li>
+  <li><span class="s-title">Set GST per line.</span> Each line carries its own GST percent (defaults to 18). A single PO can mix items on different GST codes, so set each correctly.</li>
+  <li><span class="s-title">Optionally add commission.</span> Toggle the SF 2.5% commission on or off for the invoice.</li>
+  <li><span class="s-title">Submit.</span> Manifest assigns the invoice number automatically (the VWINV series), stamps each billed line, and updates the order&rsquo;s state.</li>
+</ol>
+
+<h2 class="sec">How the invoice is valued</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Priced lines</div><div class="a-val"><p>A line with a per-unit Yuan price is valued as price times quantity times the exchange rate.</p></div></div>
+  <div class="a-row"><div class="a-key">Lump-cost lines</div><div class="a-val"><p>Some items (moulds, machines, mixed sets) have no per-unit price. Those bill the order&rsquo;s recorded rupee cost instead, so the order is still closeable.</p></div></div>
+  <div class="a-row"><div class="a-key">Invoice number</div><div class="a-val"><p>Auto-assigned from the VWINV series; never typed by hand. The financial year rolls over automatically each April.</p></div></div>
+</div>
+
+<h2 class="sec">What invoicing moves</h2>
+<div class="callout danger"><div class="c-title">&#9940; Important</div><p>The only thing invoicing debits from the pool is the <strong>2.5% commission</strong> (if you include it). Goods and logistics already left the pool when they were paid. The GST on the invoice is a document and compliance figure; it is not a separate pool movement.</p></div>
+
+<div class="callout note"><div class="c-title">&#9432; Note</div><p>The order becomes <code>Partially invoiced</code> while some goods lines are still unbilled, and <code>Invoiced</code> (closed) once they all carry an invoice number.</p></div>

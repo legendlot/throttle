@@ -1,0 +1,29 @@
+<p class="lead">The Orders screen is where you find any order and open its detail. Documents is the shared evidence vault for PIs, invoices, bills of lading and receipts.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role lot">LOT</span> <span class="role sf">SF</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Where</div><div class="g-val">Orders &middot; Documents</div></div>
+  <div class="g-cell"><div class="g-lbl">Search</div><div class="g-val">By order number or title.</div></div>
+  <div class="g-cell"><div class="g-lbl">Vault</div><div class="g-val">Evidence, downloadable by signed link.</div></div>
+</div>
+
+<h2 class="sec">Finding an order</h2>
+<ol class="steps">
+  <li><span class="s-title">Search.</span> Type an order number or title in the search box; the list filters as you type and the dropdown jumps straight to a match.</li>
+  <li><span class="s-title">Read the columns.</span> Order number, title, category, value, the Snorkel PO (if linked), state, balance due and date.</li>
+  <li><span class="s-title">Open it.</span> Click any row to open its detail, where all the actions live.</li>
+</ol>
+
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">State</div><div class="a-val"><p>Where the order is in its billing axis (<code>in flight</code>, <code>delivered</code>, <code>partially invoiced</code>, <code>invoiced</code>).</p></div></div>
+  <div class="a-row"><div class="a-key">Balance</div><div class="a-val"><p>What is still due against the order, or <code>paid</code> when settled.</p></div></div>
+</div>
+
+<h2 class="sec">Documents</h2>
+<p>Every PI, invoice, bill of lading, packing list and wire receipt can be stored against its order or shipment. Filter by type, and download any file by a short-lived secure link.</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Where files attach</div><div class="a-val"><p>From an order or shipment detail; the file is tagged to that record and a milestone is stamped for key types (like the PI).</p></div></div>
+  <div class="a-row"><div class="a-key">Access</div><div class="a-val"><p>The vault is private. Downloads use a signed link that expires, so files are never publicly exposed.</p></div></div>
+</div>
+
+<div class="callout tip"><div class="c-title">&#10003; Tip</div><p>Attach the vendor PI and the bill of lading as you get them. They become part of the order&rsquo;s timeline and make closing the order out clean and auditable.</p></div>

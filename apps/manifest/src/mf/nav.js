@@ -1,7 +1,7 @@
 // Manifest "Pit Wall" — nav structure + screen→nav mapping + breadcrumbs.
 import {
   LayoutDashboard, Package, Ship, Scale, HandCoins, CreditCard,
-  ArrowLeftRight, FileText, ShieldCheck,
+  ArrowLeftRight, FileText, ShieldCheck, BookOpen,
 } from 'lucide-react';
 
 export const NAV = [
@@ -15,6 +15,7 @@ export const NAV = [
   { kind: 'item', id: 'payments',  label: 'Payments',        icon: CreditCard },
   { kind: 'item', id: 'fx',        label: 'Exchange Rates',  icon: ArrowLeftRight },
   { kind: 'section', label: 'Workspace' },
+  { kind: 'item', id: 'manual',    label: 'System Manual', icon: BookOpen },
   { kind: 'item', id: 'documents', label: 'Documents', icon: FileText },
   { kind: 'item', id: 'admin',     label: 'Admin',     icon: ShieldCheck },
 ];
@@ -39,6 +40,7 @@ export const CRUMB = {
   payments:    { eyebrow: 'FINANCE',  title: 'Payments → Solve Factory' },
   fx:          { eyebrow: 'FINANCE',  title: 'Exchange Rates' },
   documents:   { eyebrow: 'WORKSPACE', title: 'Documents' },
+  manual:      { eyebrow: 'WORKSPACE', title: 'System Manual' },
   admin:       { eyebrow: 'WORKSPACE', title: 'Admin' },
   newOrder:    { eyebrow: 'ORDERS',   title: 'New China Order' },
   newDrawdown: { eyebrow: 'FINANCE',  title: 'Raise Draw-down' },

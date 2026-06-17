@@ -1,0 +1,29 @@
+<p class="lead">Converting a request to a PO is where Solve Factory takes ownership. SF fills in the real purchase-order detail in the vendor&rsquo;s own product codes, then places it and sends the PO document to the vendor.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sf">Solve Factory</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Where</div><div class="g-val">Order detail (open a <code>Requested</code> order)</div></div>
+  <div class="g-cell"><div class="g-lbl">Moves</div><div class="g-val"><code>Requested</code> &rarr; <code>Draft</code> &rarr; <code>Placed</code></div></div>
+  <div class="g-cell"><div class="g-lbl">Unlocks</div><div class="g-val">A printable PO document at <code>Placed</code>.</div></div>
+</div>
+
+<h2 class="sec">Convert, then fill the PO</h2>
+<ol class="steps">
+  <li><span class="s-title">Open the request.</span> Click it in the Orders list. While it is <code>Requested</code>, you see a <strong>Convert to PO</strong> button.</li>
+  <li><span class="s-title">Convert to PO.</span> The order moves to <code>Draft</code> and becomes fully editable by SF.</li>
+  <li><span class="s-title">Edit the lines.</span> For each item set the <strong>vendor item code</strong>, a description, the quantity and the unit price in Yuan. A single PO can mix items on different GST codes; set GST per line later at invoice.</li>
+  <li><span class="s-title">Add costs.</span> Use Edit on the order to record purchase, shipping and customs as they become known. Goods are priced in Yuan; landed cost builds up as it ships.</li>
+</ol>
+
+<h2 class="sec">Why the PO uses the vendor&rsquo;s codes</h2>
+<p>The PO is written in the <strong>Chinese vendor&rsquo;s product codes</strong>, not LOT&rsquo;s names. For example, the product LOT calls Flare may appear on the vendor&rsquo;s PO as <code>820D</code>. Manifest stores both: the vendor item code and a readable product name.</p>
+
+<div class="callout note"><div class="c-title">&#9432; Note</div><p>Because the PO speaks vendor codes, Manifest does not push it into Snorkel (LOT&rsquo;s procurement system) automatically. Bridging the two needs a separate vendor-code to LOT-product connector, which is planned but not built yet. Until then Manifest runs fully on its own.</p></div>
+
+<h2 class="sec">Place the PO</h2>
+<ol class="steps">
+  <li><span class="s-title">Place order.</span> When the PO is ready, click <strong>Place order</strong>. The order moves to <code>Placed</code> and the timeline starts.</li>
+  <li><span class="s-title">Download the PO PDF.</span> A printable, vendor-facing PO (in Yuan, in vendor codes) becomes available. Send it to the vendor.</li>
+</ol>
+
+<div class="callout warn"><div class="c-title">&#9888; Watch out</div><p>The PO PDF is a clean placeholder format for now. SF&rsquo;s preferred layout will be folded in later; the numbers and codes are correct, the styling will improve.</p></div>

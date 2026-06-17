@@ -1,0 +1,28 @@
+<p class="lead">Manifest has two parties, LOT and Solve Factory, plus an Admin layer. What you can see and do depends on which party you are and which role you hold.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Parties</div><div class="g-val">LOT and Solve Factory (SF).</div></div>
+  <div class="g-cell"><div class="g-lbl">LOT does</div><div class="g-val">Requests, funds the pool, views all.</div></div>
+  <div class="g-cell"><div class="g-lbl">SF does</div><div class="g-val">Runs the whole lifecycle.</div></div>
+  <div class="g-cell"><div class="g-lbl">Cost lens</div><div class="g-val">SF never sees LOT&rsquo;s internal cost columns.</div></div>
+</div>
+
+<h2 class="sec">The roles</h2>
+<table class="tbl">
+  <thead><tr><th>Role</th><th>Party</th><th>Can do</th></tr></thead>
+  <tbody>
+    <tr><td><span class="role lot">LOT</span> Finance / Founder</td><td>LOT</td><td>Create requests, record LOT to SF wires, see every order, shipment and the running account.</td></tr>
+    <tr><td><span class="role sf">Solve Factory</span> Owner</td><td>SF</td><td>Convert requests to POs, place them, attach the PI, pay the vendor and logistics, run shipments, invoice and close orders.</td></tr>
+    <tr><td><span class="role adm">Admin</span></td><td>LOT</td><td>Everything, plus manage users and roles, the shipment timeline defaults, and the logistics-partner master.</td></tr>
+  </tbody>
+</table>
+
+<h2 class="sec">What each side sees</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">LOT</div><div class="a-val"><p>The full picture: every order, every shipment, all payments and the running account. LOT funds the pool and watches it.</p></div></div>
+  <div class="a-row"><div class="a-key">Solve Factory</div><div class="a-val"><p>A trimmed sidebar focused on running orders and shipments and recording what it pays. SF never sees LOT&rsquo;s internal cost-per-unit or margin columns, by design.</p></div></div>
+</div>
+
+<div class="callout note"><div class="c-title">&#9432; Note</div><p>Most of the work after a request belongs to SF. If you are on the LOT side, your main jobs are raising the request and keeping the pool funded.</p></div>
+
+<div class="callout danger"><div class="c-title">&#9940; Important</div><p>Admin can act on SF&rsquo;s behalf (for example to drive or correct an order) because LOT runs the system. Use that carefully: the audit trail records who did what.</p></div>

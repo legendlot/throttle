@@ -1,0 +1,25 @@
+<p class="lead">SF creates a shipment when goods are ready to leave the factory. You capture the carrier and the real loading and sailing dates up front, and Manifest pre-fills the rest of the schedule.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role sf">Solve Factory</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Where</div><div class="g-val">Shipments &rarr; New shipment</div></div>
+  <div class="g-cell"><div class="g-lbl">Capture</div><div class="g-val">Mode, carrier, loading &amp; sailing dates, BL/AWB.</div></div>
+  <div class="g-cell"><div class="g-lbl">Then</div><div class="g-val">Opens the shipment detail to manage it.</div></div>
+</div>
+
+<h2 class="sec">Creating a shipment</h2>
+<ol class="steps">
+  <li><span class="s-title">New shipment.</span> On the Shipments screen, click <strong>New shipment</strong>.</li>
+  <li><span class="s-title">Pick the mode.</span> <code>sea</code> or <code>air</code>. The carrier list, date labels and the BL/AWB label all follow the mode.</li>
+  <li><span class="s-title">Choose the carrier.</span> Pick the freight partner from the list (shown as code and company name). No carrier listed? Add it in Admin &rarr; Logistics partners.</li>
+  <li><span class="s-title">Enter the real dates.</span> <strong>Loading date</strong> and <strong>Sailing date</strong> (for air, &ldquo;Departure date&rdquo;). These are the dates you actually know when booking.</li>
+  <li><span class="s-title">Add BL/AWB and container.</span> The Bill of Lading or Air Waybill number, container type and number where known.</li>
+  <li><span class="s-title">Create shipment.</span> Manifest opens the new shipment&rsquo;s detail page.</li>
+</ol>
+
+<h2 class="sec">How the dates pre-fill</h2>
+<p>From the sailing (or departure) date, Manifest suggests the downstream dates, arrival, customs clearance and delivery, using the timeline defaults for that mode. If you only enter a loading date, it works forward from there. These are <strong>suggestions, not locks</strong>: you can change any date afterwards on the detail page.</p>
+
+<div class="callout note"><div class="c-title">&#9432; Note</div><p>The timeline defaults (how many days each leg usually takes, per mode) are set by SF or Admin in Admin &rarr; Shipment timeline defaults. Tune them to match your real experience and every new shipment starts from sensible dates.</p></div>
+
+<div class="callout tip"><div class="c-title">&#10003; Tip</div><p>You do not have to allocate items at creation. Create the shipment, then attach the orders it carries on the detail page (see Managing a Shipment).</p></div>

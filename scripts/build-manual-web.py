@@ -21,7 +21,7 @@ import os, sys, json, glob, shutil, html as _html
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 05_Throttle/
 APPS = os.path.join(ROOT, "apps")
 
-ALL_APPS = ["garage", "redline", "ignition", "pitstop", "podium", "snorkel", "docket", "throttle"]
+ALL_APPS = ["garage", "redline", "ignition", "pitstop", "podium", "snorkel", "docket", "throttle", "manifest"]
 
 
 def stub_html(ch, roles):

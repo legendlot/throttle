@@ -1,0 +1,34 @@
+<p class="lead">There is one shared pool of money between LOT and Solve Factory. Think of it as a running tab. Understanding the pool is the key to understanding every money screen in Manifest.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">LOT pays in</div><div class="g-val">Pool goes up. SF holds LOT&rsquo;s money.</div></div>
+  <div class="g-cell"><div class="g-lbl">SF spends out</div><div class="g-val">Pool goes down, the moment it&rsquo;s paid.</div></div>
+  <div class="g-cell"><div class="g-lbl">Balance</div><div class="g-val">Can be positive or negative.</div></div>
+  <div class="g-cell"><div class="g-lbl">Truth</div><div class="g-val">Always live to what has actually been paid.</div></div>
+</div>
+
+<h2 class="sec">How the pool moves</h2>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Pool positive</div><div class="a-val"><p>Solve Factory is holding LOT&rsquo;s money, ready to spend on the next order.</p></div></div>
+  <div class="a-row"><div class="a-key">Pool negative</div><div class="a-val"><p>SF has spent more than LOT has put in, so <strong>LOT owes SF</strong>. This is allowed and normal; SF recovers it as LOT funds the pool again.</p></div></div>
+</div>
+
+<h2 class="sec">The most important money rule</h2>
+<div class="callout danger"><div class="c-title">&#9940; Important</div><p>Every payment SF makes is deducted from the pool <strong>the moment it is recorded</strong>, not later at invoice time. So the pool is always accurate to whatever has actually been paid out on LOT&rsquo;s behalf.</p></div>
+
+<h2 class="sec">Everything SF pays, and when</h2>
+<table class="tbl">
+  <thead><tr><th>Payment</th><th>When</th><th>Against</th></tr></thead>
+  <tbody>
+    <tr><td>Vendor advance</td><td>After the vendor PI is received</td><td>the order</td></tr>
+    <tr><td>Pickup balance / extra services</td><td>At pickup</td><td>the order</td></tr>
+    <tr><td>Shipping</td><td>When the goods clear the port</td><td>the shipment</td></tr>
+    <tr><td>Customs / duty</td><td>When the goods clear the port</td><td>the shipment</td></tr>
+    <tr><td>Other port fees</td><td>When the goods clear the port</td><td>the shipment</td></tr>
+    <tr><td>Last-mile delivery</td><td>Port to warehouse</td><td>the shipment</td></tr>
+    <tr><td>SF commission (2.5%)</td><td>At invoice</td><td>the order</td></tr>
+  </tbody>
+</table>
+<p>The first two wrap up the <strong>goods purchase</strong>. The middle four are <strong>logistics</strong>. The last is <strong>SF&rsquo;s fee</strong>. Every one of them reduces the pool the moment it is recorded.</p>
+
+<div class="callout note"><div class="c-title">&#9432; Note</div><p>Invoicing is a close-out record, not a money move. The money for goods and logistics already left the pool as it was paid. See the Invoicing chapter.</p></div>

@@ -7,7 +7,12 @@ import {
   Card, Table, Badge, Btn, Field, Input, Select, Textarea, Eyebrow, Mono,
   BalanceChart, Sparkline, MONO, DISP, toneVar,
 } from './ui.js';
+import { Manual } from '@throttle/ui';
+import manualData from '../data/manual.json';
 import * as D from './data.js';
+
+// in-app System Manual (shared viewer, themed via Manifest's CSS vars)
+function ManualScreen() { return <Manual manual={manualData} />; }
 
 const gap = 'var(--gap)';
 const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -1318,5 +1323,5 @@ function NewDrawdown({ data, onNav, session, reload }) {
 export const SCREENS = {
   dashboard: Dashboard, recon: Recon, orders: Orders, orderDetail: OrderDetail,
   shipments: Shipments, shipmentDetail: ShipmentDetail, drawdowns: Drawdowns, payments: Payments, fx: Fx,
-  documents: Documents, admin: Admin, newOrder: NewOrder, newDrawdown: NewDrawdown,
+  documents: Documents, manual: ManualScreen, admin: Admin, newOrder: NewOrder, newDrawdown: NewDrawdown,
 };
