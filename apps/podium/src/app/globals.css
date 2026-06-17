@@ -1,111 +1,176 @@
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Tomorrow:wght@400;500;600;700&display=swap');
+/* ════════════════════════════════════════════════════════════
+   PODIUM — "Pit Wall v2" design tokens
+   The same system used to modernise Garage / Redline / Docket,
+   applied to Podium (HR · people · performance · org design).
 
-*, *::before, *::after {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
+   TYPOGRAPHIC CONTRAST is the core move:
+     · Tomorrow        → brand display, labels, section heads, nav, buttons, eyebrows
+     · Hanken Grotesk  → UI text, body, descriptions, table cells, names
+     · JetBrains Mono  → numbers, codes (LOT-####), dates, times, salary bands ONLY
+
+   The :root block below is tokens.css verbatim (canonical ramp + the
+   handoff's back-compat aliases). A second "PODIUM CODEBASE ALIASES"
+   block keeps every legacy var the app + shared @throttle/ui still
+   reference resolving onto the new ramp, so nothing renders unstyled
+   during the migration. Delete an alias once its consumers move onto
+   the canonical names.
+   ════════════════════════════════════════════════════════════ */
+
+@import url('https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Tomorrow:wght@400;500;600;700&display=swap');
 
 :root {
-  --bg:         #1f1f1f;
-  --surface:    #2a2a2a;
-  --surface-2:  #333333;
-  --surface-3:  #3c3c3c;
-  --border:     #404040;
-  --border-2:   #4a4a4a;
+  /* ── Surface ramp — lifted for elevation + contrast (WCAG-tuned) ── */
+  --bg:         #1b1b1e;   /* page background — never pure black */
+  --bg-2:       #151517;   /* sunken: sidebar rail, table headers, search wells */
+  --surface:    #242428;   /* cards, panels, KPI tiles */
+  --surface-2:  #2e2e34;   /* inputs, raised inner, row hover */
+  --surface-3:  #3a3a42;   /* active fills, scrollbar */
+  --border:     #34343b;
+  --border-2:   #45454e;
+  --border-3:   #56565f;   /* focus / active edge */
+  --hairline:   #242428;   /* table row separators */
+  --divider:    #2a2a30;   /* sidebar + topbar dividers */
 
-  --text-1:     #f5f5f5;
-  --text-2:     #b0b0b0;
-  --text-3:     #888888;
-  --text-4:     #666666;
+  /* ── Text ramp (t1/t2/t3 pass AA for body) ── */
+  --t1: #f5f5f6;   /* primary  — 15.8:1 on bg, AAA */
+  --t2: #b6b6be;   /* secondary— 8.5:1,  AAA */
+  --t3: #8c8c96;   /* muted    — 5.2:1,  AA */
+  --t4: #7a7a84;   /* micro    — eyebrows, labels, codes (bold/large only) */
+  --t5: #5e5e66;   /* group headers in the sidebar only */
+  --t-body: #d6d6db; /* table cell / paragraph body */
 
-  --brand-yellow:      #F2CD1A;
-  --brand-yellow-deep: #d4b200;
-  --brand-blue:        #213CE2;
-  --brand-red:         #DE2A2A;
-  --brand-green:       #22c55e;
-  --brand-orange:      #f97316;
+  /* ── Brand + semantic (all legible on dark) ── */
+  --yellow:      #F2CD1A;   /* PRIMARY ACCENT for Podium */
+  --yellow-deep: #d4b200;
+  --blue:        #213CE2;
+  --blue-bright: #6d83ff;
+  --blue-soft:   #9fb0ff;   /* on-dark legible blue used for L2 / observations / levels */
+  --red:         #DE2A2A;
+  --red-bright:  #ff8a8a;
+  --green:       #22c55e;
+  --green-bright:#4ade80;
+  --amber:       #fbbf24;
+  --orange:      #fb923c;   /* "New Person" action accent + constructive sentiment */
 
-  /* Podium accent — the logo's podium-yellow (LOT brand yellow on charcoal mark) */
-  --podium-accent:      #F2CD1A;
-  --podium-accent-deep: #d4b200;
-  --podium-gold:       #EAB308;
+  /* ── Semantic fills (subtle bg + bright fg + border) ── */
+  --ok-fg:   #4ade80;  --ok-bg:   rgba(34,197,94,0.12);   --ok-bd:   rgba(34,197,94,0.30);
+  --warn-fg: #fbbf24;  --warn-bg: rgba(251,191,36,0.12);  --warn-bd: rgba(251,191,36,0.30);
+  --bad-fg:  #ff8a8a;  --bad-bg:  rgba(222,42,42,0.15);   --bad-bd:  rgba(222,42,42,0.34);
+  --info-fg: #9fb0ff;  --info-bg: rgba(109,131,255,0.20); --info-bd: rgba(109,131,255,0.32);
+  --neutral-fg: #9b9ba4; --neutral-bg: rgba(140,140,150,0.12); --neutral-bd: rgba(140,140,150,0.28);
 
-  --state-warning:    #fbbf24;
-  --state-warning-fg: #fbbf24;
-  --state-warning-bg: rgba(251, 191, 36, 0.12);
-  --state-error:      #DE2A2A;
-  --state-error-fg:   #ff7070;
-  --state-error-bg:   rgba(222, 42, 42, 0.15);
-  --state-success:    #22c55e;
-  --state-success-fg: #4ade80;
-  --state-success-bg: rgba(34, 197, 94, 0.12);
-  --state-info:       #7b93ff;
-  --state-info-fg:    #7b93ff;
-  --state-info-bg:    rgba(33, 60, 226, 0.20);
+  /* Employee STATUS → semantic (used by StatusBadge):
+     active=ok · on_leave=warn · notice=bad · exited=neutral */
 
-  --accent:    var(--podium-accent);
-  --accent-fg: #1f1f1f;
-  --accent-bg: rgba(242, 205, 26, 0.10);
+  /* ── Avatar tint palette (rotate by index; bright fg on low-alpha bg) ── */
+  --av1-bg: rgba(242,205,26,0.16); --av1-fg: #F2CD1A;
+  --av2-bg: rgba(109,131,255,0.20); --av2-fg: #9fb0ff;
+  --av3-bg: rgba(74,222,128,0.16); --av3-fg: #4ade80;
+  --av4-bg: rgba(249,115,22,0.18); --av4-fg: #fb923c;
+  --av5-bg: rgba(251,191,36,0.16); --av5-fg: #fbbf24;
+  --av6-bg: rgba(255,138,138,0.16); --av6-fg: #ff8a8a;
 
-  --text-2xs:  11px;
-  --text-xs:   12px;
-  --text-sm:   13px;
-  --text-base: 14px;
-  --text-md:   16px;
-  --text-lg:   18px;
-  --text-xl:   22px;
-  --text-2xl:  28px;
-  --text-3xl:  36px;
+  /* ── Type families ── */
+  --font-display: 'Tomorrow', system-ui, sans-serif;       /* labels, heads, nav, buttons */
+  --font-ui:      'Hanken Grotesk', system-ui, sans-serif; /* UI + body */
+  --font-num:     'JetBrains Mono', ui-monospace, Menlo, monospace; /* numbers + codes */
 
-  --tracking-tight:  0.04em;
-  --tracking-mid:    0.06em;
-  --tracking-wide:   0.08em;
+  /* ── Radius (sharp-ish; cards 11–12, controls 6, pills 9999) ── */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 9px;
+  --r-lg: 12px;
+  --r-full: 9999px;
 
-  --space-1:  4px;
-  --space-2:  8px;
-  --space-3:  12px;
-  --space-4:  16px;
-  --space-5:  20px;
-  --space-6:  24px;
-  --space-8:  32px;
-  --space-10: 40px;
+  /* ── Elevation ── */
+  --shadow-card: 0 1px 0 rgba(255,255,255,0.03) inset, 0 8px 24px -12px rgba(0,0,0,0.7);
+  --shadow-pop:  0 12px 40px -8px rgba(0,0,0,0.8), 0 0 0 1px var(--border-2);
+  --glow-yellow: 0 0 0 1px rgba(242,205,26,0.4), 0 6px 24px -6px rgba(242,205,26,0.25);
 
-  --radius-sm:   3px;
-  --radius-md:   4px;
-  --radius-lg:   8px;
-  --radius-full: 9999px;
+  /* ── Motion ── */
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --fast: 130ms;
+  --base: 200ms;
 
-  --font-mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
-  --font-cond: 'Tomorrow', system-ui, sans-serif;
-
-  --duration-fast:    120ms;
-  --duration-default: 180ms;
-  --duration-slow:    260ms;
-  --ease-out:         cubic-bezier(0.22, 1, 0.36, 1);
-
-  /* Legacy aliases (so shared UI primitives using --yellow/etc still work) */
-  --surface2: var(--surface-2);
-  --surface3: var(--surface-3);
-  --border2:  var(--border-2);
-  --t1:       var(--text-1);
-  --t2:       var(--text-2);
-  --t3:       var(--text-3);
-  --yellow:   var(--brand-yellow);
-  --yellow2:  var(--brand-yellow-deep);
-  --blue:     var(--brand-blue);
-  --red:      var(--brand-red);
-  --green:    var(--brand-green);
-  --orange:   var(--podium-accent);
-  --mono:     var(--font-mono);
-  --cond:     var(--font-cond);
+  /* ── Layout constants ── */
+  --sidebar-w: 236px;
+  --sidebar-w-collapsed: 72px;
+  --topbar-h: 58px;
 }
+
+/* ════════════════════════════════════════════════════════════
+   BACK-COMPAT ALIASES — map Podium's existing token names onto the
+   new ramp so legacy inline styles render correctly mid-migration.
+   ════════════════════════════════════════════════════════════ */
+:root {
+  --font-cond:      var(--font-display);   /* was a condensed display face */
+  --font-mono:      var(--font-num);
+  --podium-accent:  var(--yellow);         /* was orange — now LOT yellow */
+  --accent:         var(--yellow);
+  --accent-bg:      rgba(242,205,26,0.07);
+  --brand-orange:   var(--orange);
+
+  --text-1: var(--t1);
+  --text-2: var(--t2);
+  --text-3: var(--t3);
+  --text-4: var(--t4);
+
+  --radius-sm:   var(--r-sm);
+  --radius-md:   var(--r-lg);   /* cards used --radius-md; bump to the softer 12 */
+  --radius-full: var(--r-full);
+
+  --state-success-fg: var(--ok-fg);   --state-success-bg: var(--ok-bg);
+  --state-warning-fg: var(--warn-fg); --state-warning-bg: var(--warn-bg);
+  --state-danger-fg:  var(--bad-fg);  --state-danger-bg:  var(--bad-bg);
+}
+
+/* ════════════════════════════════════════════════════════════
+   PODIUM CODEBASE ALIASES — extra legacy names referenced by the
+   Podium app screens AND shared @throttle/ui primitives that the
+   handoff alias block above doesn't cover. Kept so unmigrated inline
+   styles + shared Sidebar/Topbar/Chip/Combobox/KpiCard/Manual render
+   identically. (Audited from a full var grep across both trees.)
+   ════════════════════════════════════════════════════════════ */
+:root {
+  /* brand-* used by format.js / performance.js / inline styles */
+  --brand-yellow:      var(--yellow);
+  --brand-yellow-deep: var(--yellow-deep);
+  --brand-blue:        var(--blue);
+  --brand-red:         var(--red);
+  --brand-green:       var(--green);
+
+  --accent-fg:   #1b1b1e;   /* text on a yellow accent fill */
+  --radius-lg:   var(--r-lg);
+  --text-base:   14px;
+
+  /* legacy --state-error / --state-info / single-suffix warning */
+  --state-error:     var(--red);
+  --state-error-fg:  var(--bad-fg);
+  --state-error-bg:  var(--bad-bg);
+  --state-info:      var(--blue-bright);
+  --state-info-fg:   var(--info-fg);
+  --state-info-bg:   var(--info-bg);
+  --state-warning:   var(--warn-fg);
+  --state-success:   var(--ok-fg);
+
+  /* no-dash + short legacy aliases used by shared @throttle/ui */
+  --surface2:  var(--surface-2);
+  --surface3:  var(--surface-3);
+  --border2:   var(--border-2);
+  --cond:      var(--font-display);
+  --mono:      var(--font-num);
+  --brand-fg:  #1b1b1e;          /* shared Chip/StatusBadge text-on-brand */
+  --man-accent: var(--yellow);   /* shared Manual accent */
+}
+
+/* ── Base ── */
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
 html, body {
   background: var(--bg);
-  color: var(--text-1);
-  font-family: var(--font-mono);
-  font-size: var(--text-base);
+  color: var(--t1);
+  font-family: var(--font-ui);
+  font-size: 14px;
   line-height: 1.45;
   height: 100%;
   overflow: hidden;
@@ -123,22 +188,81 @@ button { font-family: inherit; }
   border-radius: 2px;
 }
 
-::selection {
-  background: rgba(242, 205, 26, 0.35);
-  color: var(--text-1);
+/* ── Reusable atoms ── */
+.eyebrow {           /* micro section label */
+  font-family: var(--font-display);
+  font-size: 9px; font-weight: 600;
+  letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--t4);
+}
+.label {             /* panel / card title */
+  font-family: var(--font-display);
+  font-size: 11px; font-weight: 600;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--t2);
+}
+.num {               /* every number, code, date, salary */
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
 }
 
-::-webkit-scrollbar       { width: 6px; height: 6px; }
+::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--border-2); }
-* { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 4px; }
+* { scrollbar-width: thin; scrollbar-color: var(--surface-3) transparent; }
+::selection { background: rgba(242,205,26,0.32); color: #fff; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
-    animation-duration: 0.01ms !important;
+    animation-duration: .01ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+    transition-duration: .01ms !important;
     scroll-behavior: auto !important;
   }
 }
+
+/* Live-dot pulse used by the topbar */
+@keyframes podiumPulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+
+/* Grid-table row hover (ui.js GridRow) */
+.pd-grid-row { transition: background var(--fast) var(--ease); }
+.pd-grid-row:hover { background: var(--surface); }
+
+/* Sidebar nav-item hover (PodiumSidebar) */
+.pd-nav-item:hover { background: var(--surface); }
+.pd-sb-head:hover { background: #1e1e22; }
+
+/* Org chart report-row hover (OrgChart) */
+.pd-org-report:hover { background: var(--surface-2); }
+
+/* Generic card hover (feed / list cards) */
+.pd-card-hover { transition: border-color var(--fast) var(--ease); }
+.pd-card-hover:hover { border-color: var(--border-2); }
+
+/* In-app manual chapter body (expanded HTML from docs/manual fragments).
+   Themes the semantic fragment classes onto the new ramp. */
+.pd-manual-body { color: var(--t-body); }
+.pd-manual-body h2, .pd-manual-body h3, .pd-manual-body h4 { font-family: var(--font-display); color: var(--t1); letter-spacing: 0.02em; margin: 14px 0 6px; }
+.pd-manual-body h2 { font-size: 16px; } .pd-manual-body h3 { font-size: 14px; } .pd-manual-body h4 { font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--t2); }
+.pd-manual-body p { margin: 6px 0; color: var(--t-body); }
+.pd-manual-body ul, .pd-manual-body ol { margin: 6px 0 6px 18px; }
+.pd-manual-body li { margin: 3px 0; }
+.pd-manual-body a { color: var(--yellow); }
+.pd-manual-body code, .pd-manual-body .num { font-family: var(--font-num); font-size: 0.92em; }
+.pd-manual-body strong { color: var(--t1); }
+.pd-manual-body .lead { font-size: 14px; color: var(--t2); }
+.pd-manual-body .callout { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--yellow); border-radius: var(--r-sm); padding: 10px 12px; margin: 10px 0; }
+.pd-manual-body .steps { list-style: decimal; }
+.pd-manual-body table, .pd-manual-body .tbl { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 13px; }
+.pd-manual-body th, .pd-manual-body td { border: 1px solid var(--border); padding: 6px 9px; text-align: left; }
+.pd-manual-body th { background: var(--bg-2); color: var(--t2); font-family: var(--font-display); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; }
+.pd-manual-body .glance, .pd-manual-body .anatomy { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 10px 12px; margin: 10px 0; }
+
+/* Dark form input yellow focus ring (ui.js formInput) */
+.pd-input:focus { border-color: var(--yellow); }
+
+/* Underline tab bar */
+.pd-tab { cursor: pointer; padding: 9px 14px; font-size: 13px; font-weight: 600; color: var(--t3); border-bottom: 2px solid transparent; margin-bottom: -1px; transition: color var(--fast) var(--ease); }
+.pd-tab:hover { color: var(--t2); }
+.pd-tab.active { color: var(--t1); border-bottom-color: var(--yellow); }

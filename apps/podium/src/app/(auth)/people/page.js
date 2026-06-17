@@ -2,11 +2,12 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { Spinner, Chip, useListNav, Combobox } from '@throttle/ui';
-import { UserPlus, RefreshCw } from 'lucide-react';
+import { Spinner, useListNav, Combobox } from '@throttle/ui';
+import { UserPlus, RefreshCw, Search } from 'lucide-react';
 import { podiumopsGet } from '../../../lib/podiumopsFetch.js';
 import StatusBadge from '../../../components/StatusBadge.js';
 import DirectorySyncModal from '../../../components/DirectorySyncModal.js';
+import { Avatar, FilterChip, GridHead, GridRow, gridTh, SoftPill, btnPrimary, btnGhost } from '../../../components/ui.js';
 
 const TABS = [
   { id: 'active', label: 'Active' },
@@ -15,6 +16,7 @@ const TABS = [
   { id: 'exited', label: 'Exited' },
   { id: 'all', label: 'All' },
 ];
+const COLS = '2.2fr 1.6fr 1.2fr 1.3fr 120px';
 
 export default function PeoplePage() {
   const { session, perms } = useAuth();
@@ -22,6 +24,7 @@ export default function PeoplePage() {
   const [tab, setTab] = useState('active');
   const [search, setSearch] = useState('');
   const [rows, setRows] = useState([]);
+  const [all, setAll] = useState([]);
   const [depts, setDepts] = useState([]);
   const [dept, setDept] = useState('');
   const [loading, setLoading] = useState(false);
@@ -34,7 +37,8 @@ export default function PeoplePage() {
   useEffect(() => {
     if (!session) return;
     podiumopsGet('getDepartments', {}, session).then(d => setDepts(d.departments || [])).catch(() => {});
-  }, [session]);
+    podiumopsGet('getEmployees', { status: 'all', limit: 2000 }, session).then(e => setAll(e.employees || [])).catch(() => {});
+  }, [session, reloadKey]);
 
   useEffect(() => {
     if (!session) return;
@@ -47,73 +51,89 @@ export default function PeoplePage() {
       .finally(() => setLoading(false));
   }, [tab, search, dept, session, reloadKey]);
 
+  const c = (s) => all.filter(e => e.status === s).length;
+  const newCount = all.filter(e => withinDays(e.date_joined, 30)).length;
+
   return (
     <div>
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <h1 style={h1}>Directory</h1>
-        {perms?.podium_hr && (
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={() => setSyncOpen(true)} style={syncBtn}>
-              <RefreshCw size={14} strokeWidth={2.25} /> Sync from Google
-            </button>
-            <button onClick={() => router.push('/people/new')} style={newBtn}>
-              <UserPlus size={15} strokeWidth={2.25} /> New Person
-            </button>
-          </div>
-        )}
-      </header>
-
       {syncOpen && (
-        <DirectorySyncModal
-          session={session}
-          onClose={() => setSyncOpen(false)}
-          onDone={() => setReloadKey(k => k + 1)}
-        />
+        <DirectorySyncModal session={session} onClose={() => setSyncOpen(false)} onDone={() => setReloadKey(k => k + 1)} />
       )}
 
-      <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
-        {TABS.map(t => <Chip key={t.id} active={tab === t.id} onClick={() => setTab(t.id)}>{t.label}</Chip>)}
+      {/* Summary strip */}
+      <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 11, padding: '14px 20px', marginBottom: 18, flexWrap: 'wrap', gap: '12px 0' }}>
+        <Stat value={c('active')} label="Headcount" color="var(--yellow)" first />
+        <Stat value={depts.length} label="Departments" />
+        <Stat value={c('on_leave')} label="On Leave" color="var(--warn-fg)" />
+        <Stat value={c('notice')} label="Notice" color="var(--bad-fg)" />
+        <Stat value={newCount} label="New · 30d" color="var(--green-bright)" last />
+        <span style={{ flex: 1 }} />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, width: 240, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 11px', color: 'var(--t4)' }}>
+          <Search size={14} strokeWidth={1.9} />
+          <input data-search-primary value={search} onChange={e => setSearch(e.target.value)} placeholder="Search directory…"
+            style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: 'var(--t1)', fontFamily: 'var(--font-ui)', fontSize: 12.5 }} />
+        </label>
       </div>
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-        <input data-search-primary placeholder="Search name, code, title, email…" value={search} onChange={e => setSearch(e.target.value)} style={inputStyle(280)} />
-        <Combobox value={dept} onChange={v => setDept(v)} style={{ width: 180 }} inputStyle={{ fontFamily: 'var(--font-mono)', fontSize: 13, padding: '6px 10px' }}
-          placeholder="All departments" options={depts.map(d => ({ value: d.id, label: d.name }))} />
+      {/* Filters + actions */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+        {TABS.map(t => <FilterChip key={t.id} active={tab === t.id} onClick={() => setTab(t.id)}>{t.label}</FilterChip>)}
+        <div style={{ width: 180, marginLeft: 4 }}>
+          <Combobox value={dept} onChange={v => setDept(v)} inputStyle={{ fontFamily: 'var(--font-ui)', fontSize: 13, padding: '6px 10px' }}
+            placeholder="All departments" options={depts.map(d => ({ value: d.id, label: d.name }))} />
+        </div>
+        <span style={{ flex: 1 }} />
+        {perms?.podium_hr && (
+          <>
+            <button onClick={() => setSyncOpen(true)} style={btnGhost}><RefreshCw size={13} strokeWidth={2.1} /> Sync from Google</button>
+            <button onClick={() => router.push('/people/new')} style={btnPrimary}><UserPlus size={14} strokeWidth={2.2} /> New Person</button>
+          </>
+        )}
       </div>
 
+      {/* Avatar table */}
       {loading ? <Spinner /> : (
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-            <thead>
-              <tr style={{ background: 'var(--surface-2)', textAlign: 'left' }}>
-                <th style={th}>Code</th><th style={th}>Name</th><th style={th}>Title</th>
-                <th style={th}>Department</th><th style={th}>Manager</th><th style={th}>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.length === 0 && <tr><td colSpan={6} style={{ ...td, color: 'var(--text-3)', textAlign: 'center' }}>No results</td></tr>}
-              {rows.map((r, i) => (
-                <tr key={r.id} onClick={() => router.push(`/people/detail/?id=${r.id}`)} onMouseEnter={() => setFocusedIdx(i)}
-                  style={{ cursor: 'pointer', borderTop: '1px solid var(--border)', background: focusedIdx === i ? 'var(--surface-2)' : 'transparent', outline: focusedIdx === i ? '2px solid var(--podium-accent)' : 'none', outlineOffset: '-2px' }}>
-                  <td style={td}><span style={{ color: 'var(--podium-accent)', fontWeight: 600 }}>{r.employee_code}</span></td>
-                  <td style={td}>{r.full_name}{r.preferred_name && <span style={{ color: 'var(--text-3)', fontSize: 11, marginLeft: 6 }}>({r.preferred_name})</span>}</td>
-                  <td style={td}>{r.job_title || '—'}</td>
-                  <td style={td}>{r.department?.name || '—'}</td>
-                  <td style={td}>{r.manager?.full_name || '—'}</td>
-                  <td style={td}><StatusBadge status={r.status} /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 11, overflow: 'hidden' }}>
+          <GridHead cols={COLS}>
+            <div style={gridTh}>Person</div>
+            <div style={gridTh}>Title</div>
+            <div style={gridTh}>Department</div>
+            <div style={gridTh}>Manager</div>
+            <div style={gridTh}>Status</div>
+          </GridHead>
+          {rows.length === 0 && <div style={{ padding: '20px 16px', color: 'var(--t3)', fontSize: 13, textAlign: 'center' }}>No results</div>}
+          {rows.map((r, i) => (
+            <GridRow key={r.id} cols={COLS} onClick={() => router.push(`/people/detail/?id=${r.id}`)} onMouseEnter={() => setFocusedIdx(i)} focused={focusedIdx === i}>
+              <div style={{ padding: '11px 16px', display: 'flex', alignItems: 'center', gap: 11 }}>
+                <Avatar name={r.full_name} photoUrl={r.photo_url} tintKey={r.id} size={34} />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--t1)' }}>{r.full_name}{r.preferred_name && <span style={{ color: 'var(--t4)', fontSize: 11, marginLeft: 6 }}>({r.preferred_name})</span>}</div>
+                  <div className="num" style={{ fontSize: 11, color: 'var(--t4)' }}>{r.employee_code}</div>
+                </div>
+              </div>
+              <div style={{ padding: '11px 16px', fontSize: 13, color: 'var(--t2)' }}>{r.job_title || '—'}</div>
+              <div style={{ padding: '11px 16px' }}>{r.department?.name ? <SoftPill>{r.department.name}</SoftPill> : <span style={{ color: 'var(--t4)' }}>—</span>}</div>
+              <div style={{ padding: '11px 16px', fontSize: 12.5, color: 'var(--t3)' }}>{r.manager?.full_name || '—'}</div>
+              <div style={{ padding: '11px 16px' }}><StatusBadge status={r.status} /></div>
+            </GridRow>
+          ))}
         </div>
       )}
     </div>
   );
 }
 
-const h1 = { fontFamily: 'var(--font-cond)', fontSize: 22, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' };
-const th = { padding: '10px 12px', fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600 };
-const td = { padding: '10px 12px' };
-const newBtn = { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--podium-accent)', color: '#1f1f1f', border: 'none', borderRadius: 'var(--radius-sm)', padding: '8px 14px', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer' };
-const syncBtn = { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '8px 14px', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer' };
-function inputStyle(w) { return { background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 10px', fontFamily: 'var(--font-mono)', fontSize: 13, width: w }; }
+function Stat({ value, label, color = 'var(--t1)', first, last }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: first ? '0 22px 0 0' : last ? '0 0 0 22px' : '0 22px', borderRight: last ? 'none' : '1px solid var(--divider)' }}>
+      <span className="num" style={{ fontSize: 20, fontWeight: 600, color }}>{value}</span>
+      <span style={{ fontFamily: 'var(--font-display)', fontSize: 10, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--t3)' }}>{label}</span>
+    </div>
+  );
+}
+function withinDays(d, n) {
+  if (!d) return false;
+  const dt = new Date(d); if (isNaN(dt)) return false;
+  const days = Math.round((Date.now() - dt.getTime()) / 86400000);
+  return days >= 0 && days <= n;
+}

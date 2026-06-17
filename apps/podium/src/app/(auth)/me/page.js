@@ -28,36 +28,33 @@ export default function MyPerformancePage() {
   if (me == null) return <Spinner />;
   if (me === false || !me.employee_id) {
     return (
-      <div style={{ maxWidth: 760 }}>
-        <h1 style={h1}>My Performance</h1>
-        <div style={empty}>You don&apos;t have an employee profile linked to your login yet. Ask HR to set one up.</div>
+      <div style={{ maxWidth: 840 }}>
+        <div style={{ color: 'var(--t3)', fontSize: 14 }}>You don&apos;t have an employee profile linked to your login yet. Ask HR to set one up.</div>
       </div>
     );
   }
 
   const open = me.open_action_items || [];
   return (
-    <div style={{ maxWidth: 820 }}>
-      <h1 style={h1}>My Performance</h1>
-
-      <AppraisalsBlock session={session} />
+    <div style={{ maxWidth: 840 }}>
+      <AppraisalsBanner session={session} />
 
       {open.length > 0 && (
-        <div style={banner}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontWeight: 600, marginBottom: 6 }}>
-            <CheckSquare size={15} /> Open action items ({open.length})
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 11, padding: '13px 16px', marginBottom: 18 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, color: 'var(--t1)', marginBottom: 8 }}>
+            <CheckSquare size={15} color="var(--blue-soft)" /> Open action items · {open.length}
           </div>
           {open.map((a, i) => (
-            <div key={i} style={{ fontSize: 13, padding: '2px 0', color: 'var(--text-2)' }}>
-              • {a.text} <span style={{ color: 'var(--text-3)', fontSize: 11 }}>· from 1:1 {fmtDate(a.met_on)}</span>
+            <div key={i} style={{ fontSize: 13, padding: '3px 0', color: 'var(--t2)' }}>
+              • {a.text} <span style={{ color: 'var(--t4)', fontSize: 11 }}>· from 1:1 {fmtDate(a.met_on)}</span>
             </div>
           ))}
         </div>
       )}
 
-      <div style={tabBar}>
+      <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid var(--border)', marginBottom: 16 }}>
         {TABS.map(t => (
-          <button key={t.id} onClick={() => setTab(t.id)} style={{ ...tabBtn, ...(tab === t.id ? tabBtnActive : {}) }}>{t.label}</button>
+          <div key={t.id} className={'pd-tab' + (tab === t.id ? ' active' : '')} onClick={() => setTab(t.id)}>{t.label}</div>
         ))}
       </div>
 
@@ -68,7 +65,7 @@ export default function MyPerformancePage() {
   );
 }
 
-function AppraisalsBlock({ session }) {
+function AppraisalsBanner({ session }) {
   const router = useRouter();
   const [d, setD] = useState(null);
   useEffect(() => { podiumopsGet('getMyAppraisals', {}, session).then(setD).catch(() => setD(false)); }, [session]);
@@ -77,32 +74,32 @@ function AppraisalsBlock({ session }) {
   const toReview = (d.to_review || []).filter(r => !r.done);
   if (!mine.length && !toReview.length) return null;
   const go = (id) => router.push(`/appraisals/detail/?id=${id}`);
+
   return (
-    <div style={apBox}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontWeight: 700, marginBottom: 8, fontSize: 13, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-2)' }}>
-        <ClipboardCheck size={15} /> Appraisals
-      </div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
       {mine.map(a => (
-        <div key={a.id} onClick={() => go(a.id)} style={apRow}>
-          <span>{a.cycle?.name} — {a.status === 'shared' ? 'your result is ready' : a.self_submitted_at ? 'self-review submitted (editable)' : 'start your self-review'}</span>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--podium-accent)' }}>{a.status === 'shared' ? 'View' : 'Open'} <ChevronRight size={14} /></span>
+        <div key={a.id} style={banner}>
+          <ClipboardCheck size={18} color="var(--yellow)" style={{ flex: 'none' }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--t1)' }}>{a.cycle?.name} — {a.status === 'shared' ? 'your result is ready' : a.self_submitted_at ? 'self-review submitted (editable)' : 'start your self-review'}</div>
+            {a.cycle?.period_end && <div style={{ fontSize: 12, color: 'var(--t2)' }}>Window closes {fmtDate(a.cycle.period_end)}.</div>}
+          </div>
+          <div onClick={() => go(a.id)} style={bannerBtn}>{a.status === 'shared' ? 'View' : 'Open'}</div>
         </div>
       ))}
       {toReview.map(r => (
-        <div key={r.id} onClick={() => go(r.id)} style={apRow}>
-          <span>Review <b>{r.employee?.full_name}</b> <span style={{ color: 'var(--text-3)', fontSize: 12 }}>· {r.cycle?.name}</span></span>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--podium-accent)' }}>Review <ChevronRight size={14} /></span>
+        <div key={r.id} style={banner}>
+          <ClipboardCheck size={18} color="var(--yellow)" style={{ flex: 'none' }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--t1)' }}>Review {r.employee?.full_name}</div>
+            <div style={{ fontSize: 12, color: 'var(--t2)' }}>{r.cycle?.name}</div>
+          </div>
+          <div onClick={() => go(r.id)} style={{ ...bannerBtn, display: 'inline-flex', alignItems: 'center', gap: 5 }}>Review <ChevronRight size={14} /></div>
         </div>
       ))}
     </div>
   );
 }
 
-const apBox = { background: 'var(--accent-bg)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '12px 14px', marginBottom: 16 };
-const apRow = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '8px 10px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: 13, marginTop: 6 };
-const h1 = { fontFamily: 'var(--font-cond)', fontSize: 24, fontWeight: 700, letterSpacing: '0.03em', marginBottom: 16 };
-const empty = { color: 'var(--text-3)', fontSize: 14 };
-const banner = { background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '12px 14px', marginBottom: 16 };
-const tabBar = { display: 'flex', gap: 4, borderBottom: '1px solid var(--border)', marginBottom: 16 };
-const tabBtn = { background: 'transparent', color: 'var(--text-3)', border: 'none', borderBottom: '2px solid transparent', padding: '8px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer', marginBottom: -1 };
-const tabBtnActive = { color: 'var(--text-1)', borderBottomColor: 'var(--podium-accent)' };
+const banner = { display: 'flex', alignItems: 'center', gap: 12, background: 'rgba(242,205,26,0.07)', border: '1px solid var(--yellow)', borderRadius: 11, padding: '14px 18px' };
+const bannerBtn = { background: 'var(--yellow)', color: '#1b1b1e', borderRadius: 6, padding: '7px 14px', fontFamily: 'var(--font-display)', fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer' };

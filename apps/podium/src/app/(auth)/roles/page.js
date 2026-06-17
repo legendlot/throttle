@@ -3,9 +3,12 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast, Modal } from '@throttle/ui';
-import { Plus } from 'lucide-react';
+import { Lock } from 'lucide-react';
 import { podiumopsGet, podiumopsPost } from '../../../lib/podiumopsFetch.js';
 import { fmtMoney } from '../../../lib/format.js';
+import { GridHead, GridRow, gridTh, PrimaryButton, formLabel } from '../../../components/ui.js';
+
+const COLS = '1.8fr 0.8fr 0.7fr 1.2fr 70px 110px';
 
 export default function RolesPage() {
   const { session, perms } = useAuth();
@@ -36,44 +39,46 @@ export default function RolesPage() {
 
   return (
     <div>
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <h1 style={h1}>Roles &amp; KPIs</h1>
-        {canManage && <button onClick={() => setOpen(true)} style={newBtn}><Plus size={15} /> New Role</button>}
-      </header>
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 14 }}>
+        <span style={{ fontSize: 13, color: 'var(--t3)' }}>{rows.length} role{rows.length === 1 ? '' : 's'} defined{showBands ? ' · salary bands visible to HR' : ''}</span>
+        <span style={{ flex: 1 }} />
+        {canManage && <PrimaryButton onClick={() => setOpen(true)}>New Role</PrimaryButton>}
+      </div>
 
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-          <thead><tr style={{ background: 'var(--surface-2)', textAlign: 'left' }}>
-            <th style={th}>Title</th><th style={th}>Code</th><th style={th}>Level</th><th style={th}>Department</th><th style={th}>KPIs</th>{showBands && <th style={th}>Band (mid)</th>}
-          </tr></thead>
-          <tbody>
-            {rows.length === 0 && <tr><td colSpan={6} style={{ ...td, color: 'var(--text-3)', textAlign: 'center' }}>No roles defined</td></tr>}
-            {rows.map(r => (
-              <tr key={r.id} onClick={() => router.push(`/roles/detail/?id=${r.id}`)} style={{ cursor: 'pointer', borderTop: '1px solid var(--border)' }}>
-                <td style={td}>{r.title}{!r.active && <span style={{ color: 'var(--text-4)', fontSize: 11 }}> (inactive)</span>}</td>
-                <td style={td}>{r.role_code || '—'}</td>
-                <td style={td}>{r.level || '—'}</td>
-                <td style={td}>{r.department?.name || '—'}</td>
-                <td style={td}>{r.kpi_count || 0}</td>
-                {showBands && <td style={td}>{r._bands_hidden ? '🔒' : fmtMoney(r.salary_band_mid)}</td>}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 11, overflow: 'hidden' }}>
+        <GridHead cols={COLS}>
+          <div style={gridTh}>Title</div>
+          <div style={gridTh}>Code</div>
+          <div style={gridTh}>Level</div>
+          <div style={gridTh}>Department</div>
+          <div style={gridTh}>KPIs</div>
+          <div style={gridTh}>Band · Mid</div>
+        </GridHead>
+        {rows.length === 0 && <div style={{ padding: '20px 16px', color: 'var(--t3)', fontSize: 13, textAlign: 'center' }}>No roles defined</div>}
+        {rows.map(r => (
+          <GridRow key={r.id} cols={COLS} onClick={() => router.push(`/roles/detail/?id=${r.id}`)}>
+            <div style={{ padding: '11px 16px', fontSize: 13.5, fontWeight: 600, color: 'var(--t1)' }}>{r.title}{!r.active && <span style={{ color: 'var(--t4)', fontSize: 11 }}> (inactive)</span>}</div>
+            <div style={{ padding: '11px 16px' }}><span className="num" style={{ fontSize: 11.5, color: 'var(--t2)' }}>{r.role_code || '—'}</span></div>
+            <div style={{ padding: '11px 16px' }}>{r.level ? <span style={{ fontFamily: 'var(--font-display)', fontSize: 11, fontWeight: 600, letterSpacing: '0.04em', color: 'var(--blue-soft)' }}>{r.level}</span> : <span style={{ color: 'var(--t4)' }}>—</span>}</div>
+            <div style={{ padding: '11px 16px', fontSize: 13, color: 'var(--t3)' }}>{r.department?.name || '—'}</div>
+            <div style={{ padding: '11px 16px' }}><span className="num" style={{ fontSize: 13, color: 'var(--t1)' }}>{r.kpi_count || 0}</span></div>
+            <div style={{ padding: '11px 16px' }}>
+              {r._bands_hidden
+                ? <Lock size={14} color="var(--t4)" />
+                : <span className="num" style={{ fontSize: 13, color: 'var(--yellow)' }}>{r.salary_band_mid != null ? fmtMoney(r.salary_band_mid) : '—'}</span>}
+            </div>
+          </GridRow>
+        ))}
       </div>
 
       <Modal open={open} onClose={() => setOpen(false)} title="New Role" confirmLabel={busy ? 'Creating…' : 'Create'} onConfirm={create} loading={busy}>
-        <Field label="Title *"><input style={inp} value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} /></Field>
-        <Field label="Role code"><input style={inp} value={form.role_code} onChange={e => setForm(f => ({ ...f, role_code: e.target.value }))} /></Field>
-        <Field label="Level"><input style={inp} placeholder="e.g. L3 / Senior" value={form.level} onChange={e => setForm(f => ({ ...f, level: e.target.value }))} /></Field>
+        <Field label="Title *"><input className="pd-input" style={inp} value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} /></Field>
+        <Field label="Role code"><input className="pd-input" style={inp} value={form.role_code} onChange={e => setForm(f => ({ ...f, role_code: e.target.value }))} /></Field>
+        <Field label="Level"><input className="pd-input" style={inp} placeholder="e.g. L3 / Senior" value={form.level} onChange={e => setForm(f => ({ ...f, level: e.target.value }))} /></Field>
       </Modal>
     </div>
   );
 }
 
-const h1 = { fontFamily: 'var(--font-cond)', fontSize: 22, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' };
-const th = { padding: '10px 12px', fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600 };
-const td = { padding: '10px 12px' };
-const newBtn = { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--podium-accent)', color: '#1f1f1f', border: 'none', borderRadius: 'var(--radius-sm)', padding: '8px 14px', fontWeight: 700, fontSize: 12, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer' };
-const inp = { width: '100%', background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '7px 10px', fontFamily: 'var(--font-mono)', fontSize: 13 };
-function Field({ label, children }) { return <label style={{ display: 'block', marginBottom: 10 }}><div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>{label}</div>{children}</label>; }
+const inp = { width: '100%', background: 'var(--bg)', color: 'var(--t1)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '9px 11px', fontFamily: 'var(--font-ui)', fontSize: 13, outline: 'none' };
+function Field({ label, children }) { return <label style={{ display: 'block', marginBottom: 12 }}><div style={formLabel}>{label}</div>{children}</label>; }

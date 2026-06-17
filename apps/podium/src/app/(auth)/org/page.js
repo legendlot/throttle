@@ -48,25 +48,21 @@ export default function OrgPage() {
 
   return (
     <div>
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
-        <h1 style={{ fontFamily: 'var(--font-cond)', fontSize: 22, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
-          Org Chart {viewing && <span style={{ fontSize: 12, color: 'var(--state-warning-fg)' }}>· snapshot</span>}
-        </h1>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <select value={viewing || ''} onChange={e => viewSnap(e.target.value || null)} style={sel}>
-            <option value="">Live (current)</option>
-            {snaps.map(s => <option key={s.id} value={s.id}>{s.label} · {fmtDate(s.captured_at)}</option>)}
-          </select>
-          {perms?.podium_hr && <button onClick={capture} disabled={busy} style={btn}><Camera size={14} /> {busy ? 'Saving…' : 'Capture snapshot'}</button>}
-        </div>
+      <header style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 8 }}>
+        {viewing && <span style={{ flex: 1, fontFamily: 'var(--font-display)', fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--warn-fg)' }}>Viewing snapshot</span>}
+        <select value={viewing || ''} onChange={e => viewSnap(e.target.value || null)} style={sel}>
+          <option value="">Live (current)</option>
+          {snaps.map(s => <option key={s.id} value={s.id}>{s.label} · {fmtDate(s.captured_at)}</option>)}
+        </select>
+        {perms?.podium_hr && <button onClick={capture} disabled={busy} style={btn}><Camera size={14} /> {busy ? 'Saving…' : 'Capture snapshot'}</button>}
       </header>
 
       {nodes.length === 0
-        ? <div style={{ color: 'var(--text-3)' }}>No employees yet. Add people in the Directory to build the chart.</div>
+        ? <div style={{ color: 'var(--t3)' }}>No employees yet. Add people in the Directory to build the chart.</div>
         : <OrgChart nodes={nodes} onSelect={(n) => !viewing && router.push(`/people/detail/?id=${n.id}`)} />}
 
       {snaps.length > 0 && (
-        <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div style={{ marginTop: 14, fontSize: 12, color: 'var(--t3)', display: 'flex', alignItems: 'center', gap: 6 }}>
           <History size={13} /> {snaps.length} saved snapshot{snaps.length === 1 ? '' : 's'}
         </div>
       )}
@@ -74,5 +70,5 @@ export default function OrgPage() {
   );
 }
 
-const btn = { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--podium-accent)', color: '#1f1f1f', border: 'none', borderRadius: 'var(--radius-sm)', padding: '8px 14px', fontWeight: 700, fontSize: 12, letterSpacing: '0.04em', textTransform: 'uppercase', cursor: 'pointer' };
-const sel = { background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '7px 10px', fontFamily: 'var(--font-mono)', fontSize: 13, minWidth: 200 };
+const btn = { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--yellow)', color: '#1b1b1e', border: 'none', borderRadius: 'var(--r-sm)', padding: '7px 13px', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer' };
+const sel = { background: 'var(--surface)', color: 'var(--t1)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '7px 10px', fontFamily: 'var(--font-num)', fontSize: 12.5, minWidth: 200 };

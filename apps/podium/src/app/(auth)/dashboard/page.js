@@ -5,6 +5,9 @@ import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
 import { podiumopsGet } from '../../../lib/podiumopsFetch.js';
 import { labelOf, EMPLOYMENT_TYPES, tenure } from '../../../lib/format.js';
+import { Avatar, KpiTile, card, cardLabel } from '../../../components/ui.js';
+
+const BAR_COLS = ['#F2CD1A', '#9fb0ff', '#4ade80', '#fb923c', '#fbbf24', '#ff8a8a'];
 
 export default function DashboardPage() {
   const { session } = useAuth();
@@ -25,73 +28,110 @@ export default function DashboardPage() {
   const active = emps.filter(e => e.status === 'active');
   const byStatus = tally(emps, e => e.status);
   const byType = tally(active, e => e.employment_type || 'unknown');
+  const newCount = active.filter(e => withinDays(e.date_joined, 30)).length;
+
   const recent = [...active]
     .filter(e => e.date_joined)
     .sort((a, b) => (b.date_joined || '').localeCompare(a.date_joined || ''))
     .slice(0, 6);
-
-  // upcoming work anniversaries (within 30 days) — needs date_joined
   const anniv = upcoming(active, 'date_joined');
   const bdays = upcoming(active, 'date_of_birth');
 
+  const deptRows = depts.slice().sort((a, b) => (b.headcount || 0) - (a.headcount || 0));
+  const maxHc = Math.max(1, ...deptRows.map(d => d.headcount || 0));
+  const typeRows = Object.entries(byType).sort((a, b) => b[1] - a[1]);
+  const typeMax = Math.max(1, ...typeRows.map(([, v]) => v));
+
   return (
     <div>
-      <h1 style={h1}>Dashboard</h1>
-
-      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 18 }}>
-        <Tile label="Headcount" value={active.length} accent />
-        <Tile label="Departments" value={depts.length} />
-        <Tile label="On Leave" value={byStatus.on_leave || 0} />
-        <Tile label="Notice" value={byStatus.notice || 0} />
-        <Tile label="Exited" value={byStatus.exited || 0} />
+      {/* KPI rail */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 18, flexWrap: 'wrap' }}>
+        <KpiTile label="Headcount" value={active.length} sub={newCount ? `+${newCount} this month` : 'steady'} subColor="var(--green-bright)" stripe />
+        <KpiTile label="Departments" value={depts.length} sub={`${deptRows.filter(d => (d.headcount || 0) > 0).length} active`} />
+        <KpiTile label="On Leave" value={byStatus.on_leave || 0} sub={(byStatus.on_leave || 0) ? 'currently away' : 'none'} subColor="var(--warn-fg)" />
+        <KpiTile label="Notice" value={byStatus.notice || 0} sub={(byStatus.notice || 0) ? 'serving notice' : 'none'} subColor="var(--bad-fg)" />
+        <KpiTile label="New · 30d" value={newCount} sub={newCount ? 'onboarding' : 'none'} subColor="var(--green-bright)" />
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
-        <Card title="By Department">
-          {depts.length === 0 ? <Empty /> : depts
-            .slice().sort((a, b) => (b.headcount || 0) - (a.headcount || 0))
-            .map(d => (
-              <Row key={d.id} label={d.name} value={d.headcount || 0} />
-            ))}
-        </Card>
+      {/* Card grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 14 }}>
+        <div style={card}>
+          <div style={cardLabel}>By Department</div>
+          {deptRows.length === 0 ? <Empty /> : deptRows.map((d, i) => (
+            <Bar key={d.id} label={d.name} value={d.headcount || 0} pct={Math.round((d.headcount || 0) / maxHc * 100)} color={BAR_COLS[i % BAR_COLS.length]} />
+          ))}
+        </div>
 
-        <Card title="By Employment Type">
-          {Object.keys(byType).length === 0 ? <Empty /> : Object.entries(byType)
-            .sort((a, b) => b[1] - a[1])
-            .map(([k, v]) => <Row key={k} label={labelOf(EMPLOYMENT_TYPES, k)} value={v} />)}
-        </Card>
-
-        <Card title="Recent Joiners">
+        <div style={card}>
+          <div style={cardLabel}>Recent Joiners</div>
           {recent.length === 0 ? <Empty /> : recent.map(e => (
-            <ClickRow key={e.id} onClick={() => router.push(`/people/detail/?id=${e.id}`)}
-              label={e.full_name} sub={e.job_title} value={tenure(e.date_joined)} />
+            <div key={e.id} onClick={() => router.push(`/people/detail/?id=${e.id}`)}
+              style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '7px 0', borderTop: '1px solid var(--border)', cursor: 'pointer' }}>
+              <Avatar name={e.full_name} photoUrl={e.photo_url} tintKey={e.id} size={30} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--t1)' }}>{e.full_name}</div>
+                <div style={{ fontSize: 11, color: 'var(--t3)' }}>{e.job_title || '—'}</div>
+              </div>
+              <span className="num" style={{ fontSize: 11.5, color: 'var(--yellow)' }}>{tenure(e.date_joined)}</span>
+            </div>
           ))}
-        </Card>
+        </div>
 
-        <Card title="Upcoming Work Anniversaries">
+        <div style={card}>
+          <div style={cardLabel}>By Employment Type</div>
+          {typeRows.length === 0 ? <Empty /> : typeRows.map(([k, v], i) => (
+            <Bar key={k} label={labelOf(EMPLOYMENT_TYPES, k)} value={v} pct={Math.round(v / typeMax * 100)} color={BAR_COLS[(i + 1) % BAR_COLS.length]} />
+          ))}
+        </div>
+
+        <div style={card}>
+          <div style={cardLabel}>Upcoming Anniversaries</div>
           {anniv.length === 0 ? <Empty text="None in the next 30 days" /> : anniv.map(e => (
-            <ClickRow key={e.id} onClick={() => router.push(`/people/detail/?id=${e.id}`)}
-              label={e.full_name} sub={e.job_title} value={e._when} />
+            <WhenRow key={e.id} onClick={() => router.push(`/people/detail/?id=${e.id}`)} name={e.full_name} title={e.job_title} when={e._when} />
           ))}
-        </Card>
+        </div>
 
-        <Card title="Upcoming Birthdays">
+        <div style={card}>
+          <div style={cardLabel}>Upcoming Birthdays</div>
           {bdays.length === 0 ? <Empty text="None in the next 30 days" /> : bdays.map(e => (
-            <ClickRow key={e.id} onClick={() => router.push(`/people/detail/?id=${e.id}`)}
-              label={e.full_name} sub={e.job_title} value={e._when} />
+            <WhenRow key={e.id} onClick={() => router.push(`/people/detail/?id=${e.id}`)} name={e.full_name} title={e.job_title} when={e._when} />
           ))}
-        </Card>
+        </div>
       </div>
     </div>
   );
 }
 
-function tally(arr, keyFn) {
-  const o = {};
-  for (const x of arr) { const k = keyFn(x); o[k] = (o[k] || 0) + 1; }
-  return o;
+function Bar({ label, value, pct, color }) {
+  return (
+    <div style={{ marginBottom: 11 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, marginBottom: 4 }}>
+        <span style={{ color: 'var(--t-body)' }}>{label}</span>
+        <span className="num" style={{ color: 'var(--t3)' }}>{value}</span>
+      </div>
+      <div style={{ height: 5, background: 'var(--bg)', borderRadius: 3, overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: `${pct}%`, background: color, borderRadius: 3 }} />
+      </div>
+    </div>
+  );
 }
-// nearest upcoming month-day for a date field, within 30 days
+function WhenRow({ name, title, when, onClick }) {
+  return (
+    <div onClick={onClick} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '7px 0', borderTop: '1px solid var(--border)', fontSize: 13, cursor: 'pointer' }}>
+      <span style={{ color: 'var(--t-body)' }}>{name}{title && <span style={{ color: 'var(--t4)', fontSize: 11, marginLeft: 6 }}>{title}</span>}</span>
+      <span className="num" style={{ fontSize: 11.5, color: 'var(--yellow)' }}>{when}</span>
+    </div>
+  );
+}
+function Empty({ text = 'No data' }) { return <div style={{ color: 'var(--t3)', fontSize: 12, padding: '6px 0' }}>{text}</div>; }
+
+function tally(arr, keyFn) { const o = {}; for (const x of arr) { const k = keyFn(x); o[k] = (o[k] || 0) + 1; } return o; }
+function withinDays(d, n) {
+  if (!d) return false;
+  const dt = new Date(d); if (isNaN(dt)) return false;
+  const days = Math.round((Date.now() - dt.getTime()) / 86400000);
+  return days >= 0 && days <= n;
+}
 function upcoming(arr, field) {
   const now = new Date();
   const out = [];
@@ -106,33 +146,3 @@ function upcoming(arr, field) {
   }
   return out.sort((a, b) => a._days - b._days).slice(0, 6);
 }
-
-const h1 = { fontFamily: 'var(--font-cond)', fontSize: 22, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: 16 };
-function Tile({ label, value, accent }) {
-  return (
-    <div style={{ flex: '1 1 130px', minWidth: 120, background: accent ? 'var(--accent-bg)' : 'var(--surface)', border: `1px solid ${accent ? 'var(--podium-accent)' : 'var(--border)'}`, borderRadius: 'var(--radius-md)', padding: '14px 16px' }}>
-      <div style={{ fontSize: 11, color: accent ? 'var(--podium-accent)' : 'var(--text-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
-      <div style={{ fontSize: 28, fontWeight: 700, fontFamily: 'var(--font-cond)', marginTop: 2 }}>{value}</div>
-    </div>
-  );
-}
-function Card({ title, children }) {
-  return (
-    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '14px 16px' }}>
-      <div style={{ fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600, marginBottom: 10 }}>{title}</div>
-      {children}
-    </div>
-  );
-}
-function Row({ label, value }) {
-  return <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderTop: '1px solid var(--border)', fontSize: 13 }}><span>{label}</span><span style={{ fontWeight: 600 }}>{value}</span></div>;
-}
-function ClickRow({ label, sub, value, onClick }) {
-  return (
-    <div onClick={onClick} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderTop: '1px solid var(--border)', fontSize: 13, cursor: 'pointer' }}>
-      <span><span>{label}</span>{sub && <span style={{ color: 'var(--text-3)', fontSize: 11, marginLeft: 6 }}>{sub}</span>}</span>
-      <span style={{ color: 'var(--podium-accent)', fontSize: 12, fontWeight: 600 }}>{value}</span>
-    </div>
-  );
-}
-function Empty({ text = 'No data' }) { return <div style={{ color: 'var(--text-3)', fontSize: 12, padding: '6px 0' }}>{text}</div>; }

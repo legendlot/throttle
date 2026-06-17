@@ -100,15 +100,16 @@ export function ObservationsPanel({ employeeId, session }) {
       {data.observations.length === 0 ? <Empty>No observations yet.</Empty> :
         data.observations.map(o => (
           <div key={o.id} style={entry}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={kindEyebrow('var(--blue-soft)')}>Observation</span>
               <SentimentChip id={o.sentiment} />
-              <span style={{ fontSize: 12, color: 'var(--text-3)' }}>{fmtDate(o.observed_on)}</span>
-              {o.author?.full_name && <span style={{ fontSize: 12, color: 'var(--text-3)' }}>· {o.author.full_name}</span>}
               <span style={{ ...visTag }}>{visibilityMeta(o.visibility).label}</span>
               <span style={{ flex: 1 }} />
+              <span className="num" style={{ fontSize: 12, color: 'var(--t4)' }}>{fmtDate(o.observed_on)}</span>
               <RowActions canEdit={o._can_edit} canDelete={o._can_delete} onEdit={() => openEdit(o)} onDelete={() => del(o)} />
             </div>
-            <div style={{ fontSize: 13, marginTop: 6, whiteSpace: 'pre-wrap' }}>{o.body}</div>
+            <div style={{ fontSize: 13.5, marginTop: 6, color: 'var(--t-body)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{o.body}</div>
+            {o.author?.full_name && <div style={{ fontSize: 12, color: 'var(--t4)', marginTop: 7 }}>— {o.author.full_name}</div>}
             <Tags tags={o.tags} />
           </div>
         ))}
@@ -169,13 +170,14 @@ export function WinsPanel({ employeeId, session }) {
       {data.accomplishments.length === 0 ? <Empty>No wins recorded yet.</Empty> :
         data.accomplishments.map(w => (
           <div key={w.id} style={entry}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>{w.title}</span>
-              <span style={{ fontSize: 12, color: 'var(--text-3)' }}>· {fmtDate(w.achieved_on)}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+              <span style={kindEyebrow('var(--green-bright)')}>Win</span>
               <span style={{ flex: 1 }} />
+              <span className="num" style={{ fontSize: 12, color: 'var(--t4)' }}>{fmtDate(w.achieved_on)}</span>
               <RowActions canEdit={w._can_edit} canDelete={w._can_delete} onEdit={() => openEdit(w)} onDelete={() => del(w)} />
             </div>
-            {w.description && <div style={{ fontSize: 13, marginTop: 5, color: 'var(--text-2)', whiteSpace: 'pre-wrap' }}>{w.description}</div>}
+            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--t1)' }}>{w.title}</div>
+            {w.description && <div style={{ fontSize: 13, marginTop: 3, color: 'var(--t2)', whiteSpace: 'pre-wrap' }}>{w.description}</div>}
             <Tags tags={w.tags} />
           </div>
         ))}
@@ -258,9 +260,9 @@ export function OneOnOnesPanel({ employeeId, session }) {
         data.one_on_ones.map(o => (
           <div key={o.id} style={entry}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>{fmtDate(o.met_on)}</span>
-              {o.manager?.full_name && <span style={{ fontSize: 12, color: 'var(--text-3)' }}>· {o.manager.full_name}</span>}
+              <span style={kindEyebrow('var(--t2)')}>1:1{o.manager?.full_name ? ` · ${o.manager.full_name}` : ''}</span>
               <span style={{ flex: 1 }} />
+              <span className="num" style={{ fontSize: 12, color: 'var(--t4)' }}>{fmtDate(o.met_on)}</span>
               <RowActions canEdit={o._can_edit} canDelete={o._can_delete} onEdit={() => openEdit(o)} onDelete={() => del(o)} />
             </div>
             {o.shared_notes && <div style={{ fontSize: 13, marginTop: 6, whiteSpace: 'pre-wrap' }}>{o.shared_notes}</div>}
@@ -294,7 +296,10 @@ export function OneOnOnesPanel({ employeeId, session }) {
 
 // ── styles ──────────────────────────────────────────────────────────────────
 
-const entry = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '12px 14px', marginBottom: 10 };
+function kindEyebrow(color) {
+  return { fontFamily: 'var(--font-display)', fontSize: 10, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color };
+}
+const entry = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '14px 16px', marginBottom: 10 };
 const formCard = { background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 14, marginBottom: 12 };
 const formRow = { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 };
 const chip = { fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 'var(--radius-full)', letterSpacing: '0.02em' };

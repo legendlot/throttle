@@ -5,6 +5,42 @@ import { Spinner, useToast } from '@throttle/ui';
 import { Plus, ArrowLeft, ShieldCheck } from 'lucide-react';
 import { podiumopsGet, podiumopsPost } from '../../../../lib/podiumopsFetch.js';
 
+// Prototype "Permissions" summary cards — one per permission key, with the count
+// of people whose assigned role grants it (RULE-PODIUM-001: elevated keys imply view).
+const PERM_SUMMARY = [
+  { key: 'podium_view',  label: 'Viewer', desc: 'Read-only access to the directory, org chart and departments.', fg: 'var(--blue-soft)' },
+  { key: 'podium_hr',    label: 'HR',     desc: 'Manage people, departments, roles and appraisal cycles.',        fg: 'var(--green-bright)' },
+  { key: 'podium_admin', label: 'Admin',  desc: 'Full access including users, permissions and settings.',          fg: 'var(--yellow)' },
+];
+
+function PermSummary({ roles, users }) {
+  const roleMap = {};
+  for (const r of roles) roleMap[r.role_key] = r.permissions || {};
+  const count = (key) => users.filter(u => u.podium_role && roleMap[u.podium_role]?.[key]).length;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>
+      {PERM_SUMMARY.map(p => (
+        <div key={p.key} style={{ display: 'flex', alignItems: 'center', gap: 16, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-lg)', padding: '16px 18px' }}>
+          <div style={{ width: 48, height: 48, borderRadius: 11, background: 'var(--bg)', border: '1px solid var(--border)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}>
+            <ShieldCheck size={22} color={p.fg} strokeWidth={1.75} />
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+              <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--t1)' }}>{p.label}</span>
+              <span className="num" style={{ fontSize: 11, color: 'var(--t3)', background: 'var(--bg)', border: '1px solid var(--border)', padding: '2px 8px', borderRadius: 5 }}>{p.key}</span>
+            </div>
+            <div style={{ fontSize: 13, color: 'var(--t2)', marginTop: 4 }}>{p.desc}</div>
+          </div>
+          <div style={{ textAlign: 'right', flex: 'none' }}>
+            <div className="num" style={{ fontSize: 22, fontWeight: 600, color: 'var(--t1)' }}>{count(p.key)}</div>
+            <div style={{ fontFamily: 'var(--font-display)', fontSize: 9, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--t4)' }}>People</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // Podium permission matrix — the 4 boolean keys, grouped. Define unlimited custom
 // roles from these toggles. Any elevated key implies podium_view (enforced both
 // here and server-side — RULE-PODIUM-001 corollary).
@@ -28,6 +64,7 @@ export default function RolesPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
   const [roles, setRoles] = useState([]);
+  const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState('list');      // list | form
   const [editKey, setEditKey] = useState(null);
@@ -42,8 +79,12 @@ export default function RolesPage() {
     if (!session) return;
     setLoading(true);
     try {
-      const r = await podiumopsGet('getPodiumRoles', {}, session);
+      const [r, u] = await Promise.all([
+        podiumopsGet('getPodiumRoles', {}, session),
+        podiumopsGet('getPodiumUsers', {}, session).catch(() => []),
+      ]);
       setRoles(Array.isArray(r) ? r : []);
+      setUsers(Array.isArray(u) ? u : []);
     } catch (e) { showToast(e.message || 'Failed to load roles', 'error'); }
     finally { setLoading(false); }
   }, [session, showToast]);
@@ -108,6 +149,9 @@ export default function RolesPage() {
 
       {view === 'list' ? (
         loading ? <Spinner /> : (
+          <>
+          <PermSummary roles={roles} users={users} />
+          <div style={{ ...lbl, marginBottom: 10 }}>Custom roles</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             {roles.map((r) => (
               <div key={r.role_key} style={card}>
@@ -136,6 +180,7 @@ export default function RolesPage() {
               </div>
             ))}
           </div>
+          </>
         )
       ) : (
         <div style={card}>
