@@ -383,9 +383,8 @@ function gateRequirements(current, target, disposition, ticket, attachments_coun
       }
       return null;
     case 'refund_completed':
-      if (!ticket.refund_reference) {
-        return 'refund_reference (UTR / payment ref) required.';
-      }
+      // refund_reference (UTR / payment ref) is now OPTIONAL (Pruthvi, S149) —
+      // a refund can be marked completed before the UTR/payment ref is captured.
       return null;
     case 'handed_to_production':
       // repair_run_id can be set later — agent might link a run before or at this stage.

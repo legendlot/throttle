@@ -346,7 +346,7 @@ function AdvanceModal({ open, onClose, ticket, targetStage, session, onAdvanced 
         { name: 'refund_amount_inr', label: 'Refund amount (₹)', required: true, type: 'number' },
       ];
       case 'refund_completed':       return [
-        { name: 'refund_reference', label: 'UTR / payment reference', required: true },
+        { name: 'refund_reference', label: 'UTR / payment reference (optional)' },
       ];
       case 'handed_to_production':   return [
         { name: 'repair_run_id', label: 'Production run ID (optional)', type: 'number' },
