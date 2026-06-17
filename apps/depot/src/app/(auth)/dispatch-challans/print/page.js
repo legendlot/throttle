@@ -89,8 +89,18 @@ function PrintInner() {
           .doc { max-width: 800px; margin: 0 auto; background: #fff; padding: 32px; box-shadow: 0 0 0 1px #e5e5e5; }
         }
         @media print {
+          /* Defeat the (auth) app-shell's viewport clipping (height:100dvh + overflow:hidden) */
+          html, body { height: auto !important; overflow: visible !important; }
+          /* Hide the whole app shell (sidebar + topbar + chrome); reveal ONLY the challan */
+          body * { visibility: hidden !important; overflow: visible !important; height: auto !important; max-height: none !important; }
+          .doc, .doc * { visibility: visible !important; }
           .no-print { display: none !important; }
-          .doc { box-shadow: none; padding: 0; }
+          /* Pull the document to the page origin so it isn't offset by the (now-hidden) sidebar/topbar */
+          .doc {
+            position: absolute !important;
+            left: 0 !important; top: 0 !important; width: 100% !important;
+            box-shadow: none; padding: 0 !important;
+          }
         }
         .doc, .doc * {
           color: #000 !important;
