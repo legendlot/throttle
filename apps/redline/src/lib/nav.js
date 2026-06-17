@@ -16,21 +16,54 @@ import {
    /dispatch + /dispatch/lines overview pages are ⌘K-only.
    ════════════════════════════════════════════════════════════ */
 
+/* S152 reorg: the old flat 10-item Production group split into lifecycle-ordered
+   groups (Plan → Floor → Quality → Reports). Planner / Line Setup / Line Design
+   promoted out of the Setup drawer into Plan (daily prep, not done-once config).
+   Inbox renamed Activities. Dispatch dropped lower (it's just a Depot pointer +
+   the still-here Repack screens). */
 export const NAV_PRIMARY = [
   { id: 'overview', label: 'Overview', icon: Gauge, route: '/exec' },
   {
-    id: 'production', label: 'Production', icon: Factory,
+    id: 'plan', label: 'Plan', icon: CalendarClock,
     children: [
-      { id: 'new-run',     label: 'New Run',    route: '/new-run',            icon: FilePlus2 },
-      { id: 'hourly',      label: 'Hourly',     route: '/hourly',             icon: Clock },
-      { id: 'prod-history',label: 'Production History', route: '/production-history', icon: History },
-      { id: 'qc',          label: 'QC',         route: '/qc',                 icon: ShieldCheck },
-      { id: 'lines',       label: 'Lines',      route: '/lines',              icon: GitBranch },
-      { id: 'audit',       label: 'Audit',      route: '/audit',              icon: ClipboardCheck },
-      { id: 'deviations',  label: 'Deviations', route: '/process-deviations', icon: AlertTriangle },
-      { id: 'manpower',    label: 'Manpower',   route: '/manpower',           icon: Users },
-      { id: 'line-flush',  label: 'Line Flush', route: '/line-flush',         icon: Workflow },
-      { id: 'reporting',   label: 'Reporting',  route: '/reporting',          icon: BarChart3 },
+      { id: 'planner',     label: 'Planner',     route: '/planner',     icon: CalendarClock },
+      { id: 'new-run',     label: 'New Run',     route: '/new-run',     icon: FilePlus2 },
+      { id: 'line-setup',  label: 'Line Setup',  route: '/line-setup',  icon: ClipboardList },
+      { id: 'line-design', label: 'Line Design', route: '/line-design', icon: LayoutGrid },
+    ],
+  },
+  {
+    id: 'floor', label: 'Floor', icon: Factory,
+    children: [
+      { id: 'lines',      label: 'Lines',      route: '/lines',      icon: GitBranch },
+      { id: 'hourly',     label: 'Hourly',     route: '/hourly',     icon: Clock },
+      { id: 'manpower',   label: 'Manpower',   route: '/manpower',   icon: Users },
+      { id: 'line-flush', label: 'Line Flush', route: '/line-flush', icon: Workflow },
+    ],
+  },
+  {
+    id: 'quality', label: 'Quality', icon: ShieldCheck,
+    children: [
+      { id: 'qc',         label: 'QC',         route: '/qc',                 icon: ShieldCheck },
+      { id: 'audit',      label: 'Audit',      route: '/audit',              icon: ClipboardCheck },
+      { id: 'deviations', label: 'Deviations', route: '/process-deviations', icon: AlertTriangle },
+    ],
+  },
+  {
+    id: 'reports', label: 'Reports', icon: BarChart3,
+    children: [
+      { id: 'prod-history', label: 'Production History', route: '/production-history', icon: History },
+      { id: 'reporting',    label: 'Reporting',          route: '/reporting',          icon: BarChart3 },
+    ],
+  },
+  {
+    id: 'inbox', label: 'Activities', icon: Bell, badged: true,
+    children: [
+      { id: 'alerts',      label: 'Alerts',      route: '/alerts',       icon: Bell,    badgeKey: 'alerts' },
+      { id: 'returns',     label: 'Returns',     route: '/returns',      icon: Undo2,   badgeKey: 'returns' },
+      { id: 'scans',       label: 'Scans',       route: '/scans',        icon: ScanLine },
+      { id: 'corrections', label: 'Corrections', route: '/corrections',  icon: Edit3 },
+      { id: 'repair',      label: 'Repair',      route: '/repair-queue', icon: Wrench },
     ],
   },
   {
@@ -44,27 +77,15 @@ export const NAV_PRIMARY = [
       { id: 'repack-reports', label: 'Repack Reports',   route: '/repack-runs/reports', icon: BarChart3 },
     ],
   },
-  {
-    id: 'inbox', label: 'Inbox', icon: Bell, badged: true,
-    children: [
-      { id: 'alerts',      label: 'Alerts',      route: '/alerts',       icon: Bell,    badgeKey: 'alerts' },
-      { id: 'returns',     label: 'Returns',     route: '/returns',      icon: Undo2,   badgeKey: 'returns' },
-      { id: 'scans',       label: 'Scans',       route: '/scans',        icon: ScanLine },
-      { id: 'corrections', label: 'Corrections', route: '/corrections',  icon: Edit3 },
-      { id: 'repair',      label: 'Repair',      route: '/repair-queue', icon: Wrench },
-    ],
-  },
 ];
 
 export const NAV_MANUAL = { id: 'manual', label: 'System Manual', icon: BookOpen, route: '/manual' };
 
+/* Setup = done-once admin config only (planning moved to the Plan group, S152). */
 export const NAV_SETUP = [
-  { id: 'planner',     label: 'Planner',       route: '/planner',           icon: CalendarClock },
-  { id: 'line-design', label: 'Line Design',   route: '/line-design',       icon: LayoutGrid },
-  { id: 'line-setup',  label: 'Line Setup',    route: '/line-setup',        icon: ClipboardList },
-  { id: 'upc',         label: 'UPC Generator', route: '/upc',               icon: QrCode },
-  { id: 'operators',   label: 'Operators',     route: '/operators',         icon: Users },
-  { id: 'print',       label: 'Print',         route: '/print',             icon: Printer },
+  { id: 'upc',       label: 'UPC Generator', route: '/upc',       icon: QrCode },
+  { id: 'operators', label: 'Operators',     route: '/operators', icon: Users },
+  { id: 'print',     label: 'Print',         route: '/print',     icon: Printer },
 ];
 
 /* ⌘K-only destinations — pages that exist but live outside the sidebar.
