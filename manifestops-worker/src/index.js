@@ -324,13 +324,22 @@ const PREFILL_DATE_COL = {
   cleared: 'clearance_date', local_transport: 'local_dispatch_date', received: 'warehouse_delivery_date',
 };
 function addDays(iso, n) { const dt = new Date(iso + 'T00:00:00Z'); dt.setUTCDate(dt.getUTCDate() + n); return dt.toISOString().split('T')[0]; }
-// Build a {date col → ISO} patch by walking the editable stage_defaults offsets from an anchor date.
-async function prefillShipmentDates(mode, anchorISO) {
+// Build a {date col → ISO} patch by walking the editable stage_defaults offsets, anchored off the
+// real dates the user gave at creation. If sailing (etd) is known → only the downstream legs
+// (docked→received) are suggested forward from it; if only loading is known → from sailing onward;
+// if neither → from today (loaded onward). Explicit dates are preserved by the caller (fill-if-blank).
+async function prefillShipmentDates(mode, opts = {}) {
   const r = await query('stage_defaults', `?mode=eq.${encodeURIComponent(mode)}&select=stage,offset_days`);
   if (!r.ok || !r.data.length) return {};
   const off = {}; r.data.forEach(x => { off[x.stage] = Number(x.offset_days) || 0; });
-  const patch = {}; let cur = anchorISO || todayISO();
-  for (const stage of SHIP_STAGES) {              // 'planned' has no offset/date col → skipped
+  let cur, startAfter;
+  if (opts.etd)               { cur = opts.etd;          startAfter = 'sailing'; }
+  else if (opts.loading_date) { cur = opts.loading_date; startAfter = 'loaded'; }
+  else                        { cur = opts.anchor || todayISO(); startAfter = null; }
+  const patch = {};
+  let started = startAfter == null;
+  for (const stage of SHIP_STAGES) {              // planned skipped (no offset/date col)
+    if (!started) { if (stage === startAfter) started = true; continue; }  // skip up to & incl. the known stage
     if (off[stage] == null) continue;
     cur = addDays(cur, off[stage]);
     if (PREFILL_DATE_COL[stage]) patch[PREFILL_DATE_COL[stage]] = cur;
@@ -1010,7 +1019,7 @@ export default {
             const fields = pick(d, SHIPMENT_FIELDS);
             // pre-fill expected milestone dates from the editable per-mode stage_defaults (suggest, not lock).
             // SF-supplied dates win — only fill the cols SF left blank.
-            const prefill = await prefillShipmentDates(mode, d.anchor_date);
+            const prefill = await prefillShipmentDates(mode, { anchor: d.anchor_date, loading_date: fields.loading_date, etd: fields.etd });
             for (const [col, val] of Object.entries(prefill)) if (fields[col] == null) fields[col] = val;
             const row = { ...fields, mode, shipment_no, status: fields.status || 'planned', created_by: userId };
             const r = await insert('shipments', row);

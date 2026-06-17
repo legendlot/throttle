@@ -750,7 +750,7 @@ function Shipments({ data, onNav, session, reload }) {
   const [forwarders, setForwarders] = useState([]);
   const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
-  const blank = { mode: 'sea', forwarder_code: '', container_type: '', container_no: '', bl_awb_no: '', anchor_date: '' };
+  const blank = { mode: 'sea', forwarder_code: '', loading_date: '', etd: '', container_type: '', container_no: '', bl_awb_no: '' };
   const [f, setF] = useState(blank);
   useEffect(() => { garageFetch('getForwarders', {}, session).then(setForwarders).catch(() => setForwarders([])); /* eslint-disable-next-line */ }, [session]);
   const fwdOpts = ['', ...forwarders.filter((x) => (x.modes_supported || []).map((m) => String(m).toLowerCase()).includes(f.mode)).map((x) => x.forwarder_code)];
@@ -758,12 +758,13 @@ function Shipments({ data, onNav, session, reload }) {
     if (busy) return; setBusy(true);
     try {
       const fwd = forwarders.find((x) => x.forwarder_code === f.forwarder_code);
-      const sh = await act('createShipment', { mode: f.mode, forwarder_code: f.forwarder_code || null, forwarder_name: fwd ? fwd.company_name : null, container_type: f.container_type || null, container_no: f.container_no || null, bl_awb_no: f.bl_awb_no || null, anchor_date: f.anchor_date || null }, session);
+      const sh = await act('createShipment', { mode: f.mode, forwarder_code: f.forwarder_code || null, forwarder_name: fwd ? fwd.company_name : null, loading_date: f.loading_date || null, etd: f.etd || null, container_type: f.container_type || null, container_no: f.container_no || null, bl_awb_no: f.bl_awb_no || null }, session);
       setF(blank); setShow(false); reload && reload();
       if (sh && sh.id) onNav('shipmentDetail', sh.id);
     } catch (e) { alert(e?.message || 'Create failed'); } finally { setBusy(false); }
   };
   const blAwbLbl = f.mode === 'air' ? 'Air Waybill (AWB)' : 'Bill of Lading (BL)';
+  const sailLbl = f.mode === 'air' ? 'Departure date (flight leaves)' : 'Sailing date (leaves port)';
   return (
     <Stack>
       {show && (
@@ -771,12 +772,13 @@ function Shipments({ data, onNav, session, reload }) {
           <Grid cols="repeat(3,1fr)">
             <Field label="Mode"><Select value={f.mode} onChange={(e) => setF((x) => ({ ...x, mode: e.target.value, forwarder_code: '' }))} options={['sea', 'air']} /></Field>
             <Field label="Carrier / forwarder"><Select value={f.forwarder_code} onChange={(e) => setF((x) => ({ ...x, forwarder_code: e.target.value }))} options={fwdOpts} /></Field>
-            <Field label="Anchor date (pre-fills ETAs)"><Input type="date" value={f.anchor_date} onChange={(e) => setF((x) => ({ ...x, anchor_date: e.target.value }))} /></Field>
+            <Field label={blAwbLbl}><Input value={f.bl_awb_no} onChange={(e) => setF((x) => ({ ...x, bl_awb_no: e.target.value }))} /></Field>
+            <Field label="Loading date"><Input type="date" value={f.loading_date} onChange={(e) => setF((x) => ({ ...x, loading_date: e.target.value }))} /></Field>
+            <Field label={sailLbl}><Input type="date" value={f.etd} onChange={(e) => setF((x) => ({ ...x, etd: e.target.value }))} /></Field>
             <Field label="Container type"><Input value={f.container_type} onChange={(e) => setF((x) => ({ ...x, container_type: e.target.value }))} placeholder={f.mode === 'air' ? 'ULD / loose' : 'FCL / LCL / 40ft'} /></Field>
             <Field label="Container no."><Input value={f.container_no} onChange={(e) => setF((x) => ({ ...x, container_no: e.target.value }))} /></Field>
-            <Field label={blAwbLbl}><Input value={f.bl_awb_no} onChange={(e) => setF((x) => ({ ...x, bl_awb_no: e.target.value }))} /></Field>
           </Grid>
-          <Mono size={10} color="var(--t3)" style={{ display: 'block', marginTop: 10 }}>No carrier listed? Add it in Admin → Logistics partners. Expected dates pre-fill from the {f.mode} timeline defaults — editable after.</Mono>
+          <Mono size={10} color="var(--t3)" style={{ display: 'block', marginTop: 10 }}>No carrier listed? Add it in Admin → Logistics partners. Downstream ETAs (arrival, customs, delivery) pre-fill forward from the {sailLbl.includes('Departure') ? 'departure' : 'sailing'} date using the {f.mode} timeline defaults — all editable after.</Mono>
           <Btn onClick={create} style={{ marginTop: 14 }}>{busy ? 'Creating…' : 'Create shipment'}</Btn>
         </Card>
       )}
