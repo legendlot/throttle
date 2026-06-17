@@ -91,8 +91,12 @@ export default function OverviewPage() {
           part_name: r.part_name,
           max_units: r.bom_qty > 0 ? Math.floor((r.available || 0) / r.bom_qty) : 0,
         }));
-        const max = Math.max(0, ...items.map(r => r.max_units));
+        // Producible = the BOTTLENECK part's count (the minimum). A unit can only be
+        // built up to its most-constrained part. (Was Math.max — that showed the
+        // most-plentiful part's stock, wildly overstating producibility, e.g. 40,550
+        // "Bumble" while a 0-stock part actually allowed 0.)
         const bottleneck = items.reduce((m, r) => r.max_units < m.max_units ? r : m, items[0]);
+        const max = Math.max(0, bottleneck?.max_units ?? 0);
         return { product, max, bottleneck: bottleneck?.part_name || '—' };
       }).sort((a, b) => a.max - b.max);
       setProducible(rows);
