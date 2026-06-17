@@ -28,7 +28,6 @@ function buildCommands() {
     { k: 'New run / request', grp: 'Action', icon: 'plus', route: '/new-run', s: 'Create' },
     { k: 'Log hourly count', grp: 'Action', icon: 'clock', route: '/hourly', s: 'Open' },
     { k: 'Generate UPC batch', grp: 'Action', icon: 'qr', route: '/upc', s: 'Open' },
-    { k: 'New delivery challan', grp: 'Action', icon: 'file', route: '/dispatch-challans/new', s: 'Create' },
     { k: 'Print a label', grp: 'Action', icon: 'printer', route: '/print', s: 'Open' },
   );
   return cmds;

@@ -2,9 +2,9 @@ import {
   Gauge, Factory, Truck, Bell,
   Clock, ShieldCheck, GitBranch, ClipboardCheck, AlertTriangle, Users,
   FilePlus2, Workflow, BarChart3,
-  Network, Send, ArrowLeftRight, FileText, RefreshCw, PackageCheck,
+  ArrowLeftRight,
   Undo2, ScanLine, Edit3, Wrench,
-  CalendarClock, LayoutGrid, ClipboardList, Tag, QrCode, Printer,
+  CalendarClock, LayoutGrid, ClipboardList, QrCode, Printer,
   BookOpen, History,
 } from 'lucide-react';
 
@@ -34,17 +34,14 @@ export const NAV_PRIMARY = [
     ],
   },
   {
+    // Dispatch carved out into Depot (depot.legendoftoys.com) — S152 cutover.
+    // Group kept only as a pointer + the still-here Repack screens (repack stays
+    // in Redline as a production activity; its tab placement is a later decision).
     id: 'dispatch', label: 'Dispatch', icon: Truck,
     children: [
-      { id: 'pipeline',       label: 'Pipeline',       route: '/dispatch-pipeline',  icon: Network },
-      { id: 'shipments',      label: 'Shipments',      route: '/dispatch-shipments', icon: Send },
-      { id: 'repack',         label: 'Repack',         route: '/repack-runs',        icon: ArrowLeftRight },
-      { id: 'repack-reports', label: 'Repack Reports', route: '/repack-runs/reports', icon: BarChart3 },
-      { id: 'challans',       label: 'Challans',       route: '/dispatch-challans',  icon: FileText },
-      // Dispatch-team ops moved out of Garage (S128, Afshaan): these belong with the dispatch team.
-      { id: 'restock',         label: 'Unit Restock',    route: '/restock',          icon: RefreshCw },
-      { id: 'dispatch-roster', label: 'Dispatch Roster', route: '/dispatch-roster',  icon: Users },
-      { id: 'dispatch-counts', label: 'Dispatch Counts', route: '/dispatch-counts',  icon: PackageCheck },
+      { id: 'dispatch-moved', label: 'Moved to Depot →', route: '/dispatch',           icon: Truck },
+      { id: 'repack',         label: 'Repack',           route: '/repack-runs',         icon: ArrowLeftRight },
+      { id: 'repack-reports', label: 'Repack Reports',   route: '/repack-runs/reports', icon: BarChart3 },
     ],
   },
   {
@@ -65,17 +62,14 @@ export const NAV_SETUP = [
   { id: 'planner',     label: 'Planner',       route: '/planner',           icon: CalendarClock },
   { id: 'line-design', label: 'Line Design',   route: '/line-design',       icon: LayoutGrid },
   { id: 'line-setup',  label: 'Line Setup',    route: '/line-setup',        icon: ClipboardList },
-  { id: 'channels',    label: 'Channels',      route: '/dispatch-channels', icon: Tag },
   { id: 'upc',         label: 'UPC Generator', route: '/upc',               icon: QrCode },
   { id: 'operators',   label: 'Operators',     route: '/operators',         icon: Users },
   { id: 'print',       label: 'Print',         route: '/print',             icon: Printer },
 ];
 
-/* ⌘K-only destinations — pages that exist but live outside the sidebar */
-export const NAV_HIDDEN = [
-  { id: 'dispatch-overview', label: 'Dispatch Overview', route: '/dispatch',       icon: Truck },
-  { id: 'dispatch-lines',    label: 'Dispatch Lines',    route: '/dispatch/lines', icon: GitBranch },
-];
+/* ⌘K-only destinations — pages that exist but live outside the sidebar.
+   (Dispatch overview/lines removed S152 — dispatch lives in Depot now.) */
+export const NAV_HIDDEN = [];
 
 /* ── breadcrumb/title resolution for the topbar ─────────────── */
 export function resolveNav(pathname) {

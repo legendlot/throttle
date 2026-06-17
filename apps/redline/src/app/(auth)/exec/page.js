@@ -644,9 +644,7 @@ export default function OverviewPage() {
             </div>
           </Panel>
 
-          <Panel title="Dispatch today" icon="truck"
-            action={<span onClick={() => router.push('/dispatch-pipeline')}
-              style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--t3)', cursor: 'pointer' }}>Pipeline →</span>}>
+          <Panel title="Packed" icon="box">
             <div style={{ display: 'flex', gap: 10 }}>
               {[['Retail', s.today_rtr, 'var(--yellow)'], ['Ecom', s.today_rte, 'var(--blue-bright)'], ['Pkg out', s.dispatch_stock, 'var(--t2)']].map(([l, v, c]) => (
                 <div key={l} style={{ flex: 1, background: 'var(--surface-2)', borderRadius: 'var(--r-sm)', padding: '11px 13px', borderTop: `2px solid ${c}` }}>

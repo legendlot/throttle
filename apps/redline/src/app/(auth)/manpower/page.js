@@ -194,7 +194,6 @@ export default function ManpowerPage() {
   const TABS = [
     { key: 'live',        label: 'Live view',   icon: 'grid' },
     { key: 'attendance',  label: 'Attendance',  icon: 'clock' },
-    { key: 'dispatch',    label: 'Dispatch',    icon: 'truck' },
     { key: 'roster',      label: 'Daily roster',icon: 'layers' },
     { key: 'performance', label: 'Performance', icon: 'activity' },
     { key: 'analytics',   label: 'Manpower analytics', icon: 'gauge' },
@@ -222,7 +221,6 @@ export default function ManpowerPage() {
 
       {activeTab === 'live'        && <LiveViewTab session={session} canManageFloor={canManageFloor} />}
       {activeTab === 'attendance'  && <AttendanceTab session={session} canManageFloor={canManageFloor} operators={allOperators} team="production" />}
-      {activeTab === 'dispatch'    && <AttendanceTab session={session} canManageFloor={canManageFloor} operators={allOperators} team="dispatch" />}
       {activeTab === 'roster'      && <DailyRosterTab session={session} canManageFloor={canManageFloor} operators={allOperators} />}
       {activeTab === 'performance' && <PerformanceTab session={session} canManageFloor={canManageFloor} operators={allOperators} />}
       {activeTab === 'analytics'   && <ManpowerAnalyticsTab session={session} canManageFloor={canManageFloor} operators={allOperators} team="production" />}
