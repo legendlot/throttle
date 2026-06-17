@@ -1,7 +1,7 @@
 import {
   Gauge, Send, Network, FileText, PackageCheck,
   Undo2, RefreshCw, ArrowLeftRight, BarChart3,
-  LayoutGrid, Truck, GitBranch, ScanLine, ClipboardList, Users, Tag,
+  LayoutGrid, Truck, GitBranch, ScanLine, ClipboardList, Users, Tag, ClipboardCheck,
 } from 'lucide-react';
 
 /* ════════════════════════════════════════════════════════════
@@ -43,6 +43,7 @@ export const NAV_PRIMARY = [
       { id: 'live-floor',      label: 'Live Floor',      route: '/dispatch',        icon: Truck },
       { id: 'lines',           label: 'Lines',           route: '/dispatch/lines',  icon: GitBranch },
       { id: 'scans',           label: 'Scan Feed',       route: '/scans',           icon: ScanLine },
+      { id: 'stock-audit',     label: 'Stock Audit',     route: '/dispatch-audits', icon: ClipboardCheck },
       { id: 'dispatch-roster', label: 'Dispatch Roster', route: '/dispatch-roster', icon: ClipboardList },
       { id: 'manpower',        label: 'Manpower',        route: '/manpower',        icon: Users },
     ],
