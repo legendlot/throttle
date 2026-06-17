@@ -671,6 +671,11 @@ async function getQueueCounts(params, auth, env) {
   const scope = await visibilityFilters(params, auth, env);
   if (!scope) return err(`Unknown department slug`, 404);
   const scopeQs = scope.length ? `&${scope.join('&')}` : '';
+  // Optional assigned-agent filter — keeps the tab badges in lock-step with the
+  // agent-filtered list (getTickets ?agent=). Skipped for the 'my' tab, which is
+  // always the viewer's own queue.
+  const agent = params.get('agent');
+  const agentQs = agent ? `&assigned_agent_id=eq.${encodeURIComponent(agent)}` : '';
   const tabs = {
     my:         `?assigned_agent_id=eq.${auth.userId}&closed_at=is.null&select=id`,
     open:       `?closed_at=is.null&select=id`,
@@ -683,8 +688,8 @@ async function getQueueCounts(params, auth, env) {
   const results = {};
   const entries = Object.entries(tabs);
   // Parallel — 7 subrequests, well under budget
-  const responses = await Promise.all(entries.map(([_, qs]) =>
-    sb(`/rest/v1/cs_tickets${qs}${scopeQs}&limit=1`, env, {
+  const responses = await Promise.all(entries.map(([k, qs]) =>
+    sb(`/rest/v1/cs_tickets${qs}${scopeQs}${k === 'my' ? '' : agentQs}&limit=5000`, env, {
       headers: { Prefer: 'count=exact' },
     })
   ));
@@ -737,10 +742,23 @@ async function getKpis(params, auth, env) {
   });
 }
 
+// Normalize a scanned/typed/spoken UPC to the canonical LOT-XXXXXXXX form.
+// The unit's QR encodes "LOT-00081760"; the printed human-readable is
+// "<product_code><serial>" e.g. "SHAK00081760" (Redline apps/redline .../upc/page.js).
+// Agents or customers may read out the human-readable or bare digits, so resolve
+// LOT-00081760 / lot-81760 / 00081760 / 81760 / SHAK00081760 → LOT-<8-pad>.
+// No trailing digits → returned unchanged (exact-match fallback).
+function normalizeUpc(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return s;
+  const m = s.match(/(\d+)\s*$/);   // trailing run of digits = the serial
+  return (m && m[1]) ? 'LOT-' + m[1].padStart(8, '0') : s;
+}
+
 async function lookupByUpc(params, auth, env) {
-  const upc = params.get('upc');
-  if (!upc) return err('upc required');
-  const info = await fetchDispatchInfo(upc, env);
+  const raw = params.get('upc');
+  if (!raw) return err('upc required');
+  const info = await fetchDispatchInfo(normalizeUpc(raw), env);
   return ok(info);
 }
 

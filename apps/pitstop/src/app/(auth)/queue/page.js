@@ -107,7 +107,7 @@ export default function QueuePage() {
   const dispositionFilter = searchParams.get('disposition') || '';
   const categoryFilter = searchParams.get('category') || '';
   const platformFilter = searchParams.get('platform') || '';
-  const createdByFilter = searchParams.get('created_by') || '';
+  const agentFilter = searchParams.get('agent') || '';
   const searchQ = searchParams.get('q') || '';
 
   // Agent filter is for oversight roles only (admins + dept leads who can reassign).
@@ -152,8 +152,11 @@ export default function QueuePage() {
     let alive = true;
     const fetchSummary = async () => {
       try {
+        const countParams = {};
+        if (agentFilter) countParams.agent = agentFilter;
+        if (perms?.cs_ticket_admin) countParams.department = deptSlug || 'all';
         const [c, k] = await Promise.all([
-          csopsGet('getQueueCounts', {}, session),
+          csopsGet('getQueueCounts', countParams, session),
           csopsGet('getKpis', {}, session),
         ]);
         if (alive) { setCounts(c || {}); setKpis(k); }
@@ -162,7 +165,7 @@ export default function QueuePage() {
     fetchSummary();
     const t = setInterval(fetchSummary, 60_000);
     return () => { alive = false; clearInterval(t); };
-  }, [session]);
+  }, [session, agentFilter, deptSlug, perms?.cs_ticket_admin]);
 
   // Issue catalog (once per session)
   useEffect(() => {
@@ -199,7 +202,7 @@ export default function QueuePage() {
     if (dispositionFilter) params.disposition = dispositionFilter;
     if (categoryFilter)    params.category    = categoryFilter;
     if (platformFilter)    params.platform    = platformFilter;
-    if (createdByFilter)   params.created_by  = createdByFilter;
+    if (agentFilter)       params.agent       = agentFilter;
     if (searchQ)           params.search      = searchQ;
     if (perms?.cs_ticket_admin) params.department = deptSlug || 'all';
 
@@ -208,7 +211,7 @@ export default function QueuePage() {
       .catch(e => { if (alive) setError(e.message); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [session, activeTab, dispositionFilter, categoryFilter, platformFilter, createdByFilter, searchQ, deptSlug, perms?.cs_ticket_admin]);
+  }, [session, activeTab, dispositionFilter, categoryFilter, platformFilter, agentFilter, searchQ, deptSlug, perms?.cs_ticket_admin]);
 
   // Submit search on Enter
   function submitSearch(e) {
@@ -418,14 +421,14 @@ export default function QueuePage() {
           {PLATFORMS.map(p => <option key={p} value={p}>{p}</option>)}
         </select>
 
-        {/* Agent (created-by) select — oversight roles only */}
+        {/* Agent select (assigned/handling agent) — oversight roles only */}
         {canFilterByAgent && (
           <>
             <span style={{ color: 'var(--t4)', padding: '0 4px' }}>|</span>
             <select
-              value={createdByFilter}
-              onChange={e => setParam('created_by', e.target.value)}
-              title="Filter by the agent who created the ticket"
+              value={agentFilter}
+              onChange={e => setParam('agent', e.target.value)}
+              title="Filter by the agent handling the ticket"
               style={{
                 background: 'var(--surface)',
                 color: 'var(--t1)',

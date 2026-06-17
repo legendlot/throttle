@@ -832,7 +832,7 @@ function EditPanelModal({ ticket, field, session, onClose, onSaved }) {
   // Minimal V1: a free-form panel for editing fields in the current section.
   // Locked-field rules already enforced by the backend.
   const sectionFields = {
-    issue:      ['issue_category','issue_subcategory','issue_subcategory_custom','disposition','issue_description'],
+    issue:      ['issue_category','issue_subcategory','issue_subcategory_custom','disposition','issue_description','product','product_model','product_color','product_sku','lot_unit_upc'],
     return:     ['return_awb','return_courier','return_tracking_url','return_cost_inr','inspection_note'],
     resolution: ticket.disposition === 'replacement'
                   ? ['replacement_order_id','replacement_awb','replacement_unit_upc','replacement_cost_inr']
@@ -845,6 +845,18 @@ function EditPanelModal({ ticket, field, session, onClose, onSaved }) {
   const [form, setForm] = useState(() => Object.fromEntries(fields.map(f => [f, ticket[f] ?? ''])));
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
+
+  // Product catalog for the Issue section's Product → Variant → Colour cascade
+  // (Pruthvi S149 — let agents tag the product on auto-created call tickets).
+  const [catalog, setCatalog] = useState([]);
+  useEffect(() => {
+    if (field !== 'issue' || !session) return;
+    let alive = true;
+    csopsGet('getProductCatalog', {}, session)
+      .then(r => { if (alive) setCatalog(r?.items || []); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [field, session]);
 
   async function save() {
     setSubmitting(true);
@@ -883,6 +895,13 @@ function EditPanelModal({ ticket, field, session, onClose, onSaved }) {
               <span style={{ color: 'var(--t3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.08em', fontFamily: 'var(--font-mono)' }}>issue_description</span>
               <textarea value={form.issue_description || ''} onChange={(e) => setForm((s) => ({ ...s, issue_description: e.target.value }))} rows={3} style={inputStyle} />
             </label>
+            {/* Product → Variant → Colour cascade + UPC (all optional) so call-ticket
+               complaints can be tagged to a product (Pruthvi S149). */}
+            <DetailProductCascade form={form} setForm={setForm} catalog={catalog} />
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span style={{ color: 'var(--t3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.08em', fontFamily: 'var(--font-mono)' }}>unit UPC (optional)</span>
+              <input value={form.lot_unit_upc || ''} onChange={(e) => setForm((s) => ({ ...s, lot_unit_upc: e.target.value }))} placeholder="LOT-… or scan" style={inputStyle} />
+            </label>
           </>
         ) : fields.map(f => (
           <label key={f} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -906,6 +925,66 @@ function EditPanelModal({ ticket, field, session, onClose, onSaved }) {
         ))}
       </div>
     </Modal>
+  );
+}
+
+// Product → Variant → Colour dependent cascade for the Issue edit panel.
+// Mirrors the new-ticket ProductCascade; SKU auto-resolves. All optional.
+function DetailProductCascade({ form, setForm, catalog }) {
+  const uniq = (arr) => [...new Set(arr.filter(Boolean))];
+  const withCurrent = (list, val) => (val && !list.includes(val) ? [val, ...list] : list);
+  const resolveSku = (product, model, color) =>
+    (catalog.find(c => c.product === product && c.model === model && c.color === color)?.sku) || '';
+
+  const products = withCurrent(uniq(catalog.map(c => c.product)), form.product);
+  const models   = withCurrent(uniq(catalog.filter(c => c.product === form.product).map(c => c.model)), form.product_model);
+  const colors   = withCurrent(uniq(catalog.filter(c => c.product === form.product && c.model === form.product_model).map(c => c.color)), form.product_color);
+
+  function selProduct(p) {
+    const ms = uniq(catalog.filter(c => c.product === p).map(c => c.model));
+    const model = ms.length === 1 ? ms[0] : '';
+    const cs = uniq(catalog.filter(c => c.product === p && c.model === model).map(c => c.color));
+    const color = cs.length === 1 ? cs[0] : '';
+    setForm(s => ({ ...s, product: p, product_model: model, product_color: color, product_sku: resolveSku(p, model, color) }));
+  }
+  function selModel(m) {
+    const cs = uniq(catalog.filter(c => c.product === form.product && c.model === m).map(c => c.color));
+    const color = cs.length === 1 ? cs[0] : '';
+    setForm(s => ({ ...s, product_model: m, product_color: color, product_sku: resolveSku(form.product, m, color) }));
+  }
+  function selColor(c) {
+    setForm(s => ({ ...s, product_color: c, product_sku: resolveSku(form.product, form.product_model, c) }));
+  }
+
+  const lbl = { color: 'var(--t3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.08em', fontFamily: 'var(--font-mono)' };
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 8 }}>
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <span style={lbl}>product</span>
+        <select value={form.product || ''} onChange={e => selProduct(e.target.value)} style={inputStyle}>
+          <option value="">— select —</option>
+          {products.map(p => <option key={p} value={p}>{p}</option>)}
+        </select>
+      </label>
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <span style={lbl}>variant</span>
+        <select value={form.product_model || ''} onChange={e => selModel(e.target.value)} style={inputStyle} disabled={!form.product}>
+          <option value="">{form.product ? '— select —' : '—'}</option>
+          {models.map(m => <option key={m} value={m}>{m}</option>)}
+        </select>
+      </label>
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <span style={lbl}>colour</span>
+        <select value={form.product_color || ''} onChange={e => selColor(e.target.value)} style={inputStyle} disabled={!form.product_model}>
+          <option value="">{form.product_model ? '— select —' : '—'}</option>
+          {colors.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+      </label>
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <span style={lbl}>sku</span>
+        <input value={form.product_sku || ''} readOnly style={{ ...inputStyle, opacity: 0.7 }} placeholder="auto" />
+      </label>
+    </div>
   );
 }
 
