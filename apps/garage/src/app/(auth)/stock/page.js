@@ -52,6 +52,23 @@ function downloadCsv(rows, filename, showCost) {
 // `product=''` (RULE-003) so a normal product-equality filter can't pick them.
 const COMMON_PRODUCT_KEY = '__common__';
 
+// Per-column sort accessors for the Components ledger. Number accessors sort
+// numerically; everything else sorts as a numeric-aware string.
+const STOCK_SORT = {
+  part:           r => r.part_code || '',
+  product:        r => r.product || '',
+  category:       r => r.category || '',
+  opening_stock:  r => Number(r.opening_stock)  || 0,
+  total_received: r => Number(r.total_received) || 0,
+  total_issued:   r => Number(r.total_issued)   || 0,
+  returned:       r => Number(r.returned)       || 0,
+  closing_stock:  r => Number(r.closing_stock)  || 0,
+  unit_cost:      r => Number(r.unit_cost)      || 0,
+  reorder_level:  r => Number(r.reorder_level)  || 0,
+  location:       r => r.location || '',
+  status:         r => { const c = Number(r.closing_stock) || 0, ro = Number(r.reorder_level) || 0; return ro > 0 && c <= ro ? 1 : 0; },
+};
+
 export default function StockPage() {
   const { session, perms } = useAuth();
   const { PRODUCTS: CATALOGUE_PRODUCTS } = useProducts();
@@ -70,8 +87,13 @@ export default function StockPage() {
   const [typeFilter, setTypeFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [fbuSearch, setFbuSearch] = useState('');
+  const [sort, setSort] = useState({ key: 'part', dir: 'asc' });
 
   const showCost = hasPermission(perms, 'reports_finance');
+
+  function toggleSort(key) {
+    setSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' });
+  }
 
   useEffect(() => {
     if (!session) return;
@@ -141,6 +163,20 @@ export default function StockPage() {
     });
   }, [stockData, search, productFilter, categoryFilter, typeFilter, statusFilter]);
 
+  const sortedStock = useMemo(() => {
+    const acc = STOCK_SORT[sort.key] || STOCK_SORT.part;
+    const dir = sort.dir === 'asc' ? 1 : -1;
+    return [...filteredStock].sort((a, b) => {
+      const va = acc(a), vb = acc(b);
+      let cmp;
+      if (typeof va === 'number' && typeof vb === 'number') cmp = va - vb;
+      else cmp = String(va).localeCompare(String(vb), undefined, { numeric: true, sensitivity: 'base' });
+      // stable tiebreak on part_code so equal values keep a deterministic order
+      if (cmp === 0) cmp = String(a.part_code || '').localeCompare(String(b.part_code || ''), undefined, { numeric: true });
+      return cmp * dir;
+    });
+  }, [filteredStock, sort]);
+
   const filteredFbu = useMemo(() => {
     const f = fbuSearch.toLowerCase();
     if (!f) return fbuData;
@@ -160,13 +196,29 @@ export default function StockPage() {
     const slug = productFilter
       ? productFilter.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
       : 'all';
-    downloadCsv(filteredStock, `stock-ledger-${slug}-${today}.csv`, showCost);
+    downloadCsv(sortedStock, `stock-ledger-${slug}-${today}.csv`, showCost);
   }
 
   const lowCount = useMemo(() => stockData.filter(r => {
     const c = Number(r.closing_stock) || 0, ro = Number(r.reorder_level) || 0;
     return ro > 0 && c <= ro;
   }).length, [stockData]);
+
+  function SortableTh({ colKey, align, children }) {
+    const active = sort.key === colKey;
+    return (
+      <th
+        style={{ ...th, ...(align === 'right' ? { textAlign: 'right' } : {}), cursor: 'pointer', userSelect: 'none' }}
+        onClick={() => toggleSort(colKey)}
+        title="Sort by this column"
+      >
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: align === 'right' ? 'flex-end' : 'flex-start', color: active ? 'var(--t1)' : undefined }}>
+          {children}
+          <span style={{ fontSize: 9, opacity: active ? 1 : 0.3 }}>{active ? (sort.dir === 'asc' ? '▲' : '▼') : '↕'}</span>
+        </span>
+      </th>
+    );
+  }
 
   return (
     <div>
@@ -238,22 +290,22 @@ export default function StockPage() {
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead>
                     <tr>
-                      <th style={th}>Part</th>
-                      <th style={th}>Product</th>
-                      <th style={th}>Category</th>
-                      <th style={{ ...th, textAlign: 'right' }}>Open</th>
-                      <th style={{ ...th, textAlign: 'right' }}>Recv</th>
-                      <th style={{ ...th, textAlign: 'right' }}>Iss</th>
-                      <th style={{ ...th, textAlign: 'right' }}>Ret</th>
-                      <th style={{ ...th, textAlign: 'right' }}>Close</th>
-                      {showCost && <th style={{ ...th, textAlign: 'right' }}>Cost</th>}
-                      <th style={{ ...th, textAlign: 'right' }}>Reorder</th>
-                      <th style={th}>Loc</th>
-                      <th style={th}>Status</th>
+                      <SortableTh colKey="part">Part</SortableTh>
+                      <SortableTh colKey="product">Product</SortableTh>
+                      <SortableTh colKey="category">Category</SortableTh>
+                      <SortableTh colKey="opening_stock" align="right">Open</SortableTh>
+                      <SortableTh colKey="total_received" align="right">Recv</SortableTh>
+                      <SortableTh colKey="total_issued" align="right">Iss</SortableTh>
+                      <SortableTh colKey="returned" align="right">Ret</SortableTh>
+                      <SortableTh colKey="closing_stock" align="right">Close</SortableTh>
+                      {showCost && <SortableTh colKey="unit_cost" align="right">Cost</SortableTh>}
+                      <SortableTh colKey="reorder_level" align="right">Reorder</SortableTh>
+                      <SortableTh colKey="location">Loc</SortableTh>
+                      <SortableTh colKey="status">Status</SortableTh>
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredStock.map((r, i) => {
+                    {sortedStock.map((r, i) => {
                       const closing = Number(r.closing_stock) || 0;
                       const reorder = Number(r.reorder_level) || 0;
                       const recv = Number(r.total_received) || 0;
