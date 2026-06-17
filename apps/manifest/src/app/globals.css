@@ -10,6 +10,8 @@
    ════════════════════════════════════════════════════════════ */
 
 :root {
+  /* dark telemetry theme — render native controls (date pickers, scrollbars, spinners) dark to match */
+  color-scheme: dark;
   /* surfaces */
   --bg:            #161519;
   --surface:       #1F1E24;
