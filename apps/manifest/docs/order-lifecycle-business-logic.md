@@ -89,7 +89,16 @@ plan** — even if SF revises the dates later, the original is never lost (see �
 - Usually **one PO travels on one shipment**, but a single shipment often carries **several
   POs** together, and one PO can be **split across more than one shipment** if needed.
 - Items can be **moved between shipments while the container hasn't left yet**. **Once the
-  shipment sets sail, its contents are locked** — nothing can be added, removed, or moved.
+  shipment departs, its contents are locked** — nothing can be added, removed, or moved.
+- A shipment is either **Air** or **Sea** (see §4.5). Both follow the same steps; air is
+  faster and the costs differ. The same PO can even be **split across an air shipment and a
+  sea shipment** — e.g. urgent items fly while the bulk sails.
+- Manifest **suggests the expected dates** for each leg from the team's saved defaults for
+  that mode (air or sea). These are only suggestions — SF can change any date — and the
+  defaults themselves are **editable by SF/admin** in a settings screen.
+- Manifest records **who is carrying the shipment** (the freight partner — e.g. DHL, FedEx,
+  a shipping line), with a tracking link where available. Partners are always picked from a
+  shared list, never typed as loose text.
 
 ### Step 7 — The shipment sails, docks, and clears customs
 SF advances the real shipment milestones — **Loaded → Sailing → Docked → Cleared → Local
@@ -99,11 +108,18 @@ SF now knows the real logistics costs and enters + pays them out of the pool:
 - **Customs / duty**
 - **Other port fees**
 
-Each is recorded against the shipment and **deducts the pool immediately**.
+Each is recorded against the shipment and **deducts the pool immediately**. (For an **air**
+shipment these milestones read *In Flight* and *Landed* instead of *Sailing* and *Docked* —
+same steps, different words.)
 
 ### Step 8 — Last-mile delivery to the warehouse
 SF arranges delivery from the port to LOT's warehouse, enters + pays that **last-mile
 delivery** cost (deducts the pool), and the order is now **delivered**.
+
+At this point Manifest also records **who is doing the last-mile delivery** and the **vehicle
+number**, so the **store team knows exactly who and what vehicle to expect** when the material
+arrives. (The delivery partner is picked from the shared list — if a new one is needed, it's
+added to the master in the moment, never typed as loose text.)
 
 ### Step 9 — SF invoices LOT and closes the order
 Finally, SF raises the **invoice to LOT** to close the order out (see §6). The order moves to
@@ -127,6 +143,25 @@ Everything SF pays comes out of the shared pool and is tracked + auditable at ev
 
 The first two wrap up the **goods purchase**. The middle four are **logistics**. The last is
 **SF's fee**. Every one of them reduces the pool the moment it's recorded.
+
+---
+
+## 4.5 Air vs Sea — what's different
+
+Every shipment is either **Air** or **Sea**. The journey steps are the same; what changes is:
+
+- **Speed.** Sea is roughly **30–40 days** door-to-door; air is roughly **5–8 days**.
+- **Cost.** Sea freight is priced by container or volume; air freight is priced by
+  **chargeable weight**. Both still incur customs/duty, handling fees, and last-mile delivery —
+  Manifest just prompts SF for the right set of costs for the mode.
+- **Wording.** The same milestones are labelled to suit the mode — "Sailing / Docked" for sea,
+  "In Flight / Landed" for air. The carrier document is a "Bill of Lading (BL)" for sea and an
+  "Air Waybill (AWB)" for air.
+- **Lock point.** A shipment's contents lock the moment it **departs** — when the vessel sails
+  or the flight leaves.
+
+The **suggested timelines per mode are editable** by SF/admin, so the dates Manifest pre-fills
+always reflect the team's real experience.
 
 ---
 
@@ -190,9 +225,13 @@ Two things fall out of this history automatically:
 **Billing side (runs in parallel near the end):**
 `In flight → Delivered → Partially invoiced → Invoiced (closed)`
 
-**Shipment journey:**
+**Shipment journey (Sea):**
 `Planned → Loaded → Sailing → Docked → Cleared → Local transport → Received`
 (contents lock at *Sailing*).
+
+**Shipment journey (Air):** the same steps, read as
+`Planned → Loaded → In Flight → Landed → Cleared → Local transport → Received`
+(contents lock at *In Flight* — i.e. departure).
 
 ---
 
@@ -208,3 +247,7 @@ Two things fall out of this history automatically:
 6. **Invoice = close-out record**; partial allowed; **GST editable per line**; optional 2.5%
    commission; auto invoice number.
 7. **Original plan dates are permanent**; full timestamped history on orders + shipments.
+8. **Air or Sea** — same steps, different speed/cost/wording; the suggested timelines per mode
+   are editable; one PO can split across both.
+9. **Every leg names its carrier**; last-mile records the **delivery partner + vehicle number**
+   for the store team; partners always come from the shared master, never free text.

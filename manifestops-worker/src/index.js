@@ -25,8 +25,8 @@ const CORS = {
 // ── Permission gates (keys in manifest.manifest_roles.permissions) ──
 const canView            = p => !!p.manifest_view;
 const canManageOrders    = p => !!p.order_manage;
-const canUpdateOrder     = p => !!p.order_manage || !!p.sf_order_update;       // SF may move status/tracking
-const canManageShipments = p => !!p.shipment_manage || !!p.sf_order_update;    // SF updates milestones
+const canUpdateOrder     = p => !!p.order_manage || !!p.sf_order_update || !!p.sf_po_manage;       // SF may move status/tracking
+const canManageShipments = p => !!p.shipment_manage || !!p.sf_order_update || !!p.sf_po_manage;    // SF updates milestones
 const canManageCharges   = p => !!p.charge_manage || !!p.sf_vendor_payment_record; // SF inputs cost lines
 const canFinalizeCharge  = p => !!p.charge_manage;                             // flip is_estimate=false: LOT only
 const canRecordPayment   = p => !!p.payment_record;                           // LOT → SF payments: LOT only
@@ -38,6 +38,9 @@ const canManageDocs      = p => !!p.doc_manage || !!p.sf_evidence_upload;
 const canProjectSnorkel  = p => !!p.china_po_sync;
 const canAdmin           = p => !!p.manifest_admin;
 const canViewCost        = p => !!p.cost_view;   // v2 landed-CPU / margin lens (SF lacks it)
+// SF lifecycle ownership (Phase 1, 2026-06-17). LOT manifest_admin always overrides so admins can drive/test.
+const canSfPoManage      = p => !!p.sf_po_manage     || !!p.manifest_admin;                        // convert/edit/place/advance/ship/pay/cancel
+const canSfInvoice       = p => !!p.sf_invoice_create || !!p.manifest_admin || !!p.payment_record; // invoice/close (LOT finance/admin override)
 
 // Strip LOT-only cost/margin fields from a read when the caller lacks cost_view.
 // v1 has no margin/CPU columns yet; the lens is here so v2 fields are never leaked to SF.
@@ -232,10 +235,12 @@ function num(v) { const n = Number(v); return Number.isFinite(n) ? n : null; }
 const ORDER_FIELDS = ['title','category','vendor_code','vendor_name','placed_via','currency','est_value_rmb','incoterms','notes'];
 const ORDER_COST_FIELDS = ['qty','per_unit_rmb','purchase_inr','shipping_inr','customs_inr','gst_percent','order_label','billing_subentity','invoice_date'];
 const LINE_FIELDS  = ['line_no','product','variant','color','item_type','part_code','description','qty','unit',
-  'unit_price_rmb','hsn_code','gst_percent','component_type','receive_format','remote_qty','weight_kg','cbm'];
+  'unit_price_rmb','hsn_code','gst_percent','component_type','receive_format','remote_qty','weight_kg','cbm',
+  'vendor_item_code','lot_product_code'];
 const SHIPMENT_FIELDS = ['shipment_no','mode','container_type','container_no','bl_awb_no','forwarder_code','forwarder_name',
   'status','etd','eta','loading_date','unloading_date','port_arrival_date','customs_entry_date','clearance_date',
-  'local_dispatch_date','warehouse_delivery_date','notes'];
+  'local_dispatch_date','warehouse_delivery_date','notes','cost_notes',
+  'last_mile_forwarder_code','last_mile_forwarder_name','last_mile_vehicle_no'];
 function pick(src, fields) {
   const out = {};
   for (const f of fields) if (src[f] !== undefined) out[f] = (src[f] === '' ? null : src[f]);
@@ -303,6 +308,44 @@ function computePoMoney(order, allocations, schedule, eff) {
     if (ei >= 0 && MONEY_PIPELINE.indexOf(m.due_stage) <= ei) reached += due;
   });
   return { allocated: +allocated.toFixed(2), balanceDue: +(total - allocated).toFixed(2), scheduledDueNow: Math.max(0, +(reached - allocated).toFixed(2)) };
+}
+
+// ── shipment modes (Air vs Sea) — labels + per-mode timeline pre-fill (Phase 5, 2026-06-17) ──
+// Underlying status keys are shared; mode only relabels (Decision A). Land falls back to sea.
+const MODE_STAGE_LABELS = {
+  sea: { loaded: 'Loaded', sailing: 'Sailing', docked: 'Docked', cleared: 'Cleared', local_transport: 'Local transport', received: 'Received' },
+  air: { loaded: 'Loaded', sailing: 'In Flight', docked: 'Landed', cleared: 'Cleared', local_transport: 'Local transport', received: 'Received' },
+};
+const modeLabels = (mode) => MODE_STAGE_LABELS[mode] || MODE_STAGE_LABELS.sea;
+const blAwbLabel = (mode) => (mode === 'air' ? 'Air Waybill (AWB)' : 'Bill of Lading (BL)');
+// stage → the shipment date column the pre-fill writes (estimate cols)
+const PREFILL_DATE_COL = {
+  loaded: 'loading_date', sailing: 'etd', docked: 'eta',
+  cleared: 'clearance_date', local_transport: 'local_dispatch_date', received: 'warehouse_delivery_date',
+};
+function addDays(iso, n) { const dt = new Date(iso + 'T00:00:00Z'); dt.setUTCDate(dt.getUTCDate() + n); return dt.toISOString().split('T')[0]; }
+// Build a {date col → ISO} patch by walking the editable stage_defaults offsets from an anchor date.
+async function prefillShipmentDates(mode, anchorISO) {
+  const r = await query('stage_defaults', `?mode=eq.${encodeURIComponent(mode)}&select=stage,offset_days`);
+  if (!r.ok || !r.data.length) return {};
+  const off = {}; r.data.forEach(x => { off[x.stage] = Number(x.offset_days) || 0; });
+  const patch = {}; let cur = anchorISO || todayISO();
+  for (const stage of SHIP_STAGES) {              // 'planned' has no offset/date col → skipped
+    if (off[stage] == null) continue;
+    cur = addDays(cur, off[stage]);
+    if (PREFILL_DATE_COL[stage]) patch[PREFILL_DATE_COL[stage]] = cur;
+  }
+  return patch;
+}
+// charge_type (UI) → charges.category (existing enum). Logistics costs map onto existing categories — no new enum.
+const SHIPMENT_COST_CATEGORY = { shipping: 'intl_freight', customs: 'customs_duty', other_fees: 'clearing', last_mile: 'local_freight' };
+// PI (+ future) doc types → an order-timeline milestone event.
+const DOC_TYPE_MILESTONE = { pi: 'pi_attached' };
+// Current pool net (running_account final balance) — drives the pool-sufficiency nudge.
+async function getPoolNet() {
+  const r = await query('running_account', '?select=signed_inr');
+  if (!r.ok) return null;
+  return +(r.data || []).reduce((s, e) => s + (Number(e.signed_inr) || 0), 0).toFixed(2);
 }
 
 // ============================================================
@@ -486,12 +529,18 @@ export default {
             return ok(r.data);
           }
           case 'getForwarders': {
-            const r = await queryStore('forwarders', '?active=eq.true&order=company_name.asc&select=forwarder_code,company_name,country,modes_supported,sea_days,air_days');
+            const r = await queryStore('forwarders', '?active=eq.true&order=company_name.asc&select=forwarder_code,company_name,country,country_iso,modes_supported,sea_days,air_days,land_days,iata_code,scac_code,tracking_url');
             if (!r.ok) return err(r.data);
             return ok(r.data);
           }
           case 'getAddresses': {
             const r = await queryStore('company_addresses', '?active=eq.true&order=label.asc');
+            if (!r.ok) return err(r.data);
+            return ok(r.data);
+          }
+          // ── Shipment-defaults config (editable per-mode timelines; suggest-not-lock) ──
+          case 'getStageDefaults': {
+            const r = await query('stage_defaults', '?order=mode.asc,stage.asc&select=*');
             if (!r.ok) return err(r.data);
             return ok(r.data);
           }
@@ -571,16 +620,20 @@ export default {
           }
           case 'getShipment': {
             const id = qp('id'); if (!id) return err('id required');
-            const [sR, slR, dR] = await Promise.all([
+            const [sR, slR, dR, evR] = await Promise.all([
               query('shipments', `?id=eq.${encodeURIComponent(id)}&select=*&limit=1`),
               query('shipment_lines', `?shipment_id=eq.${encodeURIComponent(id)}&select=*,order_lines(*,orders(order_no,title,vendor_name))`),
               query('documents', `?shipment_id=eq.${encodeURIComponent(id)}&order=created_at.desc&select=*`),
+              query('stage_events', `?entity=eq.shipment&shipment_id=eq.${encodeURIComponent(id)}&order=occurred_at.asc&select=stage,from_stage,note,actor_name,party,occurred_at`),
             ]);
             if (!sR.ok || !sR.data[0]) return err('Shipment not found', 404);
+            const sh = sR.data[0];
             return ok({
-              shipment: sR.data[0],
+              shipment: sh,
+              stageLabels: modeLabels(sh.mode), blAwbLabel: blAwbLabel(sh.mode),
               lines: (slR.ok ? slR.data : []).map(l => ({ ...l, order_lines: stripCost(l.order_lines, P) })),
               documents: dR.ok ? dR.data : [],
+              events: evR.ok ? evR.data : [],
             });
           }
 
@@ -794,6 +847,8 @@ export default {
             if (!oR.ok || !oR.data[0]) return err('Order not found', 404);
             const from = oR.data[0].status;
             if (from === 'cancelled') return err('Order is cancelled', 422);
+            if (target === 'cancelled' && !['requested','draft','placed','confirmed','produced'].includes(from))
+              return err('Cannot cancel after pickup — goods are paid for and in transit', 409);
             if (['shipped', 'received'].includes(from) && target !== 'cancelled') return err('Order is in shipping — advance its shipment legs instead', 422);
             if (target === 'placed') {
               const lc = await query('order_lines', `?order_id=eq.${encodeURIComponent(d.order_id)}&select=id&limit=1`);
@@ -805,38 +860,85 @@ export default {
             await logActivity(auth, 'order_stage', { scope: 'order', order_id: d.order_id, detail: target });
             return ok({ order_id: d.order_id, status: target });
           }
+          case 'convertToPo': {
+            // SF claims a LOT request and opens it as an editable PO draft. requested → draft.
+            if (!canSfPoManage(P)) return err('No permission (SF PO management)', 403);
+            if (!d.order_id) return err('order_id required');
+            const oR = await query('orders', `?id=eq.${encodeURIComponent(d.order_id)}&select=status&limit=1`);
+            if (!oR.ok || !oR.data[0]) return err('Order not found', 404);
+            if (oR.data[0].status !== 'requested') return err('Only a requested order can be converted to a PO', 422);
+            const r = await update('orders', { status: 'draft', placed_via: 'SF', updated_at: nowISO() }, `id=eq.${encodeURIComponent(d.order_id)}`);
+            if (!r.ok) return err('Convert failed: ' + JSON.stringify(r.data), 502);
+            await logStageEvent(auth, { entity: 'order', order_id: d.order_id, stage: 'draft', from_stage: 'requested', note: 'Converted to PO' });
+            await logActivity(auth, 'order_converted', { scope: 'order', order_id: d.order_id });
+            return ok(Array.isArray(r.data) ? r.data[0] : r.data);
+          }
+          case 'cancelOrder': {
+            // Cancellable only up to & including 'produced' (never after pickup). Reason required. No payment auto-reversal.
+            if (!canSfPoManage(P)) return err('No permission', 403);
+            if (!d.order_id) return err('order_id required');
+            if (!d.reason || !String(d.reason).trim()) return err('A cancellation reason is required', 400);
+            const oR = await query('orders', `?id=eq.${encodeURIComponent(d.order_id)}&select=status&limit=1`);
+            if (!oR.ok || !oR.data[0]) return err('Order not found', 404);
+            const from = oR.data[0].status;
+            if (!['requested','draft','placed','confirmed','produced'].includes(from))
+              return err('Cannot cancel after pickup — goods are paid for and in transit', 409);
+            const r = await update('orders', { status: 'cancelled', cost_state: 'cancelled', updated_at: nowISO() }, `id=eq.${encodeURIComponent(d.order_id)}`);
+            if (!r.ok) return err('Cancel failed: ' + JSON.stringify(r.data), 502);
+            await logStageEvent(auth, { entity: 'order', order_id: d.order_id, stage: 'cancelled', from_stage: from, note: d.reason });
+            await logActivity(auth, 'order_cancelled', { scope: 'order', order_id: d.order_id, detail: d.reason });
+            return ok({ order_id: d.order_id, status: 'cancelled' });
+          }
           case 'invoiceOrder': {
-            // LOT finance records the SF invoice → locks the order + accrues 2.5% commission.
-            if (!canRecordPayment(P) && !canManageCharges(P)) return err('No permission (LOT finance only)', 403);
+            // SF closes an order out with a RECORD — partial allowed, per-line GST, optional 2.5% commission.
+            // Pool impact = COMMISSION ONLY (goods/logistics already debited via payments §6); GST is a document figure.
+            if (!canSfInvoice(P)) return err('No permission (invoice/close)', 403);
             if (!d.order_id) return err('order_id required');
             const oR = await query('orders', `?id=eq.${encodeURIComponent(d.order_id)}&select=*&limit=1`);
             if (!oR.ok || !oR.data[0]) return err('Order not found', 404);
             const o = oR.data[0];
-            if (o.cost_state === 'invoiced') return err('Order already invoiced', 422);
             if (o.status === 'cancelled') return err('Order is cancelled', 422);
-            // invoice number is auto-derived from the VWINV series (never fed manually);
-            // an explicit invoice_no is still honoured (e.g. attaching to an existing invoice).
-            const invoice_no = (d.invoice_no && String(d.invoice_no).trim()) || await nextInvoiceNo();
+            if (o.cost_state === 'invoiced') return err('Order already fully invoiced', 422);
+            // billable = goods lines not yet stamped with an invoice_no; restrict to line_ids if given.
+            const lR = await query('order_lines', `?order_id=eq.${encodeURIComponent(d.order_id)}&order=line_no.asc&select=*`);
+            const allLines = lR.ok ? lR.data : [];
+            const wantIds = Array.isArray(d.line_ids) && d.line_ids.length ? d.line_ids.map(String) : null;
+            const billable = allLines.filter(l => !l.invoice_no && (!wantIds || wantIds.includes(String(l.id))));
+            if (!billable.length) return err('No billable (un-invoiced) lines selected', 422);
+            // value each billed line in INR via FX at invoice date (RMB price × qty × rate). [valuation flagged for reseed]
             const invDate = d.invoice_date || todayISO();
-            // 1) flip the order to invoiced
-            const upd = await update('orders', { invoice_no, invoice_date: invDate, cost_state: 'invoiced', updated_at: nowISO() }, `id=eq.${encodeURIComponent(d.order_id)}`);
-            if (!upd.ok) return err('Order invoice update failed: ' + JSON.stringify(upd.data), 502);
-            // 2) (re)compute the SF invoice = sum of all orders carrying this invoice_no (multi-order invoices supported)
-            const grp = await query('orders', `?invoice_no=eq.${encodeURIComponent(invoice_no)}&select=total_inr,billing_subentity`);
-            const invTotal = (grp.ok ? grp.data : []).reduce((s, x) => s + (Number(x.total_inr) || 0), 0);
-            const commission = +(invTotal * 0.025).toFixed(2);
-            const sub = o.billing_subentity || ((grp.ok && grp.data[0]) ? grp.data[0].billing_subentity : null);
+            const fx = await fxForDate(invDate) || 0;
+            const gstBy = d.gst_by_line || {};
+            let goodsInr = 0, gstInr = 0; const stamped = [];
+            for (const l of billable) {
+              const lineInr = +(Number(l.qty || 0) * Number(l.unit_price_rmb || 0) * fx).toFixed(2);
+              const gstPct = gstBy[l.id] != null ? Number(gstBy[l.id]) : (l.gst_percent != null ? Number(l.gst_percent) : 18);
+              goodsInr += lineInr; gstInr += +(lineInr * gstPct / 100).toFixed(2);
+              stamped.push({ id: l.id, gstPct });
+            }
+            goodsInr = +goodsInr.toFixed(2); gstInr = +gstInr.toFixed(2);
+            const includeComm = !!d.include_commission;
+            const subtotal = +(goodsInr + gstInr).toFixed(2);
+            const commission = includeComm ? +(subtotal * 0.025).toFixed(2) : 0;
+            const invoiceTotal = +(subtotal + commission).toFixed(2);
+            const invoice_no = (d.invoice_no && String(d.invoice_no).trim()) || await nextInvoiceNo();
+            // 1) stamp each billed line (bills once)
+            for (const s of stamped) await update('order_lines', { invoice_no, gst_percent: s.gstPct }, `id=eq.${s.id}`);
+            // 2) all goods lines billed now? → invoiced, else partially_invoiced
+            const remaining = allLines.filter(l => !l.invoice_no && !stamped.some(s => String(s.id) === String(l.id)));
+            const newCostState = remaining.length ? 'partially_invoiced' : 'invoiced';
+            await update('orders', { invoice_no, invoice_date: invDate, cost_state: newCostState, updated_at: nowISO() }, `id=eq.${encodeURIComponent(d.order_id)}`);
+            // 3) (re)write the sf_invoices row — commission is the only pool impact (via running_account)
             const fy = invoiceFyCode(invDate);
             const period = d.period || `FY20${fy.slice(0, 2)}-${fy.slice(2)}`;
             const exist = await query('sf_invoices', `?invoice_no=eq.${encodeURIComponent(invoice_no)}&select=id&limit=1`);
-            const invRow = { period, invoice_date: invDate, billing_subentity: sub, total_inr: invTotal, commission_rate: 2.5, commission_inr: commission, status: 'received' };
-            if (exist.ok && exist.data[0]) {
-              await update('sf_invoices', invRow, `invoice_no=eq.${encodeURIComponent(invoice_no)}`);
-            } else {
-              await insert('sf_invoices', { invoice_no, ...invRow, notes: d.notes || null, created_by: userId }, 'return=minimal');
-            }
-            await logActivity(auth, 'order_invoiced', { scope: 'order', order_id: d.order_id, detail: invoice_no });
-            return ok({ order_id: d.order_id, invoice_no, invoice_total_inr: invTotal, commission_inr: commission });
+            const invRow = { period, invoice_date: invDate, billing_subentity: o.billing_subentity || null,
+              total_inr: invoiceTotal, commission_rate: includeComm ? 2.5 : 0, commission_inr: commission, status: 'received' };
+            if (exist.ok && exist.data[0]) await update('sf_invoices', invRow, `invoice_no=eq.${encodeURIComponent(invoice_no)}`);
+            else await insert('sf_invoices', { invoice_no, ...invRow, notes: d.notes || null, created_by: userId }, 'return=minimal');
+            await logStageEvent(auth, { entity: 'order', order_id: d.order_id, stage: newCostState, note: invoice_no });
+            await logActivity(auth, 'order_invoiced', { scope: 'order', order_id: d.order_id, detail: `${invoice_no} (${newCostState})` });
+            return ok({ order_id: d.order_id, invoice_no, cost_state: newCostState, goods_inr: goodsInr, gst_inr: gstInr, commission_inr: commission, invoice_total_inr: invoiceTotal, lines_billed: stamped.length });
           }
 
           // ── PO money layer: per-PO allocations + schedule + container move ──
@@ -896,19 +998,41 @@ export default {
           // ── Shipments + consolidation ──
           case 'createShipment': {
             if (!canManageShipments(P)) return err('No permission', 403);
+            const mode = d.mode;
+            if (!mode || !['sea', 'air', 'land'].includes(mode)) return err('mode required (sea | air)', 422);
             const shipment_no = await nextSeq('mf_shipment', 'SHM-');
-            const row = { ...pick(d, SHIPMENT_FIELDS), shipment_no, created_by: userId };
+            const fields = pick(d, SHIPMENT_FIELDS);
+            // pre-fill expected milestone dates from the editable per-mode stage_defaults (suggest, not lock).
+            // SF-supplied dates win — only fill the cols SF left blank.
+            const prefill = await prefillShipmentDates(mode, d.anchor_date);
+            for (const [col, val] of Object.entries(prefill)) if (fields[col] == null) fields[col] = val;
+            const row = { ...fields, mode, shipment_no, status: fields.status || 'planned', created_by: userId };
             const r = await insert('shipments', row);
             if (!r.ok) return err('Shipment create failed: ' + JSON.stringify(r.data), 502);
             const sh = Array.isArray(r.data) ? r.data[0] : r.data;
-            await logActivity(auth, 'shipment_created', { scope: 'shipment', shipment_id: sh.id, detail: shipment_no });
+            // immutable original plan = the first dates_planned event (append-only history).
+            await logStageEvent(auth, { entity: 'shipment', shipment_id: sh.id, stage: 'dates_planned', note: JSON.stringify(prefill) });
+            await logActivity(auth, 'shipment_created', { scope: 'shipment', shipment_id: sh.id, detail: `${shipment_no} (${mode})` });
             return ok(sh);
           }
           case 'updateShipment': {
             if (!canManageShipments(P)) return err('No permission', 403);
             if (!d.id) return err('id required');
-            const r = await update('shipments', { ...pick(d, SHIPMENT_FIELDS), updated_at: nowISO() }, `id=eq.${encodeURIComponent(d.id)}`);
+            const enc = encodeURIComponent(d.id);
+            const curR = await query('shipments', `?id=eq.${enc}&select=*&limit=1`);
+            if (!curR.ok || !curR.data[0]) return err('Shipment not found', 404);
+            const cur = curR.data[0];
+            const patch = pick(d, SHIPMENT_FIELDS);
+            // mode is locked once the shipment has loaded (it never changes mid-journey).
+            if (patch.mode && patch.mode !== cur.mode && cur.status !== 'planned')
+              return err('Mode is locked once a shipment is loaded', 422);
+            // log a dates_revised event if any expected milestone date changed (the original plan stays the first event).
+            const DATE_COLS = ['etd','eta','loading_date','unloading_date','port_arrival_date','customs_entry_date','clearance_date','local_dispatch_date','warehouse_delivery_date'];
+            const changed = {};
+            DATE_COLS.forEach(c => { if (patch[c] !== undefined && String(patch[c] || '') !== String(cur[c] || '')) changed[c] = { from: cur[c] || null, to: patch[c] || null }; });
+            const r = await update('shipments', { ...patch, updated_at: nowISO() }, `id=eq.${enc}`);
             if (!r.ok) return err('Update failed: ' + JSON.stringify(r.data), 502);
+            if (Object.keys(changed).length) await logStageEvent(auth, { entity: 'shipment', shipment_id: d.id, stage: 'dates_revised', note: JSON.stringify(changed) });
             await logActivity(auth, 'shipment_updated', { scope: 'shipment', shipment_id: d.id });
             return ok(Array.isArray(r.data) ? r.data[0] : r.data);
           }
@@ -916,6 +1040,10 @@ export default {
             // Replace which order lines (+ qty) ride this shipment.
             if (!canManageShipments(P)) return err('No permission', 403);
             if (!d.shipment_id) return err('shipment_id required');
+            // departure-lock: a shipment's manifest freezes once it sails / takes off (status='sailing'+).
+            const slockR = await query('shipments', `?id=eq.${encodeURIComponent(d.shipment_id)}&select=status&limit=1`);
+            if (slockR.ok && slockR.data[0] && !['planned', 'loaded'].includes(slockR.data[0].status))
+              return err('Shipment has departed — its contents are locked', 422);
             await del('shipment_lines', `shipment_id=eq.${encodeURIComponent(d.shipment_id)}`);
             const lines = Array.isArray(d.lines) ? d.lines : [];
             if (lines.length) {
@@ -939,6 +1067,51 @@ export default {
             }
             await logActivity(auth, 'shipment_lines_set', { scope: 'shipment', shipment_id: d.shipment_id });
             return ok({ saved: lines.length });
+          }
+          case 'allocateItemsToShipment': {
+            // Add specific order lines (+ qty) to a shipment (additive). Departure-lock guarded.
+            if (!canManageShipments(P)) return err('No permission', 403);
+            if (!d.shipment_id || !Array.isArray(d.items) || !d.items.length) return err('shipment_id and items[] required', 422);
+            const enc = encodeURIComponent(d.shipment_id);
+            const sR = await query('shipments', `?id=eq.${enc}&select=status&limit=1`);
+            if (!sR.ok || !sR.data[0]) return err('Shipment not found', 404);
+            if (!['planned', 'loaded'].includes(sR.data[0].status)) return err('Shipment has departed — its contents are locked', 422);
+            const rows = d.items.filter(i => i.order_line_id).map(i => ({ shipment_id: d.shipment_id, order_line_id: i.order_line_id, qty_in_shipment: num(i.qty) || 0 }));
+            if (!rows.length) return err('no valid items', 422);
+            const ins = await insert('shipment_lines', rows, 'return=minimal');
+            if (!ins.ok) return err('Allocate failed: ' + JSON.stringify(ins.data), 502);
+            // hand the linked orders production → shipping
+            const olR = await query('order_lines', `?id=in.(${rows.map(r => r.order_line_id).join(',')})&select=order_id`);
+            const orderIds = [...new Set((olR.ok ? olR.data : []).map(x => x.order_id).filter(Boolean))];
+            for (const oid of orderIds) {
+              const oR = await query('orders', `?id=eq.${oid}&select=status&limit=1`);
+              const st = oR.ok && oR.data[0] ? oR.data[0].status : null;
+              if (st && ORDER_PROD_STAGES.includes(st)) {
+                await update('orders', { status: 'shipped', updated_at: nowISO() }, `id=eq.${oid}`);
+                await logStageEvent(auth, { entity: 'order', order_id: oid, stage: 'shipped', from_stage: st, note: 'Allocated to shipment ' + d.shipment_id });
+              }
+            }
+            await logStageEvent(auth, { entity: 'shipment', shipment_id: d.shipment_id, stage: 'items_allocated', note: `${rows.length} line(s)` });
+            await logActivity(auth, 'shipment_items_allocated', { scope: 'shipment', shipment_id: d.shipment_id, detail: `${rows.length} line(s)` });
+            return ok({ shipment_id: d.shipment_id, allocated: rows.length });
+          }
+          case 'moveItemsBetweenShipments': {
+            // Move specific order lines from one shipment to another. Both must be pre-departure.
+            if (!canManageShipments(P)) return err('No permission', 403);
+            if (!d.from_shipment_id || !d.to_shipment_id || !Array.isArray(d.items) || !d.items.length) return err('from_shipment_id, to_shipment_id and items[] required', 422);
+            for (const sid of [d.from_shipment_id, d.to_shipment_id]) {
+              const sR = await query('shipments', `?id=eq.${encodeURIComponent(sid)}&select=status&limit=1`);
+              if (!sR.ok || !sR.data[0]) return err('Shipment not found: ' + sid, 404);
+              if (!['planned', 'loaded'].includes(sR.data[0].status)) return err('A shipment has departed — its contents are locked', 422);
+            }
+            const olIds = d.items.map(i => i.order_line_id).filter(Boolean);
+            if (!olIds.length) return err('no valid items', 422);
+            await update('shipment_lines', { shipment_id: d.to_shipment_id },
+              `shipment_id=eq.${encodeURIComponent(d.from_shipment_id)}&order_line_id=in.(${olIds.join(',')})`);
+            await logStageEvent(auth, { entity: 'shipment', shipment_id: d.from_shipment_id, stage: 'items_moved_out', note: `→ ${d.to_shipment_id}` });
+            await logStageEvent(auth, { entity: 'shipment', shipment_id: d.to_shipment_id, stage: 'items_moved_in', note: `← ${d.from_shipment_id}` });
+            await logActivity(auth, 'shipment_items_moved', { scope: 'shipment', shipment_id: d.to_shipment_id, detail: `${olIds.length} line(s)` });
+            return ok({ moved: olIds.length, to_shipment_id: d.to_shipment_id });
           }
           case 'advanceShipmentStage': {
             // Shipping-half stages; stamps the matching milestone date; rolls up to orders on 'received'.
@@ -1083,17 +1256,45 @@ export default {
             if (!canRecordVendorPay(P)) return err('No permission', 403);
             const rmb = num(d.amount_rmb), inr = num(d.amount_inr_debited);
             if (!(rmb > 0) || !(inr > 0)) return err('amount_rmb and amount_inr_debited must be > 0', 422);
+            const ptype = d.payment_type && ['advance','pickup_balance','other'].includes(d.payment_type) ? d.payment_type : null;
             const vp_no = await nextSeq('mf_vpay', 'VP-');
             const row = {
               vp_no, vendor_code: d.vendor_code || null, vendor_name: d.vendor_name || null,
-              order_id: d.order_id || null, amount_rmb: rmb, amount_inr_debited: +inr.toFixed(2),
+              order_id: d.order_id || null, payment_type: ptype, amount_rmb: rmb, amount_inr_debited: +inr.toFixed(2),
               actual_bank_rate: +(inr / rmb).toFixed(6), payment_date: d.payment_date || todayISO(),
               recorded_by: userId, recorded_by_name: auth.fullName, note: d.note || null,
             };
             const r = await insert('vendor_payments', row);
             if (!r.ok) return err('Vendor payment failed: ' + JSON.stringify(r.data), 502);
+            // payment-driven: this debits the pool via the running_account view. Log + report pool sufficiency.
+            if (d.order_id) await logStageEvent(auth, { entity: 'order', order_id: d.order_id, stage: 'payment', note: `${ptype || 'vendor'} ¥${rmb} = ₹${inr.toFixed(0)}` });
             await logActivity(auth, 'vendor_payment_recorded', { scope: 'vendor_payment', order_id: d.order_id, detail: `${vp_no} ¥${rmb} @ ${(inr / rmb).toFixed(3)}` });
-            return ok(Array.isArray(r.data) ? r.data[0] : r.data);
+            const pool_after = await getPoolNet();
+            return ok({ ...(Array.isArray(r.data) ? r.data[0] : r.data), pool_after, shortfall: (pool_after != null && pool_after < 0) ? +(-pool_after).toFixed(2) : 0 });
+          }
+          case 'recordShipmentCost': {
+            // SF records + pays a logistics cost against a shipment (shipping/customs/other/last-mile).
+            // Posts a FINAL (non-estimate) charge → debits the pool immediately via running_account.
+            if (!canSfPoManage(P)) return err('No permission', 403);
+            if (!d.shipment_id || !d.charge_type) return err('shipment_id and charge_type required', 422);
+            const category = SHIPMENT_COST_CATEGORY[d.charge_type];
+            if (!category) return err('Invalid charge_type (shipping | customs | other_fees | last_mile)', 422);
+            const amount = num(d.amount_inr);
+            if (!(amount > 0)) return err('amount_inr must be > 0', 422);
+            const charge_no = await nextSeq('mf_charge', 'CHG-');
+            const row = {
+              charge_no, scope: 'shipment', shipment_id: d.shipment_id, order_id: d.order_id || null,
+              category, description: d.notes || d.charge_type, amount, currency: 'INR',
+              is_estimate: false, amount_inr: +amount.toFixed(2), due_stage: d.due_stage || null,
+              incurred_date: d.incurred_date || todayISO(), source_party: party,
+              created_by: userId, created_by_name: auth.fullName,
+            };
+            const r = await insert('charges', row);
+            if (!r.ok) return err('Shipment cost failed: ' + JSON.stringify(r.data), 502);
+            await logStageEvent(auth, { entity: 'shipment', shipment_id: d.shipment_id, stage: 'payment', note: `${d.charge_type} ₹${amount.toFixed(0)}` });
+            await logActivity(auth, 'shipment_cost_recorded', { scope: 'shipment', shipment_id: d.shipment_id, detail: `${d.charge_type} ${charge_no}` });
+            const pool_after = await getPoolNet();
+            return ok({ ...(Array.isArray(r.data) ? r.data[0] : r.data), pool_after, shortfall: (pool_after != null && pool_after < 0) ? +(-pool_after).toFixed(2) : 0 });
           }
           case 'deleteVendorPayment': {
             if (!canRecordVendorPay(P)) return err('No permission', 403);
@@ -1172,6 +1373,9 @@ export default {
             };
             const r = await insert('documents', row);
             if (!r.ok) return err('Doc record failed: ' + JSON.stringify(r.data), 502);
+            // milestone doc types (PI, …) also stamp a timestamped event on the order timeline.
+            if (DOC_TYPE_MILESTONE[d.doc_type] && d.order_id)
+              await logStageEvent(auth, { entity: 'order', order_id: d.order_id, stage: DOC_TYPE_MILESTONE[d.doc_type], note: d.file_name || d.doc_type });
             await logActivity(auth, 'document_added', { scope: 'document', order_id: d.order_id, shipment_id: d.shipment_id, detail: d.doc_type });
             return ok(Array.isArray(r.data) ? r.data[0] : r.data);
           }
@@ -1189,6 +1393,12 @@ export default {
           // ── Snorkel China-PO projection ──
           case 'projectToSnorkel': {
             if (!canProjectSnorkel(P)) return err('No permission', 403);
+            // PARKED (spec §2, 2026-06-17): Manifest POs are raised in the vendor's product codes
+            // (e.g. Flare='820D'), not LOT product_master codes — so they can't be auto-projected.
+            // A vendor_code→LOT product_code connector (separate spec) must land first. Until then,
+            // projection is disabled to keep half-mapped China POs out of Snorkel.
+            if (!d.force_projection_connector_built)
+              return err('Snorkel projection is parked — Manifest POs use vendor product codes; a vendor_code→LOT product_code connector is required first (spec §2).', 422);
             if (!d.order_id) return err('order_id required');
             const [oR, lR] = await Promise.all([
               query('orders', `?id=eq.${encodeURIComponent(d.order_id)}&select=*&limit=1`),
@@ -1241,6 +1451,44 @@ export default {
               `id=eq.${encodeURIComponent(o.id)}`);
             await logActivity(auth, 'projected_to_snorkel', { scope: 'order', order_id: o.id, detail: po_number });
             return ok({ po_number, lines: poLines.length });
+          }
+
+          // ── Shipment-defaults config (editable per-mode timelines; suggest, not lock; no audit) ──
+          case 'setStageDefaults': {
+            if (!canAdmin(P) && !canSfPoManage(P)) return err('No permission', 403);
+            const rows = Array.isArray(d.rows) ? d.rows : [];
+            if (!rows.length) return err('rows[] required', 422);
+            const clean = rows.filter(r => ['sea','air','land'].includes(r.mode) && SHIP_STAGES.includes(r.stage))
+              .map(r => ({ mode: r.mode, stage: r.stage, offset_days: Math.round(num(r.offset_days) || 0), updated_at: nowISO() }));
+            if (!clean.length) return err('no valid rows', 422);
+            const r = await sb('/rest/v1/stage_defaults', { method: 'POST', body: JSON.stringify(clean), prefer: 'return=minimal,resolution=merge-duplicates' });
+            if (!r.ok) return err('Save failed: ' + JSON.stringify(r.data), 502);
+            return ok({ saved: clean.length });
+          }
+          // ── Forwarder master inline-create (cross-schema write into store.forwarders; no free-text partners) ──
+          case 'createForwarder': {
+            if (!canSfPoManage(P) && !canManageShipments(P)) return err('No permission', 403);
+            if (!d.company_name || !d.country || !d.country_iso) return err('company_name, country, country_iso required', 422);
+            let modes = Array.isArray(d.modes_supported) ? d.modes_supported : [];
+            const CAP = { sea: 'Sea', air: 'Air', land: 'Land' };   // normalize to the master's vocabulary
+            modes = [...new Set(modes.map(m => CAP[String(m).toLowerCase()] || m).filter(Boolean))];
+            if (!modes.length) return err('modes_supported required (Sea/Air/Land)', 422);
+            // mint FWD-<ISO>-NNN from the max existing for that country (the 'fwd' seq is stale; compute from codes).
+            const iso = String(d.country_iso).toUpperCase().slice(0, 2);
+            const ex = await queryStore('forwarders', `?forwarder_code=like.FWD-${iso}-*&select=forwarder_code`);
+            let maxN = 0; (ex.ok ? ex.data : []).forEach(f => { const m = String(f.forwarder_code).match(/-(\d+)$/); if (m) maxN = Math.max(maxN, parseInt(m[1], 10)); });
+            const forwarder_code = `FWD-${iso}-${String(maxN + 1).padStart(3, '0')}`;
+            const row = {
+              forwarder_code, company_name: d.company_name, country: d.country, country_iso: iso,
+              location: d.location || null, modes_supported: modes,
+              iata_code: d.iata_code || null, scac_code: d.scac_code || null, tracking_url: d.tracking_url || null,
+              contact_name: d.contact_name || null, contact_phone: d.contact_phone || null, contact_email: d.contact_email || null,
+              notes: d.notes || null, active: true, created_by: auth.fullName || 'manifest',
+            };
+            const r = await sbStore('/rest/v1/forwarders', { method: 'POST', body: JSON.stringify(row), prefer: 'return=representation' });
+            if (!r.ok) return err('Forwarder create failed: ' + JSON.stringify(r.data), 502);
+            await logActivity(auth, 'forwarder_created', { detail: forwarder_code });
+            return ok(Array.isArray(r.data) ? r.data[0] : r.data);
           }
 
           // ── Admin ──

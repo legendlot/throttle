@@ -2,7 +2,7 @@
 
 > **For agentic workers:** implement task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Commit + push (+ deploy worker) after each task.
 
-**Goal:** Turn Manifest into one continuous, party-owned lifecycle — **LOT requests + funds the pool; SF owns everything after** (convert → place → PI → pay vendor → ship → clear customs → deliver → invoice). Flip the money model to **payment-driven** (every SF payment deducts the shared pool the moment it's recorded; the invoice becomes a close-out record). Decouple the Snorkel projection (POs are in vendor codes). Add per-line GST, a cancel-until-pickup rule, immutable original plan dates, and a full timestamped history on orders + shipments.
+**Goal:** Turn Manifest into one continuous, party-owned lifecycle — **LOT requests + funds the pool; SF owns everything after** (convert → place → PI → pay vendor → ship → clear customs → deliver → invoice). Flip the money model to **payment-driven** (every SF payment deducts the shared pool the moment it's recorded; the invoice becomes a close-out record). Decouple the Snorkel projection (POs are in vendor codes). Add per-line GST, a cancel-until-pickup rule, immutable original plan dates, and a full timestamped history on orders + shipments. Add **shipment modes (Air vs Sea — relabel only, Decision A)**, **editable per-mode timeline defaults** (`stage_defaults`, suggest-not-lock), and **logistics-partner + last-mile-vehicle capture** reusing `store.forwarders` with **no free-text entry** (spec §5a + §14).
 
 **Spec:** `docs/superpowers/specs/2026-06-16-manifest-sf-order-lifecycle-design.md`
 **Business-logic reference (manual source):** `apps/manifest/docs/order-lifecycle-business-logic.md`
@@ -16,6 +16,8 @@
 - `charges` has `scope`/`order_id`/`shipment_id`/`category`/`amount_inr`/`incurred_date`; category enum already = `goods|sf_commission|intl_freight|customs_duty|clearing|insurance|local_freight|other`; **non-goods charges already feed `running_account`**.
 - `vendor_payments` has `order_id`/`amount_inr_debited`/`actual_bank_rate`/`payment_date` (but is NOT currently in `running_account` — S144 demoted it).
 - `po_allocations` + `po_payment_schedule` (S145).
+- **`shipments.mode`** already exists (CHECK `{sea,air,land}`, nullable) — sea-flavored status pipeline `planned→loaded→sailing→docked→cleared→local_transport→received`; **zero shipments today** (clean slate). `shipments.forwarder_code`/`forwarder_name`, `bl_awb_no`, `container_type`, and the 9 milestone date cols (`etd`/`eta`/`loading_date`/`unloading_date`/`port_arrival_date`/`customs_entry_date`/`clearance_date`/`local_dispatch_date`/`warehouse_delivery_date`) all exist.
+- **Masters are rich + reusable (verified 2026-06-17):** `store.vendors` (vendor_code/name/category/source_country/country_iso/currency/gstin/payment_terms/lead_time_days — covers china/intl/domestic) + `store.forwarders` (forwarder_code/company_name/country/**modes_supported[]**/**sea_days**/**air_days**/land_days/**iata_code**/**scac_code**/tracking_url). Manifest already READS both. **NO new master tables** — extend forwarders via inline-create only.
 - Worker actions already present: `convertToPo`? **NO.** Present: `getBootstrap/getOrders/getOrder/createOrder/updateOrder/setOrderStatus/saveOrderLines/advanceOrderStage/invoiceOrder/allocateToPo/setPoSchedule/moveOrderToShipment/createShipment/updateShipment/setShipmentLines/advanceShipmentStage/createCharge/recordPayment/recordVendorPayment/createDrawdown/createSfInvoice/recordDocument/projectToSnorkel/...`.
 
 **Charge-category mapping (no new enum needed):** shipping→`intl_freight`, customs→`customs_duty`, other port fees→`clearing`/`insurance`/`other`, last-mile→`local_freight`.
@@ -129,7 +131,7 @@ alter table manifest.order_lines add column if not exists lot_product_code text;
 
 **Files:** `apps/manifest/src/mf/screens.js`, `Drawer.js`, `ui.js`.
 
-- [ ] **Step 1:** Order drawer + shipment drawer each render a **timeline**: each pipeline step shows its **expected date** (current plan, faint) and the **actual stamp** (from the matching `stage_advanced`/milestone event). Thread payments, PI, invoicing, cancel into the order timeline; milestones + logistics payments into the shipment timeline.
+- [ ] **Step 1:** Order drawer + shipment drawer each render a **timeline**: each pipeline step shows its **expected date** (current plan, faint) and the **actual stamp** (from the matching `stage_advanced`/milestone event). Thread payments, PI, invoicing, cancel into the order timeline; milestones + logistics payments into the shipment timeline. Shipment-timeline step labels are **mode-aware** (spec §5a — "In Flight"/"Landed" for air vs "Sailing"/"Docked" for sea); if Phase 5's `MODE_PROFILE` isn't built yet, fall back to the raw status key and relabel when it lands.
 - [ ] **Step 2:** Show **original plan vs current plan** where dates were revised (from the first `dates_planned` event vs the latest). Build/commit/push.
 
 ---
@@ -210,7 +212,7 @@ select entry_date, kind, ref_no, description, signed_inr,
 
 **Files:** `apps/manifest/src/mf/screens.js` (order + shipment drawers, money screen), `data.js`.
 
-- [ ] **Step 1:** Order drawer: **Record vendor payment** (advance after PI; pickup balance at pickup) with type + amount + bank rate + date. Shipment drawer: **Record shipment cost** (shipping / customs / other fees / last-mile) at the relevant stage.
+- [ ] **Step 1:** Order drawer: **Record vendor payment** (advance after PI; pickup balance at pickup) with type + amount + bank rate + date. Shipment drawer: **Record shipment cost** (shipping / customs / other fees / last-mile) at the relevant stage. The shipment-cost line **suggestions are mode-aware** (spec §5a: air → freight (chargeable weight) + customs + airport handling; sea → freight + customs + port/CFS/THC) — all still map to the existing `charges` categories; the freight-basis hint goes in `cost_notes`.
 - [ ] **Step 2:** After recording, if `shortfall>0`, surface a **Raise Draw-down** prompt (calls existing `createDrawdown`). Funding nudge, not a blocker.
 - [ ] **Step 3:** Show the per-order + per-shipment payment ledger (type, amount, date) on the drawers. Build/commit/push.
 
@@ -220,21 +222,83 @@ select entry_date, kind, ref_no, description, signed_inr,
 
 ---
 
-## Phase 5 — Shipments: item allocation / move / sailing-lock
+## Phase 5 — Shipments: modes + config + masters + item allocation / move / departure-lock
 
-### Task 15: Worker — item-level allocate/move with sailing-lock
+> Decision A (relabel the shared pipeline; **no status-enum change**) + the 2026-06-17 config
+> items: editable per-mode timeline defaults, vendor/forwarder master reuse, logistics-partner
+> + last-mile-vehicle capture. Tasks 15a–15c (config + masters + modes) are independent of the
+> rest of the phase and **may be built first**. See spec §5a + §14.
+
+### Task 15a: Migration — mode required + shipment defaults config + last-mile columns
+
+**Apply via** Supabase MCP `apply_migration`, name `manifest_shipment_modes_config_v1`.
+
+- [ ] **Step 1: Apply**
+```sql
+-- Manifest shipment modes + config + last-mile partner. Spec §5a + §14.
+-- mode required (zero rows today → safe to enforce NOT NULL); keep the {sea,air,land} CHECK.
+alter table manifest.shipments alter column mode set not null;
+
+-- last-mile partner + vehicle (captured at local_transport; partner = a store.forwarders code)
+alter table manifest.shipments add column if not exists last_mile_forwarder_code text;
+alter table manifest.shipments add column if not exists last_mile_forwarder_name text;
+alter table manifest.shipments add column if not exists last_mile_vehicle_no     text;
+-- cost_notes is added in Phase 4 Task 10; add here too (idempotent) in case Phase 5 lands first:
+alter table manifest.shipments add column if not exists cost_notes text;
+
+-- editable per-mode timeline defaults (suggest, not lock; no audit)
+create table if not exists manifest.stage_defaults (
+  mode        text not null check (mode = any (array['sea','air','land'])),
+  stage       text not null check (stage = any (array['loaded','sailing','docked','cleared','local_transport','received'])),
+  offset_days integer not null default 0,
+  updated_at  timestamptz not null default now(),
+  primary key (mode, stage)
+);
+alter table manifest.stage_defaults enable row level security;
+grant all on manifest.stage_defaults to service_role;
+
+-- seed sensible defaults (offset_days = days after the previous milestone)
+insert into manifest.stage_defaults (mode, stage, offset_days) values
+  ('sea','loaded',3),('sea','sailing',5),('sea','docked',25),('sea','cleared',3),('sea','local_transport',3),('sea','received',2),
+  ('air','loaded',1),('air','sailing',1),('air','docked',2),('air','cleared',2),('air','local_transport',1),('air','received',1)
+on conflict (mode, stage) do nothing;
+```
+
+- [ ] **Step 2: Verify** — `execute_sql`: `shipments.mode` is NOT NULL; `stage_defaults` has 12 seeded rows; the 3 last-mile columns + `cost_notes` exist.
+
+### Task 15b: Worker — stage defaults + forwarder inline-create + create-time date pre-fill
+
+**File:** `05_Throttle/manifestops-worker/src/index.js`
+
+- [ ] **Step 1: `getStageDefaults()` / `setStageDefaults(rows)`** — read + upsert `manifest.stage_defaults`. Guard `manifest_admin` (LOT) or `sf_po_manage` (SF). Plain upsert, **no stage_event / no audit**.
+- [ ] **Step 2: `createForwarder(payload)`** — cross-schema write into `store.forwarders` via `sbStore` (**Manifest's first non-projection cross-schema write** — record it in CORE/spoke). Require the master NOT-NULL fields: `forwarder_code` (mint if not given), `company_name`, `country`, `country_iso`, `modes_supported[]`; optional `iata_code`/`scac_code`/`tracking_url`/contact. Return the created row. **No free-text fallback anywhere — this is the only way a new partner enters.**
+- [ ] **Step 3: `createShipment` pre-fill.** Require `mode` (400 if missing). After insert, walk `stage_defaults` for that mode (ordered loaded→received) from a planning anchor (today or a passed `anchor_date`) to set `loading_date`/`etd`/`eta`/`port_arrival_date`/`clearance_date`/`local_dispatch_date`/`warehouse_delivery_date` as **suggested** values; all overridable via `updateShipment`. Log the first-set as the `dates_planned` event (Phase 3 Task 8 Step 2).
+- [ ] **Step 4:** Accept `last_mile_forwarder_code`/`_name`/`last_mile_vehicle_no` on `updateShipment` (set at the `local_transport` step). `getShipment`/`getBootstrap` return `mode`, the resolved per-mode labels, the last-mile fields, and the mode-filtered carrier list.
+- [ ] **Step 5:** Deploy/verify — `getStageDefaults` returns the 12 seeds; `createForwarder` adds a `store.forwarders` row; a new shipment pre-fills dates per mode.
+
+### Task 15c: App — mode selector, relabeling, admin defaults, partner pickers, last-mile
+
+**Files:** `apps/manifest/src/mf/screens.js`, `Drawer.js`, `ui.js`, `data.js`; new admin screen.
+
+- [ ] **Step 1: `MODE_PROFILE` constant** (shared shape, app + worker) — per-mode stage labels (`sailing`→"In Flight"/"Sailing", `docked`→"Landed"/"Docked"), BL/AWB label, container_type label, and the suggested cost-line list. Shipment views + timelines render labels via `MODE_PROFILE[shipment.mode]`.
+- [ ] **Step 2:** `createShipment` UI requires a **mode** (Sea / Air) selector — editable while `planned`, locked once `loaded`. BL/AWB + container_type fields relabel by mode.
+- [ ] **Step 3: Admin → Shipment defaults** screen — a per-mode editable grid of `offset_days` → `setStageDefaults`. Gated `manifest_admin` / `sf_po_manage`.
+- [ ] **Step 4: Carrier picker** filtered to `modes_supported ⊇ mode`; **last-mile partner picker** (forwarders, typically land) at the `local_transport` step + a **vehicle number** field. Both pickers offer **"+ Add new partner"** → small form → `createForwarder` → returns with it selected. **No free-text partner entry.**
+- [ ] **Step 5: Build** `npx turbo build --filter=manifest` (zero errors); commit + push.
+
+### Task 15d: Worker — item-level allocate/move with departure-lock
 
 **File:** worker `src/index.js` (extends `setShipmentLines`/`moveOrderToShipment`).
 
-- [ ] **Step 1: `allocateItemsToShipment`** — body `{ shipment_id, items:[{order_line_id, qty}] }`. Insert `shipment_lines`. Guard: target shipment `status ∈ {planned,loaded}` else 409 (sailing-lock).
+- [ ] **Step 1: `allocateItemsToShipment`** — body `{ shipment_id, items:[{order_line_id, qty}] }`. Insert `shipment_lines`. Guard: target shipment `status ∈ {planned,loaded}` else 409 (departure-lock — `status='sailing'`, labeled "In Flight" for air).
 - [ ] **Step 2: `moveItemsBetweenShipments`** — `{ from_shipment_id, to_shipment_id, items:[...] }`. Guard BOTH source and target are `status ∈ {planned,loaded}` else 409. Log stage_events on both shipments.
 - [ ] **Step 3:** Deploy/verify — allocate to a `planned` shipment OK; flip to `sailing`; attempt move → 409.
 
-### Task 16: App — shipment composition UI
+### Task 15e: App — shipment composition UI (mode-aware)
 
 **Files:** `apps/manifest/src/mf/screens.js` (shipment screen/drawer).
 
-- [ ] **Step 1:** Shipment view shows allocated lines (grouped by PO); **Add items** / **Move items** controls disabled once `status='sailing'`+ (with a "manifest locked — sailed" hint). Build/commit/push.
+- [ ] **Step 1:** Shipment view shows allocated lines (grouped by PO) with the mode badge (Sea/Air) + per-mode stage labels; **Add items** / **Move items** controls disabled once `status='sailing'`+ (hint "manifest locked — departed" / "sailed" / "in flight" per mode). Build/commit/push.
 
 ---
 
@@ -278,6 +342,7 @@ select entry_date, kind, ref_no, description, signed_inr,
 ## Closeout (session-end)
 - [ ] Update `systems/manifest.md` (lifecycle + payment-driven money + parked Snorkel projection), `BUSINESS_RULES.md` (RULE-MANIFEST-001 amendment + RULE-MANIFEST-003 parked note), `CORE.md` running_account bullet, `BACKLOG.md` (close the SF-lifecycle P1 item; add the Snorkel-connector as a new item), `archive/SESSIONS.md`.
 - [ ] Fold `apps/manifest/docs/order-lifecycle-business-logic.md` into the Manifest in-app manual when the manual is authored.
+- [ ] Note the **new cross-schema write** (`createForwarder` → `store.forwarders`) in `systems/manifest.md` + `CORE.md` (Manifest previously had ONLY the Snorkel projection as a cross-schema write). Record `manifest.stage_defaults` + the `shipments` mode/last-mile columns in the spoke's data-model. Add BACKLOG items for **land-mode shipments** + optional **vendor inline-create**.
 
 ## Open items to confirm at build time (spec §13)
 - GST-on-invoice → pool, or document-only? (default document-only; decide in Phase 7).
@@ -285,3 +350,5 @@ select entry_date, kind, ref_no, description, signed_inr,
 - Snorkel connector (vendor_code→LOT product_code mapping + projection) = **separate future spec**.
 - PO PDF real format (placeholder until SF provides).
 - Reports tab / running-account statement = **separate spec** (PO print route built reusable).
+- Forwarder inline-create minimum field set (code / name / country / country_iso / modes at least); `forwarder_code` mint strategy.
+- Land-mode shipments out of scope (fall back to sea labels); vendor inline-create is an optional parallel to forwarder inline-create.

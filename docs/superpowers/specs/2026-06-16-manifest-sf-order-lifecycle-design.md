@@ -4,6 +4,11 @@
 > **revised 2026-06-17** with Afshaan's 10-point feedback — money model flipped to
 > payment-driven, Snorkel projection decoupled, cancellation rule, per-line GST,
 > immutable original plan dates, full timestamped history on orders + shipments).
+> **Extended 2026-06-17 (later):** shipment **modes — Air vs Sea** (Decision A: relabel the
+> shared pipeline, no status-enum change), **editable per-mode timeline defaults**
+> (`manifest.stage_defaults`, suggest-not-lock), and **logistics-partner capture** (carrier +
+> last-mile partner + vehicle number) reusing `store.forwarders` with **no free-text entry** —
+> see §5a + §14.
 > Builds on the S140 schema, S144 lifecycle engine, and S145 PO money layer.
 > Next step: run `writing-plans` off this spec to produce the phased implementation plan.
 
@@ -133,6 +138,63 @@ machinery.
 - **Expected dates** feed the timeline as planned targets (faint), with actual stamps
   layered on as stages advance.
 
+### 5a. Shipment modes — Air vs Sea (added 2026-06-17)
+
+A shipment carries a **mode** — **`sea`** or **`air`** (the schema CHECK also allows `land`,
+which is out of scope and falls back to sea labels until designed). `shipments.mode` already
+exists. The two modes share **ONE pipeline and ONE money model** — mode only changes
+**labels, the suggested cost lines, the suggested timeline, and the carrier-document name.**
+**Decision A (2026-06-17): keep the existing status keys; mode drives presentation only** —
+no status-enum change, and the departure-lock stays keyed on `status='sailing'`.
+
+- **Mode is required at `createShipment`.** Editable while `planned`; **locked once `loaded`**
+  (a shipment never changes mode mid-journey).
+- **Stage labels (same 7 keys, relabeled by mode):**
+
+  | Key | Sea label | Air label |
+  |---|---|---|
+  | `planned` | Planned | Planned |
+  | `loaded` | Loaded (stuffed / gated-in) | Loaded (tendered to airline) |
+  | `sailing` *(departure-lock)* | Sailing (vessel departed) | In Flight (departed) |
+  | `docked` | Docked (arrived port) | Landed (arrived airport) |
+  | `cleared` | Customs cleared | Customs cleared |
+  | `local_transport` | Local transport | Local transport |
+  | `received` | Received (warehouse) | Received (warehouse) |
+
+  The **departure-lock** (§5 "locks at departure") is `status='sailing'` for both modes —
+  just labeled "In Flight" for air. No lock-logic change.
+- **Carrier document:** the existing `shipments.bl_awb_no` renders as **"Bill of Lading
+  (BL #)"** for sea and **"Air Waybill (AWB #)"** for air. `container_type` likewise
+  (FCL/LCL/20ft/40ft for sea; N/A or ULD for air).
+- **Cost lines differ in content, not category** — every line still maps to the existing
+  `charges` enum (**no new categories**):
+
+  | Cost | Charge category | Sea | Air |
+  |---|---|---|---|
+  | Freight | `intl_freight` | Ocean freight (FCL per-container / LCL CBM-weight) | Air freight — **chargeable weight** = max(gross kg, CBM×167) |
+  | Customs / duty | `customs_duty` | ✓ | ✓ |
+  | Port / airport handling | `clearing` | Port / CFS / THC | Airport handling / break-bulk |
+  | Other | `other` / `insurance` | BL fee, demurrage, insurance | AWB fee, insurance |
+  | Last-mile | `local_freight` | ✓ | ✓ |
+
+  Mode only changes the **suggested cost-line checklist** SF sees at clearance + a
+  **freight-basis note** (air = chargeable weight, sea = container/CBM) stored in
+  `shipments.cost_notes`. Per-unit landed-cost allocation stays v2.
+- **Suggested timeline comes from config (`stage_defaults`, §14.1), NOT hardcode** —
+  per-mode per-stage day-offsets pre-fill the expected dates at create; SF overrides freely;
+  the first saved set is still the immutable original plan (§5/§8). Sea ≈ 30–40 days
+  door-to-door, air ≈ 5–8 — but the actual numbers are whatever SF/admin set in the config.
+- **Air + sea split of one PO is free:** urgent lines on an `air` shipment, bulk on a `sea`
+  shipment, via the existing item-level split (§5). No new mechanic.
+- **Logistics partners (§14.3):** the international carrier is the existing
+  `shipments.forwarder_code` (picker filtered to `modes_supported ⊇ mode` → DHL/FedEx for air
+  via IATA, shipping lines for sea via SCAC; `tracking_url` surfaced). The **last-mile**
+  partner + **vehicle number** are captured at `local_transport` for store-team visibility on
+  arrival. **All partners come from `store.forwarders` — no free-text entry.**
+- **`MODE_PROFILE` constant** (worker/app shared) holds only the non-editable bits — labels,
+  BL/AWB name, the suggested cost-line list per mode. The editable day-offsets live in the
+  `stage_defaults` table (§14.1), not here.
+
 ## 6. Money — ONE pool, payment-driven (points 4 & 6) ⚠️ supersedes S144 invoice-billing
 
 The single LOT↔SF pool (`running_account`, RULE-MANIFEST-001) stays the one source of
@@ -247,8 +309,23 @@ pay-now gate** — SF can still pay from its own pocket (net goes negative).
 - `order_lines`: add `vendor_code text`, `vendor_desc text`, `lot_product_code text` (nullable,
   filled by the future connector), `invoice_no text` (nullable), `gst_percent numeric`
   (per-line GST used).
-- `shipments`: add `cost_notes text` (logistics costs live on `charges` rows, §6, not as
-  shipment columns).
+- `shipments`: add `cost_notes text` (logistics costs live on `charges` rows, §6); make
+  `mode` (`sea`|`air`|`land`) **required** (already in the CHECK; tighten to NOT NULL — zero
+  rows today, safe); add **last-mile** capture `last_mile_forwarder_code text` +
+  `last_mile_forwarder_name text` + `last_mile_vehicle_no text` (§14.3). Status enum
+  **unchanged** (Decision A — mode relabels, no new status values).
+- **`manifest.stage_defaults`** (NEW, §14.1) — editable per-mode timeline config: `mode`
+  (`sea`|`air`|`land`) × `stage` (`loaded`/`sailing`/`docked`/`cleared`/`local_transport`/
+  `received`) → `offset_days int` (days after the previous milestone) + `updated_at`. PK
+  (`mode`,`stage`). RLS-on, `GRANT ALL … service_role`. **Direct edits, no audit.** Seeded
+  with sensible air + sea defaults.
+- **Masters reused, not rebuilt (§14.2/§14.3):** vendors = `store.vendors` (already covers
+  china/international/domestic via `source_country`/`country_iso`/`currency`/`gstin`; no
+  change). Carriers + last-mile partners = `store.forwarders` (already has `modes_supported`/
+  `sea_days`/`air_days`/`iata_code`/`scac_code`/`tracking_url`). **No free-text partner names —
+  inline-create writes a proper `store.forwarders` row** (new Manifest cross-schema write
+  `createForwarder`, §10). `store.forwarders.*_days` is **reference only** — the suggestion
+  driver is `stage_defaults`.
 - `vendor_payments`: add `payment_type text` (`advance` | `pickup_balance`) + `order_id`
   FK; re-include in `running_account`.
 - `charges`: add `charge_type text` (`shipping` | `customs` | `other_fees` | `last_mile`),
@@ -288,6 +365,18 @@ pay-now gate** — SF can still pay from its own pocket (net goes negative).
   vendor codes, per-line `invoice_no`/`gst_percent`, the full payment ledger per order +
   shipment, the order/shipment history timelines (planned-vs-actual + original plan), pool
   available for the nudge.
+- `getStageDefaults()` / `setStageDefaults(rows)` — read/upsert the per-mode timeline config
+  (`manifest_admin` or SF `sf_po_manage`; direct upsert, **no audit**).
+- `createForwarder(payload)` — inline-create a `store.forwarders` row (cross-schema write via
+  `sbStore` — Manifest's first non-projection cross-schema write) so a new carrier/last-mile
+  partner is added to the master in-flow, **never as free text**. Requires the master's
+  NOT-NULL fields (`forwarder_code`, `company_name`, `country`, `country_iso`,
+  `modes_supported[]`); returns the new row so the shipment flow continues with it selected.
+- `createShipment` — require `mode`; pre-fill the 6 expected milestone dates by walking
+  `stage_defaults` for that mode from a planning anchor (overridable); accept the last-mile
+  fields (set at the `local_transport` step).
+- `getVendors`/`getForwarders` already exist — the forwarder picker filters by
+  `modes_supported ⊇ mode`.
 
 ## 11. Build phases (one spec, staged delivery)
 
@@ -301,7 +390,14 @@ pay-now gate** — SF can still pay from its own pocket (net goes negative).
 4. **Payment-driven money** — `vendor_payments`/`charges` typing + stage links + back into
    `running_account` (view rewrite); `recordVendorPayment` / `recordShipmentCost`; pool-
    sufficiency → Raise Draw-down nudge; fold/retire S145 `po_allocations`.
-5. **Shipments item allocation/move/lock** — item-level allocate/move with sailing-lock.
+5. **Shipments: modes + config + masters + item allocation/move/lock** — `mode` required +
+   per-mode relabeling (Decision A) + departure-lock; `manifest.stage_defaults` table +
+   `getStageDefaults`/`setStageDefaults` + an Admin "Shipment defaults" screen + create-time
+   date pre-fill; carrier picker filtered by mode with **inline forwarder-master create**
+   (`createForwarder`, no free text); **last-mile partner + vehicle** capture at
+   `local_transport`; mode-aware suggested cost lines (touches Phase 4) + timeline labels
+   (touches Phase 3); item-level allocate/move with the departure-lock. (The config table +
+   masters are independent and may land first.)
 6. **Partial invoicing** — line-selection invoice form, **per-line GST** + optional
    commission, partial/close transitions, commission pool debit.
 7. **Seed rework (point 8)** — after 1–6, re-derive the FY26-27 seed onto the new model.
@@ -339,3 +435,48 @@ Where the design was deliberately kept simple / de-complicated:
   later, separate build; this spec stops at order-level cost tracking.
 - **Cancellation with payments already made:** payments are NOT auto-reversed on cancel
   (loose); confirm whether a manual reversal/credit tool is wanted later.
+- **Land mode** is out of scope; a `land` shipment falls back to sea labels until designed.
+- **Forwarder inline-create** writes `store.forwarders` directly — confirm the minimum field
+  set SF must enter for a valid master row (at least code / company_name / country / country_iso
+  / modes_supported). A **vendor** inline-create mirroring it (so SF can add a China vendor
+  in-flow rather than via Snorkel) is an optional parallel — not built unless asked.
+
+## 14. Configuration & masters (added 2026-06-17)
+
+### 14.1 Editable per-mode timeline defaults — `manifest.stage_defaults`
+
+- **Why:** the suggested expected-date schedule for a shipment must be tunable by the team,
+  not hardcoded — and must **suggest, never lock**.
+- **Table:** `manifest.stage_defaults(mode, stage, offset_days, updated_at)`, PK
+  (`mode`,`stage`) — one row per (`sea`|`air`|`land`) × (`loaded`/`sailing`/`docked`/`cleared`/
+  `local_transport`/`received`). `offset_days` = days after the previous milestone. RLS-on,
+  service_role grant. **Direct edits, no audit** (per Afshaan — no history needed here).
+- **UI:** an **Admin → Shipment defaults** screen (gated `manifest_admin` or SF `sf_po_manage`)
+  — a per-mode grid of editable day-offsets, plain upsert.
+- **Use:** `createShipment` walks the offsets from a planning anchor to pre-fill the shipment's
+  6 expected milestone dates for its mode. SF overrides any; the first saved set becomes the
+  immutable original plan (§5/§8). `store.forwarders.*_days` is **ignored** for suggestions
+  (Decision 2, 2026-06-17) — `stage_defaults` is the single source.
+
+### 14.2 Vendor master — reuse `store.vendors`
+
+- `store.vendors` already covers china / international / domestic (`source_country`/
+  `country_iso`/`currency`/`gstin`) and is already read by Manifest (`getVendors`). **No schema
+  change.** The PO line editor picks from it. Vendor CRUD stays Snorkel-owned; an in-Manifest
+  vendor inline-create mirroring §14.3 is an optional later add (§13).
+
+### 14.3 Logistics partners — reuse `store.forwarders`, no free text
+
+- **International carrier** = `shipments.forwarder_code`/`forwarder_name` (exists). The picker
+  is **filtered to `modes_supported ⊇ shipment.mode`** → DHL/FedEx surface for air (IATA codes),
+  shipping lines for sea (SCAC); `tracking_url` is surfaced to the team.
+- **Last-mile / local delivery** is a separate partner captured at the **`local_transport`**
+  stage: `shipments.last_mile_forwarder_code`/`last_mile_forwarder_name` (picker from
+  `store.forwarders`, typically `land` mode) + **`last_mile_vehicle_no`** — so the **store team
+  knows who is bringing the goods and which vehicle to expect** on arrival.
+- **No free-text partner entry — the master is protected.** If a needed carrier/transporter
+  isn't in `store.forwarders`, the picker offers **"+ Add new partner"**, which opens a small
+  form, captures the required master fields, **creates the `store.forwarders` row in-process**
+  (`createForwarder`, §10 — a new Manifest cross-schema write into `store`), then returns to the
+  shipment flow with the new partner selected. This is the only way a partner enters the flow,
+  so the master is never corrupted by ad-hoc text.
