@@ -288,7 +288,7 @@ function stripPan(row, auth, edges) {
 // Public (directory-safe) projection of an employee row.
 const PUBLIC_EMP_KEYS = [
   'id', 'employee_code', 'full_name', 'preferred_name', 'job_title',
-  'department_id', 'job_role_id', 'manager_id', 'photo_url', 'status', 'work_email',
+  'department_id', 'job_role_id', 'manager_id', 'secondary_manager_id', 'photo_url', 'status', 'work_email',
 ];
 function projectPublic(row) {
   const out = {};
@@ -297,12 +297,13 @@ function projectPublic(row) {
   if (row.department) out.department = row.department;
   if (row.job_role)   out.job_role = row.job_role;
   if (row.manager)    out.manager = row.manager;
+  if (row.secondary_manager) out.secondary_manager = row.secondary_manager;
   out._restricted = true;
   return out;
 }
 
 const EMP_EMBED =
-  'department:department_id(id,name,code),job_role:job_role_id(id,title,level),manager:manager_id(id,full_name,job_title)';
+  'department:department_id(id,name,code),job_role:job_role_id(id,title,level),manager:manager_id(id,full_name,job_title),secondary_manager:secondary_manager_id(id,full_name,job_title)';
 
 // ────────────────────────────────────────────────────────────────────────────
 // GET ACTIONS
@@ -543,7 +544,7 @@ async function mintEmployeeCode(env) {
 const EMPLOYEE_FIELDS = [
   'auth_user_id', 'full_name', 'preferred_name', 'personal_email', 'work_email', 'phone',
   'emergency_contact_name', 'emergency_contact_phone', 'date_of_birth',
-  'department_id', 'job_role_id', 'job_title', 'manager_id', 'employment_type',
+  'department_id', 'job_role_id', 'job_title', 'manager_id', 'secondary_manager_id', 'employment_type',
   'legal_entity', 'work_location', 'date_joined', 'probation_end_date', 'confirmed_at',
   'date_exited', 'exit_reason', 'status', 'photo_url',
   'gender', 'blood_group', 'pan_number',
@@ -565,6 +566,9 @@ async function updateEmployee(body, auth, env) {
   if (!body.employee_id) return err('employee_id required', 400);
   const patch = pickPatch(body, EMPLOYEE_FIELDS);
   delete patch.employee_code; // immutable
+  // A person can't be their own (solid or dotted) manager.
+  if (patch.secondary_manager_id === body.employee_id) patch.secondary_manager_id = null;
+  if (patch.manager_id === body.employee_id) patch.manager_id = null;
   patch.updated_at = nowIso();
   if (Object.keys(patch).length === 1) return err('no_patch', 400);
   const r = await sb(`/rest/v1/employees?id=eq.${body.employee_id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });

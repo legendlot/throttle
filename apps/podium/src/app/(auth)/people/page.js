@@ -113,7 +113,10 @@ export default function PeoplePage() {
               </div>
               <div style={{ padding: '11px 16px', fontSize: 13, color: 'var(--t2)' }}>{r.job_title || '—'}</div>
               <div style={{ padding: '11px 16px' }}>{r.department?.name ? <SoftPill>{r.department.name}</SoftPill> : <span style={{ color: 'var(--t4)' }}>—</span>}</div>
-              <div style={{ padding: '11px 16px', fontSize: 12.5, color: 'var(--t3)' }}>{r.manager?.full_name || '—'}</div>
+              <div style={{ padding: '11px 16px', fontSize: 12.5, color: 'var(--t3)' }}>
+                {r.manager?.full_name || '—'}
+                {r.secondary_manager?.full_name && <div style={{ fontSize: 11, color: 'var(--t4)' }}>⋯ {r.secondary_manager.full_name} <span style={{ fontStyle: 'italic' }}>(dotted)</span></div>}
+              </div>
               <div style={{ padding: '11px 16px' }}><StatusBadge status={r.status} /></div>
             </GridRow>
           ))}

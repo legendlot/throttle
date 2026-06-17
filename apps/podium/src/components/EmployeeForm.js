@@ -69,6 +69,7 @@ export default function EmployeeForm({ session, initial, onSaved, onCancel }) {
           <Field label="Department"><Combobox value={f.department_id || ''} onChange={v => set('department_id', v)} inputStyle={comboInp} placeholder="Search department…" options={depts.map(d => ({ value: d.id, label: d.name }))} /></Field>
           <Field label="Job role"><Combobox value={f.job_role_id || ''} onChange={v => set('job_role_id', v)} inputStyle={comboInp} placeholder="Search role…" options={roles.map(r => ({ value: r.id, label: r.title, hint: r.level || '' }))} /></Field>
           <Field label="Manager"><Combobox value={f.manager_id || ''} onChange={v => set('manager_id', v)} inputStyle={comboInp} placeholder="Search manager…" options={people.filter(p => p.id !== initial?.id).map(p => ({ value: p.id, label: p.full_name, hint: p.employee_code || '' }))} /></Field>
+          <Field label="Secondary manager (dotted line)"><Combobox value={f.secondary_manager_id || ''} onChange={v => set('secondary_manager_id', v)} inputStyle={comboInp} placeholder="Search dotted-line manager…" options={people.filter(p => p.id !== initial?.id && p.id !== f.manager_id).map(p => ({ value: p.id, label: p.full_name, hint: p.employee_code || '' }))} /></Field>
           <Field label="Employment type">
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
               {EMPLOYMENT_TYPES.map(t => {
@@ -117,7 +118,7 @@ export default function EmployeeForm({ session, initial, onSaved, onCancel }) {
 }
 
 const FIELDS = ['full_name', 'preferred_name', 'work_email', 'personal_email', 'phone', 'date_of_birth', 'gender', 'blood_group', 'pan_number', 'photo_url',
-  'job_title', 'department_id', 'job_role_id', 'manager_id', 'employment_type', 'legal_entity', 'work_location',
+  'job_title', 'department_id', 'job_role_id', 'manager_id', 'secondary_manager_id', 'employment_type', 'legal_entity', 'work_location',
   'date_joined', 'probation_end_date', 'confirmed_at', 'status', 'date_exited', 'exit_reason',
   'emergency_contact_name', 'emergency_contact_phone'];
 

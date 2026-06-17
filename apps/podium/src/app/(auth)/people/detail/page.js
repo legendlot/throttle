@@ -77,6 +77,7 @@ export default function PersonDetailPage() {
             <KV k="Job role" v={e.job_role?.title} />
             <KV k="Grade" v={e.job_role?.level} />
             <KV k="Manager" v={e.manager?.full_name} />
+            {e.secondary_manager?.full_name && <KV k="Also reports to" v={`${e.secondary_manager.full_name} (dotted)`} />}
             <KV k="Type" v={labelOf(EMPLOYMENT_TYPES, e.employment_type)} />
             <KV k="Legal entity" v={e.legal_entity} />
             <KV k="Location" v={e.work_location} />
