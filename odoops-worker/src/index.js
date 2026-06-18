@@ -145,6 +145,9 @@ async function channelName(id) { return (await getChannels()).find(c => c.id ===
 const SHOPIFY_API_VERSION_DEFAULT = '2026-04';
 let _shopToken = null, _shopTokenExp = 0;
 async function getShopifyToken(env, force = false) {
+  // Custom app (Admin → Develop apps): a static Admin API access token (shpat_…). Use it directly.
+  if (env.SHOPIFY_ACCESS_TOKEN) return env.SHOPIFY_ACCESS_TOKEN;
+  // Otherwise (Dev Dashboard app, as csops/ignition use): mint via the client-credentials grant.
   const now = Date.now();
   if (!force && _shopToken && now < _shopTokenExp - 60_000) return _shopToken;
   const res = await fetch(`https://${env.SHOPIFY_STORE_DOMAIN}/admin/oauth/access_token`, {
@@ -505,7 +508,7 @@ export default {
             const lastByChannel = {}; runs.forEach(r => { if (!lastByChannel[r.channel_id]) lastByChannel[r.channel_id] = r; });
             const cfgByChannel = {}; cfgs.forEach(c => { cfgByChannel[c.channel_id] = c; });
             return ok({
-              secrets: { shopify: !!env.SHOPIFY_CLIENT_ID, amazon: !!env.AMAZON_LWA_CLIENT_ID, flipkart: !!env.FLIPKART_CLIENT_ID },
+              secrets: { shopify: !!(env.SHOPIFY_ACCESS_TOKEN || env.SHOPIFY_CLIENT_ID), amazon: !!env.AMAZON_LWA_CLIENT_ID, flipkart: !!env.FLIPKART_CLIENT_ID },
               connectors: channels.map(c => ({ channel_id: c.id, name: c.name, adapter_kind: cfgByChannel[c.id]?.adapter_kind || null, enabled: !!cfgByChannel[c.id]?.enabled, cursor: cfgByChannel[c.id]?.cursor || null, last_ok_at: cfgByChannel[c.id]?.last_ok_at || null, last_error: cfgByChannel[c.id]?.last_error || null, last_run: lastByChannel[c.id] || null })),
             });
           }

@@ -19,8 +19,9 @@ crons = ["0 * * * *"]
 
 # Secrets set via `wrangler secret put` — never stored in this file:
 #   SUPABASE_SERVICE_KEY   (Supabase service_role sb_secret key — same project as lotopsproxy)
-#   SHOPIFY_STORE_DOMAIN   (dedicated Odo Shopify custom app — e.g. xxxx.myshopify.com)
-#   SHOPIFY_CLIENT_ID
+#   SHOPIFY_STORE_DOMAIN   (the LOT store — ed7e3f-cf.myshopify.com)
+#   SHOPIFY_ACCESS_TOKEN   (custom app: static Admin API token shpat_… — PREFERRED for Develop-apps)
+#   SHOPIFY_CLIENT_ID      (only for a Dev Dashboard app's client-credentials grant; not needed if ACCESS_TOKEN set)
 #   SHOPIFY_CLIENT_SECRET
 #   SHOPIFY_API_VERSION    (optional; defaults to 2026-04 in code)
 # Phase 2/3 (later): AMAZON_LWA_CLIENT_ID/SECRET/REFRESH_TOKEN, FLIPKART_CLIENT_ID/SECRET.
