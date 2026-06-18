@@ -8,7 +8,7 @@ import React, { useState, useEffect } from 'react';
 import { Icon } from '@/components/throttle/Icon';
 import { Avatar, ProductTag } from '@/components/throttle/ui';
 import { STAGES, PRIORITY, DTYPE, stageByVal, teamById, taskTag } from '@/lib/throttleData';
-import { fetchTaskActivity, fetchTaskAttachments, postComment, relAge, setTaskOwner, selfAssignOwner, abandonTask, submitForReview } from '@/lib/throttleApi';
+import { fetchTaskActivity, fetchTaskAttachments, fetchTaskBrief, postComment, relAge, setTaskOwner, selfAssignOwner, abandonTask, submitForReview } from '@/lib/throttleApi';
 
 const toast = (msg, tone = 'ok', icon) => window.dispatchEvent(new CustomEvent('throttle:toast', { detail: { msg, tone, icon: icon || (tone === 'bad' ? 'alert' : 'check') } }));
 
@@ -33,8 +33,9 @@ export function TaskDrawer({ task, onClose, onMove, session, members = [], role,
   const [reviewing, setReviewing] = useState(false);
   const [reviewLink, setReviewLink] = useState('');
   const [attachments, setAttachments] = useState(null);
+  const [brief, setBrief] = useState(null);
 
-  useEffect(() => { setComment(''); setComments(null); setAbandoning(false); setAbandonReason(''); setReviewing(false); setReviewLink(''); setAttachments(null); }, [task?.id]);
+  useEffect(() => { setComment(''); setComments(null); setAbandoning(false); setAbandonReason(''); setReviewing(false); setReviewLink(''); setAttachments(null); setBrief(null); }, [task?.id]);
   useEffect(() => {
     if (!task) return;
     const onKey = e => { if (e.key === 'Escape') onClose(); };
@@ -53,6 +54,8 @@ export function TaskDrawer({ task, onClose, onMove, session, members = [], role,
       }
       const att = await fetchTaskAttachments(session, task.id);
       if (!cancelled) setAttachments(att || []);
+      const br = task.requestId ? await fetchTaskBrief(session, task.requestId) : null;
+      if (!cancelled) setBrief(br || { notes: null, reference: null, fields: [] });
     })();
     return () => { cancelled = true; };
   }, [task, session]);
@@ -218,9 +221,32 @@ export function TaskDrawer({ task, onClose, onMove, session, members = [], role,
           </div>
 
           <div className="eyebrow" style={{ padding: 0, marginBottom: 6 }}>Brief</div>
-          <p style={{ fontSize: 13.5, color: 'var(--t2)', lineHeight: 1.6, margin: '0 0 20px' }}>
-            {task.product ? `${task.product} ` : ''}deliverable for the current sprint. Match the brand book — dark-first, motorsport energy, no birthday-party context. Final files to the shared drive on approval.
-          </p>
+          {brief == null ? (
+            <p style={{ fontSize: 13, color: 'var(--t4)', margin: '0 0 20px' }}>Loading…</p>
+          ) : (brief.notes || brief.fields.length > 0 || brief.reference) ? (
+            <div style={{ margin: '0 0 20px' }}>
+              {brief.notes && (
+                <p style={{ fontSize: 13.5, color: 'var(--t2)', lineHeight: 1.6, margin: '0 0 10px', whiteSpace: 'pre-wrap' }}>{brief.notes}</p>
+              )}
+              {brief.fields.length > 0 && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '5px 14px', fontSize: 13, lineHeight: 1.5 }}>
+                  {brief.fields.map(f => (
+                    <React.Fragment key={f.label}>
+                      <span style={{ color: 'var(--t4)' }}>{f.label}</span>
+                      <span style={{ color: 'var(--t2)' }}>{f.value}</span>
+                    </React.Fragment>
+                  ))}
+                </div>
+              )}
+              {brief.reference && (/^https?:\/\//i.test(brief.reference)
+                ? <a href={brief.reference} target="_blank" rel="noopener noreferrer"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 10, fontSize: 12.5, color: 'var(--yellow)', textDecoration: 'none' }}>
+                    <Icon name="link" size={13} />Reference</a>
+                : <p style={{ fontSize: 13, color: 'var(--t4)', margin: '10px 0 0' }}>Reference: <span style={{ color: 'var(--t2)' }}>{brief.reference}</span></p>)}
+            </div>
+          ) : (
+            <p style={{ fontSize: 13, color: 'var(--t4)', fontStyle: 'italic', margin: '0 0 20px' }}>No brief provided.</p>
+          )}
 
           {attachments && attachments.length > 0 && (
             <>

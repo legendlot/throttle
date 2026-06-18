@@ -64,7 +64,7 @@ export async function fetchUsers(session) {
 export async function fetchTasks(session, usersById = {}) {
   try {
     const { data, error } = await supabaseBrand.from('tasks')
-      .select('id,task_number,title,stage,priority,deliverable_type,type,product_code,due_date,blocked_reason,sprint_id,task_assignees(user_id,is_owner)')
+      .select('id,task_number,title,stage,priority,deliverable_type,type,product_code,due_date,blocked_reason,sprint_id,request_id,task_assignees(user_id,is_owner)')
       .in('stage', ACTIVE_STAGES)
       .order('task_number', { ascending: false });
     if (error || !data || !data.length) return null;
@@ -88,8 +88,44 @@ export async function fetchTasks(session, usersById = {}) {
         age: dueAge(t.due_date),
         blocked: t.blocked_reason || null,
         sprint_id: t.sprint_id || null,
+        requestId: t.request_id || null,
       };
     });
+  } catch (_) { return null; }
+}
+
+// ── task brief (from the originating request's template_data) ────
+// There is no single "brief" column — each request type carries its own structured
+// fields in requests.template_data (plus a free-text `notes` and `reference`). We
+// surface them generically so the drawer shows the REAL request, not placeholder text.
+const BRIEF_SKIP = new Set(['notes', 'reference', 'priority', 'deadline', 'is_revision', 'revision_ref', 'checklist']);
+function humanizeKey(k) {
+  if (k === 'cta') return 'CTA';
+  return String(k).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+function formatBriefValue(v) {
+  if (v == null || v === '') return null;
+  if (Array.isArray(v)) { const j = v.filter(Boolean).join(', '); return j || null; }
+  if (typeof v === 'boolean') return v ? 'Yes' : 'No';
+  if (typeof v === 'object') return null; // skip nested objects (e.g. checklist maps)
+  return String(v);
+}
+export async function fetchTaskBrief(session, requestId) {
+  if (!requestId) return null;
+  try {
+    const { data, error } = await supabaseBrand.from('requests')
+      .select('title,type,template_data,review_note').eq('id', requestId).single();
+    if (error || !data) return null;
+    const td = data.template_data || {};
+    const notes = (typeof td.notes === 'string' && td.notes.trim()) ? td.notes.trim() : null;
+    const reference = (typeof td.reference === 'string' && td.reference.trim()) ? td.reference.trim() : null;
+    const fields = [];
+    for (const [k, v] of Object.entries(td)) {
+      if (BRIEF_SKIP.has(k)) continue;
+      const val = formatBriefValue(v);
+      if (val != null) fields.push({ label: humanizeKey(k), value: val });
+    }
+    return { notes, reference, fields, reqTitle: data.title || null };
   } catch (_) { return null; }
 }
 
