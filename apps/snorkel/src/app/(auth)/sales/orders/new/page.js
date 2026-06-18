@@ -40,13 +40,24 @@ export default function NewOrderPage() {
     }
   }
 
+  // Inline partner quick-create — persists, prepends to the dropdown, returns the
+  // new row so the form can select it without waiting for a reload.
+  async function createPartner(data) {
+    const res = await workerFetch('createSalesPartner', { data }, session);
+    if (!res.ok) throw new Error(res.error || 'Create failed');
+    const np = { ...data, id: res.data.id, partner_code: res.data.partner_code };
+    setPartners(prev => [np, ...prev]);
+    showToast(`Partner ${np.partner_code} created`, 'success');
+    return np;
+  }
+
   return (
     <div style={{ color: 'var(--t1)' }}>
       <div style={{ marginBottom: 16 }}>
         <h1 style={pageH1}>New Sales Order</h1>
         <p style={pageSub}>Saved as Draft. Confirm it to hand off to dispatch.</p>
       </div>
-      <OrderForm partners={partners} channels={channels} saving={saving} onSubmit={submit} onCancel={() => router.push('/sales/orders')} />
+      <OrderForm partners={partners} channels={channels} saving={saving} onSubmit={submit} onCancel={() => router.push('/sales/orders')} onCreatePartner={perms?.sales_partner_manage ? createPartner : null} />
     </div>
   );
 }

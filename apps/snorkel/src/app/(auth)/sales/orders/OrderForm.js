@@ -1,11 +1,13 @@
 'use client';
 import { useState, useMemo } from 'react';
+import { Combobox, Modal } from '@throttle/ui';
 import { useProducts } from '@/hooks/useProducts';
 import {
   panelStyle, panelHeaderStyle, panelBodyStyle, inputStyle, selectStyle, labelStyle,
   btnPrimary, btnSecondary, tableThStyle, tableTdStyle,
 } from '@/lib/snorkelui';
 import { inr } from '@/lib/sales';
+import PartnerForm from '../partners/PartnerForm';
 
 function Field({ label, children, span }) {
   return (<div style={{ gridColumn: span ? '1 / -1' : 'auto' }}><label style={labelStyle}>{label}</label>{children}</div>);
@@ -24,9 +26,13 @@ export function lineMath(l) {
 }
 
 // Shared create/edit order form. `partners` + `channels` preloaded. `initial` optional (edit).
-export default function OrderForm({ partners, channels, initial, saving, onSubmit, onCancel }) {
+// `onCreatePartner` (optional, async (data) => newPartnerRow) enables the inline
+// "+ Add" partner quick-create — pass it only when the user can manage partners.
+export default function OrderForm({ partners, channels, initial, saving, onSubmit, onCancel, onCreatePartner }) {
   const { PRODUCTS, PRODUCT_VARIANTS, PRODUCT_COLORS } = useProducts();
   const [partnerId, setPartnerId] = useState(initial?.partner_id || '');
+  const [partnerModal, setPartnerModal] = useState(false);
+  const [creatingPartner, setCreatingPartner] = useState(false);
   const [meta, setMeta] = useState({
     channel_key: initial?.channel_key || '',
     order_date: initial?.order_date || new Date().toISOString().slice(0, 10),
@@ -40,10 +46,31 @@ export default function OrderForm({ partners, channels, initial, saving, onSubmi
 
   const partner = useMemo(() => partners.find(p => p.id === partnerId), [partners, partnerId]);
 
+  const partnerOptions = useMemo(
+    () => partners.map(p => ({ value: p.id, label: p.name, hint: p.partner_code })),
+    [partners]
+  );
+  const productOptions = useMemo(() => PRODUCTS.map(p => ({ value: p, label: p })), [PRODUCTS]);
+
+  function applyPartner(p) {
+    if (p) setMeta(s => ({ ...s, channel_key: p.channel_key || s.channel_key, credit_days: p.default_credit_days ?? s.credit_days }));
+  }
   function pickPartner(pid) {
     setPartnerId(pid);
-    const p = partners.find(x => x.id === pid);
-    if (p) setMeta(s => ({ ...s, channel_key: p.channel_key || s.channel_key, credit_days: p.default_credit_days ?? s.credit_days }));
+    applyPartner(partners.find(x => x.id === pid));
+  }
+
+  // Inline quick-create: parent persists the partner + returns the new row; we
+  // select it directly off that row (the `partners` prop may not have refreshed yet).
+  async function handleCreatePartner(data) {
+    if (!onCreatePartner) return;
+    setCreatingPartner(true);
+    try {
+      const np = await onCreatePartner(data);
+      if (np?.id) { setPartnerId(np.id); applyPartner(np); }
+      setPartnerModal(false);
+    } catch { /* parent surfaces the error toast */ }
+    finally { setCreatingPartner(false); }
   }
   const setLine = (i, k, v) => setLines(ls => ls.map((l, j) => {
     if (j !== i) return l;
@@ -89,10 +116,20 @@ export default function OrderForm({ partners, channels, initial, saving, onSubmi
         <div style={panelBodyStyle}>
           <div style={grid}>
             <Field label="Partner *">
-              <select style={{ ...selectStyle, width: '100%' }} value={partnerId} onChange={e => pickPartner(e.target.value)}>
-                <option value="">— select —</option>
-                {partners.map(p => <option key={p.id} value={p.id}>{p.name} ({p.partner_code})</option>)}
-              </select>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'stretch' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <Combobox
+                    value={partnerId}
+                    options={partnerOptions}
+                    onChange={pickPartner}
+                    placeholder="Search partner…"
+                    emptyLabel="No matching partner"
+                  />
+                </div>
+                {onCreatePartner && (
+                  <button type="button" style={{ ...btnSecondary, whiteSpace: 'nowrap', padding: '0 12px' }} onClick={() => setPartnerModal(true)} title="Create a new partner">+ Add</button>
+                )}
+              </div>
             </Field>
             <Field label="Channel">
               <select style={{ ...selectStyle, width: '100%' }} value={meta.channel_key} onChange={e => setM('channel_key', e.target.value)}>
@@ -116,8 +153,11 @@ export default function OrderForm({ partners, channels, initial, saving, onSubmi
 
       <div style={panelStyle}>
         <div style={panelHeaderStyle}><span>Lines</span><button style={btnSecondary} onClick={addLine}>+ Add line</button></div>
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 980 }}>
+        <div style={{ padding: '0 16px' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: 1040 }}>
+            <colgroup>
+              {[170, 110, 110, 95, 75, 58, 85, 58, 58, 95, 95, 44].map((w, i) => <col key={i} style={{ width: w }} />)}
+            </colgroup>
             <thead><tr>
               {['Product', 'Model', 'Colour', 'SKU', 'HSN', 'Qty', 'Rate', 'Disc%', 'GST%', 'Taxable', 'Total', ''].map((h, i) => (
                 <th key={i} style={{ ...tableThStyle, textAlign: ['Qty', 'Rate', 'Disc%', 'GST%', 'Taxable', 'Total'].includes(h) ? 'right' : 'left' }}>{h}</th>
@@ -130,32 +170,38 @@ export default function OrderForm({ partners, channels, initial, saving, onSubmi
                 const colors = (PRODUCT_COLORS[l.product] || {})[l.model] || [];
                 const cell = { ...inputStyle, width: '100%', padding: '4px 6px' };
                 const numCell = { ...cell, textAlign: 'right' };
+                const cbInput = { padding: '4px 6px', fontSize: 12 };
                 return (
                   <tr key={i}>
                     <td style={tableTdStyle}>
-                      <select style={{ ...selectStyle, width: 130, padding: '4px 6px' }} value={l.product} onChange={e => setLine(i, 'product', e.target.value)}>
-                        <option value="">—</option>
-                        {PRODUCTS.map(p => <option key={p} value={p}>{p}</option>)}
-                      </select>
+                      <Combobox
+                        value={l.product}
+                        options={productOptions}
+                        onChange={v => setLine(i, 'product', v)}
+                        placeholder="Search…"
+                        emptyLabel="No match"
+                        inputStyle={cbInput}
+                        maxDropdownHeight={220}
+                      />
                     </td>
                     <td style={tableTdStyle}>
-                      <select style={{ ...selectStyle, width: 100, padding: '4px 6px' }} value={l.model} onChange={e => setLine(i, 'model', e.target.value)} disabled={!models.length}>
+                      <select style={{ ...selectStyle, width: '100%', padding: '4px 6px' }} value={l.model} onChange={e => setLine(i, 'model', e.target.value)} disabled={!models.length}>
                         <option value="">{models.length ? '—' : 'n/a'}</option>
                         {models.map(mm => <option key={mm} value={mm}>{mm}</option>)}
                       </select>
                     </td>
                     <td style={tableTdStyle}>
-                      <select style={{ ...selectStyle, width: 100, padding: '4px 6px' }} value={l.color} onChange={e => setLine(i, 'color', e.target.value)} disabled={!colors.length}>
+                      <select style={{ ...selectStyle, width: '100%', padding: '4px 6px' }} value={l.color} onChange={e => setLine(i, 'color', e.target.value)} disabled={!colors.length}>
                         <option value="">{colors.length ? '—' : 'n/a'}</option>
                         {colors.map(c => <option key={c} value={c}>{c}</option>)}
                       </select>
                     </td>
-                    <td style={tableTdStyle}><input style={{ ...cell, width: 90 }} value={l.sku || ''} onChange={e => setLine(i, 'sku', e.target.value)} /></td>
-                    <td style={tableTdStyle}><input style={{ ...cell, width: 70, fontFamily: 'var(--mono)' }} value={l.hsn_code || ''} onChange={e => setLine(i, 'hsn_code', e.target.value)} placeholder="9503" /></td>
-                    <td style={tableTdStyle}><input type="number" style={{ ...numCell, width: 56 }} value={l.qty} onChange={e => setLine(i, 'qty', e.target.value)} /></td>
-                    <td style={tableTdStyle}><input type="number" style={{ ...numCell, width: 80 }} value={l.rate} onChange={e => setLine(i, 'rate', e.target.value)} /></td>
-                    <td style={tableTdStyle}><input type="number" style={{ ...numCell, width: 56 }} value={l.discount_pct} onChange={e => setLine(i, 'discount_pct', e.target.value)} /></td>
-                    <td style={tableTdStyle}><input type="number" style={{ ...numCell, width: 56 }} value={l.gst_pct} onChange={e => setLine(i, 'gst_pct', e.target.value)} /></td>
+                    <td style={tableTdStyle}><input style={cell} value={l.sku || ''} onChange={e => setLine(i, 'sku', e.target.value)} /></td>
+                    <td style={tableTdStyle}><input style={{ ...cell, fontFamily: 'var(--mono)' }} value={l.hsn_code || ''} onChange={e => setLine(i, 'hsn_code', e.target.value)} placeholder="9503" /></td>
+                    <td style={tableTdStyle}><input type="number" style={numCell} value={l.qty} onChange={e => setLine(i, 'qty', e.target.value)} /></td>
+                    <td style={tableTdStyle}><input type="number" style={numCell} value={l.rate} onChange={e => setLine(i, 'rate', e.target.value)} /></td>
+                    <td style={tableTdStyle}><input type="number" style={numCell} value={l.discount_pct} onChange={e => setLine(i, 'discount_pct', e.target.value)} /></td>
+                    <td style={tableTdStyle}><input type="number" style={numCell} value={l.gst_pct} onChange={e => setLine(i, 'gst_pct', e.target.value)} /></td>
                     <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)' }}>{m.taxable.toLocaleString('en-IN')}</td>
                     <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)' }}>{m.total.toLocaleString('en-IN')}</td>
                     <td style={tableTdStyle}><button style={{ ...btnSecondary, padding: '3px 8px', color: '#ff7070' }} onClick={() => removeLine(i)}>×</button></td>
@@ -182,6 +228,17 @@ export default function OrderForm({ partners, channels, initial, saving, onSubmi
         <button style={btnPrimary} onClick={submit} disabled={saving || !valid}>{saving ? 'Saving…' : 'Save Order'}</button>
         <button style={btnSecondary} onClick={onCancel} disabled={saving}>Cancel</button>
       </div>
+
+      {onCreatePartner && (
+        <Modal open={partnerModal} onClose={() => { if (!creatingPartner) setPartnerModal(false); }} title="New Partner" size="lg">
+          <PartnerForm
+            channels={channels}
+            saving={creatingPartner}
+            onSubmit={handleCreatePartner}
+            onCancel={() => setPartnerModal(false)}
+          />
+        </Modal>
+      )}
     </div>
   );
 }

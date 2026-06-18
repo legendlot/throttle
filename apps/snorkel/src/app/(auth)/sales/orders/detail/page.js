@@ -104,6 +104,15 @@ function OrderDetailInner() {
     await act('deleteSalesPayment', { data: { id: pid } }, 'Receipt deleted');
   }
 
+  async function createPartner(d) {
+    const res = await workerFetch('createSalesPartner', { data: d }, session);
+    if (!res.ok) throw new Error(res.error || 'Create failed');
+    const np = { ...d, id: res.data.id, partner_code: res.data.partner_code };
+    setPartners(prev => [np, ...prev]);
+    showToast(`Partner ${np.partner_code} created`, 'success');
+    return np;
+  }
+
   async function startEdit() { await loadFormMasters(); setEditing(true); }
   async function saveEdit(d) {
     setBusy(true);
@@ -123,7 +132,7 @@ function OrderDetailInner() {
         <div style={{ marginBottom: 16 }}><h1 style={pageH1}>Edit {o.order_no}</h1></div>
         <OrderForm partners={partners} channels={channels} saving={busy}
           initial={{ partner_id: o.partner_id, channel_key: o.channel_key, order_date: o.order_date, credit_days: o.credit_days, partner_po_ref: o.partner_po_ref, expected_dispatch_date: o.expected_dispatch_date, notes: o.notes, lines }}
-          onSubmit={saveEdit} onCancel={() => setEditing(false)} />
+          onSubmit={saveEdit} onCancel={() => setEditing(false)} onCreatePartner={perms?.sales_partner_manage ? createPartner : null} />
       </div>
     );
   }
