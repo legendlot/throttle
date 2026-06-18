@@ -159,6 +159,7 @@ export async function fetchRequests(session, usersById = {}) {
         products, items,
         note: (r.status === 'info_needed' || r.status === 'rejected') ? (r.review_note || null) : null,
         brief: briefFromTemplateData(td),
+        template_data: td,
         date: shortDate(r.created_at), age: relAge(r.created_at), ageTone: ageTone(r.created_at),
         requester_id: r.requester_id,
       };
@@ -334,6 +335,12 @@ export async function actOnRequest(session, requestId, status, note) {
   if (status === 'info_needed') return workerFetch('requestMoreInfo', { request_id: requestId, note: note || 'More information needed.' }, session.access_token);
   if (status === 'rejected') return workerFetch('rejectRequest', { request_id: requestId, note: note || 'Rejected.' }, session.access_token);
   throw new Error('unknown action');
+}
+
+// Requester edits their own pending / info-needed request (worker re-validates
+// ownership + status). Mirrors submitRequest's payload shape.
+export async function updateRequest(session, { requestId, type, title, templateData, is_product_scoped, products }) {
+  return workerFetch('updateRequest', { requestId, type, title, templateData, is_product_scoped, products }, session.access_token);
 }
 
 // ── ageing config (settings) ─────────────────────────────────────

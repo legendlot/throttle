@@ -25,6 +25,7 @@ export function AppShell({ route, children }) {
   const [collapsed, setCollapsed] = useState(false);
   const [palette, setPalette] = useState(false);
   const [newReq, setNewReq] = useState(false);
+  const [editReq, setEditReq] = useState(null);
   const [sprint, setSprint] = useState('S-24');
   const [badges, setBadges] = useState({ requests: 2, board: 3 });
 
@@ -41,12 +42,14 @@ export function AppShell({ route, children }) {
   // global events: ⌘K, new request, open task
   useEffect(() => {
     const onKey = e => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setPalette(p => !p); } };
-    const onNew = () => setNewReq(true);
+    const onNew = () => { setEditReq(null); setNewReq(true); };
+    const onEdit = e => { setEditReq(e.detail || null); };
     const onOpenTask = e => { if (typeof window !== 'undefined') window.__throttleOpenTask = e.detail; if (route !== 'board') router.push('/board'); };
     window.addEventListener('keydown', onKey);
     window.addEventListener('throttle:newreq', onNew);
+    window.addEventListener('throttle:editreq', onEdit);
     window.addEventListener('throttle:opentask', onOpenTask);
-    return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('throttle:newreq', onNew); window.removeEventListener('throttle:opentask', onOpenTask); };
+    return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('throttle:newreq', onNew); window.removeEventListener('throttle:editreq', onEdit); window.removeEventListener('throttle:opentask', onOpenTask); };
   }, [route, router]);
 
   // live sprint label + nav badges (non-blocking; falls back to seed)
@@ -94,7 +97,7 @@ export function AppShell({ route, children }) {
         </main>
       </div>
       <CommandPalette open={palette} onClose={() => setPalette(false)} onNavigate={navigate} />
-      <NewRequestModal open={newReq} onClose={() => setNewReq(false)} />
+      <NewRequestModal open={newReq || !!editReq} editing={editReq} onClose={() => { setNewReq(false); setEditReq(null); }} />
       <ToastHost />
     </div>
   );

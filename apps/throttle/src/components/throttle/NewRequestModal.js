@@ -8,13 +8,17 @@ import { workerFetch } from '@throttle/db';
 import { Icon } from './Icon';
 import { PrimaryBtn } from './ui';
 import { PRODUCTS, PRIORITY, REQ_TYPES, productChip } from '@/lib/throttleData';
-import { fetchProducts } from '@/lib/throttleApi';
+import { fetchProducts, updateRequest } from '@/lib/throttleApi';
 
 const REQ_CHANNELS = ['Amazon', 'Flipkart', 'Quick Commerce', 'Website', 'Social', 'Email', 'WhatsApp', 'Offline'];
 const PRODUCT_SCOPED = { launch_pack: true, product_creative: true, motion_3d: true };
 
-export function NewRequestModal({ open, onClose }) {
+// `editing` (optional) = an existing request the owner is editing. When set, the
+// modal opens prefilled at the Details step (type is fixed) and submits via
+// updateRequest instead of submitRequest.
+export function NewRequestModal({ open, onClose, editing }) {
   const { session } = useAuth();
+  const isEdit = !!editing;
   const [step, setStep] = useState(0);
   const [type, setType] = useState(null);
   const [form, setForm] = useState({ title: '', products: [], priority: 'medium', channels: [], deadline: '', notes: '' });
@@ -22,7 +26,26 @@ export function NewRequestModal({ open, onClose }) {
   const [filedId, setFiledId] = useState('R-242');
   const [productCodes, setProductCodes] = useState(() => PRODUCTS.map(p => p.code));
 
-  useEffect(() => { if (open) { setStep(0); setType(null); setBusy(false); setFiledId('R-242'); setForm({ title: '', products: [], priority: 'medium', channels: [], deadline: '', notes: '' }); } }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    setBusy(false); setFiledId('R-242');
+    if (editing) {
+      const td = editing.template_data || {};
+      setType(editing.type || null);
+      setForm({
+        title: editing.title || '',
+        products: Array.isArray(editing.products) ? editing.products : [],
+        priority: td.priority || 'medium',
+        channels: Array.isArray(td.channels) ? td.channels : [],
+        deadline: td.deadline || '',
+        notes: td.notes || '',
+      });
+      setStep(1); // type is fixed on edit — skip the type picker
+    } else {
+      setStep(0); setType(null);
+      setForm({ title: '', products: [], priority: 'medium', channels: [], deadline: '', notes: '' });
+    }
+  }, [open, editing]);
   // Live product list from product_master (falls back to seed list on error)
   useEffect(() => {
     if (!open || !session) return;
@@ -40,7 +63,7 @@ export function NewRequestModal({ open, onClose }) {
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const toggleArr = (k, v) => setForm(f => ({ ...f, [k]: f[k].includes(v) ? f[k].filter(x => x !== v) : [...f[k], v] }));
-  const t = type ? REQ_TYPES[type] : null;
+  const t = type ? (REQ_TYPES[type] || { label: String(type).replace(/_/g, ' '), icon: 'box' }) : null;
   const scoped = type && PRODUCT_SCOPED[type];
   const canContinue = step === 0 ? !!type : step === 1 ? (form.title.trim() && form.deadline && (!scoped || form.products.length)) : true;
 
@@ -52,20 +75,21 @@ export function NewRequestModal({ open, onClose }) {
     if (busy) return;
     setBusy(true);
     if (session) {
+      const template_data = { priority: form.priority, channels: form.channels, deadline: form.deadline || null, notes: form.notes || null };
+      const is_product_scoped = form.products.length > 0;
+      const products = form.products.map(code => ({ product_name: code, notes: null }));
       try {
-        const body = {
-          type,
-          title: form.title.trim(),
-          template_data: { priority: form.priority, channels: form.channels, deadline: form.deadline || null, notes: form.notes || null },
-          is_product_scoped: form.products.length > 0,
-          products: form.products.map(code => ({ product_name: code, notes: null })),
-        };
-        const res = await workerFetch('submitRequest', body, session.access_token);
-        const rid = res?.request_id || res?.data?.request_id;
-        if (rid) setFiledId(typeof rid === 'string' ? rid.slice(0, 8) : String(rid));
+        if (isEdit) {
+          await updateRequest(session, { requestId: editing.id, title: form.title.trim(), templateData: template_data, is_product_scoped, products });
+          setFiledId(typeof editing.id === 'string' ? editing.id.slice(0, 8) : String(editing.id));
+        } else {
+          const res = await workerFetch('submitRequest', { type, title: form.title.trim(), template_data, is_product_scoped, products }, session.access_token);
+          const rid = res?.request_id || res?.data?.request_id;
+          if (rid) setFiledId(typeof rid === 'string' ? rid.slice(0, 8) : String(rid));
+        }
         window.dispatchEvent(new CustomEvent('throttle:requestfiled'));
       } catch (e) {
-        window.dispatchEvent(new CustomEvent('throttle:toast', { detail: { msg: 'Could not file request: ' + (e.message || 'error'), tone: 'bad', icon: 'alert' } }));
+        window.dispatchEvent(new CustomEvent('throttle:toast', { detail: { msg: (isEdit ? 'Could not update request: ' : 'Could not file request: ') + (e.message || 'error'), tone: 'bad', icon: 'alert' } }));
       }
     }
     setBusy(false);
@@ -78,7 +102,7 @@ export function NewRequestModal({ open, onClose }) {
       <div onClick={e => e.stopPropagation()} style={{ width: 'min(660px, 94vw)', maxHeight: '86vh', background: 'var(--surface)',
         border: '1px solid var(--border-2)', borderRadius: 'var(--r-lg)', boxShadow: 'var(--shadow-pop)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '16px 20px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-          <span style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 14, letterSpacing: '0.06em', color: 'var(--t1)', textTransform: 'uppercase' }}>New Request</span>
+          <span style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 14, letterSpacing: '0.06em', color: 'var(--t1)', textTransform: 'uppercase' }}>{isEdit ? 'Edit Request' : 'New Request'}</span>
           {step < 3 && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 6 }}>
               {STEPS.map((s, i) => (
@@ -190,20 +214,20 @@ export function NewRequestModal({ open, onClose }) {
           {step === 3 && (
             <div style={{ textAlign: 'center', padding: '34px 0' }}>
               <span style={{ width: 60, height: 60, borderRadius: '50%', background: 'var(--ok-bg)', border: '1px solid var(--ok-bd)', color: 'var(--ok-fg)', display: 'grid', placeItems: 'center', margin: '0 auto 18px' }}><Icon name="check" size={28} /></span>
-              <h2 style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20, color: 'var(--t1)', margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: '0.02em' }}>Request filed</h2>
+              <h2 style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20, color: 'var(--t1)', margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: '0.02em' }}>{isEdit ? 'Request updated' : 'Request filed'}</h2>
               <p style={{ fontSize: 14, color: 'var(--t3)', margin: 0, lineHeight: 1.5 }}>
-                <span className="num" style={{ color: 'var(--yellow)' }}>{filedId}</span> is in the approval queue.<br/>You’ll get a ping when a lead picks it up.</p>
+                <span className="num" style={{ color: 'var(--yellow)' }}>{filedId}</span> {isEdit ? 'is updated and back in the approval queue.' : 'is in the approval queue.'}<br/>You’ll get a ping when a lead picks it up.</p>
             </div>
           )}
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 20px', borderTop: '1px solid var(--border)', flexShrink: 0 }}>
-          {step > 0 && step < 3 && (
+          {step > (isEdit ? 1 : 0) && step < 3 && (
             <button onClick={() => setStep(s => s - 1)} className="t-btn" style={{ padding: '9px 14px', borderRadius: 'var(--r-sm)', background: 'transparent', border: '1px solid var(--border-2)', color: 'var(--t2)', cursor: 'pointer', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 11.5, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Back</button>
           )}
           <span style={{ marginLeft: 'auto' }} />
           {step < 2 && <PrimaryBtn icon="chevronRight" onClick={() => canContinue && setStep(s => s + 1)}>Continue</PrimaryBtn>}
-          {step === 2 && <PrimaryBtn icon="check" onClick={submit}>{busy ? 'Filing…' : 'Submit request'}</PrimaryBtn>}
+          {step === 2 && <PrimaryBtn icon="check" onClick={submit}>{busy ? (isEdit ? 'Saving…' : 'Filing…') : (isEdit ? 'Save changes' : 'Submit request')}</PrimaryBtn>}
           {step === 3 && <PrimaryBtn icon="check" onClick={onClose}>Done</PrimaryBtn>}
         </div>
       </div>

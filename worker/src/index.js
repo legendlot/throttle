@@ -1323,8 +1323,11 @@ async function handleUpdateRequest(body, ctx, env) {
   // Only the requester can update
   if (req.requester_id !== ctx.userId) return err('Forbidden', 403);
 
-  // Only info_needed requests can be updated
-  if (req.status !== 'info_needed') return err('Only info_needed requests can be updated', 400);
+  // The requester may edit their own request while it is still pending or
+  // awaiting more info — not once it has been approved / rejected / actioned.
+  if (req.status !== 'info_needed' && req.status !== 'pending') {
+    return err('Only a pending or info-needed request can be edited', 400);
+  }
 
   // Build PATCH body — only include fields that were sent
   const patch = {

@@ -58,7 +58,8 @@ function ReqCard({ r, onOpen, onAct }) {
   );
 }
 
-function RequestDrawer({ req, onClose, onAct }) {
+function RequestDrawer({ req, onClose, onAct, meId }) {
+  const canEditOwn = meId && req.requester_id === meId && (req.status === 'pending' || req.status === 'info_needed');
   useEffect(() => {
     if (!req) return;
     const onKey = e => { if (e.key === 'Escape') onClose(); };
@@ -87,6 +88,13 @@ function RequestDrawer({ req, onClose, onAct }) {
             <h2 style={{ fontFamily: 'var(--font-ui)', fontWeight: 600, fontSize: 18, color: 'var(--t1)', lineHeight: 1.3, margin: 0 }}>{req.title}</h2>
           </div>
           {req.products.length > 0 && <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>{req.products.map(p => <ProductTag key={p} code={p} size="lg" />)}</div>}
+          {canEditOwn && (
+            <button
+              onClick={() => { window.dispatchEvent(new CustomEvent('throttle:editreq', { detail: { id: req._id || req.id, type: req.type, title: req.title, products: req.products, template_data: req.template_data } })); onClose(); }}
+              className="t-btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '8px 13px', marginBottom: 16, borderRadius: 'var(--r-sm)', background: 'transparent', border: '1px solid var(--border-2)', color: 'var(--t1)', cursor: 'pointer', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+              <Icon name="type" size={13} />Edit request
+            </button>
+          )}
           {req.note && <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '10px 12px', borderRadius: 'var(--r-sm)', background: 'var(--info-bg)', border: '1px solid var(--info-bd)', color: 'var(--info-fg)', fontSize: 12.5, marginBottom: 16 }}><Icon name="alert" size={15} style={{ flexShrink: 0, marginTop: 1 }} />{req.note}</div>}
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px 16px', marginBottom: 20 }}>
@@ -144,7 +152,7 @@ function RequestDrawer({ req, onClose, onAct }) {
 }
 
 function RequestsScreen() {
-  const { session } = useAuth();
+  const { session, brandUser } = useAuth();
   const FILTERS = [
     { v: 'needs', label: 'Needs Action' }, { v: 'all', label: 'All' },
     { v: 'pending', label: 'Pending' }, { v: 'approved', label: 'Approved' },
@@ -260,7 +268,7 @@ function RequestsScreen() {
         </div>
       </div>
 
-      <RequestDrawer req={selected} onClose={() => setSelected(null)} onAct={act} />
+      <RequestDrawer req={selected} onClose={() => setSelected(null)} onAct={act} meId={brandUser?.id} />
     </div>
   );
 }
