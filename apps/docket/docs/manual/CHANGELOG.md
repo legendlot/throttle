@@ -3,6 +3,18 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.2.0] - 2026-06-18
+### Added
+- The Tasks List chapter now covers two S153 features. **Updating many tasks at
+  once** (bulk update): the Select toggle, per-row tick boxes that appear only on
+  tasks you can edit, Select all, and the yellow bulk bar that sets owner / status /
+  priority / deadline / program across the whole selection, plus notes that only
+  your own tasks change and that bulk deadlines keep the same audit reason. **My
+  tasks**: clarified that the sidebar My tasks view is cross-space (not one space),
+  splitting work into an "Assigned to me" (owner) section and a collapsible
+  "Collaborating" section, with a Space column, and that capturing there assigns to
+  you.
+
 ## [1.0.1] - 2026-06-06
 ### Fixed
 - Scratchpad chapter: verified against the live app and tightened to match it

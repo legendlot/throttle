@@ -68,8 +68,35 @@
   <div class="a-row"><div class="a-key">Sort</div><div class="a-val"><p>Click any column header to sort by it. Click again to reverse, and a third time to switch sorting off. Sorting applies to both top-level rows and their sub-tasks.</p></div></div>
 </div>
 
+<h2 class="sec">Updating many tasks at once</h2>
+<p>When you need to make the same change to several tasks (assign them all to one person, push them all to next week, bump them all to P1), use <strong>bulk update</strong> instead of editing each row by hand. It works in both The Grid and the main board.</p>
+<ol class="steps">
+  <li><span class="s-title">Click <strong>Select</strong></span> in the control bar. A tick box appears on the left of every task you are allowed to edit. Tasks you only collaborate on or can view show a faint, locked box: you cannot pick those.</li>
+  <li><span class="s-title">Tick the tasks you want.</span> Pick them one by one, or use <strong>Select all</strong> to grab every editable task currently shown (your search and filters decide what &ldquo;all&rdquo; means).</li>
+  <li><span class="s-title">Use the yellow bar that pops up at the bottom.</span> It shows how many are selected and gives one button each for <strong>Owner</strong>, <strong>Status</strong>, <strong>Priority</strong>, <strong>Deadline</strong> and <strong>Program</strong>.</li>
+  <li><span class="s-title">Pick a value</span> and it applies to every selected task at once. <strong>Clear</strong> deselects everything; clicking <strong>Select</strong> again leaves bulk mode.</li>
+</ol>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Only your tasks change</div>
+  <p>A bulk action only touches tasks you are allowed to edit, which is why collaborator-only tasks cannot be ticked in the first place. If a few in your selection still cannot be changed, Docket updates the rest and tells you how many it skipped.</p>
+</div>
+
+<div class="callout warn">
+  <div class="c-title">&#9888; Bulk deadlines still keep the audit trail</div>
+  <p>Setting a deadline in bulk follows the same rule as a single task: tasks getting their <em>first</em> deadline are set silently, but if any selected task already has one, Docket asks for a single reason and records the change on each task's history.</p>
+</div>
+
 <h2 class="sec">Which space am I in?</h2>
 <p>The list always shows <strong>one space at a time</strong>. By default that is <strong>General</strong>, the open company-wide space. If you click a private space in the sidebar, the list shows only that space's tasks and a header with the space name appears; anything you capture then lands in that space. Spaces have their own chapter.</p>
+
+<h2 class="sec">My tasks: everything on your plate, across every space</h2>
+<p><strong>My tasks</strong> in the sidebar is different from the rest of the list. Instead of one space, it pulls together every task you are involved in <strong>across all the spaces you can see</strong>, and splits them into two sections:</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">Assigned to me</div><div class="a-val"><p>Tasks where you are the <strong>owner</strong>, the person accountable for getting them done. This is the top section.</p></div></div>
+  <div class="a-row"><div class="a-key">Collaborating</div><div class="a-val"><p>Tasks where you are a <strong>collaborator</strong> but not the owner. This sits in a collapsible section below; fold it away when you want to focus only on what you own.</p></div></div>
+</div>
+<p>Because it spans spaces, each row carries a <strong>Space</strong> column so you can see where a task lives. Capturing a task here <strong>assigns it to you</strong> automatically, and search, filters and bulk select all work the same as on a normal list.</p>
 
 <div class="callout floor">
   <div class="c-title">&#9874; A typical pass through your list</div>
