@@ -1,0 +1,35 @@
+<p class="lead">Manifest can print two formal documents from an order: the China Purchase Order you send the vendor, and the GST tax invoice from Solve Factory. Both open as a clean printable page you save as a PDF, and you can reprint them as many times as you like.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role lot">LOT</span> <span class="role sf">Solve Factory</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Where</div><div class="g-val">Order detail.</div></div>
+  <div class="g-cell"><div class="g-lbl">Output</div><div class="g-val">Print, or Save as PDF.</div></div>
+  <div class="g-cell"><div class="g-lbl">Stored?</div><div class="g-val">No. Reprint any time.</div></div>
+</div>
+
+<h2 class="sec">How it works</h2>
+<p>Open any order. In the header (and on the Invoiced card) you will find document buttons. Click one and a clean black-and-white document opens in a new tab and the print dialog appears on its own. From there choose your printer, or pick <strong>Save as PDF</strong> to keep a copy. Nothing is stored on the system: the document is built fresh from the latest order data each time, so it is always current and always available.</p>
+
+<h2 class="sec">China PO</h2>
+<p>Available once an order has been placed (not while it is still a request or draft). It shows:</p>
+<ul class="bullets">
+  <li><strong>Buyer:</strong> Legend of Toys, with the company address and GSTIN.</li>
+  <li><strong>Supplier:</strong> the Chinese vendor on the order.</li>
+  <li><strong>Lines:</strong> vendor item code, description, quantity and unit price, in the order&rsquo;s currency (RMB).</li>
+  <li><strong>Totals:</strong> in RMB. No GST is shown, because purchases in RMB are not taxed here.</li>
+</ul>
+<p>Click <strong>China PO</strong> in the order header to generate it.</p>
+
+<h2 class="sec">SF Invoice (tax invoice)</h2>
+<p>Available once an order has been invoiced. The <strong>SF Invoice PDF</strong> button sits on the Invoiced card. It shows:</p>
+<ul class="bullets">
+  <li><strong>Seller:</strong> the Solve Factory billing entity on the invoice. <strong>Bill to:</strong> Legend of Toys with GSTIN.</li>
+  <li><strong>Charges:</strong> goods value, shipping and customs (whichever apply), totalling the taxable value.</li>
+  <li><strong>Tax:</strong> the GST amount on the goods, shown as a single IGST line.</li>
+  <li><strong>Commission:</strong> the Solve Factory commission line (GST included).</li>
+  <li><strong>Grand total</strong> and the amount written out in words.</li>
+</ul>
+
+<div class="callout note"><div class="c-title">&#9432; Note</div><p>The invoice is built from the order&rsquo;s recorded totals, so it reflects whatever has been invoiced. If you reopen it later it will show the current figures. If you need a frozen copy of an invoice exactly as it was issued, save the PDF when you generate it.</p></div>
+
+<div class="callout note"><div class="c-title">&#9432; Note</div><p>If a button does nothing or shows an error, the order is not at the right stage yet (a China PO needs the order placed; an SF Invoice needs it invoiced), or your role does not include document access.</p></div>

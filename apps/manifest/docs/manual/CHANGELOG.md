@@ -1,5 +1,12 @@
 # Changelog — Manifest Operations Manual
 
+## 1.1.0 — 2026-06-18
+Access control + document generation (Session 153). Rewrote the Admin chapter for the new
+three-tab Admin (Access Control, Roles/permissions builder, Operations), the super-admin tier
+vs operational admin, and the locked-by-default "No access" wall. Added a new chapter,
+"Generating a China PO or Invoice" (browser-print documents saved as PDF from the order detail).
+Noted the shipment stage timeline (now a stepper with per-stage dates). 19 chapters.
+
 ## 1.0.0 — 2026-06-17
 First complete manual. Combined system + process guide, 18 chapters across five parts:
 Getting Started (what Manifest is, signing in, who does what, the shared pool); The Order

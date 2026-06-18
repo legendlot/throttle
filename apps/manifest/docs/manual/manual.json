@@ -2,8 +2,8 @@
   "title": "Manifest",
   "title_accent": "Operations Manual",
   "subtitle": "How Legend of Toys and Solve Factory run every China import together, and how to do it on the system.",
-  "version": "1.0.0",
-  "date": "2026-06-17",
+  "version": "1.1.0",
+  "date": "2026-06-18",
   "app_url": "manifest.legendoftoys.com",
   "owner": "Legend of Toys",
   "accent": "#213CE2",
@@ -11,7 +11,7 @@
   "roles": {
     "lot": { "label": "LOT", "name": "Legend of Toys", "desc": "Raises the request and funds the shared pool. Sees everything; never sees SF's internal cost lens." },
     "sf":  { "label": "Solve Factory", "name": "Solve Factory", "desc": "Owns the whole order lifecycle after the request: PO, vendor, shipping, customs, delivery, invoicing." },
-    "adm": { "label": "Admin", "name": "Admin", "desc": "Manages users and roles, the shipment timeline defaults, and the logistics-partner master." }
+    "adm": { "label": "Admin", "name": "Admin", "desc": "Super admins control who has access and build roles; operational admins tune the shipment timeline defaults and the logistics-partner master." }
   },
   "parts": [
     {
@@ -59,7 +59,8 @@
       "subtitle": "Finding orders, the evidence vault, and the settings that keep the system tuned.",
       "chapters": [
         { "id": "orders-docs", "title": "Orders List, Search & Documents", "route": "/orders", "file": "40-orders-docs.html", "roles": ["lot","sf","adm"] },
-        { "id": "admin",       "title": "Admin - Users, Timeline Defaults & Partners", "route": "/admin", "file": "41-admin.html", "roles": ["adm"] }
+        { "id": "admin",       "title": "Admin - Access, Roles, Timeline & Partners", "route": "/admin", "file": "41-admin.html", "roles": ["adm"] },
+        { "id": "documents",   "title": "Generating a China PO or Invoice", "route": "/orders", "file": "42-documents.html", "roles": ["lot","sf","adm"] }
       ]
     }
   ]

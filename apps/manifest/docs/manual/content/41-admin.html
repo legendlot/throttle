@@ -1,20 +1,44 @@
-<p class="lead">Admin is where LOT manages who can use Manifest, tunes the shipment timeline defaults, and keeps the logistics-partner master. Three small settings that keep the whole system accurate.</p>
+<p class="lead">Admin is where access to Manifest is controlled, roles are built, and the shipment timeline defaults and logistics-partner master are kept. Because Manifest holds sensitive cross-company money data, access is locked by default and only a super admin can hand it out.</p>
 
 <div class="glance">
   <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role adm">Admin</span></div></div>
   <div class="g-cell"><div class="g-lbl">Where</div><div class="g-val">Admin</div></div>
-  <div class="g-cell"><div class="g-lbl">Manages</div><div class="g-val">Users, timeline defaults, partners.</div></div>
-  <div class="g-cell"><div class="g-lbl">Audit</div><div class="g-val">No audit on defaults; direct edits.</div></div>
+  <div class="g-cell"><div class="g-lbl">Tabs</div><div class="g-val">Access Control, Roles, Operations.</div></div>
+  <div class="g-cell"><div class="g-lbl">Default</div><div class="g-val">No access until granted.</div></div>
 </div>
 
-<h2 class="sec">Users &amp; roles</h2>
-<p>The Admin screen lists members grouped by organisation (Legend of Toys and Solve Factory) with their role and status.</p>
-<ol class="steps">
-  <li><span class="s-title">Onboard a Solve Factory owner.</span> The SF owner first requests a login link on the sign-in screen (this creates their account). Then an admin adds them here and assigns the SF role.</li>
-  <li><span class="s-title">Assign or change a role.</span> LOT finance / founder, SF owner, or admin. Roles control exactly what each person sees and can do.</li>
-</ol>
+<h2 class="sec">Two levels of admin</h2>
+<p>There is a deliberate split between governing access and running day-to-day settings:</p>
+<ul class="bullets">
+  <li><strong>Super admin</strong> (the "Manifest Super Admin" role): controls who can use Manifest, builds and edits roles, and appoints other super admins. Afshaan holds this, plus anyone he grants the role (for example Vinay).</li>
+  <li><strong>Manifest Admin</strong> (operational): can tune the timeline defaults and the logistics-partner master, but cannot change who has access or what a role can do.</li>
+</ul>
+<p>Only super admins see the <strong>Access Control</strong> and <strong>Roles</strong> tabs. Anyone with operational admin sees the <strong>Operations</strong> tab.</p>
 
-<h2 class="sec">Shipment timeline defaults</h2>
+<h2 class="sec">The locked door</h2>
+<p>A person who has signed in but has not been granted a Manifest role sees a full-screen <strong>"No access to Manifest"</strong> message with a Sign out button, and nothing else. The same wall appears the moment someone is disabled. This is normal and safe: access is something a super admin grants on purpose, never the default.</p>
+
+<h2 class="sec">Access Control (super admin)</h2>
+<p>Lists everyone who has a Manifest role, with their organisation, role, and active status.</p>
+<ol class="steps">
+  <li><span class="s-title">Grant access.</span> Type the person&rsquo;s email, pick a role, and click <strong>Grant</strong>. They must have signed in at least once first (Google for LOT staff, the email link for Solve Factory owners) so their account exists; otherwise you get a clear "ask them to sign in once first" message.</li>
+  <li><span class="s-title">Change a role.</span> Use the role dropdown on their row to move them to a different role.</li>
+  <li><span class="s-title">Disable or enable.</span> <strong>Disable</strong> instantly blocks login while keeping the person on the list; <strong>Enable</strong> restores it. Use this for a temporary cut.</li>
+  <li><span class="s-title">Remove.</span> Takes the person off Manifest entirely.</li>
+</ol>
+<div class="callout note"><div class="c-title">&#9432; Note</div><p>Disabling here only affects Manifest. It never touches the person&rsquo;s access to the other Legend of Toys systems.</p></div>
+<div class="callout danger"><div class="c-title">&#9940; Important</div><p>You cannot disable or remove yourself, and you cannot disable, remove, or demote the <strong>last</strong> active super admin. This stops anyone from accidentally locking the whole team out. Always keep at least two super admins.</p></div>
+
+<h2 class="sec">Roles, the permissions builder (super admin)</h2>
+<p>A role is a named bundle of permissions. The list shows every role; the built-in ones (Manifest Super Admin, Solve Factory Owner, LOT Finance, LOT Founder) are marked <strong>System</strong> and are view-only.</p>
+<ol class="steps">
+  <li><span class="s-title">Create a role.</span> Click <strong>New</strong>, give it a key, a label, and pick its side (LOT or Solve Factory). The side is fixed once created.</li>
+  <li><span class="s-title">Tick the permissions.</span> Each capability (manage orders, record payments, create invoices, manage documents, and so on) is a checkbox, grouped by area. A Solve Factory role can only hold SF capabilities; LOT-only powers (including super admin and the cost view) are never offered on an SF role.</li>
+  <li><span class="s-title">Save, or Delete.</span> Save writes the role. A custom role with nobody assigned can be deleted; an assigned one must be reassigned first.</li>
+</ol>
+<div class="callout note"><div class="c-title">&#9432; Note</div><p>You build roles out of a fixed set of capabilities. You cannot invent a brand-new power here; if a genuinely new capability is ever needed, that is a system change, not a role edit.</p></div>
+
+<h2 class="sec">Operations: shipment timeline defaults</h2>
 <p>These are the day-offsets Manifest uses to pre-fill a new shipment&rsquo;s expected dates, set separately for sea and air.</p>
 <ol class="steps">
   <li><span class="s-title">Edit the offsets.</span> For each mode, set how many days after the previous milestone each leg usually takes (loaded, sailing, docked, cleared, local transport, received).</li>
@@ -22,7 +46,7 @@
 </ol>
 <div class="callout note"><div class="c-title">&#9432; Note</div><p>These defaults are edited directly with no audit trail, on purpose; they are tuning knobs, not records. Adjust them whenever your real lead times change.</p></div>
 
-<h2 class="sec">Logistics partners</h2>
+<h2 class="sec">Operations: logistics partners</h2>
 <p>The shared list of carriers and last-mile transporters (freight forwarders, shipping lines, couriers). Every carrier and last-mile picker in Manifest reads from this master.</p>
 <ol class="steps">
   <li><span class="s-title">Add a partner.</span> Click <strong>Add partner</strong>, enter the company, country and the modes it supports (sea, air, land), plus IATA or SCAC codes and a tracking URL where relevant.</li>
