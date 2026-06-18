@@ -256,7 +256,78 @@ const qcAdapter = {
   async fetch() { return { rows: [], cursorAfter: null, subreqs: 0, partial: false }; },
 };
 
-const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter };
+// ── QC via Google Sheet (service-account read; reuses the QC stg_qc tail) ──
+// Reads a private sheet the team maintains daily. The SA (GOOGLE_SA_JSON) must be shared
+// (Viewer) on the sheet. Per-channel config in connector_config.config:
+//   { spreadsheet_id, tab, columns: { date, sku, title, units, gross } }  (column = header text)
+function _b64urlBytes(buf) {
+  let s = ''; const a = new Uint8Array(buf);
+  for (let i = 0; i < a.length; i++) s += String.fromCharCode(a[i]);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+const _b64urlStr = (str) => _b64urlBytes(new TextEncoder().encode(str));
+function _pemToPkcs8(pem) {
+  const body = pem.replace(/-----BEGIN PRIVATE KEY-----/, '').replace(/-----END PRIVATE KEY-----/, '').replace(/\s+/g, '');
+  const bin = atob(body); const buf = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+  return buf.buffer;
+}
+let _gToken = null, _gTokenExp = 0;
+async function googleSheetsToken(env) {
+  if (!env.GOOGLE_SA_JSON) throw new Error('Google not configured (set GOOGLE_SA_JSON secret)');
+  const now = Math.floor(Date.now() / 1000);
+  if (_gToken && now < _gTokenExp - 60) return _gToken;
+  const sa = JSON.parse(env.GOOGLE_SA_JSON);
+  const header = _b64urlStr(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const claim = _b64urlStr(JSON.stringify({
+    iss: sa.client_email, scope: 'https://www.googleapis.com/auth/spreadsheets.readonly',
+    aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 3600,
+  }));
+  const signingInput = `${header}.${claim}`;
+  const key = await crypto.subtle.importKey('pkcs8', _pemToPkcs8(sa.private_key), { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, new TextEncoder().encode(signingInput));
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: `${signingInput}.${_b64urlBytes(sig)}` }),
+  });
+  const t = await res.json().catch(() => ({}));
+  if (!t.access_token) throw new Error('Google token failed: ' + JSON.stringify(t).slice(0, 160));
+  _gToken = t.access_token; _gTokenExp = now + (Number(t.expires_in) || 3600);
+  return _gToken;
+}
+const gsheetAdapter = {
+  kind: 'qc_gsheet', stgTable: 'stg_qc', sourceKind: 'qc',
+  async fetch({ env, config }) {
+    const cfg = config || {};
+    if (!cfg.spreadsheet_id || !cfg.tab) throw new Error('gsheet config missing spreadsheet_id/tab (set connector_config.config)');
+    if (!cfg.columns || !cfg.columns.sku || !cfg.columns.units) throw new Error('gsheet config.columns must map at least sku + units');
+    const token = await googleSheetsToken(env);
+    const range = encodeURIComponent(`${cfg.tab}!A:ZZ`);
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${cfg.spreadsheet_id}/values/${range}?majorDimension=ROWS&valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=FORMATTED_STRING`;
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!r.ok) throw new Error(`Sheets API ${r.status}: ${(await r.text().catch(() => '')).slice(0, 160)}`);
+    const j = await r.json();
+    const grid = (j.values || []).map(row => row.map(c => (c == null ? '' : String(c))));
+    const rows = gridToQcRows(grid, cfg.columns, todayISO());
+    return { rows, cursorAfter: null, subreqs: 2, partial: false };
+  },
+  async stage(rows, runId, channelId) {
+    if (!rows.length) return;
+    const from = rows.reduce((m, x) => x.sale_date < m ? x.sale_date : m, rows[0].sale_date);
+    const to   = rows.reduce((m, x) => x.sale_date > m ? x.sale_date : m, rows[0].sale_date);
+    const b = await sbSales('/rest/v1/upload_batch', {
+      method: 'POST', prefer: 'return=representation',
+      body: JSON.stringify({ channel_id: channelId, storage_path: 'gsheet', file_name: 'google-sheet', report_period_from: from, report_period_to: to, status: 'parsed' }),
+    });
+    const batchId = (b.ok && b.data[0]) ? b.data[0].id : null;
+    // supersede the channel's staged rows over the pulled range (the sheet is the source of truth)
+    await sbSales(`/rest/v1/stg_qc?channel_id=eq.${channelId}&sale_date=gte.${from}&sale_date=lte.${to}`, { method: 'DELETE', prefer: 'return=minimal' });
+    const body = rows.map(r => ({ channel_id: channelId, upload_batch_id: batchId, row_no: r.row_no, sale_date: r.sale_date, channel_sku: r.channel_sku, title: r.title, qty: Math.round(r.qty), gross_value: r.gross_value, is_cancelled: false, raw: r.raw }));
+    await sbSales('/rest/v1/stg_qc', { method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify(body) });
+  },
+};
+
+const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter };
 
 // minimal RFC-4180-ish CSV parser (handles quoted fields, commas, newlines)
 function parseCSV(text) {
@@ -276,6 +347,43 @@ function parseCSV(text) {
   }
   if (field.length || row.length) { row.push(field); rows.push(row); }
   return rows.filter(r => r.length && r.some(x => String(x).trim() !== ''));
+}
+
+// Parse a sheet/CSV date cell → 'YYYY-MM-DD' (IST calendar). Handles ISO, DD/MM/YYYY,
+// DD-MM-YYYY, DD-Mon-YYYY. Indian sheets are day-first, so slash dates assume DD/MM unless
+// the first part is clearly a month-impossible >12 the other way. Returns null if unparseable.
+const _MON = { jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12 };
+function parseSheetDate(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return null;
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);                          // ISO
+  let m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/);                      // DD/MM/YYYY (day-first)
+  if (m) {
+    let [, a, b, y] = m; a = +a; b = +b; y = +y; if (y < 100) y += 2000;
+    let day = a, mon = b; if (a > 12 && b <= 12) { day = a; mon = b; } else if (b > 12 && a <= 12) { day = b; mon = a; }
+    if (mon >= 1 && mon <= 12 && day >= 1 && day <= 31) return `${y}-${String(mon).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+  }
+  m = s.match(/^(\d{1,2})[\-\s]([A-Za-z]{3})[A-Za-z]*[\-\s](\d{2,4})/);               // DD-Mon-YYYY
+  if (m) { let [, d, mon, y] = m; const mm = _MON[mon.toLowerCase()]; y = +y; if (y < 100) y += 2000; if (mm) return `${y}-${String(mm).padStart(2,'0')}-${String(+d).padStart(2,'0')}`; }
+  return null;
+}
+
+// Shared parser: a grid (header row + data rows) + a column map {date,sku,title,units,gross}
+// (values = header text) → QC NormLine rows. Used by both the CSV upload and the Sheet adapter.
+function gridToQcRows(grid, cm, fallbackDate) {
+  if (!grid || grid.length < 2) throw new Error('Empty or header-only data');
+  const header = grid[0].map(h => String(h).trim());
+  const idx = name => header.findIndex(h => h.toLowerCase() === String(name || '').toLowerCase());
+  const ci = { sku: idx(cm.sku), title: idx(cm.title), units: idx(cm.units), gross: idx(cm.gross), date: idx(cm.date) };
+  if (ci.sku < 0 || ci.units < 0) throw new Error(`column_map needs sku + units to match real headers. Got headers: [${header.join(', ')}]`);
+  const rows = [];
+  for (let r = 1; r < grid.length; r++) {
+    const line = grid[r];
+    const sku = String(line[ci.sku] ?? '').trim(); if (!sku) continue;
+    const sale_date = (ci.date >= 0 ? parseSheetDate(line[ci.date]) : null) || fallbackDate;
+    rows.push({ row_no: r, channel_sku: sku, title: ci.title >= 0 ? String(line[ci.title] ?? '').trim() : null, qty: num(line[ci.units]), gross_value: ci.gross >= 0 ? num(line[ci.gross]) : 0, sale_date, raw: { line } });
+  }
+  return rows;
 }
 
 // ============================================================
@@ -338,7 +446,7 @@ async function executeRun(cfg, runId, env, { budget = CRON_BUDGET, cursorOverrid
   try {
     const cname = await channelName(cfg.channel_id);
     const cursor = cursorOverride !== undefined ? cursorOverride : cfg.cursor;
-    const { rows, cursorAfter, subreqs, partial } = await adapter.fetch({ env, channelId: cfg.channel_id, channelName: cname, cursor, windowTo: nowISO(), budget });
+    const { rows, cursorAfter, subreqs, partial } = await adapter.fetch({ env, channelId: cfg.channel_id, channelName: cname, cursor, windowTo: nowISO(), budget, config: cfg.config });
     await adapter.stage(rows, runId, cfg.channel_id);
     const dates = distinctDates(rows);
     const res = dates.length ? await mapAndUpsert(cfg.channel_id, dates, runId, adapter.stgTable, cfg.started_by) : { mapped: 0, unmapped: 0, factsUpserted: 0 };
@@ -369,19 +477,7 @@ async function ingestUpload(batch, env) {
     text = await dl.text();
   }
   const grid = parseCSV(text);
-  if (grid.length < 2) throw new Error('Empty or header-only file');
-  const header = grid[0].map(h => String(h).trim());
-  const idx = name => header.findIndex(h => h.toLowerCase() === String(name || '').toLowerCase());
-  const ci = { sku: idx(cm.sku), title: idx(cm.title), units: idx(cm.units), gross: idx(cm.gross), date: idx(cm.date) };
-  if (ci.sku < 0 || ci.units < 0) throw new Error('column_map must map at least sku + units to existing columns');
-  const rows = [];
-  for (let r = 1; r < grid.length; r++) {
-    const line = grid[r];
-    const sku = String(line[ci.sku] ?? '').trim(); if (!sku) continue;
-    const dateRaw = ci.date >= 0 ? String(line[ci.date] ?? '').trim() : '';
-    const sale_date = (dateRaw && /^\d{4}-\d{2}-\d{2}/.test(dateRaw)) ? dateRaw.slice(0, 10) : (batch.report_period_to || batch.report_period_from || todayISO());
-    rows.push({ row_no: r, channel_sku: sku, title: ci.title >= 0 ? String(line[ci.title] ?? '').trim() : null, qty: num(line[ci.units]), gross_value: ci.gross >= 0 ? num(line[ci.gross]) : 0, sale_date, raw: { line } });
-  }
+  const rows = gridToQcRows(grid, cm, batch.report_period_to || batch.report_period_from || todayISO());
   // supersede prior staged rows for this channel over the report period
   const from = batch.report_period_from || rows.reduce((m, x) => x.sale_date < m ? x.sale_date : m, rows[0]?.sale_date || todayISO());
   const to   = batch.report_period_to   || rows.reduce((m, x) => x.sale_date > m ? x.sale_date : m, rows[0]?.sale_date || todayISO());
@@ -508,7 +604,7 @@ export default {
             const lastByChannel = {}; runs.forEach(r => { if (!lastByChannel[r.channel_id]) lastByChannel[r.channel_id] = r; });
             const cfgByChannel = {}; cfgs.forEach(c => { cfgByChannel[c.channel_id] = c; });
             return ok({
-              secrets: { shopify: !!(env.SHOPIFY_ACCESS_TOKEN || env.SHOPIFY_CLIENT_ID), amazon: !!env.AMAZON_LWA_CLIENT_ID, flipkart: !!env.FLIPKART_CLIENT_ID },
+              secrets: { shopify: !!(env.SHOPIFY_ACCESS_TOKEN || env.SHOPIFY_CLIENT_ID), amazon: !!env.AMAZON_LWA_CLIENT_ID, flipkart: !!env.FLIPKART_CLIENT_ID, google: !!env.GOOGLE_SA_JSON },
               connectors: channels.map(c => ({ channel_id: c.id, name: c.name, adapter_kind: cfgByChannel[c.id]?.adapter_kind || null, enabled: !!cfgByChannel[c.id]?.enabled, cursor: cfgByChannel[c.id]?.cursor || null, last_ok_at: cfgByChannel[c.id]?.last_ok_at || null, last_error: cfgByChannel[c.id]?.last_error || null, last_run: lastByChannel[c.id] || null })),
             });
           }
