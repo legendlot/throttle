@@ -1,9 +1,11 @@
 // ============================================================
-// SALESOPS — LOT consolidated cross-channel sales dashboard Worker
+// ODO — LOT consolidated cross-channel sales dashboard Worker (odoops)
 // ------------------------------------------------------------
-// Own worker, isolated blast radius. service_role on the SAME Supabase project
-// as lotopsproxy/snorkelops/manifestops. Owns the `sales` schema (sales_fact,
-// staging, sku_map, connector_*, upload_batch).
+// Odo (odo.legendoftoys.com). Own worker, isolated blast radius. service_role on the
+// SAME Supabase project as lotopsproxy/snorkelops/manifestops. Owns the `sales` schema
+// (sales_fact, staging, sku_map, connector_*, upload_batch).
+// NB: the DB schema (`sales`) + permission tables (`store.salesops_roles`) keep their
+// build-time identifiers — internal/invisible; the product is "Odo" everywhere user-facing.
 //
 // Connector framework: per-channel adapters (fetch + stage) feed a shared
 // normalize→map→upsert tail into sales.sales_fact. Hourly cron iterates enabled

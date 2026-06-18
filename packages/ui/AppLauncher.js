@@ -11,7 +11,7 @@ const SYSTEMS = [
   { key: 'ignition', label: 'Ignition', url: 'https://ignition.legendoftoys.com', mono: 'IG', tint: '#f97316' },
   { key: 'docket',   label: 'Docket',   url: 'https://docket.legendoftoys.com',   mono: 'DK', tint: '#8b5cf6' },
   { key: 'pitstop',  label: 'Pitstop',  url: 'https://pitstop.legendoftoys.com',  mono: 'PS', tint: '#10b981' },
-  { key: 'sales',    label: 'Salesops', url: 'https://sales.legendoftoys.com',    mono: 'SL', tint: '#38bdf8' },
+  { key: 'odo',      label: 'Odo',      url: 'https://odo.legendoftoys.com',      mono: 'OD', tint: '#f2cd1a' },
   { key: 'throttle', label: 'Throttle', url: 'https://throttle.legendoftoys.com', mono: 'TH', tint: '#eab308' },
 ];
 

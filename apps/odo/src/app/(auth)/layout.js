@@ -25,14 +25,14 @@ function Shell({ children }) {
   const can = (item) => !!P[item.perm] || !!P.salesops_admin || (item.adminAlt && !!P[item.adminAlt]);
   const items = NAV.filter(can);
   const active = (route) => route === '/' ? pathname === '/' : (pathname === route || pathname.startsWith(route + '/'));
-  const title = (NAV.find(n => active(n.route)) || {}).label || 'Salesops';
+  const title = (NAV.find(n => active(n.route)) || {}).label || 'Odo';
 
   return (
     <div className="so-app">
       <aside className="so-side">
         <div style={{ height: 56, display: 'flex', alignItems: 'center', gap: 10, padding: '0 18px', borderBottom: '1px solid var(--border)' }}>
-          <div style={{ width: 26, height: 26, borderRadius: 7, background: 'var(--accent)', color: 'var(--accent-fg)', display: 'grid', placeItems: 'center', fontFamily: 'var(--cond)', fontWeight: 700 }}>₹</div>
-          <div style={{ fontFamily: 'var(--cond)', fontWeight: 700, letterSpacing: '0.08em', fontSize: 14, color: 'var(--t1)' }}>SALESOPS</div>
+          <img src="/favicon.svg" alt="Odo" style={{ width: 28, height: 28, borderRadius: 7 }} />
+          <div style={{ fontFamily: 'var(--cond)', fontWeight: 700, letterSpacing: '0.08em', fontSize: 15, color: 'var(--t1)' }}>ODO</div>
         </div>
         <nav style={{ flex: 1, padding: '10px 0' }}>
           {items.map(it => {
@@ -52,7 +52,7 @@ function Shell({ children }) {
       <div className="so-main">
         <header style={{ height: 56, borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 28px', flexShrink: 0 }}>
           <div style={{ fontFamily: 'var(--cond)', fontWeight: 600, fontSize: 16, letterSpacing: '0.04em', color: 'var(--t1)' }}>{title}</div>
-          <AppLauncher current="sales" />
+          <AppLauncher current="odo" />
         </header>
         <div className="so-scroll">{children}</div>
       </div>

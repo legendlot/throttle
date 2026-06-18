@@ -1,14 +1,16 @@
-name = "salesops"
+name = "odoops"
 main = "src/index.js"
 compatibility_date = "2026-05-28"
 workers_dev = true
 
-# Salesops — LOT consolidated cross-channel sales dashboard worker.
+# Odo — LOT consolidated cross-channel sales dashboard worker (odo.legendoftoys.com).
 # service_role on the SAME Supabase project as lotopsproxy/snorkelops/manifestops.
 # Owns the `sales` schema (sales_fact, staging, sku_map, connector_*, upload_batch).
 # Cross-schema READS: store.sales_orders/_lines (GT/MT), store.salesops_roles/_user_roles
 # (perms), store.users_profile (auth), public.dispatch_channels + product_master.
 # No cross-schema WRITES outside `sales`. No cross-worker calls.
+# (Internal DB names keep the `sales`/`salesops_*` build identifiers — they predate the
+#  Odo branding and are invisible to users; system/app/worker/domain are all "Odo".)
 
 # Hourly connector pull — iterates enabled sales.connector_config adapters with a
 # global subrequest budget, advancing each channel's cursor on success.
@@ -17,7 +19,7 @@ crons = ["0 * * * *"]
 
 # Secrets set via `wrangler secret put` — never stored in this file:
 #   SUPABASE_SERVICE_KEY   (Supabase service_role sb_secret key — same project as lotopsproxy)
-#   SHOPIFY_STORE_DOMAIN   (dedicated salesops Shopify custom app — e.g. xxxx.myshopify.com)
+#   SHOPIFY_STORE_DOMAIN   (dedicated Odo Shopify custom app — e.g. xxxx.myshopify.com)
 #   SHOPIFY_CLIENT_ID
 #   SHOPIFY_CLIENT_SECRET
 #   SHOPIFY_API_VERSION    (optional; defaults to 2026-04 in code)

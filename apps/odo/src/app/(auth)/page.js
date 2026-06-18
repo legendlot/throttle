@@ -64,7 +64,7 @@ export default function Dashboard() {
 
   const exportCsv = () => {
     salesGet('getSalesExport', { from, to, group, channel_id: sel.join(',') }, session)
-      .then(r => downloadCsv(r?.rows || [], `salesops_${group}_${from}_${to}.csv`))
+      .then(r => downloadCsv(r?.rows || [], `odo_${group}_${from}_${to}.csv`))
       .catch(() => {});
   };
   const toggleCh = (id) => setSel(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);

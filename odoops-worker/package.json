@@ -1,7 +1,7 @@
 {
-  "name": "salesops-worker",
+  "name": "odoops-worker",
   "version": "1.0.0",
-  "description": "Salesops — LOT consolidated cross-channel sales dashboard API (Cloudflare Worker)",
+  "description": "Odo — LOT consolidated cross-channel sales dashboard API (Cloudflare Worker)",
   "main": "src/index.js",
   "scripts": {
     "dev": "wrangler dev",

@@ -1,8 +1,9 @@
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 /* ════════════════════════════════════════════════════════════
-   SALESOPS — consolidated cross-channel sales dashboard.
+   ODO — consolidated cross-channel sales dashboard (odo.legendoftoys.com).
    Dark telemetry theme, shared with the LOT system family.
+   Brand: LOT yellow #F2CD1A + odometer blue #213CE2 (from the logo).
    ════════════════════════════════════════════════════════════ */
 
 :root {
@@ -15,11 +16,11 @@
   --t1:            #F2F3F0;
   --t2:            #A4A6AE;
   --t3:            #6E6F79;
-  --accent:        #38BDF8;   /* sky — salesops identity */
-  --accent-fg:     #0A1620;
+  --accent:        #F2CD1A;   /* LOT yellow — Odo primary (logo tile) */
+  --accent-fg:     #282828;
   --green:         #34D27B;
   --red:           #FF6B6B;
-  --blue:          #8198FF;
+  --blue:          #4C63F0;   /* odometer blue (logo segment) */
   --amber:         #F2CD1A;
   --radius:        12px;
   --shadow:        0 18px 44px -20px rgba(0,0,0,.7);

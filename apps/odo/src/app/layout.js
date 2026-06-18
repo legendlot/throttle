@@ -2,7 +2,7 @@ import './globals.css';
 import { AuthProvider } from '@throttle/auth';
 import { ToastProvider } from '@throttle/ui';
 
-export const metadata = { title: 'Salesops · Consolidated Sales' };
+export const metadata = { title: 'Odo · Consolidated Sales' };
 
 export default function RootLayout({ children }) {
   return (
