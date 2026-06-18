@@ -751,6 +751,23 @@ export default {
             const r = await sbPublic('/rest/v1/product_master?is_active=eq.true&select=product_code,product,model,color,sku,ean&order=product.asc');
             return ok({ rows: r.ok ? r.data : [] });
           }
+          case 'amazonPeek': {  // diagnostic: inspect a report's status + raw document head (real headers / row count)
+            if (!canConnector(P)) return err('No permission', 403);
+            const rid = qp('report_id'); if (!rid) return err('report_id required');
+            let token; try { token = await getAmazonToken(env); } catch (e) { return err(String(e?.message || e), 400); }
+            const host = qp('host') || 'https://sellingpartnerapi-eu.amazon.com';
+            const H = { Authorization: `Bearer ${token}`, 'x-amz-access-token': token };
+            const pr = await fetch(`${host}/reports/2021-06-30/reports/${rid}`, { headers: H });
+            const rep = await pr.json().catch(() => ({}));
+            const info = { reportStatus: pr.status, processingStatus: rep.processingStatus, reportType: rep.reportType, dataStartTime: rep.dataStartTime, dataEndTime: rep.dataEndTime, reportDocumentId: rep.reportDocumentId, errors: rep.errors };
+            if (rep.processingStatus !== 'DONE' || !rep.reportDocumentId) return ok(info);
+            const dr = await fetch(`${host}/reports/2021-06-30/documents/${rep.reportDocumentId}`, { headers: H });
+            const doc = await dr.json().catch(() => ({}));
+            let text = '';
+            try { text = await fetchAmazonDoc(doc); } catch (e) { return ok({ ...info, docStatus: dr.status, compression: doc.compressionAlgorithm || null, docError: String(e?.message || e) }); }
+            const lines = text.split(/\r?\n/);
+            return ok({ ...info, docStatus: dr.status, compression: doc.compressionAlgorithm || null, textLength: text.length, lineCount: lines.length, head: text.slice(0, 2000) });
+          }
           case 'amazonProbe': {  // diagnostic: which marketplaces does the LWA token actually cover? (NA/EU/FE)
             if (!canConnector(P)) return err('No permission', 403);
             let token;
