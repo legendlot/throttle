@@ -97,6 +97,7 @@ button { font-family: inherit; }
 .so-table td { padding: 9px 12px; border-bottom: 1px solid var(--border); color: var(--t2); }
 .so-table tr:hover td { background: var(--surface2); }
 .so-num { text-align: right; font-variant-numeric: tabular-nums; color: var(--t1); }
+.so-table th.so-num { text-align: right; } /* th text-align:left out-specifies .so-num — re-assert right for numeric headers */
 
 .so-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 999px;
   border: 1px solid var(--border-strong); font-family: var(--mono); font-size: 11px; color: var(--t2); cursor: pointer; transition: all .12s; }

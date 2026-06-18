@@ -23,7 +23,8 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!session) return;
-    salesGet('getBootstrap', {}, session).then(b => setChannels(b?.channels || [])).catch(() => {});
+    // getBootstrap.channels carry `.id`; normalise to `.channel_id` (what the rest of this page + the rollup rows use).
+    salesGet('getBootstrap', {}, session).then(b => setChannels((b?.channels || []).map(c => ({ channel_id: c.channel_id || c.id, name: c.name, type: c.type })))).catch(() => {});
   }, [session]);
 
   const chName = useMemo(() => Object.fromEntries(channels.map(c => [c.channel_id, c.name])), [channels]);
