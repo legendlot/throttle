@@ -104,12 +104,13 @@ const PIPELINE = [
 const SHIP_STAGES = ['loaded', 'sailing', 'docked', 'cleared', 'local_transport', 'received'];
 const PROD_NEXT = { placed: 'confirmed', confirmed: 'produced', produced: 'picked_up' };
 
-// horizontal stepper showing the composed timeline; stampByStage = { stage: isoDate }
-function Timeline({ current, stampByStage = {} }) {
-  const curIdx = PIPELINE.findIndex((s) => s.key === current);
+// horizontal stepper showing a stage pipeline; stampByStage = { stage: isoDate }.
+// `stages` defaults to the order PIPELINE; pass a custom [{key,label}] for shipments.
+function Timeline({ current, stampByStage = {}, stages = PIPELINE }) {
+  const curIdx = stages.findIndex((s) => s.key === current);
   return (
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 0, overflowX: 'auto', paddingBottom: 4 }}>
-      {PIPELINE.map((s, i) => {
+      {stages.map((s, i) => {
         const done = curIdx >= 0 && i < curIdx;
         const here = i === curIdx;
         const c = (done || here) ? 'var(--accent)' : 'var(--surface2)';
@@ -830,6 +831,12 @@ function ShipmentDetail({ detailId, session, onNav, reload, data }) {
   const saveEdit = () => run(async () => { const fwd = forwarders.find((x) => x.forwarder_code === form.forwarder_code); await act('updateShipment', { id: s.id, ...form, forwarder_name: fwd ? fwd.company_name : null }, session); setEdit(false); });
   const attachOrder = () => { const o = attachable.find((x) => x.no === attach); if (!o) return; run(async () => { const od = await garageFetch('getOrder', { id: o.id }, session); const items = (od.lines || []).map((l) => ({ order_line_id: l.id, qty: Number(l.qty) || 0 })); if (items.length) await act('allocateItemsToShipment', { shipment_id: s.id, items }, session); }); setAttach(''); };
   const dateFields = [['etd', 'ETD'], ['eta', 'ETA'], ['loading_date', 'Loaded'], ['port_arrival_date', 'Arrived'], ['clearance_date', 'Cleared'], ['local_dispatch_date', 'Local dispatch'], ['warehouse_delivery_date', 'Delivered']];
+  // stepper data: stage→date stamps (events first, then milestone-date columns) + mode-aware labels
+  const shipPipeline = SHIP_PIPE.map((st) => ({ key: st, label: lbl(st) }));
+  const shipStamps = {};
+  (resp.events || []).forEach((e) => { if (e.occurred_at) shipStamps[e.stage] = e.occurred_at; });
+  const shipDateFor = { loaded: s.loading_date, sailing: s.etd, docked: s.port_arrival_date, cleared: s.clearance_date, local_transport: s.local_dispatch_date, received: s.warehouse_delivery_date };
+  Object.entries(shipDateFor).forEach(([st, dt]) => { if (!shipStamps[st] && dt) shipStamps[st] = dt; });
 
   return (
     <div>
@@ -851,15 +858,8 @@ function ShipmentDetail({ detailId, session, onNav, reload, data }) {
                   : <Btn variant="secondary" onClick={startEdit}>Edit</Btn>}
           </div>
         </div>
-        {/* stage strip */}
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {SHIP_PIPE.map((st, i) => (
-            <span key={st} style={{ padding: '5px 10px', borderRadius: 7, fontFamily: MONO, fontSize: 10,
-              background: i <= idx ? 'color-mix(in srgb, var(--accent) 16%, transparent)' : 'var(--surface2)',
-              border: '1px solid ' + (i <= idx ? 'color-mix(in srgb, var(--accent) 30%, transparent)' : 'var(--border)'),
-              color: i <= idx ? 'var(--accent)' : 'var(--t3)' }}>{lbl(st)}</span>
-          ))}
-        </div>
+        {/* stage timeline (horizontal stepper, mode-aware labels) */}
+        <Timeline current={s.status} stampByStage={shipStamps} stages={shipPipeline} />
       </Card>
 
       <Grid cols="1.5fr 1fr" style={{ alignItems: 'start' }}>
