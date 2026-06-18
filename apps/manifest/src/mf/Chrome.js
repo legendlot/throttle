@@ -48,6 +48,7 @@ export function Sidebar({ collapsed, onToggle, screen, onNav, badges = {}, fx, m
       {/* nav body */}
       <nav style={{ flex: 1, overflowY: 'auto', padding: '14px 12px' }}>
         {NAV.map((row, i) => {
+          if (row.needs && !row.needs(me?.permissions)) return null;
           if (row.kind === 'section') {
             return collapsed
               ? <div key={i} style={{ height: 1, background: 'var(--border)', margin: '0 8px 10px' }} />

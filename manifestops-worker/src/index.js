@@ -37,6 +37,7 @@ const canManageFx        = p => !!p.fx_manage;
 const canManageDocs      = p => !!p.doc_manage || !!p.sf_evidence_upload;
 const canProjectSnorkel  = p => !!p.china_po_sync;
 const canAdmin           = p => !!p.manifest_admin;
+const canSuperAdmin      = p => !!p.manifest_super_admin;   // governs access + roles (Afshaan/Vinay)
 const canViewCost        = p => !!p.cost_view;   // v2 landed-CPU / margin lens (SF lacks it)
 // SF lifecycle ownership (Phase 1, 2026-06-17). LOT manifest_admin always overrides so admins can drive/test.
 const canSfPoManage      = p => !!p.sf_po_manage     || !!p.manifest_admin;                        // convert/edit/place/advance/ship/pay/cancel
@@ -54,12 +55,23 @@ function stripCost(row, P) {
 
 // Resolve Manifest permissions + party: manifest_user_roles(user) → role_key → manifest_roles.
 async function getManifestRole(userId) {
-  const ur = await sb(`/rest/v1/manifest_user_roles?user_id=eq.${userId}&select=role_key&limit=1`);
+  const ur = await sb(`/rest/v1/manifest_user_roles?user_id=eq.${userId}&active=is.true&select=role_key&limit=1`);
   if (!ur.ok || !ur.data[0]) return { roleKey: null, party: null, perms: {} };
   const roleKey = ur.data[0].role_key;
   const r = await sb(`/rest/v1/manifest_roles?role_key=eq.${encodeURIComponent(roleKey)}&select=permissions,party&limit=1`);
   if (!r.ok || !r.data[0]) return { roleKey, party: null, perms: {} };
   return { roleKey, party: r.data[0].party || null, perms: r.data[0].permissions || {} };
+}
+
+// Count users whose ACTIVE role carries manifest_super_admin. Backs the last-super-admin guards.
+async function activeSuperAdminUserIds() {
+  const rolesR = await sb('/rest/v1/manifest_roles?select=role_key,permissions');
+  const superKeys = new Set((rolesR.ok ? rolesR.data : [])
+    .filter(r => r.permissions && r.permissions.manifest_super_admin)
+    .map(r => r.role_key));
+  if (!superKeys.size) return [];
+  const urR = await sb('/rest/v1/manifest_user_roles?active=is.true&select=user_id,role_key');
+  return (urR.ok ? urR.data : []).filter(u => superKeys.has(u.role_key)).map(u => u.user_id);
 }
 
 async function verifyJWT(authHeader) {
@@ -502,32 +514,29 @@ export default {
               when: relTime(a.created_at), tone: activityTone(a.event),
             }));
 
-            // ── admin org groups (admin only) ──
-            let orgGroups = [];
-            if (canAdmin(P)) {
-              const [urR, rolesR, profR] = await Promise.all([
-                query('manifest_user_roles', '?select=user_id,role_key'),
-                query('manifest_roles', '?select=role_key,label,party'),
+            // ── governance payload (super admin only) ──
+            let roles = [], accessUsers = [];
+            if (canSuperAdmin(P)) {
+              const [rolesR, urR, profR] = await Promise.all([
+                query('manifest_roles', '?order=party.asc,role_key.asc&select=*'),
+                query('manifest_user_roles', '?select=user_id,role_key,active,disabled_at'),
                 queryStore('users_profile', '?select=id,full_name,active&order=full_name.asc'),
               ]);
-              const roleMeta = {}; (rolesR.ok ? rolesR.data : []).forEach(r => { roleMeta[r.role_key] = r; });
-              const urByUser = {}; (urR.ok ? urR.data : []).forEach(u => { urByUser[u.user_id] = u.role_key; });
-              const lot = [], sf = [];
-              (profR.ok ? profR.data : []).forEach(u => {
-                const rk = urByUser[u.id]; if (!rk) return; const rm = roleMeta[rk]; if (!rm) return;
-                const m = { name: u.full_name || '—', email: '', role: rm.label || rk, last: u.active ? 'active' : '—', status: u.active ? 'active' : 'invited' };
-                (rm.party === 'SF' ? sf : lot).push(m);
-              });
-              orgGroups = [
-                { org: 'Legend of Toys', tag: 'L', tagTone: 'yellow', members: lot },
-                { org: 'Solve Factory', tag: 'S', tagTone: 'blue', members: sf },
-              ];
+              roles = rolesR.ok ? rolesR.data : [];
+              const roleMeta = {}; roles.forEach(r => { roleMeta[r.role_key] = r; });
+              const profById = {}; (profR.ok ? profR.data : []).forEach(u => { profById[u.id] = u; });
+              accessUsers = (urR.ok ? urR.data : []).map(u => {
+                const rm = roleMeta[u.role_key]; const pf = profById[u.user_id] || {};
+                return { user_id: u.user_id, full_name: pf.full_name || '—', role_key: u.role_key,
+                         role_label: rm ? (rm.label || u.role_key) : u.role_key, party: rm ? rm.party : 'LOT',
+                         active: u.active !== false, disabled_at: u.disabled_at || null };
+              }).sort((a, b) => (a.full_name || '').localeCompare(b.full_name || ''));
             }
 
             return ok({
               me: { id: userId, email: auth.email, role: auth.role, full_name: auth.fullName, manifest_role: auth.manifestRole, party, permissions: P },
               summary, ledger, orders, payments, drawdowns, shipments, fx, documents, activity,
-              subentities: subR.ok ? subR.data : [], orgGroups,
+              subentities: subR.ok ? subR.data : [], roles, accessUsers,
             });
           }
 
@@ -746,13 +755,13 @@ export default {
 
           // ── Admin ──
           case 'getRoles': {
-            if (!canAdmin(P)) return err('No permission', 403);
+            if (!canSuperAdmin(P)) return err('No permission', 403);
             const r = await query('manifest_roles', '?order=party.asc,role_key.asc&select=*');
             if (!r.ok) return err(r.data);
             return ok(r.data);
           }
           case 'getUsers': {
-            if (!canAdmin(P)) return err('No permission', 403);
+            if (!canSuperAdmin(P)) return err('No permission', 403);
             const [urR, profR] = await Promise.all([
               query('manifest_user_roles', '?select=*'),
               queryStore('users_profile', '?select=id,full_name,role,active&order=full_name.asc'),
@@ -1506,40 +1515,134 @@ export default {
             return ok(Array.isArray(r.data) ? r.data[0] : r.data);
           }
 
-          // ── Admin ──
+          // ── Admin · governance (super admin only) ──
           case 'saveRole': {
-            if (!canAdmin(P)) return err('No permission', 403);
+            if (!canSuperAdmin(P)) return err('No permission', 403);
             if (!d.role_key) return err('role_key required');
-            const row = {
-              role_key: d.role_key, label: d.label || d.role_key, description: d.description || null,
-              party: d.party === 'SF' ? 'SF' : 'LOT', permissions: d.permissions || {},
-            };
+            const existR = await sb(`/rest/v1/manifest_roles?role_key=eq.${encodeURIComponent(d.role_key)}&select=is_system,party&limit=1`);
+            const exist = existR.ok && existR.data[0] ? existR.data[0] : null;
+            if (exist && exist.is_system) return err('System roles are locked', 403);
+            // Party is immutable after create.
+            const party = exist ? exist.party : (d.party === 'SF' ? 'SF' : 'LOT');
+            let permissions = { ...(d.permissions || {}) };
+            // SF roles may hold ONLY the SF key set + manifest_view — strip LOT-only keys.
+            if (party === 'SF') {
+              const SF_ALLOWED = new Set(['manifest_view', 'sf_order_update', 'sf_evidence_upload', 'sf_drawdown_raise', 'sf_vendor_payment_record', 'sf_running_account_view', 'sf_po_manage', 'sf_invoice_create']);
+              permissions = Object.fromEntries(Object.entries(permissions).filter(([k, v]) => v && SF_ALLOWED.has(k)));
+            }
+            // Guard: don't strip the last super admin's governance via a role edit.
+            if (exist && exist.is_system === false && !permissions.manifest_super_admin) {
+              const supers = await activeSuperAdminUserIds();
+              const holders = await sb(`/rest/v1/manifest_user_roles?role_key=eq.${encodeURIComponent(d.role_key)}&active=is.true&select=user_id`);
+              const heldBy = new Set((holders.ok ? holders.data : []).map(u => u.user_id));
+              if (supers.length && supers.every(id => heldBy.has(id))) return err('Would remove the last super admin', 409);
+            }
+            const row = { role_key: d.role_key, label: d.label || d.role_key, description: d.description || null, party, permissions };
             const r = await sb('/rest/v1/manifest_roles', {
               method: 'POST', body: JSON.stringify(row), prefer: 'return=representation,resolution=merge-duplicates',
             });
             if (!r.ok) return err('Role save failed: ' + JSON.stringify(r.data), 502);
+            await logActivity(auth, 'role_saved', { detail: d.role_key });
             return ok(Array.isArray(r.data) ? r.data[0] : r.data);
           }
+          case 'deleteRole': {
+            if (!canSuperAdmin(P)) return err('No permission', 403);
+            if (!d.role_key) return err('role_key required');
+            const exR = await sb(`/rest/v1/manifest_roles?role_key=eq.${encodeURIComponent(d.role_key)}&select=is_system&limit=1`);
+            if (!exR.ok || !exR.data[0]) return err('Role not found', 404);
+            if (exR.data[0].is_system) return err('System roles cannot be deleted', 403);
+            const inUse = await sb(`/rest/v1/manifest_user_roles?role_key=eq.${encodeURIComponent(d.role_key)}&select=user_id`);
+            if (inUse.ok && inUse.data.length) return err(`Role is assigned to ${inUse.data.length} user(s) — reassign them first`, 409);
+            const r = await del('manifest_roles', `role_key=eq.${encodeURIComponent(d.role_key)}`);
+            if (!r.ok) return err('Delete failed: ' + JSON.stringify(r.data), 502);
+            await logActivity(auth, 'role_deleted', { detail: d.role_key });
+            return ok({ role_key: d.role_key, deleted: true });
+          }
           case 'setUserRole': {
-            if (!canAdmin(P)) return err('No permission', 403);
+            if (!canSuperAdmin(P)) return err('No permission', 403);
             if (!d.user_id) return err('user_id required');
+            // Last-super-admin guard.
+            {
+              const supers = await activeSuperAdminUserIds();
+              const isLastSuper = supers.length === 1 && supers[0] === d.user_id;
+              if (isLastSuper) {
+                if (d.role_key === null || d.role_key === '') return err('Cannot remove the last super admin', 409);
+                const tgt = await sb(`/rest/v1/manifest_roles?role_key=eq.${encodeURIComponent(d.role_key)}&select=permissions&limit=1`);
+                const keepsSuper = tgt.ok && tgt.data[0] && tgt.data[0].permissions && tgt.data[0].permissions.manifest_super_admin;
+                if (!keepsSuper) return err('Cannot demote the last super admin', 409);
+              }
+            }
             if (d.role_key === null || d.role_key === '') {
               await del('manifest_user_roles', `user_id=eq.${encodeURIComponent(d.user_id)}`);
+              await logActivity(auth, 'access_removed', { detail: d.user_id });
               return ok({ user_id: d.user_id, role_key: null });
             }
             const r = await sb('/rest/v1/manifest_user_roles', {
-              method: 'POST', body: JSON.stringify({ user_id: d.user_id, role_key: d.role_key, assigned_by: userId, assigned_at: nowISO() }),
+              method: 'POST', body: JSON.stringify({ user_id: d.user_id, role_key: d.role_key, active: true, assigned_by: userId, assigned_at: nowISO() }),
               prefer: 'return=representation,resolution=merge-duplicates',
             });
             if (!r.ok) return err('Assign failed: ' + JSON.stringify(r.data), 502);
+            await logActivity(auth, 'role_assigned', { detail: `${d.user_id} → ${d.role_key}` });
             return ok(Array.isArray(r.data) ? r.data[0] : r.data);
           }
+          case 'setUserActive': {
+            if (!canSuperAdmin(P)) return err('No permission', 403);
+            if (!d.user_id) return err('user_id required');
+            const active = d.active !== false;
+            if (!active) {
+              if (d.user_id === userId) return err('You cannot disable your own access', 409);
+              const supers = await activeSuperAdminUserIds();
+              if (supers.length === 1 && supers[0] === d.user_id) return err('Cannot disable the last super admin', 409);
+            }
+            const patch = active
+              ? { active: true, disabled_at: null, disabled_by: null }
+              : { active: false, disabled_at: nowISO(), disabled_by: userId };
+            const r = await update('manifest_user_roles', patch, `user_id=eq.${encodeURIComponent(d.user_id)}`);
+            if (!r.ok) return err('Update failed: ' + JSON.stringify(r.data), 502);
+            await logActivity(auth, active ? 'access_enabled' : 'access_disabled', { detail: d.user_id });
+            return ok({ user_id: d.user_id, active });
+          }
+          case 'grantAccess': {
+            // Generalizes onboardSfUser: grant Manifest access by email to LOT or SF users.
+            // The auth user must already exist (Google sign-in for LOT, email link for SF).
+            if (!canSuperAdmin(P)) return err('No permission', 403);
+            if (!d.email || !d.role_key) return err('email and role_key required');
+            const adminR = await fetch(`${SUPABASE_URL}/auth/v1/admin/users?email=${encodeURIComponent(d.email)}`, {
+              headers: { 'apikey': SUPABASE_SERVICE_KEY, 'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}` },
+            });
+            let authUser = null;
+            if (adminR.ok) { const j = await adminR.json(); authUser = (j.users || j)[0] || (Array.isArray(j) ? j[0] : null) || (j.id ? j : null); }
+            if (!authUser?.id) return err('No auth user for that email yet — ask them to sign in once first, then retry', 422);
+            const roleR = await sb(`/rest/v1/manifest_roles?role_key=eq.${encodeURIComponent(d.role_key)}&select=party&limit=1`);
+            if (!(roleR.ok && roleR.data[0])) return err('Unknown role_key', 400);
+            const party = roleR.data[0].party;
+            // Ensure a users_profile exists WITHOUT clobbering an existing one.
+            const profR = await sbStore(`/rest/v1/users_profile?id=eq.${authUser.id}&select=id&limit=1`);
+            if (!(profR.ok && profR.data[0])) {
+              await sbStore('/rest/v1/users_profile', {
+                method: 'POST',
+                body: JSON.stringify({ id: authUser.id, full_name: d.full_name || d.email, role: party === 'SF' ? 'sf_partner' : 'staff', active: true }),
+                prefer: 'return=minimal',
+              });
+            } else {
+              await sbStore('/rest/v1/users_profile', {
+                method: 'POST',
+                body: JSON.stringify({ id: authUser.id, active: true }),
+                prefer: 'return=minimal,resolution=merge-duplicates',
+              });
+            }
+            await sb('/rest/v1/manifest_user_roles', {
+              method: 'POST',
+              body: JSON.stringify({ user_id: authUser.id, role_key: d.role_key, active: true, assigned_by: userId, assigned_at: nowISO() }),
+              prefer: 'return=minimal,resolution=merge-duplicates',
+            });
+            await logActivity(auth, 'access_granted', { detail: `${d.email} → ${d.role_key}` });
+            return ok({ user_id: authUser.id, email: d.email, role_key: d.role_key });
+          }
           case 'onboardSfUser': {
-            // Create/activate a users_profile row for an external SF owner + assign sf_owner.
-            // The auth user must already exist (created when they first request an OTP).
-            if (!canAdmin(P)) return err('No permission', 403);
+            // Back-compat alias → grantAccess with the sf_owner default.
+            if (!canSuperAdmin(P)) return err('No permission', 403);
             if (!d.email) return err('email required');
-            // auth schema isn't PostgREST-exposed → resolve the auth user via the admin API.
             const adminR = await fetch(`${SUPABASE_URL}/auth/v1/admin/users?email=${encodeURIComponent(d.email)}`, {
               headers: { 'apikey': SUPABASE_SERVICE_KEY, 'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}` },
             });
@@ -1552,7 +1655,7 @@ export default {
               prefer: 'return=minimal,resolution=merge-duplicates',
             });
             await sb('/rest/v1/manifest_user_roles', {
-              method: 'POST', body: JSON.stringify({ user_id: authUser.id, role_key: d.role_key || 'sf_owner', assigned_by: userId }),
+              method: 'POST', body: JSON.stringify({ user_id: authUser.id, role_key: d.role_key || 'sf_owner', active: true, assigned_by: userId }),
               prefer: 'return=minimal,resolution=merge-duplicates',
             });
             await logActivity(auth, 'sf_user_onboarded', { detail: d.email });

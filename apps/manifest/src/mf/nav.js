@@ -17,7 +17,7 @@ export const NAV = [
   { kind: 'section', label: 'Workspace' },
   { kind: 'item', id: 'manual',    label: 'System Manual', icon: BookOpen },
   { kind: 'item', id: 'documents', label: 'Documents', icon: FileText },
-  { kind: 'item', id: 'admin',     label: 'Admin',     icon: ShieldCheck },
+  { kind: 'item', id: 'admin',     label: 'Admin',     icon: ShieldCheck, needs: (p) => !!(p && (p.manifest_admin || p.manifest_super_admin)) },
 ];
 
 // which nav item is highlighted for a given screen

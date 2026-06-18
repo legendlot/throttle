@@ -1166,33 +1166,177 @@ function Forwarders({ session }) {
 }
 
 // ════════════════════════════════════════════════════════════════
+// Permission-key catalog for the builder — labels grouped per party. Keys are the worker's fixed
+// capability vocabulary; the builder composes roles from them (it does not invent capabilities).
+const PERMISSION_KEYS = {
+  LOT: [
+    { group: 'Manifest',   keys: [['manifest_view', 'View Manifest']] },
+    { group: 'Orders',     keys: [['order_manage', 'Manage orders'], ['china_po_sync', 'Project to Snorkel']] },
+    { group: 'Shipping',   keys: [['shipment_manage', 'Manage shipments']] },
+    { group: 'Finance',    keys: [['charge_manage', 'Manage charges'], ['payment_record', 'Record payments'], ['drawdown_manage', 'Manage draw-downs'], ['fx_manage', 'Manage FX'], ['cost_view', 'View cost / margin']] },
+    { group: 'Documents',  keys: [['doc_manage', 'Manage documents']] },
+    { group: 'Governance', keys: [['manifest_admin', 'Operational admin'], ['manifest_super_admin', 'Super admin (access + roles)']] },
+  ],
+  SF: [
+    { group: 'Manifest',   keys: [['manifest_view', 'View Manifest']] },
+    { group: 'Orders',     keys: [['sf_order_update', 'Update orders'], ['sf_po_manage', 'Manage POs'], ['sf_invoice_create', 'Create invoices']] },
+    { group: 'Finance',    keys: [['sf_drawdown_raise', 'Raise draw-downs'], ['sf_vendor_payment_record', 'Record vendor payments'], ['sf_running_account_view', 'View running account']] },
+    { group: 'Documents',  keys: [['sf_evidence_upload', 'Upload evidence']] },
+  ],
+};
+
+// Btn doesn't support `disabled`; small local button that does (for guarded admin controls).
+function AdminBtn({ children, onClick, disabled, danger }) {
+  return (
+    <button type="button" disabled={disabled} onClick={onClick}
+      style={{ fontFamily: DISP, fontWeight: 700, fontSize: 11, letterSpacing: '.04em', textTransform: 'uppercase',
+        borderRadius: 8, padding: '7px 12px', cursor: disabled ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap',
+        background: 'var(--surface2)', border: '1px solid var(--border)',
+        color: danger ? 'var(--red)' : 'var(--t2)', opacity: disabled ? 0.4 : 1 }}>{children}</button>
+  );
+}
+
 function Admin({ data, session, reload }) {
-  const groups = (data.orgGroups || []).filter((g) => g.members.length);
+  const P = data?.me?.permissions || {};
+  const isSuper = !!P.manifest_super_admin;
+  const isAdmin = !!P.manifest_admin;
+  const TABS = [
+    isSuper && ['access', 'Access Control'],
+    isSuper && ['roles', 'Roles'],
+    isAdmin && ['ops', 'Operations'],
+  ].filter(Boolean);
+  const [tab, setTab] = useState(TABS[0] ? TABS[0][0] : 'none');
+  if (!TABS.length) return <Card><Empty>Admin access required.</Empty></Card>;
+  const active = TABS.some((t) => t[0] === tab) ? tab : TABS[0][0];
   return (
     <Stack>
-      <div style={{ display: 'flex' }}><div style={{ flex: 1 }} /><Btn><Plus size={14} style={{ marginRight: 6, verticalAlign: -2 }} />Invite User</Btn></div>
-      <Grid cols="1fr 1fr" style={{ alignItems: 'start' }}>
-        <ShipmentDefaults session={session} reload={reload} />
-        <Forwarders session={session} />
-      </Grid>
-      {groups.length ? groups.map((g) => (
-        <Card key={g.org} title={
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ width: 24, height: 24, borderRadius: 6, background: `color-mix(in srgb, ${toneVar(g.tagTone)} 16%, transparent)`, color: toneVar(g.tagTone), display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontFamily: DISP, fontWeight: 700, fontSize: 12 }}>{g.tag}</span>
-            {g.org}<Mono size={10} color="var(--t3)" style={{ marginLeft: 4 }}>{g.members.length} members</Mono>
-          </span>}>
-          <Table rows={g.members} rowKey={(m, i) => m.name + i} cols={[
-            { label: 'Name', render: (m) => (
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
-                <span style={{ width: 28, height: 28, borderRadius: 999, background: 'var(--surface2)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontFamily: MONO, fontSize: 10, fontWeight: 600, color: 'var(--t2)' }}>{initials(m.name)}</span>
-                <span style={{ color: 'var(--t1)' }}>{m.name}</span>
-              </span>) },
-            { label: 'Role', render: (m) => <Badge tone={g.tagTone}>{m.role}</Badge> },
-            { label: 'Status', align: 'right', render: (m) => <Badge tone={D.userStatusTone(m.status)}>{m.status}</Badge> },
-          ]} />
-        </Card>
-      )) : <Card><Empty>Admin access required, or no users assigned a Manifest role.</Empty></Card>}
+      <div style={{ display: 'flex', gap: 8 }}>
+        {TABS.map(([id, label]) => (
+          <button key={id} type="button" onClick={() => setTab(id)} className="mf-chip"
+            style={{ padding: '8px 14px', borderRadius: 8, fontFamily: MONO, fontSize: 11, cursor: 'pointer',
+              border: '1px solid ' + (active === id ? 'color-mix(in srgb, var(--accent) 32%, transparent)' : 'var(--border)'),
+              background: active === id ? 'color-mix(in srgb, var(--accent) 16%, transparent)' : 'var(--surface)',
+              color: active === id ? 'var(--accent)' : 'var(--t2)' }}>{label}</button>
+        ))}
+      </div>
+      {active === 'access' && <AccessControl data={data} session={session} reload={reload} />}
+      {active === 'roles'  && <RolesBuilder  data={data} session={session} reload={reload} />}
+      {active === 'ops'    && (
+        <Grid cols="1fr 1fr" style={{ alignItems: 'start' }}>
+          <ShipmentDefaults session={session} reload={reload} />
+          <Forwarders session={session} />
+        </Grid>
+      )}
     </Stack>
+  );
+}
+
+function AccessControl({ data, session, reload }) {
+  const users = data.accessUsers || [];
+  const roles = data.roles || [];
+  const meId = data.me?.id;
+  const roleMap = {}; roles.forEach((r) => { roleMap[r.role_key] = r; });
+  const superHolders = users.filter((u) => u.active && roleMap[u.role_key]?.permissions?.manifest_super_admin);
+  const lastSuper = superHolders.length === 1 ? superHolders[0].user_id : null;
+  const [busy, setBusy] = useState('');
+  const [grant, setGrant] = useState({ email: '', role_key: roles[0]?.role_key || '' });
+  const act = async (action, body) => {
+    setBusy(body.user_id || 'grant');
+    try { await workerFetch(action, body, session); await reload(); }
+    catch (e) { alert(e?.message || 'Failed'); }
+    setBusy('');
+  };
+  const roleOpts = roles.map((r) => ({ value: r.role_key, label: `${r.label} (${r.party})` }));
+  return (
+    <Stack>
+      <Card title="Grant access">
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <Input placeholder="email@…" value={grant.email} onChange={(e) => setGrant((g) => ({ ...g, email: e.target.value }))} style={{ flex: 1, minWidth: 200, width: 'auto' }} />
+          <Select options={roleOpts} value={grant.role_key} onChange={(e) => setGrant((g) => ({ ...g, role_key: e.target.value }))} style={{ width: 'auto', minWidth: 180 }} />
+          <AdminBtn disabled={!grant.email || !grant.role_key || !!busy} onClick={() => act('grantAccess', { email: grant.email.trim(), role_key: grant.role_key }).then(() => setGrant((g) => ({ ...g, email: '' })))}>Grant</AdminBtn>
+        </div>
+        <Mono size={10} color="var(--t3)" style={{ display: 'block', marginTop: 8 }}>The person must have signed in at least once (Google for LOT, email link for SF) before access can be granted.</Mono>
+      </Card>
+      <Card title="People with Manifest access">
+        <Table rows={users} rowKey={(u) => u.user_id} cols={[
+          { label: 'Name', render: (u) => <span style={{ color: u.active ? 'var(--t1)' : 'var(--t3)' }}>{u.full_name}{u.user_id === meId ? <Mono size={9} color="var(--t3)"> (you)</Mono> : null}</span> },
+          { label: 'Party', render: (u) => <Badge tone={u.party === 'SF' ? 'blue' : 'yellow'}>{u.party}</Badge> },
+          { label: 'Role', render: (u) => (
+            <Select options={roleOpts} value={u.role_key} disabled={busy === u.user_id || u.user_id === lastSuper}
+              onChange={(e) => act('setUserRole', { user_id: u.user_id, role_key: e.target.value })}
+              style={{ width: 'auto', minWidth: 150, padding: '5px 8px', fontSize: 11, fontFamily: MONO }} />) },
+          { label: 'Status', render: (u) => <Badge tone={u.active ? 'green' : 'red'}>{u.active ? 'active' : 'disabled'}</Badge> },
+          { label: '', align: 'right', render: (u) => {
+            const guarded = u.user_id === meId || u.user_id === lastSuper;
+            return (
+              <span style={{ display: 'inline-flex', gap: 6, justifyContent: 'flex-end' }}>
+                <AdminBtn disabled={guarded || busy === u.user_id} onClick={() => act('setUserActive', { user_id: u.user_id, active: !u.active })}>{u.active ? 'Disable' : 'Enable'}</AdminBtn>
+                <AdminBtn danger disabled={guarded || busy === u.user_id} onClick={() => { if (confirm(`Remove ${u.full_name}'s access?`)) act('setUserRole', { user_id: u.user_id, role_key: null }); }}>Remove</AdminBtn>
+              </span>);
+          } },
+        ]} />
+      </Card>
+    </Stack>
+  );
+}
+
+function RolesBuilder({ data, session, reload }) {
+  const roles = data.roles || [];
+  const users = data.accessUsers || [];
+  const [sel, setSel] = useState(null);     // role_key being edited, or '__new__'
+  const [draft, setDraft] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const assignedCount = (rk) => users.filter((u) => u.role_key === rk).length;
+  const openNew = () => { setSel('__new__'); setDraft({ role_key: '', label: '', description: '', party: 'LOT', permissions: {}, is_system: false }); };
+  const openEdit = (r) => { setSel(r.role_key); setDraft({ ...r, permissions: { ...(r.permissions || {}) } }); };
+  const save = async () => { setBusy(true); try { await workerFetch('saveRole', draft, session); await reload(); setSel(null); setDraft(null); } catch (e) { alert(e?.message || 'Failed'); } setBusy(false); };
+  const remove = async (rk) => { if (!confirm(`Delete role ${rk}?`)) return; setBusy(true); try { await workerFetch('deleteRole', { role_key: rk }, session); await reload(); setSel(null); setDraft(null); } catch (e) { alert(e?.message || 'Failed'); } setBusy(false); };
+  const toggleKey = (k) => setDraft((d) => ({ ...d, permissions: { ...d.permissions, [k]: !d.permissions[k] } }));
+  const cat = draft ? (PERMISSION_KEYS[draft.party] || PERMISSION_KEYS.LOT) : [];
+  const locked = !!draft?.is_system;
+  return (
+    <Grid cols="300px 1fr" style={{ alignItems: 'start' }}>
+      <Card title={<span style={{ display: 'inline-flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>Roles <AdminBtn onClick={openNew}><Plus size={12} style={{ verticalAlign: -2 }} /> New</AdminBtn></span>}>
+        <Table rows={roles} rowKey={(r) => r.role_key} cols={[
+          { label: 'Role', render: (r) => (
+            <button type="button" onClick={() => openEdit(r)} style={{ background: 'none', border: 0, cursor: 'pointer', textAlign: 'left', padding: 0 }}>
+              <span style={{ color: 'var(--t1)', fontFamily: MONO, fontSize: 11.5 }}>{r.label}</span>
+              <Mono size={9} color="var(--t3)" style={{ display: 'block' }}>{r.role_key}</Mono>
+            </button>) },
+          { label: '', align: 'right', render: (r) => r.is_system ? <Badge tone="gray">System</Badge> : <Badge tone={r.party === 'SF' ? 'blue' : 'yellow'}>{r.party}</Badge> },
+        ]} />
+      </Card>
+      {draft ? (
+        <Card title={sel === '__new__' ? 'New role' : (locked ? `${draft.label} · system · locked` : `Edit ${draft.label}`)}>
+          <Stack>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <Input placeholder="role_key" value={draft.role_key} disabled={sel !== '__new__'} onChange={(e) => setDraft((d) => ({ ...d, role_key: e.target.value.trim() }))} style={{ width: 'auto', flex: 1, minWidth: 140 }} />
+              <Input placeholder="Label" value={draft.label} disabled={locked} onChange={(e) => setDraft((d) => ({ ...d, label: e.target.value }))} style={{ width: 'auto', flex: 1, minWidth: 140 }} />
+              <Select options={['LOT', 'SF']} value={draft.party} disabled={sel !== '__new__'} onChange={(e) => setDraft((d) => ({ ...d, party: e.target.value }))} style={{ width: 'auto', minWidth: 90 }} />
+            </div>
+            <Input placeholder="Description" value={draft.description || ''} disabled={locked} onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))} />
+            {cat.map((grp) => (
+              <div key={grp.group}>
+                <Mono size={10} color="var(--t3)">{grp.group}</Mono>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 5 }}>
+                  {grp.keys.map(([k, label]) => (
+                    <label key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: MONO, fontSize: 11, color: 'var(--t2)', opacity: locked ? 0.6 : 1, cursor: locked ? 'default' : 'pointer' }}>
+                      <input type="checkbox" checked={!!draft.permissions[k]} disabled={locked} onChange={() => toggleKey(k)} />{label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ))}
+            {!locked && (
+              <div style={{ display: 'flex', gap: 8 }}>
+                <AdminBtn disabled={busy || !draft.role_key} onClick={save}>Save role</AdminBtn>
+                {sel !== '__new__' && <AdminBtn danger disabled={busy || assignedCount(draft.role_key) > 0} onClick={() => remove(draft.role_key)}>Delete{assignedCount(draft.role_key) > 0 ? ` (${assignedCount(draft.role_key)} assigned)` : ''}</AdminBtn>}
+              </div>
+            )}
+          </Stack>
+        </Card>
+      ) : <Card><Empty>Select a role to view, or create a new one.</Empty></Card>}
+    </Grid>
   );
 }
 

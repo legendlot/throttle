@@ -18,8 +18,9 @@ const ls = (k, fb) => {
 };
 
 export default function ManifestApp() {
-  const { session } = useAuth();
+  const { session, signOut } = useAuth();
   const [screen, setScreen] = useState('dashboard');
+  const [unauth, setUnauth] = useState(false);
   const [detailId, setDetailId] = useState(null);
   const [collapsed, setCollapsed] = useState(false);
   const [drill, setDrill] = useState(null);
@@ -39,8 +40,12 @@ export default function ManifestApp() {
 
   const reload = useCallback(async () => {
     if (!session) return;
-    try { setError(''); const d = await garageFetch('getBootstrap', {}, session); setData(d); }
-    catch (e) { setError(e?.message || 'Could not load data'); }
+    try { setError(''); setUnauth(false); const d = await garageFetch('getBootstrap', {}, session); setData(d); }
+    catch (e) {
+      const msg = e?.message || 'Could not load data';
+      if (/unauthor/i.test(msg) || /Worker 401/.test(msg)) { setUnauth(true); setData(null); }
+      else setError(msg);
+    }
   }, [session]);
   useEffect(() => { reload(); }, [reload]);
 
@@ -58,6 +63,21 @@ export default function ManifestApp() {
     shipments: (data?.shipments || []).length || 0,
     drawdowns: data?.summary?.openDrawCount || 0,
   };
+
+  if (hydrated && unauth) {
+    return (
+      <div style={{ height: '100dvh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg, #0b0d10)', color: 'var(--t1, #e7e9ec)', fontFamily: 'var(--font-mono, monospace)', padding: 24 }}>
+        <div style={{ maxWidth: 460, textAlign: 'center' }}>
+          <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 10, color: 'var(--t1, #e7e9ec)' }}>No access to Manifest</div>
+          <p style={{ color: 'var(--t3, #8b9099)', fontSize: 13, lineHeight: 1.6 }}>
+            Your account isn’t authorized for Manifest. Ask a super admin to grant you access.
+          </p>
+          <div style={{ fontSize: 12, color: 'var(--t2, #aab)', margin: '14px 0' }}>{session?.user?.email}</div>
+          <button onClick={signOut} style={{ padding: '8px 16px', borderRadius: 8, border: '1px solid var(--border, #2a2f37)', background: 'transparent', color: 'var(--t1, #e7e9ec)', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12 }}>Sign out</button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: 'flex', height: '100dvh', overflow: 'hidden', ...themeVars, visibility: hydrated ? 'visible' : 'hidden' }}>
