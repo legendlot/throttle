@@ -60,6 +60,14 @@ function newLine() {
   };
 }
 
+// company_addresses has no flat `address` column — compose it from the parts.
+function composeCompanyAddress(a) {
+  if (!a) return '';
+  if (a.address) return a.address; // tolerate a flat field if one is ever added
+  const cityLine = [a.city, a.state, a.pincode].filter(Boolean).join(', ');
+  return [a.line1, a.line2, cityLine, a.country].filter(Boolean).join('\n');
+}
+
 export default function NewChallanPage() {
   const router = useRouter();
   const { session } = useAuth();
@@ -107,7 +115,7 @@ export default function NewChallanPage() {
         if (def) {
           setFromId(String(def.id));
           setFromName(def.legal_name || def.company_name || '');
-          setFromAddress(def.address || '');
+          setFromAddress(composeCompanyAddress(def));
           setFromGstin(def.gstin || '');
         }
       } catch (e) {
@@ -123,7 +131,7 @@ export default function NewChallanPage() {
     const a = addresses.find(x => String(x.id) === String(id));
     if (a) {
       setFromName(a.legal_name || a.company_name || '');
-      setFromAddress(a.address || '');
+      setFromAddress(composeCompanyAddress(a));
       setFromGstin(a.gstin || '');
     }
   }
