@@ -1,0 +1,15 @@
+{
+  "name": "salesops-worker",
+  "version": "1.0.0",
+  "description": "Salesops — LOT consolidated cross-channel sales dashboard API (Cloudflare Worker)",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "type": "commonjs",
+  "devDependencies": {
+    "wrangler": "^4.83.0"
+  }
+}
