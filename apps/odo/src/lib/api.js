@@ -25,6 +25,35 @@ export function istDaysAgo(days) {
   return new Date(Date.now() + 5.5 * 3600 * 1000 - days * 86400 * 1000).toISOString().slice(0, 10);
 }
 
+// IST wall-clock parts (UTC getters on a +5.5h-shifted Date == IST Y/M/D).
+function istParts() { const d = new Date(Date.now() + 5.5 * 3600 * 1000); return { y: d.getUTCFullYear(), m: d.getUTCMonth(), d: d.getUTCDate() }; }
+
+// Quick-range presets → [{ key, label, from, to }] (IST). FY = Indian fiscal year (Apr 1).
+export function rangePresets() {
+  const to = istToday();
+  const { y, m } = istParts();
+  const pad = n => String(n).padStart(2, '0');
+  const mtd = `${y}-${pad(m + 1)}-01`;
+  const fy = `${m >= 3 ? y : y - 1}-04-01`;
+  return [
+    { key: 'today', label: 'Today', from: to, to },
+    { key: '7d',    label: '7D',    from: istDaysAgo(6),  to },
+    { key: '30d',   label: '30D',   from: istDaysAgo(29), to },
+    { key: '90d',   label: '90D',   from: istDaysAgo(89), to },
+    { key: 'mtd',   label: 'MTD',   from: mtd, to },
+    { key: 'fy',    label: 'FY',    from: fy,  to },
+  ];
+}
+
+// The equal-length window immediately preceding [from,to] (for period-over-period deltas).
+export function priorPeriod(from, to) {
+  const f = Date.parse(from + 'T00:00:00Z'), t = Date.parse(to + 'T00:00:00Z');
+  if (isNaN(f) || isNaN(t)) return { from, to };
+  const lenDays = Math.round((t - f) / 86400000) + 1;
+  const iso = d => new Date(d).toISOString().slice(0, 10);
+  return { from: iso(f - lenDays * 86400000), to: iso(f - 86400000) };
+}
+
 // Build + download a CSV from an array of flat objects.
 export function downloadCsv(rows, filename) {
   if (!rows || !rows.length) return;
