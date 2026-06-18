@@ -327,7 +327,104 @@ const gsheetAdapter = {
   },
 };
 
-const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter };
+// ── Amazon (SP-API · LWA-only · Reports API) ───────────────────
+// Auth = LWA refresh-token grant (AWS SigV4 dropped Oct 2023). Data via the Reports API
+// (NOT Orders — getOrders is ~1/min + N+1 getOrderItems → blows the 50-subrequest cap).
+// One GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL report = order-line history over a
+// window. Async: create → poll → ingest, carried ACROSS cron ticks via connector_config.config:
+//   { region_host, marketplace_id, backfill_start, columns, pending_report_id, pending_through }
+let _amzToken = null, _amzTokenExp = 0;
+async function getAmazonToken(env) {
+  if (!env.AMAZON_SP_REFRESH_TOKEN || !env.AMAZON_LWA_CLIENT_ID || !env.AMAZON_LWA_CLIENT_SECRET)
+    throw new Error('Amazon not configured (set AMAZON_SP_REFRESH_TOKEN + AMAZON_LWA_CLIENT_ID/SECRET)');
+  const now = Date.now();
+  if (_amzToken && now < _amzTokenExp - 60_000) return _amzToken;
+  const res = await fetch('https://api.amazon.com/auth/o2/token', {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: env.AMAZON_SP_REFRESH_TOKEN, client_id: env.AMAZON_LWA_CLIENT_ID, client_secret: env.AMAZON_LWA_CLIENT_SECRET }),
+  });
+  const t = await res.json().catch(() => ({}));
+  if (!t.access_token) throw new Error('Amazon token failed: ' + JSON.stringify(t).slice(0, 160));
+  _amzToken = t.access_token; _amzTokenExp = now + (Number(t.expires_in) || 3600) * 1000;
+  return _amzToken;
+}
+// Merge-write the pending state into connector_config.config (the whole jsonb is replaced, so merge first).
+async function patchConnectorConfig(channelId, config, patch) {
+  const next = { ...(config || {}), ...patch };
+  await sbSales(`/rest/v1/connector_config?channel_id=eq.${channelId}`, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ config: next }) });
+}
+// Download a report document (pre-signed URL), gunzipping if GZIP-compressed → text.
+async function fetchAmazonDoc(doc) {
+  const res = await fetch(doc.url);
+  if (!res.ok) throw new Error('Amazon doc download ' + res.status);
+  if (String(doc.compressionAlgorithm || '').toUpperCase() === 'GZIP') {
+    const stream = res.body.pipeThrough(new DecompressionStream('gzip'));
+    return await new Response(stream).text();
+  }
+  return await res.text();
+}
+const AMZ_COLUMNS_DEFAULT = { date: 'purchase-date', sku: 'sku', title: 'product-name', units: 'quantity', gross: 'item-price', status: 'order-status', order_id: 'amazon-order-id' };
+const amazonAdapter = {
+  kind: 'amazon_spapi', stgTable: 'stg_amazon', sourceKind: 'amazon',
+  async fetch({ env, channelId, cursor, config }) {
+    const cfg = config || {};
+    const host = cfg.region_host || 'https://sellingpartnerapi-eu.amazon.com'; // India (A21TJRUUN4KGV) = eu host
+    const mkt = cfg.marketplace_id;
+    if (!mkt) throw new Error('amazon config missing marketplace_id (set connector_config.config)');
+    const columns = cfg.columns || AMZ_COLUMNS_DEFAULT;
+    const token = await getAmazonToken(env);
+    const H = { Authorization: `Bearer ${token}`, 'x-amz-access-token': token, 'Content-Type': 'application/json' };
+    let subreqs = 1; // token
+
+    // ── A pending report is in flight → poll it ──
+    if (cfg.pending_report_id) {
+      const pr = await fetch(`${host}/reports/2021-06-30/reports/${cfg.pending_report_id}`, { headers: H }); subreqs++;
+      if (!pr.ok) throw new Error(`Amazon getReport ${pr.status}: ${(await pr.text().catch(() => '')).slice(0, 160)}`);
+      const rep = await pr.json();
+      const st = rep.processingStatus;
+      if (st === 'IN_QUEUE' || st === 'IN_PROGRESS') return { rows: [], cursorAfter: null, subreqs, partial: true }; // still cooking; keep pending, next tick re-polls
+      if (st === 'CANCELLED' || st === 'FATAL') { await patchConnectorConfig(channelId, cfg, { pending_report_id: null, pending_through: null }); throw new Error(`Amazon report ${st}`); }
+      // DONE → fetch the document, gunzip, parse the TSV grid
+      const dr = await fetch(`${host}/reports/2021-06-30/documents/${rep.reportDocumentId}`, { headers: H }); subreqs++;
+      if (!dr.ok) throw new Error(`Amazon getDocument ${dr.status}`);
+      const doc = await dr.json();
+      const text = await fetchAmazonDoc(doc); subreqs++;
+      const grid = text.split(/\r?\n/).filter(l => l.length).map(l => l.split('\t'));
+      const rows = grid.length >= 2 ? gridToQcRows(grid, columns, todayISO()) : [];
+      const through = cfg.pending_through;
+      await patchConnectorConfig(channelId, cfg, { pending_report_id: null, pending_through: null });
+      return { rows, cursorAfter: through, subreqs, partial: false }; // cursor advances to the window end
+    }
+
+    // ── No pending → create a report for [cursor || backfill_start, now] ──
+    const dataStart = cursor || cfg.backfill_start || BACKFILL_START;
+    const dataEnd = nowISO();
+    const cr = await fetch(`${host}/reports/2021-06-30/reports`, {
+      method: 'POST', headers: H,
+      body: JSON.stringify({ reportType: 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL', marketplaceIds: [mkt], dataStartTime: dataStart, dataEndTime: dataEnd }),
+    }); subreqs++;
+    if (!cr.ok) throw new Error(`Amazon createReport ${cr.status}: ${(await cr.text().catch(() => '')).slice(0, 200)}`);
+    const cj = await cr.json();
+    if (!cj.reportId) throw new Error('Amazon createReport: no reportId — ' + JSON.stringify(cj).slice(0, 160));
+    await patchConnectorConfig(channelId, cfg, { pending_report_id: cj.reportId, pending_through: dataEnd });
+    return { rows: [], cursorAfter: null, subreqs, partial: true }; // report queued; next tick ingests
+  },
+  async stage(rows, runId, channelId) {
+    if (!rows.length) return;
+    const from = rows.reduce((m, x) => x.sale_date < m ? x.sale_date : m, rows[0].sale_date);
+    const to   = rows.reduce((m, x) => x.sale_date > m ? x.sale_date : m, rows[0].sale_date);
+    // stg_amazon has no stable source line id (flat file) → supersede by date range, like the gsheet adapter.
+    await sbSales(`/rest/v1/stg_amazon?channel_id=eq.${channelId}&sale_date=gte.${from}&sale_date=lte.${to}`, { method: 'DELETE', prefer: 'return=minimal' });
+    const body = rows.map(r => ({
+      run_id: runId, channel_id: channelId, source_order_id: r.source_order_id || null, sale_date: r.sale_date,
+      channel_sku: r.channel_sku, title: r.title, qty: Math.round(r.qty), gross_value: r.gross_value,
+      order_status: r.order_status || null, is_cancelled: !!r.is_cancelled, raw: r.raw,
+    }));
+    await sbSales('/rest/v1/stg_amazon', { method: 'POST', prefer: 'return=minimal', body: JSON.stringify(body) });
+  },
+};
+
+const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter, amazon_spapi: amazonAdapter };
 
 // minimal RFC-4180-ish CSV parser (handles quoted fields, commas, newlines)
 function parseCSV(text) {
@@ -382,14 +479,26 @@ function gridToQcRows(grid, cm, fallbackDate) {
   }
   const header = grid[hr].map(h => String(h).trim());
   const idx = name => header.findIndex(h => h.toLowerCase() === String(name || '').toLowerCase());
-  const ci = { sku: idx(cm.sku), title: idx(cm.title), units: idx(cm.units), gross: idx(cm.gross), date: idx(cm.date) };
+  // status/order_id are optional (Amazon flat-file carries them; QC sheets don't).
+  const ci = { sku: idx(cm.sku), title: idx(cm.title), units: idx(cm.units), gross: idx(cm.gross), date: idx(cm.date), status: idx(cm.status), order_id: idx(cm.order_id) };
   if (ci.sku < 0 || ci.units < 0) throw new Error(`column_map needs sku + units to match real headers. Found header row: [${header.join(', ')}]`);
   const rows = [];
   for (let r = hr + 1; r < grid.length; r++) {
     const line = grid[r];
     const sku = String(line[ci.sku] ?? '').trim(); if (!sku) continue;
-    const sale_date = (ci.date >= 0 ? parseSheetDate(line[ci.date]) : null) || fallbackDate;
-    rows.push({ row_no: r, channel_sku: sku, title: ci.title >= 0 ? String(line[ci.title] ?? '').trim() : null, qty: num(line[ci.units]), gross_value: ci.gross >= 0 ? num(line[ci.gross]) : 0, sale_date, raw: { line } });
+    // A full ISO datetime (Amazon purchase-date) → IST calendar day; a plain date string → parseSheetDate.
+    let sale_date = null;
+    if (ci.date >= 0) { const dc = String(line[ci.date] ?? '').trim(); sale_date = dc.includes('T') ? istDate(dc) : parseSheetDate(dc); }
+    sale_date = sale_date || fallbackDate;
+    const statusCell = ci.status >= 0 ? String(line[ci.status] ?? '').trim() : '';
+    rows.push({
+      row_no: r, channel_sku: sku,
+      title: ci.title >= 0 ? String(line[ci.title] ?? '').trim() : null,
+      qty: num(line[ci.units]), gross_value: ci.gross >= 0 ? num(line[ci.gross]) : 0, sale_date,
+      source_order_id: ci.order_id >= 0 ? (String(line[ci.order_id] ?? '').trim() || null) : null,
+      order_status: statusCell || null, is_cancelled: /cancel/i.test(statusCell),
+      raw: { line },
+    });
   }
   return rows;
 }
