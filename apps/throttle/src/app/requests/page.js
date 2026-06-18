@@ -97,9 +97,30 @@ function RequestDrawer({ req, onClose, onAct }) {
           </div>
 
           <div className="eyebrow" style={{ padding: 0, marginBottom: 6 }}>Brief</div>
-          <p style={{ fontSize: 13.5, color: 'var(--t2)', lineHeight: 1.6, margin: '0 0 20px' }}>
-            {req.who} needs {t.label.toLowerCase()} for {req.products.length ? req.products.join(', ') : 'the brand'}. On approval this fans out into {req.items || 'one or more'} task{(req.items || 1) > 1 ? 's' : ''} on the production board, assigned in the current sprint.
-          </p>
+          {(req.brief && (req.brief.notes || req.brief.fields.length > 0 || req.brief.reference)) ? (
+            <div style={{ margin: '0 0 20px' }}>
+              {req.brief.notes && (
+                <p style={{ fontSize: 13.5, color: 'var(--t2)', lineHeight: 1.6, margin: '0 0 10px', whiteSpace: 'pre-wrap' }}>{req.brief.notes}</p>
+              )}
+              {req.brief.fields.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 13 }}>
+                  {req.brief.fields.map(f => (
+                    <div key={f.label} style={{ display: 'flex', gap: 12 }}>
+                      <span style={{ color: 'var(--t4)', minWidth: 120 }}>{f.label}</span>
+                      <span style={{ color: 'var(--t2)', flex: 1 }}>{f.value}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {req.brief.reference && (/^https?:\/\//i.test(req.brief.reference)
+                ? <a href={req.brief.reference} target="_blank" rel="noopener noreferrer"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 10, fontSize: 12.5, color: 'var(--yellow)', textDecoration: 'none' }}>
+                    <Icon name="link" size={13} />Reference</a>
+                : <p style={{ fontSize: 13, color: 'var(--t4)', margin: '10px 0 0' }}>Reference: <span style={{ color: 'var(--t2)' }}>{req.brief.reference}</span></p>)}
+            </div>
+          ) : (
+            <p style={{ fontSize: 13, color: 'var(--t4)', fontStyle: 'italic', margin: '0 0 20px' }}>No brief provided.</p>
+          )}
 
           <div className="eyebrow" style={{ padding: 0, marginBottom: 10 }}>What happens on approve</div>
           <ol style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>

@@ -110,22 +110,28 @@ function formatBriefValue(v) {
   if (typeof v === 'object') return null; // skip nested objects (e.g. checklist maps)
   return String(v);
 }
+// Build a structured brief from a request's template_data: free-text notes, a
+// reference link, and the remaining humanized fields. Shared by the board task
+// drawer (via the originating request) and the requests approval drawer.
+export function briefFromTemplateData(td) {
+  const t = td || {};
+  const notes = (typeof t.notes === 'string' && t.notes.trim()) ? t.notes.trim() : null;
+  const reference = (typeof t.reference === 'string' && t.reference.trim()) ? t.reference.trim() : null;
+  const fields = [];
+  for (const [k, v] of Object.entries(t)) {
+    if (BRIEF_SKIP.has(k)) continue;
+    const val = formatBriefValue(v);
+    if (val != null) fields.push({ label: humanizeKey(k), value: val });
+  }
+  return { notes, reference, fields };
+}
 export async function fetchTaskBrief(session, requestId) {
   if (!requestId) return null;
   try {
     const { data, error } = await supabaseBrand.from('requests')
-      .select('title,type,template_data,review_note').eq('id', requestId).single();
+      .select('title,type,template_data').eq('id', requestId).single();
     if (error || !data) return null;
-    const td = data.template_data || {};
-    const notes = (typeof td.notes === 'string' && td.notes.trim()) ? td.notes.trim() : null;
-    const reference = (typeof td.reference === 'string' && td.reference.trim()) ? td.reference.trim() : null;
-    const fields = [];
-    for (const [k, v] of Object.entries(td)) {
-      if (BRIEF_SKIP.has(k)) continue;
-      const val = formatBriefValue(v);
-      if (val != null) fields.push({ label: humanizeKey(k), value: val });
-    }
-    return { notes, reference, fields, reqTitle: data.title || null };
+    return { ...briefFromTemplateData(data.template_data), reqTitle: data.title || null };
   } catch (_) { return null; }
 }
 
@@ -152,6 +158,7 @@ export async function fetchRequests(session, usersById = {}) {
         who: u?.name || 'Requester', wi: u ? u.initial : '?',
         products, items,
         note: (r.status === 'info_needed' || r.status === 'rejected') ? (r.review_note || null) : null,
+        brief: briefFromTemplateData(td),
         date: shortDate(r.created_at), age: relAge(r.created_at), ageTone: ageTone(r.created_at),
         requester_id: r.requester_id,
       };
