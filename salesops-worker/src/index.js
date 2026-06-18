@@ -355,10 +355,14 @@ async function runChannel(cfg, trigger, env, userId, opts = {}) {
 // QC report ingest — download file from Storage, parse, supersede, stage, map.
 async function ingestUpload(batch, env) {
   const cm = batch.column_map || {};
-  const path = batch.storage_path;
-  const dl = await fetch(`${SUPABASE_URL}/storage/v1/object/salesops-uploads/${path}`, { headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` } });
-  if (!dl.ok) throw new Error('File download failed (' + dl.status + ')');
-  const text = await dl.text();
+  let text;
+  if (batch.csv_text != null) {
+    text = String(batch.csv_text);                 // inline upload (frontend sent the CSV body)
+  } else {
+    const dl = await fetch(`${SUPABASE_URL}/storage/v1/object/salesops-uploads/${batch.storage_path}`, { headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` } });
+    if (!dl.ok) throw new Error('File download failed (' + dl.status + ')');
+    text = await dl.text();
+  }
   const grid = parseCSV(text);
   if (grid.length < 2) throw new Error('Empty or header-only file');
   const header = grid[0].map(h => String(h).trim());
@@ -423,7 +427,8 @@ export default {
         switch (action) {
           case 'getMe':
           case 'ping':
-            return ok({ me: { id: userId, email: auth.email, full_name: auth.fullName, role_key: auth.roleKey, permissions: P } });
+            // Shape consumed by @throttle/auth AuthProvider.loadIdentity — identity fields MUST be top-level of `data`.
+            return ok({ id: userId, email: auth.email, full_name: auth.fullName, role: auth.role, role_key: auth.roleKey, permissions: P });
 
           case 'getBootstrap': {
             const channels = await getChannels();
@@ -559,13 +564,13 @@ export default {
           }
           case 'uploadReport': {
             if (!canUpload(P)) return err('No permission', 403);
-            if (!d.channel_id || !d.storage_path) return err('channel_id and storage_path required');
+            if (!d.channel_id || (!d.storage_path && !d.csv_text)) return err('channel_id and (storage_path or csv_text) required');
             const ins = await sbSales('/rest/v1/upload_batch', {
               method: 'POST', prefer: 'return=representation',
-              body: JSON.stringify({ channel_id: d.channel_id, storage_path: d.storage_path, file_name: d.file_name || null, mime_type: d.mime_type || null, report_period_from: d.report_period_from || null, report_period_to: d.report_period_to || null, status: 'uploaded', uploaded_by: userId }),
+              body: JSON.stringify({ channel_id: d.channel_id, storage_path: d.storage_path || 'inline', file_name: d.file_name || null, mime_type: d.mime_type || null, report_period_from: d.report_period_from || null, report_period_to: d.report_period_to || null, status: 'uploaded', uploaded_by: userId }),
             });
             if (!ins.ok || !ins.data[0]) return err('Upload record failed: ' + JSON.stringify(ins.data), 502);
-            const batch = { ...ins.data[0], column_map: d.column_map || {} };
+            const batch = { ...ins.data[0], column_map: d.column_map || {}, csv_text: d.csv_text };
             try { const res = await ingestUpload(batch, env); return ok({ batch_id: batch.id, ...res }); }
             catch (e) { await sbSales(`/rest/v1/upload_batch?id=eq.${batch.id}`, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ status: 'error', error: String(e?.message || e) }) }); return err('Parse failed: ' + String(e?.message || e), 422); }
           }
