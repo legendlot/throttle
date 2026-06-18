@@ -451,8 +451,11 @@ async function executeRun(cfg, runId, env, { budget = CRON_BUDGET, cursorOverrid
     const dates = distinctDates(rows);
     const res = dates.length ? await mapAndUpsert(cfg.channel_id, dates, runId, adapter.stgTable, cfg.started_by) : { mapped: 0, unmapped: 0, factsUpserted: 0 };
     await finishRun(runId, { status: partial ? 'partial' : 'ok', rows_fetched: rows.length, rows_mapped: res.mapped, rows_unmapped: res.unmapped, facts_upserted: res.factsUpserted, subrequests_used: subreqs, cursor_after: cursorAfter });
-    // advance the live cursor only on a clean (non-partial) success
-    if (!partial && cursorAfter) await sbSales(`/rest/v1/connector_config?channel_id=eq.${cfg.channel_id}`, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ cursor: cursorAfter, last_ok_at: nowISO(), last_error: null }) });
+    // Advance the live cursor whenever we have a watermark — INCLUDING partial pulls.
+    // Adapters page strictly forward (Shopify by ascending updated_at), so on a budget-capped
+    // partial we've fully ingested everything ≤ cursorAfter; advancing lets the next run continue
+    // forward instead of re-pulling the same oldest window forever (the "stuck at Nov 2025" bug).
+    if (cursorAfter) await sbSales(`/rest/v1/connector_config?channel_id=eq.${cfg.channel_id}`, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ cursor: cursorAfter, last_ok_at: nowISO(), last_error: null }) });
     return { subreqs };
   } catch (e) {
     await finishRun(runId, { status: 'error', error: String(e?.message || e) });
