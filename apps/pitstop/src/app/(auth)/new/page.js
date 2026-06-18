@@ -93,13 +93,17 @@ export default function NewTicketPage() {
       try {
         const data = await csopsGet('lookupByUpc', { upc }, session);
         if (data?.unit) {
-          // Auto-fill product fields from the unit
+          // Auto-fill product fields from the resolved unit. The UPC is the source
+          // of truth, so OVERWRITE the cascade (was `s.x || …`, which kept a stale
+          // earlier selection — e.g. banner showed Rumble while dropdowns stayed on
+          // a previously-picked Flare). This effect only runs when the UPC changes,
+          // so manual edits made after auto-fill are preserved until the UPC changes.
           setForm(s => ({
             ...s,
-            product:       s.product       || data.unit.product || '',
-            product_sku:   s.product_sku   || data.unit.sku || '',
-            product_model: s.product_model || data.unit.model || '',
-            product_color: s.product_color || data.unit.color || '',
+            product:       data.unit.product || '',
+            product_sku:   data.unit.sku || '',
+            product_model: data.unit.model || '',
+            product_color: data.unit.color || '',
           }));
           setUpcLookup({ loading: false, data, error: null });
         } else {
