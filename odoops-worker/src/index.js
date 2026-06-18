@@ -372,12 +372,20 @@ function parseSheetDate(raw) {
 // (values = header text) → QC NormLine rows. Used by both the CSV upload and the Sheet adapter.
 function gridToQcRows(grid, cm, fallbackDate) {
   if (!grid || grid.length < 2) throw new Error('Empty or header-only data');
-  const header = grid[0].map(h => String(h).trim());
+  // Header isn't always row 1 (some tabs have title/blank rows above it). Find the first row
+  // (within the first 20) that contains BOTH the configured sku + units header labels.
+  const want = [String(cm.sku || '').toLowerCase(), String(cm.units || '').toLowerCase()];
+  let hr = 0;
+  for (let i = 0; i < Math.min(grid.length, 20); i++) {
+    const cells = grid[i].map(c => String(c).trim().toLowerCase());
+    if (want.every(w => w && cells.includes(w))) { hr = i; break; }
+  }
+  const header = grid[hr].map(h => String(h).trim());
   const idx = name => header.findIndex(h => h.toLowerCase() === String(name || '').toLowerCase());
   const ci = { sku: idx(cm.sku), title: idx(cm.title), units: idx(cm.units), gross: idx(cm.gross), date: idx(cm.date) };
-  if (ci.sku < 0 || ci.units < 0) throw new Error(`column_map needs sku + units to match real headers. Got headers: [${header.join(', ')}]`);
+  if (ci.sku < 0 || ci.units < 0) throw new Error(`column_map needs sku + units to match real headers. Found header row: [${header.join(', ')}]`);
   const rows = [];
-  for (let r = 1; r < grid.length; r++) {
+  for (let r = hr + 1; r < grid.length; r++) {
     const line = grid[r];
     const sku = String(line[ci.sku] ?? '').trim(); if (!sku) continue;
     const sale_date = (ci.date >= 0 ? parseSheetDate(line[ci.date]) : null) || fallbackDate;
