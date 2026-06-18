@@ -185,6 +185,20 @@ async function logHistory(env, taskId, actor, eventType, extra = {}) {
     }),
   });
 }
+// Batched history insert — one POST for N rows (used by bulk update; respects the
+// 50-subrequest limit instead of one logHistory await per task). `rows` items take the
+// same {task_id, event_type, field, old, new, note} shape as logHistory's args.
+async function logHistoryBatch(env, actor, rows) {
+  if (!rows.length) return;
+  await sbDocket(`/rest/v1/task_history`, env, {
+    method: 'POST', prefer: 'return=minimal',
+    body: JSON.stringify(rows.map(r => ({
+      task_id: r.task_id, actor_user_id: actor, event_type: r.event_type,
+      field: r.field || null, old_value: r.old != null ? String(r.old) : null,
+      new_value: r.new != null ? String(r.new) : null, note: r.note || null,
+    }))),
+  });
+}
 async function loadTask(id, env) {
   const r = await sbDocket(`/rest/v1/tasks?id=eq.${enc(id)}&select=*&limit=1`, env);
   return (r.ok && r.data?.[0]) || null;
@@ -558,6 +572,36 @@ async function getProgramTasks(url, auth, env) {
     const sName = {}; (sr.ok ? sr.data : []).forEach(s => { sName[s.id] = s.name; });
     rows = rows.map(t => ({ ...t, space_name: sName[t.space_id] || null }));
   }
+  return ok(rows);
+}
+
+// Cross-space "My tasks": every non-recurring task the caller OWNS or COLLABORATES on,
+// across all accessible spaces. Hydrated like getProgramTasks (+ space_name) and annotated
+// with _relation ('owner' | 'collaborator') so the page splits them into two sections.
+async function getMyTasks(url, auth, env) {
+  const q = url.searchParams;
+  const { memberSpaceIds, defaultId } = await programScopeArgs(auth, env);
+  const params = {
+    p_user: auth.userId, p_employee: auth.employeeId,
+    p_view_all: canViewAll(auth), p_member_space_ids: memberSpaceIds, p_default_space_id: defaultId,
+    p_status: q.get('status') || null,
+    p_department_id: q.get('department_id') || null,
+    p_priority: q.get('priority') || null,
+    p_overdue: q.get('overdue') === '1' || q.get('overdue') === 'true',
+    p_revised: q.get('revised') === '1' || q.get('revised') === 'true',
+    p_program_id: q.get('program_id') || null,
+    p_q: q.get('q') || null,
+  };
+  const r = await sbDocket(`/rest/v1/rpc/list_my_tasks`, env, { method: 'POST', body: JSON.stringify(params) });
+  if (!r.ok) return err('db_error: ' + JSON.stringify(r.data), 500);
+  let rows = await hydrateTasks(r.data || [], auth, env);
+  const spaceIds = uniq(rows.map(t => t.space_id));
+  if (spaceIds.length) {
+    const sr = await sbDocket(`/rest/v1/spaces?id=in.${inList(spaceIds)}&select=id,name`, env);
+    const sName = {}; (sr.ok ? sr.data : []).forEach(s => { sName[s.id] = s.name; });
+    rows = rows.map(t => ({ ...t, space_name: sName[t.space_id] || null }));
+  }
+  rows = rows.map(t => ({ ...t, _relation: (auth.employeeId && t.owner_employee_id === auth.employeeId) ? 'owner' : 'collaborator' }));
   return ok(rows);
 }
 
@@ -975,6 +1019,9 @@ async function createTaskCore(d, auth, env) {
     if (d.owner_employee_id == null) d.owner_employee_id = auth.employeeId || null; // "create for myself"
   }
 
+  // "Add to my list" (My-tasks quick-capture) — default owner to the caller.
+  if (d.assign_self && d.owner_employee_id == null) d.owner_employee_id = auth.employeeId || null;
+
   let parentId = d.parent_task_id || null;
   let spaceId = d.space_id || null;
   if (parentId) {
@@ -1334,6 +1381,77 @@ async function reviseDeadline(body, auth, env) {
   await logHistory(env, task.id, auth.userId, 'deadline_revised',
     { field: 'revised_deadline', old: prevEffective, new: d.new_deadline, note: d.reason });
   return ok({ id: task.id, revised_deadline: d.new_deadline });
+}
+
+// Bulk update N tasks with one action. Subrequest-safe (load + ≤2 patch + 1 history
+// insert, regardless of N — no per-row await loop). Only tasks the caller canEditTask
+// (and not already abandoned) are touched; the rest are skipped + counted.
+const BULK_FIELDS = new Set(['owner_employee_id', 'priority', 'program_id', 'status', 'deadline']);
+async function bulkUpdateTasks(body, auth, env) {
+  const d = body.data || body;
+  const ids = Array.isArray(d.ids) ? uniq(d.ids) : [];
+  const field = d.field;
+  if (!ids.length) return err('ids required', 400);
+  if (!BULK_FIELDS.has(field)) return err('invalid field', 400);
+
+  const tr = await sbDocket(`/rest/v1/tasks?id=in.${inList(ids)}&select=*`, env);
+  if (!tr.ok) return err('db_error: ' + JSON.stringify(tr.data), 500);
+  const all = tr.data || [];
+  const editable = all.filter(t => canEditTask(auth, t) && t.status !== 'abandoned');
+  const skipped = ids.length - editable.length;
+  if (!editable.length) return ok({ updated: 0, skipped, field });
+
+  const stamp = { updated_by: auth.userId, updated_at: nowIso() };
+
+  if (field === 'status') {
+    const value = d.value;
+    if (!STATUSES.includes(value)) return err('invalid status', 400);
+    if (value === 'abandoned') return err('use abandonTask to abandon (reason required)', 422);
+    const targets = editable.filter(t => t.status !== value);
+    if (!targets.length) return ok({ updated: 0, skipped, field });
+    const r = await sbDocket(`/rest/v1/tasks?id=in.${inList(targets.map(t => t.id))}`, env, {
+      method: 'PATCH', prefer: 'return=minimal',
+      body: JSON.stringify({ ...stamp, status: value, completed_at: value === 'done' ? nowIso() : null }),
+    });
+    if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
+    await logHistoryBatch(env, auth.userId, targets.map(t => ({ task_id: t.id, event_type: 'status_changed', field: 'status', old: t.status, new: value })));
+    return ok({ updated: targets.length, skipped, field });
+  }
+
+  if (field === 'deadline') {
+    const value = d.value; // ISO datetime
+    if (!value) return err('value required', 400);
+    const firstSet = editable.filter(t => !t.deadline);
+    const revise = editable.filter(t => t.deadline);
+    if (revise.length && (!d.reason || !String(d.reason).trim())) return err('reason required (some tasks already have a deadline)', 400);
+    if (firstSet.length) {
+      const r = await sbDocket(`/rest/v1/tasks?id=in.${inList(firstSet.map(t => t.id))}`, env, {
+        method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ ...stamp, deadline: value }) });
+      if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
+    }
+    if (revise.length) {
+      const r = await sbDocket(`/rest/v1/tasks?id=in.${inList(revise.map(t => t.id))}`, env, {
+        method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ ...stamp, revised_deadline: value }) });
+      if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
+    }
+    await logHistoryBatch(env, auth.userId, [
+      ...firstSet.map(t => ({ task_id: t.id, event_type: 'deadline_set', field: 'deadline', new: value })),
+      ...revise.map(t => ({ task_id: t.id, event_type: 'deadline_revised', field: 'revised_deadline', old: t.revised_deadline || t.deadline, new: value, note: String(d.reason).trim() })),
+    ]);
+    return ok({ updated: editable.length, skipped, field });
+  }
+
+  // Plain settable fields: owner_employee_id / priority / program_id.
+  let value = d.value;
+  if (field === 'owner_employee_id' || field === 'program_id') value = value || null;
+  if (field === 'priority' && !['P0', 'P1', 'P2', 'P3'].includes(value)) return err('invalid priority', 400);
+  const targets = editable.filter(t => (t[field] || null) !== (value || null));
+  if (!targets.length) return ok({ updated: 0, skipped, field });
+  const r = await sbDocket(`/rest/v1/tasks?id=in.${inList(targets.map(t => t.id))}`, env, {
+    method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ ...stamp, [field]: value }) });
+  if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
+  await logHistoryBatch(env, auth.userId, targets.map(t => ({ task_id: t.id, event_type: `${field}_changed`, field, old: t[field], new: value })));
+  return ok({ updated: targets.length, skipped, field });
 }
 
 async function abandonTask(body, auth, env) {
@@ -1707,14 +1825,14 @@ async function deleteScratchNote(body, auth, env) {
 // ════════════════════════════════════════════════════════════════════════════
 const GET_ACTIONS = {
   getMe, getDepartments, getEmployees,
-  getTasks, getProgramTasks, getTask, getDashboard,
+  getTasks, getProgramTasks, getMyTasks, getTask, getDashboard,
   getChecklist, getChecklistTemplates, getChecklistTemplate, getChecklistOversight,
   getPrograms, getSpaces, getSpaceMembers, getAllSpaces,
   getScratchNotes,
   getDocketRoles, getDocketUsers, getDashboardSharing,
 };
 const POST_ACTIONS = {
-  createTask, createSubtask, updateTask, changeStatus, reviseDeadline, abandonTask, setParent, moveTask,
+  createTask, createSubtask, updateTask, changeStatus, reviseDeadline, abandonTask, bulkUpdateTasks, setParent, moveTask,
   createRecurringTask, updateRecurrence, toggleChecklistOccurrence,
   saveChecklistTemplate, archiveChecklistTemplate,
   assignChecklistTemplate, unassignChecklistTemplate,

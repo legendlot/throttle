@@ -6,7 +6,7 @@ import { Spinner, useToast } from '@throttle/ui';
 import {
   Search, X, Plus, Check, Ban, ListFilter, Layers, List, Rows3, Inbox,
   ChevronRight, ChevronDown, Calendar, AlertTriangle, Link2, MessageSquare,
-  Lock, Settings2, LayoutDashboard, ListChecks, Archive,
+  Lock, Settings2, LayoutDashboard, ListChecks, Archive, CheckSquare, Users, Flag, Tag,
 } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../../../lib/docketopsFetch.js';
 import { StatusBadge } from '../../../components/StatusBadge.js';
@@ -36,7 +36,10 @@ export default function TasksPage() {
   const lensParam = search.get('lens');
   const viewProgramId = search.get('program') || '';
   const inProgramMode = !!viewProgramId;
-  const gridCols = inProgramMode ? PROGRAM_GRID_COLS : GRID_COLS;
+  // My-tasks mode: cross-space list of tasks I own/collaborate on, split into two sections.
+  const mineMode = lensParam === 'mine' && !spaceId && !inProgramMode;
+  const crossSpace = inProgramMode || mineMode;
+  const gridCols = crossSpace ? PROGRAM_GRID_COLS : GRID_COLS;
 
   const [tasks, setTasks] = useState([]);
   const [departments, setDepartments] = useState([]);
@@ -68,7 +71,13 @@ export default function TasksPage() {
   const [drawerId, setDrawerId] = useState(null);
   const [newSpaceOpen, setNewSpaceOpen] = useState(false);
   const [spaceSettingsOpen, setSpaceSettingsOpen] = useState(false);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState(() => new Set());
   const searchRef = useRef(null);
+
+  // Reset selection when the primary view changes (switching space/program/my-tasks)
+  // so a bulk action can never land on tasks from a different context.
+  useEffect(() => { setSelected(new Set()); setSelectMode(false); }, [spaceId, viewProgramId, mineMode]);
 
   // `lens=mine` (sidebar "My tasks") drives the mine filter; absent → off.
   useEffect(() => { setMine(lensParam === 'mine'); }, [lensParam]);
@@ -122,14 +131,20 @@ export default function TasksPage() {
         status, department_id: departmentId, employee_id: employeeId, priority,
         overdue: overdue ? '1' : '', revised: revised ? '1' : '', lens: mine ? 'mine' : '',
       };
-      // Program mode: cross-space aggregation of one program's tasks (no space scope, no program filter).
-      const r = inProgramMode
-        ? await docketopsGet('getProgramTasks', { program_id: viewProgramId, ...common }, session)
-        : await docketopsGet('getTasks', { space_id: spaceId, program_id: programId, ...common }, session);
+      // My-tasks: cross-space owner+collaborator list. Program mode: cross-space aggregation
+      // of one program's tasks. Otherwise the normal single-space board.
+      const r = mineMode
+        ? await docketopsGet('getMyTasks', {
+            status, department_id: departmentId, priority, program_id: programId,
+            overdue: overdue ? '1' : '', revised: revised ? '1' : '',
+          }, session)
+        : inProgramMode
+          ? await docketopsGet('getProgramTasks', { program_id: viewProgramId, ...common }, session)
+          : await docketopsGet('getTasks', { space_id: spaceId, program_id: programId, ...common }, session);
       setTasks(Array.isArray(r) ? r : []);
     } catch (e) { showToast(e.message || 'Failed to load tasks', 'error'); }
     finally { setLoading(false); }
-  }, [session, inProgramMode, viewProgramId, spaceId, status, departmentId, employeeId, priority, programId, overdue, revised, mine, showToast]);
+  }, [session, mineMode, inProgramMode, viewProgramId, spaceId, status, departmentId, employeeId, priority, programId, overdue, revised, mine, showToast]);
   useEffect(() => { load(); }, [load]);
 
   function refreshSpaces() {
@@ -236,8 +251,43 @@ export default function TasksPage() {
   const gridRows = useMemo(() => activeTop.filter(needsSetup).sort(sortFn), [activeTop, sortFn]);
   const boardRows = useMemo(() => activeTop.filter(t => !needsSetup(t)).sort(sortFn), [activeTop, sortFn]);
 
-  // Publish the active board count to the topbar; clear it when leaving the board.
-  useEffect(() => { setCount?.(activeTop.length); return () => setCount?.(null); }, [activeTop.length, setCount]);
+  // My-tasks mode: flat list (incl. sub-tasks) split by relation. "Assigned to me" = owner;
+  // "Collaborating" = everything else (collaborator-only). Search applies; no Grid/nesting.
+  const mineMatched = useMemo(() => (mineMode ? tasks.filter(matchesQuery) : []), [mineMode, tasks, matchesQuery]);
+  const mineOwner = useMemo(() => mineMatched.filter(t => t._relation === 'owner').sort(sortFn), [mineMatched, sortFn]);
+  const mineCollab = useMemo(() => mineMatched.filter(t => t._relation !== 'owner').sort(sortFn), [mineMatched, sortFn]);
+
+  // ---- bulk selection (works in Grid + board + my-tasks; only editable tasks are selectable) ----
+  const selectableIds = useMemo(() => {
+    const pool = mineMode ? [...mineOwner, ...mineCollab] : [...gridRows, ...boardRows];
+    return pool.filter(t => t._can_edit && t.status !== 'abandoned').map(t => t.id);
+  }, [mineMode, mineOwner, mineCollab, gridRows, boardRows]);
+  const allSelected = selectableIds.length > 0 && selectableIds.every(id => selected.has(id));
+  const toggleSelect = useCallback((id) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }), []);
+  function clearSelection() { setSelected(new Set()); }
+  function toggleSelectAll() {
+    setSelected(s => {
+      const n = new Set(s);
+      if (selectableIds.length && selectableIds.every(id => s.has(id))) selectableIds.forEach(id => n.delete(id));
+      else selectableIds.forEach(id => n.add(id));
+      return n;
+    });
+  }
+  async function applyBulk(field, value, reason) {
+    const ids = [...selected];
+    if (!ids.length) return;
+    try {
+      const res = await docketopsPost('bulkUpdateTasks', { ids, field, value, reason }, session);
+      const updated = res?.updated ?? 0, skipped = res?.skipped ?? 0;
+      showToast(`Updated ${updated}${skipped ? ` · skipped ${skipped}` : ''}`, updated ? 'success' : 'info');
+      clearSelection();
+      await load();
+    } catch (e) { showToast(e.message || 'Bulk update failed', 'error'); }
+  }
+
+  // Publish the visible count to the topbar; clear it when leaving the board.
+  const headerCount = mineMode ? (mineOwner.length + mineCollab.length) : activeTop.length;
+  useEffect(() => { setCount?.(headerCount); return () => setCount?.(null); }, [headerCount, setCount]);
 
   // Program mode: smart default space for new tasks = the space this program already lives
   // in most (programs live in private spaces; General is rarely used). Falls back to General.
@@ -292,7 +342,8 @@ export default function TasksPage() {
   const rowCtx = {
     saveField, abandonInline, reviseInline, addSubtask, addCollab, childrenByParent,
     openDrawer: setDrawerId, teamCellOpts, ownerCellOpts, prioOpts, empOpts, expanded, setExpanded, sortFn,
-    gridCols, showSpace: inProgramMode,
+    gridCols, showSpace: crossSpace,
+    selectMode, selected, toggleSelect,
   };
 
   const groupOpts = [
@@ -315,7 +366,10 @@ export default function TasksPage() {
 
       {inProgramMode
         ? <ProgramCapture session={session} programId={viewProgramId} spaces={spaces} defaultSpaceId={programDefaultSpace} onCreated={load} showToast={showToast} />
-        : <QuickCapture session={session} spaceId={spaceId} onCreated={load} showToast={showToast} />}
+        : mineMode
+          ? <QuickCapture session={session} assignSelf onCreated={load} showToast={showToast}
+              placeholder="Add a task to your list. Type a title, press Enter — it's assigned to you.   ( c )" />
+          : <QuickCapture session={session} spaceId={spaceId} onCreated={load} showToast={showToast} />}
 
       <div className="toolbar">
         <div className="search">
@@ -323,31 +377,46 @@ export default function TasksPage() {
           <input data-search-primary ref={searchRef} value={q} onChange={e => setQ(e.target.value)} placeholder="Search tasks, owners, DKT-no…" />
           {!q && <span className="kbd">/</span>}
         </div>
-        <div style={{ position: 'relative' }}>
-          <button className={'tool' + (groupBy !== 'none' ? ' on' : '')} onClick={() => setGroupMenu(m => !m)}>
-            <Layers className="ic" /> {groupLabel}
-          </button>
-          {groupMenu && (
-            <Popover open onClose={() => setGroupMenu(false)} width={180}>
-              <OptionList label="Group by" value={groupBy} options={groupOpts} onPick={(v) => { setGroupBy(v); setGroupMenu(false); }} />
-            </Popover>
-          )}
-        </div>
+        {!mineMode && (
+          <div style={{ position: 'relative' }}>
+            <button className={'tool' + (groupBy !== 'none' ? ' on' : '')} onClick={() => setGroupMenu(m => !m)}>
+              <Layers className="ic" /> {groupLabel}
+            </button>
+            {groupMenu && (
+              <Popover open onClose={() => setGroupMenu(false)} width={180}>
+                <OptionList label="Group by" value={groupBy} options={groupOpts} onPick={(v) => { setGroupBy(v); setGroupMenu(false); }} />
+              </Popover>
+            )}
+          </div>
+        )}
         <div style={{ position: 'relative' }}>
           <button className={'tool' + (activeFilterCount > 0 ? ' on' : '')} onClick={() => setFilterOpen(o => !o)}>
             <ListFilter className="ic" /> Filter {activeFilterCount > 0 && <span className="badge">{activeFilterCount}</span>}
           </button>
           {filterOpen && (
             <FilterPop onClose={() => setFilterOpen(false)} hideProgramFilter={inProgramMode}
+              hideOwnerFilter={mineMode} hideMineToggle={mineMode}
               {...{ status, setStatus, departmentId, setDepartmentId, employeeId, setEmployeeId, priority, setPriority,
                 programId, setProgramId, overdue, setOverdue, revised, setRevised, mine, setMine,
                 teamOpts, empOpts, programOpts, activeFilterCount, clearFilters }} />
           )}
         </div>
-        <button className={'tool' + (archiveDone ? ' on' : '')} onClick={toggleArchiveDone}
-          title={archiveDone ? 'Done tasks are archived — click to show them on the board' : 'Archive done tasks into a collapsed section'}>
-          <Archive className="ic" /> {archiveDone ? 'Done archived' : 'Archive done'}
+        <button className={'tool' + (selectMode ? ' on' : '')} onClick={() => setSelectMode(m => { if (m) clearSelection(); return !m; })}
+          title="Select multiple tasks to update them in bulk">
+          <CheckSquare className="ic" /> Select
         </button>
+        {selectMode && selectableIds.length > 0 && (
+          <button className="tool" onClick={toggleSelectAll}>
+            <span className={'sel-box' + (allSelected ? ' on' : '')}>{allSelected && <Check size={11} />}</span>
+            {allSelected ? 'Clear all' : 'Select all'}{selected.size > 0 && <span className="badge">{selected.size}</span>}
+          </button>
+        )}
+        {!mineMode && (
+          <button className={'tool' + (archiveDone ? ' on' : '')} onClick={toggleArchiveDone}
+            title={archiveDone ? 'Done tasks are archived — click to show them on the board' : 'Archive done tasks into a collapsed section'}>
+            <Archive className="ic" /> {archiveDone ? 'Done archived' : 'Archive done'}
+          </button>
+        )}
         <div className="seg">
           <button className={density === 'compact' ? 'on' : ''} title="Compact" onClick={() => chooseDensity('compact')}><List /></button>
           <button className={density === 'roomy' ? 'on' : ''} title="Roomy" onClick={() => chooseDensity('roomy')}><Rows3 /></button>
@@ -355,12 +424,19 @@ export default function TasksPage() {
       </div>
 
       {loading && tasks.length === 0 ? <Spinner /> : (
-        topLevel.length === 0 ? (
+        (mineMode ? (mineOwner.length + mineCollab.length) === 0 : topLevel.length === 0) ? (
           <div className="empty-state">
             <div className="ei"><ListChecks size={24} /></div>
-            <h3>{(q || activeFilterCount) ? 'No tasks match' : 'All clear'}</h3>
-            <p>{(q || activeFilterCount) ? 'Try a different search or widen the filters.' : 'Capture a task above to get started.'}</p>
+            <h3>{(q || activeFilterCount) ? 'No tasks match' : (mineMode ? 'Nothing assigned to you' : 'All clear')}</h3>
+            <p>{(q || activeFilterCount) ? 'Try a different search or widen the filters.' : (mineMode ? 'Tasks you own or collaborate on — across every space — show up here.' : 'Capture a task above to get started.')}</p>
             {activeFilterCount > 0 && <button className="fp-clear" style={{ width: 'auto', margin: '14px auto 0' }} onClick={clearFilters}>Clear filters</button>}
+          </div>
+        ) : mineMode ? (
+          <div style={{ opacity: loading ? 0.5 : 1, pointerEvents: loading ? 'none' : 'auto', transition: 'opacity var(--base) var(--ease)' }}>
+            <MineSection title="Assigned to me" rows={mineOwner} ctx={rowCtx} gridCols={gridCols}
+              sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
+            <MineSection title="Collaborating" rows={mineCollab} ctx={rowCtx} gridCols={gridCols}
+              sortKey={sortKey} sortDir={sortDir} onSort={onSort} collapsible />
           </div>
         ) : (
           <div style={{ opacity: loading ? 0.5 : 1, pointerEvents: loading ? 'none' : 'auto', transition: 'opacity var(--base) var(--ease)' }}>
@@ -407,6 +483,11 @@ export default function TasksPage() {
             <ArchivedZone rows={archivedRows} ctx={rowCtx} />
           </div>
         )
+      )}
+
+      {selectMode && selected.size > 0 && (
+        <BulkBar count={selected.size} onClear={clearSelection} onApply={applyBulk}
+          ownerOpts={ownerCellOpts} prioOpts={prioOpts} programOpts={programCellOpts} />
       )}
 
       {drawerId && (
@@ -536,8 +617,9 @@ function DeadlineCell({ task, editable, onFirstSet, onRevise }) {
 
 /* ---------------- Task row ---------------- */
 function TaskRow({ task, ctx, isChild, hasKids, expanded }) {
-  const { saveField, abandonInline, reviseInline, addSubtask, addCollab, openDrawer, teamCellOpts, ownerCellOpts, prioOpts, empOpts, setExpanded, gridCols, showSpace } = ctx;
+  const { saveField, abandonInline, reviseInline, addSubtask, addCollab, openDrawer, teamCellOpts, ownerCellOpts, prioOpts, empOpts, setExpanded, gridCols, showSpace, selectMode, selected, toggleSelect } = ctx;
   const ed = !!task._can_edit && task.status !== 'abandoned';
+  const isSel = !!selected?.has(task.id);
   const done = task.status === 'done';
   const collabs = (task.collaborators || []).map(c => c.full_name).filter(Boolean);
   const [adding, setAdding] = useState(false);
@@ -558,7 +640,7 @@ function TaskRow({ task, ctx, isChild, hasKids, expanded }) {
 
   const addableCollabs = empOpts.filter(o => o.value !== task.owner_employee_id && !(task.collaborators || []).some(c => c.employee_id === o.value));
 
-  const cls = ['row', isChild ? 'sub' : '', done ? 'done' : '',
+  const cls = ['row', isChild ? 'sub' : '', done ? 'done' : '', isSel ? 'selected' : '',
     !isChild && task.priority === 'P0' ? 'p0' : '', !isChild && task.priority === 'P1' ? 'p1' : ''].filter(Boolean).join(' ');
 
   return (
@@ -576,6 +658,9 @@ function TaskRow({ task, ctx, isChild, hasKids, expanded }) {
         }}>
         {/* Title */}
         <span className="cell cell-title">
+          {selectMode && (ed
+            ? <button className={'sel-box' + (isSel ? ' on' : '')} title="Select task" onClick={(e) => { e.stopPropagation(); toggleSelect(task.id); }}>{isSel && <Check size={11} />}</button>
+            : <span className="sel-box disabled" title="You can only bulk-edit tasks you own" />)}
           {isChild ? <span className="branch"><ChevronRight size={12} style={{ transform: 'rotate(45deg)' }} /></span>
             : (hasKids
               ? <button className={'expand' + (expanded ? ' open' : '')} onClick={(e) => { e.stopPropagation(); toggleExpand(); }}><ChevronRight size={14} /></button>
@@ -695,11 +780,15 @@ function GridZone({ rows, ctx }) {
 }
 
 function GridCard({ task, ctx }) {
-  const { saveField, openDrawer, ownerCellOpts } = ctx;
+  const { saveField, openDrawer, ownerCellOpts, selectMode, selected, toggleSelect } = ctx;
   const ed = !!task._can_edit && task.status !== 'abandoned';
   const done = task.status === 'done';
+  const isSel = !!selected?.has(task.id);
   return (
-    <div className="gcard">
+    <div className={'gcard' + (isSel ? ' selected' : '')}>
+      {selectMode && (ed
+        ? <button className={'sel-box' + (isSel ? ' on' : '')} title="Select task" onClick={() => toggleSelect(task.id)}>{isSel && <Check size={11} />}</button>
+        : <span className="sel-box disabled" title="You can only bulk-edit tasks you own" />)}
       <button className={'check' + (done ? ' checked' : '')} disabled={!ed} style={{ marginRight: 2 }}
         onClick={() => saveField(task, 'status', done ? 'not_started' : 'done')}>{done && <Check size={12} />}</button>
       <span className="gtitle" onClick={() => openDrawer(task.id)} style={{ cursor: 'pointer' }}>
@@ -781,10 +870,117 @@ function ArchivedRow({ task, ctx }) {
   );
 }
 
+/* ---------------- My-tasks section (cross-space, flat) ---------------- */
+function MineSection({ title, rows, ctx, gridCols, sortKey, sortDir, onSort, collapsible }) {
+  const [open, setOpen] = useState(true);
+  if (collapsible && !rows.length) return null;
+  return (
+    <div className="mine-section">
+      <div className={'mine-head' + (collapsible ? ' clickable' : '')} onClick={collapsible ? () => setOpen(o => !o) : undefined}>
+        {collapsible && <span className={'chev' + (open ? '' : ' closed')}><ChevronDown size={15} /></span>}
+        <span className="ms-ttl">{title}</span>
+        <span className="ms-cnt">{rows.length}</span>
+      </div>
+      {(!collapsible || open) && (
+        rows.length ? (
+          <div className="board-scroll"><div className="board">
+            <div className="cols" style={{ '--grid-cols': gridCols }}>
+              <ColHead k="title" label="Task" sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
+              <span className="ch">Space</span>
+              <ColHead k="owner_name" label="Owner" sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
+              <ColHead k="status" label="Status" sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
+              <ColHead k="priority" label="Pri" sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
+              <ColHead k="deadline" label="Deadline" sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
+              <span className="ch" style={{ justifyContent: 'flex-end' }} />
+            </div>
+            <div className="rows">
+              {rows.map(t => <TaskRow key={t.id} task={t} ctx={ctx} hasKids={false} expanded={false} />)}
+            </div>
+          </div></div>
+        ) : <div className="mine-empty">Nothing here yet.</div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------- Bulk action bar (floating) ---------------- */
+function BulkBar({ count, onClear, onApply, ownerOpts, prioOpts, programOpts }) {
+  const [menu, setMenu] = useState(null); // owner | status | priority | program | deadline
+  const [draft, setDraft] = useState(null);
+  const [reason, setReason] = useState('');
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!menu) return;
+    function down(e) { if (ref.current && !ref.current.contains(e.target)) close(); }
+    function key(e) { if (e.key === 'Escape') close(); }
+    document.addEventListener('mousedown', down); document.addEventListener('keydown', key, true);
+    return () => { document.removeEventListener('mousedown', down); document.removeEventListener('keydown', key, true); };
+  }, [menu]);
+  function close() { setMenu(null); setDraft(null); setReason(''); }
+  function go(field, value, r) { onApply(field, value, r); close(); }
+  const toggle = (m) => { setDraft(null); setReason(''); setMenu(cur => (cur === m ? null : m)); };
+
+  return (
+    <div className="bulk-bar" ref={ref} onMouseDown={e => e.stopPropagation()}>
+      <span className="bb-count"><CheckSquare size={15} /> {count} selected</span>
+      <div className="bb-sep" />
+      <div className="bb-actions">
+        {/* Owner */}
+        <div className="bb-item">
+          <button className={'bb-btn' + (menu === 'owner' ? ' on' : '')} onClick={() => toggle('owner')}><Users size={14} /> Owner</button>
+          {menu === 'owner' && <div className="pop bb-pop"><OptionList options={ownerOpts} searchable onPick={(v) => go('owner_employee_id', v)} /></div>}
+        </div>
+        {/* Status */}
+        <div className="bb-item">
+          <button className={'bb-btn' + (menu === 'status' ? ' on' : '')} onClick={() => toggle('status')}><Check size={14} /> Status</button>
+          {menu === 'status' && (
+            <div className="pop bb-pop" style={{ width: 190 }}>
+              {SETTABLE_STATUSES.map(s => (
+                <button key={s.key} className="menu-item" onClick={() => go('status', s.key)}>
+                  <span className="si" style={{ background: s.color }} />{s.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        {/* Priority */}
+        <div className="bb-item">
+          <button className={'bb-btn' + (menu === 'priority' ? ' on' : '')} onClick={() => toggle('priority')}><Flag size={14} /> Priority</button>
+          {menu === 'priority' && (
+            <div className="pop bb-pop" style={{ width: 160 }}>
+              {prioOpts.map(p => <button key={p.value} className="menu-item" onClick={() => go('priority', p.value)}>{p.label}</button>)}
+            </div>
+          )}
+        </div>
+        {/* Deadline */}
+        <div className="bb-item">
+          <button className={'bb-btn' + (menu === 'deadline' ? ' on' : '')} onClick={() => toggle('deadline')}><Calendar size={14} /> Deadline</button>
+          {menu === 'deadline' && (
+            <div className="pop bb-pop" style={{ width: 248, padding: 10 }}>
+              <DatePicker value={draft} onChange={setDraft} autoFocus />
+              <input className="reason-input" placeholder="Reason (required if any already has a deadline)" value={reason} onChange={e => setReason(e.target.value)} />
+              <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 10 }}>
+                <button className="btn btn-ghost" onClick={close}>Cancel</button>
+                <button className="btn btn-primary" disabled={!draft} onClick={() => go('deadline', draft, reason.trim() || undefined)}><Check size={13} /> Set</button>
+              </div>
+            </div>
+          )}
+        </div>
+        {/* Program */}
+        <div className="bb-item">
+          <button className={'bb-btn' + (menu === 'program' ? ' on' : '')} onClick={() => toggle('program')}><Tag size={14} /> Program</button>
+          {menu === 'program' && <div className="pop bb-pop"><OptionList options={programOpts} searchable onPick={(v) => go('program_id', v)} /></div>}
+        </div>
+      </div>
+      <button className="bb-clear" onClick={onClear}><X size={14} /> Clear</button>
+    </div>
+  );
+}
+
 /* ---------------- Filter popover ---------------- */
 function FilterPop({ onClose, status, setStatus, departmentId, setDepartmentId, employeeId, setEmployeeId,
   priority, setPriority, programId, setProgramId, overdue, setOverdue, revised, setRevised, mine, setMine,
-  teamOpts, empOpts, programOpts, activeFilterCount, clearFilters, hideProgramFilter }) {
+  teamOpts, empOpts, programOpts, activeFilterCount, clearFilters, hideProgramFilter, hideOwnerFilter, hideMineToggle }) {
   const ref = useRef(null);
   useEffect(() => {
     function down(e) { if (ref.current && !ref.current.contains(e.target)) onClose(); }
@@ -805,13 +1001,13 @@ function FilterPop({ onClose, status, setStatus, departmentId, setDepartmentId, 
     <div ref={ref} className="filter-pop" onMouseDown={e => e.stopPropagation()}>
       <Sel label="Status" value={status} set={setStatus} any="Any status" options={STATUSES.map(s => ({ value: s.key, label: s.label }))} />
       <Sel label="Team" value={departmentId} set={setDepartmentId} any="Any team" options={teamOpts} />
-      <Sel label="Owner" value={employeeId} set={setEmployeeId} any="Anyone" options={empOpts} />
+      {!hideOwnerFilter && <Sel label="Owner" value={employeeId} set={setEmployeeId} any="Anyone" options={empOpts} />}
       <Sel label="Priority" value={priority} set={setPriority} any="Any priority" options={PRIORITIES.map(p => ({ value: p.key, label: p.label }))} />
       {!hideProgramFilter && <Sel label="Program" value={programId} set={setProgramId} any="Any program" options={programOpts} />}
       <div className="fp-grp">
         <div className="fp-lbl">Quick</div>
         <div className="fp-toggles">
-          <button className={'fp-toggle' + (mine ? ' on' : '')} onClick={() => setMine(m => !m)}>My tasks</button>
+          {!hideMineToggle && <button className={'fp-toggle' + (mine ? ' on' : '')} onClick={() => setMine(m => !m)}>My tasks</button>}
           <button className={'fp-toggle' + (overdue ? ' on' : '')} onClick={() => setOverdue(o => !o)}>Overdue</button>
           <button className={'fp-toggle' + (revised ? ' on' : '')} onClick={() => setRevised(r => !r)}>Revised</button>
         </div>
@@ -822,7 +1018,7 @@ function FilterPop({ onClose, status, setStatus, departmentId, setDepartmentId, 
 }
 
 /* ---------------- Quick capture ---------------- */
-function QuickCapture({ session, spaceId, onCreated, showToast }) {
+function QuickCapture({ session, spaceId, onCreated, showToast, assignSelf, placeholder }) {
   const [title, setTitle] = useState('');
   const [saving, setSaving] = useState(false);
   const ref = useRef(null);
@@ -830,7 +1026,11 @@ function QuickCapture({ session, spaceId, onCreated, showToast }) {
     const t = title.trim();
     if (!t || saving) return;
     setSaving(true);
-    try { await docketopsPost('createTask', { title: t, space_id: spaceId || undefined }, session); setTitle(''); await onCreated(); showToast('Captured to The Grid', 'success'); ref.current?.focus(); }
+    try {
+      await docketopsPost('createTask', { title: t, space_id: spaceId || undefined, assign_self: assignSelf || undefined }, session);
+      setTitle(''); await onCreated();
+      showToast(assignSelf ? 'Added to your list' : 'Captured to The Grid', 'success'); ref.current?.focus();
+    }
     catch (e) { showToast(e.message || 'Create failed', 'error'); }
     finally { setSaving(false); }
   }
@@ -839,7 +1039,7 @@ function QuickCapture({ session, spaceId, onCreated, showToast }) {
       <Plus className="plus" />
       <input ref={ref} data-create-primary value={title} onChange={e => setTitle(e.target.value)}
         onKeyDown={e => { if (e.key === 'Enter') add(); }}
-        placeholder="Capture a task. Type a title, press Enter — it lands in The Grid to finish later.   ( c )"
+        placeholder={placeholder || 'Capture a task. Type a title, press Enter — it lands in The Grid to finish later.   ( c )'}
         disabled={saving} />
       <button className="go" onClick={add} disabled={!title.trim() || saving}>{saving ? '…' : 'Add'}</button>
     </div>

@@ -853,3 +853,44 @@ button { cursor: pointer; background: none; border: none; }
 .cl-ovr-recurring { margin-bottom: 12px; }
 .cl-ovr-recurring h5 { font-family: var(--f-display); font-weight: 600; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--accent-deep); margin: 10px 0 6px; }
 @media (max-width: 720px) { .cl-editor-grid { grid-template-columns: 1fr; } .cl-ovr-stats { width: 100%; margin-left: 0; } }
+
+/* ============================================================
+   My-tasks sections + bulk selection (S153)
+   ============================================================ */
+
+/* Cross-space "My tasks" two-section layout */
+.mine-section { margin-bottom: 18px; }
+.mine-head { display: flex; align-items: center; gap: 9px; padding: 6px 4px 10px; user-select: none; }
+.mine-head.clickable { cursor: pointer; }
+.mine-head .chev { color: var(--text-4); display: flex; transition: transform var(--base) var(--ease); }
+.mine-head .chev.closed { transform: rotate(-90deg); }
+.mine-head .ms-ttl { font-family: var(--f-display); font-weight: 600; font-size: 13px; letter-spacing: .07em; text-transform: uppercase; color: var(--text-1); }
+.mine-head .ms-cnt { font-family: var(--f-mono); font-size: 11px; color: var(--text-4); }
+.mine-empty { font-size: 13px; color: var(--text-4); padding: 6px 6px 14px; }
+
+/* Selection checkbox (rows + grid cards) */
+.sel-box { width: 17px; height: 17px; flex-shrink: 0; border-radius: var(--r-sm); border: 1.6px solid var(--border-strong); display: grid; place-items: center; color: transparent; background: var(--surface); transition: border-color var(--fast), background var(--fast), color var(--fast); }
+.sel-box:hover { border-color: var(--accent); }
+.sel-box.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.sel-box.disabled { opacity: .3; border-style: dashed; cursor: not-allowed; }
+.cell-title .sel-box { margin-right: 2px; }
+.gcard .sel-box { margin-right: 4px; }
+.row.selected { background: var(--accent-soft); }
+.gcard.selected { background: var(--accent-soft); }
+
+/* Floating bulk action bar */
+.bulk-bar { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 70; display: flex; align-items: center; gap: 12px; padding: 8px 12px; background: var(--surface-2); border: 1px solid var(--border-2); border-radius: var(--r-full); box-shadow: var(--shadow-pop); animation: pop-in 140ms var(--ease); max-width: 94vw; }
+.bulk-bar .bb-count { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; color: var(--text-1); white-space: nowrap; padding-left: 4px; }
+.bulk-bar .bb-count svg { color: var(--accent); }
+.bulk-bar .bb-sep { width: 1px; align-self: stretch; background: var(--border); }
+.bulk-bar .bb-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.bulk-bar .bb-item { position: relative; }
+.bulk-bar .bb-btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 11px; border-radius: var(--r-md); font-size: 13px; color: var(--text-2); background: var(--surface-3); transition: color var(--fast), background var(--fast); }
+.bulk-bar .bb-btn:hover { color: var(--text-1); }
+.bulk-bar .bb-btn svg { color: var(--text-3); }
+.bulk-bar .bb-btn.on { color: var(--accent); background: var(--accent-soft); }
+.bulk-bar .bb-btn.on svg { color: var(--accent); }
+.bulk-bar .bb-clear { display: inline-flex; align-items: center; gap: 6px; padding: 7px 11px; border-radius: var(--r-md); font-size: 13px; color: var(--text-3); }
+.bulk-bar .bb-clear:hover { color: var(--text-1); }
+/* bulk-bar popovers open UPWARD (the bar is pinned to the bottom) */
+.bb-pop { top: auto; bottom: calc(100% + 8px); left: 0; }
