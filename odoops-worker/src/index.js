@@ -364,6 +364,20 @@ async function fetchAmazonDoc(doc) {
   return await res.text();
 }
 const AMZ_COLUMNS_DEFAULT = { date: 'purchase-date', sku: 'sku', title: 'product-name', units: 'quantity', gross: 'item-price', status: 'order-status', order_id: 'amazon-order-id' };
+const AMZ_REPORT_TYPE = 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL';
+// HARD LIMIT: this report can only be requested for ≤30 days per call ("Date range exceeded"
+// otherwise). So we chunk: one ≤30-day window per report, walking the cursor forward.
+const AMZ_WINDOW_MS = 30 * 24 * 3600 * 1000;
+async function createAmazonReport(host, H, mkt, startISO, endISO) {
+  const cr = await fetch(`${host}/reports/2021-06-30/reports`, {
+    method: 'POST', headers: H,
+    body: JSON.stringify({ reportType: AMZ_REPORT_TYPE, marketplaceIds: [mkt], dataStartTime: startISO, dataEndTime: endISO }),
+  });
+  if (!cr.ok) throw new Error(`Amazon createReport ${cr.status}: ${(await cr.text().catch(() => '')).slice(0, 200)}`);
+  const cj = await cr.json();
+  if (!cj.reportId) throw new Error('Amazon createReport: no reportId — ' + JSON.stringify(cj).slice(0, 160));
+  return cj.reportId;
+}
 const amazonAdapter = {
   kind: 'amazon_spapi', stgTable: 'stg_amazon', sourceKind: 'amazon',
   async fetch({ env, channelId, cursor, config }) {
@@ -374,6 +388,7 @@ const amazonAdapter = {
     const columns = cfg.columns || AMZ_COLUMNS_DEFAULT;
     const token = await getAmazonToken(env);
     const H = { Authorization: `Bearer ${token}`, 'x-amz-access-token': token, 'Content-Type': 'application/json' };
+    const nowMs = Date.now();
     let subreqs = 1; // token
 
     // ── A pending report is in flight → poll it ──
@@ -389,24 +404,29 @@ const amazonAdapter = {
       if (!dr.ok) throw new Error(`Amazon getDocument ${dr.status}`);
       const doc = await dr.json();
       const text = await fetchAmazonDoc(doc); subreqs++;
+      if (/date range exceeded/i.test(text)) throw new Error('Amazon: ' + text.trim().slice(0, 120)); // defensive — window too wide
       const grid = text.split(/\r?\n/).filter(l => l.length).map(l => l.split('\t'));
       const rows = grid.length >= 2 ? gridToQcRows(grid, columns, todayISO()) : [];
-      const through = cfg.pending_through;
-      await patchConnectorConfig(channelId, cfg, { pending_report_id: null, pending_through: null });
-      return { rows, cursorAfter: through, subreqs, partial: false }; // cursor advances to the window end
+      const windowEnd = cfg.pending_through;
+      // Walk forward: if history remains beyond this window, immediately queue the NEXT ≤30-day
+      // report (so each tick ingests one window AND queues the next — backfill self-walks).
+      const endMs = Date.parse(windowEnd || '') || 0;
+      let partial = false, next = { pending_report_id: null, pending_through: null };
+      if (endMs && endMs < nowMs - 60_000) {
+        const nextEnd = new Date(Math.min(endMs + AMZ_WINDOW_MS, nowMs)).toISOString();
+        try { const rid = await createAmazonReport(host, H, mkt, windowEnd, nextEnd); subreqs++; next = { pending_report_id: rid, pending_through: nextEnd }; partial = true; }
+        catch (_) { /* leave pending cleared — next tick re-creates from the advanced cursor */ }
+      }
+      await patchConnectorConfig(channelId, cfg, next);
+      return { rows, cursorAfter: windowEnd, subreqs, partial }; // cursor advances to this window's end
     }
 
-    // ── No pending → create a report for [cursor || backfill_start, now] ──
-    const dataStart = cursor || cfg.backfill_start || BACKFILL_START;
-    const dataEnd = nowISO();
-    const cr = await fetch(`${host}/reports/2021-06-30/reports`, {
-      method: 'POST', headers: H,
-      body: JSON.stringify({ reportType: 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL', marketplaceIds: [mkt], dataStartTime: dataStart, dataEndTime: dataEnd }),
-    }); subreqs++;
-    if (!cr.ok) throw new Error(`Amazon createReport ${cr.status}: ${(await cr.text().catch(() => '')).slice(0, 200)}`);
-    const cj = await cr.json();
-    if (!cj.reportId) throw new Error('Amazon createReport: no reportId — ' + JSON.stringify(cj).slice(0, 160));
-    await patchConnectorConfig(channelId, cfg, { pending_report_id: cj.reportId, pending_through: dataEnd });
+    // ── No pending → create the first/next ≤30-day report from the cursor ──
+    const startISO = cursor || cfg.backfill_start || BACKFILL_START;
+    const startMs = Date.parse(startISO) || nowMs;
+    const endISO = new Date(Math.min(startMs + AMZ_WINDOW_MS, nowMs)).toISOString();
+    const rid = await createAmazonReport(host, H, mkt, startISO, endISO); subreqs++;
+    await patchConnectorConfig(channelId, cfg, { pending_report_id: rid, pending_through: endISO });
     return { rows: [], cursorAfter: null, subreqs, partial: true }; // report queued; next tick ingests
   },
   async stage(rows, runId, channelId) {
