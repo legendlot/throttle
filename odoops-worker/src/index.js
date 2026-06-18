@@ -751,6 +751,24 @@ export default {
             const r = await sbPublic('/rest/v1/product_master?is_active=eq.true&select=product_code,product,model,color,sku,ean&order=product.asc');
             return ok({ rows: r.ok ? r.data : [] });
           }
+          case 'amazonProbe': {  // diagnostic: which marketplaces does the LWA token actually cover? (NA/EU/FE)
+            if (!canConnector(P)) return err('No permission', 403);
+            let token;
+            try { token = await getAmazonToken(env); } catch (e) { return err(String(e?.message || e), 400); }
+            const H = { Authorization: `Bearer ${token}`, 'x-amz-access-token': token };
+            const hosts = { na: 'https://sellingpartnerapi-na.amazon.com', eu: 'https://sellingpartnerapi-eu.amazon.com', fe: 'https://sellingpartnerapi-fe.amazon.com' };
+            const out = {};
+            for (const [k, host] of Object.entries(hosts)) {
+              try {
+                const r = await fetch(`${host}/sellers/v1/marketplaceParticipations`, { headers: H });
+                const j = await r.json().catch(() => ({}));
+                out[k] = { host, status: r.status,
+                  marketplaces: (j.payload || []).map(p => ({ id: p.marketplace?.id, name: p.marketplace?.name, country: p.marketplace?.countryCode, participating: p.participation?.isParticipating })),
+                  error: j.errors ? (j.errors[0]?.message || JSON.stringify(j.errors)) : undefined };
+              } catch (e) { out[k] = { host, error: String(e?.message || e) }; }
+            }
+            return ok(out);
+          }
           default: return err('Unknown action: ' + action, 400);
         }
       }
