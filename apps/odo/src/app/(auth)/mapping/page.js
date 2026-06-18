@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
-import { Spinner, useToast } from '@throttle/ui';
+import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { salesGet, salesPost, fmtInt, inr } from '../../../lib/api.js';
 
 export default function MappingPage() {
@@ -31,6 +31,12 @@ export default function MappingPage() {
   useEffect(load, [session]);
 
   const vlabel = useMemo(() => Object.fromEntries(variants.map(v => [v.product_code, [v.product, v.model, v.color].filter(Boolean).join(' ') + ` · ${v.product_code}`])), [variants]);
+  // searchable-combobox options: search across product/model/color + code + sku
+  const variantOptions = useMemo(() => variants.map(v => ({
+    value: v.product_code,
+    label: [v.product, v.model, v.color].filter(Boolean).join(' ') || v.product_code,
+    hint: [v.product_code, v.sku].filter(Boolean).join(' · '),
+  })), [variants]);
 
   const resolve = (row) => {
     const code = pick[row.id];
@@ -60,10 +66,15 @@ export default function MappingPage() {
                     <td className="so-num">{fmtInt(u.pending_units)}</td>
                     <td className="so-num">{inr(u.pending_gross)}</td>
                     <td>
-                      <select className="so-select" disabled={!canManage} value={pick[u.id] || ''} onChange={e => setPick(p => ({ ...p, [u.id]: e.target.value }))} style={{ maxWidth: 260 }}>
-                        <option value="">— select —</option>
-                        {variants.map(v => <option key={v.product_code} value={v.product_code}>{vlabel[v.product_code]}</option>)}
-                      </select>
+                      <div style={{ minWidth: 240, maxWidth: 320 }}>
+                        <Combobox
+                          value={pick[u.id] || ''}
+                          options={variantOptions}
+                          onChange={(val) => setPick(p => ({ ...p, [u.id]: val }))}
+                          placeholder="Search variant…"
+                          disabled={!canManage}
+                        />
+                      </div>
                     </td>
                     <td><button className="so-btn" disabled={!canManage} onClick={() => resolve(u)}>Map</button></td>
                   </tr>
