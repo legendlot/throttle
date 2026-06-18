@@ -878,19 +878,20 @@ button { cursor: pointer; background: none; border: none; }
 .row.selected { background: var(--accent-soft); }
 .gcard.selected { background: var(--accent-soft); }
 
-/* Floating bulk action bar */
-.bulk-bar { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 70; display: flex; align-items: center; gap: 12px; padding: 8px 12px; background: var(--surface-2); border: 1px solid var(--border-2); border-radius: var(--r-full); box-shadow: var(--shadow-pop); animation: pop-in 140ms var(--ease); max-width: 94vw; }
-.bulk-bar .bb-count { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; color: var(--text-1); white-space: nowrap; padding-left: 4px; }
-.bulk-bar .bb-count svg { color: var(--accent); }
-.bulk-bar .bb-sep { width: 1px; align-self: stretch; background: var(--border); }
+/* Floating bulk action bar — brand-yellow "pop" so it's obvious + intuitive */
+.bulk-bar { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 70; display: flex; align-items: center; gap: 12px; padding: 8px 10px 8px 8px; background: var(--surface-2); border: 1.5px solid var(--accent); border-radius: var(--r-full); box-shadow: 0 0 0 4px var(--accent-soft), 0 14px 40px -10px rgba(242,205,26,0.45), var(--shadow-pop); animation: pop-in 140ms var(--ease); max-width: 94vw; }
+.bulk-bar .bb-count { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 800; letter-spacing: .03em; color: var(--accent-ink); background: var(--accent); padding: 6px 13px; border-radius: var(--r-full); white-space: nowrap; }
+.bulk-bar .bb-count svg { color: var(--accent-ink); }
+.bulk-bar .bb-sep { width: 1px; align-self: stretch; margin: 4px 0; background: var(--accent-line); }
 .bulk-bar .bb-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .bulk-bar .bb-item { position: relative; }
-.bulk-bar .bb-btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 11px; border-radius: var(--r-md); font-size: 13px; color: var(--text-2); background: var(--surface-3); transition: color var(--fast), background var(--fast); }
-.bulk-bar .bb-btn:hover { color: var(--text-1); }
+.bulk-bar .bb-btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: var(--r-md); font-size: 13px; font-weight: 500; color: var(--text-1); background: var(--surface-3); border: 1px solid transparent; transition: color var(--fast), background var(--fast), border-color var(--fast); }
+.bulk-bar .bb-btn:hover { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); }
+.bulk-bar .bb-btn:hover svg { color: var(--accent); }
 .bulk-bar .bb-btn svg { color: var(--text-3); }
-.bulk-bar .bb-btn.on { color: var(--accent); background: var(--accent-soft); }
-.bulk-bar .bb-btn.on svg { color: var(--accent); }
+.bulk-bar .bb-btn.on { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+.bulk-bar .bb-btn.on svg { color: var(--accent-ink); }
 .bulk-bar .bb-clear { display: inline-flex; align-items: center; gap: 6px; padding: 7px 11px; border-radius: var(--r-md); font-size: 13px; color: var(--text-3); }
-.bulk-bar .bb-clear:hover { color: var(--text-1); }
+.bulk-bar .bb-clear:hover { color: var(--text-1); background: var(--surface-3); }
 /* bulk-bar popovers open UPWARD (the bar is pinned to the bottom) */
 .bb-pop { top: auto; bottom: calc(100% + 8px); left: 0; }
