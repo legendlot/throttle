@@ -74,6 +74,18 @@ async function activeSuperAdminUserIds() {
   return (urR.ok ? urR.data : []).filter(u => superKeys.has(u.role_key)).map(u => u.user_id);
 }
 
+// Resolve an auth user id by email via a SECURITY DEFINER RPC. The GoTrue admin
+// `/admin/users?email=` filter is UNRELIABLE (it ignores the filter and returns the
+// first user in the list) — do not use it for email lookups.
+async function resolveAuthUserId(email) {
+  const r = await sb('/rest/v1/rpc/user_id_by_email', { method: 'POST', body: JSON.stringify({ p_email: email }) });
+  if (!r.ok || r.data == null) return null;
+  const v = r.data;
+  if (typeof v === 'string') return v;
+  if (Array.isArray(v)) return typeof v[0] === 'string' ? v[0] : (v[0]?.user_id_by_email || null);
+  return v.user_id_by_email || null;
+}
+
 async function verifyJWT(authHeader) {
   if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
   const token = authHeader.slice(7);
@@ -1607,12 +1619,9 @@ export default {
             // The auth user must already exist (Google sign-in for LOT, email link for SF).
             if (!canSuperAdmin(P)) return err('No permission', 403);
             if (!d.email || !d.role_key) return err('email and role_key required');
-            const adminR = await fetch(`${SUPABASE_URL}/auth/v1/admin/users?email=${encodeURIComponent(d.email)}`, {
-              headers: { 'apikey': SUPABASE_SERVICE_KEY, 'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}` },
-            });
-            let authUser = null;
-            if (adminR.ok) { const j = await adminR.json(); authUser = (j.users || j)[0] || (Array.isArray(j) ? j[0] : null) || (j.id ? j : null); }
-            if (!authUser?.id) return err('No auth user for that email yet — ask them to sign in once first, then retry', 422);
+            const resolvedId = await resolveAuthUserId(d.email);
+            if (!resolvedId) return err('No auth user for that email yet — ask them to sign in once first, then retry', 422);
+            const authUser = { id: resolvedId };
             const roleR = await sb(`/rest/v1/manifest_roles?role_key=eq.${encodeURIComponent(d.role_key)}&select=party&limit=1`);
             if (!(roleR.ok && roleR.data[0])) return err('Unknown role_key', 400);
             const party = roleR.data[0].party;
@@ -1631,11 +1640,12 @@ export default {
                 prefer: 'return=minimal,resolution=merge-duplicates',
               });
             }
-            await sb('/rest/v1/manifest_user_roles', {
+            const grantR = await sb('/rest/v1/manifest_user_roles', {
               method: 'POST',
               body: JSON.stringify({ user_id: authUser.id, role_key: d.role_key, active: true, assigned_by: userId, assigned_at: nowISO() }),
               prefer: 'return=minimal,resolution=merge-duplicates',
             });
+            if (!grantR.ok) return err('Grant failed: ' + JSON.stringify(grantR.data), 502);
             await logActivity(auth, 'access_granted', { detail: `${d.email} → ${d.role_key}` });
             return ok({ user_id: authUser.id, email: d.email, role_key: d.role_key });
           }
@@ -1643,12 +1653,9 @@ export default {
             // Back-compat alias → grantAccess with the sf_owner default.
             if (!canSuperAdmin(P)) return err('No permission', 403);
             if (!d.email) return err('email required');
-            const adminR = await fetch(`${SUPABASE_URL}/auth/v1/admin/users?email=${encodeURIComponent(d.email)}`, {
-              headers: { 'apikey': SUPABASE_SERVICE_KEY, 'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}` },
-            });
-            let authUser = null;
-            if (adminR.ok) { const j = await adminR.json(); authUser = (j.users || j)[0] || (Array.isArray(j) ? j[0] : null) || (j.id ? j : null); }
-            if (!authUser?.id) return err('No auth user for that email yet — ask them to request a login link first, then retry', 422);
+            const sfId = await resolveAuthUserId(d.email);
+            if (!sfId) return err('No auth user for that email yet — ask them to request a login link first, then retry', 422);
+            const authUser = { id: sfId };
             await sbStore('/rest/v1/users_profile', {
               method: 'POST',
               body: JSON.stringify({ id: authUser.id, full_name: d.full_name || d.email, role: 'sf_partner', active: true }),
