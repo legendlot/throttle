@@ -758,6 +758,65 @@ export default {
             return ok({ url: `${SUPABASE_URL}/storage/v1${sr.data.signedURL}` });
           }
 
+          // ── Document generation payloads (assembled for the print pages) ──
+          case 'getPoDoc': {
+            if (!canManageDocs(P)) return err('No permission', 403);
+            const id = qp('id'); if (!id) return err('id required');
+            const oR = await query('orders', `?id=eq.${encodeURIComponent(id)}&select=*&limit=1`);
+            if (!oR.ok || !oR.data[0]) return err('Order not found', 404);
+            const o = oR.data[0];
+            const [lR, vR, caR] = await Promise.all([
+              query('order_lines', `?order_id=eq.${encodeURIComponent(id)}&order=line_no.asc&select=line_no,product,variant,color,description,vendor_item_code,qty,unit,unit_price_rmb`),
+              o.vendor_code ? queryStore('vendors', `?vendor_code=eq.${encodeURIComponent(o.vendor_code)}&select=vendor_code,vendor_name,source_country,location,address,gstin&limit=1`) : Promise.resolve({ ok: true, data: [] }),
+              queryStore('company_addresses', `?active=is.true&order=is_registered_office.desc,id.asc&select=legal_name,line1,line2,city,state,pincode,country,gstin&limit=1`),
+            ]);
+            const lines = (lR.ok ? lR.data : []).map((l) => {
+              const qty = Number(l.qty) || 0, price = Number(l.unit_price_rmb) || 0;
+              const desc = l.description || [l.product, l.variant, l.color].filter(Boolean).join(' ') || '—';
+              return { vendor_item_code: l.vendor_item_code || l.product || '—', description: desc, qty, unit: l.unit || 'pcs', unit_price: price, line_total: qty * price };
+            });
+            const subtotal = lines.reduce((s, l) => s + l.line_total, 0);
+            const vendor = (vR.ok && vR.data[0]) ? vR.data[0] : { vendor_code: o.vendor_code, vendor_name: o.vendor_name, source_country: 'China', address: null };
+            const company = (caR.ok && caR.data[0]) ? caR.data[0] : { legal_name: 'Legend of Toys Pvt Ltd', gstin: '29AAFCF7834H1ZA', country: 'India' };
+            return ok({
+              company, vendor,
+              order: { order_no: o.order_no, order_label: o.order_label, po_ref: o.linked_po_number || o.order_no, currency: o.currency || 'CNY', incoterms: o.incoterms, notes: o.notes, created_at: o.created_at, status: o.status },
+              lines, totals: { subtotal, grand: subtotal },
+            });
+          }
+          case 'getInvoiceDoc': {
+            if (!canManageDocs(P)) return err('No permission', 403);
+            const id = qp('id'); if (!id) return err('id required');
+            const oR = await query('orders', `?id=eq.${encodeURIComponent(id)}&select=*&limit=1`);
+            if (!oR.ok || !oR.data[0]) return err('Order not found', 404);
+            const o = oR.data[0];
+            if (o.cost_state !== 'invoiced' || !o.invoice_no) return err('Order is not invoiced yet', 422);
+            const [seR, caR, invR] = await Promise.all([
+              o.billing_subentity ? query('sf_subentities', `?code=eq.${encodeURIComponent(o.billing_subentity)}&select=code,name&limit=1`) : Promise.resolve({ ok: true, data: [] }),
+              queryStore('company_addresses', `?active=is.true&order=is_registered_office.desc,id.asc&select=legal_name,line1,line2,city,state,pincode,country,gstin&limit=1`),
+              query('sf_invoices', `?invoice_no=eq.${encodeURIComponent(o.invoice_no)}&select=commission_rate,commission_inr,total_inr,invoice_date&limit=1`),
+            ]);
+            const inv = (invR.ok && invR.data[0]) ? invR.data[0] : {};
+            const seller = (seR.ok && seR.data[0]) ? { code: seR.data[0].code, name: seR.data[0].name } : { code: o.billing_subentity || 'SF', name: 'Solve Factory' };
+            const buyer = (caR.ok && caR.data[0]) ? caR.data[0] : { legal_name: 'Legend of Toys Pvt Ltd', gstin: '29AAFCF7834H1ZA', country: 'India' };
+            const costLines = [
+              { label: 'Goods value', amt: Number(o.purchase_inr) || 0 },
+              { label: 'Shipping', amt: Number(o.shipping_inr) || 0 },
+              { label: 'Customs', amt: Number(o.customs_inr) || 0 },
+            ].filter((r) => r.amt > 0);
+            const taxable = Number(o.base_inr) || costLines.reduce((s, r) => s + r.amt, 0);
+            const gstInr = Number(o.gst_inr) || 0;
+            const commission = inv.commission_inr != null ? { rate: Number(inv.commission_rate) || 0, inr: Number(inv.commission_inr) || 0 } : null;
+            const goodsTotal = Number(o.total_inr) || (taxable + gstInr);
+            const grand = goodsTotal + (commission ? commission.inr : 0);
+            return ok({
+              seller, buyer,
+              invoice: { invoice_no: o.invoice_no, invoice_date: o.invoice_date || inv.invoice_date || null, order_no: o.order_no, order_label: o.order_label },
+              costLines, taxable, gst: { percent: Number(o.gst_percent) || 0, inr: gstInr }, commission,
+              goods_total: goodsTotal, grand_total: grand,
+            });
+          }
+
           // ── Activity feed ──
           case 'getActivity': {
             const r = await query('activity', '?order=created_at.desc&limit=100&select=*');

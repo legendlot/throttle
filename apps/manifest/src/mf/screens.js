@@ -627,6 +627,7 @@ function OrderDetail({ detailId, session, onNav, reload, data }) {
               <Btn onClick={createLeg}><ShipIcon size={13} style={{ marginRight: 6, verticalAlign: -2 }} />Create {legMode} leg</Btn>
             </>}
             {cancellable && <Btn variant="secondary" onClick={cancelOrder}>Cancel</Btn>}
+            {!['draft', 'requested', 'cancelled'].includes(o.status) && <Btn variant="secondary" onClick={() => window.open(`/print/china-po/?id=${o.id}`, '_blank')}><FileText size={13} style={{ marginRight: 6, verticalAlign: -2 }} />China PO</Btn>}
           </div>
         </div>
         {o.status === 'requested'
@@ -740,6 +741,7 @@ function OrderDetail({ detailId, session, onNav, reload, data }) {
             ? <Card title="Invoiced" bodyPad="16px 20px 18px">
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}><Mono size={11} color="var(--t3)">Invoice</Mono><Mono color="var(--t1)">{o.invoice_no}</Mono></div>
                 {resp.commission && <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}><Mono size={11} color="var(--t3)">Commission · {resp.commission.rate}%</Mono><Mono color="var(--t1)">{D.inr(resp.commission.inr)}</Mono></div>}
+                <Btn variant="secondary" style={{ marginTop: 14, width: '100%' }} onClick={() => window.open(`/print/sf-invoice/?id=${o.id}`, '_blank')}><FileText size={13} style={{ marginRight: 6, verticalAlign: -2 }} />SF Invoice PDF</Btn>
               </Card>
             : editable && !edit && !['draft', 'requested'].includes(o.status) &&
                 <InvoiceCard order={o} lines={resp.lines} suggestedInvoiceNo={resp.suggestedInvoiceNo} fx={data?.fx?.current} run={run} session={session} />}
