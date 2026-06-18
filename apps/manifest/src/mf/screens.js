@@ -1242,7 +1242,7 @@ function AccessControl({ data, session, reload }) {
   const [grant, setGrant] = useState({ email: '', role_key: roles[0]?.role_key || '' });
   const act = async (action, body) => {
     setBusy(body.user_id || 'grant');
-    try { await workerFetch(action, body, session); await reload(); }
+    try { await workerFetch(action, { data: body }, session); await reload(); }
     catch (e) { alert(e?.message || 'Failed'); }
     setBusy('');
   };
@@ -1289,8 +1289,8 @@ function RolesBuilder({ data, session, reload }) {
   const assignedCount = (rk) => users.filter((u) => u.role_key === rk).length;
   const openNew = () => { setSel('__new__'); setDraft({ role_key: '', label: '', description: '', party: 'LOT', permissions: {}, is_system: false }); };
   const openEdit = (r) => { setSel(r.role_key); setDraft({ ...r, permissions: { ...(r.permissions || {}) } }); };
-  const save = async () => { setBusy(true); try { await workerFetch('saveRole', draft, session); await reload(); setSel(null); setDraft(null); } catch (e) { alert(e?.message || 'Failed'); } setBusy(false); };
-  const remove = async (rk) => { if (!confirm(`Delete role ${rk}?`)) return; setBusy(true); try { await workerFetch('deleteRole', { role_key: rk }, session); await reload(); setSel(null); setDraft(null); } catch (e) { alert(e?.message || 'Failed'); } setBusy(false); };
+  const save = async () => { setBusy(true); try { await workerFetch('saveRole', { data: draft }, session); await reload(); setSel(null); setDraft(null); } catch (e) { alert(e?.message || 'Failed'); } setBusy(false); };
+  const remove = async (rk) => { if (!confirm(`Delete role ${rk}?`)) return; setBusy(true); try { await workerFetch('deleteRole', { data: { role_key: rk } }, session); await reload(); setSel(null); setDraft(null); } catch (e) { alert(e?.message || 'Failed'); } setBusy(false); };
   const toggleKey = (k) => setDraft((d) => ({ ...d, permissions: { ...d.permissions, [k]: !d.permissions[k] } }));
   const cat = draft ? (PERMISSION_KEYS[draft.party] || PERMISSION_KEYS.LOT) : [];
   const locked = !!draft?.is_system;
