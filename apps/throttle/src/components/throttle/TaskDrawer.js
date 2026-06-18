@@ -8,7 +8,7 @@ import React, { useState, useEffect } from 'react';
 import { Icon } from '@/components/throttle/Icon';
 import { Avatar, ProductTag } from '@/components/throttle/ui';
 import { STAGES, PRIORITY, DTYPE, stageByVal, teamById, taskTag } from '@/lib/throttleData';
-import { fetchTaskActivity, postComment, relAge, setTaskOwner, selfAssignOwner, abandonTask, submitForReview } from '@/lib/throttleApi';
+import { fetchTaskActivity, fetchTaskAttachments, postComment, relAge, setTaskOwner, selfAssignOwner, abandonTask, submitForReview } from '@/lib/throttleApi';
 
 const toast = (msg, tone = 'ok', icon) => window.dispatchEvent(new CustomEvent('throttle:toast', { detail: { msg, tone, icon: icon || (tone === 'bad' ? 'alert' : 'check') } }));
 
@@ -32,8 +32,9 @@ export function TaskDrawer({ task, onClose, onMove, session, members = [], role,
   const [abandonReason, setAbandonReason] = useState('');
   const [reviewing, setReviewing] = useState(false);
   const [reviewLink, setReviewLink] = useState('');
+  const [attachments, setAttachments] = useState(null);
 
-  useEffect(() => { setComment(''); setComments(null); setAbandoning(false); setAbandonReason(''); setReviewing(false); setReviewLink(''); }, [task?.id]);
+  useEffect(() => { setComment(''); setComments(null); setAbandoning(false); setAbandonReason(''); setReviewing(false); setReviewLink(''); setAttachments(null); }, [task?.id]);
   useEffect(() => {
     if (!task) return;
     const onKey = e => { if (e.key === 'Escape') onClose(); };
@@ -45,10 +46,13 @@ export function TaskDrawer({ task, onClose, onMove, session, members = [], role,
     let cancelled = false;
     (async () => {
       const act = await fetchTaskActivity(session, task.id);
-      if (cancelled || !act) return;
-      const rows = act.filter(a => a.event_type === 'comment' && a.payload?.comment)
-        .map(a => ({ who: a.user?.name || 'Someone', t: relAge(a.created_at), text: a.payload.comment }));
-      setComments(rows);
+      if (!cancelled && act) {
+        const rows = act.filter(a => a.event_type === 'comment' && a.payload?.comment)
+          .map(a => ({ who: a.user?.name || 'Someone', t: relAge(a.created_at), text: a.payload.comment }));
+        setComments(rows);
+      }
+      const att = await fetchTaskAttachments(session, task.id);
+      if (!cancelled) setAttachments(att || []);
     })();
     return () => { cancelled = true; };
   }, [task, session]);
@@ -217,6 +221,26 @@ export function TaskDrawer({ task, onClose, onMove, session, members = [], role,
           <p style={{ fontSize: 13.5, color: 'var(--t2)', lineHeight: 1.6, margin: '0 0 20px' }}>
             {task.product ? `${task.product} ` : ''}deliverable for the current sprint. Match the brand book — dark-first, motorsport energy, no birthday-party context. Final files to the shared drive on approval.
           </p>
+
+          {attachments && attachments.length > 0 && (
+            <>
+              <div className="eyebrow" style={{ padding: 0, marginBottom: 8 }}>Submitted work</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 20 }}>
+                {attachments.map(a => (
+                  <a key={a.id} href={a.url} target="_blank" rel="noopener noreferrer"
+                    style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px', borderRadius: 'var(--r-sm)',
+                      background: 'var(--bg-2)', border: '1px solid var(--border-2)', color: 'var(--t1)', textDecoration: 'none',
+                      fontSize: 13, transition: 'border-color .15s' }}
+                    onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--yellow)'}
+                    onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border-2)'}>
+                    <Icon name="link" size={14} />
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.label || a.url}</span>
+                    <span className="num" style={{ fontSize: 10.5, color: 'var(--t4)' }}>{relAge(a.created_at)}</span>
+                  </a>
+                ))}
+              </div>
+            </>
+          )}
 
           <div className="eyebrow" style={{ padding: 0, marginBottom: 8 }}>Move to stage</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 22 }}>

@@ -238,6 +238,17 @@ export async function fetchTaskActivity(session, taskId) {
   try { const r = await workerFetch('getTaskActivity', { taskId }, session.access_token); return r?.activity || r?.data?.activity || []; }
   catch (_) { return null; }
 }
+// Deliverable links submitted for review (brand.task_attachments). The lead opens
+// these to review the work before approving — RLS lets admin/lead/member read.
+export async function fetchTaskAttachments(session, taskId) {
+  try {
+    const { data, error } = await supabaseBrand.from('task_attachments')
+      .select('id,url,label,created_at').eq('task_id', taskId)
+      .order('created_at', { ascending: false });
+    if (error) return null;
+    return data || [];
+  } catch (_) { return null; }
+}
 export async function postComment(session, taskId, comment) {
   return workerFetch('addComment', { taskId, comment }, session.access_token);
 }
