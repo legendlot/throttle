@@ -455,14 +455,24 @@ const metaAdsAdapter = {
     if (!env.META_SYSTEM_USER_TOKEN) throw new Error('Meta not configured (set META_SYSTEM_USER_TOKEN)');
     const accounts = (config && config.accounts) || [];
     if (!accounts.length) throw new Error('Meta config.accounts empty');
-    const since = (cursor || (config && config.backfill_start) || BACKFILL_START).slice(0, 10);
-    const until = istDate(nowISO());
-    const rows = []; let subreqs = 0, partial = false, maxDate = since;
+    const backfillStart = ((config && config.backfill_start) || BACKFILL_START).slice(0, 10);
+    const today = istDate(nowISO());
+    const WIN = 30;
+    const addDays = (d, n) => { const t = new Date(d + 'T00:00:00Z'); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); };
+    // ONE window per run (the full-range pull blew the Worker wall-clock). Walk BACKWARD from today
+    // so recent spend lands on the first run; cursor = earliest date fetched so far.
+    const earliest = cursor ? String(cursor).slice(0, 10) : null;
+    let winEnd, winStart, mode;
+    if (earliest === null) { mode = 'initial'; winEnd = today; winStart = addDays(today, -(WIN - 1)); }
+    else if (earliest > backfillStart) { mode = 'backfill'; winEnd = addDays(earliest, -1); winStart = addDays(winEnd, -(WIN - 1)); }
+    else { mode = 'steady'; winEnd = today; winStart = addDays(today, -(WIN - 1)); }
+    if (winStart < backfillStart) winStart = backfillStart;
+    const rows = []; let subreqs = 0, partial = false;
     for (const acct of accounts) {
       let url = `https://graph.facebook.com/${META_API_VER}/act_${acct}/insights`
         + `?level=campaign&time_increment=1`
         + `&fields=campaign_id,campaign_name,spend,impressions,clicks,actions,action_values`
-        + `&time_range=${encodeURIComponent(JSON.stringify({ since, until }))}`
+        + `&time_range=${encodeURIComponent(JSON.stringify({ since: winStart, until: winEnd }))}`
         + `&limit=200&access_token=${env.META_SYSTEM_USER_TOKEN}`;
       while (url) {
         if (subreqs >= budget) { partial = true; break; }
@@ -470,11 +480,10 @@ const metaAdsAdapter = {
         if (!res || !res.ok) { const b = res ? await res.text().catch(() => '') : ''; throw new Error(`Meta ${res ? res.status : 'network'} act_${acct}: ${b.slice(0, 160)}`); }
         const j = await res.json();
         for (const d of (j.data || [])) {
-          const day = d.date_start; if (day > maxDate) maxDate = day;
           const purch = (d.actions || []).find(a => a.action_type === 'omni_purchase' || a.action_type === 'purchase');
           const purchVal = (d.action_values || []).find(a => a.action_type === 'omni_purchase' || a.action_type === 'purchase');
           rows.push({
-            channel_id: channelId, ad_account_id: acct, campaign_id: d.campaign_id, campaign_name: d.campaign_name || null, the_date: day,
+            channel_id: channelId, ad_account_id: acct, campaign_id: d.campaign_id, campaign_name: d.campaign_name || null, the_date: d.date_start,
             spend: num(d.spend), impressions: num(d.impressions), clicks: num(d.clicks),
             conversions: purch ? num(purch.value) : 0, conv_value: purchVal ? num(purchVal.value) : 0, raw: d,
           });
@@ -483,7 +492,11 @@ const metaAdsAdapter = {
       }
       if (partial) break;
     }
-    return { rows, cursorAfter: maxDate, subreqs, partial };
+    // Advance cursor to the new earliest while backfilling; once backfilled, hold at backfillStart
+    // so steady-state runs keep refreshing only the most-recent window.
+    const cursorAfter = (mode === 'steady') ? backfillStart : winStart;
+    if (mode !== 'steady') partial = partial || (winStart > backfillStart);
+    return { rows, cursorAfter, subreqs, partial };
   },
   async stage(rows, runId, channelId) {
     if (!rows.length) return;
