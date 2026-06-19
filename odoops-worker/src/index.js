@@ -930,6 +930,19 @@ export default {
             return ok({ rows: r.data || [] });
           }
 
+          // Sales-value segregation (order-grain): gross/cancellations/discounts/returns/GST +
+          // order-type counts, per (sale_date, channel). Populated for channels with order-grain
+          // staging (Shopify now; Amazon/GT-MT later) — others simply have no rows here.
+          case 'getSegregation': {
+            const chans = (qp('channel_id') || '').split(',').map(s => s.trim()).filter(Boolean);
+            const r = await rpcSales('f_order_rollup', {
+              p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO(),
+              p_channels: chans.length ? chans : null,
+            });
+            if (!r.ok) return err('Segregation rollup failed: ' + JSON.stringify(r.data), 502);
+            return ok({ rows: r.data || [], channels: await getChannels() });
+          }
+
           case 'getSalesExport': {
             const chans = (qp('channel_id') || '').split(',').map(s => s.trim()).filter(Boolean);
             const r = await rpcSales('f_sales_rollup', {
