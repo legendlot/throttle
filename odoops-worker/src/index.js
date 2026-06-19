@@ -272,15 +272,16 @@ function _pemToPkcs8(pem) {
   for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
   return buf.buffer;
 }
-let _gToken = null, _gTokenExp = 0;
-async function googleSheetsToken(env) {
+let _gTokById = {};   // scope → { token, exp } — one cached token per scope
+async function googleToken(env, scope) {
   if (!env.GOOGLE_SA_JSON) throw new Error('Google not configured (set GOOGLE_SA_JSON secret)');
   const now = Math.floor(Date.now() / 1000);
-  if (_gToken && now < _gTokenExp - 60) return _gToken;
+  const c = _gTokById[scope];
+  if (c && now < c.exp - 60) return c.token;
   const sa = JSON.parse(env.GOOGLE_SA_JSON);
   const header = _b64urlStr(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
   const claim = _b64urlStr(JSON.stringify({
-    iss: sa.client_email, scope: 'https://www.googleapis.com/auth/spreadsheets.readonly',
+    iss: sa.client_email, scope,
     aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 3600,
   }));
   const signingInput = `${header}.${claim}`;
@@ -292,9 +293,10 @@ async function googleSheetsToken(env) {
   });
   const t = await res.json().catch(() => ({}));
   if (!t.access_token) throw new Error('Google token failed: ' + JSON.stringify(t).slice(0, 160));
-  _gToken = t.access_token; _gTokenExp = now + (Number(t.expires_in) || 3600);
-  return _gToken;
+  _gTokById[scope] = { token: t.access_token, exp: now + (Number(t.expires_in) || 3600) };
+  return t.access_token;
 }
+const googleSheetsToken = (env) => googleToken(env, 'https://www.googleapis.com/auth/spreadsheets.readonly');
 const gsheetAdapter = {
   kind: 'qc_gsheet', stgTable: 'stg_qc', sourceKind: 'qc',
   async fetch({ env, config }) {
@@ -444,7 +446,120 @@ const amazonAdapter = {
   },
 };
 
-const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter, amazon_spapi: amazonAdapter };
+// ── Meta Ads (Marketing API insights) — domain: marketing → mkt_fact ──────
+const META_API_VER = 'v21.0';
+const metaAdsAdapter = {
+  kind: 'meta_ads', stgTable: 'stg_meta',
+  datesOf(rows) { return [...new Set(rows.map(r => r.the_date))].sort(); },
+  async fetch({ env, channelId, cursor, budget, config }) {
+    if (!env.META_SYSTEM_USER_TOKEN) throw new Error('Meta not configured (set META_SYSTEM_USER_TOKEN)');
+    const accounts = (config && config.accounts) || [];
+    if (!accounts.length) throw new Error('Meta config.accounts empty');
+    const since = (cursor || (config && config.backfill_start) || BACKFILL_START).slice(0, 10);
+    const until = istDate(nowISO());
+    const rows = []; let subreqs = 0, partial = false, maxDate = since;
+    for (const acct of accounts) {
+      let url = `https://graph.facebook.com/${META_API_VER}/act_${acct}/insights`
+        + `?level=campaign&time_increment=1`
+        + `&fields=campaign_id,campaign_name,spend,impressions,clicks,actions,action_values`
+        + `&time_range=${encodeURIComponent(JSON.stringify({ since, until }))}`
+        + `&limit=200&access_token=${env.META_SYSTEM_USER_TOKEN}`;
+      while (url) {
+        if (subreqs >= budget) { partial = true; break; }
+        const res = await fetch(url).catch(() => null); subreqs++;
+        if (!res || !res.ok) { const b = res ? await res.text().catch(() => '') : ''; throw new Error(`Meta ${res ? res.status : 'network'} act_${acct}: ${b.slice(0, 160)}`); }
+        const j = await res.json();
+        for (const d of (j.data || [])) {
+          const day = d.date_start; if (day > maxDate) maxDate = day;
+          const purch = (d.actions || []).find(a => a.action_type === 'omni_purchase' || a.action_type === 'purchase');
+          const purchVal = (d.action_values || []).find(a => a.action_type === 'omni_purchase' || a.action_type === 'purchase');
+          rows.push({
+            channel_id: channelId, ad_account_id: acct, campaign_id: d.campaign_id, campaign_name: d.campaign_name || null, the_date: day,
+            spend: num(d.spend), impressions: num(d.impressions), clicks: num(d.clicks),
+            conversions: purch ? num(purch.value) : 0, conv_value: purchVal ? num(purchVal.value) : 0, raw: d,
+          });
+        }
+        url = (j.paging && j.paging.next) || null;
+      }
+      if (partial) break;
+    }
+    return { rows, cursorAfter: maxDate, subreqs, partial };
+  },
+  async stage(rows, runId, channelId) {
+    if (!rows.length) return;
+    const body = rows.map(r => ({
+      run_id: runId, channel_id: channelId, ad_account_id: r.ad_account_id, campaign_id: r.campaign_id,
+      campaign_name: r.campaign_name, the_date: r.the_date, spend: r.spend, impressions: Math.round(r.impressions),
+      clicks: Math.round(r.clicks), conversions: r.conversions, conv_value: r.conv_value, raw: r.raw,
+    }));
+    await sbSales('/rest/v1/stg_meta', { method: 'POST', body: JSON.stringify(body), prefer: 'return=minimal,resolution=merge-duplicates' });
+  },
+  async recompute({ channelId, dates, runId }) {
+    const f = await rpcSales('recompute_mkt', { p_channel: channelId, p_dates: dates, p_run_id: runId });
+    return { mapped: 0, unmapped: 0, factsUpserted: (f.ok ? Number(f.data) : 0) };
+  },
+};
+
+// ── GA4 (Analytics Data API runReport) — domain: traffic → traffic_fact ───
+const GA4_SCOPE = 'https://www.googleapis.com/auth/analytics.readonly';
+const ga4Adapter = {
+  kind: 'ga4', stgTable: 'stg_ga4',
+  datesOf(rows) { return [...new Set(rows.map(r => r.the_date))].sort(); },
+  async fetch({ env, channelId, cursor, budget, config }) {
+    const prop = config && config.property_id;
+    if (!prop) throw new Error('GA4 config.property_id missing');
+    const startDate = (cursor || (config && config.backfill_start) || BACKFILL_START).slice(0, 10);
+    const endDate = istDate(nowISO());
+    const token = await googleToken(env, GA4_SCOPE);
+    const rows = []; let subreqs = 0, partial = false, maxDate = startDate, offset = 0;
+    const LIMIT = 100000;
+    while (true) {
+      if (subreqs >= budget) { partial = true; break; }
+      const res = await fetch(`https://analyticsdata.googleapis.com/v1beta/properties/${prop}:runReport`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dateRanges: [{ startDate, endDate }],
+          dimensions: [{ name: 'date' }, { name: 'sessionDefaultChannelGroup' }],
+          metrics: [{ name: 'sessions' }, { name: 'addToCarts' }, { name: 'checkouts' }, { name: 'ecommercePurchases' }, { name: 'purchaseRevenue' }],
+          limit: LIMIT, offset, keepEmptyRows: false,
+        }),
+      }).catch(() => null);
+      subreqs++;
+      if (!res || !res.ok) { const b = res ? await res.text().catch(() => '') : ''; throw new Error(`GA4 ${res ? res.status : 'network'}: ${b.slice(0, 200)}`); }
+      const j = await res.json();
+      for (const row of (j.rows || [])) {
+        const dv = row.dimensionValues, mv = row.metricValues;
+        const ymd = dv[0].value;
+        const the_date = `${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}`;
+        if (the_date > maxDate) maxDate = the_date;
+        rows.push({
+          channel_id: channelId, the_date, src_group: dv[1].value || '(none)',
+          sessions: num(mv[0].value), add_to_carts: num(mv[1].value), checkouts: num(mv[2].value),
+          purchases: num(mv[3].value), conv_value: num(mv[4].value), raw: row,
+        });
+      }
+      const total = Number(j.rowCount || 0);
+      offset += LIMIT;
+      if (offset >= total || !(j.rows || []).length) break;
+    }
+    return { rows, cursorAfter: maxDate, subreqs, partial };
+  },
+  async stage(rows, runId, channelId) {
+    if (!rows.length) return;
+    const body = rows.map(r => ({
+      run_id: runId, channel_id: channelId, the_date: r.the_date, src_group: r.src_group,
+      sessions: Math.round(r.sessions), add_to_carts: Math.round(r.add_to_carts), checkouts: Math.round(r.checkouts),
+      purchases: Math.round(r.purchases), conv_value: r.conv_value, raw: r.raw,
+    }));
+    await sbSales('/rest/v1/stg_ga4', { method: 'POST', body: JSON.stringify(body), prefer: 'return=minimal,resolution=merge-duplicates' });
+  },
+  async recompute({ channelId, dates, runId }) {
+    const f = await rpcSales('recompute_traffic', { p_channel: channelId, p_dates: dates, p_run_id: runId });
+    return { mapped: 0, unmapped: 0, factsUpserted: (f.ok ? Number(f.data) : 0) };
+  },
+};
+
+const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter, amazon_spapi: amazonAdapter, meta_ads: metaAdsAdapter, ga4: ga4Adapter };
 
 // minimal RFC-4180-ish CSV parser (handles quoted fields, commas, newlines)
 function parseCSV(text) {
@@ -585,8 +700,15 @@ async function executeRun(cfg, runId, env, { budget = CRON_BUDGET, cursorOverrid
     const cursor = cursorOverride !== undefined ? cursorOverride : cfg.cursor;
     const { rows, cursorAfter, subreqs, partial } = await adapter.fetch({ env, channelId: cfg.channel_id, channelName: cname, cursor, windowTo: nowISO(), budget, config: cfg.config });
     await adapter.stage(rows, runId, cfg.channel_id);
-    const dates = distinctDates(rows);
-    const res = dates.length ? await mapAndUpsert(cfg.channel_id, dates, runId, adapter.stgTable, cfg.started_by) : { mapped: 0, unmapped: 0, factsUpserted: 0 };
+    // Sales adapters use sale_date + the SKU-mapping tail (default). Non-sales domains
+    // (marketing/traffic) supply their own date field (datesOf) + their own recompute.
+    const dates = adapter.datesOf ? adapter.datesOf(rows) : distinctDates(rows);
+    let res = { mapped: 0, unmapped: 0, factsUpserted: 0 };
+    if (dates.length) {
+      res = adapter.recompute
+        ? await adapter.recompute({ channelId: cfg.channel_id, dates, runId })
+        : await mapAndUpsert(cfg.channel_id, dates, runId, adapter.stgTable, cfg.started_by);
+    }
     await finishRun(runId, { status: partial ? 'partial' : 'ok', rows_fetched: rows.length, rows_mapped: res.mapped, rows_unmapped: res.unmapped, facts_upserted: res.factsUpserted, subrequests_used: subreqs, cursor_after: cursorAfter });
     // Advance the live cursor whenever we have a watermark — INCLUDING partial pulls.
     // Adapters page strictly forward (Shopify by ascending updated_at), so on a budget-capped
@@ -719,6 +841,18 @@ export default {
               p_channels: chans.length ? chans : null, p_product_code: qp('product_code') || null, p_group: qp('group') || 'variant',
             });
             if (!r.ok) return err('Rollup failed: ' + JSON.stringify(r.data), 502);
+            return ok({ rows: r.data || [] });
+          }
+
+          case 'getMarketing': {
+            const r = await rpcSales('f_mkt_rollup', { p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO(), p_group: qp('group') || 'platform' });
+            if (!r.ok) return err('Marketing rollup failed: ' + JSON.stringify(r.data), 502);
+            return ok({ rows: r.data || [] });
+          }
+
+          case 'getTraffic': {
+            const r = await rpcSales('f_traffic_rollup', { p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO() });
+            if (!r.ok) return err('Traffic rollup failed: ' + JSON.stringify(r.data), 502);
             return ok({ rows: r.data || [] });
           }
 
