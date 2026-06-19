@@ -875,11 +875,21 @@ export default {
               sbSales('/rest/v1/connector_runs?order=started_at.desc&limit=120&select=*'),
             ]);
             const cfgs = cfgR.ok ? cfgR.data : []; const runs = runR.ok ? runR.data : [];
+            // Platform connectors (Meta Ads / GA4) are is_sale=false, so getChannels() excludes them.
+            // Fetch their names directly so they still appear as manageable connector cards.
+            const have = new Set(channels.map(c => c.id));
+            const extraIds = [...new Set(cfgs.map(c => c.channel_id).filter(id => !have.has(id)))];
+            let extra = [];
+            if (extraIds.length) {
+              const er = await sbPublic(`/rest/v1/dispatch_channels?id=in.(${extraIds.join(',')})&select=id,name,type`);
+              extra = er.ok ? er.data : [];
+            }
+            const allCh = [...channels, ...extra];
             const lastByChannel = {}; runs.forEach(r => { if (!lastByChannel[r.channel_id]) lastByChannel[r.channel_id] = r; });
             const cfgByChannel = {}; cfgs.forEach(c => { cfgByChannel[c.channel_id] = c; });
             return ok({
-              secrets: { shopify: !!(env.SHOPIFY_ACCESS_TOKEN || env.SHOPIFY_CLIENT_ID), amazon: !!env.AMAZON_LWA_CLIENT_ID, flipkart: !!env.FLIPKART_CLIENT_ID, google: !!env.GOOGLE_SA_JSON },
-              connectors: channels.map(c => ({ channel_id: c.id, name: c.name, adapter_kind: cfgByChannel[c.id]?.adapter_kind || null, enabled: !!cfgByChannel[c.id]?.enabled, cursor: cfgByChannel[c.id]?.cursor || null, last_ok_at: cfgByChannel[c.id]?.last_ok_at || null, last_error: cfgByChannel[c.id]?.last_error || null, last_run: lastByChannel[c.id] || null })),
+              secrets: { shopify: !!(env.SHOPIFY_ACCESS_TOKEN || env.SHOPIFY_CLIENT_ID), amazon: !!env.AMAZON_LWA_CLIENT_ID, flipkart: !!env.FLIPKART_CLIENT_ID, google: !!env.GOOGLE_SA_JSON, meta: !!env.META_SYSTEM_USER_TOKEN },
+              connectors: allCh.map(c => ({ channel_id: c.id, name: c.name, adapter_kind: cfgByChannel[c.id]?.adapter_kind || null, enabled: !!cfgByChannel[c.id]?.enabled, cursor: cfgByChannel[c.id]?.cursor || null, last_ok_at: cfgByChannel[c.id]?.last_ok_at || null, last_error: cfgByChannel[c.id]?.last_error || null, last_run: lastByChannel[c.id] || null })),
             });
           }
 
