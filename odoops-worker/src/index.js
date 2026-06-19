@@ -65,6 +65,17 @@ async function rpcSales(fn, body) {
   return sbSales(`/rest/v1/rpc/${fn}`, { method: 'POST', body: JSON.stringify(body) });
 }
 
+// Chunked INSERT that THROWS on any failed chunk. A single large array POST (e.g. a wide
+// Shopify re-pull whose line rows each carry the full `raw` JSON) can exceed the request-body
+// limit and fail — and a plain sbSales POST whose result is ignored drops the whole batch
+// SILENTLY. Chunk it (default 200 rows) and surface failures so a run errors loudly instead.
+async function sbInsertChunked(path, rows, prefer = 'return=minimal') {
+  for (let i = 0; i < rows.length; i += 200) {
+    const r = await sbSales(path, { method: 'POST', prefer, body: JSON.stringify(rows.slice(i, i + 200)) });
+    if (!r.ok) throw new Error(`insert ${path.split('?')[0].split('/').pop()} [${i}..${i + 200}) failed (${r.status}): ${JSON.stringify(r.data).slice(0, 160)}`);
+  }
+}
+
 // ── utils ───────────────────────────────────────────────────────
 function ok(payload, status = 200) {
   return new Response(JSON.stringify({ ok: true, data: payload }), { status, headers: { ...CORS, 'Content-Type': 'application/json' } });
@@ -253,7 +264,7 @@ const shopifyAdapter = {
         discount_value: r.discount_value || 0, tax_value: r.tax_value || 0, row_type: r.row_type || 'sale',
         order_status: r.order_status, is_cancelled: r.is_cancelled, raw: r.raw,
       }));
-      await sbSales('/rest/v1/stg_shopify', { method: 'POST', body: JSON.stringify(body), prefer: 'return=minimal,resolution=merge-duplicates' });
+      await sbInsertChunked('/rest/v1/stg_shopify', body, 'return=minimal,resolution=merge-duplicates');
     }
     await stageOrders((fetched && fetched.orderRows) || [], runId, channelId);
   },
@@ -270,8 +281,7 @@ async function stageOrders(orderRows, runId, channelId) {
     is_cancelled: !!o.is_cancelled, returned_value: o.returned_value || 0,
     tags: Array.isArray(o.tags) ? o.tags : [], raw: o.raw || null,
   }));
-  await sbSales('/rest/v1/stg_orders?on_conflict=channel_id,source_order_id,row_kind,refund_id',
-    { method: 'POST', body: JSON.stringify(body), prefer: 'return=minimal,resolution=merge-duplicates' });
+  await sbInsertChunked('/rest/v1/stg_orders?on_conflict=channel_id,source_order_id,row_kind,refund_id', body, 'return=minimal,resolution=merge-duplicates');
 }
 
 // ── GT/MT (reads Snorkel confirmed sales orders) ───────────────
@@ -306,7 +316,7 @@ const snorkelAdapter = {
       sale_date: r.sale_date, channel_sku: r.channel_sku, title: r.title,
       qty: Math.round(r.qty), gross_value: r.gross_value, order_status: r.order_status, is_cancelled: r.is_cancelled, raw: r.raw,
     }));
-    await sbSales('/rest/v1/stg_snorkel', { method: 'POST', body: JSON.stringify(body), prefer: 'return=minimal,resolution=merge-duplicates' });
+    await sbInsertChunked('/rest/v1/stg_snorkel', body, 'return=minimal,resolution=merge-duplicates');
   },
 };
 
@@ -385,7 +395,7 @@ const gsheetAdapter = {
     // supersede the channel's staged rows over the pulled range (the sheet is the source of truth)
     await sbSales(`/rest/v1/stg_qc?channel_id=eq.${channelId}&sale_date=gte.${from}&sale_date=lte.${to}`, { method: 'DELETE', prefer: 'return=minimal' });
     const body = rows.map(r => ({ channel_id: channelId, upload_batch_id: batchId, row_no: r.row_no, sale_date: r.sale_date, channel_sku: r.channel_sku, title: r.title, qty: Math.round(r.qty), gross_value: r.gross_value, is_cancelled: false, raw: r.raw }));
-    await sbSales('/rest/v1/stg_qc', { method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify(body) });
+    await sbInsertChunked('/rest/v1/stg_qc', body, 'return=minimal,resolution=merge-duplicates');
   },
 };
 
@@ -502,7 +512,7 @@ const amazonAdapter = {
       channel_sku: r.channel_sku, title: r.title, qty: Math.round(r.qty), gross_value: r.gross_value,
       order_status: r.order_status || null, is_cancelled: !!r.is_cancelled, raw: r.raw,
     }));
-    await sbSales('/rest/v1/stg_amazon', { method: 'POST', prefer: 'return=minimal', body: JSON.stringify(body) });
+    await sbInsertChunked('/rest/v1/stg_amazon', body, 'return=minimal');
   },
 };
 
@@ -629,7 +639,7 @@ const amazonAdsAdapter = {
     const to   = rows.reduce((m, x) => x.the_date > m ? x.the_date : m, rows[0].the_date);
     await sbSales(`/rest/v1/stg_amazon_ads?channel_id=eq.${channelId}&the_date=gte.${from}&the_date=lte.${to}`, { method: 'DELETE', prefer: 'return=minimal' });
     const body = rows.map(r => ({ run_id: runId, channel_id: channelId, ad_account_id: r.ad_account_id, campaign_id: r.campaign_id, campaign_name: r.campaign_name, the_date: r.the_date, spend: r.spend, impressions: Math.round(r.impressions), clicks: Math.round(r.clicks), conversions: r.conversions, conv_value: r.conv_value, raw: r.raw }));
-    await sbSales('/rest/v1/stg_amazon_ads', { method: 'POST', prefer: 'return=minimal', body: JSON.stringify(body) });
+    await sbInsertChunked('/rest/v1/stg_amazon_ads', body, 'return=minimal');
   },
   async recompute({ channelId, dates, runId }) {
     const f = await rpcSales('recompute_amzn_ads', { p_channel: channelId, p_dates: dates, p_run_id: runId });
@@ -696,7 +706,7 @@ const metaAdsAdapter = {
       campaign_name: r.campaign_name, the_date: r.the_date, spend: r.spend, impressions: Math.round(r.impressions),
       clicks: Math.round(r.clicks), conversions: r.conversions, conv_value: r.conv_value, raw: r.raw,
     }));
-    await sbSales('/rest/v1/stg_meta', { method: 'POST', body: JSON.stringify(body), prefer: 'return=minimal,resolution=merge-duplicates' });
+    await sbInsertChunked('/rest/v1/stg_meta', body, 'return=minimal,resolution=merge-duplicates');
   },
   async recompute({ channelId, dates, runId }) {
     const f = await rpcSales('recompute_mkt', { p_channel: channelId, p_dates: dates, p_run_id: runId });
@@ -755,7 +765,7 @@ const ga4Adapter = {
       sessions: Math.round(r.sessions), add_to_carts: Math.round(r.add_to_carts), checkouts: Math.round(r.checkouts),
       purchases: Math.round(r.purchases), conv_value: r.conv_value, raw: r.raw,
     }));
-    await sbSales('/rest/v1/stg_ga4', { method: 'POST', body: JSON.stringify(body), prefer: 'return=minimal,resolution=merge-duplicates' });
+    await sbInsertChunked('/rest/v1/stg_ga4', body, 'return=minimal,resolution=merge-duplicates');
   },
   async recompute({ channelId, dates, runId }) {
     const f = await rpcSales('recompute_traffic', { p_channel: channelId, p_dates: dates, p_run_id: runId });
@@ -951,7 +961,7 @@ async function ingestUpload(batch, env) {
   await sbSales(`/rest/v1/stg_qc?channel_id=eq.${batch.channel_id}&sale_date=gte.${from}&sale_date=lte.${to}`, { method: 'DELETE', prefer: 'return=minimal' });
   if (rows.length) {
     const body = rows.map(r => ({ channel_id: batch.channel_id, upload_batch_id: batch.id, row_no: r.row_no, sale_date: r.sale_date, channel_sku: r.channel_sku, title: r.title, qty: Math.round(r.qty), gross_value: r.gross_value, is_cancelled: false, raw: r.raw }));
-    await sbSales('/rest/v1/stg_qc', { method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify(body) });
+    await sbInsertChunked('/rest/v1/stg_qc', body, 'return=minimal,resolution=merge-duplicates');
   }
   const dates = distinctDates(rows);
   const res = dates.length ? await mapAndUpsert(batch.channel_id, dates, null, 'stg_qc', batch.uploaded_by) : { mapped: 0, unmapped: 0, factsUpserted: 0 };
