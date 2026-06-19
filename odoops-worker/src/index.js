@@ -70,9 +70,10 @@ async function rpcSales(fn, body) {
 // limit and fail — and a plain sbSales POST whose result is ignored drops the whole batch
 // SILENTLY. Chunk it (default 200 rows) and surface failures so a run errors loudly instead.
 async function sbInsertChunked(path, rows, prefer = 'return=minimal') {
-  for (let i = 0; i < rows.length; i += 200) {
-    const r = await sbSales(path, { method: 'POST', prefer, body: JSON.stringify(rows.slice(i, i + 200)) });
-    if (!r.ok) throw new Error(`insert ${path.split('?')[0].split('/').pop()} [${i}..${i + 200}) failed (${r.status}): ${JSON.stringify(r.data).slice(0, 160)}`);
+  const CHUNK = 300;   // ~600KB/POST for fat Shopify line rows — under the body limit, few subrequests
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const r = await sbSales(path, { method: 'POST', prefer, body: JSON.stringify(rows.slice(i, i + CHUNK)) });
+    if (!r.ok) throw new Error(`insert ${path.split('?')[0].split('/').pop()} [${i}..${i + CHUNK}) failed (${r.status}): ${JSON.stringify(r.data).slice(0, 160)}`);
   }
 }
 
@@ -181,8 +182,11 @@ const shopifyAdapter = {
     const gql = `query($q:String!,$after:String){ orders(first:50, query:$q, sortKey:UPDATED_AT, after:$after){ pageInfo{ hasNextPage endCursor } edges{ node{ id name createdAt updatedAt cancelledAt displayFinancialStatus currencyCode tags totalPriceSet{ shopMoney{ amount } } totalDiscountsSet{ shopMoney{ amount } } totalTaxSet{ shopMoney{ amount } } lineItems(first:100){ edges{ node{ id title quantity sku variantTitle originalTotalSet{ shopMoney{ amount currencyCode } } discountedTotalSet{ shopMoney{ amount } } taxLines{ priceSet{ shopMoney{ amount } } } } } } refunds{ id createdAt totalRefundedSet{ shopMoney{ amount } } refundLineItems(first:50){ edges{ node{ quantity subtotalSet{ shopMoney{ amount } } totalTaxSet{ shopMoney{ amount } } lineItem{ id sku title variantTitle } } } } } } } } }`;
     let token = await getShopifyToken(env); subreqs++;
     if (!token) throw new Error('Shopify auth failed (client credentials)');
+    // Cap pages per run at 12 (~600 orders): the chunked staging inserts that follow each cost a
+    // subrequest, so leaving headroom keeps pages+inserts under Cloudflare's 50-subrequest cap (and
+    // the heavy widened query under the wall-clock). The cursor advances, so the next run continues.
     while (hasNext) {
-      if (subreqs >= budget) { partial = true; break; }
+      if (subreqs >= Math.min(budget, 12)) { partial = true; break; }
       const run = (tok) => fetch(`https://${env.SHOPIFY_STORE_DOMAIN}/admin/api/${ver}/graphql.json`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': tok },
         body: JSON.stringify({ query: gql, variables: { q: `updated_at:>='${since}'`, after } }),
