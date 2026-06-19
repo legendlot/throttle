@@ -268,7 +268,7 @@ const shopifyAdapter = {
         discount_value: r.discount_value || 0, tax_value: r.tax_value || 0, row_type: r.row_type || 'sale',
         order_status: r.order_status, is_cancelled: r.is_cancelled, raw: r.raw,
       }));
-      await sbInsertChunked('/rest/v1/stg_shopify', body, 'return=minimal,resolution=merge-duplicates');
+      await sbInsertChunked('/rest/v1/stg_shopify?on_conflict=source_line_id', body, 'return=minimal,resolution=merge-duplicates');
     }
     await stageOrders((fetched && fetched.orderRows) || [], runId, channelId);
   },
@@ -320,7 +320,7 @@ const snorkelAdapter = {
       sale_date: r.sale_date, channel_sku: r.channel_sku, title: r.title,
       qty: Math.round(r.qty), gross_value: r.gross_value, order_status: r.order_status, is_cancelled: r.is_cancelled, raw: r.raw,
     }));
-    await sbInsertChunked('/rest/v1/stg_snorkel', body, 'return=minimal,resolution=merge-duplicates');
+    await sbInsertChunked('/rest/v1/stg_snorkel?on_conflict=source_line_id', body, 'return=minimal,resolution=merge-duplicates');
   },
 };
 
@@ -399,7 +399,7 @@ const gsheetAdapter = {
     // supersede the channel's staged rows over the pulled range (the sheet is the source of truth)
     await sbSales(`/rest/v1/stg_qc?channel_id=eq.${channelId}&sale_date=gte.${from}&sale_date=lte.${to}`, { method: 'DELETE', prefer: 'return=minimal' });
     const body = rows.map(r => ({ channel_id: channelId, upload_batch_id: batchId, row_no: r.row_no, sale_date: r.sale_date, channel_sku: r.channel_sku, title: r.title, qty: Math.round(r.qty), gross_value: r.gross_value, is_cancelled: false, raw: r.raw }));
-    await sbInsertChunked('/rest/v1/stg_qc', body, 'return=minimal,resolution=merge-duplicates');
+    await sbInsertChunked('/rest/v1/stg_qc?on_conflict=upload_batch_id,row_no', body, 'return=minimal,resolution=merge-duplicates');
   },
 };
 
@@ -710,7 +710,7 @@ const metaAdsAdapter = {
       campaign_name: r.campaign_name, the_date: r.the_date, spend: r.spend, impressions: Math.round(r.impressions),
       clicks: Math.round(r.clicks), conversions: r.conversions, conv_value: r.conv_value, raw: r.raw,
     }));
-    await sbInsertChunked('/rest/v1/stg_meta', body, 'return=minimal,resolution=merge-duplicates');
+    await sbInsertChunked('/rest/v1/stg_meta?on_conflict=channel_id,ad_account_id,campaign_id,the_date', body, 'return=minimal,resolution=merge-duplicates');
   },
   async recompute({ channelId, dates, runId }) {
     const f = await rpcSales('recompute_mkt', { p_channel: channelId, p_dates: dates, p_run_id: runId });
@@ -769,7 +769,7 @@ const ga4Adapter = {
       sessions: Math.round(r.sessions), add_to_carts: Math.round(r.add_to_carts), checkouts: Math.round(r.checkouts),
       purchases: Math.round(r.purchases), conv_value: r.conv_value, raw: r.raw,
     }));
-    await sbInsertChunked('/rest/v1/stg_ga4', body, 'return=minimal,resolution=merge-duplicates');
+    await sbInsertChunked('/rest/v1/stg_ga4?on_conflict=channel_id,the_date,src_group', body, 'return=minimal,resolution=merge-duplicates');
   },
   async recompute({ channelId, dates, runId }) {
     const f = await rpcSales('recompute_traffic', { p_channel: channelId, p_dates: dates, p_run_id: runId });
@@ -965,7 +965,7 @@ async function ingestUpload(batch, env) {
   await sbSales(`/rest/v1/stg_qc?channel_id=eq.${batch.channel_id}&sale_date=gte.${from}&sale_date=lte.${to}`, { method: 'DELETE', prefer: 'return=minimal' });
   if (rows.length) {
     const body = rows.map(r => ({ channel_id: batch.channel_id, upload_batch_id: batch.id, row_no: r.row_no, sale_date: r.sale_date, channel_sku: r.channel_sku, title: r.title, qty: Math.round(r.qty), gross_value: r.gross_value, is_cancelled: false, raw: r.raw }));
-    await sbInsertChunked('/rest/v1/stg_qc', body, 'return=minimal,resolution=merge-duplicates');
+    await sbInsertChunked('/rest/v1/stg_qc?on_conflict=upload_batch_id,row_no', body, 'return=minimal,resolution=merge-duplicates');
   }
   const dates = distinctDates(rows);
   const res = dates.length ? await mapAndUpsert(batch.channel_id, dates, null, 'stg_qc', batch.uploaded_by) : { mapped: 0, unmapped: 0, factsUpserted: 0 };
