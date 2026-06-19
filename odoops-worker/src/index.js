@@ -167,7 +167,7 @@ const shopifyAdapter = {
     const ver = env.SHOPIFY_API_VERSION || SHOPIFY_API_VERSION_DEFAULT;
     const since = cursor || BACKFILL_START;
     const rows = [], orderRows = []; let after = null, hasNext = true, subreqs = 0, maxUpdated = since, partial = false;
-    const gql = `query($q:String!,$after:String){ orders(first:50, query:$q, sortKey:UPDATED_AT, after:$after){ pageInfo{ hasNextPage endCursor } edges{ node{ id name createdAt updatedAt cancelledAt displayFinancialStatus currencyCode tags totalPriceSet{ shopMoney{ amount } } lineItems(first:100){ edges{ node{ id title quantity sku variantTitle originalTotalSet{ shopMoney{ amount currencyCode } } discountedTotalSet{ shopMoney{ amount } } taxLines{ priceSet{ shopMoney{ amount } } } } } } refunds{ id createdAt totalRefundedSet{ shopMoney{ amount } } refundLineItems(first:50){ edges{ node{ quantity subtotalSet{ shopMoney{ amount } } totalTaxSet{ shopMoney{ amount } } lineItem{ id sku title variantTitle } } } } } } } } }`;
+    const gql = `query($q:String!,$after:String){ orders(first:50, query:$q, sortKey:UPDATED_AT, after:$after){ pageInfo{ hasNextPage endCursor } edges{ node{ id name createdAt updatedAt cancelledAt displayFinancialStatus currencyCode tags totalPriceSet{ shopMoney{ amount } } totalDiscountsSet{ shopMoney{ amount } } totalTaxSet{ shopMoney{ amount } } lineItems(first:100){ edges{ node{ id title quantity sku variantTitle originalTotalSet{ shopMoney{ amount currencyCode } } discountedTotalSet{ shopMoney{ amount } } taxLines{ priceSet{ shopMoney{ amount } } } } } } refunds{ id createdAt totalRefundedSet{ shopMoney{ amount } } refundLineItems(first:50){ edges{ node{ quantity subtotalSet{ shopMoney{ amount } } totalTaxSet{ shopMoney{ amount } } lineItem{ id sku title variantTitle } } } } } } } } }`;
     let token = await getShopifyToken(env); subreqs++;
     if (!token) throw new Error('Shopify auth failed (client credentials)');
     while (hasNext) {
@@ -191,13 +191,13 @@ const shopifyAdapter = {
         // marks the order cancelled — that would double-count against the returns it produces.
         const cancelled = !!o.cancelledAt || fin === 'VOIDED';
         const occurred = o.createdAt, saleDate = istDate(o.createdAt), cur = o.currencyCode || null;
-        let oGross = 0, oDisc = 0, oTax = 0;
+        let oGross = 0;
         for (const le of (o.lineItems?.edges || [])) {
           const l = le.node;
           const gross = num(l.originalTotalSet?.shopMoney?.amount);              // pre-discount, tax-incl (IN store)
           const disc  = Math.max(0, gross - num(l.discountedTotalSet?.shopMoney?.amount));
           const tax   = (l.taxLines || []).reduce((a, t) => a + num(t.priceSet?.shopMoney?.amount), 0);
-          oGross += gross; oDisc += disc; oTax += tax;
+          oGross += gross;
           rows.push({
             source_line_id: l.id, source_order_id: o.id, order_name: o.name,
             channel_sku: l.sku || l.variantTitle || l.title, variant_title: l.variantTitle || null, title: l.title || null,
@@ -206,10 +206,13 @@ const shopifyAdapter = {
             order_status: o.displayFinancialStatus || null, is_cancelled: cancelled, raw: l,
           });
         }
-        // order-grain row (measures = line sums, so order_fact reconciles to sales_fact exactly)
+        // order-grain row: gross = line-sum merchandise (pre-discount, reconciles to sales_fact);
+        // discount/tax = ORDER-level totals (authoritative — order-level discount codes aren't
+        // reflected in per-line discountedTotalSet, which undercounts; per-line stays for sales_fact).
         orderRows.push({
           source_order_id: o.id, refund_id: '', row_kind: 'order', sale_date: saleDate, order_name: o.name,
-          gross: oGross, discount: oDisc, tax: oTax, currency: cur, is_cancelled: cancelled, returned_value: 0,
+          gross: oGross, discount: num(o.totalDiscountsSet?.shopMoney?.amount), tax: num(o.totalTaxSet?.shopMoney?.amount),
+          currency: cur, is_cancelled: cancelled, returned_value: 0,
           tags: Array.isArray(o.tags) ? o.tags : [], raw: { financial: o.displayFinancialStatus, total: o.totalPriceSet?.shopMoney?.amount },
         });
         // refunds → returns (skip on cancelled orders — the whole order is already excluded)
