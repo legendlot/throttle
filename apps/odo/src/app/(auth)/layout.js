@@ -2,10 +2,12 @@
 import { usePathname, useRouter } from 'next/navigation';
 import { RequireAuth, useAuth } from '@throttle/auth';
 import { Spinner, AppLauncher } from '@throttle/ui';
-import { LayoutDashboard, GitMerge, PlugZap, Upload, ShieldCheck, LogOut } from 'lucide-react';
+import { LayoutDashboard, Megaphone, Filter, GitMerge, PlugZap, Upload, ShieldCheck, LogOut } from 'lucide-react';
 
 const NAV = [
   { route: '/',           label: 'Dashboard',  icon: LayoutDashboard, perm: 'sales_view' },
+  { route: '/marketing',  label: 'Marketing',  icon: Megaphone,       perm: 'sales_view' },
+  { route: '/funnel',     label: 'Funnel',     icon: Filter,          perm: 'sales_view' },
   { route: '/mapping',    label: 'Mapping',    icon: GitMerge,        perm: 'sales_view' },
   { route: '/connectors', label: 'Connectors', icon: PlugZap,         perm: 'sales_view' },
   { route: '/uploads',    label: 'Uploads',    icon: Upload,          perm: 'sales_upload', adminAlt: 'salesops_admin' },
