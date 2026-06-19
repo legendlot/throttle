@@ -506,6 +506,126 @@ const amazonAdapter = {
   },
 };
 
+// ── Amazon Ads (Advertising API v3 · LWA refresh-token · async reporting) → mkt_fact ──
+// SEPARATE LWA app from SP-API (AMAZON_ADS_*). India = EU host. Profile discovered once + cached.
+// Async report: create → poll → ingest carried ACROSS cron ticks via connector_config.config:
+//   { region_host, ad_product, profile_id, backfill_start, pending_report_id, pending_through }
+let _amzAdsToken = null, _amzAdsTokenExp = 0;
+async function getAmazonAdsToken(env) {
+  if (!env.AMAZON_ADS_REFRESH_TOKEN || !env.AMAZON_ADS_CLIENT_ID || !env.AMAZON_ADS_CLIENT_SECRET)
+    throw new Error('Amazon Ads not configured (set AMAZON_ADS_REFRESH_TOKEN + AMAZON_ADS_CLIENT_ID/SECRET)');
+  const now = Date.now();
+  if (_amzAdsToken && now < _amzAdsTokenExp - 60_000) return _amzAdsToken;
+  const res = await fetch('https://api.amazon.co.uk/auth/o2/token', {   // EU LWA token endpoint
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: env.AMAZON_ADS_REFRESH_TOKEN, client_id: env.AMAZON_ADS_CLIENT_ID, client_secret: env.AMAZON_ADS_CLIENT_SECRET }),
+  });
+  const t = await res.json().catch(() => ({}));
+  if (!t.access_token) throw new Error('Amazon Ads token failed: ' + JSON.stringify(t).slice(0, 160));
+  _amzAdsToken = t.access_token; _amzAdsTokenExp = now + (Number(t.expires_in) || 3600) * 1000;
+  return _amzAdsToken;
+}
+const AMZ_ADS_WINDOW_MS = 30 * 24 * 3600 * 1000;            // ≤30-day report windows
+const AMZ_ADS_COLUMNS = ['date', 'campaignId', 'campaignName', 'impressions', 'clicks', 'cost', 'purchases14d', 'sales14d'];
+const amzAdsDay = ms => new Date(ms).toISOString().slice(0, 10);
+async function createAdsReport(host, H, adProduct, reportTypeId, startDate, endDate) {
+  const cr = await fetch(`${host}/reporting/reports`, {
+    method: 'POST', headers: H,
+    body: JSON.stringify({
+      name: `odo-${reportTypeId}-${startDate}-${endDate}`, startDate, endDate,
+      configuration: { adProduct, groupBy: ['campaign'], columns: AMZ_ADS_COLUMNS, reportTypeId, timeUnit: 'DAILY', format: 'GZIP_JSON' },
+    }),
+  });
+  if (!cr.ok) throw new Error(`Amazon Ads createReport ${cr.status}: ${(await cr.text().catch(() => '')).slice(0, 200)}`);
+  const cj = await cr.json();
+  if (!cj.reportId) throw new Error('Amazon Ads createReport: no reportId — ' + JSON.stringify(cj).slice(0, 160));
+  return cj.reportId;
+}
+const amazonAdsAdapter = {
+  kind: 'amazon_ads', stgTable: 'stg_amazon_ads',
+  datesOf(rows) { return [...new Set(rows.map(r => r.the_date))].sort(); },
+  async fetch({ env, channelId, cursor, config }) {
+    const cfg = config || {};
+    const host = cfg.region_host || 'https://advertising-api-eu.amazon.com';
+    const adProduct = cfg.ad_product || 'SPONSORED_PRODUCTS';
+    const reportTypeId = adProduct === 'SPONSORED_BRANDS' ? 'sbCampaigns' : (adProduct === 'SPONSORED_DISPLAY' ? 'sdCampaigns' : 'spCampaigns');
+    const token = await getAmazonAdsToken(env);
+    let subreqs = 1;
+
+    // profile discovery (once) — India profile, cached into config
+    let profileId = cfg.profile_id;
+    if (!profileId) {
+      const pr = await fetch(`${host}/v2/profiles`, { headers: { 'Amazon-Advertising-API-ClientId': env.AMAZON_ADS_CLIENT_ID, Authorization: `Bearer ${token}` } }); subreqs++;
+      if (!pr.ok) throw new Error(`Amazon Ads /v2/profiles ${pr.status}: ${(await pr.text().catch(() => '')).slice(0, 160)}`);
+      const profiles = await pr.json();
+      const pick = (profiles || []).find(p => p.countryCode === 'IN') || (profiles || [])[0];
+      if (!pick) throw new Error('Amazon Ads: no profiles on this login (no Ads account linked?)');
+      profileId = String(pick.profileId);
+      await patchConnectorConfig(channelId, cfg, { profile_id: profileId }); cfg.profile_id = profileId;
+    }
+    const H = { 'Amazon-Advertising-API-ClientId': env.AMAZON_ADS_CLIENT_ID, 'Amazon-Advertising-API-Scope': profileId, Authorization: `Bearer ${token}`, 'Content-Type': 'application/vnd.createasyncreportrequest.v3+json' };
+    const nowMs = Date.now();
+
+    // ── pending report → poll ──
+    if (cfg.pending_report_id) {
+      const pr = await fetch(`${host}/reporting/reports/${cfg.pending_report_id}`, { headers: H }); subreqs++;
+      if (!pr.ok) throw new Error(`Amazon Ads getReport ${pr.status}: ${(await pr.text().catch(() => '')).slice(0, 160)}`);
+      const rep = await pr.json();
+      const st = (rep.status || '').toUpperCase();
+      if (st === 'PENDING' || st === 'PROCESSING') return { rows: [], cursorAfter: null, subreqs, partial: true };
+      if (st !== 'COMPLETED') { await patchConnectorConfig(channelId, cfg, { pending_report_id: null, pending_through: null }); throw new Error(`Amazon Ads report ${st}: ${(rep.failureReason || '').slice(0, 120)}`); }
+      let rows = [];
+      if (rep.url) {
+        const dl = await fetch(rep.url); subreqs++;                       // presigned S3 — no auth headers
+        if (!dl.ok) throw new Error('Amazon Ads doc download ' + dl.status);
+        const text = await new Response(dl.body.pipeThrough(new DecompressionStream('gzip'))).text();
+        let arr = []; try { arr = JSON.parse(text); } catch { arr = []; }
+        rows = (Array.isArray(arr) ? arr : []).map(d => ({
+          channel_id: channelId, ad_account_id: profileId, campaign_id: String(d.campaignId ?? ''),
+          campaign_name: d.campaignName || null, the_date: d.date,
+          spend: num(d.cost), impressions: num(d.impressions), clicks: num(d.clicks),
+          conversions: num(d.purchases14d), conv_value: num(d.sales14d), raw: d,
+        })).filter(r => r.the_date);
+      }
+      const windowEnd = cfg.pending_through;
+      const endMs = Date.parse((windowEnd || '') + 'T00:00:00Z') || 0;
+      // Walk forward: queue the next window if this one ended >~10h before now (more history to cover).
+      let partial = false, next = { pending_report_id: null, pending_through: null };
+      if (endMs && endMs < nowMs - 36_000_000) {
+        const nextStart = amzAdsDay(endMs + 86400000);
+        const nextEnd = amzAdsDay(Math.min(endMs + AMZ_ADS_WINDOW_MS, nowMs));
+        try { const rid = await createAdsReport(host, H, adProduct, reportTypeId, nextStart, nextEnd); subreqs++; next = { pending_report_id: rid, pending_through: nextEnd }; partial = true; }
+        catch (_) { /* leave cleared — next tick re-creates from the advanced cursor */ }
+      }
+      await patchConnectorConfig(channelId, cfg, next);
+      return { rows, cursorAfter: windowEnd, subreqs, partial };
+    }
+
+    // ── no pending → create the next window. Floor the start at today-30 so steady-state always
+    //    refreshes the trailing 30 days (Amazon attributes conversions over a 14-day window). ──
+    let startStr = (cursor || cfg.backfill_start || amzAdsDay(nowMs - AMZ_ADS_WINDOW_MS)).slice(0, 10);
+    const trailingStart = amzAdsDay(nowMs - AMZ_ADS_WINDOW_MS);
+    if (startStr > trailingStart) startStr = trailingStart;
+    const startMs = Date.parse(startStr + 'T00:00:00Z') || nowMs;
+    const endStr = amzAdsDay(Math.min(startMs + AMZ_ADS_WINDOW_MS, nowMs));
+    const rid = await createAdsReport(host, H, adProduct, reportTypeId, startStr, endStr); subreqs++;
+    await patchConnectorConfig(channelId, cfg, { pending_report_id: rid, pending_through: endStr });
+    return { rows: [], cursorAfter: null, subreqs, partial: true };
+  },
+  async stage(rows, runId, channelId) {
+    if (!rows.length) return;
+    const from = rows.reduce((m, x) => x.the_date < m ? x.the_date : m, rows[0].the_date);
+    const to   = rows.reduce((m, x) => x.the_date > m ? x.the_date : m, rows[0].the_date);
+    await sbSales(`/rest/v1/stg_amazon_ads?channel_id=eq.${channelId}&the_date=gte.${from}&the_date=lte.${to}`, { method: 'DELETE', prefer: 'return=minimal' });
+    const body = rows.map(r => ({ run_id: runId, channel_id: channelId, ad_account_id: r.ad_account_id, campaign_id: r.campaign_id, campaign_name: r.campaign_name, the_date: r.the_date, spend: r.spend, impressions: Math.round(r.impressions), clicks: Math.round(r.clicks), conversions: r.conversions, conv_value: r.conv_value, raw: r.raw }));
+    await sbSales('/rest/v1/stg_amazon_ads', { method: 'POST', prefer: 'return=minimal', body: JSON.stringify(body) });
+  },
+  async recompute({ channelId, dates, runId }) {
+    const f = await rpcSales('recompute_amzn_ads', { p_channel: channelId, p_dates: dates, p_run_id: runId });
+    return { mapped: 0, unmapped: 0, factsUpserted: (f.ok ? Number(f.data) : 0) };
+  },
+};
+
 // ── Meta Ads (Marketing API insights) — domain: marketing → mkt_fact ──────
 const META_API_VER = 'v21.0';
 const metaAdsAdapter = {
@@ -632,7 +752,7 @@ const ga4Adapter = {
   },
 };
 
-const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter, amazon_spapi: amazonAdapter, meta_ads: metaAdsAdapter, ga4: ga4Adapter };
+const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter, amazon_spapi: amazonAdapter, amazon_ads: amazonAdsAdapter, meta_ads: metaAdsAdapter, ga4: ga4Adapter };
 
 // minimal RFC-4180-ish CSV parser (handles quoted fields, commas, newlines)
 function parseCSV(text) {
@@ -975,7 +1095,7 @@ export default {
             const lastByChannel = {}; runs.forEach(r => { if (!lastByChannel[r.channel_id]) lastByChannel[r.channel_id] = r; });
             const cfgByChannel = {}; cfgs.forEach(c => { cfgByChannel[c.channel_id] = c; });
             return ok({
-              secrets: { shopify: !!(env.SHOPIFY_ACCESS_TOKEN || env.SHOPIFY_CLIENT_ID), amazon: !!env.AMAZON_LWA_CLIENT_ID, flipkart: !!env.FLIPKART_CLIENT_ID, google: !!env.GOOGLE_SA_JSON, meta: !!env.META_SYSTEM_USER_TOKEN },
+              secrets: { shopify: !!(env.SHOPIFY_ACCESS_TOKEN || env.SHOPIFY_CLIENT_ID), amazon: !!env.AMAZON_LWA_CLIENT_ID, amazon_ads: !!env.AMAZON_ADS_CLIENT_ID, flipkart: !!env.FLIPKART_CLIENT_ID, google: !!env.GOOGLE_SA_JSON, meta: !!env.META_SYSTEM_USER_TOKEN },
               connectors: allCh.map(c => ({ channel_id: c.id, name: c.name, adapter_kind: cfgByChannel[c.id]?.adapter_kind || null, enabled: !!cfgByChannel[c.id]?.enabled, cursor: cfgByChannel[c.id]?.cursor || null, last_ok_at: cfgByChannel[c.id]?.last_ok_at || null, last_error: cfgByChannel[c.id]?.last_error || null, last_run: lastByChannel[c.id] || null })),
             });
           }
