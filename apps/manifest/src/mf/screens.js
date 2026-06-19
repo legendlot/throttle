@@ -312,7 +312,7 @@ function Dashboard({ data, onNav }) {
       <Grid cols="1.55fr 1fr">
         <Card title="Open orders" action={<LinkText onClick={() => onNav('orders')}>View all →</LinkText>}>
           {open.length ? (
-            <Table onRowClick={(r) => onNav('orderDetail', r.id)} rows={open.slice(0, 6)} rowKey={(r) => r.no} cols={[
+            <Table onRowClick={(r) => onNav('orderDetail', r.id)} rows={open.slice(0, 6)} rowKey={(r) => r.no} mobileCols={['Order', 'Value', 'State']} cols={[
               { label: 'Order', render: (r) => <Mono color="var(--t1)" weight={600}>{r.no}</Mono> },
               { label: 'Title', render: (r) => <span style={{ color: 'var(--t2)' }}>{r.title}</span> },
               { label: 'Value', align: 'right', render: (r) => r.valueRmb ? <Mono>{D.rmb(r.valueRmb)}</Mono> : <Mono color="var(--t3)">{D.inr(r.recognized)}</Mono> },
@@ -396,7 +396,7 @@ function Recon({ data, openDrill }) {
       </Grid>
       <Card title="Ledger" action={<Mono size={11} color="var(--t3)">full transaction history</Mono>}>
         {ledgerDesc.length ? (
-          <Table onRowClick={openDrill} rows={ledgerDesc} rowKey={(r, i) => (r.ref || r.kind) + r.date + r.balance} cols={[
+          <Table onRowClick={openDrill} rows={ledgerDesc} rowKey={(r, i) => (r.ref || r.kind) + r.date + r.balance} mobileCols={['Ref', 'Type', 'Amount', 'Date']} cols={[
             { label: 'Date', render: (r) => <Mono size={11} color="var(--t3)">{r.date}</Mono> },
             { label: 'Type', render: (r) => <Badge tone={D.kindTone(r.kind)}>{D.label(r.kind)}</Badge> },
             { label: 'Ref', render: (r) => <Mono color="var(--t1)" weight={600}>{r.ref || '—'}</Mono> },
@@ -427,7 +427,7 @@ function Orders({ data, onNav }) {
       </div>
       <Card>
         {rows.length ? (
-          <Table onRowClick={(r) => onNav('orderDetail', r.id)} rows={rows} rowKey={(r) => r.no} cols={[
+          <Table onRowClick={(r) => onNav('orderDetail', r.id)} rows={rows} rowKey={(r) => r.no} mobileCols={['Order', 'Title', 'State', 'Balance']} cols={[
             { label: 'Order', render: (r) => <Mono color="var(--t1)" weight={600}>{r.no}</Mono> },
             { label: 'Title', render: (r) => <span style={{ color: 'var(--t2)' }}>{r.title}</span> },
             { label: 'Category', render: (r) => <Mono size={11} color="var(--t3)">{D.label(r.category)}</Mono> },
@@ -701,7 +701,7 @@ function OrderDetail({ detailId, session, onNav, reload, data }) {
                 <button className="mf-chip" onClick={() => setLines((ls) => [...ls, { product: '', qty: '', unit_price_rmb: '', item_type: 'product' }])} style={{ width: '100%', padding: '8px 0', borderRadius: 8, fontFamily: MONO, fontSize: 11, background: 'transparent', border: '1px dashed var(--border-strong)', color: 'var(--t3)' }}>+ Add line</button>
               </div>
             ) : resp.lines.length ? (
-              <Table rows={resp.lines} rowKey={(r) => r.line_no} cols={[
+              <Table rows={resp.lines} rowKey={(r) => r.line_no} mobileCols={['Product', 'Qty', 'Unit ¥', 'Colour']} cols={[
                 { label: '#', render: (r) => <Mono size={11} color="var(--t3)">{r.line_no}</Mono> },
                 { label: 'Product', render: (r) => <span style={{ color: 'var(--t1)' }}>{r.product || '—'}</span> },
                 { label: 'Variant', render: (r) => <Mono size={11} color="var(--t3)">{r.variant || '—'}</Mono> },
@@ -800,7 +800,7 @@ function Shipments({ data, onNav, session, reload }) {
       )}
       <Card title="Shipments" action={<Btn variant="secondary" style={{ padding: '7px 12px', fontSize: 11 }} onClick={() => setShow((v) => !v)}><Plus size={13} style={{ marginRight: 5, verticalAlign: -2 }} />New shipment</Btn>}>
         {data.shipments.length ? (
-          <Table onRowClick={(r) => onNav('shipmentDetail', r.id)} rows={data.shipments} rowKey={(r) => r.no} cols={[
+          <Table onRowClick={(r) => onNav('shipmentDetail', r.id)} rows={data.shipments} rowKey={(r) => r.no} mobileCols={['Shipment', 'Status', 'Mode', 'ETA']} cols={[
             { label: 'Shipment', render: (r) => <Mono color="var(--t1)" weight={600}>{r.no}</Mono> },
             { label: 'Mode', render: (r) => <Badge tone={r.mode === 'air' ? 'blue' : 'gray'}>{r.mode}</Badge> },
             { label: 'BL · AWB', render: (r) => <Mono size={11} color="var(--t3)">{r.blAwb}</Mono> },
@@ -895,7 +895,7 @@ function ShipmentDetail({ detailId, session, onNav, reload, data }) {
               <Btn variant="secondary" style={{ padding: '6px 12px', fontSize: 11 }} onClick={attachOrder}>Add order</Btn>
             </span>) : <Mono size={10} color="var(--t3)">locked — departed</Mono>}>
             {resp.lines.length ? (
-              <Table rows={resp.lines} rowKey={(r) => r.id} cols={[
+              <Table rows={resp.lines} rowKey={(r) => r.id} mobileCols={['Product', 'Qty', 'Order']} cols={[
                 { label: 'Order', render: (r) => <Mono size={11} color="var(--t3)">{r.order_lines?.orders?.order_no || '—'}</Mono> },
                 { label: 'Product', render: (r) => <span style={{ color: 'var(--t1)' }}>{r.order_lines?.product || r.order_lines?.description || '—'}</span> },
                 { label: 'Vendor code', render: (r) => <Mono size={11} color="var(--t3)">{r.order_lines?.vendor_item_code || '—'}</Mono> },
@@ -940,7 +940,7 @@ function Drawdowns({ data, onNav }) {
       </div>
       <Card>
         {data.drawdowns.length ? (
-          <Table rows={data.drawdowns} rowKey={(r) => r.no} cols={[
+          <Table rows={data.drawdowns} rowKey={(r) => r.no} mobileCols={['No.', 'Status', 'Est. INR', 'Phase']} cols={[
             { label: 'No.', render: (r) => <Mono color="var(--t1)" weight={600}>{r.no}</Mono> },
             { label: 'Phase', render: (r) => <Mono size={11} color="var(--t3)">{D.label(r.phase)}</Mono> },
             { label: 'Order', render: (r) => PO(r.order) },
@@ -1005,7 +1005,7 @@ function Payments({ data, session, reload }) {
       )}
       <Card title="Outgoing wires" action={<Btn variant="secondary" style={{ padding: '7px 12px', fontSize: 11 }} onClick={() => setShow((v) => !v)}><Plus size={13} style={{ marginRight: 5, verticalAlign: -2 }} />Record Wire</Btn>}>
         {data.payments.length ? (
-          <Table rows={data.payments} rowKey={(r) => r.ref} cols={[
+          <Table rows={data.payments} rowKey={(r) => r.ref} mobileCols={['Ref', 'Amount INR', 'Status', 'Date']} cols={[
             { label: 'Ref', render: (r) => <Mono color="var(--t1)" weight={600}>{r.ref}</Mono> },
             { label: 'Date', render: (r) => <Mono size={11} color="var(--t3)">{r.date}</Mono> },
             { label: 'Amount INR', align: 'right', render: (r) => <Mono color="var(--green)" weight={600}>{D.inr(r.inr)}</Mono> },
@@ -1051,7 +1051,7 @@ function Fx({ data }) {
       </Grid>
       <Card title="Rate history">
         {fx.history.length ? (
-          <Table rows={fx.history} rowKey={(r, i) => r.date + r.rate} cols={[
+          <Table rows={fx.history} rowKey={(r, i) => r.date + r.rate} mobileCols={['Date', 'CNY · INR', 'Δ']} cols={[
             { label: 'Date', render: (r) => <Mono size={11} color="var(--t3)">{r.date}</Mono> },
             { label: 'CNY · INR', render: (r) => <Mono color="var(--t1)" weight={600}>{r.rate}</Mono> },
             { label: 'Δ', render: (r) => r.delta == null ? <Mono size={11} color="var(--t3)">—</Mono> : <Mono size={11} color={r.delta > 0 ? 'var(--green)' : 'var(--t3)'}>{r.delta > 0 ? '+' : ''}{r.delta.toFixed(2)}</Mono> },

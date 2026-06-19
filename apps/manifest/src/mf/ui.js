@@ -107,17 +107,28 @@ export function Select({ options = [], ...props }) {
 // Desktop: a real table inside a horizontal-scroll wrapper (wide column sets
 // scroll rather than forcing the page wider). Mobile: each row restacks into a
 // label:value card — every list screen becomes phone-native with no per-screen work.
-export function Table({ cols, rows, onRowClick, rowKey }) {
+// mobileCols: ordered list of column labels to show on a phone (first = card heading);
+// omit to show every column. Desktop is unaffected.
+export function Table({ cols, rows, onRowClick, rowKey, mobileCols }) {
   const mobile = useIsMobile();
   if (mobile) {
+    const shown = (mobileCols && mobileCols.length)
+      ? mobileCols.map((l) => cols.find((c) => c.label === l)).filter(Boolean)
+      : cols;
+    const head = shown[0];
+    const rest = shown.slice(1);
     return (
       <div style={{ display: 'flex', flexDirection: 'column' }}>
         {rows.map((row, ri) => (
           <div key={rowKey ? rowKey(row, ri) : ri} className={'mf-tr' + (onRowClick ? ' click' : '')}
             onClick={onRowClick ? () => onRowClick(row) : undefined}
-            style={{ display: 'flex', flexDirection: 'column', gap: 7, padding: '14px 16px',
+            style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '13px 16px',
               borderBottom: '1px solid color-mix(in srgb, var(--border) 55%, transparent)' }}>
-            {cols.map((c, ci) => (
+            {head && (
+              <div style={{ minWidth: 0, fontSize: 14, fontWeight: 600, color: 'var(--t1)', overflow: 'hidden', textOverflow: 'ellipsis',
+                marginBottom: rest.length ? 2 : 0 }}>{head.render(row)}</div>
+            )}
+            {rest.map((c, ci) => (
               <div key={ci} style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 14 }}>
                 <span style={{ fontFamily: MONO, fontSize: 9.5, fontWeight: 600, letterSpacing: '.1em',
                   textTransform: 'uppercase', color: 'var(--t3)', flexShrink: 0 }}>{c.label}</span>
