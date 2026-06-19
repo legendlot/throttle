@@ -521,7 +521,7 @@ async function getAmazonAdsToken(env) {
     body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: env.AMAZON_ADS_REFRESH_TOKEN, client_id: env.AMAZON_ADS_CLIENT_ID, client_secret: env.AMAZON_ADS_CLIENT_SECRET }),
   });
   const t = await res.json().catch(() => ({}));
-  if (!t.access_token) throw new Error('Amazon Ads token failed: ' + JSON.stringify(t).slice(0, 160));
+  if (!t.access_token) throw new Error(`Amazon Ads token failed (${res.status} ${t.error || ''}): ${t.error_description || JSON.stringify(t).slice(0, 400)}`);
   _amzAdsToken = t.access_token; _amzAdsTokenExp = now + (Number(t.expires_in) || 3600) * 1000;
   return _amzAdsToken;
 }
