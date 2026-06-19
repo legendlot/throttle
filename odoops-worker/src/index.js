@@ -166,8 +166,8 @@ const shopifyAdapter = {
     if (!env.SHOPIFY_STORE_DOMAIN || !env.SHOPIFY_CLIENT_ID || !env.SHOPIFY_CLIENT_SECRET) throw new Error('Shopify not configured (set SHOPIFY_* secrets)');
     const ver = env.SHOPIFY_API_VERSION || SHOPIFY_API_VERSION_DEFAULT;
     const since = cursor || BACKFILL_START;
-    const rows = []; let after = null, hasNext = true, subreqs = 0, maxUpdated = since, partial = false;
-    const gql = `query($q:String!,$after:String){ orders(first:50, query:$q, sortKey:UPDATED_AT, after:$after){ pageInfo{ hasNextPage endCursor } edges{ node{ id name createdAt updatedAt cancelledAt displayFinancialStatus currencyCode lineItems(first:100){ edges{ node{ id title quantity sku variantTitle originalTotalSet{ shopMoney{ amount currencyCode } } } } } } } } }`;
+    const rows = [], orderRows = []; let after = null, hasNext = true, subreqs = 0, maxUpdated = since, partial = false;
+    const gql = `query($q:String!,$after:String){ orders(first:50, query:$q, sortKey:UPDATED_AT, after:$after){ pageInfo{ hasNextPage endCursor } edges{ node{ id name createdAt updatedAt cancelledAt displayFinancialStatus currencyCode tags totalPriceSet{ shopMoney{ amount } } lineItems(first:100){ edges{ node{ id title quantity sku variantTitle originalTotalSet{ shopMoney{ amount currencyCode } } discountedTotalSet{ shopMoney{ amount } } taxLines{ priceSet{ shopMoney{ amount } } } } } } refunds{ id createdAt totalRefundedSet{ shopMoney{ amount } } refundLineItems(first:50){ edges{ node{ quantity subtotalSet{ shopMoney{ amount } } totalTaxSet{ shopMoney{ amount } } lineItem{ id sku title variantTitle } } } } } } } } }`;
     let token = await getShopifyToken(env); subreqs++;
     if (!token) throw new Error('Shopify auth failed (client credentials)');
     while (hasNext) {
@@ -186,33 +186,90 @@ const shopifyAdapter = {
         const o = oe.node;
         if (o.updatedAt && o.updatedAt > maxUpdated) maxUpdated = o.updatedAt;
         const fin = (o.displayFinancialStatus || '').toUpperCase();
-        const cancelled = !!o.cancelledAt || fin === 'REFUNDED' || fin === 'VOIDED';
+        // CANCELLATION vs RETURN are distinct: cancelled = order voided (cancelledAt/VOIDED);
+        // a refund on a NON-cancelled order is a return (captured below). REFUNDED no longer
+        // marks the order cancelled — that would double-count against the returns it produces.
+        const cancelled = !!o.cancelledAt || fin === 'VOIDED';
+        const occurred = o.createdAt, saleDate = istDate(o.createdAt), cur = o.currencyCode || null;
+        let oGross = 0, oDisc = 0, oTax = 0;
         for (const le of (o.lineItems?.edges || [])) {
           const l = le.node;
+          const gross = num(l.originalTotalSet?.shopMoney?.amount);              // pre-discount, tax-incl (IN store)
+          const disc  = Math.max(0, gross - num(l.discountedTotalSet?.shopMoney?.amount));
+          const tax   = (l.taxLines || []).reduce((a, t) => a + num(t.priceSet?.shopMoney?.amount), 0);
+          oGross += gross; oDisc += disc; oTax += tax;
           rows.push({
             source_line_id: l.id, source_order_id: o.id, order_name: o.name,
             channel_sku: l.sku || l.variantTitle || l.title, variant_title: l.variantTitle || null, title: l.title || null,
-            qty: num(l.quantity), gross_value: num(l.originalTotalSet?.shopMoney?.amount),
-            occurred_at: o.createdAt, sale_date: istDate(o.createdAt),
+            qty: num(l.quantity), gross_value: gross, discount_value: disc, tax_value: tax, row_type: 'sale',
+            occurred_at: occurred, sale_date: saleDate,
             order_status: o.displayFinancialStatus || null, is_cancelled: cancelled, raw: l,
           });
+        }
+        // order-grain row (measures = line sums, so order_fact reconciles to sales_fact exactly)
+        orderRows.push({
+          source_order_id: o.id, refund_id: '', row_kind: 'order', sale_date: saleDate, order_name: o.name,
+          gross: oGross, discount: oDisc, tax: oTax, currency: cur, is_cancelled: cancelled, returned_value: 0,
+          tags: Array.isArray(o.tags) ? o.tags : [], raw: { financial: o.displayFinancialStatus, total: o.totalPriceSet?.shopMoney?.amount },
+        });
+        // refunds → returns (skip on cancelled orders — the whole order is already excluded)
+        if (!cancelled) {
+          for (const rf of (o.refunds || [])) {
+            const rDate = istDate(rf.createdAt || o.createdAt);
+            orderRows.push({
+              source_order_id: o.id, refund_id: rf.id, row_kind: 'return', sale_date: rDate, order_name: o.name,
+              gross: 0, discount: 0, tax: 0, currency: cur, is_cancelled: false,
+              returned_value: num(rf.totalRefundedSet?.shopMoney?.amount), tags: [], raw: { refund: rf.id },
+            });
+            let ri = 0;
+            for (const rle of (rf.refundLineItems?.edges || [])) {
+              const rl = rle.node, li = rl.lineItem || {};
+              const amt = num(rl.subtotalSet?.shopMoney?.amount) + num(rl.totalTaxSet?.shopMoney?.amount);
+              rows.push({
+                source_line_id: `${rf.id}:${li.id || 'L'}:${ri++}`, source_order_id: o.id, order_name: o.name,
+                channel_sku: li.sku || li.variantTitle || li.title, variant_title: li.variantTitle || null, title: li.title || null,
+                qty: num(rl.quantity), gross_value: amt, discount_value: 0, tax_value: num(rl.totalTaxSet?.shopMoney?.amount), row_type: 'return',
+                occurred_at: rf.createdAt || occurred, sale_date: rDate,
+                order_status: 'REFUND', is_cancelled: false, raw: rl,
+              });
+            }
+          }
         }
       }
       hasNext = !!conn?.pageInfo?.hasNextPage; after = conn?.pageInfo?.endCursor || null;
     }
-    return { rows, cursorAfter: maxUpdated, subreqs, partial };
+    return { rows, orderRows, cursorAfter: maxUpdated, subreqs, partial };
   },
-  async stage(rows, runId, channelId) {
-    if (!rows.length) return;
-    const body = rows.map(r => ({
-      run_id: runId, channel_id: channelId, source_order_id: r.source_order_id, order_name: r.order_name,
-      source_line_id: r.source_line_id, occurred_at: r.occurred_at, sale_date: r.sale_date,
-      channel_sku: r.channel_sku, variant_title: r.variant_title, title: r.title,
-      qty: Math.round(r.qty), gross_value: r.gross_value, order_status: r.order_status, is_cancelled: r.is_cancelled, raw: r.raw,
-    }));
-    await sbSales('/rest/v1/stg_shopify', { method: 'POST', body: JSON.stringify(body), prefer: 'return=minimal,resolution=merge-duplicates' });
+  async stage(rows, runId, channelId, fetched) {
+    if (rows.length) {
+      const body = rows.map(r => ({
+        run_id: runId, channel_id: channelId, source_order_id: r.source_order_id, order_name: r.order_name,
+        source_line_id: r.source_line_id, occurred_at: r.occurred_at, sale_date: r.sale_date,
+        channel_sku: r.channel_sku, variant_title: r.variant_title, title: r.title,
+        qty: Math.round(r.qty), gross_value: r.gross_value,
+        discount_value: r.discount_value || 0, tax_value: r.tax_value || 0, row_type: r.row_type || 'sale',
+        order_status: r.order_status, is_cancelled: r.is_cancelled, raw: r.raw,
+      }));
+      await sbSales('/rest/v1/stg_shopify', { method: 'POST', body: JSON.stringify(body), prefer: 'return=minimal,resolution=merge-duplicates' });
+    }
+    await stageOrders((fetched && fetched.orderRows) || [], runId, channelId);
   },
 };
+
+// Order/return-grain staging (drives f_order_rollup). Shared by every order-grain adapter
+// (Shopify now; Amazon/Snorkel later). Upserts on the (channel, order, kind, refund) unique index.
+async function stageOrders(orderRows, runId, channelId) {
+  if (!orderRows.length) return;
+  const body = orderRows.map(o => ({
+    run_id: runId, channel_id: channelId, source_order_id: o.source_order_id, refund_id: o.refund_id || '',
+    row_kind: o.row_kind || 'order', sale_date: o.sale_date, order_name: o.order_name || null,
+    gross: o.gross || 0, discount: o.discount || 0, tax: o.tax || 0, currency: o.currency || null,
+    is_cancelled: !!o.is_cancelled, returned_value: o.returned_value || 0,
+    tags: Array.isArray(o.tags) ? o.tags : [], raw: o.raw || null,
+  }));
+  await sbSales('/rest/v1/stg_orders?on_conflict=channel_id,source_order_id,row_kind,refund_id',
+    { method: 'POST', body: JSON.stringify(body), prefer: 'return=minimal,resolution=merge-duplicates' });
+}
 
 // ── GT/MT (reads Snorkel confirmed sales orders) ───────────────
 const snorkelAdapter = {
@@ -670,7 +727,7 @@ async function finishRun(runId, patch) {
 async function resolveSkus(channelId, dates, stgTable, userId) {
   if (!dates.length) return { mapped: 0, unmapped: 0 };
   const dl = inList(dates);
-  const stg = await sbSales(`/rest/v1/${stgTable}?channel_id=eq.${channelId}&sale_date=in.${dl}&is_cancelled=is.false&select=channel_sku,title,qty,gross_value`);
+  const stg = await sbSales(`/rest/v1/${stgTable}?channel_id=eq.${channelId}&sale_date=in.${dl}&is_cancelled=is.false&row_type=eq.sale&select=channel_sku,title,qty,gross_value`);
   const agg = {};
   for (const r of (stg.ok ? stg.data : [])) {
     const k = r.channel_sku; if (!k) continue;
@@ -711,8 +768,9 @@ async function executeRun(cfg, runId, env, { budget = CRON_BUDGET, cursorOverrid
   try {
     const cname = await channelName(cfg.channel_id);
     const cursor = cursorOverride !== undefined ? cursorOverride : cfg.cursor;
-    const { rows, cursorAfter, subreqs, partial } = await adapter.fetch({ env, channelId: cfg.channel_id, channelName: cname, cursor, windowTo: nowISO(), budget, config: cfg.config });
-    await adapter.stage(rows, runId, cfg.channel_id);
+    const fetched = await adapter.fetch({ env, channelId: cfg.channel_id, channelName: cname, cursor, windowTo: nowISO(), budget, config: cfg.config });
+    const { rows, cursorAfter, subreqs, partial } = fetched;
+    await adapter.stage(rows, runId, cfg.channel_id, fetched);
     // Sales adapters use sale_date + the SKU-mapping tail (default). Non-sales domains
     // (marketing/traffic) supply their own date field (datesOf) + their own recompute.
     const dates = adapter.datesOf ? adapter.datesOf(rows) : distinctDates(rows);
