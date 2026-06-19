@@ -1776,15 +1776,28 @@ async function webhookCallSummary(body, env, account) {
     body: JSON.stringify({ agent_user_id: agent.id, agent_name: agent.name, raw_meta: callMeta }),
   });
 
-  // cs_tickets — only if a ticket exists (answered calls only)
+  // cs_tickets — reassign ownership to the agent who actually handled the call.
+  // A call's OWN ticket is found by its session_id (the creating call). A
+  // COALESCED repeat call (RULE-PITSTOP-018) has no ticket of its own, so fall
+  // back to the ticket it was attached to (cs_calls.ticket_id). Ownership rule
+  // (Pruthvi S156): an INCOMING answered call always takes the ticket — the
+  // agent who handled the support call owns it, even when the ticket was
+  // auto-created by an earlier OUTGOING (e.g. COD-confirmation) call. An OUTGOING
+  // call never steals a ticket it merely coalesced into. Before this, the summary
+  // keyed only on the new call's session_id, so a coalesced incoming call never
+  // found the ticket and the outgoing-call agent kept the credit.
   const existing = await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(c.session_id)}&select=id&limit=1`, env);
-  const t = existing.data?.[0];
-  if (t) {
-    await sb(`/rest/v1/cs_tickets?call_session_id=eq.${encodeURIComponent(c.session_id)}`, env, {
+  let ticketId = existing.data?.[0]?.id || null;
+  if (!ticketId && c.direction === 'incoming') {
+    const callRow = await sb(`${callQ}&select=ticket_id`, env);
+    ticketId = callRow.data?.[0]?.ticket_id || null;
+  }
+  if (ticketId) {
+    await sb(`/rest/v1/cs_tickets?id=eq.${ticketId}`, env, {
       method: 'PATCH',
       body: JSON.stringify({ assigned_agent_id: agent.id, assigned_agent_name: agent.name }),
     });
-    await insertHistorySystem(t.id, 'assigned_agent_name', null, agent.name, 'auto-assigned from call.summary', env);
+    await insertHistorySystem(ticketId, 'assigned_agent_name', null, agent.name, 'auto-assigned from call.summary', env);
   }
   return json({ ok: true, assigned: agent.name });
 }
