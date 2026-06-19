@@ -520,7 +520,9 @@ async function getAmazonAdsToken(env) {
     throw new Error('Amazon Ads not configured (set AMAZON_ADS_REFRESH_TOKEN + AMAZON_ADS_CLIENT_ID/SECRET)');
   const now = Date.now();
   if (_amzAdsToken && now < _amzAdsTokenExp - 60_000) return _amzAdsToken;
-  const body = new URLSearchParams({ grant_type: 'refresh_token', refresh_token: env.AMAZON_ADS_REFRESH_TOKEN, client_id: env.AMAZON_ADS_CLIENT_ID, client_secret: env.AMAZON_ADS_CLIENT_SECRET });
+  // .trim() each credential — a trailing newline/space from a `wrangler secret put` paste makes the
+  // LWA token endpoint 500 (malformed token) instead of returning a clean 4xx.
+  const body = new URLSearchParams({ grant_type: 'refresh_token', refresh_token: (env.AMAZON_ADS_REFRESH_TOKEN || '').trim(), client_id: (env.AMAZON_ADS_CLIENT_ID || '').trim(), client_secret: (env.AMAZON_ADS_CLIENT_SECRET || '').trim() });
   let last = 'no response';
   for (const ep of AMZ_ADS_TOKEN_ENDPOINTS) {
     for (let attempt = 0; attempt < 2; attempt++) {
