@@ -5,6 +5,20 @@ import React from 'react';
 export const MONO = 'var(--font-mono)';
 export const DISP = 'var(--font-display)';
 
+// breakpoint hook — SSR-safe (false until mounted; the shell gates render on
+// `hydrated` so there's no flash). 768px matches the globals.css media query.
+export function useIsMobile(bp = 768) {
+  const [m, setM] = React.useState(false);
+  React.useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${bp}px)`);
+    const on = () => setM(mq.matches);
+    on();
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, [bp]);
+  return m;
+}
+
 export function toneVar(tone) {
   switch (tone) {
     case 'green': return 'var(--green)';
@@ -90,8 +104,34 @@ export function Select({ options = [], ...props }) {
 
 // ── generic table ────────────────────────────────────────────────
 // cols: [{ label, align, render:(row)=>node }]
+// Desktop: a real table inside a horizontal-scroll wrapper (wide column sets
+// scroll rather than forcing the page wider). Mobile: each row restacks into a
+// label:value card — every list screen becomes phone-native with no per-screen work.
 export function Table({ cols, rows, onRowClick, rowKey }) {
+  const mobile = useIsMobile();
+  if (mobile) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column' }}>
+        {rows.map((row, ri) => (
+          <div key={rowKey ? rowKey(row, ri) : ri} className={'mf-tr' + (onRowClick ? ' click' : '')}
+            onClick={onRowClick ? () => onRowClick(row) : undefined}
+            style={{ display: 'flex', flexDirection: 'column', gap: 7, padding: '14px 16px',
+              borderBottom: '1px solid color-mix(in srgb, var(--border) 55%, transparent)' }}>
+            {cols.map((c, ci) => (
+              <div key={ci} style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 14 }}>
+                <span style={{ fontFamily: MONO, fontSize: 9.5, fontWeight: 600, letterSpacing: '.1em',
+                  textTransform: 'uppercase', color: 'var(--t3)', flexShrink: 0 }}>{c.label}</span>
+                <span style={{ minWidth: 0, textAlign: 'right', color: 'var(--t2)', fontSize: 13.5,
+                  overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.render(row)}</span>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    );
+  }
   return (
+    <div className="mf-tablewrap">
     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
       <thead>
         <tr>
@@ -118,6 +158,7 @@ export function Table({ cols, rows, onRowClick, rowKey }) {
         ))}
       </tbody>
     </table>
+    </div>
   );
 }
 

@@ -5,7 +5,7 @@ import { garageFetch, workerFetch } from '@throttle/db';
 import { ArrowLeft, ArrowRight, Plus, ChevronDown, FileText, Check, Truck, Ship as ShipIcon, Search, X } from 'lucide-react';
 import {
   Card, Table, Badge, Btn, Field, Input, Select, Textarea, Eyebrow, Mono,
-  BalanceChart, Sparkline, MONO, DISP, toneVar,
+  BalanceChart, Sparkline, MONO, DISP, toneVar, useIsMobile,
 } from './ui.js';
 import { Manual } from '@throttle/ui';
 import manualData from '../data/manual.json';
@@ -19,15 +19,23 @@ const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','
 const fmtDay = (iso) => { if (!iso) return '—'; const d = new Date(iso); return isNaN(d) ? String(iso) : String(d.getUTCDate()).padStart(2, '0') + ' ' + MON[d.getUTCMonth()]; };
 
 function Kpi({ eyebrow, value, color = 'var(--t1)', sub, size = 29 }) {
+  const mobile = useIsMobile();
+  // KPI cards sit two-up on a phone — cap the value font so long ₹ figures fit the half-width
+  const fsize = mobile ? Math.min(size, 20) : size;
   return (
     <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', boxShadow: 'var(--shadow)', padding: 'var(--cardpad)' }}>
       <Eyebrow>{eyebrow}</Eyebrow>
-      <div style={{ fontFamily: DISP, fontWeight: 700, fontSize: size, letterSpacing: '-.01em', color, whiteSpace: 'nowrap', margin: '8px 0 4px' }}>{value}</div>
+      <div style={{ fontFamily: DISP, fontWeight: 700, fontSize: fsize, letterSpacing: '-.01em', color, whiteSpace: 'nowrap', margin: '8px 0 4px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</div>
       <div style={{ fontSize: 12, color: 'var(--t2)' }}>{sub}</div>
     </div>
   );
 }
-const Grid = ({ cols, children, style }) => <div style={{ display: 'grid', gridTemplateColumns: cols, gap, ...style }}>{children}</div>;
+// `cols` rides on a CSS custom property so the media query in globals.css can
+// collapse it to one column on a phone (inline grid-template-columns can't be
+// overridden by a stylesheet). `kpi` keeps the row two-up instead of one.
+const Grid = ({ cols, kpi, children, style }) => (
+  <div className={'mf-grid' + (kpi ? ' mf-grid-2' : '')} style={{ '--mf-cols': cols, ...style }}>{children}</div>
+);
 const Stack = ({ children, style }) => <div style={{ display: 'flex', flexDirection: 'column', gap, ...style }}>{children}</div>;
 const Dot = ({ tone }) => <span style={{ width: 8, height: 8, borderRadius: 999, background: toneVar(tone), flexShrink: 0 }} />;
 const PO = (v) => v ? <Mono color="var(--green)" size={11}>{v}</Mono> : <Mono color="var(--t3)" size={11}>—</Mono>;
@@ -193,7 +201,7 @@ function MoneyCard({ order, money, schedule, allocations, payments, run, session
         <div style={{ marginTop: 14 }}>
           <Eyebrow style={{ marginBottom: 8 }}>Set schedule</Eyebrow>
           {sched.map((m, i) => (
-            <div key={i} style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.9fr 0.7fr 1.1fr', gap: 6, marginBottom: 7, alignItems: 'center' }}>
+            <div key={i} className="mf-grid" style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.9fr 0.7fr 1.1fr', gap: 6, marginBottom: 7, alignItems: 'center' }}>
               <Input value={m.label} onChange={(e) => setSched((s) => s.map((x, j) => j === i ? { ...x, label: e.target.value } : x))} style={{ padding: '7px 9px', fontSize: 12 }} />
               <Input value={m.value} onChange={(e) => setSched((s) => s.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} style={{ padding: '7px 9px', fontSize: 12 }} />
               <Select value={m.basis} onChange={(e) => setSched((s) => s.map((x, j) => j === i ? { ...x, basis: e.target.value } : x))} options={['pct', 'amount']} style={{ padding: '7px 9px', fontSize: 12 }} />
@@ -293,7 +301,7 @@ function Dashboard({ data, onNav }) {
   const open = data.orders.filter((o) => o.costState !== 'invoiced');
   return (
     <Stack>
-      <Grid cols="repeat(3,1fr)">
+      <Grid cols="repeat(3,1fr)" kpi>
         <Kpi eyebrow="NET POSITION" value={D.inr(s.net)} color={s.owes ? 'var(--red)' : 'var(--green)'} sub={s.owes ? 'LOT owes SF' : 'SF holds LOT advance'} />
         <Kpi eyebrow="RESERVED LIEN" value={D.inr(s.reservedLien)} color="var(--accent)" sub="carved out · adjusted in-year" />
         <Kpi eyebrow="OPEN DRAW-DOWNS" value={D.inr(s.openDrawdowns)} color="var(--accent)" sub={`${s.openDrawCount} awaiting payment`} />
@@ -381,7 +389,7 @@ function Recon({ data, openDrill }) {
           ) : <Empty>No movements</Empty>}
         </Card>
       </Grid>
-      <Grid cols="repeat(3,1fr)">
+      <Grid cols="repeat(3,1fr)" kpi>
         <Kpi eyebrow="CREDITS · PAID IN" value={D.inr(s.credits)} color="var(--green)" size={24} sub={`${data.payments.length} wires`} />
         <Kpi eyebrow="DEBITS · GOODS + COSTS" value={D.inr(s.debits)} color="var(--red)" size={24} sub="goods + charges" />
         <Kpi eyebrow="BUFFER CONSUMED" value={`${s.bufferPct}%`} color="var(--accent)" size={24} sub="debits / credits" />
@@ -410,7 +418,7 @@ function Orders({ data, onNav }) {
   const rows = query ? items.filter((it) => it.label.toLowerCase().includes(query)) : data.orders;
   return (
     <Stack>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <Dropdown>All states</Dropdown>
         <Dropdown>All categories</Dropdown>
         <SearchBox value={q} onChange={setQ} items={items} onPick={(it) => onNav('orderDetail', it.id)} placeholder="Search orders by title or number…" />
@@ -854,7 +862,7 @@ function ShipmentDetail({ detailId, session, onNav, reload, data }) {
               {departed && <Mono size={9.5} color="var(--t3)" style={{ letterSpacing: '.1em' }}>CONTENTS LOCKED</Mono>}
             </div>
           </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
             {nextStage && <Btn onClick={() => run(() => act('advanceShipmentStage', { shipment_id: s.id, stage: nextStage }, session))}>Advance → {lbl(nextStage)}</Btn>}
             {edit ? <span style={{ display: 'flex', gap: 8 }}><Btn variant="secondary" style={{ padding: '8px 14px' }} onClick={() => setEdit(false)}>Cancel</Btn><Btn onClick={saveEdit}>Save</Btn></span>
                   : <Btn variant="secondary" onClick={startEdit}>Edit</Btn>}
@@ -975,7 +983,7 @@ function Payments({ data, session, reload }) {
   };
   return (
     <Stack>
-      <Grid cols="repeat(3,1fr)">
+      <Grid cols="repeat(3,1fr)" kpi>
         <Kpi eyebrow="TOTAL WIRED → SF" value={D.inr(s.credits)} color="var(--green)" sub={`${data.payments.length} wires`} size={24} />
         <Kpi eyebrow="SUB-ENTITIES" value={data.subentities.length} sub="payout channels" size={24} />
         <Kpi eyebrow="AVG. RATE PAID" value={avg} color="var(--t1)" sub="CNY/INR · weighted" size={24} />
@@ -1064,7 +1072,7 @@ function Documents({ data }) {
   const docs = data.documents.filter((d) => f === 'All' || d.type === map[f]);
   return (
     <Stack>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         {chips.map((c) => <FilterChip key={c} active={f === c} onClick={() => setF(c)}>{c}</FilterChip>)}
         <div style={{ flex: 1 }} /><Btn><Plus size={14} style={{ marginRight: 6, verticalAlign: -2 }} />Upload</Btn>
       </div>
@@ -1108,7 +1116,7 @@ function ShipmentDefaults({ session, reload }) {
       {['sea', 'air'].map((m) => (
         <div key={m} style={{ marginBottom: 14 }}>
           <Eyebrow style={{ marginBottom: 8 }}>{m === 'air' ? 'Air' : 'Sea'} · offset days</Eyebrow>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 6 }}>
+          <div className="mf-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 6 }}>
             {byMode(m).map((r) => (
               <div key={r.stage}>
                 <div style={{ fontFamily: MONO, fontSize: 8.5, letterSpacing: '.05em', textTransform: 'uppercase', color: 'var(--t3)', marginBottom: 4 }}>{stLabel(m, r.stage)}</div>
@@ -1141,7 +1149,7 @@ function Forwarders({ session }) {
   return (
     <Card title="Logistics partners" action={<Btn variant="secondary" style={{ padding: '6px 12px', fontSize: 11 }} onClick={() => setOpen((v) => !v)}><Plus size={13} style={{ marginRight: 5, verticalAlign: -2 }} />Add partner</Btn>}>
       {open && (
-        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+        <div className="mf-grid" style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
           <Field label="Company"><Input value={f.company_name} onChange={(e) => setF((x) => ({ ...x, company_name: e.target.value }))} /></Field>
           <Field label="Country"><Input value={f.country} onChange={(e) => setF((x) => ({ ...x, country: e.target.value }))} /></Field>
           <Field label="ISO"><Input value={f.country_iso} onChange={(e) => setF((x) => ({ ...x, country_iso: e.target.value }))} /></Field>
@@ -1375,7 +1383,7 @@ function NewOrder({ onNav, session, reload }) {
       <Grid cols="1.5fr 1fr" style={{ alignItems: 'start' }}>
         <Stack>
           <Card title="Order details" bodyPad="20px">
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            <div className="mf-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
               <div style={{ gridColumn: '1 / -1' }}><Field label="Title"><Input value={f.title} onChange={(e) => setF((x) => ({ ...x, title: e.target.value }))} placeholder="e.g. Night Wolf RC — full build" /></Field></div>
               <Field label="Category"><Select value={f.category} onChange={(e) => setF((x) => ({ ...x, category: e.target.value }))} options={['Product', 'Part', 'Sub-part', 'Mould', 'Sample', 'Other']} /></Field>
               <Field label="Vendor"><Select options={['Solve Factory · Shenzhen']} /></Field>

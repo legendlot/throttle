@@ -111,3 +111,27 @@ button { font-family: inherit; }
 .mf-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
 .mf-link { color: var(--blue); cursor: pointer; }
 .mf-link:hover { text-decoration: underline; }
+
+/* ════════════════════════════════════════════════════════════
+   Phone-first adaptation. The SPA is desktop-built (inline styles,
+   fixed multi-column grids); these rules + the JS breakpoint hook
+   (useIsMobile, 768px) make it native on a phone — primary surface
+   for the SF owner. Class-based so they survive the inline styles;
+   the input rule uses !important to beat the inline font-size and
+   stop iOS Safari zooming the page on focus.
+   ════════════════════════════════════════════════════════════ */
+.mf-grid { display: grid; grid-template-columns: var(--mf-cols, 1fr); gap: var(--gap); }
+.mf-tablewrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+@media (max-width: 768px) {
+  /* every multi-column grid collapses to one column … */
+  .mf-grid { grid-template-columns: 1fr !important; }
+  /* … except KPI rows, which stay two-up to keep glance density */
+  .mf-grid.mf-grid-2 { grid-template-columns: repeat(2, 1fr) !important; }
+
+  /* inputs ≥16px so iOS doesn't zoom on focus (beats inline 11–13px) */
+  .mf-input { font-size: 16px !important; }
+
+  /* comfortable touch targets on the floor */
+  .mf-navrow { padding-top: 12px !important; padding-bottom: 12px !important; }
+}

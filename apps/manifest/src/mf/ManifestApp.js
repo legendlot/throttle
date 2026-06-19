@@ -7,6 +7,7 @@ import { Sidebar, Topbar, Tweaks } from './Chrome.js';
 import { Drawer } from './Drawer.js';
 import { SCREENS } from './screens.js';
 import { ACCENTS } from './nav.js';
+import { useIsMobile } from './ui.js';
 
 const DENSITY = {
   comfortable: { '--gap': '16px', '--cardpad': '18px 20px', '--rowpy': '11px' },
@@ -23,6 +24,8 @@ export default function ManifestApp() {
   const [unauth, setUnauth] = useState(false);
   const [detailId, setDetailId] = useState(null);
   const [collapsed, setCollapsed] = useState(false);
+  const isMobile = useIsMobile();
+  const [navOpen, setNavOpen] = useState(false); // phone: off-canvas drawer open
   const [drill, setDrill] = useState(null);
   const [accent, setAccent] = useState('#F2CD1A');
   const [density, setDensity] = useState('comfortable');
@@ -50,7 +53,7 @@ export default function ManifestApp() {
   useEffect(() => { reload(); }, [reload]);
 
   const persist = (k, v) => { try { window.localStorage.setItem(k, v); } catch {} };
-  const nav = (s, arg) => { setDrill(null); if ((s === 'orderDetail' || s === 'shipmentDetail') && arg != null) setDetailId(arg); setScreen(s); persist('mf_screen', s); };
+  const nav = (s, arg) => { setDrill(null); setNavOpen(false); if ((s === 'orderDetail' || s === 'shipmentDetail') && arg != null) setDetailId(arg); setScreen(s); persist('mf_screen', s); };
   const toggle = () => setCollapsed((c) => { persist('mf_sb', c ? '0' : '1'); return !c; });
   const chooseAccent = (c) => { setAccent(c); persist('mf_accent', c); };
   const chooseDensity = (d) => { setDensity(d); persist('mf_density', d); };
@@ -81,10 +84,11 @@ export default function ManifestApp() {
 
   return (
     <div style={{ display: 'flex', height: '100dvh', overflow: 'hidden', ...themeVars, visibility: hydrated ? 'visible' : 'hidden' }}>
-      <Sidebar collapsed={collapsed} onToggle={toggle} screen={screen} onNav={nav} badges={badges} fx={data?.fx?.current} me={data?.me} />
+      <Sidebar collapsed={collapsed} onToggle={toggle} screen={screen} onNav={nav} badges={badges} fx={data?.fx?.current} me={data?.me}
+        isMobile={isMobile} mobileOpen={navOpen} onMobileClose={() => setNavOpen(false)} />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
-        <Topbar screen={screen} fx={data?.fx?.current} />
-        <main style={{ flex: 1, overflowY: 'auto', padding: '24px 28px 60px' }}>
+        <Topbar screen={screen} fx={data?.fx?.current} isMobile={isMobile} onMenu={() => setNavOpen(true)} />
+        <main style={{ flex: 1, overflowY: 'auto', padding: isMobile ? '16px 14px 88px' : '24px 28px 60px' }}>
           {error ? (
             <div style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--red)', padding: 24 }}>
               Failed to load Manifest data: {error}
