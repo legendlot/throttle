@@ -511,19 +511,28 @@ const amazonAdapter = {
 // Async report: create → poll → ingest carried ACROSS cron ticks via connector_config.config:
 //   { region_host, ad_product, profile_id, backfill_start, pending_report_id, pending_through }
 let _amzAdsToken = null, _amzAdsTokenExp = 0;
+// LWA token endpoints: the global host handles token ops for all regions. The EU host has been
+// seen to 500 intermittently on refresh grants, so try global first, then EU; retry once on 5xx;
+// a 4xx (invalid_grant/invalid_client) is definitive → fail fast.
+const AMZ_ADS_TOKEN_ENDPOINTS = ['https://api.amazon.com/auth/o2/token', 'https://api.amazon.co.uk/auth/o2/token'];
 async function getAmazonAdsToken(env) {
   if (!env.AMAZON_ADS_REFRESH_TOKEN || !env.AMAZON_ADS_CLIENT_ID || !env.AMAZON_ADS_CLIENT_SECRET)
     throw new Error('Amazon Ads not configured (set AMAZON_ADS_REFRESH_TOKEN + AMAZON_ADS_CLIENT_ID/SECRET)');
   const now = Date.now();
   if (_amzAdsToken && now < _amzAdsTokenExp - 60_000) return _amzAdsToken;
-  const res = await fetch('https://api.amazon.co.uk/auth/o2/token', {   // EU LWA token endpoint
-    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: env.AMAZON_ADS_REFRESH_TOKEN, client_id: env.AMAZON_ADS_CLIENT_ID, client_secret: env.AMAZON_ADS_CLIENT_SECRET }),
-  });
-  const t = await res.json().catch(() => ({}));
-  if (!t.access_token) throw new Error(`Amazon Ads token failed (${res.status} ${t.error || ''}): ${t.error_description || JSON.stringify(t).slice(0, 400)}`);
-  _amzAdsToken = t.access_token; _amzAdsTokenExp = now + (Number(t.expires_in) || 3600) * 1000;
-  return _amzAdsToken;
+  const body = new URLSearchParams({ grant_type: 'refresh_token', refresh_token: env.AMAZON_ADS_REFRESH_TOKEN, client_id: env.AMAZON_ADS_CLIENT_ID, client_secret: env.AMAZON_ADS_CLIENT_SECRET });
+  let last = 'no response';
+  for (const ep of AMZ_ADS_TOKEN_ENDPOINTS) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const res = await fetch(ep, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body }).catch(() => null);
+      const t = res ? await res.json().catch(() => ({})) : {};
+      if (t.access_token) { _amzAdsToken = t.access_token; _amzAdsTokenExp = now + (Number(t.expires_in) || 3600) * 1000; return _amzAdsToken; }
+      const status = res ? res.status : 0;
+      last = `${status} ${t.error || ''}: ${t.error_description || JSON.stringify(t).slice(0, 300)}`;
+      if (status >= 400 && status < 500) throw new Error('Amazon Ads token failed (' + last + ')'); // definitive — don't retry/fallback
+    }
+  }
+  throw new Error('Amazon Ads token failed (' + last + ')');
 }
 const AMZ_ADS_WINDOW_MS = 30 * 24 * 3600 * 1000;            // ≤30-day report windows
 const AMZ_ADS_COLUMNS = ['date', 'campaignId', 'campaignName', 'impressions', 'clicks', 'cost', 'purchases14d', 'sales14d'];
