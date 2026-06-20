@@ -1,8 +1,9 @@
 'use client';
-import { useEffect, useMemo, useState, useRef } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
 import { salesGet, inr, fmtInt, istToday, istDaysAgo, downloadCsv, rangePresets, priorPeriod } from '../../lib/api.js';
+import StackedTrendChart from '../../components/StackedTrendChart.js';
 
 const GROUPS = [
   { key: 'variant', label: 'By Variant' },
@@ -63,72 +64,6 @@ function Delta({ pct }) {
     <span style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600, color: up ? 'var(--green)' : 'var(--red)' }}>
       {up ? '▲' : '▼'} {Math.abs(pct).toFixed(0)}%
     </span>
-  );
-}
-
-function TrendChart({ days, dayVals, metric }) {
-  const [hi, setHi] = useState(null);
-  const ref = useRef(null);
-  if (!days || days.length < 2) {
-    return <div style={{ padding: 32, textAlign: 'center', color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12 }}>Pick a range of 2+ days to see the trend.</div>;
-  }
-  const W = 1000, H = 230, padT = 10, padB = 2;
-  const n = days.length;
-  const totals = days.map(d => GROUP_ORDER.reduce((s, g) => s + (dayVals[d]?.[g] || 0), 0));
-  const maxTotal = Math.max(...totals, 1);
-  const x = i => (i / (n - 1)) * W;
-  const y = v => padT + (1 - v / maxTotal) * (H - padT - padB);
-  const activeGroups = GROUP_ORDER.filter(g => days.some(d => (dayVals[d]?.[g] || 0) > 0));
-
-  const areas = []; const cum = days.map(() => 0);
-  for (const g of activeGroups) {
-    const top = days.map((d, i) => cum[i] + (dayVals[d]?.[g] || 0));
-    const topPts = top.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`);
-    const botPts = cum.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).reverse();
-    areas.push({ g, d: `M ${topPts.join(' L ')} L ${botPts.join(' L ')} Z` });
-    for (let i = 0; i < n; i++) cum[i] = top[i];
-  }
-  const fmt = v => metric === 'units' ? fmtInt(v) : inr(v);
-  const onMove = e => {
-    const r = ref.current?.getBoundingClientRect(); if (!r) return;
-    setHi(Math.max(0, Math.min(n - 1, Math.round(((e.clientX - r.left) / r.width) * (n - 1)))));
-  };
-  const labelIdx = [0, Math.floor((n - 1) / 2), n - 1].filter((v, i, a) => a.indexOf(v) === i);
-
-  return (
-    <div ref={ref} style={{ position: 'relative' }} onMouseMove={onMove} onMouseLeave={() => setHi(null)}>
-      <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ display: 'block' }}>
-        {areas.map(a => <path key={a.g} d={a.d} fill={GROUP_META[a.g].color} fillOpacity="0.82" />)}
-        {hi != null && <line x1={x(hi)} x2={x(hi)} y1={padT} y2={H - padB} stroke="var(--t1)" strokeWidth="1" strokeDasharray="3 3" vectorEffect="non-scaling-stroke" opacity="0.5" />}
-      </svg>
-      {/* x labels */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4, fontFamily: 'var(--mono)', fontSize: 9.5, color: 'var(--t3)' }}>
-        {labelIdx.map(i => <span key={i}>{days[i]}</span>)}
-      </div>
-      {/* hover tooltip */}
-      {hi != null && (() => {
-        const left = (x(hi) / W) * 100;
-        const flip = left > 60;
-        return (
-          <div style={{ position: 'absolute', top: 6, left: `${left}%`, transform: `translateX(${flip ? '-104%' : '4%'})`, background: 'var(--surface2)', border: '1px solid var(--border-strong)', borderRadius: 8, padding: '8px 10px', pointerEvents: 'none', minWidth: 150, boxShadow: 'var(--shadow)', zIndex: 5 }}>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--t2)', marginBottom: 5 }}>{days[hi]}</div>
-            {activeGroups.slice().reverse().map(g => {
-              const v = dayVals[days[hi]]?.[g] || 0; if (!v) return null;
-              return (
-                <div key={g} style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--mono)', fontSize: 11, marginBottom: 2 }}>
-                  <span className="so-dot" style={{ background: GROUP_META[g].color }} />
-                  <span style={{ color: 'var(--t2)', flex: 1 }}>{GROUP_META[g].label}</span>
-                  <span style={{ color: 'var(--t1)' }}>{fmt(v)}</span>
-                </div>
-              );
-            })}
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, borderTop: '1px solid var(--border)', marginTop: 5, paddingTop: 4, fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600 }}>
-              <span style={{ color: 'var(--t2)' }}>Total</span><span style={{ color: 'var(--t1)' }}>{fmt(totals[hi])}</span>
-            </div>
-          </div>
-        );
-      })()}
-    </div>
   );
 }
 
@@ -357,7 +292,8 @@ export default function Dashboard() {
               </div>
             </div>
           </div>
-          <TrendChart days={trend.days} dayVals={trend.dv} metric={trendMetric} />
+          <StackedTrendChart days={trend.days} dayVals={trend.dv} metric={trendMetric}
+            groups={GROUP_ORDER.map(k => ({ key: k, label: GROUP_META[k].label, color: GROUP_META[k].color }))} />
         </div>
 
         {/* channel mix + top variants */}
