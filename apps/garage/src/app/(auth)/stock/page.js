@@ -17,12 +17,12 @@ const selectStyle = { background: 'var(--surface)', color: 'var(--t1)', border: 
 const searchInput = { background: 'transparent', border: 'none', outline: 'none', color: 'var(--t1)', fontFamily: 'var(--font-ui)', fontSize: 13, width: '100%' };
 const btnSec = { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface-2)', color: 'var(--t2)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '8px 13px', fontFamily: 'var(--font-display)', fontSize: 12, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', cursor: 'pointer', whiteSpace: 'nowrap' };
 
-function downloadCsv(rows, filename, showCost) {
+function downloadCsv(rows, filename, showCost, supplyMap = {}) {
   const headers = [
     'Part Code', 'Product', 'Part Name', 'Category', 'Type',
     'Opening', 'Received', 'Issued', 'Returned', 'Closing',
     ...(showCost ? ['Unit Cost'] : []),
-    'Reorder Point', 'Location', 'Status',
+    'Reorder Point', 'Location', 'Status', 'Supply',
   ];
   const lines = [
     headers,
@@ -30,11 +30,13 @@ function downloadCsv(rows, filename, showCost) {
       const closing = Number(r.closing_stock) || 0;
       const reorder = Number(r.reorder_level) || 0;
       const isLow = reorder > 0 && closing <= reorder;
+      const sv = supplyView(r, supplyMap[r.part_code]);
       return [
         r.part_code, r.product, r.part_name, r.category, r.part_type,
         r.opening_stock ?? 0, r.total_received ?? 0, r.total_issued ?? 0, r.returned ?? 0, closing,
         ...(showCost ? [r.unit_cost ?? ''] : []),
         r.reorder_level ?? 0, r.location, isLow ? 'Reorder' : 'OK',
+        sv ? sv.title : '',
       ];
     }),
   ];
@@ -69,6 +71,40 @@ const STOCK_SORT = {
   status:         r => { const c = Number(r.closing_stock) || 0, ro = Number(r.reorder_level) || 0; return ro > 0 && c <= ro ? 1 : 0; },
 };
 
+// Supply tag for a ledger row (getSupplyStatus). Answers "is this part being acted
+// on?" — on order / in transit / landed / mis-coded-on-a-dead-code / not-ordered.
+const fmtN = (n) => Number(n).toLocaleString('en-IN');
+const SUPPLY_TONE = {
+  ordered: { fg: 'var(--info-fg)', bg: 'var(--info-bg)', bd: 'var(--info-bd)' },
+  moving:  { fg: 'var(--ok-fg)',   bg: 'var(--ok-bg)',   bd: 'var(--ok-bd)' },
+  warn:    { fg: 'var(--warn-fg)', bg: 'var(--warn-bg)', bd: 'var(--warn-bd)' },
+  bad:     { fg: 'var(--bad-fg)',  bg: 'var(--bad-bg)',  bd: 'var(--bad-bd)' },
+};
+function supplyView(row, sup) {
+  const closing = Number(row.closing_stock) || 0;
+  const reorder = Number(row.reorder_level) || 0;
+  const isLow = (reorder > 0 && closing <= reorder) || closing < 0;
+  if (sup && sup.on_order > 0) {
+    const moving = sup.stage === 'In transit' || sup.stage === 'Arrived';
+    let label = `${sup.stage} · ${fmtN(sup.on_order)}`;
+    let title = `${fmtN(sup.on_order)} on order${sup.source ? ' (' + sup.source + ')' : ''}${sup.eta ? ' · ETA ' + sup.eta : ''}`;
+    if (sup.dead_inbound > 0) { label += ' ⚠'; title += ` · plus ${fmtN(sup.dead_inbound)} on dead code ${sup.dead_codes.join(', ')}`; }
+    return { label, title, tone: moving ? 'moving' : 'ordered' };
+  }
+  if (sup && sup.landed > 0) return { label: `Landed · ${fmtN(sup.landed)}`, title: `${fmtN(sup.landed)} landed, awaiting GRN`, tone: 'ordered' };
+  if (sup && sup.dead_inbound > 0) return { label: `⚠ ${fmtN(sup.dead_inbound)} on ${sup.dead_codes[0]}`, title: `${fmtN(sup.dead_inbound)} on order on dead code ${sup.dead_codes.join(', ')} — won't replenish ${row.part_code}`, tone: 'warn' };
+  if (sup && sup.is_dead) return { label: `→ ${sup.superseded_by}`, title: `Deprecated — superseded by ${sup.superseded_by}`, tone: 'dead' };
+  if (isLow) return { label: 'Not ordered', title: 'Low/negative stock and nothing on order', tone: 'bad' };
+  return null;
+}
+function SupplyTag({ row, sup }) {
+  const v = supplyView(row, sup);
+  if (!v) return <span style={{ color: 'var(--t4)', fontSize: 12 }}>—</span>;
+  if (v.tone === 'dead') return <span title={v.title} style={{ fontSize: 11, color: 'var(--t4)', fontFamily: 'var(--font-mono)' }}>{v.label}</span>;
+  const t = SUPPLY_TONE[v.tone];
+  return <span title={v.title} style={{ display: 'inline-flex', alignItems: 'center', fontSize: 11, fontWeight: 600, color: t.fg, background: t.bg, border: `1px solid ${t.bd}`, borderRadius: 6, padding: '2px 7px', whiteSpace: 'nowrap' }}>{v.label}</span>;
+}
+
 export default function StockPage() {
   const { session, perms } = useAuth();
   const { PRODUCTS: CATALOGUE_PRODUCTS } = useProducts();
@@ -80,6 +116,8 @@ export default function StockPage() {
 
   const [fbuData, setFbuData] = useState([]);
   const [fbuLoading, setFbuLoading] = useState(true);
+
+  const [supplyMap, setSupplyMap] = useState({});   // part_code → inbound/supply facts
 
   const [search, setSearch] = useState('');
   const [productFilter, setProductFilter] = useState('');
@@ -120,8 +158,15 @@ export default function StockPage() {
         setFbuLoading(false);
       }
     }
+    async function loadSupply() {
+      try {
+        const data = await garageFetch('getSupplyStatus', {}, session);
+        setSupplyMap(data || {});
+      } catch (e) { setSupplyMap({}); }
+    }
     loadStock();
     loadFbu();
+    loadSupply();
   }, [session]);
 
   const stockProducts = useMemo(() => [...new Set(stockData.map(r => r.product).filter(Boolean))].sort(), [stockData]);
@@ -196,7 +241,7 @@ export default function StockPage() {
     const slug = productFilter
       ? productFilter.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
       : 'all';
-    downloadCsv(sortedStock, `stock-ledger-${slug}-${today}.csv`, showCost);
+    downloadCsv(sortedStock, `stock-ledger-${slug}-${today}.csv`, showCost, supplyMap);
   }
 
   const lowCount = useMemo(() => stockData.filter(r => {
@@ -302,6 +347,7 @@ export default function StockPage() {
                       <SortableTh colKey="reorder_level" align="right">Reorder</SortableTh>
                       <SortableTh colKey="location">Loc</SortableTh>
                       <SortableTh colKey="status">Status</SortableTh>
+                      <th style={th}>Supply</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -328,6 +374,7 @@ export default function StockPage() {
                           <td style={{ ...tdNum, color: 'var(--t3)' }}>{r.reorder_level ?? 0}</td>
                           <td style={td}><span className="num" style={{ fontSize: 11.5, color: 'var(--t3)' }}>{r.location || '—'}</span></td>
                           <td style={td}>{isLow ? <StatusBadge variant="error">Reorder</StatusBadge> : <StatusBadge variant="success">OK</StatusBadge>}</td>
+                          <td style={td}><SupplyTag row={r} sup={supplyMap[r.part_code]} /></td>
                         </tr>
                       );
                     })}
