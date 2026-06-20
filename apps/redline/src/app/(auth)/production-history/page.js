@@ -11,6 +11,7 @@ import { garageFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { useRefreshState } from '../layout.js';
 import { Icon, Panel, KpiTile, FilterChip, fmt } from '../../../components/kit/index.js';
+import ProductionTrendChart from '../../../components/ProductionTrendChart.js';
 
 const N = (v) => Number(v) || 0;
 const variantLabel = (r) => [r.model, r.color].filter(Boolean).join(' ') || '—';
@@ -39,6 +40,37 @@ function presetRange(p) {
     return { from: `${y}-04-01`, to };
   }
   return { from: to, to };
+}
+
+// ── chart bucketing ───────────────────────────────────────────
+// Granularity follows the active date filter: Today → hourly, Week/Month → daily,
+// FY → weekly, Custom → auto by span (1 day hourly, ≤~2 months daily, else weekly).
+function daysInclusive(from, to) {
+  const a = new Date(from + 'T00:00:00'), b = new Date(to + 'T00:00:00');
+  return Math.round((b - a) / 86400000) + 1;
+}
+function chartGranularity(preset, from, to) {
+  if (preset === 'today') return 'hour';
+  if (preset === 'thisweek' || preset === 'thismonth') return 'day';
+  if (preset === 'thisfy') return 'week';
+  const n = daysInclusive(from, to);
+  if (n <= 1) return 'hour';
+  if (n <= 62) return 'day';
+  return 'week';
+}
+function weekStartISO(s) {
+  const d = new Date(s + 'T00:00:00');
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); // back to Monday
+  return fmtISO(d);
+}
+function dayShort(s) {
+  const d = new Date(s + 'T00:00:00');
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+}
+function hourLabel(h) {
+  const ap = h < 12 ? 'a' : 'p';
+  let hh = h % 12; if (hh === 0) hh = 12;
+  return `${hh}${ap}`;
 }
 
 // ── CSV ───────────────────────────────────────────────────────
@@ -123,6 +155,41 @@ export default function ProductionHistoryPage() {
     return { matched, single, noMatch: q && matched.length === 0, totals, days, inScope };
   }, [rows, products, search]);
 
+  // ── trend chart: granularity from the filter; daily/weekly from rows, hourly from RPC ──
+  const granularity = useMemo(() => chartGranularity(preset, from, to), [preset, from, to]);
+  const [hourly, setHourly] = useState([]);
+  useEffect(() => {
+    if (!session || granularity !== 'hour') { setHourly([]); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const params = { day: from };
+        if (view.single) params.product = view.single;
+        const data = await garageFetch('getProductionHistoryHourly', params, session);
+        if (!cancelled) setHourly(Array.isArray(data) ? data : []);
+      } catch { if (!cancelled) setHourly([]); }
+    })();
+    return () => { cancelled = true; };
+  }, [session, granularity, from, view.single]);
+
+  const chartData = useMemo(() => {
+    if (granularity === 'hour') {
+      return hourly.slice().sort((a, b) => a.hour - b.hour)
+        .map(h => ({ label: hourLabel(h.hour), fresh: N(h.fresh_qty), returns: N(h.return_qty) }));
+    }
+    const buckets = {};
+    for (const r of view.inScope) {
+      const key = granularity === 'week' ? weekStartISO(r.day) : r.day;
+      if (!buckets[key]) buckets[key] = { key, fresh: 0, returns: 0 };
+      buckets[key].fresh += N(r.fresh_qty);
+      buckets[key].returns += N(r.return_qty);
+    }
+    return Object.values(buckets).sort((a, b) => (a.key < b.key ? -1 : 1))
+      .map(b => ({ label: dayShort(b.key), fresh: b.fresh, returns: b.returns }));
+  }, [granularity, hourly, view.inScope]);
+
+  const granLabel = granularity === 'hour' ? 'hourly' : granularity === 'week' ? 'weekly' : 'daily';
+
   function exportCsv() {
     const flat = view.inScope.map(r => ({
       date: r.day, product: r.product, variant: r.model || '', colour: r.color || '',
@@ -191,6 +258,26 @@ export default function ProductionHistoryPage() {
         <KpiTile label="Re-dispatched"    value={fmt(view.totals.returns)} tone="warn" />
         <KpiTile label="Total packed out" value={fmt(view.totals.total)}   tone="ok" />
       </div>
+
+      {/* trend chart — bucket granularity follows the active filter */}
+      {view.inScope.length > 0 && (
+        <div style={{ marginBottom: 20 }}>
+          <Panel pad={16}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
+              <span style={{ fontFamily: 'var(--font-display)', fontSize: 10.5, fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--t3)' }}>
+                Packed out · {granLabel}{view.single ? ` · ${view.single}` : ''}
+              </span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 14, fontFamily: 'var(--font-ui)', fontSize: 11, color: 'var(--t2)' }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 9, height: 9, borderRadius: 2, background: '#f2cd1a' }} />Fresh</span>
+                {chartData.some(d => d.returns > 0) && (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 9, height: 9, borderRadius: 2, background: '#60a5fa' }} />Returns</span>
+                )}
+              </span>
+            </div>
+            <ProductionTrendChart data={chartData} />
+          </Panel>
+        </div>
+      )}
 
       {/* daily breakdown, newest first */}
       {view.days.length === 0 ? (
