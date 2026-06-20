@@ -3,10 +3,11 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
-import { Scan, AlertCircle, Phone as PhoneIcon } from 'lucide-react';
+import { AlertCircle } from 'lucide-react';
 import { csopsGet, csopsPost } from '../../../lib/csopsFetch.js';
 import { ShopifyPanel } from '../../../components/ShopifyPanel.js';
 import { IssuePicker } from '../../../components/IssuePicker.js';
+import { btnPrimary, btnGhost, Icon } from '../../../components/kit/index.js';
 
 const PLATFORMS = [
   '', 'website','amazon','cred','blinkit','instamart','marketplace','offline','zepto','swiggy','investor','other'
@@ -14,24 +15,25 @@ const PLATFORMS = [
 const INTAKE_CHANNELS = ['phone','whatsapp','email','marketplace','walkin','other'];
 
 const inputStyle = {
-  background: 'var(--surface)',
+  background: 'var(--surface-2)',
   color: 'var(--t1)',
   border: '1px solid var(--border)',
-  borderRadius: 'var(--radius-md)',
-  padding: '9px 12px',
-  fontFamily: 'var(--font-mono)',
+  borderRadius: 'var(--radius-sm)',
+  padding: '9px 11px',
+  fontFamily: 'var(--f-ui)',
   fontSize: 13,
   width: '100%',
   outline: 'none',
+  colorScheme: 'dark', accentColor: 'var(--accent)',
 };
 
 const labelStyle = {
-  color: 'var(--t3)',
+  color: 'var(--t4)',
   fontSize: 10,
   textTransform: 'uppercase',
-  letterSpacing: '0.08em',
-  fontFamily: 'var(--font-mono)',
-  marginBottom: 4,
+  letterSpacing: '0.07em',
+  fontFamily: 'var(--f-mono)',
+  marginBottom: 5,
 };
 
 export default function NewTicketPage() {
@@ -154,19 +156,7 @@ export default function NewTicketPage() {
 
   return (
     <div style={{ maxWidth: 880, margin: '0 auto' }}>
-      <h1 style={{
-        fontFamily: 'var(--font-cond)',
-        fontSize: 'var(--text-xl)',
-        fontWeight: 600,
-        letterSpacing: 'var(--tracking-tight)',
-        textTransform: 'uppercase',
-        color: 'var(--t1)',
-        marginBottom: 'var(--space-4)',
-      }}>
-        New Ticket
-      </h1>
-
-      <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+      <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--gap)' }}>
         {/* ── UPC lookup row (top, phone-call-optimised) ───────────────── */}
         <Section title="Order lookup" subtitle="Scan or type a UPC first — product fields auto-fill.">
           <Row>
@@ -305,39 +295,12 @@ export default function NewTicketPage() {
           </div>
         )}
 
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <button
-            type="button"
-            onClick={() => router.push('/queue')}
-            style={{
-              padding: '10px 18px',
-              background: 'transparent',
-              color: 'var(--t2)',
-              border: '1px solid var(--border)',
-              borderRadius: 'var(--radius-md)',
-              fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600,
-              letterSpacing: '0.06em', textTransform: 'uppercase',
-              cursor: 'pointer',
-            }}
-          >
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+          <button type="button" onClick={() => router.push('/queue')} style={{ ...btnGhost, padding: '10px 18px', fontSize: 13 }}>
             Cancel
           </button>
-          <button
-            type="submit"
-            disabled={submitting}
-            style={{
-              padding: '10px 22px',
-              background: 'var(--brand-red)',
-              color: '#fff',
-              border: '1px solid var(--brand-red)',
-              borderRadius: 'var(--radius-md)',
-              fontFamily: 'var(--font-cond)', fontSize: 12, fontWeight: 700,
-              letterSpacing: '0.08em', textTransform: 'uppercase',
-              cursor: submitting ? 'wait' : 'pointer',
-              opacity: submitting ? 0.7 : 1,
-            }}
-          >
-            {submitting ? 'Creating…' : 'Create Ticket'}
+          <button type="submit" disabled={submitting} style={{ ...btnPrimary, padding: '10px 20px', fontSize: 12, cursor: submitting ? 'wait' : 'pointer', opacity: submitting ? 0.7 : 1 }}>
+            <Icon name="check" size={14} />{submitting ? 'Creating…' : 'Create ticket'}
           </button>
         </div>
       </form>

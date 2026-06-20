@@ -1,4 +1,14 @@
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Tomorrow:wght@400;500;600;700&display=swap');
+/* ════════════════════════════════════════════════════════════════════
+   PITSTOP — "Volt" design system
+   Single approved direction. WCAG-tuned, lifted dark ramp.
+   Source of truth = Pitstop redesign prototype (Volt). See the redesign
+   handoff §2. Legacy aliases at the bottom keep the pre-Volt pages working
+   while the screen-by-screen migration completes — do not remove until
+   every page is on the canonical tokens.
+   ════════════════════════════════════════════════════════════════════ */
+
+/* Fonts — Tomorrow (display) · Hanken Grotesk (UI/body) · JetBrains Mono (numbers) */
+@import url('https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Tomorrow:wght@400;500;600;700&display=swap');
 
 *, *::before, *::after {
   margin: 0;
@@ -6,129 +16,119 @@
   box-sizing: border-box;
 }
 
-/* ════════════════════════════════════════════════════════════
-   DESIGN TOKENS — Redline
-   Captured in DESIGN.md ("The Polished Pit Wall"). Edit there
-   first, then propagate the value here. Legacy aliases at the
-   bottom preserve existing pages while migration proceeds.
-   ════════════════════════════════════════════════════════════ */
-
 :root {
-  /* ── Surface ramp (lifted dark, 4 steps) ─────────────── */
-  --bg:         #1f1f1f;   /* body */
-  --surface:    #2a2a2a;   /* cards, panels, sidebar, modals */
-  --surface-2:  #333333;   /* inputs, table-row hover, raised inner */
-  --surface-3:  #3c3c3c;   /* active fills, chip-neutral bg, hover */
-  --border:     #404040;   /* default 1px border */
-  --border-2:   #4a4a4a;   /* emphasized border, focus, raised secondary */
+  /* ── Surface ramp (lifted — never revert to #1f1f1f/near-black) ── */
+  --bg:        #1b1b1e;
+  --bg-2:      #151517;   /* sidebar / deepest wells */
+  --surface:   #242428;   /* cards, panels, modals */
+  --surface-2: #2e2e34;   /* inputs, row hover, raised inner */
+  --surface-3: #3a3a42;   /* active fills, neutral chips */
+  --border:    #34343b;
+  --border-2:  #45454e;
+  --border-3:  #56565f;
 
-  /* ── Text ramp (4 steps, AA-conformant on --bg) ──────── */
-  --text-1:     #f5f5f5;   /* primary */
-  --text-2:     #b0b0b0;   /* secondary (AAA on --bg) */
-  --text-3:     #888888;   /* tertiary (AA on --bg, replaces #555) */
-  --text-4:     #666666;   /* decorative-only — icons, dividers; sub-AA */
+  /* ── Text ramp (AA+ on --bg) ── */
+  --t1: #f5f5f6;  /* primary  — AAA */
+  --t2: #b6b6be;  /* secondary— AAA */
+  --t3: #8c8c96;  /* muted    — AA  */
+  --t4: #7a7a84;  /* micro    — AA-large / bold only (eyebrows, separators) */
 
-  /* ── Brand colors ────────────────────────────────────── */
-  --brand-yellow:      #F2CD1A;
+  /* ── Accent (brand yellow — primary action + active state ONLY) ── */
+  --accent:      #F2CD1A;
+  --accent-fg:   #1a1a1a;
+  --accent-bg:   rgba(242,205,26,.12);
+  --accent-bd:   rgba(242,205,26,.42);
+  --accent-ring: rgba(242,205,26,.28);
+
+  /* ── Semantic (status is the product — use these, never raw brand hues) ── */
+  --ok-fg:   #4ade80; --ok-bg:   rgba(34,197,94,.13);  --ok-bd:   rgba(34,197,94,.34);
+  --warn-fg: #fbbf24; --warn-bg: rgba(251,191,36,.13); --warn-bd: rgba(251,191,36,.34);
+  --bad-fg:  #ff7a7a; --bad-bg:  rgba(222,42,42,.16);  --bad-bd:  rgba(222,42,42,.42);
+  --info-fg: #8fa2ff; --info-bg: rgba(109,131,255,.15);--info-bd: rgba(109,131,255,.36);
+
+  /* ── Elevation / glow ── */
+  --glow:       0 18px 40px -22px rgba(0,0,0,.7);
+  --accent-glow:0 0 22px -4px rgba(242,205,26,.45);   /* only on primary CTAs + logo */
+
+  /* ── Geometry / rhythm ── */
+  --gap:    16px;   /* grid/section gaps */
+  --pad:    24px;   /* page + topbar padding */
+  --cardpad:16px;   /* card/panel body padding */
+  --rowpad: 12px;   /* table row vertical padding */
+  --radius:   12px;
+  --radius-sm: 7px;
+  --fs: 14px;
+
+  /* ── Type roles (THE biggest "modern" fix vs old mono-everything) ── */
+  --f-display: 'Tomorrow', system-ui, sans-serif;        /* heads, eyebrows, labels, buttons, line/ticket IDs — UPPERCASE + tracking */
+  --f-ui:      'Hanken Grotesk', system-ui, sans-serif;  /* nav, body, descriptions, table cells — sentence case */
+  --f-mono:    'JetBrains Mono', ui-monospace, monospace;/* numbers, codes, times, phone, UPC, ₹ — tabular-nums ONLY */
+
+  /* ── Motion ── */
+  --ease: cubic-bezier(.22,1,.36,1);
+  --fast: 130ms;
+  --base: 200ms;
+}
+
+/* ── Back-compat aliases — keep the pre-Volt Pitstop pages working while
+   the screen-by-screen migration completes. Every old token name found in
+   apps/pitstop/src maps onto the new Volt ramp here so no page edit is
+   needed for the lift to be inherited. ── */
+:root {
+  /* surfaces / borders */
+  --surface-1: var(--surface);
+  --border-1:  var(--border);
+
+  /* brand hues */
+  --yellow:            var(--accent);
+  --brand-yellow:      var(--accent);
   --brand-yellow-deep: #d4b200;
-  --brand-blue:        #213CE2;
-  --brand-red:         #DE2A2A;
-  --brand-green:       #22c55e;
-  --brand-orange:      #f97316;
+  --brand-red:   #DE2A2A;
+  --brand-blue:  #213CE2;
+  --brand-green: #22c55e;
+  --brand-orange:#f97316;
 
-  /* ── Semantic state ───────────────────────────────────── */
-  --state-warning:    #fbbf24;   /* amber — distinct from brand yellow */
-  --state-warning-fg: #fbbf24;
-  --state-warning-bg: rgba(251, 191, 36, 0.12);
-  --state-error:      #DE2A2A;
-  --state-error-fg:   #ff7070;
-  --state-error-bg:   rgba(222, 42, 42, 0.15);
-  --state-success:    #22c55e;
-  --state-success-fg: #4ade80;
-  --state-success-bg: rgba(34, 197, 94, 0.12);
-  --state-info:       #7b93ff;
-  --state-info-fg:    #7b93ff;
-  --state-info-bg:    rgba(33, 60, 226, 0.20);
+  /* fonts */
+  --font-cond: var(--f-display);
+  --font-mono: var(--f-mono);
 
-  /* Accent (primary action) */
-  --accent:    var(--brand-yellow);
-  --accent-fg: #0a0a0a;
-  --accent-bg: rgba(242, 205, 26, 0.08);   /* nav-active, selected row tint */
+  /* radius scale */
+  --radius-md: var(--radius-sm);
+  --radius-lg: var(--radius);
 
-  /* ── Type scale ──────────────────────────────────────── */
-  /* Body floor is 14px (--text-base). Captions may drop to 11px
-     (--text-2xs). Below 11px is reserved for non-text decoration. */
-  --text-2xs:  11px;   /* captions, "LIVE", last-refreshed */
-  --text-xs:   12px;   /* labels, table headers, status badges */
-  --text-sm:   13px;   /* dense data, sub-tab labels, form inputs */
-  --text-base: 14px;   /* body, nav items, table content */
-  --text-md:   16px;   /* page title, panel header */
-  --text-lg:   18px;   /* sub-section heading */
-  --text-xl:   22px;   /* page H1 */
-  --text-2xl:  28px;   /* KPI primary number */
-  --text-3xl:  36px;   /* hero metric — rare */
+  /* spacing */
+  --space-2: 8px; --space-3: 12px; --space-4: 16px;
 
-  /* Letter-spacing scale for uppercase text — exactly 3 values */
-  --tracking-tight:  0.04em;   /* caption, status badge */
-  --tracking-mid:    0.06em;   /* title, panel header */
-  --tracking-wide:   0.08em;   /* label, table header */
+  /* tracking */
+  --tracking-tight: .04em;
+  --tracking-wide:  .08em;
 
-  /* ── Spacing scale ───────────────────────────────────── */
-  --space-1:  4px;
-  --space-2:  8px;
-  --space-3:  12px;
-  --space-4:  16px;
-  --space-5:  20px;
-  --space-6:  24px;
-  --space-8:  32px;
-  --space-10: 40px;
+  /* type scale (old numeric names still referenced by legacy pages) */
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-xl: 21px;
 
-  /* ── Radius scale ────────────────────────────────────── */
-  --radius-sm:   3px;   /* chips, small badges, inputs */
-  --radius-md:   4px;   /* cards, panels, buttons */
-  --radius-lg:   8px;   /* large panels, modals */
-  --radius-full: 9999px;
+  /* text ramp aliases (old --text-N names → new --tN) */
+  --text-1: var(--t1);
+  --text-2: var(--t2);
+  --text-3: var(--t3);
+  --text-4: var(--t4);
 
-  /* ── Fonts ───────────────────────────────────────────── */
-  --font-mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
-  --font-cond: 'Tomorrow', system-ui, sans-serif;
-
-  /* ── Motion ──────────────────────────────────────────── */
-  --duration-fast:    120ms;
-  --duration-default: 180ms;
-  --duration-slow:    260ms;
-  --ease-out:         cubic-bezier(0.22, 1, 0.36, 1);
-
-  /* ════════════════════════════════════════════════════════
-     LEGACY ALIASES — Existing pages reference these names.
-     Aliased to the new values so the lift is inherited without
-     a per-page edit. Migrate page-by-page to the new tokens.
-     ════════════════════════════════════════════════════════ */
-  --surface2: var(--surface-2);
-  --surface3: var(--surface-3);
-  --border2:  var(--border-2);
-  --t1:       var(--text-1);
-  --t2:       var(--text-2);
-  --t3:       var(--text-3);
-  --yellow:   var(--brand-yellow);
-  --yellow2:  var(--brand-yellow-deep);
-  --blue:     var(--brand-blue);
-  --red:      var(--brand-red);
-  --green:    var(--brand-green);
-  --orange:   var(--brand-orange);
-  --mono:     var(--font-mono);
-  --cond:     var(--font-cond);
+  /* semantic state (old --state-* names → new --*-fg/-bg) */
+  --state-success: var(--ok-fg);  --state-success-fg: var(--ok-fg);  --state-success-bg: var(--ok-bg);
+  --state-warning: var(--warn-fg); --state-warning-fg: var(--warn-fg); --state-warning-bg: var(--warn-bg);
+  --state-error:   var(--bad-fg);  --state-error-fg:  var(--bad-fg);  --state-error-bg:  var(--bad-bg);
+  --state-info:    var(--info-fg); --state-info-fg:   var(--info-fg); --state-info-bg:   var(--info-bg);
 }
 
 /* ══════════════════════════════════════════════════════════
    BASE
    ══════════════════════════════════════════════════════════ */
-
 html, body {
   background: var(--bg);
-  color: var(--text-1);
-  font-family: var(--font-mono);
-  font-size: var(--text-base);
+  color: var(--t1);
+  font-family: var(--f-ui);
+  font-size: var(--fs);
   line-height: 1.45;
   height: 100%;
   overflow: hidden;
@@ -142,7 +142,7 @@ button { font-family: inherit; }
 /* ── Focus ring — keyboard only ──────────────────────────── */
 :focus { outline: none; }
 :focus-visible {
-  outline: 2px solid rgba(242, 205, 26, 0.6);
+  outline: 2px solid var(--accent-ring);
   outline-offset: 2px;
   border-radius: 2px;
 }
@@ -150,20 +150,58 @@ button { font-family: inherit; }
 /* ── Selection ───────────────────────────────────────────── */
 ::selection {
   background: rgba(242, 205, 26, 0.35);
-  color: var(--text-1);
+  color: var(--t1);
 }
 
 /* ── Scrollbars — match dark theme ───────────────────────── */
-::-webkit-scrollbar       { width: 6px; height: 6px; }
+::-webkit-scrollbar       { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--border-2); }
-* { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 8px; border: 2px solid var(--bg); }
+::-webkit-scrollbar-thumb:hover { background: var(--border-3); }
+* { scrollbar-width: thin; scrollbar-color: var(--border-2) transparent; }
+
+/* ══════════════════════════════════════════════════════════
+   TYPE ATOMS (handoff §2.3) — light helpers; values match the
+   prototype exactly. Apply via className + inline overrides.
+   ══════════════════════════════════════════════════════════ */
+.num {
+  font-family: var(--f-mono);
+  font-variant-numeric: tabular-nums;
+}
+.eyebrow {
+  font-family: var(--f-display);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--t3);
+}
+.label {
+  font-family: var(--f-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--t2);
+}
+.font-display { font-family: var(--f-display); }
+.font-ui      { font-family: var(--f-ui); }
+
+/* ══════════════════════════════════════════════════════════
+   MOTION (prototype keyframes)
+   ══════════════════════════════════════════════════════════ */
+@keyframes pit-pulse { 0%,100% { opacity:1; transform:scale(1) } 50% { opacity:.35; transform:scale(.7) } }
+@keyframes pit-ring  { 0% { box-shadow:0 0 0 0 var(--accent-ring) } 70% { box-shadow:0 0 0 7px transparent } 100% { box-shadow:0 0 0 0 transparent } }
+@keyframes pit-in    { from { opacity:0; transform:translateY(8px) } to { opacity:1; transform:none } }
+@keyframes pit-drawer{ from { transform:translateX(100%) } to { transform:none } }
+@keyframes pit-fade  { from { opacity:0 } to { opacity:1 } }
+@keyframes pit-pop   { from { opacity:0; transform:translateY(-50%) scale(.97) } to { opacity:1; transform:translateY(0) scale(1) } }
+
+.pit-pulse { animation: pit-pulse 2.4s var(--ease) infinite; }
 
 /* ══════════════════════════════════════════════════════════
    ACCESSIBILITY
    ══════════════════════════════════════════════════════════ */
-
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

@@ -3,11 +3,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@throttle/auth';
-import { KpiCard, EmptyState, Spinner, useListNav } from '@throttle/ui';
+import { EmptyState, Spinner, useListNav } from '@throttle/ui';
 import { Search, PhoneIncoming, PhoneOutgoing, Phone, MoreHorizontal, ExternalLink, FilePlus2, CheckCheck, Filter } from 'lucide-react';
 import { csopsGet, csopsPost } from '../../../lib/csopsFetch.js';
 import { CallStatusBadge } from '../../../components/CallStatusBadge.js';
 import { getActiveDept } from '../../../components/DeptSwitcher.js';
+import { KpiCard, Tabs, selectStyle } from '../../../components/kit/index.js';
 
 const TABS = [
   { id: 'all',        label: 'All Calls' },
@@ -37,9 +38,9 @@ function fmtTime(iso) {
 }
 
 function DirectionIcon({ direction }) {
-  if (direction === 'incoming') return <PhoneIncoming size={13} style={{ color: '#16a34a' }} />;
-  if (direction === 'outgoing') return <PhoneOutgoing size={13} style={{ color: '#4f46e5' }} />;
-  return <Phone size={13} style={{ color: 'var(--t3)' }} />;
+  if (direction === 'incoming') return <PhoneIncoming size={14} strokeWidth={1.75} style={{ color: 'var(--ok-fg)' }} />;
+  if (direction === 'outgoing') return <PhoneOutgoing size={14} strokeWidth={1.75} style={{ color: 'var(--info-fg)' }} />;
+  return <Phone size={14} strokeWidth={1.75} style={{ color: 'var(--t3)' }} />;
 }
 
 export default function CallsPage() {
@@ -141,31 +142,16 @@ export default function CallsPage() {
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto' }}>
       {/* KPI strip */}
-      <section style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 16 }}>
-        <KpiCard label="Calls today"      value={kpis?.total_today ?? '—'} />
-        <KpiCard label="Answered today"   value={kpis?.answered_today ?? '—'} accent="green" />
-        <KpiCard label="Missed today"     value={kpis?.missed_today ?? '—'} accent={kpis?.missed_today > 0 ? 'red' : null} />
-        <KpiCard label="Answer rate"      value={kpis?.answer_rate_pct != null ? `${kpis.answer_rate_pct}%` : '—'} />
-        <KpiCard label="Awaiting callback" value={kpis?.unanswered_awaiting_callback ?? '—'} accent={kpis?.unanswered_awaiting_callback > 0 ? 'red' : null} />
+      <section style={{ display:'grid', gridTemplateColumns:'repeat(5, 1fr)', gap: 'var(--gap)', marginBottom: 'var(--gap)' }}>
+        <KpiCard label="Calls today"       value={kpis?.total_today ?? '—'}    tone="var(--info-fg)" sub="all lanes" size={26} />
+        <KpiCard label="Answered"          value={kpis?.answered_today ?? '—'} tone="var(--ok-fg)"   sub={kpis?.answer_rate_pct != null ? `${kpis.answer_rate_pct}% rate` : ''} size={26} />
+        <KpiCard label="Missed"            value={kpis?.missed_today ?? '—'}   tone="var(--bad-fg)"  sub="today" size={26} />
+        <KpiCard label="Answer rate"       value={kpis?.answer_rate_pct != null ? `${kpis.answer_rate_pct}%` : '—'} tone={(kpis?.answer_rate_pct != null && kpis.answer_rate_pct < 90) ? 'var(--warn-fg)' : 'var(--ok-fg)'} sub="target 90%" size={26} />
+        <KpiCard label="Awaiting callback" value={kpis?.unanswered_awaiting_callback ?? '—'} tone="var(--warn-fg)" sub="missed, to return" size={26} />
       </section>
 
       {/* Tabs */}
-      <div style={{ display:'flex', gap: 4, marginBottom: 12, borderBottom: '1px solid var(--border-1)' }}>
-        {TABS.map(t => {
-          const isActive = activeTab === t.id;
-          return (
-            <button key={t.id} onClick={() => setParam('tab', t.id)} style={{
-              background: 'none', border: 'none',
-              padding: '8px 14px', cursor: 'pointer',
-              color: isActive ? 'var(--yellow)' : 'var(--t2)',
-              fontWeight: isActive ? 600 : 500,
-              borderBottom: isActive ? '2px solid var(--yellow)' : '2px solid transparent',
-              marginBottom: -1,
-              fontSize: 13,
-            }}>{t.label}</button>
-          );
-        })}
-      </div>
+      <Tabs tabs={TABS} value={activeTab} onChange={(id) => setParam('tab', id)} />
 
       {/* Filters row */}
       <div style={{ display:'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -325,17 +311,14 @@ function FilterSelect({ label, value, onChange, options }) {
     <label style={{ display:'inline-flex', alignItems:'center', gap: 6, fontSize: 12, color: 'var(--t3)' }}>
       <Filter size={12} />
       {label}:
-      <select value={value} onChange={e => onChange(e.target.value)} style={{
-        padding:'4px 8px', background:'var(--surface-2)', border:'1px solid var(--border-1)',
-        borderRadius: 5, fontSize: 12, color: 'var(--t1)',
-      }}>
+      <select value={value} onChange={e => onChange(e.target.value)} style={{ ...selectStyle, padding: '6px 9px', fontSize: 12.5 }}>
         {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
       </select>
     </label>
   );
 }
 
-function Th({ children }) { return <th style={{ textAlign:'left', padding:'8px 12px', fontSize:11, fontWeight:700, textTransform:'uppercase', color:'var(--t3)', letterSpacing:'0.05em' }}>{children}</th>; }
+function Th({ children }) { return <th style={{ textAlign:'left', padding:'10px 12px', fontFamily:'var(--f-display)', fontSize:9.5, fontWeight:700, textTransform:'uppercase', color:'var(--t3)', letterSpacing:'0.1em' }}>{children}</th>; }
 function Td({ children, ...rest }) { return <td {...rest} style={{ padding:'9px 12px', verticalAlign:'middle', ...rest.style }}>{children}</td>; }
 
 const btnIcon = { padding:4, background:'transparent', border:'none', color:'var(--t3)', cursor:'pointer', display:'inline-flex', alignItems:'center' };

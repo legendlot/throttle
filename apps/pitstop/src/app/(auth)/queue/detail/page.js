@@ -4,8 +4,9 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Modal, Spinner, useToast } from '@throttle/ui';
-import { ChevronLeft, AlertCircle, Plus, Link2, MessageSquare, ChevronRight } from 'lucide-react';
+import { ChevronLeft, Link2 } from 'lucide-react';
 import { csopsGet, csopsPost } from '../../../../lib/csopsFetch.js';
+import { Stepper as VoltStepper, StepperToggle, Icon, btnPrimary, btnGhost } from '../../../../components/kit/index.js';
 import { ShopifyPanel } from '../../../../components/ShopifyPanel.js';
 import { IssuePicker } from '../../../../components/IssuePicker.js';
 import WhatsAppPanel from '../../../../components/WhatsAppPanel.js';
@@ -109,7 +110,7 @@ export default function TicketDetailPage() {
       <DetailHeader ticket={t} onRefresh={refresh} session={session} stages={stages} perms={perms} />
 
       {/* Stepper */}
-      <Stepper stages={stages} currentIndex={stageIndex} closed={isClosed} disposition={t.disposition} />
+      <LifecycleStepper ticket={t} />
 
       {/* Three-column body */}
       <div style={{
@@ -215,7 +216,7 @@ function DetailHeader({ ticket: t, onRefresh, session, stages, perms }) {
           {t.customer_name} — {t.product || 'Unknown product'}{t.product_model && ` · ${t.product_model}`}{t.product_color && ` · ${t.product_color}`}
         </h1>
         <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-          <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--t3)', fontSize: 12 }}>{t.ticket_no}</span>
+          <span className="num" style={{ color: 'var(--accent)', fontSize: 12 }}>{t.ticket_no}</span>
           <span style={{ color: 'var(--t4)' }}>·</span>
           <span style={{ color: 'var(--t3)', fontSize: 12 }}>created {fmtIstDateTime(t.created_at)} IST</span>
           <span style={{ color: 'var(--t4)' }}>·</span>
@@ -289,19 +290,7 @@ function AdvanceButton({ label, ticket, nextStage, session, onAdvanced }) {
   const [modalOpen, setModalOpen] = useState(false);
   return (
     <>
-      <button
-        onClick={() => setModalOpen(true)}
-        style={{
-          padding: '8px 14px',
-          background: 'var(--brand-red)',
-          color: '#fff',
-          border: '1px solid var(--brand-red)',
-          borderRadius: 'var(--radius-md)',
-          fontFamily: 'var(--font-cond)', fontSize: 12, fontWeight: 700,
-          letterSpacing: '0.08em', textTransform: 'uppercase',
-          cursor: 'pointer', whiteSpace: 'nowrap',
-        }}
-      >
+      <button onClick={() => setModalOpen(true)} style={{ ...btnPrimary, padding: '9px 15px', fontSize: 12 }}>
         {label}
       </button>
       <AdvanceModal
@@ -445,45 +434,19 @@ const inputStyle = {
   outline: 'none',
 };
 
-function Stepper({ stages, currentIndex, closed, disposition }) {
-  // For the awaiting_info disposition, relabel awaiting_evidence as "awaiting info"
-  function stageLabel(s) {
-    if (disposition === 'awaiting_info' && s === 'awaiting_evidence') return 'awaiting info';
-    return s;
-  }
-
+function LifecycleStepper({ ticket: t }) {
+  // Spine (dotted nodes, default) / Rail (segmented bars) — handoff §6.3.
+  const [variant, setVariant] = useState('spine');
+  const stage = t.closed_at ? 'closed' : t.stage;
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 0,
-      padding: '14px 18px',
-      background: 'var(--surface)',
-      border: '1px solid var(--border)',
-      borderRadius: 'var(--radius-lg)',
-      overflowX: 'auto',
-    }}>
-      {stages.map((s, i) => {
-        const done = i < currentIndex || (closed && s === 'closed');
-        const current = i === currentIndex && !closed;
-        const dotBg = done ? 'var(--state-success)' : current ? 'var(--brand-red)' : 'var(--surface-3)';
-        const dotShadow = current ? '0 0 0 3px rgba(222, 42, 42, 0.25)' : 'none';
-        return (
-          <div key={s} style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, padding: '0 6px' }}>
-              <div style={{ width: 10, height: 10, borderRadius: '50%', background: dotBg, boxShadow: dotShadow }} />
-              <div style={{
-                fontFamily: 'var(--font-mono)', fontSize: 9.5,
-                color: current ? 'var(--t1)' : done ? 'var(--t2)' : 'var(--t4)',
-                fontWeight: current ? 700 : 500,
-                whiteSpace: 'nowrap',
-                letterSpacing: '0.02em',
-              }}>{stageLabel(s)}</div>
-            </div>
-            {i < stages.length - 1 && (
-              <div style={{ width: 28, height: 1, background: done ? 'var(--state-success)' : 'var(--border)' }} />
-            )}
-          </div>
-        );
-      })}
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)',
+      padding: '16px 20px', marginBottom: 'var(--gap)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+        <span style={{ fontFamily: 'var(--f-display)', fontSize: 10, letterSpacing: '0.1em', color: 'var(--t3)',
+          textTransform: 'uppercase', fontWeight: 600 }}>Lifecycle · {DISPOSITION_LABELS[t.disposition] || t.disposition || 'Pending'}</span>
+        <StepperToggle value={variant} onChange={setVariant} />
+      </div>
+      <VoltStepper disposition={t.disposition} stage={stage} variant={variant} />
     </div>
   );
 }

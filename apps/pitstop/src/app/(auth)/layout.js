@@ -1,11 +1,10 @@
 'use client';
-import { createContext, useContext, useMemo, useState } from 'react';
-import { usePathname, useRouter } from 'next/navigation';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { RequireAuth, useAuth } from '@throttle/auth';
-import { Sidebar, Spinner, Topbar, useSearchShortcut, AppLauncher } from '@throttle/ui';
-import { NAV_GROUPS, filterNavByPerms } from '../../lib/nav.js';
-import { PitstopIcon } from '../../components/PitstopIcon.js';
-import DeptSwitcher from '../../components/DeptSwitcher.js';
+import { Spinner, AppLauncher, useSearchShortcut } from '@throttle/ui';
+import { PitstopSidebar, PitstopTopbar, CommandPalette } from '../../components/kit/index.js';
+import { csopsGet } from '../../lib/csopsFetch.js';
+import DeptSwitcher, { getActiveDept } from '../../components/DeptSwitcher.js';
 
 const RefreshContext = createContext({
   refreshing: false,    setRefreshing:    () => {},
@@ -37,59 +36,75 @@ export default function AuthLayout({ children }) {
 }
 
 function AuthLayoutInner({ children }) {
-  const { user, role, perms, signOut, loading } = useAuth();
-  const pathname  = usePathname();
-  const router    = useRouter();
+  const { user, brandUser, role, perms, session, signOut, loading } = useAuth();
   const { refreshing, lastRefreshed } = useRefreshState();
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
+  const [cmdkOpen, setCmdkOpen] = useState(false);
+  const [badges, setBadges] = useState({ open: 0, missed: 0 });
 
   // Global "/" → focus the primary search input on the active page.
   useSearchShortcut();
 
-  // Permission-aware nav — perms lives separately on the auth context
-  // (the legacy user?.permissions path was always undefined and silently
-  // hid every `requires`-gated nav item).
-  const navGroups = useMemo(
-    () => filterNavByPerms(NAV_GROUPS, perms || {}),
-    [perms]
-  );
+  // Global ⌘K / Ctrl+K → command palette · Esc → close.
+  useEffect(() => {
+    const h = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setCmdkOpen(o => !o); }
+      else if (e.key === 'Escape') setCmdkOpen(false);
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, []);
+
+  // Live sidebar badges (Queue=open · Calls=awaiting-callback). 30s refresh.
+  useEffect(() => {
+    if (!session) return undefined;
+    let alive = true;
+    const load = async () => {
+      try {
+        const dept = getActiveDept(perms, brandUser?.cs_department_slug) || undefined;
+        const params = dept ? { department: dept } : {};
+        const [counts, calls] = await Promise.all([
+          csopsGet('getQueueCounts', params, session).catch(() => null),
+          csopsGet('getCallsKpis', params, session).catch(() => null),
+        ]);
+        if (!alive) return;
+        setBadges({
+          open: counts?.open || 0,
+          missed: calls?.unanswered_awaiting_callback || 0,
+        });
+      } catch { /* badges are best-effort */ }
+    };
+    load();
+    const iv = setInterval(load, 30000);
+    const onDept = () => load();
+    window.addEventListener('pitstop:dept-changed', onDept);
+    return () => { alive = false; clearInterval(iv); window.removeEventListener('pitstop:dept-changed', onDept); };
+  }, [session, perms, brandUser?.cs_department_slug]);
 
   if (loading && !user) return <Spinner />;
 
-  const displayName = user?.full_name || user?.email || '';
-  const initial     = displayName ? displayName[0].toUpperCase() : '?';
+  const displayName = user?.full_name || brandUser?.full_name || user?.email || '';
+  const roleLabel = ({ cs_agent: 'Agent', cs_lead: 'Team Lead', admin: 'CS Admin', super_admin: 'Super Admin' }[role]) || role || '';
 
   return (
-    <div style={{ display:'flex', height:'100dvh', overflow:'hidden' }}>
-      <Sidebar
-        groups={navGroups}
-        activeTab={pathname}
-        onTabSelect={(item) => router.push(item.route)}
+    <div style={{ display: 'flex', height: '100dvh', overflow: 'hidden' }}>
+      <PitstopSidebar
+        perms={perms || {}}
+        badges={badges}
         userLabel={displayName}
-        userInitial={initial}
-        userRole={role || ''}
+        userRole={roleLabel}
+        onCmdK={() => setCmdkOpen(true)}
         onLogout={signOut}
-        collapsed={sidebarCollapsed}
-        onToggle={() => setSidebarCollapsed(c => !c)}
-        appLabel="PITSTOP"
-        appShortLabel="PS"
-        appIcon={<PitstopIcon bar={2} gap={2} />}
       />
-      <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
-        <Topbar
-          navGroups={navGroups}
-          pathname={pathname}
-          onTabSelect={(item) => router.push(item.route)}
-          refreshing={refreshing}
-          lastRefreshed={lastRefreshed}
-        >
-          <AppLauncher current="pitstop" />
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <PitstopTopbar refreshing={refreshing} lastRefreshed={lastRefreshed}>
           <DeptSwitcher />
-        </Topbar>
-        <main style={{ flex:1, overflowY:'auto', padding:'16px 24px' }}>
+          <AppLauncher current="pitstop" />
+        </PitstopTopbar>
+        <main style={{ flex: 1, overflowY: 'auto', padding: 'var(--pad)' }}>
           {children}
         </main>
       </div>
+      <CommandPalette open={cmdkOpen} onClose={() => setCmdkOpen(false)} perms={perms || {}} session={session} />
     </div>
   );
 }

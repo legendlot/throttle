@@ -186,7 +186,7 @@ function CreateModal({ onClose, onCreated, session }) {
 }
 
 function Th({ children }) {
-  return <th style={{ textAlign:'left', padding: '8px 12px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--t3)', letterSpacing: '0.05em' }}>{children}</th>;
+  return <th style={{ textAlign:'left', padding: '10px 12px', fontFamily:'var(--f-display)', fontSize: 9.5, fontWeight: 700, textTransform: 'uppercase', color: 'var(--t3)', letterSpacing: '0.1em' }}>{children}</th>;
 }
 function Td({ children }) {
   return <td style={{ padding: '10px 12px', verticalAlign: 'middle' }}>{children}</td>;
@@ -201,7 +201,7 @@ function Field({ label, children }) {
 }
 
 const mono = { fontFamily:'var(--font-mono)', fontSize: 12 };
-const btnPrimary  = { display:'inline-flex', alignItems:'center', gap:6, padding:'7px 14px', background:'var(--accent)', color:'#fff', border:'none', borderRadius:6, fontWeight:600, cursor:'pointer', fontSize:13 };
+const btnPrimary  = { display:'inline-flex', alignItems:'center', gap:6, padding:'8px 14px', background:'var(--accent)', color:'var(--accent-fg)', border:'none', borderRadius:'var(--radius-sm)', fontFamily:'var(--f-display)', fontWeight:700, fontSize:11, letterSpacing:'0.06em', textTransform:'uppercase', cursor:'pointer', boxShadow:'var(--accent-glow)' };
 const btnSecondary= { padding:'7px 14px', background:'transparent', border:'1px solid var(--border-1)', borderRadius:6, color:'var(--t2)', cursor:'pointer', fontSize:13 };
 const btnIcon     = { padding:4, background:'transparent', border:'none', color:'var(--t3)', cursor:'pointer', display:'inline-flex', alignItems:'center' };
 const pill        = { padding:'2px 10px', borderRadius:999, border:'none', fontSize:11, fontWeight:600, cursor:'pointer' };

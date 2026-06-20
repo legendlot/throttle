@@ -21,12 +21,16 @@ export const DISPOSITION_LABELS = {
   repair:        'Repair',
 };
 
+// Volt palette (handoff §5). Status IS the product — every entry uses the
+// semantic --*-fg/-bg/-bd tokens, never raw brand hues:
+//   pending neutral · query info-blue · awaiting_info warn-amber ·
+//   replacement info-blue · refund warn-amber · repair ok-green.
 export const DISPOSITION_PALETTE = {
-  replacement:   { bg: 'rgba(123, 147, 255, 0.12)', fg: '#7b93ff', border: 'rgba(123, 147, 255, 0.35)' },
-  refund:        { bg: 'rgba(251, 191, 36, 0.12)',  fg: '#fbbf24', border: 'rgba(251, 191, 36, 0.35)' },
-  repair:        { bg: 'rgba(74, 222, 128, 0.12)',  fg: '#4ade80', border: 'rgba(74, 222, 128, 0.35)' },
-  query:         { bg: 'rgba(99, 179, 237, 0.12)',  fg: '#63b3ed', border: 'rgba(99, 179, 237, 0.35)' },
-  no_action:     { bg: 'var(--surface-2)',           fg: 'var(--t3)', border: 'var(--border)' },
-  awaiting_info: { bg: 'rgba(251, 191, 36, 0.08)',  fg: '#fbbf24', border: 'rgba(251, 191, 36, 0.25)' },
-  pending:       { bg: 'var(--surface-2)',           fg: 'var(--t2)', border: 'var(--border)' },
+  replacement:   { bg: 'var(--info-bg)',  fg: 'var(--info-fg)', border: 'var(--info-bd)' },
+  refund:        { bg: 'var(--warn-bg)',  fg: 'var(--warn-fg)', border: 'var(--warn-bd)' },
+  repair:        { bg: 'var(--ok-bg)',    fg: 'var(--ok-fg)',   border: 'var(--ok-bd)' },
+  query:         { bg: 'var(--info-bg)',  fg: 'var(--info-fg)', border: 'var(--info-bd)' },
+  no_action:     { bg: 'var(--surface-3)', fg: 'var(--t3)',     border: 'var(--border-2)' },
+  awaiting_info: { bg: 'var(--warn-bg)',  fg: 'var(--warn-fg)', border: 'var(--warn-bd)' },
+  pending:       { bg: 'var(--surface-3)', fg: 'var(--t2)',     border: 'var(--border-2)' },
 };

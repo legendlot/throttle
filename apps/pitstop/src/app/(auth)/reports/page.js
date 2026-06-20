@@ -1,9 +1,10 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
-import { Spinner, EmptyState, KpiCard } from '@throttle/ui';
+import { Spinner, EmptyState } from '@throttle/ui';
 import { BarChart3, Download, Phone } from 'lucide-react';
 import { csopsGet } from '../../../lib/csopsFetch.js';
+import { KpiCard, btnGhost } from '../../../components/kit/index.js';
 
 function toIsoStart(date) {
   const d = new Date(date);
@@ -18,10 +19,10 @@ function toIsoEnd(date) {
 function inr(n) { return n == null || isNaN(n) ? '—' : `₹${Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`; }
 
 const TYPE_COLORS = {
-  replacement: '#7b93ff',
-  refund:      '#fbbf24',
-  repair:      '#4ade80',
-  other:       '#888',
+  replacement: 'var(--info-fg)',
+  refund:      'var(--warn-fg)',
+  repair:      'var(--ok-fg)',
+  other:       'var(--t3)',
 };
 
 export default function ReportsPage() {
@@ -100,17 +101,8 @@ export default function ReportsPage() {
   }
 
   return (
-    <div>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 'var(--space-4)' }}>
-        <h1 style={{
-          fontFamily: 'var(--font-cond)',
-          fontSize: 'var(--text-xl)',
-          fontWeight: 600,
-          letterSpacing: 'var(--tracking-tight)',
-          textTransform: 'uppercase',
-          color: 'var(--t1)',
-        }}>Reports</h1>
-
+    <div style={{ maxWidth: 1400, margin: '0 auto' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', marginBottom: 'var(--gap)' }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--t3)', fontSize: 11, fontFamily: 'var(--font-mono)', textTransform: 'uppercase' }}>
             From
@@ -118,17 +110,7 @@ export default function ReportsPage() {
             <span>To</span>
             <input type="date" value={to} onChange={e => setTo(e.target.value)} style={dateInput} />
           </div>
-          <button onClick={exportCsv} disabled={!data} style={{
-            display: 'inline-flex', alignItems: 'center', gap: 6,
-            padding: '6px 12px',
-            background: 'transparent',
-            color: 'var(--t2)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-md)',
-            fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600,
-            letterSpacing: '0.06em', textTransform: 'uppercase',
-            cursor: 'pointer',
-          }}>
+          <button onClick={exportCsv} disabled={!data} style={btnGhost}>
             <Download size={13} strokeWidth={1.75} /> Export CSV
           </button>
         </div>
@@ -157,11 +139,11 @@ export default function ReportsPage() {
           <EmptyState icon={BarChart3} title="No tickets in range" message="Adjust the date range or create some tickets first." />
         ) : (
           <>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
-              <KpiCard label="Total cases"        value={data.range.total_rows.toLocaleString()} sub={`${from} → ${to}`} />
-              <KpiCard label="Return cost"        value={inr(data.cost_summary.return_cost_inr)}      sub="logistics in" color="orange" />
-              <KpiCard label="Replacement cost"   value={inr(data.cost_summary.replacement_cost_inr)} sub="new units out" color="blue" />
-              <KpiCard label="Refund payouts"     value={inr(data.cost_summary.refund_amount_inr)}    sub="money returned" color="red" />
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 'var(--gap)', marginBottom: 'var(--gap)' }}>
+              <KpiCard label="Total cases"        value={data.range.total_rows.toLocaleString()}       sub={`${from} → ${to}`} tone="var(--accent)"  size={25} />
+              <KpiCard label="Return cost"        value={inr(data.cost_summary.return_cost_inr)}       sub="logistics in"    tone="var(--warn-fg)" size={25} />
+              <KpiCard label="Replacement cost"   value={inr(data.cost_summary.replacement_cost_inr)}  sub="new units out"   tone="var(--info-fg)" size={25} />
+              <KpiCard label="Refund payouts"     value={inr(data.cost_summary.refund_amount_inr)}     sub="money returned"  tone="var(--bad-fg)"  size={25} />
             </div>
 
             <Panel title="Monthly trend">
@@ -213,12 +195,12 @@ function CallsPanel({ data }) {
   const fmtMMSS = (s) => s == null ? '—' : `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
   return (
     <>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
-        <KpiCard label="Total calls"     value={data.totals.total.toLocaleString()} sub={`${data.range.from.slice(0,10)} → ${data.range.to.slice(0,10)}`} />
-        <KpiCard label="Answered"        value={data.totals.answered.toLocaleString()} color="green" />
-        <KpiCard label="Missed"          value={data.totals.missed.toLocaleString()}   color={data.totals.missed > 0 ? 'red' : null} />
-        <KpiCard label="Answer rate"     value={data.totals.answer_rate_pct != null ? `${data.totals.answer_rate_pct}%` : '—'} />
-        <KpiCard label="Avg duration"    value={fmtMMSS(data.totals.avg_duration_seconds)} />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 'var(--gap)', marginBottom: 'var(--gap)' }}>
+        <KpiCard label="Total calls"  value={data.totals.total.toLocaleString()}    sub={`${data.range.from.slice(0,10)} → ${data.range.to.slice(0,10)}`} tone="var(--info-fg)" size={25} />
+        <KpiCard label="Answered"     value={data.totals.answered.toLocaleString()} tone="var(--ok-fg)"  size={25} />
+        <KpiCard label="Missed"       value={data.totals.missed.toLocaleString()}   tone={data.totals.missed > 0 ? 'var(--bad-fg)' : 'var(--t3)'} size={25} />
+        <KpiCard label="Answer rate"  value={data.totals.answer_rate_pct != null ? `${data.totals.answer_rate_pct}%` : '—'} tone="var(--warn-fg)" size={25} />
+        <KpiCard label="Avg duration" value={fmtMMSS(data.totals.avg_duration_seconds)} tone="var(--accent)" size={25} />
       </div>
 
       <Panel title="By department">
@@ -332,9 +314,10 @@ const dateInput = {
   background: 'var(--surface)',
   color: 'var(--t1)',
   border: '1px solid var(--border)',
-  borderRadius: 'var(--radius-md)',
+  borderRadius: 'var(--radius-sm)',
   padding: '4px 8px',
   fontFamily: 'var(--font-mono)', fontSize: 12,
+  colorScheme: 'dark', accentColor: 'var(--accent)',
 };
 
 function Panel({ title, children }) {

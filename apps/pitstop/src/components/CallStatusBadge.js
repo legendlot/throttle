@@ -1,24 +1,34 @@
 'use client';
 
+/**
+ * CallStatusBadge — Volt (handoff §5).
+ * answered=ok / missed=bad / abandoned+in_progress=muted.
+ * Tomorrow 9.5px UPPERCASE, *-fg on *-bg with 1px *-bd, radius 5px.
+ */
 const STYLES = {
-  answered:    { bg: 'rgba(34,197,94,0.15)',  color: '#16a34a', label: 'Answered' },
-  missed:      { bg: 'rgba(239,68,68,0.15)',  color: '#dc2626', label: 'Missed' },
-  abandoned:   { bg: 'rgba(245,158,11,0.15)', color: '#d97706', label: 'Abandoned' },
-  in_progress: { bg: 'rgba(99,102,241,0.15)', color: '#4f46e5', label: 'Live' },
+  answered:    { fg: 'var(--ok-fg)',  bg: 'var(--ok-bg)',     bd: 'var(--ok-bd)',     label: 'Answered' },
+  missed:      { fg: 'var(--bad-fg)', bg: 'var(--bad-bg)',    bd: 'var(--bad-bd)',    label: 'Missed' },
+  abandoned:   { fg: 'var(--t3)',     bg: 'var(--surface-3)', bd: 'var(--border-2)',  label: 'Abandoned' },
+  in_progress: { fg: 'var(--t3)',     bg: 'var(--surface-3)', bd: 'var(--border-2)',  label: 'Live' },
 };
 
 export function CallStatusBadge({ status }) {
   const s = STYLES[status] || STYLES.abandoned;
   return (
     <span style={{
-      display: 'inline-block',
+      display: 'inline-flex',
+      alignItems: 'center',
       background: s.bg,
-      color: s.color,
+      color: s.fg,
+      border: `1px solid ${s.bd}`,
       padding: '2px 8px',
-      borderRadius: 999,
-      fontSize: 11,
-      fontWeight: 600,
-      letterSpacing: '0.02em',
+      borderRadius: 5,
+      fontFamily: 'var(--f-display)',
+      fontSize: 9.5,
+      fontWeight: 700,
+      letterSpacing: '0.06em',
+      textTransform: 'uppercase',
+      whiteSpace: 'nowrap',
     }}>{s.label}</span>
   );
 }

@@ -1,18 +1,18 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
+import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { Chip, KpiCard, EmptyState, Spinner, useListNav } from '@throttle/ui';
-import { Plus, Download, Search, ListChecks } from 'lucide-react';
+import { EmptyState, Spinner, useListNav } from '@throttle/ui';
 import { csopsGet } from '../../../lib/csopsFetch.js';
 import { fetchIssueCatalog } from '../../../lib/issueCatalog.js';
 import { DISPOSITION_VALUES, DISPOSITION_LABELS } from '../../../lib/dispositions.js';
 import { DispositionBadge } from '../../../components/DispositionBadge.js';
 import { getActiveDept } from '../../../components/DeptSwitcher.js';
 import { fmtIstDateTime } from '../../../lib/datetime.js';
+import {
+  KpiCard, Tabs, StagePill, Icon, btnPrimary, btnGhost, inputStyle, selectStyle, fmt,
+} from '../../../components/kit/index.js';
 
-// ── Sub-tabs ─────────────────────────────────────────────────────────────────
 const TABS = [
   { id: 'my',         label: 'My Queue' },
   { id: 'open',       label: 'All Open' },
@@ -23,83 +23,44 @@ const TABS = [
   { id: 'closed',     label: 'Closed' },
 ];
 
-const PLATFORMS = ['website','amazon','cred','blinkit','instamart','marketplace','offline','zepto','swiggy'];
+const PLATFORMS = ['website', 'amazon', 'cred', 'blinkit', 'instamart', 'marketplace', 'offline', 'zepto', 'swiggy'];
 
-function StagePill({ stage }) {
-  return (
-    <span style={{
-      display: 'inline-block',
-      padding: '2px 8px',
-      background: 'var(--surface-2)',
-      color: 'var(--t2)',
-      borderRadius: 'var(--radius-sm)',
-      fontFamily: 'var(--font-mono)',
-      fontSize: 11,
-      letterSpacing: '0.02em',
-    }}>{stage}</span>
-  );
-}
+const TH = {
+  textAlign: 'left', padding: '10px 14px', fontFamily: 'var(--f-display)', fontSize: 9.5,
+  fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--t3)',
+};
+const TD = { padding: 'var(--rowpad) 14px', verticalAlign: 'middle' };
 
 function ageDays(createdAt) {
   if (!createdAt) return null;
-  const ms = Date.now() - new Date(createdAt).getTime();
-  return ms / (1000 * 60 * 60 * 24);
+  return (Date.now() - new Date(createdAt).getTime()) / (1000 * 60 * 60 * 24);
 }
-
-function CreatedLine({ createdAt }) {
-  if (!createdAt) return null;
-  return (
-    <div title={`Created ${fmtIstDateTime(createdAt)} IST`}
-         style={{ color: 'var(--t4)', fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 400, marginTop: 2 }}>
-      {fmtIstDateTime(createdAt)}
-    </div>
-  );
-}
-
-function AgeCell({ createdAt, dueAt, closedAt }) {
-  if (!createdAt) return null;
-  if (closedAt) {
-    const days = (new Date(closedAt) - new Date(createdAt)) / (1000 * 60 * 60 * 24);
-    return (
-      <div>
-        <span style={{ color: 'var(--t3)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>{days.toFixed(0)} d (closed)</span>
-        <CreatedLine createdAt={createdAt} />
-      </div>
-    );
-  }
-  const d = ageDays(createdAt);
-  if (d == null) return null;
-
-  const overdue = dueAt && Date.now() > new Date(dueAt).getTime();
-  const color = overdue ? 'var(--state-error-fg)' : d > 3 ? 'var(--state-warning-fg)' : 'var(--state-success-fg)';
-  const fontWeight = overdue ? 700 : 600;
-
-  const daysOver = overdue ? Math.floor((Date.now() - new Date(dueAt).getTime()) / (1000 * 60 * 60 * 24)) : null;
-
-  return (
-    <div>
-      <span style={{ color, fontFamily: 'var(--font-mono)', fontWeight, fontSize: 12 }}>
-        {d.toFixed(0)} d
-        {daysOver > 0 && (
-          <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 500 }}>+{daysOver}d over</span>
-        )}
-      </span>
-      <CreatedLine createdAt={createdAt} />
-    </div>
-  );
-}
-
 function maskPhone(phone) {
   if (!phone) return '';
   const s = String(phone);
-  if (s.length < 4) return s;
-  return s.slice(0, -3) + '***';
+  return s.length < 4 ? s : s.slice(0, -3) + '***';
 }
 
-// ── Page ─────────────────────────────────────────────────────────────────────
+function AgeCell({ createdAt, dueAt, closedAt }) {
+  if (!createdAt) return <span style={{ color: 'var(--t4)' }}>—</span>;
+  if (closedAt) {
+    const days = (new Date(closedAt) - new Date(createdAt)) / (1000 * 60 * 60 * 24);
+    return <span className="num" style={{ color: 'var(--t3)', fontSize: 12 }}>{days.toFixed(0)}d</span>;
+  }
+  const d = ageDays(createdAt);
+  const overdue = dueAt && Date.now() > new Date(dueAt).getTime();
+  const color = overdue ? 'var(--bad-fg)' : d > 3 ? 'var(--warn-fg)' : 'var(--ok-fg)';
+  const daysOver = overdue ? Math.floor((Date.now() - new Date(dueAt).getTime()) / (1000 * 60 * 60 * 24)) : 0;
+  return (
+    <span>
+      <span className="num" style={{ fontSize: 12, color, fontWeight: overdue ? 700 : 600 }}>{d.toFixed(0)}d</span>
+      {daysOver > 0 && <span className="num" style={{ marginLeft: 6, fontSize: 9.5, color: 'var(--bad-fg)' }}>{daysOver}d over</span>}
+    </span>
+  );
+}
 
 export default function QueuePage() {
-  const { user, session, perms, brandUser } = useAuth();
+  const { session, perms, brandUser } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -108,14 +69,11 @@ export default function QueuePage() {
   const categoryFilter = searchParams.get('category') || '';
   const platformFilter = searchParams.get('platform') || '';
   const agentFilter = searchParams.get('agent') || '';
+  const stageFilter = searchParams.get('stage') || '';
   const searchQ = searchParams.get('q') || '';
 
-  // Agent filter is for oversight roles only (admins + dept leads who can reassign).
   const canFilterByAgent = !!(perms?.cs_ticket_admin || perms?.cs_ticket_reassign);
 
-  // Effective department filter — admins can switch via topbar; others are
-  // locked to their own. Worker also enforces this; sending it explicitly
-  // keeps client + server aligned.
   const [deptSlug, setDeptSlug] = useState(() => getActiveDept(perms, brandUser?.cs_department_slug));
   useEffect(() => {
     function onChange() { setDeptSlug(getActiveDept(perms, brandUser?.cs_department_slug)); }
@@ -132,13 +90,11 @@ export default function QueuePage() {
   const [catalogCategories, setCatalogCategories] = useState([]);
   const [agents, setAgents] = useState([]);
 
-  // ↑/↓ navigates the visible row; Enter opens it. Skipped while typing.
   const { focusedIdx, setFocusedIdx } = useListNav(
     tickets.length,
     (i) => { const t = tickets[i]; if (t) router.push(`/queue/detail/?ticket_no=${t.ticket_no}`); }
   );
 
-  // Update URL with a partial param patch
   function setParam(key, value) {
     const params = new URLSearchParams(searchParams);
     if (value == null || value === '') params.delete(key);
@@ -146,7 +102,6 @@ export default function QueuePage() {
     router.push(`/queue?${params.toString()}`);
   }
 
-  // Counts (every 60s) + KPIs (every 60s)
   useEffect(() => {
     if (!session) return;
     let alive = true;
@@ -167,33 +122,25 @@ export default function QueuePage() {
     return () => { alive = false; clearInterval(t); };
   }, [session, agentFilter, deptSlug, perms?.cs_ticket_admin]);
 
-  // Issue catalog (once per session)
   useEffect(() => {
     if (!session) return;
     let alive = true;
-    fetchIssueCatalog(session)
-      .then(cats => { if (alive) setCatalogCategories(cats); })
-      .catch(() => {});
+    fetchIssueCatalog(session).then(cats => { if (alive) setCatalogCategories(cats); }).catch(() => {});
     return () => { alive = false; };
   }, [session]);
 
-  // Agents list for the "created by" filter (oversight roles only)
   useEffect(() => {
     if (!session || !canFilterByAgent) return;
     let alive = true;
     csopsGet('getDeptAgents', {}, session)
       .then(list => {
         if (!alive) return;
-        const creators = (list || [])
-          .filter(a => a.has_cs_manage || a.has_cs_admin)
-          .sort((a, b) => (a.full_name || '').localeCompare(b.full_name || ''));
-        setAgents(creators);
-      })
-      .catch(() => {});
+        setAgents((list || []).filter(a => a.has_cs_manage || a.has_cs_admin)
+          .sort((a, b) => (a.full_name || '').localeCompare(b.full_name || '')));
+      }).catch(() => {});
     return () => { alive = false; };
   }, [session, canFilterByAgent]);
 
-  // Tickets — refetch on tab/filter/search change
   useEffect(() => {
     if (!session) return;
     let alive = true;
@@ -203,6 +150,7 @@ export default function QueuePage() {
     if (categoryFilter)    params.category    = categoryFilter;
     if (platformFilter)    params.platform    = platformFilter;
     if (agentFilter)       params.agent       = agentFilter;
+    if (stageFilter)       params.stage       = stageFilter;
     if (searchQ)           params.search      = searchQ;
     if (perms?.cs_ticket_admin) params.department = deptSlug || 'all';
 
@@ -211,22 +159,16 @@ export default function QueuePage() {
       .catch(e => { if (alive) setError(e.message); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [session, activeTab, dispositionFilter, categoryFilter, platformFilter, agentFilter, searchQ, deptSlug, perms?.cs_ticket_admin]);
+  }, [session, activeTab, dispositionFilter, categoryFilter, platformFilter, agentFilter, stageFilter, searchQ, deptSlug, perms?.cs_ticket_admin]);
 
-  // Submit search on Enter
-  function submitSearch(e) {
-    e.preventDefault();
-    setParam('q', searchInput.trim());
-  }
+  function submitSearch(e) { e.preventDefault(); setParam('q', searchInput.trim()); }
 
   function exportCsv() {
     const rows = [
-      ['ticket_no','customer','phone','product','model','disposition','stage','platform','agent','created_at','due_at','closed_at'],
+      ['ticket_no', 'customer', 'phone', 'product', 'model', 'disposition', 'stage', 'platform', 'agent', 'created_at', 'due_at', 'closed_at'],
       ...tickets.map(t => [
-        t.ticket_no, t.customer_name || '', maskPhone(t.customer_phone),
-        t.product || '', t.product_model || '',
-        t.disposition || '', t.stage, t.platform || '',
-        t.assigned_agent_name || '', t.created_at || '', t.due_at || '', t.closed_at || '',
+        t.ticket_no, t.customer_name || '', maskPhone(t.customer_phone), t.product || '', t.product_model || '',
+        t.disposition || '', t.stage, t.platform || '', t.assigned_agent_name || '', t.created_at || '', t.due_at || '', t.closed_at || '',
       ]),
     ];
     const csv = rows.map(r => r.map(v => {
@@ -236,355 +178,124 @@ export default function QueuePage() {
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url;
-    a.download = `pitstop-${activeTab}-${new Date().toISOString().slice(0,10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    a.href = url; a.download = `pitstop-${activeTab}-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click(); URL.revokeObjectURL(url);
   }
 
+  const kpiTiles = [
+    { label: 'My open',     value: kpis?.my_open ?? '—',             tone: 'var(--accent)' },
+    { label: 'Overdue',     value: kpis?.overdue ?? '—',             tone: 'var(--bad-fg)' },
+    { label: 'Awaiting evidence', value: kpis?.awaiting_evidence_old ?? '—', tone: 'var(--warn-fg)' },
+    { label: 'In logistics', value: counts?.logistics ?? '—',        tone: 'var(--info-fg)' },
+  ];
+
   return (
-    <div>
-      {/* ── Header ─────────────────────────────────── */}
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 'var(--space-4)' }}>
-        <h1 style={{
-          fontFamily: 'var(--font-cond)',
-          fontSize: 'var(--text-xl)',
-          fontWeight: 600,
-          letterSpacing: 'var(--tracking-tight)',
-          textTransform: 'uppercase',
-          color: 'var(--t1)',
-        }}>Queue</h1>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <button onClick={exportCsv} style={{
-            display: 'inline-flex', alignItems: 'center', gap: 6,
-            padding: '6px 12px',
-            background: 'transparent',
-            color: 'var(--t2)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-md)',
-            fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600,
-            letterSpacing: '0.06em', textTransform: 'uppercase',
-            cursor: 'pointer',
-          }}>
-            <Download size={13} strokeWidth={1.75} /> Export CSV
-          </button>
-          <Link href="/new" style={{
-            display: 'inline-flex', alignItems: 'center', gap: 6,
-            padding: '7px 14px',
-            background: 'var(--brand-red)',
-            color: '#fff',
-            border: '1px solid var(--brand-red)',
-            borderRadius: 'var(--radius-md)',
-            fontFamily: 'var(--font-cond)', fontSize: 12, fontWeight: 700,
-            letterSpacing: '0.08em', textTransform: 'uppercase',
-            textDecoration: 'none',
-          }}>
-            <Plus size={14} strokeWidth={2} /> New Ticket
-          </Link>
-        </div>
+    <div style={{ maxWidth: 1400, margin: '0 auto' }}>
+      {/* KPI tiles */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 'var(--gap)', marginBottom: 'var(--gap)' }}>
+        {kpiTiles.map((k, i) => <KpiCard key={i} {...k} sub="" size={26} />)}
       </div>
 
-      {/* ── KPI row ────────────────────────────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
-        <KpiCard label="My Open"             value={kpis?.my_open ?? '—'}              sub="assigned to you" />
-        <KpiCard label="Overdue"             value={kpis?.overdue ?? '—'}              sub="past SLA"         color="red" />
-        <KpiCard label="Awaiting Evidence ≥3d" value={kpis?.awaiting_evidence_old ?? '—'} sub="nudge candidates" color="orange" />
-        <KpiCard label="Closed Today"        value={kpis?.closed_today ?? '—'}         sub="resolutions" />
-        <KpiCard label="Avg Close (MTD)"     value={kpis?.avg_close_days_mtd == null ? '—' : `${kpis.avg_close_days_mtd}d`} sub="month-to-date" />
-      </div>
+      {/* lifecycle tabs */}
+      <Tabs tabs={TABS.map(t => ({ ...t, count: counts[t.id] }))} value={activeTab} onChange={(id) => setParam('tab', id)} />
 
-      {/* ── Sub-tabs ───────────────────────────────── */}
-      <div style={{
-        display: 'flex', gap: 4, padding: '4px 0',
-        borderBottom: '1px solid var(--border)',
-        marginBottom: 'var(--space-3)',
-        overflowX: 'auto', flexWrap: 'wrap',
-      }}>
-        {TABS.map(t => {
-          const isActive = activeTab === t.id;
-          const count = counts[t.id];
-          return (
-            <button
-              key={t.id}
-              onClick={() => setParam('tab', t.id)}
-              style={{
-                padding: '8px 14px',
-                background: isActive ? 'var(--surface-2)' : 'transparent',
-                color: isActive ? 'var(--t1)' : 'var(--t3)',
-                border: 'none',
-                borderRadius: 'var(--radius-md) var(--radius-md) 0 0',
-                fontFamily: 'var(--font-mono)', fontSize: 'var(--text-sm)',
-                fontWeight: isActive ? 700 : 600,
-                cursor: 'pointer', whiteSpace: 'nowrap',
-                position: 'relative',
-                borderBottom: isActive ? '2px solid var(--brand-red)' : '2px solid transparent',
-                marginBottom: -1,
-              }}
-            >
-              {t.label}
-              {count != null && (
-                <span style={{
-                  marginLeft: 6,
-                  padding: '0 6px',
-                  background: isActive ? 'var(--brand-red)' : 'var(--surface-3)',
-                  color: isActive ? '#fff' : 'var(--t2)',
-                  borderRadius: 8,
-                  fontSize: 10, fontWeight: 700,
-                }}>{count}</span>
-              )}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* ── Filter bar ─────────────────────────────── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 'var(--space-3)' }}>
-        {/* Search */}
-        <form onSubmit={submitSearch} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 6,
-            background: 'var(--surface)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-md)',
-            padding: '6px 10px',
-            minWidth: 320,
-          }}>
-            <Search size={13} strokeWidth={1.75} color="var(--t3)" />
-            <input
-              data-search-primary
-              value={searchInput}
-              onChange={e => setSearchInput(e.target.value)}
-              placeholder="Search name, phone, order, UPC, ticket #…  ( / )"
-              style={{
-                flex: 1,
-                background: 'transparent',
-                border: 'none', outline: 'none',
-                color: 'var(--t1)',
-                fontFamily: 'var(--font-mono)', fontSize: 'var(--text-sm)',
-              }}
-            />
-          </div>
-          {searchQ && (
-            <button type="button" onClick={() => { setSearchInput(''); setParam('q', ''); }} style={{
-              background: 'transparent', border: 'none',
-              color: 'var(--t3)', cursor: 'pointer',
-              fontFamily: 'var(--font-mono)', fontSize: 11,
-            }}>clear</button>
-          )}
+      {/* filter bar */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+        <form onSubmit={submitSearch} style={{ display: 'flex', alignItems: 'center', gap: 7, background: 'var(--surface-2)',
+          border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 11px', flex: 1, minWidth: 200, maxWidth: 340 }}>
+          <Icon name="search" size={14} style={{ color: 'var(--t4)' }} />
+          <input data-search-primary value={searchInput} onChange={e => setSearchInput(e.target.value)}
+            placeholder="Ticket #, customer, product…" style={{ flex: 1, background: 'transparent', border: 'none',
+              outline: 'none', color: 'var(--t1)', fontFamily: 'var(--f-ui)', fontSize: 13 }} />
+          {searchQ && <button type="button" onClick={() => { setSearchInput(''); setParam('q', ''); }}
+            className="num" style={{ background: 'transparent', border: 'none', color: 'var(--t3)', cursor: 'pointer', fontSize: 11 }}>clear</button>}
         </form>
 
-        <span style={{ color: 'var(--t4)', padding: '0 4px' }}>|</span>
+        <select value={dispositionFilter} onChange={e => setParam('disposition', e.target.value)} style={selectStyle}>
+          <option value="">Disposition</option>
+          {DISPOSITION_VALUES.map(d => <option key={d} value={d}>{DISPOSITION_LABELS[d]}</option>)}
+        </select>
 
-        {/* Disposition chips */}
-        <Chip active={dispositionFilter === ''} onClick={() => setParam('disposition', '')}>All</Chip>
-        {DISPOSITION_VALUES.map(d => (
-          <Chip key={d} active={dispositionFilter === d} onClick={() => setParam('disposition', d)}>
-            {DISPOSITION_LABELS[d]}
-          </Chip>
-        ))}
-
-        <span style={{ color: 'var(--t4)', padding: '0 4px' }}>|</span>
-
-        {/* Category select */}
-        <select
-          value={categoryFilter}
-          onChange={e => setParam('category', e.target.value)}
-          style={{
-            background: 'var(--surface)',
-            color: 'var(--t1)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-md)',
-            padding: '5px 8px',
-            fontFamily: 'var(--font-mono)', fontSize: 'var(--text-sm)',
-          }}
-        >
+        <select value={categoryFilter} onChange={e => setParam('category', e.target.value)} style={selectStyle}>
           <option value="">All categories</option>
           {catalogCategories.map(c => <option key={c.category} value={c.category}>{c.category}</option>)}
         </select>
 
-        <span style={{ color: 'var(--t4)', padding: '0 4px' }}>|</span>
-
-        {/* Platform select */}
-        <select
-          value={platformFilter}
-          onChange={e => setParam('platform', e.target.value)}
-          style={{
-            background: 'var(--surface)',
-            color: 'var(--t1)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-md)',
-            padding: '5px 8px',
-            fontFamily: 'var(--font-mono)', fontSize: 'var(--text-sm)',
-          }}
-        >
-          <option value="">All platforms</option>
+        <select value={platformFilter} onChange={e => setParam('platform', e.target.value)} style={selectStyle}>
+          <option value="">Platform</option>
           {PLATFORMS.map(p => <option key={p} value={p}>{p}</option>)}
         </select>
 
-        {/* Agent select (assigned/handling agent) — oversight roles only */}
         {canFilterByAgent && (
-          <>
-            <span style={{ color: 'var(--t4)', padding: '0 4px' }}>|</span>
-            <select
-              value={agentFilter}
-              onChange={e => setParam('agent', e.target.value)}
-              title="Filter by the agent handling the ticket"
-              style={{
-                background: 'var(--surface)',
-                color: 'var(--t1)',
-                border: '1px solid var(--border)',
-                borderRadius: 'var(--radius-md)',
-                padding: '5px 8px',
-                fontFamily: 'var(--font-mono)', fontSize: 'var(--text-sm)',
-              }}
-            >
-              <option value="">All agents</option>
-              {agents.map(a => <option key={a.id} value={a.id}>{a.full_name}</option>)}
-            </select>
-          </>
+          <select value={agentFilter} onChange={e => setParam('agent', e.target.value)} title="Filter by the agent handling the ticket" style={selectStyle}>
+            <option value="">All agents</option>
+            {agents.map(a => <option key={a.id} value={a.id}>{a.full_name}</option>)}
+          </select>
         )}
+
+        <span style={{ flex: 1 }} />
+        <button onClick={exportCsv} style={btnGhost}><Icon name="ext" size={13} />Export CSV</button>
+        <button onClick={() => router.push('/new')} style={btnPrimary}><Icon name="plus" size={14} />New ticket</button>
       </div>
 
-      {/* ── Error / loading ────────────────────────── */}
       {error && (
-        <div style={{
-          padding: 12, marginBottom: 12,
-          background: 'var(--state-error-bg)',
-          color: 'var(--state-error-fg)',
-          border: '1px solid var(--state-error)',
-          borderRadius: 'var(--radius-md)',
-          fontFamily: 'var(--font-mono)', fontSize: 12,
-        }}>
-          {error}
-        </div>
+        <div style={{ padding: 12, marginBottom: 12, background: 'var(--bad-bg)', color: 'var(--bad-fg)',
+          border: '1px solid var(--bad-bd)', borderRadius: 'var(--radius-sm)', fontSize: 12.5 }}>{error}</div>
       )}
 
-      {/* ── Table ──────────────────────────────────── */}
       {loading ? (
         <Spinner />
       ) : tickets.length === 0 ? (
-        <EmptyState icon={ListChecks} title="No tickets match" message="Adjust filters or open a new ticket." />
+        <EmptyState icon={<Icon name="list" size={28} />} title="No tickets match" message="Adjust filters or open a new ticket." />
       ) : (
-        <div style={{
-          background: 'var(--surface)',
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius-md)',
-          overflow: 'hidden',
-        }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--text-sm)' }}>
-            <thead style={{ background: 'var(--surface-2)', borderBottom: '1px solid var(--border)', position: 'sticky', top: 0, zIndex: 1 }}>
-              <tr>
-                <Th>Ticket</Th>
-                <Th>Customer</Th>
-                <Th>Product</Th>
-                <Th>Disposition</Th>
-                <Th>Stage</Th>
-                <Th>Platform</Th>
-                <Th>Agent</Th>
-                <Th align="right">Age / SLA</Th>
-              </tr>
-            </thead>
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead><tr style={{ background: 'var(--surface-2)' }}>
+              <th style={TH}>Ticket</th><th style={TH}>Customer</th><th style={TH}>Product</th>
+              <th style={TH}>Disposition</th><th style={TH}>Stage</th><th style={TH}>Agent</th>
+              <th style={{ ...TH }}>Age</th>
+            </tr></thead>
             <tbody>
               {tickets.map((t, i) => (
-                <tr key={t.id} style={{
-                      borderBottom: '1px solid var(--border)',
-                      cursor: 'pointer',
-                      background: focusedIdx === i ? 'var(--surface-2)' : 'transparent',
-                      boxShadow: focusedIdx === i ? 'inset 0 0 0 2px var(--yellow)' : 'none',
-                    }}
-                    onMouseEnter={() => setFocusedIdx(i)}
-                    onClick={() => router.push(`/queue/detail/?ticket_no=${t.ticket_no}`)}>
-                  <Td mono><span style={{ color: 'var(--t1)', fontWeight: 600 }}>{t.ticket_no}</span></Td>
-                  <Td>
-                    <div style={{ color: 'var(--t1)' }}>{t.customer_name}</div>
-                    <div style={{ color: 'var(--t3)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>{maskPhone(t.customer_phone)}</div>
-                  </Td>
-                  <Td>
-                    {t.product ? `${t.product}${t.product_model ? ` · ${t.product_model}` : ''}` : <span style={{ color: 'var(--t4)' }}>—</span>}
-                    {t.product_color && <span style={{ color: 'var(--t3)', marginLeft: 4 }}>· {t.product_color}</span>}
-                  </Td>
-                  <Td>
+                <tr key={t.id}
+                  style={{ borderTop: '1px solid var(--border)', cursor: 'pointer',
+                    background: focusedIdx === i ? 'var(--surface-2)' : 'transparent',
+                    boxShadow: focusedIdx === i ? 'inset 0 0 0 2px var(--accent-ring)' : 'none' }}
+                  onMouseEnter={() => setFocusedIdx(i)}
+                  onClick={() => router.push(`/queue/detail/?ticket_no=${t.ticket_no}`)}>
+                  <td style={{ ...TD }}><span className="num" style={{ fontSize: 12, color: 'var(--accent)', fontWeight: 600 }}>{t.ticket_no}</span></td>
+                  <td style={TD}>
+                    <div style={{ color: 'var(--t1)', fontWeight: 600 }}>{t.customer_name || '—'}</div>
+                    <div className="num" style={{ fontSize: 10.5, color: 'var(--t4)' }}>{maskPhone(t.customer_phone)}</div>
+                  </td>
+                  <td style={{ ...TD, color: 'var(--t2)' }}>
+                    {t.product || <span style={{ color: 'var(--t4)' }}>—</span>}
+                    {t.product_model && <span style={{ color: 'var(--t4)' }}> · {t.product_model}</span>}
+                    {t.product_color && <span style={{ color: 'var(--t4)' }}> · {t.product_color}</span>}
+                  </td>
+                  <td style={TD}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                       <DispositionBadge disposition={t.disposition} compact />
-                      {t.auto_created && (
-                        <span style={{
-                          display: 'inline-block', padding: '1px 6px',
-                          background: 'var(--surface-3)', color: 'var(--t3)',
-                          border: '1px solid var(--border)',
-                          borderRadius: 'var(--radius-sm)',
-                          fontFamily: 'var(--font-mono)', fontSize: 9,
-                          fontWeight: 700, letterSpacing: '0.08em',
-                          textTransform: 'uppercase',
-                        }}>AUTO</span>
-                      )}
+                      {t.auto_created && <span className="num" style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.08em',
+                        textTransform: 'uppercase', color: 'var(--t3)', background: 'var(--surface-3)',
+                        border: '1px solid var(--border-2)', borderRadius: 4, padding: '1px 5px' }}>auto</span>}
                     </div>
-                  </Td>
-                  <Td><StagePill stage={t.stage} /></Td>
-                  <Td>
-                    <span style={{ color: 'var(--t2)' }}>{t.platform || '—'}</span>
-                    {t.external_order_id && (
-                      <div style={{ color: 'var(--t3)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>{t.external_order_id}</div>
-                    )}
-                  </Td>
-                  <Td>{t.assigned_agent_name || <span style={{ color: 'var(--t4)' }}>—</span>}</Td>
-                  <Td align="right"><AgeCell createdAt={t.created_at} dueAt={t.due_at} closedAt={t.closed_at} /></Td>
+                  </td>
+                  <td style={TD}><StagePill stage={t.stage} /></td>
+                  <td style={{ ...TD, color: t.assigned_agent_name ? 'var(--t1)' : 'var(--t4)', fontWeight: 500 }}>{t.assigned_agent_name || 'Unassigned'}</td>
+                  <td style={TD}><AgeCell createdAt={t.created_at} dueAt={t.due_at} closedAt={t.closed_at} /></td>
                 </tr>
               ))}
             </tbody>
           </table>
-          <div style={{
-            padding: '8px 14px',
-            background: 'var(--surface-2)',
-            color: 'var(--t3)',
-            fontFamily: 'var(--font-mono)', fontSize: 11,
-            borderTop: '1px solid var(--border)',
-            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-          }}>
-            <span>{tickets.length} ticket{tickets.length === 1 ? '' : 's'}</span>
-            <span style={{ color: 'var(--t4)' }}>
-              <Kbd>↑</Kbd><Kbd>↓</Kbd> navigate · <Kbd>↵</Kbd> open · <Kbd>/</Kbd> search
-            </span>
+          <div style={{ padding: '9px 14px', background: 'var(--surface-2)', borderTop: '1px solid var(--border)',
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontFamily: 'var(--f-mono)',
+            fontSize: 11, color: 'var(--t4)' }}>
+            <span>{fmt(tickets.length)} ticket{tickets.length === 1 ? '' : 's'}</span>
+            <span>↑↓ navigate · ↵ open · / search</span>
           </div>
         </div>
       )}
     </div>
-  );
-}
-
-function Th({ children, align = 'left' }) {
-  return (
-    <th style={{
-      padding: '8px 12px',
-      textAlign: align,
-      color: 'var(--t3)',
-      fontFamily: 'var(--font-mono)',
-      fontSize: 10,
-      fontWeight: 700,
-      letterSpacing: 'var(--tracking-wide)',
-      textTransform: 'uppercase',
-    }}>{children}</th>
-  );
-}
-
-function Td({ children, mono, align = 'left' }) {
-  return (
-    <td style={{
-      padding: '10px 12px',
-      color: 'var(--t2)',
-      verticalAlign: 'middle',
-      textAlign: align,
-      fontFamily: mono ? 'var(--font-mono)' : 'inherit',
-    }}>{children}</td>
-  );
-}
-
-function Kbd({ children }) {
-  return (
-    <kbd style={{
-      display: 'inline-block', padding: '0 5px', margin: '0 2px',
-      background: 'var(--surface)', border: '1px solid var(--border)',
-      borderRadius: 3, fontFamily: 'var(--font-mono)', fontSize: 10,
-      color: 'var(--t2)', minWidth: 14, textAlign: 'center', lineHeight: '14px',
-    }}>{children}</kbd>
   );
 }
