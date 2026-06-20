@@ -231,6 +231,59 @@ aggregate later.** Capture them in staging now for every applicable source:
 - Long-term north star: our own internal systems run the business with direct integrations; Odo is
   the consolidation layer until then.
 
+### 4.1 Unicommerce (Uniware) integration brief (researched S159, official docs)
+
+Two API families — we use the **Uniware Seller APIs** (pull our own data out), NOT the Marketplace
+APIs (those are for marketplaces plugging *into* Unicommerce). REST/JSON/HTTPS.
+
+**Auth — OAuth password grant:**
+- Token endpoint: `https://{tenant}.unicommerce.com/oauth/token`
+- Params: `grant_type=password`, `client_id=my-trusted-client` (fixed), `username`, `password`.
+- Returns `access_token` (bearer), `refresh_token`, `expires_in` (~11–12h). Refresh token valid 30d.
+- Every call: `Authorization: bearer {token}` + a **`Facility`** header (facility code).
+- Prereq: API user is an **Admin** in Uniware with facility access.
+
+**Data-pull patterns:**
+- **Export Job (async CSV) — THE ingestion path.** `POST /services/rest/v1/export/job/create`
+  (body: `exportJobTypeName` = the Uniware report name e.g. Sale Order Item report, `exportColums`,
+  `exportFilters` with `channel` + `dateRange`, `frequency:"ONETIME"`) → returns `jobCode` → poll
+  `GET /docs/export-status.html` (`export/job/status`) until complete → download `.csv` link.
+  Line-level, bulk, channel+date filtered, **no N+1** — pairs with the Workflows/Queues async
+  ingestion model (create→poll→download across steps). Use `dateType=UPDATED` so re-pulls catch
+  cancellations/returns/status changes → feeds idempotent recompute.
+- `POST /services/rest/v1/oms/saleOrder/search` — header-level only (channel, status, fromDate/
+  toDate, dateType CREATED|UPDATED|FULFILLMENT_TAT, facilityCodes, pagination). No SKU/qty/price.
+- `POST /services/rest/v1/oms/saleorder/get` (`code`, `facilityCodes`) — full line detail per
+  order, but N+1; use only for spot lookups, not bulk.
+
+**Granularity (matches our charter — line level):** `channel`, `displayOrderDateTime`, `itemSku`,
+`channelProductId`, `quantity`, `sellingPrice`, `totalPrice`, `discount`, **full GST split**
+(`totalCentralGst`/`totalStateGst`/`totalIntegratedGst`/`totalUnionTerritoryGst` + %), `cod`,
+`prepaidAmount`, `paymentMode`, shipping charges, `voucherCode`/`voucherValue`/`storeCredit`,
+`status` (incl. CANCELLED). Order-level: ship-to `state` (CGST/SGST vs IGST), `customerGSTIN`,
+`currencyCode`. Returns via the Returns API + `returnStatuses` filter.
+
+**Caveat:** Unicommerce is an OMS — it has the ORDER (GMV/GST/discount/qty/channel/returns), NOT the
+marketplace SETTLEMENT. Settlement-grade net (commission, fees, actual payout) still comes from each
+marketplace's settlement report (the separate settlement fact, §3.3). Unicommerce closes the
+order-grain gap for channels we can't reach directly; it does not replace settlement ingestion.
+
+**Inventory:** `Get Inventory Snapshot` exists but is **SOAP** (not REST) — usable for the
+daily-snapshot inventory domain, different call style.
+
+**Flipkart-via-Unicommerce:** Flipkart is already a configured channel in our Uniware, so its orders
+flow in tagged `channel=FLIPKART…` — the Export Job filtered to that channel gives Flipkart sell-out
+at line level with **no Flipkart developer approval needed**. This is the backstop if direct Flipkart
+access stays blocked.
+
+**To start (need from Afshaan):** (1) tenant subdomain; (2) an Admin API user (username+password)
+created in Uniware with facility access; (3) facility code(s); (4) which channels are live in our
+Uniware. Then: build a `unicommerce` adapter (OAuth + token cache/refresh → Export Job create/poll →
+CSV → `stg_*` → recompute), same shape as existing connectors.
+
+Sources: documentation.unicommerce.com (oauth.html, using-the-uniware-apis.html, export-create.html,
+saleorder-search.html, saleorder-get.html) + support.unicommerce.com (get-inventory-snapshot).
+
 ---
 
 ## 5. Running P&L model (per channel + consolidated)
