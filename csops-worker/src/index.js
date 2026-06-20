@@ -444,6 +444,7 @@ async function handleGet(action, params, auth, env) {
     case 'getTicket':        return getTicket(params, auth, env);
     case 'getQueueCounts':   return getQueueCounts(params, auth, env);
     case 'getKpis':          return getKpis(params, auth, env);
+    case 'getOverviewSummary': return getOverviewSummary(params, auth, env);
     case 'lookupByUpc':      return lookupByUpc(params, auth, env);
     case 'lookupPastCases':  return lookupPastCases(params, auth, env);
     case 'getStageRules':    return getStageRules(params, auth, env);
@@ -739,6 +740,76 @@ async function getKpis(params, auth, env) {
     awaiting_evidence_old: (awaitingOld.data || []).length,
     closed_today: (closedToday.data || []).length,
     avg_close_days_mtd: avg,
+  });
+}
+
+// getOverviewSummary — the CS lead's "what needs me now" command view in ONE
+// dept-scoped, server-computed call. Returns the point-in-time KPI/exception
+// counts (open / SLA breached / evidence aging / unassigned / refunds pending)
+// + EXACT per-agent open load (grouped over the whole dept, not a client
+// sample). Calls KPIs stay in getCallsKpis; ranged calls/resolved stay in
+// getReports/getCallReports. Scope = the same dept + operator self-scope as
+// getKpis/getTickets (so an operator sees only their own slice).
+async function getOverviewSummary(params, auth, env) {
+  const nowIso = new Date().toISOString();
+  // IST start-of-day for "resolved today"
+  const istMidnight = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  istMidnight.setHours(0, 0, 0, 0);
+  const startOfTodayIso = istMidnight.toISOString();
+  const agingIso = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+
+  const scope = await visibilityFilters(params, auth, env);
+  if (!scope) return err('Unknown department slug', 404);
+  const scopeQs = scope.length ? `&${scope.join('&')}` : '';
+
+  const [openR, slaR, awaitingR, resolvedR, unassignedR, refundsR, agentRowsR, rosterR, rolesR] = await Promise.all([
+    sb(`/rest/v1/cs_tickets?closed_at=is.null&select=id&limit=5000${scopeQs}`, env),
+    sb(`/rest/v1/cs_tickets?closed_at=is.null&due_at=lt.${encodeURIComponent(nowIso)}&select=created_at&order=created_at.asc&limit=5000${scopeQs}`, env),
+    sb(`/rest/v1/cs_tickets?stage=eq.awaiting_evidence&closed_at=is.null&stage_changed_at=lt.${encodeURIComponent(agingIso)}&select=id&limit=5000${scopeQs}`, env),
+    sb(`/rest/v1/cs_tickets?closed_at=gte.${encodeURIComponent(startOfTodayIso)}&select=id&limit=5000${scopeQs}`, env),
+    sb(`/rest/v1/cs_tickets?closed_at=is.null&assigned_agent_id=is.null&select=auto_created&limit=5000${scopeQs}`, env),
+    sb(`/rest/v1/cs_tickets?closed_at=is.null&disposition=eq.refund&stage=eq.inspected&select=refund_amount_inr&limit=5000${scopeQs}`, env),
+    sb(`/rest/v1/cs_tickets?closed_at=is.null&assigned_agent_id=not.is.null&select=assigned_agent_id,assigned_agent_name&limit=5000${scopeQs}`, env),
+    sb(`/rest/v1/users_profile?active=eq.true&select=id,full_name,role&order=full_name.asc&limit=500`, env),
+    sb(`/rest/v1/roles?select=role_id,permissions`, env),
+  ]);
+
+  const sla = slaR.data || [];
+  const slaOldestDays = sla.length
+    ? Math.floor((Date.now() - new Date(sla[0].created_at).getTime()) / (24 * 60 * 60 * 1000))
+    : 0;
+
+  const unassignedRows = unassignedR.data || [];
+  const refunds = refundsR.data || [];
+  const refundsTotal = refunds.reduce((s, r) => s + (Number(r.refund_amount_inr) || 0), 0);
+
+  // EXACT per-agent open load — seed from the cs_ticket_manage roster (so idle
+  // agents show at 0) then add the grouped open counts.
+  const rolesMap = {};
+  for (const r of (rolesR.data || [])) rolesMap[r.role_id] = r.permissions || {};
+  const agentMap = {};
+  for (const u of (rosterR.data || [])) {
+    if (rolesMap[u.role]?.cs_ticket_manage) agentMap[u.id] = { user_id: u.id, name: u.full_name || '—', open: 0 };
+  }
+  for (const t of (agentRowsR.data || [])) {
+    const id = t.assigned_agent_id;
+    if (!id) continue;
+    if (!agentMap[id]) agentMap[id] = { user_id: id, name: t.assigned_agent_name || '—', open: 0 };
+    agentMap[id].open += 1;
+  }
+  const agents = Object.values(agentMap).sort((a, b) => b.open - a.open);
+
+  return ok({
+    open: (openR.data || []).length,
+    sla_breached: sla.length,
+    sla_oldest_days: slaOldestDays,
+    awaiting_evidence: (awaitingR.data || []).length,
+    resolved_today: (resolvedR.data || []).length,
+    unassigned: unassignedRows.length,
+    unassigned_from_calls: unassignedRows.filter(t => t.auto_created).length,
+    refunds_pending: refunds.length,
+    refunds_total_inr: refundsTotal,
+    agents,
   });
 }
 

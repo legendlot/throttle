@@ -3,11 +3,10 @@
    OVERVIEW — "what needs me now" (handoff §6.1, NEW screen).
    KPI rail (6, date presets) · "Needs attention" exception feed
    (severity-filterable + right-slide drawer) · Agent load panel.
-   Wired entirely to EXISTING csops endpoints — the exception
-   feed + agent load are composed client-side (getKpis /
-   getCallsKpis / getQueueCounts / getTickets / getDeptAgents).
-   A dedicated roll-up endpoint (handoff §8) would make agent
-   load + unassigned exact + cut this to one request.
+   Backed by getOverviewSummary (one dept-scoped, server-computed
+   roll-up: point-in-time KPIs + EXACT exception counts + EXACT
+   per-agent load) + getCallsKpis (call side). Ranged calls/
+   resolved (week/month presets) layer in getReports/getCallReports.
    ════════════════════════════════════════════════════════════ */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -50,13 +49,11 @@ export default function OverviewPage() {
     try {
       const dept = getActiveDept(perms, brandUser?.cs_department_slug) || undefined;
       const dp = dept ? { department: dept } : {};
-      const [counts, kpis, callsKpis, openList, refundList, agents] = await Promise.all([
-        csopsGet('getQueueCounts', dp, session).catch(() => null),
-        csopsGet('getKpis', dp, session).catch(() => null),
+      // ONE dept-scoped, server-computed roll-up (point-in-time KPIs +
+      // exception counts + EXACT per-agent load) + call KPIs.
+      const [summary, callsKpis] = await Promise.all([
+        csopsGet('getOverviewSummary', dp, session).catch(() => null),
         csopsGet('getCallsKpis', dp, session).catch(() => null),
-        csopsGet('getTickets', { ...dp, tab: 'open', limit: 200 }, session).catch(() => null),
-        csopsGet('getTickets', { ...dp, tab: 'open', disposition: 'refund', stage: 'inspected', limit: 100 }, session).catch(() => null),
-        csopsGet('getDeptAgents', {}, session).catch(() => null),
       ]);
 
       let ranged = null;
@@ -68,7 +65,7 @@ export default function OverviewPage() {
         ]);
         ranged = { rep, callRep };
       }
-      setData({ counts, kpis, callsKpis, openList, refundList, agents, ranged });
+      setData({ summary, callsKpis, ranged });
       setLastRefreshed?.(new Date());
     } finally {
       setRefreshing?.(false);
@@ -84,24 +81,24 @@ export default function OverviewPage() {
     return () => { clearInterval(iv); window.removeEventListener('pitstop:dept-changed', onDept); };
   }, [load]);
 
-  // ── KPI rail ───────────────────────────────────────────────
+  // ── KPI rail (from getOverviewSummary + getCallsKpis; ranged from reports) ──
   const kpis = useMemo(() => {
     const d = data || {};
-    const counts = d.counts || {}, k = d.kpis || {}, ck = d.callsKpis || {};
+    const s = d.summary || {}, ck = d.callsKpis || {};
     const isToday = preset === 'today';
     const callRepTot = d.ranged?.callRep?.totals;
-    const resolvedRange = (d.ranged?.rep?.by_agent || []).reduce((s, a) => s + (Number(a.closed) || 0), 0);
+    const resolvedRange = (d.ranged?.rep?.by_agent || []).reduce((s2, a) => s2 + (Number(a.closed) || 0), 0);
     const answerRate = isToday ? ck.answer_rate_pct : callRepTot?.answer_rate_pct;
     const calls = isToday ? ck.total_today : callRepTot?.total;
     const callsAnswered = isToday ? ck.answered_today : callRepTot?.answered;
-    const resolved = isToday ? k.closed_today : resolvedRange;
+    const resolved = isToday ? s.resolved_today : resolvedRange;
     const suffix = isToday ? 'today' : preset === 'week' ? '(wk)' : '(mo)';
     const num = v => (v == null ? '—' : fmt(v));
     return [
-      { label: 'Open tickets', value: num(counts.open), icon: 'list', tone: 'var(--accent)', sub: 'in queue', subTone: 'var(--t3)' },
-      { label: 'SLA breached', value: num(k.overdue), icon: 'alert', tone: 'var(--bad-fg)',
-        sub: (k.overdue ? 'needs action now' : 'all on track'), subTone: k.overdue ? 'var(--bad-fg)' : 'var(--t3)' },
-      { label: 'Awaiting evidence', value: num(k.awaiting_evidence_old), icon: 'clock', tone: 'var(--warn-fg)', sub: 'aging >3d', subTone: 'var(--warn-fg)' },
+      { label: 'Open tickets', value: num(s.open), icon: 'list', tone: 'var(--accent)', sub: 'in queue', subTone: 'var(--t3)' },
+      { label: 'SLA breached', value: num(s.sla_breached), icon: 'alert', tone: 'var(--bad-fg)',
+        sub: (s.sla_breached ? 'needs action now' : 'all on track'), subTone: s.sla_breached ? 'var(--bad-fg)' : 'var(--t3)' },
+      { label: 'Awaiting evidence', value: num(s.awaiting_evidence), icon: 'clock', tone: 'var(--warn-fg)', sub: 'aging >3d', subTone: 'var(--warn-fg)' },
       { label: 'Answer rate', value: answerRate == null ? '—' : `${answerRate}%`, icon: 'phone',
         tone: (answerRate != null && answerRate < 90) ? 'var(--warn-fg)' : 'var(--ok-fg)', sub: 'target 90%',
         subTone: (answerRate != null && answerRate < 90) ? 'var(--warn-fg)' : 'var(--ok-fg)' },
@@ -111,23 +108,17 @@ export default function OverviewPage() {
     ];
   }, [data, preset]);
 
-  // ── exception feed (composed from existing data) ───────────
+  // ── exception feed (exact, from getOverviewSummary + getCallsKpis) ─────
   const exceptions = useMemo(() => {
     const d = data || {};
-    const k = d.kpis || {}, ck = d.callsKpis || {};
-    const openTickets = d.openList?.tickets || [];
-    const now = Date.now();
-    const overdue = openTickets.filter(t => t.due_at && new Date(t.due_at).getTime() < now);
-    const unassigned = openTickets.filter(t => !t.assigned_agent_id);
-    const refunds = d.refundList?.tickets || [];
-
+    const s = d.summary || {}, ck = d.callsKpis || {};
     const list = [];
-    if ((k.overdue || 0) > 0) list.push({
-      id: 'sla', sev: 'high', icon: 'alert', dept: 'ALL', title: `${k.overdue} ticket${k.overdue > 1 ? 's' : ''} past SLA`,
-      detail: overdue[0] ? `Oldest: ${overdue[0].customer_name || overdue[0].ticket_no}` : 'Due date passed, still open',
-      metric: String(k.overdue), owner: 'Leads',
+    if ((s.sla_breached || 0) > 0) list.push({
+      id: 'sla', sev: 'high', icon: 'alert', dept: 'ALL', title: `${s.sla_breached} ticket${s.sla_breached > 1 ? 's' : ''} past SLA`,
+      detail: s.sla_oldest_days ? `Oldest ${s.sla_oldest_days}d past due` : 'Due date passed, still open',
+      metric: String(s.sla_breached), owner: 'Leads',
       rec: 'These tickets have passed their SLA due date and are still open. Open the queue, advance the ones that can move, and escalate anything genuinely blocked before end of day.',
-      ctx: [['Breached', String(k.overdue)], ['Sample', String(overdue.length)], ['Action', 'Advance / escalate'], ['Scope', 'Open queue']],
+      ctx: [['Breached', String(s.sla_breached)], ['Oldest', `${s.sla_oldest_days || 0}d over`], ['Action', 'Advance / escalate'], ['Scope', 'Open queue']],
       primary: 'Open in Queue', route: '/queue?tab=open',
     });
     if ((ck.unanswered_awaiting_callback || 0) > 0) list.push({
@@ -138,25 +129,26 @@ export default function OverviewPage() {
       ctx: [['Missed', String(ck.missed_today ?? '—')], ['Awaiting', String(ck.unanswered_awaiting_callback)], ['Answer rate', `${ck.answer_rate_pct ?? '—'}%`], ['Target', '90%']],
       primary: 'Open Call Log', route: '/calls?tab=missed',
     });
-    if ((k.awaiting_evidence_old || 0) > 0) list.push({
-      id: 'evidence', sev: 'med', icon: 'clock', dept: 'ALL', title: `${k.awaiting_evidence_old} awaiting evidence >48h`,
-      detail: 'Blocked on customer photo / video', metric: String(k.awaiting_evidence_old), owner: 'Messaging',
+    if ((s.awaiting_evidence || 0) > 0) list.push({
+      id: 'evidence', sev: 'med', icon: 'clock', dept: 'ALL', title: `${s.awaiting_evidence} awaiting evidence >48h`,
+      detail: 'Blocked on customer photo / video', metric: String(s.awaiting_evidence), owner: 'Messaging',
       rec: 'These are blocked on customer evidence. Send the approved evidence-request WhatsApp template to nudge, then snooze. Auto-close anything silent past policy.',
-      ctx: [['Aging', String(k.awaiting_evidence_old)], ['Blocked on', 'Customer'], ['Nudge', 'WA template'], ['Then', 'Snooze 24h']],
+      ctx: [['Aging', String(s.awaiting_evidence)], ['Blocked on', 'Customer'], ['Nudge', 'WA template'], ['Then', 'Snooze 24h']],
       primary: 'Open in Queue', route: '/queue?tab=awaiting',
     });
-    if (refunds.length > 0) list.push({
-      id: 'refunds', sev: 'med', icon: 'refund', dept: 'ALL', title: `${refunds.length} refund${refunds.length > 1 ? 's' : ''} pending approval`,
-      detail: 'Inspected & ready to initiate', metric: String(refunds.length), owner: 'You',
+    if ((s.refunds_pending || 0) > 0) list.push({
+      id: 'refunds', sev: 'med', icon: 'refund', dept: 'ALL', title: `${s.refunds_pending} refund${s.refunds_pending > 1 ? 's' : ''} pending approval`,
+      detail: s.refunds_total_inr ? `₹${fmt(s.refunds_total_inr)} inspected & ready` : 'Inspected & ready to initiate',
+      metric: s.refunds_total_inr ? `₹${fmt(s.refunds_total_inr)}` : String(s.refunds_pending), owner: 'You',
       rec: 'These inspected tickets passed fault verification and are waiting on refund approval. Approve to initiate, or convert to a replacement if stock allows.',
-      ctx: [['Pending', String(refunds.length)], ['Stage', 'Inspected'], ['Disposition', 'Refund'], ['Next', 'Initiate / swap']],
+      ctx: [['Pending', String(s.refunds_pending)], ['Total', `₹${fmt(s.refunds_total_inr || 0)}`], ['Stage', 'Inspected'], ['Next', 'Initiate / swap']],
       primary: 'Open in Queue', route: '/queue?disposition=refund&stage=inspected',
     });
-    if (unassigned.length > 0) list.push({
-      id: 'unassigned', sev: 'med', icon: 'list', dept: 'ALL', title: `${unassigned.length} unassigned in queue`,
-      detail: `${unassigned.filter(t => t.auto_created).length} auto-created from calls`, metric: String(unassigned.length), owner: 'Floor',
+    if ((s.unassigned || 0) > 0) list.push({
+      id: 'unassigned', sev: 'med', icon: 'list', dept: 'ALL', title: `${s.unassigned} unassigned in queue`,
+      detail: `${s.unassigned_from_calls || 0} auto-created from calls`, metric: String(s.unassigned), owner: 'Floor',
       rec: 'These tickets have no owner — several came from telephony and have no disposition yet. Claim & triage, or assign to the lightest-loaded agents.',
-      ctx: [['Unassigned', String(unassigned.length)], ['From calls', String(unassigned.filter(t => t.auto_created).length)], ['Action', 'Claim / assign'], ['Scope', 'Recent open']],
+      ctx: [['Unassigned', String(s.unassigned)], ['From calls', String(s.unassigned_from_calls || 0)], ['Action', 'Claim / assign'], ['Scope', 'All open']],
       primary: 'Open in Queue', route: '/queue',
     });
     return list;
@@ -165,16 +157,11 @@ export default function OverviewPage() {
   const exFiltered = exceptions.filter(e => sev === 'all' || e.sev === sev);
   const drawerEx = exceptions.find(e => e.id === drawerId) || null;
 
-  // ── agent load (composed from open-ticket sample + roster) ──
+  // ── agent load (EXACT, from getOverviewSummary) ────────────
   const agents = useMemo(() => {
-    const d = data || {};
-    const roster = (d.agents || []).filter(a => a.has_cs_manage && a.active !== false);
-    const openTickets = d.openList?.tickets || [];
-    const byAgent = {};
-    openTickets.forEach(t => { if (t.assigned_agent_name) byAgent[t.assigned_agent_name] = (byAgent[t.assigned_agent_name] || 0) + 1; });
-    const rows = roster.map(a => {
-      const name = a.full_name || '—';
-      const open = byAgent[name] || 0;
+    const rows = (data?.summary?.agents || []).map(a => {
+      const name = a.name || '—';
+      const open = Number(a.open) || 0;
       const pct = Math.min(100, Math.round((open / AGENT_CAP) * 100));
       const over = open > AGENT_CAP;
       const loadColor = over ? 'var(--bad-fg)' : pct > 75 ? 'var(--warn-fg)' : 'var(--ok-fg)';
