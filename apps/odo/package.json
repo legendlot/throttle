@@ -11,6 +11,7 @@
     "react": "^18",
     "react-dom": "^18",
     "lucide-react": "^0.469.0",
+    "recharts": "^2.15.4",
     "@throttle/auth": "*",
     "@throttle/db": "*",
     "@throttle/ui": "*",

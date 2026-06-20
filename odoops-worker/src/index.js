@@ -1070,7 +1070,7 @@ export default {
           }
 
           case 'getTraffic': {
-            const r = await rpcSales('f_traffic_rollup', { p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO() });
+            const r = await rpcSales('f_traffic_rollup', { p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO(), p_group: qp('group') || 'src' });
             if (!r.ok) return err('Traffic rollup failed: ' + JSON.stringify(r.data), 502);
             return ok({ rows: r.data || [] });
           }
