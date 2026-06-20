@@ -48,6 +48,17 @@ function balanceOf(part) {
   return { total, raised, diff };
 }
 
+// True when a part has units going back to stock but no Qty/Bag set, so its
+// bag stickers won't print. Sticker printing is gated on Qty/Bag (never on
+// qty matching), so surface a hint to set it before confirming.
+function restockNeedsBagSize(part) {
+  return (part.splits || []).some(sp =>
+    sp.disposition === 'Return to Stock'
+    && (parseFloat(sp.qty) || 0) > 0
+    && (parseInt(sp.bagsOf) || 0) <= 0
+  );
+}
+
 export function FlushVerifyPanel({ flushId, onClose, onVerified }) {
   const { session } = useAuth();
   const { showToast } = useToast();
@@ -282,6 +293,8 @@ export function FlushVerifyPanel({ flushId, onClose, onVerified }) {
   }
   if (!flush) return null;
 
+  const noBagParts = parts.filter(restockNeedsBagSize);
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 14px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap', gap: 12 }}>
@@ -419,9 +432,22 @@ export function FlushVerifyPanel({ flushId, onClose, onVerified }) {
                 <span>Store total: <strong style={{ color: 'var(--t1)' }}>{bal.total}</strong> · Production raised: <strong style={{ color: 'var(--t1)' }}>{bal.raised}</strong></span>
                 <span style={{ color: balColor, fontWeight: 700 }}>{balText}</span>
               </div>
+              {restockNeedsBagSize(p) && (
+                <div style={{ marginTop: 5, fontSize: 10, color: '#f2cd1a', display: 'flex', alignItems: 'center', gap: 5, lineHeight: 1.4 }}>
+                  <span>⚠</span>
+                  <span>No bag sticker will print — set <strong>Qty/Bag</strong> above to print labels for the restocked units.</span>
+                </div>
+              )}
             </div>
           );
         })}
+
+        {noBagParts.length > 0 && (
+          <div style={{ marginTop: 12, padding: '8px 10px', background: 'rgba(242,205,26,.1)', border: '1px solid rgba(242,205,26,.35)', borderRadius: 3, fontSize: 11, color: '#f2cd1a', lineHeight: 1.45 }}>
+            <strong>{noBagParts.length} part{noBagParts.length === 1 ? '' : 's'}</strong> will go back to stock with <strong>no bag sticker</strong> (Qty/Bag is 0):{' '}
+            <span style={{ fontFamily: 'var(--mono)' }}>{noBagParts.map(p => p.part_code).join(', ')}</span>. Set the <strong>Qty/Bag</strong> on each to print labels, or confirm to proceed without them.
+          </div>
+        )}
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
           {onClose && (
