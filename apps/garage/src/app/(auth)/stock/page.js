@@ -84,6 +84,12 @@ function supplyView(row, sup) {
   const closing = Number(row.closing_stock) || 0;
   const reorder = Number(row.reorder_level) || 0;
   const isLow = (reorder > 0 && closing <= reorder) || closing < 0;
+  // A deprecated code that itself has inbound = the mis-coded source: the order
+  // lands here, not on the live successor. Flag it (don't show a calm "On order").
+  if (sup && sup.is_dead && (sup.on_order > 0 || sup.landed > 0)) {
+    const n = (sup.on_order || 0) + (sup.landed || 0);
+    return { label: `⚠ Ordered · ${fmtN(n)} → ${sup.superseded_by}`, title: `${fmtN(n)} inbound on this DEPRECATED code — won't replenish ${sup.superseded_by}; re-code the PO or transfer the stock`, tone: 'warn' };
+  }
   if (sup && sup.on_order > 0) {
     const moving = sup.stage === 'In transit' || sup.stage === 'Arrived';
     let label = `${sup.stage} · ${fmtN(sup.on_order)}`;
