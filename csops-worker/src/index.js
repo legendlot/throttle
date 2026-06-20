@@ -412,6 +412,11 @@ export default {
     if (url.pathname === '/webhooks/bitespeed' && request.method === 'POST') {
       return handleBiteSpeedWebhook(request, env);
     }
+    // Meta (Instagram + Facebook Messenger DMs) — GET verify handshake + POST events.
+    if (url.pathname === '/webhooks/meta') {
+      if (request.method === 'GET')  return handleMetaVerify(url, env);
+      if (request.method === 'POST') return handleMetaWebhook(request, env);
+    }
     if (!action && request.method === 'GET') return err('Missing action parameter', 400);
 
     // Authenticate every request (besides /health)
@@ -503,6 +508,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'markCalledBack':           return markCalledBack(body, auth, env);
     case 'createTicketFromCall':     return createTicketFromCall(body, auth, env);
     case 'sendWaMessage':            return sendWaMessage(body, auth, env);
+    case 'sendMetaMessage':          return sendMetaMessage(body, auth, env);
     case 'recordInboundWaStub':      return recordInboundWaStub(body, auth, env);
     case 'createWaTemplate':         return createWaTemplate(body, auth, env);
     case 'updateWaTemplate':         return updateWaTemplate(body, auth, env);
@@ -2868,4 +2874,175 @@ async function biteSpeedMessageCreated(body, env) {
   }
 
   return json({ ok: true, thread_id: thread.id, ticket_id: linkedTicketId, direction, kind });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// META — Instagram + Facebook Messenger DMs, DIRECT via the Messenger Platform
+// (independent of BiteSpeed/WhatsApp). Reuses cs_wa_threads/cs_wa_messages with
+// channel='instagram'|'messenger'. Webhook envelope is the stable Graph shape:
+//   { object:'instagram'|'page', entry:[{ id, messaging:[{ sender:{id},
+//     recipient:{id}, timestamp, message:{ mid, text, attachments, is_echo } }] }] }
+// Founder setup: Meta app + IG-professional/FB-Page, subscribe webhook → this URL
+// with META_VERIFY_TOKEN, App Review (instagram_business_manage_messages /
+// pages_messaging), then a long-lived Page access token. Secrets:
+// META_VERIFY_TOKEN, META_APP_SECRET, META_PAGE_TOKEN. INERT until those are set.
+// ════════════════════════════════════════════════════════════════════════════
+const META_GRAPH = 'https://graph.facebook.com/v21.0';
+
+function handleMetaVerify(url, env) {
+  const mode = url.searchParams.get('hub.mode');
+  const token = url.searchParams.get('hub.verify_token');
+  const challenge = url.searchParams.get('hub.challenge');
+  if (mode === 'subscribe' && env.META_VERIFY_TOKEN && token === env.META_VERIFY_TOKEN) {
+    return new Response(challenge || '', { status: 200, headers: { ...CORS, 'Content-Type': 'text/plain' } });
+  }
+  return err('Verification failed', 403);
+}
+
+async function hmacSha256Hex(secret, message) {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message));
+  return [...new Uint8Array(sig)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function handleMetaWebhook(request, env) {
+  if (!env.META_APP_SECRET) return json({ ok: true, skipped: 'meta_not_configured' });
+  const raw = await request.text();
+  // X-Hub-Signature-256 = 'sha256=' + HMAC-SHA256(rawBody, app_secret)
+  const sigHeader = request.headers.get('x-hub-signature-256') || '';
+  const expected = 'sha256=' + await hmacSha256Hex(env.META_APP_SECRET, raw);
+  if (sigHeader !== expected) return err('Invalid signature', 401);
+
+  let body = {};
+  try { body = JSON.parse(raw); } catch { return err('Bad JSON', 400); }
+  const channel = body?.object === 'instagram' ? 'instagram' : body?.object === 'page' ? 'messenger' : null;
+  if (!channel) return json({ ok: true, ignored: body?.object || 'unknown' });
+
+  try {
+    for (const entry of (body.entry || [])) {
+      for (const ev of (entry.messaging || entry.standby || [])) {
+        if (ev.message) await metaHandleMessage(channel, ev, env);
+      }
+    }
+  } catch (e) {
+    console.error('[meta] handler error', e);
+  }
+  return json({ ok: true });   // always ack to avoid Meta retry storms
+}
+
+async function metaFindOrCreateThread(channel, extUserId, accountId, env) {
+  const found = await sb(
+    `/rest/v1/cs_wa_threads?channel=eq.${channel}&external_user_id=eq.${encodeURIComponent(extUserId)}&select=*&limit=1`, env);
+  if (found.data?.[0]) return found.data[0];
+  const ins = await sb(`/rest/v1/cs_wa_threads`, env, {
+    method: 'POST',
+    body: JSON.stringify({
+      channel, external_user_id: extUserId, provider_thread_ref: extUserId,
+      provider_account_id: accountId != null ? String(accountId) : null,
+    }),
+  });
+  if (!ins.ok) console.error(`[meta] thread insert failed ${ins.status} ${JSON.stringify(ins.data)?.slice(0, 200)}`);
+  return ins.data?.[0] || null;
+}
+
+// Best-effort IG-username / FB-name lookup for a scoped sender id (needs a token).
+async function resolveMetaHandle(extUserId, env) {
+  if (!env.META_PAGE_TOKEN) return null;
+  try {
+    const r = await fetch(`${META_GRAPH}/${encodeURIComponent(extUserId)}?fields=name,username&access_token=${env.META_PAGE_TOKEN}`);
+    const d = await r.json();
+    return r.ok ? (d.username || d.name || null) : null;
+  } catch { return null; }
+}
+
+async function metaHandleMessage(channel, ev, env) {
+  const msg = ev.message || {};
+  const mid = msg.mid != null ? String(msg.mid) : null;
+  const isEcho = !!msg.is_echo;
+  const direction = isEcho ? 'outbound' : 'inbound';
+  // inbound: customer = sender.id, our acct = recipient.id · echo(outbound): swapped
+  const extUserId = String(isEcho ? ev.recipient?.id : ev.sender?.id);
+  const accountId = isEcho ? ev.sender?.id : ev.recipient?.id;
+  if (!extUserId || extUserId === 'undefined') return;
+
+  if (mid) {
+    const exists = await sb(`/rest/v1/cs_wa_messages?provider_message_id=eq.${encodeURIComponent(mid)}&select=id&limit=1`, env);
+    if (exists.data?.[0]) return;   // idempotent
+  }
+
+  const thread = await metaFindOrCreateThread(channel, extUserId, accountId, env);
+  if (!thread) return;
+
+  if (!thread.customer_handle) {
+    const handle = await resolveMetaHandle(extUserId, env);
+    if (handle) {
+      await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify({ customer_handle: handle }) }).catch(() => {});
+      thread.customer_handle = handle;
+    }
+  }
+
+  const att = Array.isArray(msg.attachments) ? msg.attachments[0] : null;
+  let kind = 'text', mediaUrl = null;
+  if (att) {
+    const t = (att.type || '').toLowerCase();
+    kind = ['image', 'video', 'audio'].includes(t) ? t : t === 'file' ? 'document' : (t || 'document');
+    mediaUrl = att.payload?.url || null;
+  }
+  const ts = ev.timestamp ? new Date(Number(ev.timestamp)).toISOString() : new Date().toISOString();
+
+  const ins = await sb(`/rest/v1/cs_wa_messages`, env, {
+    method: 'POST',
+    body: JSON.stringify({
+      thread_id: thread.id, channel, direction, kind,
+      body: msg.text || null, media_url: mediaUrl, provider_message_id: mid,
+      status: direction === 'outbound' ? 'sent' : null,
+      received_at: direction === 'inbound' ? ts : null,
+      sent_at: direction === 'outbound' ? ts : null,
+      raw_meta: ev,
+    }),
+  });
+  if (!ins.ok) { console.error(`[meta] message insert failed ${ins.status} ${JSON.stringify(ins.data)?.slice(0, 200)}`); return; }
+
+  const patch = { last_message_at: ts };
+  if (direction === 'inbound') patch.customer_window_until = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) }).catch(() => {});
+}
+
+// Outbound send via Graph API. Inert without META_PAGE_TOKEN. Gated cs_ticket_manage.
+async function sendMetaMessage(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { thread_id, text, tag } = body;
+  if (!thread_id || !text) return err('thread_id and text required');
+  if (!env.META_PAGE_TOKEN) return err('Meta send not configured (META_PAGE_TOKEN missing)', 503);
+
+  const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=*&limit=1`, env);
+  const thread = tRes.data?.[0];
+  if (!thread || !thread.external_user_id) return err('Thread not found or has no recipient', 404);
+
+  const withinWindow = thread.customer_window_until && new Date(thread.customer_window_until).getTime() > Date.now();
+  const payload = {
+    recipient: { id: thread.external_user_id },
+    message: { text },
+    messaging_type: withinWindow ? 'RESPONSE' : 'MESSAGE_TAG',
+    ...(withinWindow ? {} : { tag: tag || 'HUMAN_AGENT' }),
+  };
+  const r = await fetch(`${META_GRAPH}/me/messages?access_token=${env.META_PAGE_TOKEN}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) return err(`Meta send failed: ${JSON.stringify(d?.error || d)}`, r.status);
+
+  const mid = d?.message_id || null;
+  await sb(`/rest/v1/cs_wa_messages`, env, {
+    method: 'POST',
+    body: JSON.stringify({
+      thread_id: thread.id, channel: thread.channel, direction: 'outbound', kind: 'text',
+      body: text, provider_message_id: mid, status: 'sent',
+      sent_by_user_id: auth.userId, sent_by_name: auth.fullName || auth.name || auth.email || null,
+      sent_at: new Date().toISOString(),
+    }),
+  });
+  await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify({ last_message_at: new Date().toISOString() }) }).catch(() => {});
+  return ok({ sent: true, message_id: mid });
 }
