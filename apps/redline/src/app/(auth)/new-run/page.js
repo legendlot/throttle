@@ -9,6 +9,7 @@ import {
   Icon, Panel, lineColor, lineRgb, btnPrimary, btnGhost, inputStyle,
 } from '../../../components/kit/index.js';
 import { RecentRuns } from '../../../components/production-runs/RecentRuns.js';
+import { CoveragePanel } from '../../../components/production-runs/CoveragePanel.js';
 
 // Unified run-request surface (run-request consolidation, 2026-06-07).
 // One place for production to request ANY run: Fresh · Outsourced · Repair · Repack.
@@ -201,6 +202,10 @@ function ProductionForm({ runType, cat, products, vendors = [], session, toast, 
         </tbody>
       </table>
       <button onClick={addRow} style={{ ...btnGhost, marginBottom: 18 }}><Icon name="plus" size={14} />Add variant</button>
+
+      <CoveragePanel product={product}
+        qty={rows.reduce((s, r) => s + (parseInt(r.qty_ecomm) || 0) + (parseInt(r.qty_retail) || 0), 0)}
+        session={session} />
 
       <div><span className="eyebrow" style={lblStyle}>Notes · optional</span><textarea rows={2} value={notes} onChange={e => setNotes(e.target.value)} style={{ ...inp, resize: 'vertical' }} /></div>
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
