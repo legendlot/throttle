@@ -11,7 +11,7 @@ import {
   Wrench, MessageSquare, User, Users, Check, X, ExternalLink, Plus, AlarmClock,
   Paperclip, ChevronRight, ChevronLeft, ChevronDown, Zap, Command,
   SlidersHorizontal, Pin, LogOut, Building2, Headphones, Info, CornerDownRight,
-  BookOpen,
+  BookOpen, TrendingUp,
 } from 'lucide-react';
 
 const ICONS = {
@@ -23,7 +23,7 @@ const ICONS = {
   snooze: AlarmClock, paperclip: Paperclip, chevR: ChevronRight, chevL: ChevronLeft,
   chevD: ChevronDown, zap: Zap, cmd: Command, command: Command, cog: SlidersHorizontal,
   settings: SlidersHorizontal, pin: Pin, logout: LogOut, building: Building2,
-  headphones: Headphones, info: Info, reply: CornerDownRight, book: BookOpen,
+  headphones: Headphones, info: Info, reply: CornerDownRight, book: BookOpen, trend: TrendingUp,
 };
 
 function resolve(name) {

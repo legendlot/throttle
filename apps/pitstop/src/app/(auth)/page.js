@@ -15,6 +15,7 @@ import {
   KpiCard, SectionHead, DatePresets, SevFilter, ExceptionRow, Drawer, Icon,
   sevPalette, fmt, btnPrimary,
 } from '../../components/kit/index.js';
+import { TrendChart, hourFmt } from '../../components/kit/Chart.js';
 import { csopsGet } from '../../lib/csopsFetch.js';
 import { getActiveDept } from '../../components/DeptSwitcher.js';
 import { useRefreshState } from './layout.js';
@@ -180,6 +181,21 @@ export default function OverviewPage() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 'var(--gap)', marginBottom: 'var(--gap)' }}>
         {kpis.map((k, i) => <KpiCard key={i} {...k} size={27} />)}
       </div>
+
+      {/* tickets created · hourly (today) */}
+      <section style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden', marginBottom: 'var(--gap)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px var(--cardpad)', borderBottom: '1px solid var(--border)' }}>
+          <span className="label" style={{ fontSize: 11, color: 'var(--t2)', fontWeight: 600 }}>Tickets created · hourly</span>
+          <span className="num" style={{ fontSize: 10.5, color: 'var(--t4)' }}>today · IST</span>
+        </div>
+        <div style={{ padding: '14px 10px 6px' }}>
+          <TrendChart
+            data={data?.summary?.created_today_hourly || []}
+            xKey="hour" xFmt={hourFmt} xLabel="Hour" height={220}
+            series={[{ key: 'count', name: 'Created', color: 'accent', kind: 'area' }]}
+          />
+        </div>
+      </section>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.55fr) minmax(0,1fr)', gap: 'var(--gap)' }}>
         {/* exception feed */}

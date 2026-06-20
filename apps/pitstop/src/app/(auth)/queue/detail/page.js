@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Modal, Spinner, useToast } from '@throttle/ui';
-import { ChevronLeft, Link2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Link2, MessageSquare } from 'lucide-react';
 import { csopsGet, csopsPost } from '../../../../lib/csopsFetch.js';
 import { Stepper as VoltStepper, StepperToggle, Icon, btnPrimary, btnGhost } from '../../../../components/kit/index.js';
 import { ShopifyPanel } from '../../../../components/ShopifyPanel.js';
@@ -62,6 +62,8 @@ export default function TicketDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showRevealPhone, setShowRevealPhone] = useState(false);
+  // Activity feed is collapsed by default to declutter the detail view.
+  const [activityOpen, setActivityOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!session || !ticket_no) return;
@@ -112,23 +114,34 @@ export default function TicketDetailPage() {
       {/* Stepper */}
       <LifecycleStepper ticket={t} />
 
-      {/* Three-column body */}
+      {/* Three-column body — Activity collapses to a slim rail (default collapsed) */}
       <div style={{
         display: 'grid',
-        gridTemplateColumns: 'minmax(260px, 280px) minmax(0, 1fr) minmax(280px, 320px)',
-        gap: 'var(--space-3)',
+        gridTemplateColumns: activityOpen
+          ? 'minmax(260px, 280px) minmax(0, 1fr) minmax(300px, 340px)'
+          : 'minmax(260px, 280px) minmax(0, 1fr) 46px',
+        gap: 'var(--gap)',
         marginTop: 'var(--space-4)',
+        alignItems: 'start',
       }}>
         <IdentityRail ticket={t} dispatch={data.dispatch_info} pastCases={data.past_cases} session={session} onRefresh={refresh} />
         <WorkArea ticket={t} dispatch={data.dispatch_info} repairRun={data.repair_run} session={session} perms={perms} onRefresh={refresh} stages={stages} />
-        <ActivityFeed
-          ticket={t}
-          history={data.history}
-          notes={data.notes}
-          attachments={data.attachments}
-          session={session}
-          onRefresh={refresh}
-        />
+        {activityOpen ? (
+          <ActivityFeed
+            ticket={t}
+            history={data.history}
+            notes={data.notes}
+            attachments={data.attachments}
+            session={session}
+            onRefresh={refresh}
+            onCollapse={() => setActivityOpen(false)}
+          />
+        ) : (
+          <ActivityRail
+            count={(data.history?.length || 0) + (data.notes?.length || 0) + (data.attachments?.length || 0)}
+            onExpand={() => setActivityOpen(true)}
+          />
+        )}
       </div>
     </div>
   );
@@ -951,7 +964,28 @@ function DetailProductCascade({ form, setForm, catalog }) {
   );
 }
 
-function ActivityFeed({ ticket, history, notes, attachments, session, onRefresh }) {
+// Slim collapsed rail — a discoverable affordance that Activity exists + can expand.
+function ActivityRail({ count, onExpand }) {
+  return (
+    <button onClick={onExpand} title="Show activity"
+      style={{ position: 'sticky', top: 0, width: 46, minHeight: 220, background: 'var(--surface)',
+        border: '1px solid var(--border)', borderRadius: 'var(--radius)', cursor: 'pointer',
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: '14px 0', color: 'var(--t3)' }}
+      onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--accent-bd)'; e.currentTarget.style.color = 'var(--t1)'; }}
+      onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--t3)'; }}>
+      <ChevronLeft size={16} strokeWidth={1.75} />
+      <MessageSquare size={16} strokeWidth={1.75} />
+      {count > 0 && (
+        <span className="num" style={{ fontSize: 10, color: 'var(--accent)', background: 'var(--accent-bg)',
+          border: '1px solid var(--accent-bd)', borderRadius: 99, padding: '1px 5px' }}>{count}</span>
+      )}
+      <span style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', fontFamily: 'var(--f-display)',
+        fontSize: 10, letterSpacing: '0.12em', textTransform: 'uppercase', marginTop: 4 }}>Activity</span>
+    </button>
+  );
+}
+
+function ActivityFeed({ ticket, history, notes, attachments, session, onRefresh, onCollapse }) {
   // Merge feeds by timestamp
   const merged = useMemo(() => {
     const items = [];
@@ -1003,7 +1037,16 @@ function ActivityFeed({ ticket, history, notes, attachments, session, onRefresh 
       minHeight: 360, maxHeight: 'calc(100dvh - 280px)',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-        <SectionLabel>Activity</SectionLabel>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {onCollapse && (
+            <button onClick={onCollapse} title="Hide activity" style={{ background: 'none', border: '1px solid var(--border-2)',
+              borderRadius: 'var(--radius-sm)', width: 24, height: 24, color: 'var(--t3)', cursor: 'pointer',
+              display: 'grid', placeItems: 'center' }}>
+              <ChevronRight size={14} strokeWidth={1.75} />
+            </button>
+          )}
+          <SectionLabel style={{ marginBottom: 0 }}>Activity</SectionLabel>
+        </div>
         <button onClick={() => setShowAttach(v => !v)} style={{
           ...miniLink, display: 'inline-flex', alignItems: 'center', gap: 3,
         }}>

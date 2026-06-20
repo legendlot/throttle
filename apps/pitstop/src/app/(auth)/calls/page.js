@@ -9,6 +9,7 @@ import { csopsGet, csopsPost } from '../../../lib/csopsFetch.js';
 import { CallStatusBadge } from '../../../components/CallStatusBadge.js';
 import { getActiveDept } from '../../../components/DeptSwitcher.js';
 import { KpiCard, Tabs, selectStyle } from '../../../components/kit/index.js';
+import { TrendChart, hourFmt } from '../../../components/kit/Chart.js';
 
 const TABS = [
   { id: 'all',        label: 'All Calls' },
@@ -66,6 +67,23 @@ export default function CallsPage() {
   const [error, setError] = useState(null);
   const [searchInput, setSearchInput] = useState(searchQ);
   const [openCalldetailId, setOpenCalldetailId] = useState(null);
+
+  // Hourly call-volume chart (a particular day, default today).
+  const [chartDay, setChartDay] = useState(() => {
+    const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    return ist.toISOString().slice(0, 10);
+  });
+  const [hourly, setHourly] = useState([]);
+  useEffect(() => {
+    if (!session) return;
+    let alive = true;
+    const params = { from: `${chartDay}T00:00:00`, to: `${chartDay}T23:59:59` };
+    if (perms?.cs_ticket_admin && deptSlug) params.department = deptSlug;
+    csopsGet('getCallReports', params, session)
+      .then(d => { if (alive) setHourly(d?.hourly || []); })
+      .catch(() => { if (alive) setHourly([]); });
+    return () => { alive = false; };
+  }, [session, chartDay, deptSlug, perms?.cs_ticket_admin]);
 
   // ↑/↓ navigates the visible row; Enter opens its ticket detail when linked,
   // else the call detail. Skipped while typing.
@@ -148,6 +166,22 @@ export default function CallsPage() {
         <KpiCard label="Missed"            value={kpis?.missed_today ?? '—'}   tone="var(--bad-fg)"  sub="today" size={26} />
         <KpiCard label="Answer rate"       value={kpis?.answer_rate_pct != null ? `${kpis.answer_rate_pct}%` : '—'} tone={(kpis?.answer_rate_pct != null && kpis.answer_rate_pct < 90) ? 'var(--warn-fg)' : 'var(--ok-fg)'} sub="target 90%" size={26} />
         <KpiCard label="Awaiting callback" value={kpis?.unanswered_awaiting_callback ?? '—'} tone="var(--warn-fg)" sub="missed, to return" size={26} />
+      </section>
+
+      {/* Hourly call-volume chart */}
+      <section style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden', marginBottom: 'var(--gap)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px var(--cardpad)', borderBottom: '1px solid var(--border)' }}>
+          <span className="label" style={{ fontSize: 11, color: 'var(--t2)', fontWeight: 600 }}>Calls · hourly</span>
+          <input type="date" value={chartDay} onChange={e => setChartDay(e.target.value)}
+            style={{ ...selectStyle, padding: '5px 9px', fontFamily: 'var(--f-mono)', fontSize: 12 }} />
+        </div>
+        <div style={{ padding: '14px 10px 6px' }}>
+          <TrendChart
+            data={hourly}
+            xKey="hour" xFmt={hourFmt} xLabel="Hour" height={220}
+            series={[{ key: 'count', name: 'Calls', color: 'info', kind: 'area' }]}
+          />
+        </div>
       </section>
 
       {/* Tabs */}

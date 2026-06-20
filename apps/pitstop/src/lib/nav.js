@@ -12,6 +12,7 @@ export const NAV_PRIMARY = [
   { id: 'new',      label: 'New Ticket', route: '/new',    icon: 'plus' },
   { id: 'calls',    label: 'Calls',      route: '/calls',  icon: 'phone', badgeKey: 'missed' },
   { id: 'reports',  label: 'Reports',    route: '/reports',icon: 'chart', requires: 'cs_reports_view' },
+  { id: 'history',  label: 'History',    route: '/history',icon: 'trend', requires: 'cs_reports_view' },
 ];
 
 export const NAV_SETUP = [
@@ -37,6 +38,7 @@ const CRUMBS = {
   '/calls':               { crumb: 'Work',             title: 'Call Log' },
   '/new':                 { crumb: 'Work',             title: 'New Ticket' },
   '/reports':             { crumb: 'Analyze',          title: 'Reports' },
+  '/history':             { crumb: 'Analyze',          title: 'Ticket History' },
   '/admin/departments':   { crumb: 'Setup · Admin',    title: 'Departments' },
   '/admin/myop':          { crumb: 'Setup · Admin',    title: 'MyOperator Accounts' },
   '/admin/wa-templates':  { crumb: 'Setup · Admin',    title: 'WhatsApp Templates' },

@@ -456,6 +456,10 @@ async function handleGet(action, params, auth, env) {
       const g2 = require('cs_reports_view', auth); if (g2) return g2;
       return getCallReports(params, auth, env);
     }
+    case 'getTicketHistory': {
+      const g2 = require('cs_reports_view', auth); if (g2) return g2;
+      return getTicketHistory(params, auth, env);
+    }
     case 'getAgents':        return getAgents(params, auth, env);
     case 'getIssueCatalog':  return getIssueCatalog(env);
     case 'getDepartments':   return getDepartments(params, auth, env);
@@ -762,7 +766,7 @@ async function getOverviewSummary(params, auth, env) {
   if (!scope) return err('Unknown department slug', 404);
   const scopeQs = scope.length ? `&${scope.join('&')}` : '';
 
-  const [openR, slaR, awaitingR, resolvedR, unassignedR, refundsR, agentRowsR, rosterR, rolesR] = await Promise.all([
+  const [openR, slaR, awaitingR, resolvedR, unassignedR, refundsR, agentRowsR, rosterR, rolesR, createdTodayR] = await Promise.all([
     sb(`/rest/v1/cs_tickets?closed_at=is.null&select=id&limit=5000${scopeQs}`, env),
     sb(`/rest/v1/cs_tickets?closed_at=is.null&due_at=lt.${encodeURIComponent(nowIso)}&select=created_at&order=created_at.asc&limit=5000${scopeQs}`, env),
     sb(`/rest/v1/cs_tickets?stage=eq.awaiting_evidence&closed_at=is.null&stage_changed_at=lt.${encodeURIComponent(agingIso)}&select=id&limit=5000${scopeQs}`, env),
@@ -772,7 +776,16 @@ async function getOverviewSummary(params, auth, env) {
     sb(`/rest/v1/cs_tickets?closed_at=is.null&assigned_agent_id=not.is.null&select=assigned_agent_id,assigned_agent_name&limit=5000${scopeQs}`, env),
     sb(`/rest/v1/users_profile?active=eq.true&select=id,full_name,role&order=full_name.asc&limit=500`, env),
     sb(`/rest/v1/roles?select=role_id,permissions`, env),
+    sb(`/rest/v1/cs_tickets?created_at=gte.${encodeURIComponent(startOfTodayIso)}&select=created_at&limit=5000${scopeQs}`, env),
   ]);
+
+  // Tickets created per IST hour today (0-23) — for the Overview hourly chart.
+  const hourBuckets = Array.from({ length: 24 }, (_, h) => ({ hour: h, count: 0 }));
+  for (const t of (createdTodayR.data || [])) {
+    if (!t.created_at) continue;
+    const h = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Kolkata', hour: 'numeric', hour12: false }).format(new Date(t.created_at))) % 24;
+    if (h >= 0 && h < 24) hourBuckets[h].count += 1;
+  }
 
   const sla = slaR.data || [];
   const slaOldestDays = sla.length
@@ -810,7 +823,57 @@ async function getOverviewSummary(params, auth, env) {
     refunds_pending: refunds.length,
     refunds_total_inr: refundsTotal,
     agents,
+    created_today_hourly: hourBuckets,
   });
+}
+
+// getTicketHistory — ticket-creation time series for the History page.
+// Buckets cs_tickets.created_at by day / week (ISO, Mon-start) / month over
+// [from,to], split into auto-created (call requests) vs manual. Dept-scoped
+// (mirrors getReports — dept filter only, gated by cs_reports_view in the
+// dispatcher). Bucketed in-worker (current volume is well under the row cap).
+async function getTicketHistory(params, auth, env) {
+  const granularity = ['day', 'week', 'month'].includes(params.get('granularity')) ? params.get('granularity') : 'day';
+  const to = params.get('to') ? new Date(params.get('to')) : new Date();
+  const from = params.get('from') ? new Date(params.get('from')) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+  const deptFilter = await resolveDeptFilter(params.get('department'), auth, env);
+  if (!deptFilter) return err('Unknown department slug', 404);
+  const deptClause = (() => { const c = buildDeptFilter(deptFilter); return c ? `&${c}` : ''; })();
+
+  const path = `/rest/v1/cs_tickets?created_at=gte.${encodeURIComponent(from.toISOString())}&created_at=lt.${encodeURIComponent(to.toISOString())}&select=created_at,auto_created&order=created_at.asc&limit=10000${deptClause}`;
+  const res = await sb(path, env);
+  if (!res.ok) return err(`Failed to load ticket history: ${JSON.stringify(res.data)}`, res.status);
+
+  // IST-anchored bucket key.
+  const istParts = (iso) => {
+    const p = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(iso));
+    const g = (t) => p.find(x => x.type === t)?.value;
+    return { y: Number(g('year')), m: Number(g('month')), d: Number(g('day')) };
+  };
+  const bucketKey = (iso) => {
+    const { y, m, d } = istParts(iso);
+    if (granularity === 'month') return `${y}-${String(m).padStart(2, '0')}`;
+    if (granularity === 'week') {
+      // ISO week start (Monday), computed on the IST calendar date.
+      const dt = new Date(Date.UTC(y, m - 1, d));
+      const dow = (dt.getUTCDay() + 6) % 7; // 0=Mon
+      dt.setUTCDate(dt.getUTCDate() - dow);
+      return dt.toISOString().slice(0, 10);
+    }
+    return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  };
+
+  const map = {};
+  for (const t of (res.data || [])) {
+    if (!t.created_at) continue;
+    const k = bucketKey(t.created_at);
+    if (!map[k]) map[k] = { bucket: k, total: 0, auto: 0, manual: 0 };
+    map[k].total += 1;
+    if (t.auto_created) map[k].auto += 1; else map[k].manual += 1;
+  }
+  const series = Object.values(map).sort((a, b) => (a.bucket < b.bucket ? -1 : 1));
+  return ok({ granularity, from: from.toISOString(), to: to.toISOString(), total: (res.data || []).length, series });
 }
 
 // Normalize a scanned/typed/spoken UPC to the canonical LOT-XXXXXXXX form.
