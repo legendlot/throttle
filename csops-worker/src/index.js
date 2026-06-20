@@ -2888,6 +2888,11 @@ async function biteSpeedMessageCreated(body, env) {
 // META_VERIFY_TOKEN, META_APP_SECRET, META_PAGE_TOKEN. INERT until those are set.
 // ════════════════════════════════════════════════════════════════════════════
 const META_GRAPH = 'https://graph.facebook.com/v21.0';
+// Token per channel: Instagram (IG-login path) uses its own user token; FB
+// Messenger uses the Page token. IG falls back to the page token if linked.
+function metaToken(channel, env) {
+  return channel === 'instagram' ? (env.META_IG_TOKEN || env.META_PAGE_TOKEN) : env.META_PAGE_TOKEN;
+}
 
 function handleMetaVerify(url, env) {
   const mode = url.searchParams.get('hub.mode');
@@ -2907,12 +2912,16 @@ async function hmacSha256Hex(secret, message) {
 }
 
 async function handleMetaWebhook(request, env) {
-  if (!env.META_APP_SECRET) return json({ ok: true, skipped: 'meta_not_configured' });
+  // Accept either the FB app secret (Messenger) or the IG app secret (IG-login
+  // path) — events from each product are signed with their own app secret.
+  const secrets = [env.META_APP_SECRET, env.META_IG_APP_SECRET].filter(Boolean);
+  if (!secrets.length) return json({ ok: true, skipped: 'meta_not_configured' });
   const raw = await request.text();
   // X-Hub-Signature-256 = 'sha256=' + HMAC-SHA256(rawBody, app_secret)
   const sigHeader = request.headers.get('x-hub-signature-256') || '';
-  const expected = 'sha256=' + await hmacSha256Hex(env.META_APP_SECRET, raw);
-  if (sigHeader !== expected) return err('Invalid signature', 401);
+  let validSig = false;
+  for (const s of secrets) { if (sigHeader === 'sha256=' + await hmacSha256Hex(s, raw)) { validSig = true; break; } }
+  if (!validSig) return err('Invalid signature', 401);
 
   let body = {};
   try { body = JSON.parse(raw); } catch { return err('Bad JSON', 400); }
@@ -2947,10 +2956,11 @@ async function metaFindOrCreateThread(channel, extUserId, accountId, env) {
 }
 
 // Best-effort IG-username / FB-name lookup for a scoped sender id (needs a token).
-async function resolveMetaHandle(extUserId, env) {
-  if (!env.META_PAGE_TOKEN) return null;
+async function resolveMetaHandle(extUserId, channel, env) {
+  const token = metaToken(channel, env);
+  if (!token) return null;
   try {
-    const r = await fetch(`${META_GRAPH}/${encodeURIComponent(extUserId)}?fields=name,username&access_token=${env.META_PAGE_TOKEN}`);
+    const r = await fetch(`${META_GRAPH}/${encodeURIComponent(extUserId)}?fields=name,username&access_token=${token}`);
     const d = await r.json();
     return r.ok ? (d.username || d.name || null) : null;
   } catch { return null; }
@@ -2975,7 +2985,7 @@ async function metaHandleMessage(channel, ev, env) {
   if (!thread) return;
 
   if (!thread.customer_handle) {
-    const handle = await resolveMetaHandle(extUserId, env);
+    const handle = await resolveMetaHandle(extUserId, channel, env);
     if (handle) {
       await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify({ customer_handle: handle }) }).catch(() => {});
       thread.customer_handle = handle;
@@ -3014,11 +3024,12 @@ async function sendMetaMessage(body, auth, env) {
   const g = require('cs_ticket_manage', auth); if (g) return g;
   const { thread_id, text, tag } = body;
   if (!thread_id || !text) return err('thread_id and text required');
-  if (!env.META_PAGE_TOKEN) return err('Meta send not configured (META_PAGE_TOKEN missing)', 503);
 
   const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=*&limit=1`, env);
   const thread = tRes.data?.[0];
   if (!thread || !thread.external_user_id) return err('Thread not found or has no recipient', 404);
+  const token = metaToken(thread.channel, env);
+  if (!token) return err('Meta send not configured (no token for this channel)', 503);
 
   const withinWindow = thread.customer_window_until && new Date(thread.customer_window_until).getTime() > Date.now();
   const payload = {
@@ -3027,7 +3038,7 @@ async function sendMetaMessage(body, auth, env) {
     messaging_type: withinWindow ? 'RESPONSE' : 'MESSAGE_TAG',
     ...(withinWindow ? {} : { tag: tag || 'HUMAN_AGENT' }),
   };
-  const r = await fetch(`${META_GRAPH}/me/messages?access_token=${env.META_PAGE_TOKEN}`, {
+  const r = await fetch(`${META_GRAPH}/me/messages?access_token=${token}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
   });
   const d = await r.json().catch(() => ({}));
