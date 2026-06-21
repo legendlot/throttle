@@ -476,6 +476,8 @@ async function handleGet(action, params, auth, env) {
     case 'getCallsKpis':     return getCallsKpis(params, auth, env);
     case 'getWaThread':      return getWaThread(params, auth, env);
     case 'getWaTemplates':   return getWaTemplates(params, auth, env);
+    case 'getMessagingThreads': return getMessagingThreads(params, auth, env);
+    case 'getMessagingThread':  return getMessagingThread(params, auth, env);
     case 'searchShopifyCustomer':
       return ok(await shopifyLookup({ phone: params.get('phone'), email: params.get('email') }, env));
     default:
@@ -509,6 +511,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'createTicketFromCall':     return createTicketFromCall(body, auth, env);
     case 'sendWaMessage':            return sendWaMessage(body, auth, env);
     case 'sendMetaMessage':          return sendMetaMessage(body, auth, env);
+    case 'linkMessagingThread':      return linkMessagingThread(body, auth, env);
     case 'recordInboundWaStub':      return recordInboundWaStub(body, auth, env);
     case 'createWaTemplate':         return createWaTemplate(body, auth, env);
     case 'updateWaTemplate':         return updateWaTemplate(body, auth, env);
@@ -3062,4 +3065,87 @@ async function sendMetaMessage(body, auth, env) {
   });
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify({ last_message_at: new Date().toISOString() }) }).catch(() => {});
   return ok({ sent: true, message_id: mid });
+}
+
+// ── Agent Inbox — cross-channel thread list + reader + ticket link ───────────
+// Surfaces every cs_wa_threads conversation (whatsapp/instagram/messenger) for
+// the Pitstop /inbox. Read-gated by handleGet's cs_ticket_view; replies go
+// through sendMetaMessage (IG/FB, gated cs_ticket_manage). WhatsApp stays
+// read-only (BiteSpeed deep-link) until C2-B.
+async function getMessagingThreads(params, auth, env) {
+  const channel = params.get('channel');
+  const limit = Math.min(Number(params.get('limit')) || 60, 100);
+  let q = `/rest/v1/cs_wa_threads?select=*&order=last_message_at.desc.nullslast&limit=${limit}`;
+  if (channel && channel !== 'all') q += `&channel=eq.${encodeURIComponent(channel)}`;
+  const tRes = await sb(q, env);
+  const threads = tRes.data || [];
+  if (!threads.length) return ok({ threads: [] });
+
+  // One batched fetch of recent messages for these threads → last-message preview
+  // + linked ticket per thread (avoids N+1; PostgREST has no "latest per group").
+  const ids = threads.map(t => t.id);
+  const mRes = await sb(
+    `/rest/v1/cs_wa_messages?thread_id=in.(${ids.join(',')})&select=thread_id,body,kind,direction,ticket_id,created_at&order=created_at.desc&limit=600`,
+    env,
+  );
+  const lastByThread = {};
+  const ticketByThread = {};
+  for (const m of (mRes.data || [])) {
+    if (!lastByThread[m.thread_id]) lastByThread[m.thread_id] = m;
+    if (m.ticket_id && !ticketByThread[m.thread_id]) ticketByThread[m.thread_id] = m.ticket_id;
+  }
+  const ticketIds = [...new Set(Object.values(ticketByThread))];
+  const ticketNoById = {};
+  if (ticketIds.length) {
+    const tkRes = await sb(`/rest/v1/cs_tickets?id=in.(${ticketIds.join(',')})&select=id,ticket_no`, env);
+    for (const tk of (tkRes.data || [])) ticketNoById[tk.id] = tk.ticket_no;
+  }
+  const out = threads.map(t => {
+    const lm = lastByThread[t.id] || null;
+    const tid = ticketByThread[t.id] || null;
+    return {
+      ...t,
+      last_message: lm ? { body: lm.body, kind: lm.kind, direction: lm.direction, created_at: lm.created_at } : null,
+      linked_ticket_id: tid,
+      linked_ticket_no: tid ? (ticketNoById[tid] || null) : null,
+      within_customer_window: withinCustomerWindow(t),
+    };
+  });
+  return ok({ threads: out });
+}
+
+async function getMessagingThread(params, auth, env) {
+  const thread_id = params.get('thread_id');
+  if (!thread_id) return err('thread_id required');
+  const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=*&limit=1`, env);
+  const thread = tRes.data?.[0];
+  if (!thread) return err('Thread not found', 404);
+  const mRes = await sb(
+    `/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(thread_id)}&select=*&order=created_at.asc&limit=500`,
+    env,
+  );
+  const messages = mRes.data || [];
+  const linkedId = messages.find(m => m.ticket_id)?.ticket_id || null;
+  let linked_ticket = null;
+  if (linkedId) {
+    const tk = await sb(`/rest/v1/cs_tickets?id=eq.${linkedId}&select=id,ticket_no,disposition,stage&limit=1`, env);
+    linked_ticket = tk.data?.[0] || null;
+  }
+  return ok({ thread, messages, linked_ticket, within_customer_window: withinCustomerWindow(thread) });
+}
+
+// Link every message on a thread to a ticket (cs_wa_messages.ticket_id). IG/FB
+// threads have no phone to auto-match, so this is the manual bind from the inbox.
+async function linkMessagingThread(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { thread_id, ticket_no } = body;
+  if (!thread_id || !ticket_no) return err('thread_id and ticket_no required');
+  const tk = await sb(`/rest/v1/cs_tickets?ticket_no=eq.${encodeURIComponent(ticket_no)}&select=id,ticket_no&limit=1`, env);
+  const ticket = tk.data?.[0];
+  if (!ticket) return err('Ticket not found', 404);
+  const upd = await sb(`/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(thread_id)}`, env, {
+    method: 'PATCH', body: JSON.stringify({ ticket_id: ticket.id }),
+  });
+  if (!upd.ok) return err('Failed to link thread', upd.status || 500);
+  return ok({ linked: true, ticket_no: ticket.ticket_no, ticket_id: ticket.id });
 }
