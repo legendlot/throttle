@@ -9,7 +9,7 @@ import { AppLauncher } from '@throttle/ui';
 
 export const ROUTE_OF = {
   dashboard: '/dashboard', requests: '/requests', board: '/board',
-  sprints: '/sprints', social: '/social', manual: '/manual', settings: '/settings',
+  sprints: '/sprints', social: '/social', performance: '/performance', manual: '/manual', settings: '/settings',
 };
 export const ROUTE_META = {
   dashboard: { group: 'Overview',   title: 'Command' },
@@ -17,6 +17,7 @@ export const ROUTE_META = {
   board:     { group: 'Production', title: 'Board' },
   sprints:   { group: 'Production', title: 'Sprints' },
   social:    { group: 'Channels',   title: 'Social Calendar' },
+  performance: { group: 'Channels', title: 'Social Performance' },
   manual:    { group: 'System',     title: 'Manual' },
   settings:  { group: 'System',     title: 'Settings' },
 };
@@ -67,7 +68,10 @@ export function Sidebar({ route, onNavigate, collapsed, onToggle, onPalette, use
       { id: 'board',    label: 'Board',    icon: 'board', badge: badges.board },
       { id: 'sprints',  label: 'Sprints',  icon: 'target' },
     ] },
-    { section: 'Channels',   items: [{ id: 'social', label: 'Social', icon: 'calendar' }] },
+    { section: 'Channels',   items: [
+      { id: 'social', label: 'Social', icon: 'calendar' },
+      { id: 'performance', label: 'Performance', icon: 'trend' },
+    ] },
   ];
   const BOTTOM = [
     { id: 'manual',   label: 'System Manual', icon: 'book' },
@@ -196,6 +200,7 @@ export function CommandPalette({ open, onClose, onNavigate, tasks = TASKS }) {
     { id: 'board', label: 'Board', icon: 'board' },
     { id: 'sprints', label: 'Sprints', icon: 'target' },
     { id: 'social', label: 'Social', icon: 'calendar' },
+    { id: 'performance', label: 'Performance', icon: 'trend' },
     { id: 'manual', label: 'System Manual', icon: 'book' },
     { id: 'settings', label: 'Settings', icon: 'settings' },
   ].map(i => ({ ...i, kind: 'Go to' }));
