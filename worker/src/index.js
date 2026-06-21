@@ -246,6 +246,7 @@ export default {
       try { body = await request.json(); } catch {}
     }
 
+    try {
     switch (action) {
       case 'getMe':               return handleGetMe(body, ctx, env);
       case 'updateUserRole':      return handleUpdateUserRole(body, ctx, env);
@@ -304,6 +305,10 @@ export default {
       case 'getSocialAnalytics':    return handleGetSocialAnalytics(body, ctx, env);
       default:
         return err(`Unknown action: ${action}`, 404);
+    }
+    } catch (e) {
+      console.error('[throttleops] handler error', action, e?.stack || e);
+      return err(`${action} failed: ${e?.message || e}`, 500);
     }
   },
 
@@ -3164,7 +3169,9 @@ async function runSocialSync(env) {
   // from /me?fields=followers_count (merge keeps the day's reach).
   const prof = await igGet('me?fields=followers_count', env);
   if (prof.ok && prof.data?.followers_count != null) {
-    const todayIST = new Date(new Date().toLocaleString('en-CA', { timeZone: 'Asia/Kolkata' })).toISOString().slice(0, 10);
+    // IST calendar date without locale-string parsing (en-CA → comma'd string
+    // is unparseable by new Date() → RangeError on toISOString).
+    const todayIST = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
     await sbFetch('social_account_metrics?on_conflict=channel_id,metric_date',
       { method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal',
         body: JSON.stringify([{ channel_id: channel.id, metric_date: todayIST, follower_count: Number(prof.data.followers_count) }]) }, env);
@@ -3284,9 +3291,14 @@ async function reconcilePublished(channel, env) {
 
 async function handleSyncSocialInsights(body, ctx, env) {
   const g = requireRole(ctx, 'lead', 'admin'); if (g) return g;
-  const result = await runSocialSync(env);
-  if (!result.ok) return err(`Sync skipped: ${result.reason}`, result.reason === 'no_ig_token' ? 503 : 400);
-  return json(result);
+  try {
+    const result = await runSocialSync(env);
+    if (!result.ok) return err(`Sync skipped: ${result.reason}`, result.reason === 'no_ig_token' ? 503 : 400);
+    return json(result);
+  } catch (e) {
+    console.error('[syncSocialInsights]', e?.stack || e);
+    return err(`Sync failed: ${e?.message || e}`, 500);   // always a CORS response
+  }
 }
 
 async function handleGetSocialAnalytics(body, ctx, env) {
