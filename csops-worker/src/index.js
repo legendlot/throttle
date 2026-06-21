@@ -2894,6 +2894,12 @@ function metaToken(channel, env) {
   return channel === 'instagram' ? (env.META_IG_TOKEN || env.META_PAGE_TOKEN) : env.META_PAGE_TOKEN;
 }
 
+// Instagram-Login (IGAA) tokens only work against graph.instagram.com; Messenger
+// (Page) tokens use graph.facebook.com. Pick the right Graph host per channel.
+function metaGraphBase(channel) {
+  return channel === 'instagram' ? 'https://graph.instagram.com/v21.0' : META_GRAPH;
+}
+
 function handleMetaVerify(url, env) {
   const mode = url.searchParams.get('hub.mode');
   const token = url.searchParams.get('hub.verify_token');
@@ -2960,7 +2966,7 @@ async function resolveMetaHandle(extUserId, channel, env) {
   const token = metaToken(channel, env);
   if (!token) return null;
   try {
-    const r = await fetch(`${META_GRAPH}/${encodeURIComponent(extUserId)}?fields=name,username&access_token=${token}`);
+    const r = await fetch(`${metaGraphBase(channel)}/${encodeURIComponent(extUserId)}?fields=name,username&access_token=${token}`);
     const d = await r.json();
     return r.ok ? (d.username || d.name || null) : null;
   } catch { return null; }
@@ -3038,7 +3044,7 @@ async function sendMetaMessage(body, auth, env) {
     messaging_type: withinWindow ? 'RESPONSE' : 'MESSAGE_TAG',
     ...(withinWindow ? {} : { tag: tag || 'HUMAN_AGENT' }),
   };
-  const r = await fetch(`${META_GRAPH}/me/messages?access_token=${token}`, {
+  const r = await fetch(`${metaGraphBase(thread.channel)}/me/messages?access_token=${token}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
   });
   const d = await r.json().catch(() => ({}));
