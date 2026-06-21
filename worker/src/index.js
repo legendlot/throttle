@@ -3159,6 +3159,18 @@ async function runSocialSync(env) {
     }
   }
 
+  // 1b) Authoritative follower count from the profile endpoint — the insights
+  // `follower_count` metric is unreliable / often empty, so stamp today's row
+  // from /me?fields=followers_count (merge keeps the day's reach).
+  const prof = await igGet('me?fields=followers_count', env);
+  if (prof.ok && prof.data?.followers_count != null) {
+    const todayIST = new Date(new Date().toLocaleString('en-CA', { timeZone: 'Asia/Kolkata' })).toISOString().slice(0, 10);
+    await sbFetch('social_account_metrics?on_conflict=channel_id,metric_date',
+      { method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal',
+        body: JSON.stringify([{ channel_id: channel.id, metric_date: todayIST, follower_count: Number(prof.data.followers_count) }]) }, env);
+    summary.followers = Number(prof.data.followers_count);
+  }
+
   // 2) Published media list → social_media (basic fields; merge keeps metrics).
   const mediaFields = 'id,caption,media_type,permalink,timestamp,like_count,comments_count';
   let media = [];
@@ -3298,7 +3310,8 @@ async function handleGetSocialAnalytics(body, ctx, env) {
     comments: media.reduce((s, m) => s + Number(m.comments_count || 0), 0),
     reach_30d: media.filter(m => m.published_at && (Date.now() - new Date(m.published_at).getTime()) < 30 * 864e5)
       .reduce((s, m) => s + Number(m.reach || 0), 0),
-    followers: account_series.length ? account_series[account_series.length - 1].follower_count : null,
+    // latest day that actually has a follower count (a fresh reach-only day is null)
+    followers: ([...account_series].reverse().find(r => Number(r.follower_count) > 0)?.follower_count) ?? null,
   };
   const top_posts = [...media]
     .sort((a, b) => Number(b.reach || 0) - Number(a.reach || 0))

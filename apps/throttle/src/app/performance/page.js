@@ -8,6 +8,7 @@ import { useAuth } from '@throttle/auth';
 import { AppShell } from '@/components/throttle/AppShell';
 import { Card, PrimaryBtn } from '@/components/throttle/ui';
 import { toast } from '@/components/throttle/ToastHost';
+import ReachChart from '@/components/throttle/ReachChart';
 import { fetchSocialAnalytics, syncSocialInsights } from '@/lib/throttleApi';
 
 function fmtNum(n) {
@@ -15,26 +16,6 @@ function fmtNum(n) {
   if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
   if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'K';
   return String(Math.round(n));
-}
-
-function ReachTrend({ series }) {
-  const data = (series || []).map(d => Number(d.reach || 0));
-  if (data.length < 2) {
-    return <div style={{ fontSize: 12, color: 'var(--t4)', padding: '20px 0' }}>Not enough history yet — the daily sync builds this out.</div>;
-  }
-  const W = 680, H = 120, pad = 6;
-  const max = Math.max(...data, 1), min = Math.min(...data);
-  const span = (max - min) || 1;
-  const x = i => (i / (data.length - 1)) * W;
-  const y = v => H - pad - ((v - min) / span) * (H - pad * 2);
-  const line = data.map((v, i) => `${x(i)},${y(v)}`).join(' ');
-  const area = `0,${H} ${line} ${W},${H}`;
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ width: '100%', height: 120, display: 'block' }}>
-      <polygon points={area} fill="var(--brand-bg)" />
-      <polyline points={line} fill="none" stroke="var(--yellow)" strokeWidth="2.5" vectorEffect="non-scaling-stroke" />
-    </svg>
-  );
 }
 
 function PerformanceScreen() {
@@ -98,7 +79,7 @@ function PerformanceScreen() {
 
             <Card style={{ marginBottom: 16 }}>
               <div className="eyebrow" style={{ padding: 0, marginBottom: 10 }}>Daily reach</div>
-              <ReachTrend series={series} />
+              <ReachChart series={series} />
             </Card>
 
             <Card>
