@@ -379,3 +379,12 @@ export async function createSocialPostLive(session, { title, dateISO, time, stat
 export async function moveSocialPostLive(session, postId, dateISO) {
   return workerFetch('updateSocialPost', { post_id: postId, scheduled_date: dateISO }, session.access_token);
 }
+// ── social analytics (Tier 1) ────────────────────────────────────
+export async function fetchSocialAnalytics(session) {
+  try { const r = await workerFetch('getSocialAnalytics', {}, session.access_token); return r?.data ?? r ?? null; }
+  catch (_) { return null; }
+}
+export async function syncSocialInsights(session) {
+  const r = await workerFetch('syncSocialInsights', {}, session.access_token);
+  return r?.data ?? r ?? null;
+}

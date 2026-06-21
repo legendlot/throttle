@@ -300,6 +300,8 @@ export default {
       case 'updateCampaign':        return handleUpdateCampaign(body, ctx, env);
       case 'searchTasksForSocial':  return handleSearchTasksForSocial(body, ctx, env);
       case 'getSocialMonitoring':   return handleGetSocialMonitoring(body, ctx, env);
+      case 'syncSocialInsights':    return handleSyncSocialInsights(body, ctx, env);
+      case 'getSocialAnalytics':    return handleGetSocialAnalytics(body, ctx, env);
       default:
         return err(`Unknown action: ${action}`, 404);
     }
@@ -307,6 +309,10 @@ export default {
 
   async scheduled(event, env, ctx) {
     ctx.waitUntil(runSprintClose(env));
+    // Social analytics sync runs on the same cron tick (weekly today; a daily
+    // trigger is a wrangler.toml change — see the Tier 1 spec). Manual refresh
+    // via the syncSocialInsights action covers daily needs meanwhile.
+    ctx.waitUntil(runSocialSync(env).catch(e => console.error('[socialSync]', e)));
   },
 };
 
@@ -3087,4 +3093,216 @@ function getNextThursdayAfter(dateString) {
     d.setDate(d.getDate() + 1);
   }
   return d;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  Social analytics (Tier 1) — pull published IG media + insights into `brand`,
+//  reconcile against planned posts. Read-only IG use of META_IG_TOKEN (IGAA →
+//  graph.instagram.com). See docs/superpowers/specs/2026-06-21-throttle-social-analytics-tier1.md
+// ════════════════════════════════════════════════════════════════════════════
+const IG_GRAPH = 'https://graph.instagram.com/v21.0';
+
+async function igGet(pathAndQuery, env) {
+  if (!env.META_IG_TOKEN) return { ok: false, status: 503, data: { error: 'no_ig_token' } };
+  const sep = pathAndQuery.includes('?') ? '&' : '?';
+  try {
+    const res = await fetch(`${IG_GRAPH}/${pathAndQuery}${sep}access_token=${env.META_IG_TOKEN}`);
+    const data = await res.json().catch(() => null);
+    return { ok: res.ok, status: res.status, data };
+  } catch (e) {
+    return { ok: false, status: 0, data: { error: String(e) } };
+  }
+}
+
+// Map an insights `data` array → { metricName: latestValue }.
+function igMetricMap(data) {
+  const out = {};
+  for (const m of (data?.data || [])) {
+    const vals = m.values || [];
+    const last = vals[vals.length - 1];
+    if (last && last.value != null) out[m.name] = Number(last.value);
+  }
+  return out;
+}
+
+// The active Instagram channel row (Throttle's social_channels registry).
+async function igChannel(env) {
+  const res = await sbFetch('social_channels?platform=eq.instagram&is_active=eq.true&limit=1', { method: 'GET' }, env);
+  if (!res.ok) return null;
+  const rows = await res.json();
+  return rows[0] || null;
+}
+
+// Core sync — no auth (called by the manual action AND the cron). Returns a summary.
+async function runSocialSync(env) {
+  if (!env.META_IG_TOKEN) return { ok: false, reason: 'no_ig_token' };
+  const channel = await igChannel(env);
+  if (!channel) return { ok: false, reason: 'no_instagram_channel' };
+  const summary = { media_upserted: 0, insights_synced: 0, account_days: 0, reconciled: 0 };
+
+  // 1) Account daily insights → social_account_metrics (upsert by channel+date).
+  const acc = await igGet('me/insights?metric=reach,profile_views,follower_count&period=day', env);
+  if (acc.ok) {
+    const byDate = {};
+    for (const m of (acc.data?.data || [])) {
+      for (const v of (m.values || [])) {
+        const d = (v.end_time || '').slice(0, 10);
+        if (!d) continue;
+        (byDate[d] = byDate[d] || { channel_id: channel.id, metric_date: d })[m.name === 'profile_views' ? 'profile_views' : m.name] = Number(v.value);
+      }
+    }
+    const rows = Object.values(byDate);
+    if (rows.length) {
+      await sbFetch('social_account_metrics?on_conflict=channel_id,metric_date',
+        { method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal', body: JSON.stringify(rows) }, env);
+      summary.account_days = rows.length;
+    }
+  }
+
+  // 2) Published media list → social_media (basic fields; merge keeps metrics).
+  const mediaFields = 'id,caption,media_type,permalink,timestamp,like_count,comments_count';
+  let media = [];
+  let next = `me/media?fields=${mediaFields}&limit=100`;
+  for (let page = 0; page < 2 && next; page++) {
+    const r = await igGet(next, env);
+    if (!r.ok) break;
+    media = media.concat(r.data?.data || []);
+    const nx = r.data?.paging?.next;
+    next = nx ? nx.replace(`${IG_GRAPH}/`, '').replace(/&?access_token=[^&]*/, '') : null;
+  }
+  if (media.length) {
+    const rows = media.map(m => ({
+      ig_media_id: String(m.id), channel_id: channel.id, media_type: m.media_type,
+      permalink: m.permalink, caption: m.caption || null,
+      published_at: m.timestamp || null,
+      like_count: Number(m.like_count || 0), comments_count: Number(m.comments_count || 0),
+      last_synced_at: new Date().toISOString(),
+    }));
+    await sbFetch('social_media?on_conflict=ig_media_id',
+      { method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal', body: JSON.stringify(rows) }, env);
+    summary.media_upserted = rows.length;
+  }
+
+  // 3) Per-media insights for the newest 20 (subrequest budget) → merge metrics.
+  const newest = media.slice(0, 20);
+  const insightRows = [];
+  for (const m of newest) {
+    const isVideo = (m.media_type || '').toUpperCase() === 'VIDEO';
+    const metrics = isVideo
+      ? 'reach,saved,shares,total_interactions,views'
+      : 'reach,saved,shares,total_interactions';
+    const r = await igGet(`${m.id}/insights?metric=${metrics}`, env);
+    if (!r.ok) continue;
+    const mm = igMetricMap(r.data);
+    insightRows.push({
+      ig_media_id: String(m.id), channel_id: channel.id,
+      reach: mm.reach ?? null, saved: mm.saved ?? null, shares: mm.shares ?? null,
+      total_interactions: mm.total_interactions ?? null, views: mm.views ?? null,
+      metrics_raw: mm, last_synced_at: new Date().toISOString(),
+    });
+  }
+  if (insightRows.length) {
+    await sbFetch('social_media?on_conflict=ig_media_id',
+      { method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal', body: JSON.stringify(insightRows) }, env);
+    summary.insights_synced = insightRows.length;
+  }
+
+  // 4) Reconcile unmatched media → planned posts (±6h, nearest), mark published.
+  summary.reconciled = await reconcilePublished(channel, env);
+  return { ok: true, ...summary };
+}
+
+// Match published IG media to planned social_posts (Instagram variant, unmatched,
+// within ±6h of scheduled date+time). Sets the links + flips status to published.
+async function reconcilePublished(channel, env) {
+  const SIX_H = 6 * 3600 * 1000;
+  const umRes = await sbFetch(
+    `social_media?channel_id=eq.${channel.id}&matched_post_id=is.null&select=ig_media_id,published_at&order=published_at.desc&limit=200`,
+    { method: 'GET' }, env);
+  if (!umRes.ok) return 0;
+  const unmatched = (await umRes.json()).filter(m => m.published_at);
+  if (!unmatched.length) return 0;
+
+  // Open Instagram variants (no external_media_id yet) + their posts' schedule.
+  const vRes = await sbFetch(
+    `social_post_channels?channel_id=eq.${channel.id}&external_media_id=is.null&select=id,post_id`,
+    { method: 'GET' }, env);
+  if (!vRes.ok) return 0;
+  const variants = await vRes.json();
+  if (!variants.length) return 0;
+  const postIds = [...new Set(variants.map(v => v.post_id))];
+  const pRes = await sbFetch(
+    `social_posts?id=in.(${postIds.join(',')})&status=not.in.(cancelled)&select=id,scheduled_date,scheduled_time`,
+    { method: 'GET' }, env);
+  if (!pRes.ok) return 0;
+  const posts = Object.fromEntries((await pRes.json()).map(p => [p.id, p]));
+
+  const candidates = variants
+    .map(v => {
+      const p = posts[v.post_id];
+      if (!p || !p.scheduled_date) return null;
+      const t = new Date(`${p.scheduled_date}T${p.scheduled_time || '12:00:00'}+05:30`).getTime();
+      return { variant_id: v.id, post_id: v.post_id, when: t, taken: false };
+    })
+    .filter(Boolean);
+  if (!candidates.length) return 0;
+
+  let n = 0;
+  for (const m of unmatched) {
+    const mt = new Date(m.published_at).getTime();
+    let best = null, bestGap = SIX_H + 1;
+    for (const c of candidates) {
+      if (c.taken) continue;
+      const gap = Math.abs(c.when - mt);
+      if (gap <= SIX_H && gap < bestGap) { best = c; bestGap = gap; }
+    }
+    if (!best) continue;
+    best.taken = true;
+    const stamp = new Date(m.published_at).toISOString();
+    await sbFetch(`social_media?ig_media_id=eq.${encodeURIComponent(m.ig_media_id)}`,
+      { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ matched_post_id: best.post_id }) }, env);
+    await sbFetch(`social_post_channels?id=eq.${best.variant_id}`,
+      { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ external_media_id: m.ig_media_id, status: 'published', published_at: stamp }) }, env);
+    await sbFetch(`social_posts?id=eq.${best.post_id}`,
+      { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ status: 'published' }) }, env);
+    n++;
+  }
+  return n;
+}
+
+async function handleSyncSocialInsights(body, ctx, env) {
+  const g = requireRole(ctx, 'lead', 'admin'); if (g) return g;
+  const result = await runSocialSync(env);
+  if (!result.ok) return err(`Sync skipped: ${result.reason}`, result.reason === 'no_ig_token' ? 503 : 400);
+  return json(result);
+}
+
+async function handleGetSocialAnalytics(body, ctx, env) {
+  const g = requireRole(ctx, 'member', 'lead', 'admin'); if (g) return g;
+  const channel = await igChannel(env);
+  if (!channel) return json({ channel: null, account_series: [], top_posts: [], totals: {} });
+
+  const [accRes, mediaRes] = await Promise.all([
+    sbFetch(`social_account_metrics?channel_id=eq.${channel.id}&order=metric_date.asc`, { method: 'GET' }, env),
+    sbFetch(`social_media?channel_id=eq.${channel.id}&select=ig_media_id,permalink,caption,media_type,published_at,like_count,comments_count,reach,total_interactions,matched_post_id&order=published_at.desc&limit=300`, { method: 'GET' }, env),
+  ]);
+  const account_series = accRes.ok ? (await accRes.json()).map(r => ({
+    date: r.metric_date, reach: Number(r.reach || 0), profile_views: Number(r.profile_views || 0), follower_count: Number(r.follower_count || 0),
+  })) : [];
+  const media = mediaRes.ok ? await mediaRes.json() : [];
+
+  const totals = {
+    posts: media.length,
+    matched: media.filter(m => m.matched_post_id).length,
+    likes: media.reduce((s, m) => s + Number(m.like_count || 0), 0),
+    comments: media.reduce((s, m) => s + Number(m.comments_count || 0), 0),
+    reach_30d: media.filter(m => m.published_at && (Date.now() - new Date(m.published_at).getTime()) < 30 * 864e5)
+      .reduce((s, m) => s + Number(m.reach || 0), 0),
+    followers: account_series.length ? account_series[account_series.length - 1].follower_count : null,
+  };
+  const top_posts = [...media]
+    .sort((a, b) => Number(b.reach || 0) - Number(a.reach || 0))
+    .slice(0, 10);
+
+  return json({ channel: { id: channel.id, handle: channel.handle, name: channel.name }, account_series, top_posts, totals });
 }
