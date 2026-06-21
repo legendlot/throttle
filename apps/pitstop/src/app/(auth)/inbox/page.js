@@ -41,6 +41,11 @@ export default function InboxPage() {
 
   const [channel, setChannel] = useState('all');
   const [threads, setThreads] = useState([]);
+  const [stats, setStats] = useState({
+    instagram: { total: 0, awaiting: 0 },
+    messenger: { total: 0, awaiting: 0 },
+    whatsapp:  { total: 0, awaiting: null },
+  });
   const [loadingList, setLoadingList] = useState(true);
   const [selectedId, setSelectedId] = useState(null);
   const [convo, setConvo] = useState(null);          // { thread, messages, linked_ticket, within_customer_window }
@@ -52,15 +57,23 @@ export default function InboxPage() {
   const [linkVal, setLinkVal] = useState('');
   const scrollRef = useRef(null);
 
-  // Fetch ALL channels in one call — the list filters client-side by tab and the
-  // header tiles tally across every channel regardless of the active tab.
+  // List is channel-scoped (WhatsApp has thousands of threads — fetching "all"
+  // would bury the low-volume IG/FB threads). Tiles get their own stats call.
   const loadThreads = useCallback(async () => {
     if (!session) return;
     try {
-      const d = await csopsGet('getMessagingThreads', { limit: 200 }, session);
+      const d = await csopsGet('getMessagingThreads', channel === 'all' ? {} : { channel }, session);
       setThreads(d?.threads || []);
     } catch (e) { setErr(e.message); }
     finally { setLoadingList(false); }
+  }, [session, channel]);
+
+  const loadStats = useCallback(async () => {
+    if (!session) return;
+    try {
+      const d = await csopsGet('getMessagingStats', {}, session);
+      if (d?.stats) setStats(d.stats);
+    } catch { /* tiles are best-effort */ }
   }, [session]);
 
   const loadConvo = useCallback(async (id) => {
@@ -80,6 +93,14 @@ export default function InboxPage() {
     return () => clearInterval(iv);
   }, [session, loadThreads]);
 
+  // Header-tile stats — load + 30s poll (independent of the active tab).
+  useEffect(() => {
+    if (!session) return undefined;
+    loadStats();
+    const iv = setInterval(loadStats, 30000);
+    return () => clearInterval(iv);
+  }, [session, loadStats]);
+
   // Open conversation — load on select + 15s poll.
   useEffect(() => {
     if (!selectedId) { setConvo(null); return undefined; }
@@ -94,31 +115,16 @@ export default function InboxPage() {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [convo?.messages?.length, selectedId]);
 
-  // Client-side filter for the list (tiles always reflect all channels).
-  const visible = useMemo(
-    () => channel === 'all' ? threads : threads.filter(t => t.channel === channel),
-    [threads, channel],
+  // "Awaiting reply" is only meaningful for the two-way channels (IG/FB) — WhatsApp
+  // is a read-only BiteSpeed mirror so its awaiting is not tracked here.
+  const totalAwaiting = (stats.instagram.awaiting || 0) + (stats.messenger.awaiting || 0);
+  const allTotal = useMemo(
+    () => (stats.instagram.total || 0) + (stats.messenger.total || 0) + (stats.whatsapp.total || 0),
+    [stats],
   );
 
-  // Per-channel tallies: total conversations + "awaiting reply" (last msg inbound).
-  const stats = useMemo(() => {
-    const s = {
-      instagram: { total: 0, awaiting: 0 },
-      messenger: { total: 0, awaiting: 0 },
-      whatsapp:  { total: 0, awaiting: 0 },
-    };
-    for (const t of threads) {
-      const k = s[t.channel];
-      if (!k) continue;
-      k.total += 1;
-      if (t.last_message?.direction === 'inbound') k.awaiting += 1;
-    }
-    return s;
-  }, [threads]);
-  const totalAwaiting = stats.instagram.awaiting + stats.messenger.awaiting + stats.whatsapp.awaiting;
-
   const tabs = [
-    { id: 'all', label: 'All', count: threads.length },
+    { id: 'all', label: 'All', count: allTotal },
     { id: 'instagram', label: 'Instagram', count: stats.instagram.total },
     { id: 'messenger', label: 'Messenger', count: stats.messenger.total },
     { id: 'whatsapp', label: 'WhatsApp', count: stats.whatsapp.total },
@@ -178,14 +184,14 @@ export default function InboxPage() {
           <div style={{ padding: '11px 14px', borderBottom: '1px solid var(--border)', display: 'flex',
             alignItems: 'center', justifyContent: 'space-between' }}>
             <span className="label" style={{ fontSize: 11, fontWeight: 700, color: 'var(--t1)' }}>Conversations</span>
-            <span className="num" style={{ fontSize: 10.5, color: 'var(--t3)' }}>{visible.length}</span>
+            <span className="num" style={{ fontSize: 10.5, color: 'var(--t3)' }}>{threads.length}</span>
           </div>
           <div style={{ overflowY: 'auto', flex: 1 }}>
             {loadingList ? (
               <Empty>Loading…</Empty>
-            ) : visible.length === 0 ? (
+            ) : threads.length === 0 ? (
               <Empty>No conversations yet.</Empty>
-            ) : visible.map(t => (
+            ) : threads.map(t => (
               <ThreadRow key={t.id} t={t} active={t.id === selectedId} onClick={() => setSelectedId(t.id)} />
             ))}
           </div>
@@ -295,7 +301,10 @@ function Empty({ children }) {
 }
 function ChannelTile({ chKey, stat, active, onClick }) {
   const ch = chanOf(chKey);
+  const tracksAwaiting = stat?.awaiting != null; // WhatsApp (null) = BiteSpeed mirror
   const awaiting = stat?.awaiting || 0;
+  const subText = !tracksAwaiting ? 'in BiteSpeed' : awaiting > 0 ? `${awaiting} awaiting reply` : 'all replied';
+  const subTone = tracksAwaiting && awaiting > 0 ? 'var(--warn-fg)' : 'var(--t3)';
   return (
     <button onClick={onClick} style={{ flex: '1 1 160px', minWidth: 150, textAlign: 'left', cursor: 'pointer',
       background: 'var(--surface)', border: `1px solid ${active ? ch.color : 'var(--border)'}`,
@@ -307,9 +316,7 @@ function ChannelTile({ chKey, stat, active, onClick }) {
         <span className="eyebrow" style={{ fontSize: 9.5, letterSpacing: '0.12em' }}>{ch.label}</span>
       </div>
       <div className="num" style={{ fontWeight: 700, fontSize: 26, color: 'var(--t1)', lineHeight: 1 }}>{stat?.total || 0}</div>
-      <div style={{ fontSize: 11.5, marginTop: 6, fontWeight: 500, color: awaiting > 0 ? 'var(--warn-fg)' : 'var(--t3)' }}>
-        {awaiting > 0 ? `${awaiting} awaiting reply` : 'all replied'}
-      </div>
+      <div style={{ fontSize: 11.5, marginTop: 6, fontWeight: 500, color: subTone }}>{subText}</div>
     </button>
   );
 }

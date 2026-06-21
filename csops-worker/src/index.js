@@ -71,6 +71,24 @@ async function sbPublic(path, env, opts = {}) {
   return { ok: res.ok, status: res.status, data };
 }
 
+// Exact row count for a `store` query via Content-Range (sb() drops headers).
+// Returns 0 on any parse failure. Used where a full row fetch is too large.
+async function sbCount(path, env) {
+  const sep = path.includes('?') ? '&' : '?';
+  const res = await fetch(`${env.SUPABASE_URL}${path}${sep}limit=1`, {
+    headers: {
+      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      'Accept-Profile': 'store',
+      Prefer: 'count=exact',
+      Range: '0-0',
+    },
+  });
+  const cr = res.headers.get('content-range') || '';
+  const n = Number(cr.split('/')[1]);
+  return Number.isFinite(n) ? n : 0;
+}
+
 // ── Shopify helpers ──────────────────────────────────────────────────────────
 
 // Normalise an India phone to E.164 (mirrors createTicket's logic).
@@ -478,6 +496,7 @@ async function handleGet(action, params, auth, env) {
     case 'getWaTemplates':   return getWaTemplates(params, auth, env);
     case 'getMessagingThreads': return getMessagingThreads(params, auth, env);
     case 'getMessagingThread':  return getMessagingThread(params, auth, env);
+    case 'getMessagingStats':   return getMessagingStats(params, auth, env);
     case 'searchShopifyCustomer':
       return ok(await shopifyLookup({ phone: params.get('phone'), email: params.get('email') }, env));
     default:
@@ -3112,6 +3131,37 @@ async function getMessagingThreads(params, auth, env) {
     };
   });
   return ok({ threads: out });
+}
+
+// Header-tile stats. Per-channel total conversations + "awaiting reply" (last
+// message inbound). Awaiting is computed only for the two-way channels
+// (instagram/messenger — low volume, replied to HERE); WhatsApp is a read-only
+// BiteSpeed mirror (replies happen there) so it gets an exact total only.
+async function getMessagingStats(params, auth, env) {
+  const stats = {
+    instagram: { total: 0, awaiting: 0 },
+    messenger: { total: 0, awaiting: 0 },
+    whatsapp:  { total: 0, awaiting: null },
+  };
+  // Two-way channels: small volume → fetch threads + last-message direction.
+  const twRes = await sb(`/rest/v1/cs_wa_threads?channel=in.(instagram,messenger)&select=id,channel&limit=1000`, env);
+  const tw = twRes.data || [];
+  const chById = {};
+  for (const t of tw) { chById[t.id] = t.channel; if (stats[t.channel]) stats[t.channel].total += 1; }
+  if (tw.length) {
+    const mRes = await sb(
+      `/rest/v1/cs_wa_messages?thread_id=in.(${tw.map(t => t.id).join(',')})&select=thread_id,direction,created_at&order=created_at.desc&limit=3000`,
+      env,
+    );
+    const lastDir = {};
+    for (const m of (mRes.data || [])) if (!(m.thread_id in lastDir)) lastDir[m.thread_id] = m.direction;
+    for (const [tid, dir] of Object.entries(lastDir)) {
+      if (dir === 'inbound' && stats[chById[tid]]) stats[chById[tid]].awaiting += 1;
+    }
+  }
+  // WhatsApp: exact count only (read-only mirror — awaiting tracked in BiteSpeed).
+  stats.whatsapp.total = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.whatsapp&select=id`, env);
+  return ok({ stats });
 }
 
 async function getMessagingThread(params, auth, env) {
