@@ -3074,7 +3074,7 @@ async function sendMetaMessage(body, auth, env) {
 // read-only (BiteSpeed deep-link) until C2-B.
 async function getMessagingThreads(params, auth, env) {
   const channel = params.get('channel');
-  const limit = Math.min(Number(params.get('limit')) || 60, 100);
+  const limit = Math.min(Number(params.get('limit')) || 60, 300);
   let q = `/rest/v1/cs_wa_threads?select=*&order=last_message_at.desc.nullslast&limit=${limit}`;
   if (channel && channel !== 'all') q += `&channel=eq.${encodeURIComponent(channel)}`;
   const tRes = await sb(q, env);
@@ -3085,7 +3085,7 @@ async function getMessagingThreads(params, auth, env) {
   // + linked ticket per thread (avoids N+1; PostgREST has no "latest per group").
   const ids = threads.map(t => t.id);
   const mRes = await sb(
-    `/rest/v1/cs_wa_messages?thread_id=in.(${ids.join(',')})&select=thread_id,body,kind,direction,ticket_id,created_at&order=created_at.desc&limit=600`,
+    `/rest/v1/cs_wa_messages?thread_id=in.(${ids.join(',')})&select=thread_id,body,kind,direction,ticket_id,created_at&order=created_at.desc&limit=1500`,
     env,
   );
   const lastByThread = {};
