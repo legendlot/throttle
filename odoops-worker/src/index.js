@@ -293,6 +293,12 @@ const snorkelAdapter = {
   kind: 'snorkel_internal', stgTable: 'stg_snorkel', sourceKind: 'snorkel',
   async fetch({ channelId, channelName: cname, cursor }) {
     const sinceDate = (cursor || BACKFILL_START).slice(0, 10);
+    // Sell-out guard (spec §10 / RULE-SALES-001): the snorkel adapter ingests ONLY channels
+    // flagged feeds_odo_sellout (GT/MT) — where the Snorkel order is our sell-out signal.
+    // QC/marketplace Snorkel orders are PRIMARY/sell-in (the platform's PO) and must NOT feed
+    // Odo, else they double-count with the QC seller-report (secondary-sale) path.
+    const cfgR = await sbStore(`/rest/v1/sales_channels?channel_key=eq.${encodeURIComponent(cname)}&select=feeds_odo_sellout&limit=1`);
+    if (!(cfgR.ok && cfgR.data?.[0]?.feeds_odo_sellout)) return { rows: [], cursorAfter: sinceDate, subreqs: 1, partial: false };
     // confirmed + cancelled (cancelled nets out on recompute). channel_key = GT|MT.
     const sel = 'id,order_no,order_date,channel_key,status,confirmed_at,sales_order_lines(id,product,model,color,sku,qty,taxable_value)';
     const r = await sbStore(`/rest/v1/sales_orders?status=in.(confirmed,cancelled)&channel_key=eq.${encodeURIComponent(cname)}&order_date=gte.${sinceDate}&select=${sel}&order=order_date.asc`);
