@@ -846,48 +846,54 @@ const uniwareAdapter = {
     const H = { Authorization: `bearer ${token}`, 'Content-Type': 'application/json' };
     const winMs = (cfg.window_days || UNI_WINDOW_DAYS_DEFAULT) * 24 * 3600 * 1000;
     const maxGets = Math.min(cfg.max_gets || UNI_MAX_GETS_DEFAULT, Math.max(1, budget - 6));
+    const MAX_WINDOWS = cfg.max_windows || 25;   // empty windows to skip-scan per run (cheap search-only)
+    const PAGE = 100;
     const now = Date.now();
-    const fromMs = uniMs(cursor || cfg.backfill_start || BACKFILL_START);
-    const winEndMs = Math.min(fromMs + winMs, now);
+    let winStart = uniMs(cursor || cfg.backfill_start || BACKFILL_START);
     let subreqs = 1; // token
+    const rows = [], orderRows = [];
+    let cursorAfter = uniISO(winStart), partial = false, scanned = 0;
 
-    // 1) page the window's order codes for this channel (UPDATED) — low volume, few pages
-    const codes = []; let start = 0; const PAGE = 100;
-    while (subreqs < Math.min(budget, 10)) {
-      const body = { channel: uchan, fromDate: uniISO(fromMs), toDate: uniISO(winEndMs), dateType: 'UPDATED', searchOptions: { displayStart: start, displayLength: PAGE } };
-      const r = await fetch(`${base}/services/rest/v1/oms/saleOrder/search`, { method: 'POST', headers: H, body: JSON.stringify(body) }); subreqs++;
-      const j = await r.json().catch(() => ({}));
-      if (!j.successful) throw new Error('Uniware search: ' + JSON.stringify(j.errors || j).slice(0, 160));
-      const els = j.elements || [];
-      // Type-guard: the search `channel` filter is a channel-NAME match, and an UNRECOGNISED value
-      // silently returns ALL channels (not an error). Keep only elements whose result channel matches
-      // the target type — so a config typo can never pull the website/other channels into this one.
-      for (const e of els) {
-        if (String(e.channel || '').toUpperCase() !== uchan.toUpperCase()) continue;
-        codes.push({ code: e.code, updated: Number(e.updated) || Number(e.created) || winEndMs });
+    // Walk forward in ≤14-day windows. EMPTY windows are skipped cheaply within this run (one search
+    // each) — so backfilling from a far-back cursor through order-less history doesn't crawl one window
+    // per cron tick. Stop at the FIRST window that has target orders, process it (bounded gets), and
+    // resume next run. Budget-guarded so we never approach the 50-subrequest cap.
+    while (true) {
+      if (winStart >= now) { cursorAfter = uniISO(now); partial = false; break; }                 // caught up to live
+      if (scanned >= MAX_WINDOWS || subreqs >= budget - (maxGets + 2)) { cursorAfter = uniISO(winStart); partial = true; break; }
+      const winEnd = Math.min(winStart + winMs, now);
+      // page this window's target-channel order codes (UPDATED)
+      const codes = []; let start = 0;
+      while (subreqs < budget - maxGets - 1) {
+        const r = await fetch(`${base}/services/rest/v1/oms/saleOrder/search`, { method: 'POST', headers: H, body: JSON.stringify({ channel: uchan, fromDate: uniISO(winStart), toDate: uniISO(winEnd), dateType: 'UPDATED', searchOptions: { displayStart: start, displayLength: PAGE } }) }); subreqs++;
+        const j = await r.json().catch(() => ({}));
+        if (!j.successful) throw new Error('Uniware search: ' + JSON.stringify(j.errors || j).slice(0, 160));
+        const els = j.elements || [];
+        // Type-guard: the search `channel` filter is a channel-NAME match and an UNRECOGNISED value
+        // silently returns ALL channels — keep only elements whose result channel matches the target.
+        for (const e of els) {
+          if (String(e.channel || '').toUpperCase() === uchan.toUpperCase()) codes.push({ code: e.code, updated: Number(e.updated) || Number(e.created) || winEnd });
+        }
+        if (els.length < PAGE) break;
+        start += PAGE;
       }
-      if (els.length < PAGE) break;
-      start += PAGE;
+      scanned++;
+      if (!codes.length) { winStart = winEnd; continue; }   // empty window → skip forward, keep scanning
+      // window has data → get each (bounded), then stop and resume next run
+      codes.sort((a, b) => a.updated - b.updated);
+      let processed = 0, lastUpdated = winStart, drained = true;
+      for (const c of codes) {
+        if (processed >= maxGets || subreqs >= budget - 1) { drained = false; break; }
+        const gr = await fetch(`${base}/services/rest/v1/oms/saleorder/get`, { method: 'POST', headers: H, body: JSON.stringify({ code: c.code }) }); subreqs++; processed++;
+        const gj = await gr.json().catch(() => ({}));
+        const so = gj.saleOrderDTO; if (!so) continue;
+        const m = uniMapOrder(so); rows.push(...m.lines); orderRows.push(m.order);
+        if (c.updated > lastUpdated) lastUpdated = c.updated;
+      }
+      if (drained) { cursorAfter = uniISO(winEnd); partial = winEnd < now; }   // window done; more history if < now
+      else { cursorAfter = uniISO(lastUpdated); partial = true; }              // window not drained → resume mid-window
+      break;
     }
-    codes.sort((a, b) => a.updated - b.updated);
-
-    // 2) get each order's detail (bounded). cursor walks forward by `updated`.
-    const rows = [], orderRows = []; let processed = 0, lastUpdated = fromMs, partial = false;
-    for (const c of codes) {
-      if (processed >= maxGets || subreqs >= budget - 1) { partial = true; break; }
-      const gr = await fetch(`${base}/services/rest/v1/oms/saleorder/get`, { method: 'POST', headers: H, body: JSON.stringify({ code: c.code }) }); subreqs++; processed++;
-      const gj = await gr.json().catch(() => ({}));
-      const so = gj.saleOrderDTO;
-      if (!so) continue;
-      const { lines, order } = uniMapOrder(so);
-      rows.push(...lines); orderRows.push(order);
-      if (c.updated > lastUpdated) lastUpdated = c.updated;
-    }
-    // 3) cursor: if the whole window drained, jump to window end (and there's more history if < now);
-    //    else advance to the last processed order's updated and re-enter the same window next tick.
-    let cursorAfter;
-    if (partial) cursorAfter = uniISO(lastUpdated);
-    else { cursorAfter = uniISO(winEndMs); partial = winEndMs < now; }   // keep cron pulling until caught up
     return { rows, orderRows, cursorAfter, subreqs, partial };
   },
   async stage(rows, runId, channelId, fetched) {
