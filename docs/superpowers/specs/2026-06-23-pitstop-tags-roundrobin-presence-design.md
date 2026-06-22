@@ -178,10 +178,10 @@ store.cs_agent_presence
   updated_at    timestamptz default now()
 
 store.cs_shifts                                   -- per-department working window
-  cs_department_id  bigint PK references store.cs_departments(id)
+  cs_department_id  uuid PK references store.cs_departments(id)   -- cs_departments.id is uuid (verified S163)
   start_min         int not null                  -- minutes past IST midnight (e.g. 600 = 10:00)
   end_min           int not null                  -- (e.g. 1140 = 19:00); end < start => overnight (rare; flag if needed)
-  working_days      int[] not null default '{1,2,3,4,5,6}'  -- ISO dow; default Mon–Sat (mirrors RULE-ATT-001), Sun off
+  working_days      int[] not null default '{1,2,3,4,5}'  -- ISO dow; default Mon–Fri (Afshaan S163), team edits in UI
   is_active         boolean not null default true
   updated_at        timestamptz
   updated_by_user_id uuid
@@ -208,7 +208,7 @@ A manual `away`/`offline` (`auto=false`) is respected regardless of heartbeat. `
 - **Login → online**: authenticated app load calls `setPresence('online')` (`auto=true`) once, then starts the heartbeat. (Eligible only once inside the dept window.)
 - **Activity-gated heartbeat**: client pings `heartbeat` every ~60s **only when the tab is visible AND there was real user interaction** (mousemove/keydown/click) in the last interval — Page Visibility API + an interaction flag. So an **unattended-but-awake tab stops beating** → decays stale → ineligible, *without* relying on the shift window. (Docket `user_activity` is the lighter precedent.)
 - **Idle → away**: derived from stale `last_seen_at` (no cron needed for correctness). A short idle inside a shift (lunch) decays the agent to ineligible within ~the freshness window; status display may show `away`.
-- **EOD → offline (cosmetic)**: a small `pg_cron` near end-of-day IST resets lingering `auto=true` rows to `offline` purely for a clean roster — it is **not** the assignment gate (the shift window + freshness already are). Mirrors the floor `auto-close-attendance` cadence.
+- **No EOD cron (dropped S163)**: `getPresence` computes **effective** status live (`online` only if `last_seen_at` is fresh), so a stale stored `online` never surfaces and never gets routed — there is nothing for a reset job to fix. A cosmetic reset cron can be added later if wanted, but it is not the gate and not built.
 - **Manual toggle**: topbar Available/Away/Offline control (`auto=false`). "Available" outside the window is the off-schedule override; Away/Offline removes the agent immediately regardless of shift.
 
 ### 4.4 UI
@@ -222,7 +222,7 @@ Not in v1. If wanted, derive daily on-duty sessions/hours from presence transiti
 ---
 
 ## 5. Migrations
-Single additive migration `pitstop_tags_routing_presence_v1` (or split per phase if preferred): `cs_tags`, `cs_ticket_tags`, `cs_thread_tags`, `cs_agent_presence`, `cs_shifts` (+ seed the 4 department windows), `cs_routing_config` + the `cs_autoassign_thread` RPC + cosmetic EOD `pg_cron` job. All RLS-on at creation, service_role grants, advisor-clean. No existing column altered. Schema-verify each touched parent table first.
+Additive migrations, split per phase: **Phase 1** `pitstop_presence_shifts_v1` = `cs_agent_presence` + `cs_shifts` (+ seed the 4 department windows). **Phase 2** = `cs_routing_config` + the `cs_autoassign_thread` RPC. **Phase 3** = `cs_tags` + `cs_ticket_tags` + `cs_thread_tags`. All RLS-on at creation, service_role grants, advisor-clean. No existing column altered. Schema-verify each touched parent table first.
 
 ## 6. Blast radius & deploy
 - **csops worker** (Pitstop only — sibling worker, single-system blast radius). Sequence: edit → commit → push → `cd 05_Throttle/csops-worker && npx wrangler deploy`.
@@ -237,7 +237,8 @@ Single additive migration `pitstop_tags_routing_presence_v1` (or split per phase
 
 ## 8. Open questions (confirm before/at build)
 - **Q1 — "open thread" definition for least-loaded + the Stale view.** `cs_wa_threads` has no close/resolve state today. Options: (a) treat "open" = thread whose last message is inbound (awaiting reply); (b) add a lightweight `thread_state` (`open`/`snoozed`/`closed`) so agents can clear handled threads (cleaner load math + a real "done" action, mild scope add). Recommend (b) — it also makes the inbox a true work queue. **Decide at Phase 2.**
-- **Q2 — the actual per-department shift windows + working days.** TBD pending Afshaan — need start/end (IST) for **Messaging** (the only lane that gates thread round-robin in v1) and ideally Inbound/Outbound/Confirm too. Default working days Mon–Sat (Sun off, per RULE-ATT-001); confirm if CS runs 7 days. Also confirm heartbeat interval/freshness (default 60s / 3-min) + EOD cosmetic-cron time (IST).
+- **Q2 — RESOLVED (Afshaan S163):** seed **all four lanes 10:00–19:00 IST, Mon–Fri** (`start_min=600, end_min=1140, working_days={1,2,3,4,5}`); team edits per-lane in the admin UI. Heartbeat 60s / 3-min freshness; EOD cosmetic-cron TBD time (default ~21:00 IST). **Confirmed model:** window-open + nobody-online → no auto-assign (thread stays Unassigned, safe).
+- **Q6 (Phase 2) — catch-up of the Unassigned backlog.** Threads arriving while nobody is online stay Unassigned (not retro-assigned). Default = leave claimable from the Unassigned tab. Optional later: a sweep that distributes the backlog across agents as they come online (avoid dumping on the first login). Decide at Phase 2.
 - **Q3 — does `away` ever receive assignments?** Default: no (only `online`); `away` is excluded but not offline. Confirm.
 - **Q4 — auto-release stale threads** when owner goes offline (v2): after how long, and to whom (pool / lead)? Deferred unless wanted in v1.
 - **Q5 — notify agent on auto-assign** (in-app/Slack) — v2; ties into the Docket V2 notifications track.

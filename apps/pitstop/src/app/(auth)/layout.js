@@ -5,6 +5,7 @@ import { Spinner, AppLauncher, useSearchShortcut } from '@throttle/ui';
 import { PitstopSidebar, PitstopTopbar, CommandPalette } from '../../components/kit/index.js';
 import { csopsGet } from '../../lib/csopsFetch.js';
 import DeptSwitcher, { getActiveDept } from '../../components/DeptSwitcher.js';
+import PresenceToggle from '../../components/PresenceToggle.js';
 
 const RefreshContext = createContext({
   refreshing: false,    setRefreshing:    () => {},
@@ -97,6 +98,7 @@ function AuthLayoutInner({ children }) {
       />
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <PitstopTopbar refreshing={refreshing} lastRefreshed={lastRefreshed}>
+          <PresenceToggle session={session} />
           <DeptSwitcher />
           <AppLauncher current="pitstop" />
         </PitstopTopbar>

@@ -489,6 +489,8 @@ async function handleGet(action, params, auth, env) {
     case 'getDeptAgents':    return getDeptAgents(params, auth, env);
     case 'getProductCatalog': return getProductCatalog(params, auth, env);
     case 'getCsAgents':      return getCsAgents(params, auth, env);
+    case 'getPresence':      return getPresence(params, auth, env);
+    case 'getShifts':        return getShifts(params, auth, env);
     case 'getCannedResponses': return getCannedResponses(params, auth, env);
     case 'getMyopAccounts':  return getMyopAccounts(params, auth, env);
     case 'getCalls':         return getCalls(params, auth, env);
@@ -527,6 +529,9 @@ async function handlePost(action, body, auth, env, request) {
     case 'assignUserDepartment': return assignUserDepartment(body, auth, env);
     case 'setUserDepartments':   return setUserDepartments(body, auth, env);
     case 'setCsRole':            return setCsRole(body, auth, env);
+    case 'setPresence':          return setPresence(body, auth, env);
+    case 'heartbeat':            return heartbeat(body, auth, env);
+    case 'setShift':             return setShift(body, auth, env);
     case 'setMyopDefaultDepartment': return setMyopDefaultDepartment(body, auth, env);
     case 'markCalledBack':           return markCalledBack(body, auth, env);
     case 'createTicketFromCall':     return createTicketFromCall(body, auth, env);
@@ -1209,6 +1214,184 @@ async function getCsAgents(_params, _auth, env) {
     .filter(p => CS_ROLES.has(p.role) || !!p.cs_department_id || inCsDept.has(p.id))
     .map(p => ({ id: p.id, full_name: p.full_name, role: p.role }));
   return ok(team);
+}
+
+// ── Agent presence + shift windows (Phase 1) ─────────────────────────────────
+// Routing eligibility (Phase 2) = effective 'online' (status online + FRESH heartbeat)
+// AND ( now within the agent's department shift window OR a manual 'Available'
+// override, auto=false ). Effective status is computed live, so a stale 'online'
+// (closed/forgotten tab) is never trusted and never routed — no reset cron needed.
+
+const PRESENCE_FRESH_MS = 3 * 60 * 1000;   // heartbeat freshness (~3x the 60s client ping)
+
+// Current IST wall-clock: minutes past midnight + ISO day-of-week (1=Mon..7=Sun).
+function istNow() {
+  const d = new Date(Date.now() + 5.5 * 3600 * 1000);
+  const min = d.getUTCHours() * 60 + d.getUTCMinutes();
+  const dow0 = d.getUTCDay();                 // 0=Sun..6=Sat
+  return { min, isoDow: dow0 === 0 ? 7 : dow0 };
+}
+
+function inShiftWindow(shift, nowParts) {
+  if (!shift || shift.is_active === false) return false;
+  const days = Array.isArray(shift.working_days) ? shift.working_days : [];
+  if (!days.includes(nowParts.isoDow)) return false;
+  const s = Number(shift.start_min), e = Number(shift.end_min);
+  if (e >= s) return nowParts.min >= s && nowParts.min < e;
+  return nowParts.min >= s || nowParts.min < e;   // overnight wrap
+}
+
+function effectivePresence(p, nowMs) {
+  if (!p) return 'offline';
+  if (p.status === 'online') {
+    const fresh = p.last_seen_at && (nowMs - Date.parse(p.last_seen_at)) <= PRESENCE_FRESH_MS;
+    return fresh ? 'online' : 'offline';
+  }
+  return p.status;   // a manual away/offline stands regardless of heartbeat
+}
+
+// Roster of CS agents with effective status, in-shift flag, and routing eligibility.
+async function getPresence(_params, auth, env) {
+  const g = require('cs_ticket_view', auth); if (g) return g;
+
+  const u = await sb(
+    `/rest/v1/users_profile?active=eq.true&select=id,full_name,role,cs_department_id&order=full_name.asc&limit=500`,
+    env,
+  );
+  if (!u.ok) return err('failed to load roster', 500);
+
+  const memRes = await sb(`/rest/v1/cs_user_departments?select=user_id,cs_department_id`, env);
+  const inCsDept = new Set((memRes.data || []).map(m => m.user_id));
+  const CS_ROLES = new Set(['cs_agent', 'cs_lead']);
+  const team = (u.data || []).filter(
+    p => CS_ROLES.has(p.role) || !!p.cs_department_id || inCsDept.has(p.id),
+  );
+
+  const presByUser = {};
+  if (team.length) {
+    const pr = await sb(
+      `/rest/v1/cs_agent_presence?user_id=in.(${team.map(p => p.id).join(',')})&select=*`,
+      env,
+    );
+    for (const row of (pr.data || [])) presByUser[row.user_id] = row;
+  }
+
+  const sh = await sb(`/rest/v1/cs_shifts?select=*`, env);
+  const shiftByDept = {};
+  for (const s of (sh.data || [])) shiftByDept[s.cs_department_id] = s;
+
+  const nowParts = istNow();
+  const nowMs = Date.now();
+  const roster = team.map(p => {
+    const pres = presByUser[p.id] || null;
+    const eff = effectivePresence(pres, nowMs);
+    const in_shift = inShiftWindow(shiftByDept[p.cs_department_id], nowParts);
+    const override = !!pres && pres.auto === false && eff === 'online';
+    return {
+      user_id: p.id,
+      full_name: p.full_name,
+      role: p.role,
+      cs_department_id: p.cs_department_id || null,
+      status: eff,
+      raw_status: pres?.status || 'offline',
+      auto: pres ? pres.auto : true,
+      last_seen_at: pres?.last_seen_at || null,
+      in_shift,
+      eligible: eff === 'online' && (in_shift || override),
+    };
+  });
+
+  return ok({ roster, ist_now_min: nowParts.min, ist_dow: nowParts.isoDow });
+}
+
+// Per-department shift windows (joined to dept slug/name, dept sort order).
+async function getShifts(_params, auth, env) {
+  const g = require('cs_ticket_view', auth); if (g) return g;
+  const r = await sb(
+    `/rest/v1/cs_shifts?select=cs_department_id,start_min,end_min,working_days,is_active,updated_at,cs_departments(slug,name,sort_order)`,
+    env,
+  );
+  if (!r.ok) return err('failed to load shifts', 500);
+  const rows = (r.data || [])
+    .map(s => ({
+      cs_department_id: s.cs_department_id,
+      slug: s.cs_departments?.slug || null,
+      name: s.cs_departments?.name || null,
+      sort_order: s.cs_departments?.sort_order ?? 999,
+      start_min: s.start_min,
+      end_min: s.end_min,
+      working_days: s.working_days,
+      is_active: s.is_active,
+      updated_at: s.updated_at,
+    }))
+    .sort((a, b) => a.sort_order - b.sort_order);
+  return ok({ shifts: rows });
+}
+
+// Set own availability. Manual toggle → auto=false; 'online' outside the window
+// is the off-schedule 'Available' override. Any signed-in CS user sets their own.
+async function setPresence(body, auth, env) {
+  const g = require('cs_ticket_view', auth); if (g) return g;
+  const status = String(body?.status || '');
+  if (!['online', 'away', 'offline'].includes(status)) return err('invalid status');
+  const nowIso = new Date().toISOString();
+  const row = {
+    user_id: auth.userId,
+    status,
+    status_since: nowIso,
+    last_seen_at: nowIso,
+    auto: false,
+    updated_at: nowIso,
+  };
+  const r = await sb(`/rest/v1/cs_agent_presence?on_conflict=user_id`, env, {
+    method: 'POST',
+    prefer: 'resolution=merge-duplicates,return=representation',
+    body: JSON.stringify(row),
+  });
+  if (!r.ok) return err('failed to set presence', 500);
+  return ok({ status });
+}
+
+// Liveness ping (~60s, activity-gated client-side). One atomic RPC: promotes an
+// auto-managed row to online + bumps last_seen; never clobbers a manual away/offline.
+async function heartbeat(_body, auth, env) {
+  const g = require('cs_ticket_view', auth); if (g) return g;
+  const r = await sb(`/rest/v1/rpc/cs_heartbeat`, env, {
+    method: 'POST',
+    body: JSON.stringify({ p_user: auth.userId }),
+  });
+  if (!r.ok) return err('heartbeat failed', 500);
+  const row = Array.isArray(r.data) ? r.data[0] : r.data;   // RPC returns the row composite
+  return ok({ status: row?.status || 'online', auto: row?.auto ?? true, last_seen_at: row?.last_seen_at || null });
+}
+
+// Admin: set a department's shift window (upsert by cs_department_id).
+async function setShift(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const { cs_department_id, start_min, end_min, working_days, is_active } = body || {};
+  if (!cs_department_id) return err('cs_department_id required');
+  const sMin = Number(start_min), eMin = Number(end_min);
+  if (!Number.isInteger(sMin) || sMin < 0 || sMin > 1440) return err('invalid start_min');
+  if (!Number.isInteger(eMin) || eMin < 0 || eMin > 1440) return err('invalid end_min');
+  const days = Array.isArray(working_days) ? [...new Set(working_days.map(Number))] : [];
+  if (!days.length || days.some(d => !Number.isInteger(d) || d < 1 || d > 7))
+    return err('working_days must be ISO day numbers 1-7');
+  const row = {
+    cs_department_id,
+    start_min: sMin,
+    end_min: eMin,
+    working_days: days.sort((a, b) => a - b),
+    is_active: is_active === undefined ? true : !!is_active,
+    updated_at: new Date().toISOString(),
+    updated_by_user_id: auth.userId,
+  };
+  const r = await sb(`/rest/v1/cs_shifts?on_conflict=cs_department_id`, env, {
+    method: 'POST',
+    prefer: 'resolution=merge-duplicates,return=representation',
+    body: JSON.stringify(row),
+  });
+  if (!r.ok) return err('failed to save shift', 500);
+  return ok({ shift: r.data?.[0] || row });
 }
 
 // Sellable product catalogue for the New-ticket cascading dropdowns (Pruthvi #4).
