@@ -32,52 +32,75 @@ function WaffleIcon({ size = 18 }) {
   );
 }
 
-function Tile({ sys, current }) {
+// Live favicon (each system serves /favicon.png) with a monogram-tint fallback.
+function SysIcon({ sys, size = 40 }) {
   const [failed, setFailed] = useState(false);
-  const isCurrent = sys.key === current;
+  return (
+    <span style={{
+      width: size, height: size, borderRadius: size * 0.225, display: 'grid', placeItems: 'center',
+      overflow: 'hidden', flexShrink: 0, background: failed ? sys.tint : 'transparent',
+    }}>
+      {failed ? (
+        <span style={{
+          fontFamily: 'var(--mono, var(--font-mono, monospace))', fontSize: size * 0.32, fontWeight: 700,
+          color: '#16140b', letterSpacing: '0.02em',
+        }}>{sys.mono}</span>
+      ) : (
+        <img
+          src={`${sys.url}/favicon.png`}
+          alt=""
+          width={Math.round(size * 0.9)}
+          height={Math.round(size * 0.9)}
+          onError={() => setFailed(true)}
+          style={{ width: size * 0.9, height: size * 0.9, objectFit: 'contain', display: 'block', borderRadius: size * 0.175 }}
+        />
+      )}
+    </span>
+  );
+}
+
+// A switchable system in the grid (the systems you are NOT currently on).
+function Tile({ sys }) {
   return (
     <a
       href={sys.url}
       target="_blank"
       rel="noopener noreferrer"
-      title={isCurrent ? `${sys.label} (current)` : sys.label}
+      title={sys.label}
       style={{
         display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7,
         padding: '12px 6px', borderRadius: 10, textDecoration: 'none',
-        background: isCurrent ? 'var(--accent, var(--yellow, rgba(242,205,26,0.12)))' : 'transparent',
-        outline: isCurrent ? '1px solid var(--accent, var(--yellow, #f2cd1a))' : '1px solid transparent',
-        transition: 'background 120ms',
+        background: 'transparent', transition: 'background 120ms',
       }}
-      onMouseEnter={(e) => { if (!isCurrent) e.currentTarget.style.background = 'var(--surface-2, rgba(255,255,255,0.05))'; }}
-      onMouseLeave={(e) => { if (!isCurrent) e.currentTarget.style.background = 'transparent'; }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-2, rgba(255,255,255,0.05))'; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
     >
+      <SysIcon sys={sys} />
       <span style={{
-        width: 40, height: 40, borderRadius: 9, display: 'grid', placeItems: 'center',
-        overflow: 'hidden', flexShrink: 0,
-        background: failed ? sys.tint : 'transparent',
-      }}>
-        {failed ? (
-          <span style={{
-            fontFamily: 'var(--mono, var(--font-mono, monospace))', fontSize: 13, fontWeight: 700,
-            color: '#16140b', letterSpacing: '0.02em',
-          }}>{sys.mono}</span>
-        ) : (
-          <img
-            src={`${sys.url}/favicon.png`}
-            alt=""
-            width={36}
-            height={36}
-            onError={() => setFailed(true)}
-            style={{ width: 36, height: 36, objectFit: 'contain', display: 'block', borderRadius: 7 }}
-          />
-        )}
-      </span>
-      <span style={{
-        fontSize: 12, fontWeight: isCurrent ? 700 : 500,
-        color: isCurrent ? 'var(--t1, #fff)' : 'var(--t2, #c7ccd4)',
-        whiteSpace: 'nowrap',
+        fontSize: 12, fontWeight: 500, color: 'var(--t2, #c7ccd4)', whiteSpace: 'nowrap',
       }}>{sys.label}</span>
     </a>
+  );
+}
+
+// The current system, pinned at the top — shown, not switchable (you're already here).
+function CurrentBanner({ sys }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 11, padding: '10px 11px', marginBottom: 12,
+      borderRadius: 'var(--r-md, 11px)', cursor: 'default',
+      background: 'var(--surface-2, rgba(255,255,255,0.05))',
+      border: '1px solid var(--accent, var(--yellow, rgba(242,205,26,0.45)))',
+    }}>
+      <SysIcon sys={sys} size={38} />
+      <span style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.25, minWidth: 0 }}>
+        <span style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--t1, #fff)' }}>{sys.label}</span>
+        <span style={{
+          fontSize: 10, fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase',
+          color: 'var(--t3, #8a909a)', marginTop: 3, fontFamily: 'var(--mono, var(--font-mono, inherit))',
+        }}>You're here</span>
+      </span>
+    </div>
   );
 }
 
@@ -96,6 +119,12 @@ export function AppLauncher({ current }) {
       document.removeEventListener('keydown', onKey);
     };
   }, [open]);
+
+  // Pin the active system at top (unselectable); the grid shows everything else.
+  // If `current` isn't a listed system (e.g. Podium hosts the launcher but isn't
+  // in it), there's no banner and the grid stays the full list.
+  const currentSys = SYSTEMS.find((s) => s.key === current) || null;
+  const others = currentSys ? SYSTEMS.filter((s) => s.key !== current) : SYSTEMS;
 
   return (
     <div ref={ref} style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}>
@@ -128,13 +157,14 @@ export function AppLauncher({ current }) {
             boxShadow: 'var(--shadow-pop, 0 12px 40px rgba(0,0,0,0.45))',
           }}
         >
+          {currentSys && <CurrentBanner sys={currentSys} />}
           <div style={{
             fontSize: 10.5, fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase',
             color: 'var(--t3, #8a909a)', padding: '2px 4px 10px',
             fontFamily: 'var(--mono, var(--font-mono, inherit))',
           }}>Switch system</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 4 }}>
-            {SYSTEMS.map((s) => <Tile key={s.key} sys={s} current={current} />)}
+            {others.map((s) => <Tile key={s.key} sys={s} />)}
           </div>
         </div>
       )}

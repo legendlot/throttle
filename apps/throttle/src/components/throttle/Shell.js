@@ -22,14 +22,18 @@ export const ROUTE_META = {
   settings:  { group: 'System',     title: 'Settings' },
 };
 
+// Checkered-flag mark — the canonical Throttle logo (matches app/icon.svg + the
+// favicon.png the cross-system launcher renders). Keep these in sync.
 export function ThrottleMark({ size = 30 }) {
+  const rows = [0, 1, 2, 3];
   return (
-    <span style={{ width: size, height: size, borderRadius: 'var(--radius-mark)', background: 'var(--mark-bg)',
+    <span style={{ width: size, height: size, borderRadius: 'var(--radius-mark)', overflow: 'hidden',
       display: 'grid', placeItems: 'center', flexShrink: 0, boxShadow: 'var(--mark-shadow)' }}>
-      <svg width={size * 0.62} height={size * 0.62} viewBox="0 0 24 24" fill="none">
-        <path d="M3 17.5 14 6" stroke="var(--mark-fg)" strokeWidth="2.4" strokeLinecap="round" opacity="0.45"/>
-        <path d="M6 18 17 6.5" stroke="var(--mark-fg)" strokeWidth="2.4" strokeLinecap="round" opacity="0.7"/>
-        <path d="M9 18.5 20 7" stroke="var(--mark-fg)" strokeWidth="2.4" strokeLinecap="round"/>
+      <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true" style={{ display: 'block' }}>
+        {rows.map(r => rows.map(c => (
+          <rect key={`${r}-${c}`} x={c * 8} y={r * 8} width="8" height="8"
+            fill={(r + c) % 2 === 0 ? '#F2CD1A' : '#151515'} />
+        )))}
       </svg>
     </span>
   );
