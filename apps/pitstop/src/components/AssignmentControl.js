@@ -36,7 +36,9 @@ export default function AssignmentControl({ ticket, session, onChanged }) {
 
   useEffect(() => {
     if (!canReassign || !session) return;
-    csopsGet('getAgents', {}, session).then(setAgents).catch(() => setAgents([]));
+    // CS-team only (cs_agent/cs_lead or CS-dept member) — admins carry cs_ticket_manage
+    // via the catch-all grant but aren't CS staff, so they shouldn't be assignment targets.
+    csopsGet('getCsAgents', {}, session).then(setAgents).catch(() => setAgents([]));
   }, [canReassign, session]);
 
   async function claim() {
