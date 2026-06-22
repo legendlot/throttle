@@ -13,6 +13,7 @@
    · getShippedByChannel.
    ════════════════════════════════════════════════════════════ */
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Panel, Chip, EmptyState, Spinner, StatusBadge } from '@throttle/ui';
@@ -45,10 +46,12 @@ function ChannelTypeBadge({ type }) {
 }
 
 // ── Pipeline stat card (Redline summary-tile style) ───────────
-function StatCard({ label, value, sub, color, tag }) {
+function StatCard({ label, value, sub, color, tag, onClick }) {
   return (
-    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)',
-      padding: 16, position: 'relative', overflow: 'hidden' }}>
+    <div onClick={onClick} role={onClick ? 'button' : undefined} tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') onClick(); } : undefined}
+      style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)',
+      padding: 16, position: 'relative', overflow: 'hidden', cursor: onClick ? 'pointer' : 'default' }}>
       <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: color || 'var(--border)' }} />
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 6 }}>
         <span style={{ fontFamily: 'var(--cond)', fontSize: 12.5, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--t2)' }}>{label}</span>
@@ -120,8 +123,10 @@ function LineCard({ row, rostered }) {
 // ── Overview page ─────────────────────────────────────────────
 export default function DepotOverview() {
   const { session } = useAuth();
+  const router = useRouter();
   const { setRefreshing, setLastRefreshed } = useRefreshState();
 
+  const [pendingReqs, setPendingReqs] = useState(0);   // open fulfilment requests
   const [counts,    setCounts]    = useState(null);
   const [lines,     setLines]     = useState([]);
   const [today,     setToday]     = useState(null);   // getDispatchScanSummary
@@ -145,16 +150,18 @@ export default function DepotOverview() {
     setRefreshing(true);
     const tdy = istToday();
     try {
-      const [dash, lv, ab, dss] = await Promise.allSettled([
+      const [dash, lv, ab, dss, fr] = await Promise.allSettled([
         garageFetch('getDispatchDashboard',  { limit: '1' }, session),
         garageFetch('getDispatchLineView',   {}, session),
         garageFetch('getAllocatedByChannel', {}, session),
         garageFetch('getDispatchScanSummary', { date: tdy }, session),
+        garageFetch('getFulfilmentRequests', { status: 'pending' }, session),
       ]);
       if (dash.status === 'fulfilled') setCounts(dash.value?.counts || null);
       if (lv.status   === 'fulfilled') setLines(Array.isArray(lv.value?.dispatch_lines) ? lv.value.dispatch_lines : []);
       if (ab.status   === 'fulfilled') setAlloc(Array.isArray(ab.value) ? ab.value : []);
       if (dss.status  === 'fulfilled') setToday(dss.value || null);
+      if (fr.status   === 'fulfilled') setPendingReqs(Array.isArray(fr.value) ? fr.value.length : 0);
     } finally {
       setRefreshing(false);
       setLastRefreshed(new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' }));
@@ -273,6 +280,10 @@ export default function DepotOverview() {
 
   // ── Pipeline stat cards (live state + today throughput) ─────
   const statCards = [
+    { label: 'Fulfilment Requests', value: pendingReqs,
+      sub: pendingReqs ? 'Awaiting accept / reject →' : 'None pending',
+      color: pendingReqs ? 'var(--red)' : 'var(--border)', tag: 'open',
+      onClick: () => router.push('/fulfilment-requests') },
     { label: 'With Production', value: c.rtd_count,         sub: 'Awaiting handover',   color: 'var(--amber)',  tag: 'now' },
     { label: 'With Dispatch',   value: c.handed_over_count, sub: 'Awaiting allocation', color: 'var(--yellow)', tag: 'now' },
     { label: 'Allocated',       value: c.allocated_count,   sub: 'Awaiting ship',       color: 'var(--blue)',   tag: 'now' },

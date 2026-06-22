@@ -1,7 +1,7 @@
 import {
   Gauge, Send, Network, FileText, PackageCheck,
   Undo2, RefreshCw, ArrowLeftRight, BarChart3,
-  LayoutGrid, Truck, GitBranch, ScanLine, ClipboardList, Users, Tag, ClipboardCheck, BookOpen,
+  LayoutGrid, Truck, GitBranch, ScanLine, ClipboardList, Users, Tag, ClipboardCheck, BookOpen, Inbox,
 } from 'lucide-react';
 
 /* ════════════════════════════════════════════════════════════
@@ -23,6 +23,7 @@ export const NAV_PRIMARY = [
   {
     id: 'outbound', label: 'Outbound', icon: Send,
     children: [
+      { id: 'fulfilment-requests', label: 'Fulfilment Requests', route: '/fulfilment-requests', icon: Inbox },
       { id: 'pipeline',        label: 'Pipeline',        route: '/dispatch-pipeline',  icon: Network },
       { id: 'shipments',       label: 'Shipments',       route: '/dispatch-shipments', icon: Send },
       { id: 'challans',        label: 'Challans',        route: '/dispatch-challans',  icon: FileText },
