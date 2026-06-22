@@ -777,7 +777,123 @@ const ga4Adapter = {
   },
 };
 
-const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter, amazon_spapi: amazonAdapter, amazon_ads: amazonAdsAdapter, meta_ads: metaAdsAdapter, ga4: ga4Adapter };
+// ── Unicommerce (Uniware) — Flipkart + long-tail via the OMS sale-order API ──
+// Fallback aggregator for channels with no usable direct API (Flipkart has none while Unicommerce
+// sits on the account). search() returns metadata only → financials need a per-order get (N+1), but
+// target channels are a small slice of volume, so a bounded batch of gets/run stays under the
+// 50-subrequest cap. Forward-walking ≤30-day UPDATED windows (mirrors the Amazon adapter).
+// connector_config.config = { uniware_channel, backfill_start?, window_days?, max_gets? }.
+const UNI_WINDOW_DAYS_DEFAULT = 30;
+const UNI_MAX_GETS_DEFAULT = 40;
+const uniMs = (iso) => Date.parse(iso);
+const uniISO = (ms) => new Date(Number(ms)).toISOString();           // → "yyyy-MM-ddTHH:mm:ss.SSSZ" (uniware-accepted)
+let _uniTok = null, _uniTokExp = 0;
+async function getUniwareToken(env) {
+  if (!env.UNIWARE_TENANT || !env.UNIWARE_USERNAME || !env.UNIWARE_PASSWORD)
+    throw new Error('Uniware not configured (set UNIWARE_TENANT/UNIWARE_USERNAME/UNIWARE_PASSWORD)');
+  const now = Date.now();
+  if (_uniTok && now < _uniTokExp - 60_000) return _uniTok;
+  const qs = new URLSearchParams({ grant_type: 'password', client_id: 'my-trusted-client', username: env.UNIWARE_USERNAME, password: env.UNIWARE_PASSWORD });
+  const res = await fetch(`https://${env.UNIWARE_TENANT}.unicommerce.com/oauth/token?${qs}`, { headers: { 'Content-Type': 'application/json' } });
+  const t = await res.json().catch(() => ({}));
+  if (!t.access_token) throw new Error('Uniware token failed: ' + JSON.stringify(t).slice(0, 160));
+  _uniTok = t.access_token; _uniTokExp = now + (Number(t.expires_in) || 40000) * 1000;
+  return _uniTok;
+}
+// Map one Unicommerce saleOrderDTO → { lines[], order } for staging.
+function uniMapOrder(so) {
+  const status = String(so.status || '').toUpperCase();
+  const cancelledOrder = status === 'CANCELLED';
+  const occurred = uniISO(so.displayOrderDateTime || so.created || Date.now());
+  const saleDate = istDate(occurred);
+  const lines = []; let oGross = 0, oDisc = 0, oTax = 0;
+  for (const it of (so.saleOrderItems || [])) {
+    const itemCancelled = cancelledOrder || String(it.statusCode || '').toUpperCase() === 'CANCELLED' || !!it.cancelledBySeller;
+    const gross = num(it.sellingPrice);
+    const disc  = num(it.discount);
+    const tax   = num(it.totalIntegratedGst) + num(it.totalStateGst) + num(it.totalCentralGst) + num(it.totalUnionTerritoryGst);
+    // include in order-grain gross: cancelled order → all items (= cancelled value); live order → live items only
+    if (cancelledOrder || !itemCancelled) { oGross += gross; oDisc += disc; oTax += tax; }
+    lines.push({
+      source_line_id: `${so.code}:${it.code || it.id}`, source_order_id: so.code,
+      channel_sku: it.itemSku || it.sellerSkuCode || it.ean || null, title: it.itemName || null,
+      qty: 1, gross_value: gross, discount_value: disc, tax_value: tax, row_type: 'sale',
+      occurred_at: occurred, sale_date: saleDate, order_status: status, is_cancelled: itemCancelled,
+      raw: { ean: it.ean, sellerSku: it.sellerSkuCode, fsn: it.channelProductId, statusCode: it.statusCode },
+    });
+  }
+  const order = {
+    source_order_id: so.code, refund_id: '', row_kind: 'order', sale_date: saleDate,
+    order_name: so.displayOrderCode || so.code, gross: oGross, discount: oDisc, tax: oTax,
+    currency: so.currencyCode || 'INR', is_cancelled: cancelledOrder, returned_value: 0, tags: [],
+    raw: { channel: so.channel, status: so.status },
+  };
+  return { lines, order };
+}
+const uniwareAdapter = {
+  kind: 'uniware', stgTable: 'stg_uniware', sourceKind: 'uniware',
+  async fetch({ env, cursor, config, budget }) {
+    const cfg = config || {};
+    const uchan = cfg.uniware_channel;
+    if (!uchan) throw new Error('uniware config missing uniware_channel');
+    const base = `https://${env.UNIWARE_TENANT}.unicommerce.com`;
+    const token = await getUniwareToken(env);
+    const H = { Authorization: `bearer ${token}`, 'Content-Type': 'application/json' };
+    const winMs = (cfg.window_days || UNI_WINDOW_DAYS_DEFAULT) * 24 * 3600 * 1000;
+    const maxGets = Math.min(cfg.max_gets || UNI_MAX_GETS_DEFAULT, Math.max(1, budget - 6));
+    const now = Date.now();
+    const fromMs = uniMs(cursor || cfg.backfill_start || BACKFILL_START);
+    const winEndMs = Math.min(fromMs + winMs, now);
+    let subreqs = 1; // token
+
+    // 1) page the window's order codes for this channel (UPDATED) — low volume, few pages
+    const codes = []; let start = 0; const PAGE = 100;
+    while (subreqs < Math.min(budget, 10)) {
+      const body = { channel: uchan, fromDate: uniISO(fromMs), toDate: uniISO(winEndMs), dateType: 'UPDATED', searchOptions: { displayStart: start, displayLength: PAGE } };
+      const r = await fetch(`${base}/services/rest/v1/oms/saleOrder/search`, { method: 'POST', headers: H, body: JSON.stringify(body) }); subreqs++;
+      const j = await r.json().catch(() => ({}));
+      if (!j.successful) throw new Error('Uniware search: ' + JSON.stringify(j.errors || j).slice(0, 160));
+      const els = j.elements || [];
+      for (const e of els) codes.push({ code: e.code, updated: Number(e.updated) || Number(e.created) || winEndMs });
+      if (els.length < PAGE) break;
+      start += PAGE;
+    }
+    codes.sort((a, b) => a.updated - b.updated);
+
+    // 2) get each order's detail (bounded). cursor walks forward by `updated`.
+    const rows = [], orderRows = []; let processed = 0, lastUpdated = fromMs, partial = false;
+    for (const c of codes) {
+      if (processed >= maxGets || subreqs >= budget - 1) { partial = true; break; }
+      const gr = await fetch(`${base}/services/rest/v1/oms/saleorder/get`, { method: 'POST', headers: H, body: JSON.stringify({ code: c.code }) }); subreqs++; processed++;
+      const gj = await gr.json().catch(() => ({}));
+      const so = gj.saleOrderDTO;
+      if (!so) continue;
+      const { lines, order } = uniMapOrder(so);
+      rows.push(...lines); orderRows.push(order);
+      if (c.updated > lastUpdated) lastUpdated = c.updated;
+    }
+    // 3) cursor: if the whole window drained, jump to window end (and there's more history if < now);
+    //    else advance to the last processed order's updated and re-enter the same window next tick.
+    let cursorAfter;
+    if (partial) cursorAfter = uniISO(lastUpdated);
+    else { cursorAfter = uniISO(winEndMs); partial = winEndMs < now; }   // keep cron pulling until caught up
+    return { rows, orderRows, cursorAfter, subreqs, partial };
+  },
+  async stage(rows, runId, channelId, fetched) {
+    if (rows.length) {
+      const body = rows.map(r => ({
+        run_id: runId, channel_id: channelId, source_order_id: r.source_order_id, source_line_id: r.source_line_id,
+        occurred_at: r.occurred_at, sale_date: r.sale_date, channel_sku: r.channel_sku, title: r.title,
+        qty: Math.round(r.qty), gross_value: r.gross_value, discount_value: r.discount_value || 0, tax_value: r.tax_value || 0,
+        row_type: r.row_type || 'sale', order_status: r.order_status, is_cancelled: r.is_cancelled, raw: r.raw,
+      }));
+      await sbInsertChunked('/rest/v1/stg_uniware?on_conflict=source_line_id', body, 'return=minimal,resolution=merge-duplicates');
+    }
+    await stageOrders((fetched && fetched.orderRows) || [], runId, channelId);
+  },
+};
+
+const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter, amazon_spapi: amazonAdapter, amazon_ads: amazonAdsAdapter, meta_ads: metaAdsAdapter, ga4: ga4Adapter, uniware: uniwareAdapter };
 
 // minimal RFC-4180-ish CSV parser (handles quoted fields, commas, newlines)
 function parseCSV(text) {
@@ -1120,7 +1236,7 @@ export default {
             const lastByChannel = {}; runs.forEach(r => { if (!lastByChannel[r.channel_id]) lastByChannel[r.channel_id] = r; });
             const cfgByChannel = {}; cfgs.forEach(c => { cfgByChannel[c.channel_id] = c; });
             return ok({
-              secrets: { shopify: !!(env.SHOPIFY_ACCESS_TOKEN || env.SHOPIFY_CLIENT_ID), amazon: !!env.AMAZON_LWA_CLIENT_ID, amazon_ads: !!env.AMAZON_ADS_CLIENT_ID, flipkart: !!env.FLIPKART_CLIENT_ID, google: !!env.GOOGLE_SA_JSON, meta: !!env.META_SYSTEM_USER_TOKEN },
+              secrets: { shopify: !!(env.SHOPIFY_ACCESS_TOKEN || env.SHOPIFY_CLIENT_ID), amazon: !!env.AMAZON_LWA_CLIENT_ID, amazon_ads: !!env.AMAZON_ADS_CLIENT_ID, flipkart: !!env.FLIPKART_CLIENT_ID, google: !!env.GOOGLE_SA_JSON, meta: !!env.META_SYSTEM_USER_TOKEN, uniware: !!(env.UNIWARE_TENANT && env.UNIWARE_USERNAME && env.UNIWARE_PASSWORD) },
               connectors: allCh.map(c => ({ channel_id: c.id, name: c.name, adapter_kind: cfgByChannel[c.id]?.adapter_kind || null, enabled: !!cfgByChannel[c.id]?.enabled, cursor: cfgByChannel[c.id]?.cursor || null, last_ok_at: cfgByChannel[c.id]?.last_ok_at || null, last_error: cfgByChannel[c.id]?.last_error || null, last_run: lastByChannel[c.id] || null })),
             });
           }
@@ -1181,6 +1297,29 @@ export default {
               } catch (e) { out[k] = { host, error: String(e?.message || e) }; }
             }
             return ok(out);
+          }
+          case 'uniwareProbe': {  // diagnostic: auth + which channels are flowing (last N days, default 14)
+            if (!canConnector(P)) return err('No permission', 403);
+            let token;
+            try { token = await getUniwareToken(env); } catch (e) { return err(String(e?.message || e), 400); }
+            const base = `https://${env.UNIWARE_TENANT}.unicommerce.com`;
+            const H = { Authorization: `bearer ${token}`, 'Content-Type': 'application/json' };
+            const days = Math.min(Number(qp('days')) || 14, 60);
+            const fromISO = uniISO(Date.now() - days * 24 * 3600 * 1000);
+            const counts = {}; let start = 0, total = 0;
+            for (let p = 0; p < 5; p++) {
+              const r = await fetch(`${base}/services/rest/v1/oms/saleOrder/search`, {
+                method: 'POST', headers: H,
+                body: JSON.stringify({ fromDate: fromISO, toDate: uniISO(Date.now()), dateType: 'CREATED', searchOptions: { displayStart: start, displayLength: 100 } }),
+              });
+              const j = await r.json().catch(() => ({}));
+              if (!j.successful) return err('Uniware search: ' + JSON.stringify(j.errors || j).slice(0, 200), 502);
+              for (const e of (j.elements || [])) counts[e.channel] = (counts[e.channel] || 0) + 1;
+              total = j.totalRecords || total;
+              if ((j.elements || []).length < 100) break;
+              start += 100;
+            }
+            return ok({ days, total_records: total, channels_sampled: counts, note: 'LEGEND_OF_TOYS = website (source SHOPIFY) — excluded from ingestion' });
           }
           default: return err('Unknown action: ' + action, 400);
         }
