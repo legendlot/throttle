@@ -124,7 +124,7 @@ export default function InboxPage() {
   // Agents (for assign dropdown) + canned-response templates — load once.
   useEffect(() => {
     if (!session) return;
-    if (canReassign) csopsGet('getAgents', {}, session).then(d => setAgents(Array.isArray(d) ? d : (d?.data || []))).catch(() => {});
+    if (canReassign) csopsGet('getCsAgents', {}, session).then(d => setAgents(Array.isArray(d) ? d : (d?.data || []))).catch(() => {});
     csopsGet('getWaTemplates', {}, session).then(d => setTemplates(Array.isArray(d) ? d : (d?.data || d?.templates || []))).catch(() => {});
   }, [session, canReassign]);
 

@@ -488,6 +488,7 @@ async function handleGet(action, params, auth, env) {
     case 'getDepartments':   return getDepartments(params, auth, env);
     case 'getDeptAgents':    return getDeptAgents(params, auth, env);
     case 'getProductCatalog': return getProductCatalog(params, auth, env);
+    case 'getCsAgents':      return getCsAgents(params, auth, env);
     case 'getMyopAccounts':  return getMyopAccounts(params, auth, env);
     case 'getCalls':         return getCalls(params, auth, env);
     case 'getCall':          return getCall(params, auth, env);
@@ -1183,6 +1184,27 @@ async function getAgents(params, auth, env) {
   const eligible = (res.data || []).filter(u => rolesMap[u.role]?.cs_ticket_manage);
 
   return ok(eligible);
+}
+
+// CS-team-only assignee list (S162). getAgents/getDeptAgents return EVERY user with
+// cs_ticket_manage — but the generic `admin`/`super_admin` roles carry that perm via
+// the catch-all admin grant, so they flood any "assign to" picker with non-CS staff
+// (production/floor admins). For the inbox assign dropdown we want the actual CS team:
+// a CS-tier role (cs_agent / cs_lead) OR a CS-department membership. Admins can still
+// self-claim a thread via the Claim button (myId), they're just not assignment targets.
+async function getCsAgents(_params, _auth, env) {
+  const u = await sb(
+    `/rest/v1/users_profile?active=eq.true&select=id,full_name,role,cs_department_id&order=full_name.asc&limit=500`,
+    env,
+  );
+  if (!u.ok) return err('failed to load agents', 500);
+  const memRes = await sb(`/rest/v1/cs_user_departments?select=user_id`, env);
+  const inCsDept = new Set((memRes.data || []).map(m => m.user_id));
+  const CS_ROLES = new Set(['cs_agent', 'cs_lead']);
+  const team = (u.data || [])
+    .filter(p => CS_ROLES.has(p.role) || !!p.cs_department_id || inCsDept.has(p.id))
+    .map(p => ({ id: p.id, full_name: p.full_name, role: p.role }));
+  return ok(team);
 }
 
 // Sellable product catalogue for the New-ticket cascading dropdowns (Pruthvi #4).
