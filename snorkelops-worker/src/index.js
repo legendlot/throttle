@@ -236,25 +236,76 @@ function addDays(dateISO, days) {
   const d = new Date(dateISO + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + (days || 0));
   return d.toISOString().split('T')[0];
 }
-// Attach derived fulfilment/payment fields to an order given its (optional) shipment row.
-function decorateSalesOrder(o, sh) {
-  const fulfilment_status = fulfilmentFromShipment(sh);
-  const dispatch_date = sh?.shipped_at ? String(sh.shipped_at).split('T')[0] : null;
-  const delivery_date = sh?.delivery_date || null;
-  const due_date = addDays(delivery_date || dispatch_date, Number(o.credit_days) || 0);
+// Attach payment/due fields to an order given its fulfilment anchor (latest-shipped child).
+// Fulfilment status itself comes from deriveFulfilment() (request-based) — merged by the read handlers.
+function decorateSalesOrder(o, anchor) {
+  const a = anchor || { dispatch_date: null, delivery_date: null, anchor_date: null };
+  const due_date = addDays(a.anchor_date, Number(o.credit_days) || 0);
   const balance = +(Number(o.grand_total) - Number(o.amount_received)).toFixed(2);
   const overdue = balance > 0.005 && !!due_date && due_date < todayISO();
-  return { ...o, fulfilment_status, dispatch_date, delivery_date, due_date, balance, overdue };
+  return { ...o, dispatch_date: a.dispatch_date, delivery_date: a.delivery_date, due_date, balance, overdue };
 }
-// Batch-fetch shipments for a set of orders (single subrequest), return id→row map.
-async function fetchShipmentMap(orders) {
-  const ids = [...new Set(orders.map(o => o.dispatch_shipment_id).filter(Boolean))];
+
+// ── Fulfilment (request → shipments) — derived, read-only (RULE-SNORKEL-004 #4 extended) ──
+// Latest-shipped child anchors the order's due-date + list dispatch/delivery display.
+function fulfilmentAnchor(shipments) {
+  const shipped = (shipments || []).filter(s => s.status === 'shipped');
+  if (!shipped.length) return { dispatch_date: null, delivery_date: null, anchor_date: null };
+  const keyed = shipped.map(s => {
+    const disp = s.shipped_at ? String(s.shipped_at).slice(0, 10) : null;
+    return { disp, deliv: s.delivery_date || null, k: s.delivery_date || disp || '0000-00-00' };
+  }).sort((x, y) => String(x.k).localeCompare(String(y.k)));
+  const last = keyed[keyed.length - 1];
+  return { dispatch_date: last.disp, delivery_date: last.deliv, anchor_date: last.deliv || last.disp };
+}
+// Derived fulfilment status for one order from its request + child shipments.
+function deriveFulfilment(request, shipments) {
+  if (!request) return { fulfilment_status: 'not_submitted', shipped_units: 0, requested_units: 0 };
+  const requested_units = Math.round(Number(request.requested_units)) || 0;
+  if (request.status === 'rejected')  return { fulfilment_status: 'rejected', shipped_units: 0, requested_units };
+  if (request.status === 'cancelled') return { fulfilment_status: 'cancelled', shipped_units: 0, requested_units };
+  if (request.status === 'pending')   return { fulfilment_status: 'awaiting_acceptance', shipped_units: 0, requested_units };
+  const live = (shipments || []).filter(s => s.status !== 'cancelled');
+  const open = live.filter(s => s.status !== 'shipped');
+  const shipped_units = live.filter(s => s.status === 'shipped').reduce((sum, s) => sum + (s._shipped_units || 0), 0);
+  if (open.length) return { fulfilment_status: 'in_fulfilment', shipped_units, requested_units };
+  if (shipped_units === 0) return { fulfilment_status: 'not_fulfilled', shipped_units, requested_units };
+  return { fulfilment_status: shipped_units >= requested_units ? 'fully_fulfilled' : 'partially_fulfilled', shipped_units, requested_units };
+}
+// Batched loader: orderIds[] → { [sales_order_id]: { request, shipments:[{...,_shipped_units}] } }.
+async function loadFulfilment(orderIds) {
+  const ids = [...new Set((orderIds || []).filter(Boolean))];
   if (!ids.length) return {};
-  const r = await queryPublic('dispatch_shipments',
-    `?id=in.(${ids.join(',')})&select=id,status,shipped_at,delivery_date`);
-  const map = {};
-  if (r.ok) (r.data || []).forEach(s => { map[s.id] = s; });
-  return map;
+  const reqR = await queryPublic('dispatch_fulfilment_requests',
+    `?sales_order_id=in.(${ids.map(encodeURIComponent).join(',')})&select=*`);
+  const requests = reqR.ok ? reqR.data : [];
+  const reqIds = requests.map(r => r.id);
+  let shipments = [];
+  if (reqIds.length) {
+    const shR = await queryPublic('dispatch_shipments',
+      `?fulfilment_request_id=in.(${reqIds.map(encodeURIComponent).join(',')})&select=id,shipment_no,status,scheduled_date,shipped_at,delivery_date,expected_delivery_date,courier_partner,tracking_number,tracking_link,fulfilment_request_id`);
+    shipments = shR.ok ? shR.data : [];
+    const shIds = shipments.map(s => s.id);
+    if (shIds.length) {
+      const lnR = await queryPublic('dispatch_shipment_lines',
+        `?shipment_id=in.(${shIds.map(encodeURIComponent).join(',')})&select=shipment_id,target_qty`);
+      const byShip = {};
+      (lnR.ok ? lnR.data : []).forEach(l => { byShip[l.shipment_id] = (byShip[l.shipment_id] || 0) + (Math.round(Number(l.target_qty)) || 0); });
+      shipments.forEach(s => { s._shipped_units = byShip[s.id] || 0; });
+    }
+  }
+  const out = {};
+  requests.forEach(r => { out[r.sales_order_id] = { request: r, shipments: shipments.filter(s => s.fulfilment_request_id === r.id) }; });
+  return out;
+}
+// Reconcile reject→cancel: snorkelops is the only writer of sales_orders.status.
+async function reconcileRejections(list) {
+  for (const { o, reason } of (list || [])) {
+    const now = new Date().toISOString();
+    await update('sales_orders',
+      { status: 'cancelled', cancelled_at: now, cancel_reason: 'Fulfilment rejected: ' + (reason || ''), updated_at: now },
+      `id=eq.${encodeURIComponent(o.id)}`);
+  }
 }
 // Writable partner columns (code/id/audit excluded). Used by create + update.
 const SALES_PARTNER_FIELDS = ['name','channel_key','partner_type','gstin','state','city','pincode',
@@ -919,12 +970,18 @@ export default {
             const r = await query('sales_orders', params);
             if (!r.ok) return err(r.data);
             const orders = r.data || [];
-            const shMap = await fetchShipmentMap(orders);
+            const ful = await loadFulfilment(orders.map(o => o.id));
+            const toCancel = [];
             const rows = orders.map(o => {
-              const dec = decorateSalesOrder(o, shMap[o.dispatch_shipment_id]);
-              return { ...dec, partner_name: o.sales_partners?.name || null,
+              const f = ful[o.id];
+              const der = deriveFulfilment(f?.request, f?.shipments);
+              if (der.fulfilment_status === 'rejected' && o.status !== 'cancelled')
+                toCancel.push({ o, reason: f.request.reject_reason });
+              const dec = decorateSalesOrder(o, fulfilmentAnchor(f?.shipments));
+              return { ...dec, ...der, partner_name: o.sales_partners?.name || null,
                        partner_state: o.sales_partners?.state || null, sales_partners: undefined };
             });
+            await reconcileRejections(toCancel);
             return ok(rows);
           }
 
@@ -941,14 +998,12 @@ export default {
               query('sales_order_lines', `?order_id=eq.${encodeURIComponent(id)}&order=sort_order.asc`),
               query('sales_payments', `?order_id=eq.${encodeURIComponent(id)}&order=received_date.desc,created_at.desc`),
             ]);
-            let sh = null;
-            if (o.dispatch_shipment_id) {
-              const shR = await queryPublic('dispatch_shipments',
-                `?id=eq.${encodeURIComponent(o.dispatch_shipment_id)}&select=id,shipment_no,status,shipped_at,delivery_date&limit=1`);
-              sh = shR.ok ? shR.data?.[0] || null : null;
-            }
-            const dec = decorateSalesOrder({ ...o, sales_partners: undefined }, sh);
-            return ok({ ...dec, partner, shipment: sh,
+            const f = (await loadFulfilment([id]))[id];
+            const der = deriveFulfilment(f?.request, f?.shipments);
+            if (der.fulfilment_status === 'rejected' && o.status !== 'cancelled')
+              await reconcileRejections([{ o, reason: f.request.reject_reason }]);
+            const dec = decorateSalesOrder({ ...o, sales_partners: undefined }, fulfilmentAnchor(f?.shipments));
+            return ok({ ...dec, ...der, partner, request: f?.request || null, shipments: f?.shipments || [],
               lines: linesR.ok ? linesR.data : [], payments: paysR.ok ? paysR.data : [] });
           }
 
@@ -958,15 +1013,23 @@ export default {
               `?status=eq.confirmed&invoice_generated=eq.true&select=*,sales_partners(name)`);
             if (!r.ok) return err(r.data);
             const orders = r.data || [];
-            const shMap = await fetchShipmentMap(orders);
+            const ful = await loadFulfilment(orders.map(o => o.id));
+            const toCancel = [];
             const rows = orders
-              .map(o => ({ ...decorateSalesOrder(o, shMap[o.dispatch_shipment_id]),
-                           partner_name: o.sales_partners?.name || null, sales_partners: undefined }))
+              .map(o => {
+                const f = ful[o.id];
+                const der = deriveFulfilment(f?.request, f?.shipments);
+                if (der.fulfilment_status === 'rejected' && o.status !== 'cancelled')
+                  toCancel.push({ o, reason: f.request.reject_reason });
+                return { ...decorateSalesOrder(o, fulfilmentAnchor(f?.shipments)), ...der,
+                         partner_name: o.sales_partners?.name || null, sales_partners: undefined };
+              })
               .filter(o => o.balance > 0.005)
               .sort((a, b) => {
                 if (a.overdue !== b.overdue) return a.overdue ? -1 : 1;
                 return String(a.due_date || '9999').localeCompare(String(b.due_date || '9999'));
               });
+            await reconcileRejections(toCancel);
             return ok(rows);
           }
 
@@ -1841,6 +1904,10 @@ export default {
               channel_key: String(d.channel_key).trim().toUpperCase(),
               label: d.label, dispatch_channel_id: d.dispatch_channel_id || null,
               is_active: d.is_active !== false, sort_order: Math.round(Number(d.sort_order) || 0),
+              channel_type: d.channel_type || null,
+              collection_type: (d.collection_type === 'manual' ? 'manual' : 'auto'),
+              collection_period_days: d.collection_period_days != null ? Math.round(Number(d.collection_period_days)) : null,
+              feeds_odo_sellout: !!d.feeds_odo_sellout,
             }, false);
             if (!r.ok) return err('Create failed: ' + JSON.stringify(r.data));
             return ok(Array.isArray(r.data) ? r.data[0] : r.data);
@@ -1855,6 +1922,10 @@ export default {
             if (d.dispatch_channel_id !== undefined) updates.dispatch_channel_id = d.dispatch_channel_id || null;
             if (d.is_active !== undefined)           updates.is_active = !!d.is_active;
             if (d.sort_order !== undefined)          updates.sort_order = Math.round(Number(d.sort_order) || 0);
+            if (d.channel_type !== undefined)        updates.channel_type = d.channel_type || null;
+            if (d.collection_type !== undefined)     updates.collection_type = (d.collection_type === 'manual' ? 'manual' : 'auto');
+            if (d.collection_period_days !== undefined) updates.collection_period_days = d.collection_period_days === null ? null : Math.round(Number(d.collection_period_days));
+            if (d.feeds_odo_sellout !== undefined)   updates.feeds_odo_sellout = !!d.feeds_odo_sellout;
             const r = await update('sales_channels', updates, `id=eq.${encodeURIComponent(d.id)}`);
             if (!r.ok) return err('Update failed: ' + JSON.stringify(r.data));
             return ok({ updated: d.id });
@@ -1880,6 +1951,7 @@ export default {
               credit_days: d.credit_days != null ? Math.round(Number(d.credit_days)) : (partner.default_credit_days ?? 45),
               partner_po_ref: d.partner_po_ref || null,
               expected_dispatch_date: d.expected_dispatch_date || null,
+              destination_warehouse: d.destination_warehouse || null,
               notes: d.notes || null,
               subtotal, tax_total, grand_total, created_by: userId,
             };
@@ -1901,7 +1973,7 @@ export default {
             if (cur.data[0].status !== 'draft' || cur.data[0].invoice_generated)
               return err('Only draft, un-invoiced orders can be edited', 422);
             const updates = { updated_at: new Date().toISOString() };
-            ['channel_key','order_date','partner_po_ref','expected_dispatch_date','notes'].forEach(f => {
+            ['channel_key','order_date','partner_po_ref','expected_dispatch_date','destination_warehouse','notes'].forEach(f => {
               if (d[f] !== undefined) updates[f] = d[f] || null;
             });
             if (d.credit_days !== undefined) updates.credit_days = Math.round(Number(d.credit_days) || 0);
@@ -1929,12 +2001,26 @@ export default {
             if (!cur.ok || !cur.data[0]) return err('Order not found', 404);
             const o = cur.data[0];
             if (!['draft', 'confirmed'].includes(o.status)) return err('Only draft/confirmed orders can be cancelled', 422);
+            // Legacy single-shipment orders (pre-fulfilment-flow).
             if (o.dispatch_shipment_id) {
               const shR = await queryPublic('dispatch_shipments', `?id=eq.${encodeURIComponent(o.dispatch_shipment_id)}&select=status&limit=1`);
               const shStatus = shR.ok ? shR.data?.[0]?.status : null;
               if (shStatus === 'shipped') return err('Goods already dispatched — handle as a return, not a cancel', 422);
               if (['draft', 'packing'].includes(shStatus))
                 await sbPublic(`/rest/v1/dispatch_shipments?id=eq.${encodeURIComponent(o.dispatch_shipment_id)}`,
+                  { method: 'PATCH', body: JSON.stringify({ status: 'cancelled' }), headers: { Prefer: 'return=minimal' } });
+            }
+            // New fulfilment-flow orders: cancel the request + its non-shipped child shipments.
+            const fr = (await loadFulfilment([d.id]))[d.id];
+            if (fr?.request) {
+              if ((fr.shipments || []).some(s => s.status === 'shipped'))
+                return err('Goods already dispatched — handle as a return, not a cancel', 422);
+              if (['pending', 'accepted'].includes(fr.request.status))
+                await sbPublic(`/rest/v1/dispatch_fulfilment_requests?id=eq.${encodeURIComponent(fr.request.id)}`,
+                  { method: 'PATCH', body: JSON.stringify({ status: 'cancelled' }), headers: { Prefer: 'return=minimal' } });
+              const openShipIds = (fr.shipments || []).filter(s => s.status !== 'shipped' && s.status !== 'cancelled').map(s => s.id);
+              if (openShipIds.length)
+                await sbPublic(`/rest/v1/dispatch_shipments?id=in.(${openShipIds.map(encodeURIComponent).join(',')})`,
                   { method: 'PATCH', body: JSON.stringify({ status: 'cancelled' }), headers: { Prefer: 'return=minimal' } });
             }
             const now = new Date().toISOString();
@@ -1956,37 +2042,41 @@ export default {
             const linesR = await query('sales_order_lines', `?order_id=eq.${encodeURIComponent(d.id)}&order=sort_order.asc`);
             const lines = linesR.ok ? linesR.data : [];
             if (!lines.length) return err('Order has no lines', 422);
-            // Resolve the dispatch channel mapped to this order's sales channel.
-            const chR = await query('sales_channels', `?channel_key=eq.${encodeURIComponent(o.channel_key || '')}&select=dispatch_channel_id&limit=1`);
-            const dispatchChannelId = chR.ok ? chR.data?.[0]?.dispatch_channel_id : null;
+            // Resolve the dispatch channel + collection config for this sales channel.
+            const chR = await query('sales_channels',
+              `?channel_key=eq.${encodeURIComponent(o.channel_key || '')}&select=dispatch_channel_id,collection_type,collection_period_days&limit=1`);
+            const ch = chR.ok ? chR.data?.[0] : null;
+            const dispatchChannelId = ch?.dispatch_channel_id || null;
             if (!dispatchChannelId) return err('No dispatch channel mapped for this sales channel — set it in Sales → Settings', 422);
             const partnerName = o.sales_partners?.name || '';
-            const shRes = await sbPublic('/rest/v1/dispatch_shipments', {
+            const requested_units = lines.reduce((s, l) => s + (Math.round(Number(l.qty)) || 0), 0);
+            const title = [partnerName, o.destination_warehouse, o.order_no].filter(Boolean).join(' · ');
+            // One-time fulfilment-request insert into public (Depot owns the lifecycle thereafter).
+            const frRes = await sbPublic('/rest/v1/dispatch_fulfilment_requests', {
               method: 'POST', prefer: 'return=representation',
               body: JSON.stringify({
-                channel_id: dispatchChannelId,
-                title: `${o.order_no} · ${partnerName}`.trim(),
-                scheduled_date: o.expected_dispatch_date || todayISO(),
-                created_by: userId,
-                expected_units: lines.reduce((s, l) => s + (Math.round(Number(l.qty)) || 0), 0),
-                sales_order_id: o.id, sales_order_no: o.order_no,
+                sales_order_id: o.id, sales_order_no: o.order_no, channel_id: dispatchChannelId,
+                destination_warehouse: o.destination_warehouse || null, partner_po_ref: o.partner_po_ref || null,
+                partner_name: partnerName, title, requested_units, status: 'pending',
               }),
             });
-            if (!shRes.ok || !shRes.data?.[0]) return err('Shipment create failed: ' + JSON.stringify(shRes.data), 502);
-            const shipmentId = shRes.data[0].id;
-            const shipLines = lines.map(l => ({
-              shipment_id: shipmentId, product: l.product, model: l.model || null, color: l.color || null,
-              target_qty: Math.round(Number(l.qty)) || 0, packed_qty: 0,
+            if (!frRes.ok || !frRes.data?.[0]) return err('Fulfilment request create failed: ' + JSON.stringify(frRes.data), 502);
+            const requestId = frRes.data[0].id;
+            const frLines = lines.map((l, i) => ({
+              request_id: requestId, product: l.product, model: l.model || null, color: l.color || null,
+              sku: l.sku || null, qty: Math.round(Number(l.qty)) || 0, sort_order: l.sort_order ?? i,
             }));
-            const slRes = await sbPublic('/rest/v1/dispatch_shipment_lines', {
-              method: 'POST', body: JSON.stringify(shipLines), headers: { Prefer: 'return=minimal' },
+            const frlRes = await sbPublic('/rest/v1/dispatch_fulfilment_request_lines', {
+              method: 'POST', body: JSON.stringify(frLines), headers: { Prefer: 'return=minimal' },
             });
-            if (!slRes.ok) return err('Shipment lines failed: ' + JSON.stringify(slRes.data), 502);
+            if (!frlRes.ok) return err('Request lines failed: ' + JSON.stringify(frlRes.data), 502);
+            // credit_days: channel auto-period wins; else the order keeps its existing (partner-default) value.
             const now = new Date().toISOString();
-            await update('sales_orders',
-              { status: 'confirmed', confirmed_by: userId, confirmed_at: now, dispatch_shipment_id: shipmentId, updated_at: now },
-              `id=eq.${encodeURIComponent(d.id)}`);
-            return ok({ confirmed: d.id, dispatch_shipment_id: shipmentId, shipment_no: shRes.data[0].shipment_no });
+            const confUpdates = { status: 'confirmed', confirmed_by: userId, confirmed_at: now, updated_at: now };
+            if (ch?.collection_type === 'auto' && ch.collection_period_days != null)
+              confUpdates.credit_days = Math.round(Number(ch.collection_period_days));
+            await update('sales_orders', confUpdates, `id=eq.${encodeURIComponent(d.id)}`);
+            return ok({ confirmed: d.id, request_no: frRes.data[0].request_no });
           }
 
           case 'generateInvoice': {
