@@ -860,11 +860,14 @@ const uniwareAdapter = {
     // resume next run. Budget-guarded so we never approach the 50-subrequest cap.
     while (true) {
       if (winStart >= now) { cursorAfter = uniISO(now); partial = false; break; }                 // caught up to live
-      if (scanned >= MAX_WINDOWS || subreqs >= budget - (maxGets + 2)) { cursorAfter = uniISO(winStart); partial = true; break; }
+      // Stop scanning when out of windows or low on budget. We do NOT reserve maxGets here — empty
+      // windows cost only a search, so skipping must be free to use most of the budget; gets are
+      // separately bounded below by the remaining budget when a data window is found.
+      if (scanned >= MAX_WINDOWS || subreqs >= budget - 3) { cursorAfter = uniISO(winStart); partial = true; break; }
       const winEnd = Math.min(winStart + winMs, now);
       // page this window's target-channel order codes (UPDATED)
       const codes = []; let start = 0;
-      while (subreqs < budget - maxGets - 1) {
+      while (subreqs < budget - 3) {
         const r = await fetch(`${base}/services/rest/v1/oms/saleOrder/search`, { method: 'POST', headers: H, body: JSON.stringify({ channel: uchan, fromDate: uniISO(winStart), toDate: uniISO(winEnd), dateType: 'UPDATED', searchOptions: { displayStart: start, displayLength: PAGE } }) }); subreqs++;
         const j = await r.json().catch(() => ({}));
         if (!j.successful) throw new Error('Uniware search: ' + JSON.stringify(j.errors || j).slice(0, 160));
