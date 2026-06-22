@@ -1,6 +1,6 @@
 # CX Communications Orchestration Platform — Design
 
-> **Working name:** "Relay" (TBD — see §12). · **Status:** Design / not yet building. · **Date:** 2026-06-23.
+> **Name:** Relay (confirmed, S163). · **Status:** Design / not yet building. · **Date:** 2026-06-23.
 > **Goal:** Replace Bitespeed with an in-house, multi-channel (email · SMS · WhatsApp) customer-communications
 > orchestration platform — broadcasts, scheduled campaigns, and trigger-based customer journeys — that LOT fully
 > owns and deeply integrates with its own systems (Shopify, Pitstop, returns, Odo).
@@ -108,10 +108,10 @@ control-plane vision (S156: "write-back behind approvals + audit").
   - `suppressions` (hard bounces, complaints, opt-outs, invalid numbers)
 - **App:** a new Next.js static-export app (`apps/relay`) on the shared `@throttle/*` kit + AppLauncher (perm-gated):
   campaign composer, segment builder, journey config, template manager, analytics, and (eventually) the support inbox.
-- **Relationship to Pitstop:** the **support inbox** (2a) logically belongs to this platform but already lives in
-  Pitstop. Decision (§11): either move the inbox here, or keep it in Pitstop and have this platform own only outbound +
-  orchestration while Pitstop consumes the shared WhatsApp connection. Leaning: **keep the agent inbox in Pitstop**
-  (CS team's home) but route WhatsApp through this platform's connection, so there's ONE WhatsApp pipe.
+- **Relationship to Pitstop (DECIDED, S163):** the **support inbox stays in Pitstop** — it belongs to the CS team
+  (Afshaan). Relay owns only **outbound + orchestration + the single WhatsApp connection**; Pitstop's agent inbox
+  consumes that shared connection (one WhatsApp pipe, owned by Relay, surfaced to agents in Pitstop). At the WhatsApp
+  cutover (§8) Pitstop's inbound webhook simply re-points from Bitespeed to Relay; the CS agent UI is unchanged.
 
 ---
 
@@ -234,6 +234,9 @@ dominated by prep**, not the flip:
 
 ## 9. Phasing roadmap
 
+> **Living roadmap (Afshaan, S163):** use cases + features will keep being refined and slotted into the right phase as
+> we go. The phase *spine* (engine-first, email→SMS→WhatsApp, Bitespeed live until Phase 5) is fixed; the contents flex.
+
 Each phase ships independently and leaves Bitespeed working until Phase 5.
 
 **Phase 0 — Foundation, audit & decisions (no customer impact)**
@@ -281,19 +284,24 @@ Each phase ships independently and leaves Bitespeed working until Phase 5.
 - **Addressable-audience reality** — proactive comms is essentially Shopify-only; set expectations (not a gap to "fix").
 - **Template-approval latency** (WA + DLT) can stall go-lives — start approvals early, keep a template backlog.
 
-## 11. Open questions / decisions needed
+## 11. Decisions & open questions
 
-1. **Support inbox home** — move Chatwoot-style inbox into this platform, or keep the agent inbox in Pitstop and only
-   share the WhatsApp pipe? (Leaning: keep in Pitstop; one WA connection owned here.)
-2. **ESP** (Resend recommended) · **SMS gateway** (MSG91/Gupshup/Kaleyra/Twilio) — pick in Phase 0.
-3. **Same WhatsApp number vs new** at cutover (default: migrate existing).
-4. **System name** (§12).
-5. **Consent backfill** — can we treat existing Shopify marketing-opt-in + prior Bitespeed WA opt-ins as consent, or
-   must we re-collect? (Legal/source-of-truth question — confirm before first marketing send.)
-6. Volume + budget targets (drives ESP/gateway tier + whether direct-Meta cost actually beats Bitespeed).
+**Decided (S163, Afshaan):**
+- **Name = Relay.** (§12)
+- **Support inbox stays in Pitstop** (CS team's home). Relay owns the outbound + orchestration + the single WhatsApp
+  connection only; Pitstop's agent inbox consumes it. (§4)
+- **ESP / SMS-gateway selection = research it properly when we start building** (not now) — produce a comparison +
+  recommendation at Phase 0. (Resend is the email front-runner; SMS gateway candidates MSG91/Gupshup/Kaleyra/Twilio —
+  all subject to the research.)
+- **Internal notifications stay on Slack** — Relay is customer-facing only.
+
+**Still open (resolve as we refine / at Phase 0):**
+1. **Same WhatsApp number vs new** at cutover (default: migrate the existing number to preserve recognition; build/test on
+   a temp one first).
+2. **Consent backfill** — can existing Shopify marketing-opt-in + prior Bitespeed WA opt-ins count as consent, or must we
+   re-collect? (Legal/source-of-truth — confirm before the first marketing send.)
+3. **Volume + budget targets** (drives ESP/gateway tier + whether direct-Meta actually beats Bitespeed on cost).
 
 ## 12. Naming
 
-Working name **"Relay"** (multi-channel message relay). Racing-themed alternatives in keeping with the LOT family
-(Garage/Redline/Pitstop/Snorkel/Ignition/Docket/Podium/Manifest/Odo/Depot/Throttle): **"Radio"** (F1 team radio — the pit
-wall talking to the driver/customer; strongest thematic fit), **"Beacon"**, **"Hailer"**. Decision: Afshaan.
+**Resolved: the system is named "Relay"** (S163) — multi-channel message relay; the outbound voice of the Odo control plane.
