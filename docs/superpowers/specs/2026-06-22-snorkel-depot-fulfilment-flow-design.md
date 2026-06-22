@@ -178,8 +178,12 @@ Computed in snorkelops read handlers from the request + its shipments — **not 
 ## 8. UI
 
 ### Depot (`apps/depot`)
+- **Overview tile (prominent).** The Depot dashboard (`/dashboard`) gets a header stat tile
+  **"Open fulfilment requests"** (count of `pending`), placed in the hero/top stat row so the dispatch
+  team cannot miss it; **clicking it navigates to `/fulfilment-requests`**. (Afshaan — must be up-front.)
 - **Fulfilment Requests** `/fulfilment-requests` (Outbound nav group): pending queue + history;
   detail → Accept (Full / Split) / Reject (reason). Split builder = add rows {qty, scheduled_date}.
+  Accept-Full is a single click (the "directly fulfilled" common case must stay fast).
 - **Shipments** `/dispatch-shipments`: add tracking fields (courier, tracking #, link, expected/actual
   delivery — editable); **Cancel shipment(s)** (select/all); **edit scheduled units** on a full shipment;
   Mark Shipped (stamps dispatch date). Title shows channel · warehouse · SO.
@@ -192,12 +196,30 @@ Computed in snorkelops read handlers from the request + its shipments — **not 
 - **Channel settings** `/sales/settings`: edit `channel_type`, `collection_type`,
   `collection_period_days`, `feeds_odo_sellout` per channel.
 
-## 9. Delhivery tracking — V2 (deferred, separate plan)
-For shipments with `courier_partner='Delhivery'` + a `tracking_number` (waybill): a scheduled poll
-(Supabase `pg_cron` → a lotopsproxy endpoint, mirroring `auto-close-attendance`) calls the Delhivery
-**Track API** by waybill to auto-populate `delivery_date` + a tracking status. Needs a `DELHIVERY_TOKEN`
-secret (`wrangler secret put` — gated). >90% of shipments are Delhivery, so this covers most. **V1 ships
-with manual entry only.**
+## 9. Courier tracking — a CENTRAL shared service (Delhivery + Shiprocket) — V2
+**Reframed per Afshaan:** auto-tracking is **not** a Depot-only column poller. Build it as a **central
+courier-tracking service** that multiple systems consume:
+- **Depot** — live status / EDD / delivered-date on outbound shipments (this spec).
+- **Pitstop / returns (CS team)** — a tracking endpoint for **return shipments**; the same service
+  tracks reverse AWBs so customer success sees where a return is. (Returns currently carry a `courier`
+  on `return_shipments` — RULE-RET-001.)
+- Couriers: **Delhivery** (>90% of orders) **and Shiprocket** (the rest). Both plugged into one layer
+  so any system tracks by `(courier, awb)` without re-implementing auth/parsing.
+
+**Shape (to be finalised by the research brief, §9a):** a normalized internal interface
+`track(courier, awb) → { status, expected_delivery_date, delivered_at, checkpoints[] }`, backed by
+either a scheduled poll (`pg_cron` → worker endpoint, mirroring `auto-close-attendance`) **and/or**
+courier webhooks pushing status to a callback. Secrets (`DELHIVERY_TOKEN`, Shiprocket creds) via
+`wrangler secret put` (gated). **Home (decide in §9a):** a small shared courier worker/edge-function, OR
+a shared module on lotopsproxy that Depot uses directly and csops calls (sibling-worker pattern). Likely
+**its own spec** once the research lands, because of the cross-system (Depot + Pitstop) surface.
+
+**§9a — research deliverable (in progress).** A factual integration brief on the Delhivery + Shiprocket
+APIs — auth, track-by-AWB endpoint + response shape, webhooks vs polling, rate limits, return/reverse
+tracking, sandbox availability — feeds the central-service design. Delivered to Afshaan before V2 build.
+
+**V1 ships with manual tracking entry only** (the six columns in §4.D). V2 = this service auto-filling
+`delivery_date` + status.
 
 ## 10. Odo guard (RULE-SALES-001 amendment)
 `odoops` snorkel adapter filters confirmed orders to channels with `feeds_odo_sellout = true` → only
@@ -227,7 +249,37 @@ RULE-SALES-001 amendment + the primary-vs-secondary distinction.
 - Multi-invoice per order / e-way bill / e-invoice (separate deferred items).
 - Backorder remainder on the Full path (declined — use Split).
 
-## 14. Open items to confirm during build
-- Concrete channel seed list (names + collection periods) + whether MT is auto or manual collection.
-- Whether QC channels already exist as rows in `public.dispatch_channels` (map vs create) — Odo lists 17 `is_sale` channels; reuse those ids.
-- Exact Delhivery API contract for V2 (token, waybill track endpoint).
+## 14. Channel seeding (resolved 2026-06-22)
+**All bulk channels already exist in `public.dispatch_channels`** — `store.sales_channels` holds only
+GT + MT. So seeding = **add `sales_channels` rows mapping to existing `dispatch_channel_id`s** (no new
+dispatch channels). Candidate bulk set (confirm exact list + periods with Afshaan at build):
+- **Quick commerce** (`quick_commerce`, auto): Blinkit `1f21c292…`, Zepto `c722d174…`,
+  Instamart `a083042a…`, Firstcry `b6975c7c…`, Cred `09da9d5b…`, Peeko `cd3614b6…`.
+- **Marketplace bulk** (`marketplace`, auto): Flipkart Managed `b157d0f6…`, Amazon FBA `855de0ca…`
+  (confirm which marketplaces actually arrive as our bulk POs vs direct-to-consumer Website/Flex).
+- Existing: GT `95aa6676…` (`general_trade`, manual, `feeds_odo_sellout=true`), MT `6deae6c3…`
+  (`modern_trade`; confirm auto vs manual; `feeds_odo_sellout=true`).
+- Set `collection_period_days` per platform (15–40); all bulk channels `feeds_odo_sellout=false`.
+
+Open: exact bulk-channel set + per-channel periods; MT collection_type; Delhivery/Shiprocket API
+contract for V2 (§9a research in flight).
+
+## 15. Manual / human-flow deliverable (Afshaan request)
+The plan must produce a **simplified, plain-language narrative of the sales-order workflow** for the
+**system manual** — the human story, not the schema. It threads both systems:
+
+> *Sales raises a sales order in Snorkel for a channel (GT, MT, or a quick-commerce platform), picking
+> the partner, the destination warehouse (for QC), and the items. On confirm, it becomes a **fulfilment
+> request** the dispatch team sees in Depot — flagged on the Depot home screen so it isn't missed. The
+> dispatch team **accepts** or **rejects** it (a rejected order is cancelled, and sales raises a fresh
+> one). On accept they either **fulfil it fully** (one shipment — and they can ship fewer units than
+> asked, which closes it as partially fulfilled) or **split it** into several shipments with their own
+> dispatch dates, any of which can be cancelled. Each shipment carries its courier, tracking number and
+> link, dispatch date and expected/actual delivery. All of that flows back to the sales order, so the
+> sales team sees whether it's fully or partially fulfilled and can track every shipment — and the
+> collection clock starts automatically based on the channel's payment terms.*
+
+Captured per the in-system manual upkeep model (CORE.md §"In-app System Manuals"): authored into the
+relevant `apps/*/docs/manual/content/` chapters — **Snorkel** (sales-order side) and **Depot**
+(fulfilment side) — and rebuilt (`build.py` + `build-manual-web.py`) in the same PR. NOT a separate
+backlog item.
