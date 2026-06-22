@@ -1,0 +1,220 @@
+# Pitstop — Custom Tags, Round-Robin Assignment & Agent Presence (design)
+
+> Status: **DESIGN — awaiting Afshaan sign-off before build**
+> Date: 2026-06-23 (Session 163)
+> Requested by: Afshaan — three features, one consolidated build.
+> Surface: Pitstop — csops worker (`05_Throttle/csops-worker/src/index.js`) + `apps/pitstop`
+> North star (Afshaan): **make BiteSpeed redundant** — consolidate all CS activity (tickets + IG/WhatsApp/Messenger threads) onto Pitstop as a full helpdesk.
+
+---
+
+## 1. Context
+
+Pitstop today has two work objects:
+- **Tickets** — `store.cs_tickets` (RMA/query lifecycle; manual + telephony auto-created).
+- **Threads** — `store.cs_wa_threads` (channel = `whatsapp` | `instagram` | `messenger`), messages in `cs_wa_messages`. IG + FB are two-way (reply via `sendMetaMessage`); WhatsApp is a read-only BiteSpeed/Chatwoot mirror. Thread-level assignment (`assigned_agent_id/_name/_at`), Mine/Unassigned/All tabs, private notes and a rich composer shipped in S162.
+
+This spec adds three capabilities, all channel-agnostic:
+1. **Custom tags** on tickets AND threads (any agent tags a conversation/ticket; leads curate the catalogue).
+2. **Round-robin auto-assignment** of incoming threads to on-duty agents.
+3. **Agent presence** (availability) so an agent who hasn't signed in for the day receives no assignments.
+
+**Layering:** presence is the keystone — round-robin gates on "is this agent on duty," so presence (Phase 1) lands before/with round-robin (Phase 2). Tags (Phase 3) are independent.
+
+### Decisions locked with Afshaan (S163)
+
+| # | Decision | Choice |
+|---|---|---|
+| Presence model | how "on duty" is determined | **Availability toggle** — Online/Away/Offline; auto-online on login + heartbeat; auto-away on idle; EOD cron → offline; manual topbar toggle. (Helpdesk/Chatwoot model.) |
+| RR algorithm | how a thread picks an agent | **Least-loaded + rotation tiebreak** — fewest open threads wins; tie broken by longest-since-last-assigned. |
+| WhatsApp transport | the BiteSpeed-redundancy lever | **Workflow-layer first** — ship tags/presence/RR live on IG+FB now; WhatsApp stays read-only mirror; WA send-side is a separate spec/workstream. |
+| Tag creation | who can mint tags | **Any agent (`cs_ticket_manage`) creates inline; leads/admins (`cs_ticket_admin`) rename/merge/archive.** |
+| RR pool | who is eligible | Present CS agents who are **members of the `messaging` department** (`cs_user_departments`); fallback to all present CS agents if no messaging-dept member is online. |
+| Capacity cap | per-agent thread ceiling | `max_open_per_agent` column exists, **default unlimited**; at-capacity agents skipped, but if all are capped it falls back to least-loaded so nothing strands. |
+| Offline w/ open threads | mid-day offline handling | v1 **leaves them assigned** + surfaces a lead "Stale / unanswered" view; auto-release cron deferred to v2. |
+| RR scope | what gets auto-assigned | **Threads only.** Tickets keep manual/telephony assignment. |
+
+### Verified current state (S163)
+
+- **No presence/heartbeat/activity scaffolding** anywhere in csops (`grep` clean) — Phase 1 is a clean slate.
+- Thread assignment lives in `assignThread` + auto-claim-on-first-reply inside `sendMetaMessage` (index.js ~3114) and `sendMetaAttachment` (~3220).
+- Webhook thread-creation points (the RR hooks): `metaFindOrCreateThread` (~3003), `biteSpeedFindOrCreateThread` (~2739), `findOrCreateWaThread` (~2367).
+- `getCsAgents` already returns a **CS-team-only** roster (CS-tier role or CS-dept member) — the base for the RR pool, minus presence.
+- Permission keys (`store.roles`): `cs_ticket_view` / `cs_ticket_manage` / `cs_ticket_reassign` / `cs_ticket_approve` / `cs_ticket_admin` / `cs_reports_view`.
+- Departments: `inbound` / `outbound` / `confirm` / `messaging`; multi-dept membership in `store.cs_user_departments`.
+
+> **Schema-verify rule:** before writing any migration/SQL below, run the `information_schema.columns` check on each touched table (CLAUDE.md). Column lists here are from the spoke and must be re-verified at build time.
+
+---
+
+## 2. Feature 1 — Custom tags (tickets + threads)
+
+### 2.1 Data (one migration, additive, RLS-on, service_role-only per RULE-RLS-001)
+
+```
+store.cs_tags
+  id              uuid PK default gen_random_uuid()
+  name            text not null
+  slug            text not null unique          -- lower-kebab of name, mint-time
+  color           text not null                 -- palette key (see 2.4), not free hex
+  description     text
+  is_active       boolean not null default true -- archive = false (never hard-delete)
+  sort_order      int not null default 0
+  created_by_user_id uuid
+  created_at      timestamptz default now()
+  updated_at      timestamptz default now()
+
+store.cs_ticket_tags
+  ticket_id  bigint  references store.cs_tickets(id) on delete cascade
+  tag_id     uuid    references store.cs_tags(id)    on delete cascade
+  tagged_by_user_id uuid
+  tagged_at  timestamptz default now()
+  PRIMARY KEY (ticket_id, tag_id)
+
+store.cs_thread_tags
+  thread_id  uuid  references store.cs_wa_threads(id) on delete cascade
+  tag_id     uuid  references store.cs_tags(id)       on delete cascade
+  tagged_by_user_id uuid
+  tagged_at  timestamptz default now()
+  PRIMARY KEY (thread_id, tag_id)
+```
+
+Two explicit junction tables (not one polymorphic `taggable`): preserves real FKs + cascade, matches the `cs_user_departments` precedent, joins cleanly on the list reads. **One shared `cs_tags` catalogue** spans both objects (a tag is reusable across tickets and threads).
+
+`GRANT ALL ON … TO service_role;` on each (RULE; new `store` tables). Indexes: `cs_ticket_tags(tag_id)`, `cs_thread_tags(tag_id)` for facet counts.
+
+### 2.2 Worker (csops)
+
+GET:
+- `getTags` — active tags ordered by `sort_order, name`. Gate `cs_ticket_view`.
+
+POST:
+- `createTag {name, color}` — mints slug, dedups on slug (409 if active dupe). Gate `cs_ticket_manage`.
+- `updateTag {id, name?, color?, is_active?, sort_order?}` — rename/recolor/archive/reorder. Gate `cs_ticket_admin` (lead curation).
+- `mergeTags {from_id, into_id}` — repoint both junctions to `into_id`, archive `from_id`. Gate `cs_ticket_admin`. (De-sprawl tool; can be Phase-3.1.)
+- `setTicketTags {ticket_id, tag_ids[]}` — replace-set (delete-not-in + insert-missing, batched via `in.()`/array insert — never per-row awaits). Writes a `cs_ticket_history` row (`tags_changed`). Gate `cs_ticket_manage`.
+- `setThreadTags {thread_id, tag_ids[]}` — replace-set. Gate `cs_ticket_manage`.
+
+Reads enriched: `getTickets` and `getMessagingThreads` return `tags:[{id,name,color}]` inline — **batched** (one `cs_ticket_tags?ticket_id=in.(…)` / `cs_thread_tags?thread_id=in.(…)` join over the page, not N calls). Add `?tag=<id>` filter to `getTickets`, `getQueueCounts`, and `getMessagingThreads`.
+
+### 2.3 UI (apps/pitstop)
+
+- Reusable **`TagPicker`** (`components/kit/`) — colored multi-select chips, search, inline **"+ Create"** (gate `cs_ticket_manage`, optimistic), **click-outside dismiss** (reuses the exact S162 canned-response popup pattern).
+- **Ticket detail** (`/queue/detail`) — tag chips on the identity/issue rail → `setTicketTags`.
+- **Inbox** (`/inbox`) — tag chips in the thread header → `setThreadTags`.
+- **Filters** — tag facet chips on `/queue` (alongside disposition/category) and `/inbox`.
+- **Admin** — small tag-management card on `/admin/departments` (or a new `/admin/tags`): rename/recolor/archive/reorder/merge (gate `cs_ticket_admin`).
+
+### 2.4 Palette
+Fixed Volt-themed set (~8 swatches) defined once in the frontend + validated server-side in `createTag`/`updateTag` (reject unknown keys). Keeps the board visually coherent; no free hex.
+
+---
+
+## 3. Feature 2 — Round-robin thread assignment
+
+### 3.1 Data
+
+```
+store.cs_routing_config           -- one row per channel
+  channel              text PK     -- 'instagram' | 'messenger' | 'whatsapp'
+  auto_assign_enabled  boolean not null default false
+  algorithm            text not null default 'least_loaded'  -- future-proof; only least_loaded in v1
+  max_open_per_agent   int                                   -- null = unlimited
+  updated_at           timestamptz default now()
+  updated_by_user_id   uuid
+```
+Seed: `instagram`/`messenger` → enabled **true**; `whatsapp` → enabled **false** (read-only mirror; flip when WA send-side lands). No rotation-pointer table needed — the tiebreak reads `cs_wa_threads.assigned_at`.
+
+### 3.2 The router — `cs_autoassign_thread(p_thread_id uuid)` SECURITY DEFINER RPC
+
+Single RPC so the pick + claim is **atomic** (two concurrent webhooks can't double-assign). Logic:
+
+1. Load thread; if it already has `assigned_agent_id`, return it (no-op — idempotent).
+2. Read `cs_routing_config` for the thread's channel; if `auto_assign_enabled = false`, return null (leave unassigned).
+3. **Eligible pool** = users who:
+   - hold `cs_ticket_manage` AND are CS-team (mirror `getCsAgents`: CS-tier role OR `cs_user_departments` member),
+   - are members of the **`messaging`** department (via `cs_user_departments`); **fallback**: if none of those are present, widen to all present CS agents,
+   - have presence **`online`** (Feature 3) — `cs_agent_presence.status='online'` AND `last_seen_at` within the freshness window,
+   - are **under cap** (`open_thread_count < max_open_per_agent`, or no cap). If everyone is capped, ignore the cap (never strand a customer).
+4. **Pick** = the eligible agent with the **fewest open assigned threads**, tie broken by **oldest `assigned_at`** (longest since last assignment), final tie by `user_id` for determinism. "Open" = `cs_wa_threads` rows assigned to them not closed/resolved (define an open predicate — threads have no close field today; use "has an inbound message awaiting reply" OR add a lightweight `thread_state`; **see open question Q1**).
+5. **Claim** — `UPDATE cs_wa_threads SET assigned_agent_id/_name/_at` for the chosen agent; return the agent.
+
+`SECURITY DEFINER`, `EXECUTE` to `service_role` only.
+
+### 3.3 Trigger points (webhooks — run as service_role, no JWT)
+
+In each thread-creator, **after** insert/upsert of a new inbound thread (or when an unassigned thread receives a fresh inbound message), call `cs_autoassign_thread(thread.id)`:
+- `metaFindOrCreateThread` (IG/FB) — primary v1 path.
+- `biteSpeedFindOrCreateThread` / `findOrCreateWaThread` (WhatsApp) — guarded by `cs_routing_config.whatsapp.auto_assign_enabled` (seeded **off**), so the ~4,767 historical WA threads are **never** bulk-assigned and the floodgate only opens when WA send-side is live.
+
+Manual `assignThread` and auto-claim-on-first-reply (S162) remain and **override** RR.
+
+### 3.4 UI
+- Inbox already has Mine/Unassigned/All — RR simply means fewer Unassigned. Add an "auto-assigned" subtle marker on the assignee chip (vs manually claimed) for transparency.
+- **Admin routing card** (`/admin/departments` or `/admin/routing`): per-channel auto-assign on/off + `max_open_per_agent`. Gate `cs_ticket_admin`.
+- **Lead "Stale / unanswered" view** — threads assigned but with no agent reply, especially where the owner is now offline (supports decision: offline keeps threads assigned in v1).
+
+---
+
+## 4. Feature 3 — Agent presence (availability)
+
+### 4.1 Data
+
+```
+store.cs_agent_presence
+  user_id       uuid PK references auth.users(id)
+  status        text not null default 'offline'  -- 'online' | 'away' | 'offline'
+  status_since  timestamptz default now()        -- when current status began
+  last_seen_at  timestamptz                      -- last heartbeat
+  auto          boolean not null default true     -- true = system-set, false = manual toggle
+  updated_at    timestamptz default now()
+```
+RLS-on, service_role-only. **Effective status** for routing = `status='online' AND last_seen_at >= now() - INTERVAL '<freshness>'` (freshness ≈ 3× heartbeat interval, e.g. 3 min). A manual `offline`/`away` (`auto=false`) is respected regardless of heartbeat until the agent flips back or the EOD cron resets.
+
+### 4.2 Worker (csops)
+- POST `setPresence {status}` — manual toggle (`auto=false`); validates enum; gate `cs_ticket_view` (any signed-in CS user).
+- POST `heartbeat` — stamps `last_seen_at=now()`; if currently `offline` with `auto=true`, promotes to `online`; **never** overrides a manual `away`/`offline`. Gate `cs_ticket_view`. Cheap upsert.
+- GET `getPresence` — roster of CS agents with effective status + `last_seen_at` (lead "who's on duty"). Gate `cs_ticket_view`.
+
+### 4.3 Mechanics
+- **Login → online**: authenticated app load calls `setPresence('online')` (auto) once, then starts the heartbeat.
+- **Heartbeat**: client pings `heartbeat` every ~60s **while the tab is visible** (Page Visibility API — pause when hidden so a backgrounded tab decays to away). Docket `user_activity` is the precedent.
+- **Idle → away**: derived (no fresh heartbeat) — effective status computes to away/offline without a cron; a cron isn't required for correctness, only for tidy roster display.
+- **EOD → offline**: `pg_cron` ~ end of day IST (mirrors `auto-close-attendance`) sets all `auto=true` rows to `offline`. Ensures "didn't sign in today → offline → no assignment" even if a stale heartbeat lingered.
+- **Manual toggle**: topbar Available/Away/Offline control (`auto=false`); overrides heartbeat for breaks / end-of-shift.
+
+### 4.4 UI
+- **Topbar availability toggle** (next to DeptSwitcher) — Online/Away/Offline pill, optimistic.
+- **Presence dots** on assignee chips across queue/inbox/roster.
+- **Lead roster** (admin/leads) — who's online/away/offline + last-seen, on `/admin/departments` or the Overview.
+
+### 4.5 Optional later — HR attendance record
+Not in v1. If wanted, derive daily on-duty sessions/hours from presence transitions (a `cs_agent_presence_log` append table + a report) — additive, no rework of the above.
+
+---
+
+## 5. Migrations
+Single additive migration `pitstop_tags_routing_presence_v1` (or split per phase if preferred): `cs_tags`, `cs_ticket_tags`, `cs_thread_tags`, `cs_agent_presence`, `cs_routing_config` + the `cs_autoassign_thread` RPC + EOD `pg_cron` job. All RLS-on at creation, service_role grants, advisor-clean. No existing column altered. Schema-verify each touched parent table first.
+
+## 6. Blast radius & deploy
+- **csops worker** (Pitstop only — sibling worker, single-system blast radius). Sequence: edit → commit → push → `cd 05_Throttle/csops-worker && npx wrangler deploy`.
+- **apps/pitstop** (GH Pages, auto-deploy on push). `TagPicker` is app-local (`components/kit/`) — shared `@throttle/ui` untouched → zero cross-app blast radius.
+- **Path-scoped commits** — stage only `csops-worker` / `apps/pitstop` / spec; never `git add -A` (the uncommitted Throttle-worker `wrangler.toml`/`index.js` must stay out).
+
+## 7. Build phasing (each independently shippable)
+- **Phase 1 — Presence** (foundation): migration (presence table + EOD cron) + `setPresence`/`heartbeat`/`getPresence` + topbar toggle + lead roster.
+- **Phase 2 — Round-robin**: `cs_routing_config` + `cs_autoassign_thread` RPC + 3 webhook hooks + admin routing card. Enable IG/FB; WA off.
+- **Phase 3 — Tags**: 3 tables + tag worker actions + `TagPicker` + rails + facets + admin tag mgmt.
+- **(Parallel) WhatsApp transport** — separate spec; the actual BiteSpeed-retirement lever (direct WhatsApp Cloud API vs C2-B). Until it lands, RR/presence are live on IG+FB and WA stays a read-only mirror.
+
+## 8. Open questions (confirm before/at build)
+- **Q1 — "open thread" definition for least-loaded + the Stale view.** `cs_wa_threads` has no close/resolve state today. Options: (a) treat "open" = thread whose last message is inbound (awaiting reply); (b) add a lightweight `thread_state` (`open`/`snoozed`/`closed`) so agents can clear handled threads (cleaner load math + a real "done" action, mild scope add). Recommend (b) — it also makes the inbox a true work queue. **Decide at Phase 2.**
+- **Q2 — heartbeat freshness + heartbeat interval** (default 60s ping / 3-min freshness) and **EOD cron time** (IST). Confirm values.
+- **Q3 — does `away` ever receive assignments?** Default: no (only `online`); `away` is excluded but not offline. Confirm.
+- **Q4 — auto-release stale threads** when owner goes offline (v2): after how long, and to whom (pool / lead)? Deferred unless wanted in v1.
+- **Q5 — notify agent on auto-assign** (in-app/Slack) — v2; ties into the Docket V2 notifications track.
+
+---
+
+## 9. Why this advances "BiteSpeed redundant"
+Tags + presence + round-robin turn Pitstop from a reader into a **routed, accountable helpdesk** — the team-workflow half of parity with BiteSpeed/Chatwoot — immediately for IG + FB. The remaining half is **WhatsApp send-side** (its own spec): once agents reply to WhatsApp inside Pitstop, flip `cs_routing_config.whatsapp.auto_assign_enabled = true` and the same routing/presence/tagging applies with zero rework. At that point BiteSpeed has no unique job left.
