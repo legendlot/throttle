@@ -378,14 +378,23 @@ const gsheetAdapter = {
     if (!cfg.spreadsheet_id || !cfg.tab) throw new Error('gsheet config missing spreadsheet_id/tab (set connector_config.config)');
     if (!cfg.columns || !cfg.columns.sku || !cfg.columns.units) throw new Error('gsheet config.columns must map at least sku + units');
     const token = await googleSheetsToken(env);
-    const range = encodeURIComponent(`${cfg.tab}!A:ZZ`);
+    // Resolve the configured tab against the sheet's ACTUAL tab titles (ignoring case/spaces/punct), so
+    // config drift (e.g. "InstamartData" vs the real "Instamart Data") can't break the pull, and use the
+    // real title SINGLE-QUOTED so a space in the name doesn't break A1-range parsing ("Unable to parse range").
+    const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const metaR = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${cfg.spreadsheet_id}?fields=sheets.properties.title`, { headers: { Authorization: `Bearer ${token}` } });
+    if (!metaR.ok) throw new Error(`Sheets meta ${metaR.status}: ${(await metaR.text().catch(() => '')).slice(0, 160)}`);
+    const titles = ((await metaR.json()).sheets || []).map(s => s.properties && s.properties.title).filter(Boolean);
+    const tab = titles.find(t => norm(t) === norm(cfg.tab));
+    if (!tab) throw new Error(`gsheet tab "${cfg.tab}" not found in sheet — available tabs: ${titles.join(' | ')}`);
+    const range = encodeURIComponent(`'${tab.replace(/'/g, "''")}'!A:ZZ`);
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${cfg.spreadsheet_id}/values/${range}?majorDimension=ROWS&valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=FORMATTED_STRING`;
     const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
     if (!r.ok) throw new Error(`Sheets API ${r.status}: ${(await r.text().catch(() => '')).slice(0, 160)}`);
     const j = await r.json();
     const grid = (j.values || []).map(row => row.map(c => (c == null ? '' : String(c))));
     const rows = gridToQcRows(grid, cfg.columns, todayISO());
-    return { rows, cursorAfter: null, subreqs: 2, partial: false };
+    return { rows, cursorAfter: null, subreqs: 3, partial: false };
   },
   async stage(rows, runId, channelId) {
     if (!rows.length) return;
@@ -1069,7 +1078,11 @@ async function executeRun(cfg, runId, env, { budget = CRON_BUDGET, cursorOverrid
     // Adapters page strictly forward (Shopify by ascending updated_at), so on a budget-capped
     // partial we've fully ingested everything ≤ cursorAfter; advancing lets the next run continue
     // forward instead of re-pulling the same oldest window forever (the "stuck at Nov 2025" bug).
-    if (cursorAfter) await sbSales(`/rest/v1/connector_config?channel_id=eq.${cfg.channel_id}`, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ cursor: cursorAfter, last_ok_at: nowISO(), last_error: null }) });
+    // Always stamp success (clears any stale last_error + sets last_ok_at), even for adapters that
+    // return no cursor (gsheet/qc) — otherwise a prior error lingers forever after a clean run.
+    const okPatch = { last_ok_at: nowISO(), last_error: null };
+    if (cursorAfter) okPatch.cursor = cursorAfter;
+    await sbSales(`/rest/v1/connector_config?channel_id=eq.${cfg.channel_id}`, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify(okPatch) });
     return { subreqs };
   } catch (e) {
     await finishRun(runId, { status: 'error', error: String(e?.message || e) });
