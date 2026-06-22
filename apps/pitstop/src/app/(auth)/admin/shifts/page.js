@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { EmptyState, Spinner } from '@throttle/ui';
-import { Circle, Clock, Save, Users } from 'lucide-react';
+import { Circle, Clock, Save, Users, Shuffle } from 'lucide-react';
 import { csopsGet, csopsPost } from '../../../../lib/csopsFetch.js';
 
 const DOT = { online: '#27c93f', away: '#f5a623', offline: '#6b6b6b' };
@@ -36,9 +36,11 @@ export default function ShiftsPage() {
   const [roster, setRoster] = useState([]);
   const [istNowMin, setIstNowMin] = useState(null);
   const [shifts, setShifts] = useState([]);
+  const [routing, setRouting] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [savingId, setSavingId] = useState(null);
+  const [savingChan, setSavingChan] = useState(null);
 
   const loadRoster = useCallback(async () => {
     try {
@@ -55,13 +57,21 @@ export default function ShiftsPage() {
     } catch (e) { setError(e.message); }
   }, [session]);
 
+  const loadRouting = useCallback(async () => {
+    if (!canEdit) return;                       // getRoutingConfig is admin-gated
+    try {
+      const r = await csopsGet('getRoutingConfig', {}, session);
+      setRouting(r?.config || []);
+    } catch { /* non-admins simply don't see this section */ }
+  }, [session, canEdit]);
+
   useEffect(() => {
     if (!session) return undefined;
     let alive = true;
-    (async () => { await Promise.all([loadRoster(), loadShifts()]); if (alive) setLoading(false); })();
+    (async () => { await Promise.all([loadRoster(), loadShifts(), loadRouting()]); if (alive) setLoading(false); })();
     const iv = setInterval(() => { if (document.visibilityState === 'visible') loadRoster(); }, 30000);
     return () => { alive = false; clearInterval(iv); };
-  }, [session, loadRoster, loadShifts]);
+  }, [session, loadRoster, loadShifts, loadRouting]);
 
   const onDuty = useMemo(() => roster.filter(a => a.eligible).length, [roster]);
   const sortedRoster = useMemo(
@@ -96,6 +106,22 @@ export default function ShiftsPage() {
       set.has(day) ? set.delete(day) : set.add(day);
       return { ...s, working_days: [...set].sort((a, b) => a - b) };
     }));
+  }
+
+  function patchRouting(channel, patch) {
+    setRouting(prev => prev.map(c => c.channel === channel ? { ...c, ...patch } : c));
+  }
+  async function saveRouting(c) {
+    setSavingChan(c.channel);
+    try {
+      await csopsPost('setRoutingConfig', {
+        channel: c.channel,
+        auto_assign_enabled: c.auto_assign_enabled,
+        max_open_per_agent: (c.max_open_per_agent === '' || c.max_open_per_agent == null) ? null : Number(c.max_open_per_agent),
+      }, session);
+      await loadRouting();
+    } catch (e) { setError(e.message); }
+    finally { setSavingChan(null); }
   }
 
   if (!canView) return <EmptyState icon="🔒" message="Team-lead or admin permission required." />;
@@ -225,6 +251,51 @@ export default function ShiftsPage() {
           {shifts.length === 0 && <div style={{ padding: 16, color: 'var(--t3)' }}>No shift windows configured.</div>}
         </div>
       </section>
+
+      {/* Auto-assignment (round-robin) — admin only */}
+      {canEdit && (
+        <section style={{ background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 8, marginTop: 22, overflow: 'hidden' }}>
+          <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-1)', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Shuffle size={15} style={{ color: 'var(--t3)' }} />
+            <span style={{ fontWeight: 600, fontSize: 14 }}>Auto-assignment (round-robin)</span>
+            <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--t3)' }}>least-loaded eligible agent · per channel</span>
+          </div>
+          <div style={{ padding: 12, display: 'grid', gap: 10 }}>
+            {routing.map(c => (
+              <div key={c.channel} style={{
+                display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 14,
+                padding: '12px 14px', background: 'var(--surface-2)', border: '1px solid var(--border-1)', borderRadius: 6,
+              }}>
+                <div style={{ minWidth: 120, fontWeight: 600, textTransform: 'capitalize' }}>{c.channel}</div>
+                <label style={{ fontSize: 12, color: 'var(--t3)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <input type="checkbox" checked={!!c.auto_assign_enabled}
+                    onChange={e => patchRouting(c.channel, { auto_assign_enabled: e.target.checked })} />
+                  Auto-assign enabled
+                </label>
+                <label style={{ fontSize: 12, color: 'var(--t3)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  Max open / agent
+                  <input type="number" min={0} value={c.max_open_per_agent ?? ''} placeholder="∞"
+                    onChange={e => patchRouting(c.channel, { max_open_per_agent: e.target.value })}
+                    style={{ ...timeInput, width: 70 }} />
+                </label>
+                <button onClick={() => saveRouting(c)} disabled={savingChan === c.channel}
+                  style={{
+                    marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6,
+                    padding: '6px 12px', borderRadius: 6, border: '1px solid var(--border-1)',
+                    background: 'var(--accent)', color: '#1b1b1e', fontWeight: 600, fontSize: 12, cursor: 'pointer',
+                    opacity: savingChan === c.channel ? 0.6 : 1,
+                  }}>
+                  <Save size={13} /> {savingChan === c.channel ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            ))}
+            <div style={{ fontSize: 11, color: 'var(--t4)', padding: '2px 4px' }}>
+              WhatsApp stays off until two-way send is live. New inbound threads route to the least-loaded eligible agent;
+              if nobody is eligible they stay Unassigned (claimable in the inbox). Blank max = unlimited.
+            </div>
+          </div>
+        </section>
+      )}
     </div>
   );
 }

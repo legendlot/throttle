@@ -491,6 +491,7 @@ async function handleGet(action, params, auth, env) {
     case 'getCsAgents':      return getCsAgents(params, auth, env);
     case 'getPresence':      return getPresence(params, auth, env);
     case 'getShifts':        return getShifts(params, auth, env);
+    case 'getRoutingConfig': return getRoutingConfig(params, auth, env);
     case 'getCannedResponses': return getCannedResponses(params, auth, env);
     case 'getMyopAccounts':  return getMyopAccounts(params, auth, env);
     case 'getCalls':         return getCalls(params, auth, env);
@@ -532,6 +533,8 @@ async function handlePost(action, body, auth, env, request) {
     case 'setPresence':          return setPresence(body, auth, env);
     case 'heartbeat':            return heartbeat(body, auth, env);
     case 'setShift':             return setShift(body, auth, env);
+    case 'setThreadState':       return setThreadState(body, auth, env);
+    case 'setRoutingConfig':     return setRoutingConfig(body, auth, env);
     case 'setMyopDefaultDepartment': return setMyopDefaultDepartment(body, auth, env);
     case 'markCalledBack':           return markCalledBack(body, auth, env);
     case 'createTicketFromCall':     return createTicketFromCall(body, auth, env);
@@ -1392,6 +1395,58 @@ async function setShift(body, auth, env) {
   });
   if (!r.ok) return err('failed to save shift', 500);
   return ok({ shift: r.data?.[0] || row });
+}
+
+// ── Thread work-queue state + routing config (Phase 2) ───────────────────────
+
+// Mark a DM thread open / snoozed / closed (the inbox "Done"/"Reopen"/"Snooze").
+// 'open' is also auto-set by the webhook on any new inbound (auto-reopen).
+async function setThreadState(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { thread_id, state, snoozed_until } = body || {};
+  if (!thread_id) return err('thread_id required');
+  if (!['open', 'snoozed', 'closed'].includes(state)) return err('invalid state');
+  const patch = { thread_state: state };
+  if (state === 'closed') {
+    patch.closed_at = new Date().toISOString();
+    patch.closed_by_user_id = auth.userId;
+    patch.snoozed_until = null;
+  } else if (state === 'snoozed') {
+    patch.snoozed_until = snoozed_until || null;
+    patch.closed_at = null; patch.closed_by_user_id = null;
+  } else {                                  // open
+    patch.closed_at = null; patch.closed_by_user_id = null; patch.snoozed_until = null;
+  }
+  const r = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}`, env, {
+    method: 'PATCH', body: JSON.stringify(patch),
+  });
+  if (!r.ok) return err('failed to set thread state', 500);
+  return ok({ thread_state: state });
+}
+
+async function getRoutingConfig(_params, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const r = await sb(`/rest/v1/cs_routing_config?select=*&order=channel.asc`, env);
+  if (!r.ok) return err('failed to load routing config', 500);
+  return ok({ config: r.data || [] });
+}
+
+async function setRoutingConfig(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const { channel, auto_assign_enabled, max_open_per_agent } = body || {};
+  if (!['instagram', 'messenger', 'whatsapp'].includes(channel)) return err('invalid channel');
+  const patch = { updated_at: new Date().toISOString(), updated_by_user_id: auth.userId };
+  if (auto_assign_enabled !== undefined) patch.auto_assign_enabled = !!auto_assign_enabled;
+  if (max_open_per_agent !== undefined) {
+    const n = (max_open_per_agent === null || max_open_per_agent === '') ? null : Number(max_open_per_agent);
+    if (n !== null && (!Number.isInteger(n) || n < 0)) return err('invalid max_open_per_agent');
+    patch.max_open_per_agent = n;
+  }
+  const r = await sb(`/rest/v1/cs_routing_config?channel=eq.${encodeURIComponent(channel)}`, env, {
+    method: 'PATCH', body: JSON.stringify(patch),
+  });
+  if (!r.ok) return err('failed to save routing config', 500);
+  return ok({ channel });
 }
 
 // Sellable product catalogue for the New-ticket cascading dropdowns (Pruthvi #4).
@@ -3254,8 +3309,26 @@ async function metaHandleMessage(channel, ev, env) {
   if (!ins.ok) { console.error(`[meta] message insert failed ${ins.status} ${JSON.stringify(ins.data)?.slice(0, 200)}`); return; }
 
   const patch = { last_message_at: ts };
-  if (direction === 'inbound') patch.customer_window_until = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  if (direction === 'inbound') {
+    patch.customer_window_until = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    // Auto-reopen (Q1=B work-queue): any inbound makes the conversation active again,
+    // clearing a prior Done/Snooze. The prior assignee (if any) is kept for continuity.
+    if (thread.thread_state && thread.thread_state !== 'open') {
+      patch.thread_state = 'open';
+      patch.closed_at = null;
+      patch.closed_by_user_id = null;
+      patch.snoozed_until = null;
+    }
+  }
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) }).catch(() => {});
+
+  // Round-robin: auto-assign an unassigned inbound thread to the least-loaded eligible
+  // agent. Config-gated per channel inside the RPC (WhatsApp seeded off). Best-effort.
+  if (direction === 'inbound' && !thread.assigned_agent_id) {
+    await sb(`/rest/v1/rpc/cs_autoassign_thread`, env, {
+      method: 'POST', body: JSON.stringify({ p_thread_id: thread.id }),
+    }).catch(() => {});
+  }
 }
 
 // Outbound send via Graph API. Inert without META_PAGE_TOKEN. Gated cs_ticket_manage.
@@ -3419,9 +3492,13 @@ async function getMessagingThreads(params, auth, env) {
   const tab = params.get('tab');              // mine | unassigned | all (assignment axis, S162)
   const limit = Math.min(Number(params.get('limit')) || 60, 300);
   let q = `/rest/v1/cs_wa_threads?select=*&order=last_message_at.desc.nullslast&limit=${limit}`;
+  const state = params.get('state') || 'active';   // active (open+snoozed) | closed | all (S163 work-queue)
   if (channel && channel !== 'all') q += `&channel=eq.${encodeURIComponent(channel)}`;
   if (tab === 'mine') q += `&assigned_agent_id=eq.${auth.userId}`;
   else if (tab === 'unassigned') q += `&assigned_agent_id=is.null`;
+  if (state === 'active') q += `&thread_state=in.(open,snoozed)`;
+  else if (state === 'closed') q += `&thread_state=eq.closed`;
+  // state === 'all' → no thread_state filter
   const tRes = await sb(q, env);
   const threads = tRes.data || [];
   if (!threads.length) return ok({ threads: [] });

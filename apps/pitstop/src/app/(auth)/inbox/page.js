@@ -15,6 +15,7 @@ import { useAuth } from '@throttle/auth';
 import {
   Instagram, Facebook, MessageCircle, Send, Clock, ExternalLink, Link2,
   FileText, Smile, Lock, Bold, Italic, StickyNote, UserPlus, X, Paperclip, Plus, Search,
+  CheckCircle2, RotateCcw,
 } from 'lucide-react';
 import { Panel, Tabs, ToneBadge, btnPrimary, btnGhost, inputStyle, selectStyle } from '../../../components/kit/index.js';
 import { csopsGet, csopsPost } from '../../../lib/csopsFetch.js';
@@ -56,6 +57,7 @@ export default function InboxPage() {
 
   const [channel, setChannel] = useState('all');
   const [assignTab, setAssignTab] = useState('all');  // all | mine | unassigned (S162-A)
+  const [stateFilter, setStateFilter] = useState('active'); // active | closed | all (S163 work-queue)
   const [threads, setThreads] = useState([]);
   const [stats, setStats] = useState({
     instagram: { total: 0, awaiting: 0, mine: 0, unassigned: 0 },
@@ -93,11 +95,12 @@ export default function InboxPage() {
       const p = {};
       if (channel !== 'all') p.channel = channel;
       if (assignTab !== 'all') p.tab = assignTab;
+      if (stateFilter !== 'active') p.state = stateFilter;   // 'active' is the worker default
       const d = await csopsGet('getMessagingThreads', p, session);
       setThreads(d?.threads || []);
     } catch (e) { setErr(e.message); }
     finally { setLoadingList(false); }
-  }, [session, channel, assignTab]);
+  }, [session, channel, assignTab, stateFilter]);
 
   const loadStats = useCallback(async () => {
     if (!session) return;
@@ -290,6 +293,17 @@ export default function InboxPage() {
     } catch (e) { setErr(e.message); }
   }
 
+  // Mark the conversation Done (closed) / Reopen (open) — the work-queue toggle (S163).
+  async function setThreadStateAction(state) {
+    if (!convo?.thread) return;
+    setErr(null);
+    try {
+      await csopsPost('setThreadState', { thread_id: convo.thread.id, state }, session);
+      await loadConvo(selectedId);
+      loadThreads();
+    } catch (e) { setErr(e.message); }
+  }
+
   async function linkTicket() {
     const tn = linkVal.trim();
     if (!tn || !convo?.thread) return;
@@ -336,9 +350,17 @@ export default function InboxPage() {
         <div style={{ width: 340, flexShrink: 0, display: 'flex', flexDirection: 'column',
           background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
           <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', display: 'flex',
-            alignItems: 'center', justifyContent: 'space-between' }}>
+            alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
             <span className="label" style={{ fontSize: 11, fontWeight: 700, color: 'var(--t1)' }}>Conversations</span>
-            <span className="num" style={{ fontSize: 10.5, color: 'var(--t3)' }}>{threads.length}</span>
+            <div style={{ display: 'flex', gap: 3 }}>
+              {[['active', 'Active'], ['closed', 'Closed'], ['all', 'All']].map(([id, lbl]) => (
+                <button key={id} onClick={() => setStateFilter(id)} title={`Show ${lbl.toLowerCase()} conversations`}
+                  style={{ cursor: 'pointer', fontSize: 10, fontWeight: 600, padding: '3px 7px', borderRadius: 'var(--radius-sm)',
+                    border: '1px solid', borderColor: stateFilter === id ? 'var(--accent)' : 'var(--border)',
+                    background: stateFilter === id ? 'var(--accent-bg)' : 'transparent',
+                    color: stateFilter === id ? 'var(--accent)' : 'var(--t3)' }}>{lbl}</button>
+              ))}
+            </div>
           </div>
           {/* Assignment axis — Mine / Unassigned / All (S162-A) */}
           <div style={{ display: 'flex', gap: 4, padding: '8px 10px', borderBottom: '1px solid var(--border)' }}>
@@ -393,6 +415,17 @@ export default function InboxPage() {
                     <AssignControl
                       thread={thread} mineThread={mineThread} canReassign={canReassign} agents={agents}
                       open={assignOpen} setOpen={setAssignOpen} onAssign={assign} myId={myId} />
+                  )}
+                  {canManage && (
+                    thread.thread_state === 'closed' ? (
+                      <button onClick={() => setThreadStateAction('open')} style={{ ...btnGhost, padding: '6px 10px' }} title="Reopen this conversation">
+                        <RotateCcw size={12} /> Reopen
+                      </button>
+                    ) : (
+                      <button onClick={() => setThreadStateAction('closed')} style={{ ...btnGhost, padding: '6px 10px' }} title="Mark this conversation done">
+                        <CheckCircle2 size={12} /> Done
+                      </button>
+                    )
                   )}
                   {ch.sendable && <WindowPill open={windowOpen} until={thread.customer_window_until} />}
                   {convo?.linked_ticket ? (
@@ -758,6 +791,7 @@ function ThreadRow({ t, active, myId, onClick }) {
             textOverflow: 'ellipsis', flex: 1 }}>{preview || '—'}</span>
         </div>
         <div style={{ display: 'flex', gap: 5, marginTop: 4, flexWrap: 'wrap' }}>
+          {t.thread_state === 'closed' && <ToneBadge tone="mute" style={{ fontSize: 8.5 }}>Done</ToneBadge>}
           {t.assigned_agent_id && (
             <ToneBadge tone={mine ? 'ok' : 'mute'} style={{ fontSize: 8.5 }}>{mine ? 'Mine' : (t.assigned_agent_name || 'Assigned')}</ToneBadge>
           )}

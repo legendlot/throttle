@@ -124,8 +124,14 @@ store.cs_routing_config           -- one row per channel
   max_open_per_agent   int                                   -- null = unlimited
   updated_at           timestamptz default now()
   updated_by_user_id   uuid
+
+cs_wa_threads (additive — the Q1=B work-queue state)
+  thread_state       text not null default 'open' CHECK (open|snoozed|closed)
+  closed_at          timestamptz
+  closed_by_user_id  uuid
+  snoozed_until      timestamptz                  -- optional; snooze deferral
 ```
-Seed: `instagram`/`messenger` → enabled **true**; `whatsapp` → enabled **false** (read-only mirror; flip when WA send-side lands). No rotation-pointer table needed — the tiebreak reads `cs_wa_threads.assigned_at`.
+Seed: `instagram`/`messenger` → enabled **true**; `whatsapp` → enabled **false** (read-only mirror; flip when WA send-side lands). No rotation-pointer table — the tiebreak reads `cs_wa_threads.assigned_at`. Index `cs_wa_threads (assigned_agent_id, thread_state)` for load counts. **Load = open threads assigned to the agent** (snoozed/closed excluded). **Auto-reopen:** an inbound message on a `closed` thread flips it back to `open` (webhook), keeping its prior assignee.
 
 ### 3.2 The router — `cs_autoassign_thread(p_thread_id uuid)` SECURITY DEFINER RPC
 
@@ -236,9 +242,9 @@ Additive migrations, split per phase: **Phase 1** `pitstop_presence_shifts_v1` =
 - **(Parallel) WhatsApp transport** — separate spec; the actual BiteSpeed-retirement lever (direct WhatsApp Cloud API vs C2-B). Until it lands, RR/presence are live on IG+FB and WA stays a read-only mirror.
 
 ## 8. Open questions (confirm before/at build)
-- **Q1 — "open thread" definition for least-loaded + the Stale view.** `cs_wa_threads` has no close/resolve state today. Options: (a) treat "open" = thread whose last message is inbound (awaiting reply); (b) add a lightweight `thread_state` (`open`/`snoozed`/`closed`) so agents can clear handled threads (cleaner load math + a real "done" action, mild scope add). Recommend (b) — it also makes the inbox a true work queue. **Decide at Phase 2.**
+- **Q1 — RESOLVED (Afshaan S163): Option B — add `cs_wa_threads.thread_state` (`open`/`snoozed`/`closed`, default `open`).** Load = count of `open` threads assigned to an agent (snoozed/closed don't count). Agents click **Done** to close; a **new inbound message auto-reopens** a closed thread (in the webhook), and a reopened thread keeps its prior assignee (continuity). The inbox defaults to active (open+snoozed) with a Closed/All filter — a real work queue, matching the helpdesk model. Snooze is optional/deferrable.
 - **Q2 — RESOLVED (Afshaan S163):** seed **all four lanes 10:00–19:00 IST, Mon–Fri** (`start_min=600, end_min=1140, working_days={1,2,3,4,5}`); team edits per-lane in the admin UI. Heartbeat 60s / 3-min freshness; EOD cosmetic-cron TBD time (default ~21:00 IST). **Confirmed model:** window-open + nobody-online → no auto-assign (thread stays Unassigned, safe).
-- **Q6 (Phase 2) — catch-up of the Unassigned backlog.** Threads arriving while nobody is online stay Unassigned (not retro-assigned). Default = leave claimable from the Unassigned tab. Optional later: a sweep that distributes the backlog across agents as they come online (avoid dumping on the first login). Decide at Phase 2.
+- **Q6 — RESOLVED (Afshaan S163): leave claimable, NO catch-up sweep.** Threads arriving while nobody is online stay Unassigned and are pulled from the Unassigned tab by hand. Round-robin only ever auto-assigns a thread *at the moment a fresh inbound arrives while ≥1 agent is eligible* — it never retro-distributes a backlog.
 - **Q3 — does `away` ever receive assignments?** Default: no (only `online`); `away` is excluded but not offline. Confirm.
 - **Q4 — auto-release stale threads** when owner goes offline (v2): after how long, and to whom (pool / lead)? Deferred unless wanted in v1.
 - **Q5 — notify agent on auto-assign** (in-app/Slack) — v2; ties into the Docket V2 notifications track.
