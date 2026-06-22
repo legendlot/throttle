@@ -492,6 +492,7 @@ async function handleGet(action, params, auth, env) {
     case 'getPresence':      return getPresence(params, auth, env);
     case 'getShifts':        return getShifts(params, auth, env);
     case 'getRoutingConfig': return getRoutingConfig(params, auth, env);
+    case 'getTags':          return getTags(params, auth, env);
     case 'getCannedResponses': return getCannedResponses(params, auth, env);
     case 'getMyopAccounts':  return getMyopAccounts(params, auth, env);
     case 'getCalls':         return getCalls(params, auth, env);
@@ -535,6 +536,10 @@ async function handlePost(action, body, auth, env, request) {
     case 'setShift':             return setShift(body, auth, env);
     case 'setThreadState':       return setThreadState(body, auth, env);
     case 'setRoutingConfig':     return setRoutingConfig(body, auth, env);
+    case 'createTag':            return createTag(body, auth, env);
+    case 'updateTag':            return updateTag(body, auth, env);
+    case 'setTicketTags':        return setTicketTags(body, auth, env);
+    case 'setThreadTags':        return setThreadTags(body, auth, env);
     case 'setMyopDefaultDepartment': return setMyopDefaultDepartment(body, auth, env);
     case 'markCalledBack':           return markCalledBack(body, auth, env);
     case 'createTicketFromCall':     return createTicketFromCall(body, auth, env);
@@ -593,6 +598,12 @@ async function getTickets(params, auth, env) {
   if (agent) filters.push(`assigned_agent_id=eq.${encodeURIComponent(agent)}`);
   const createdBy = params.get('created_by');
   if (createdBy) filters.push(`created_by_user_id=eq.${encodeURIComponent(createdBy)}`);
+  const tagFilter = params.get('tag');                       // tag facet (S163)
+  if (tagFilter) {
+    const tagged = await idsWithTag('ticket', tagFilter, env);
+    if (!tagged.length) return ok({ tickets: [], offset, limit });
+    filters.push(`id=in.(${tagged.join(',')})`);
+  }
 
   // Multi-token AND-of-OR search
   if (search) {
@@ -613,7 +624,9 @@ async function getTickets(params, auth, env) {
   });
   if (!res.ok) return err(`Failed to fetch tickets: ${JSON.stringify(res.data)}`, res.status);
 
-  return ok({ tickets: res.data || [], offset, limit });
+  const tickets = res.data || [];
+  const tagsByTicket = await fetchTagsFor('ticket', tickets.map(t => t.id), env);
+  return ok({ tickets: tickets.map(t => ({ ...t, tags: tagsByTicket[t.id] || [] })), offset, limit });
 }
 
 async function getTicket(params, auth, env) {
@@ -674,6 +687,7 @@ async function getTicket(params, auth, env) {
     }
   }
 
+  const tagsByTicket = await fetchTagsFor('ticket', [ticket.id], env);
   return ok({
     ticket: updatedTicket,
     history: historyRes.data || [],
@@ -683,6 +697,7 @@ async function getTicket(params, auth, env) {
     dispatch_info: dispatchInfo,
     past_cases: pastCases,
     repair_run: repairRun?.data?.[0] || null,
+    tags: tagsByTicket[ticket.id] || [],
   });
 }
 
@@ -1447,6 +1462,117 @@ async function setRoutingConfig(body, auth, env) {
   });
   if (!r.ok) return err('failed to save routing config', 500);
   return ok({ channel });
+}
+
+// ── Tags (Phase 3) — one catalogue, shared across tickets + DM threads ────────
+const TAG_COLORS = new Set(['slate', 'red', 'orange', 'amber', 'green', 'teal', 'blue', 'violet', 'pink']);
+const slugifyTag = (s) => String(s || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
+
+// Batch-fetch tags for a set of parent ids → { parentId: [{id,name,color,slug}] }.
+async function fetchTagsFor(kind, ids, env) {
+  if (!ids.length) return {};
+  const jt = kind === 'ticket' ? 'cs_ticket_tags' : 'cs_thread_tags';
+  const col = kind === 'ticket' ? 'ticket_id' : 'thread_id';
+  const r = await sb(`/rest/v1/${jt}?${col}=in.(${ids.join(',')})&select=${col},cs_tags(id,name,color,slug,is_active)`, env);
+  const out = {};
+  for (const row of (r.data || [])) {
+    const t = row.cs_tags;
+    if (!t || t.is_active === false) continue;
+    (out[row[col]] ||= []).push({ id: t.id, name: t.name, color: t.color, slug: t.slug });
+  }
+  return out;
+}
+
+// Resolve the parent ids carrying a given tag (for the ?tag= list facet).
+async function idsWithTag(kind, tagId, env) {
+  const jt = kind === 'ticket' ? 'cs_ticket_tags' : 'cs_thread_tags';
+  const col = kind === 'ticket' ? 'ticket_id' : 'thread_id';
+  const r = await sb(`/rest/v1/${jt}?tag_id=eq.${encodeURIComponent(tagId)}&select=${col}&limit=10000`, env);
+  return (r.data || []).map(x => x[col]);
+}
+
+async function getTags(params, auth, env) {
+  const g = require('cs_ticket_view', auth); if (g) return g;
+  const includeArchived = params.get('all') === '1' && !!auth.permissions?.cs_ticket_admin;
+  const q = `/rest/v1/cs_tags?select=id,name,slug,color,description,is_active,sort_order`
+    + `${includeArchived ? '' : '&is_active=eq.true'}&order=sort_order.asc,name.asc`;
+  const r = await sb(q, env);
+  if (!r.ok) return err('failed to load tags', 500);
+  return ok({ tags: r.data || [] });
+}
+
+async function createTag(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const name = String(body?.name || '').trim();
+  const color = String(body?.color || 'slate');
+  if (!name) return err('name required');
+  if (!TAG_COLORS.has(color)) return err('invalid color');
+  const slug = slugifyTag(name);
+  if (!slug) return err('invalid name');
+  const ex = await sb(`/rest/v1/cs_tags?slug=eq.${encodeURIComponent(slug)}&select=id,is_active&limit=1`, env);
+  if (ex.data?.[0]) {
+    if (ex.data[0].is_active === false) {     // reactivate an archived dupe rather than erroring
+      const up = await sb(`/rest/v1/cs_tags?id=eq.${ex.data[0].id}`, env, {
+        method: 'PATCH', body: JSON.stringify({ is_active: true, color, name, updated_at: new Date().toISOString() }),
+      });
+      return ok({ tag: up.data?.[0] || null, reactivated: true });
+    }
+    return err('a tag with that name already exists', 409);
+  }
+  const r = await sb(`/rest/v1/cs_tags`, env, {
+    method: 'POST',
+    body: JSON.stringify({ name, slug, color, description: body?.description || null, created_by_user_id: auth.userId }),
+  });
+  if (!r.ok) return err('failed to create tag', 500);
+  return ok({ tag: r.data?.[0] || null });
+}
+
+async function updateTag(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;     // curation is lead/admin
+  const { id, name, color, description, is_active, sort_order } = body || {};
+  if (!id) return err('id required');
+  const patch = { updated_at: new Date().toISOString() };
+  if (name !== undefined) { const n = String(name).trim(); if (!n) return err('invalid name'); patch.name = n; patch.slug = slugifyTag(n); }
+  if (color !== undefined) { if (!TAG_COLORS.has(color)) return err('invalid color'); patch.color = color; }
+  if (description !== undefined) patch.description = description || null;
+  if (is_active !== undefined) patch.is_active = !!is_active;
+  if (sort_order !== undefined) patch.sort_order = Math.round(Number(sort_order) || 0);
+  const r = await sb(`/rest/v1/cs_tags?id=eq.${encodeURIComponent(id)}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+  if (!r.ok) return err('failed to update tag', 500);
+  return ok({ tag: r.data?.[0] || null });
+}
+
+// Replace-set a ticket's / thread's tags (batched delete-not-in + insert-missing).
+async function setTagsFor(kind, parentId, tagIds, auth, env) {
+  const jt = kind === 'ticket' ? 'cs_ticket_tags' : 'cs_thread_tags';
+  const col = kind === 'ticket' ? 'ticket_id' : 'thread_id';
+  const notIn = tagIds.length ? `&tag_id=not.in.(${tagIds.join(',')})` : '';
+  await sb(`/rest/v1/${jt}?${col}=eq.${encodeURIComponent(parentId)}${notIn}`, env, { method: 'DELETE', prefer: 'return=minimal' });
+  if (tagIds.length) {
+    const rows = tagIds.map(t => ({ [col]: parentId, tag_id: t, tagged_by_user_id: auth.userId }));
+    await sb(`/rest/v1/${jt}?on_conflict=${col},tag_id`, env, {
+      method: 'POST', prefer: 'resolution=ignore-duplicates,return=minimal', body: JSON.stringify(rows),
+    });
+  }
+}
+
+async function setTicketTags(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { ticket_id } = body || {};
+  const tagIds = Array.isArray(body?.tag_ids) ? [...new Set(body.tag_ids)] : null;
+  if (!ticket_id || !tagIds) return err('ticket_id and tag_ids required');
+  await setTagsFor('ticket', ticket_id, tagIds, auth, env);
+  await insertHistory(ticket_id, 'tags', null, tagIds.join(',') || '(none)', null, auth, env).catch(() => {});
+  return ok({ ticket_id, tag_ids: tagIds });
+}
+
+async function setThreadTags(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { thread_id } = body || {};
+  const tagIds = Array.isArray(body?.tag_ids) ? [...new Set(body.tag_ids)] : null;
+  if (!thread_id || !tagIds) return err('thread_id and tag_ids required');
+  await setTagsFor('thread', thread_id, tagIds, auth, env);
+  return ok({ thread_id, tag_ids: tagIds });
 }
 
 // Sellable product catalogue for the New-ticket cascading dropdowns (Pruthvi #4).
@@ -3499,6 +3625,12 @@ async function getMessagingThreads(params, auth, env) {
   if (state === 'active') q += `&thread_state=in.(open,snoozed)`;
   else if (state === 'closed') q += `&thread_state=eq.closed`;
   // state === 'all' → no thread_state filter
+  const tagFilter = params.get('tag');             // tag facet (S163)
+  if (tagFilter) {
+    const tagged = await idsWithTag('thread', tagFilter, env);
+    if (!tagged.length) return ok({ threads: [] });
+    q += `&id=in.(${tagged.join(',')})`;
+  }
   const tRes = await sb(q, env);
   const threads = tRes.data || [];
   if (!threads.length) return ok({ threads: [] });
@@ -3523,6 +3655,7 @@ async function getMessagingThreads(params, auth, env) {
     const tkRes = await sb(`/rest/v1/cs_tickets?id=in.(${ticketIds.join(',')})&select=id,ticket_no`, env);
     for (const tk of (tkRes.data || [])) ticketNoById[tk.id] = tk.ticket_no;
   }
+  const tagsByThread = await fetchTagsFor('thread', ids, env);
   const out = threads.map(t => {
     const lm = lastByThread[t.id] || null;
     const tid = ticketByThread[t.id] || null;
@@ -3532,6 +3665,7 @@ async function getMessagingThreads(params, auth, env) {
       linked_ticket_id: tid,
       linked_ticket_no: tid ? (ticketNoById[tid] || null) : null,
       within_customer_window: withinCustomerWindow(t),
+      tags: tagsByThread[t.id] || [],
     };
   });
   return ok({ threads: out });
@@ -3595,7 +3729,8 @@ async function getMessagingThread(params, auth, env) {
     const tk = await sb(`/rest/v1/cs_tickets?id=eq.${linkedId}&select=id,ticket_no,disposition,stage&limit=1`, env);
     linked_ticket = tk.data?.[0] || null;
   }
-  return ok({ thread, messages, linked_ticket, within_customer_window: withinCustomerWindow(thread) });
+  const tagsByThread = await fetchTagsFor('thread', [thread.id], env);
+  return ok({ thread, messages, linked_ticket, within_customer_window: withinCustomerWindow(thread), tags: tagsByThread[thread.id] || [] });
 }
 
 // Link every message on a thread to a ticket (cs_wa_messages.ticket_id). IG/FB

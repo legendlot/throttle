@@ -7,6 +7,7 @@ import { csopsGet } from '../../../lib/csopsFetch.js';
 import { fetchIssueCatalog } from '../../../lib/issueCatalog.js';
 import { DISPOSITION_VALUES, DISPOSITION_LABELS } from '../../../lib/dispositions.js';
 import { DispositionBadge } from '../../../components/DispositionBadge.js';
+import { TagChip } from '../../../components/TagPicker.js';
 import { getActiveDept } from '../../../components/DeptSwitcher.js';
 import { fmtIstDateTime } from '../../../lib/datetime.js';
 import {
@@ -70,6 +71,7 @@ export default function QueuePage() {
   const platformFilter = searchParams.get('platform') || '';
   const agentFilter = searchParams.get('agent') || '';
   const stageFilter = searchParams.get('stage') || '';
+  const tagFilter = searchParams.get('tag') || '';
   const searchQ = searchParams.get('q') || '';
 
   const canFilterByAgent = !!(perms?.cs_ticket_admin || perms?.cs_ticket_reassign);
@@ -89,6 +91,7 @@ export default function QueuePage() {
   const [searchInput, setSearchInput] = useState(searchQ);
   const [catalogCategories, setCatalogCategories] = useState([]);
   const [agents, setAgents] = useState([]);
+  const [allTags, setAllTags] = useState([]);
 
   const { focusedIdx, setFocusedIdx } = useListNav(
     tickets.length,
@@ -126,6 +129,7 @@ export default function QueuePage() {
     if (!session) return;
     let alive = true;
     fetchIssueCatalog(session).then(cats => { if (alive) setCatalogCategories(cats); }).catch(() => {});
+    csopsGet('getTags', {}, session).then(d => { if (alive) setAllTags(d?.tags || []); }).catch(() => {});
     return () => { alive = false; };
   }, [session]);
 
@@ -151,6 +155,7 @@ export default function QueuePage() {
     if (platformFilter)    params.platform    = platformFilter;
     if (agentFilter)       params.agent       = agentFilter;
     if (stageFilter)       params.stage       = stageFilter;
+    if (tagFilter)         params.tag         = tagFilter;
     if (searchQ)           params.search      = searchQ;
     if (perms?.cs_ticket_admin) params.department = deptSlug || 'all';
 
@@ -159,7 +164,7 @@ export default function QueuePage() {
       .catch(e => { if (alive) setError(e.message); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [session, activeTab, dispositionFilter, categoryFilter, platformFilter, agentFilter, stageFilter, searchQ, deptSlug, perms?.cs_ticket_admin]);
+  }, [session, activeTab, dispositionFilter, categoryFilter, platformFilter, agentFilter, stageFilter, tagFilter, searchQ, deptSlug, perms?.cs_ticket_admin]);
 
   function submitSearch(e) { e.preventDefault(); setParam('q', searchInput.trim()); }
 
@@ -226,6 +231,13 @@ export default function QueuePage() {
           {PLATFORMS.map(p => <option key={p} value={p}>{p}</option>)}
         </select>
 
+        {allTags.length > 0 && (
+          <select value={tagFilter} onChange={e => setParam('tag', e.target.value)} title="Filter by tag" style={selectStyle}>
+            <option value="">All tags</option>
+            {allTags.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
+        )}
+
         {canFilterByAgent && (
           <select value={agentFilter} onChange={e => setParam('agent', e.target.value)} title="Filter by the agent handling the ticket" style={selectStyle}>
             <option value="">All agents</option>
@@ -272,6 +284,11 @@ export default function QueuePage() {
                     {t.product || <span style={{ color: 'var(--t4)' }}>—</span>}
                     {t.product_model && <span style={{ color: 'var(--t4)' }}> · {t.product_model}</span>}
                     {t.product_color && <span style={{ color: 'var(--t4)' }}> · {t.product_color}</span>}
+                    {(t.tags || []).length > 0 && (
+                      <div style={{ display: 'flex', gap: 4, marginTop: 3, flexWrap: 'wrap' }}>
+                        {t.tags.map(tag => <TagChip key={tag.id} tag={tag} small />)}
+                      </div>
+                    )}
                   </td>
                   <td style={TD}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>

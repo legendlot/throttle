@@ -15,10 +15,11 @@ import { useAuth } from '@throttle/auth';
 import {
   Instagram, Facebook, MessageCircle, Send, Clock, ExternalLink, Link2,
   FileText, Smile, Lock, Bold, Italic, StickyNote, UserPlus, X, Paperclip, Plus, Search,
-  CheckCircle2, RotateCcw,
+  CheckCircle2, RotateCcw, Tag,
 } from 'lucide-react';
 import { Panel, Tabs, ToneBadge, btnPrimary, btnGhost, inputStyle, selectStyle } from '../../../components/kit/index.js';
 import { csopsGet, csopsPost } from '../../../lib/csopsFetch.js';
+import TagPicker, { TagChip } from '../../../components/TagPicker.js';
 
 // Full emoji picker — lazy, client-only (keeps the emoji dataset off the main bundle).
 const EmojiPicker = dynamic(() => import('../../../components/EmojiPicker.js'), {
@@ -58,6 +59,8 @@ export default function InboxPage() {
   const [channel, setChannel] = useState('all');
   const [assignTab, setAssignTab] = useState('all');  // all | mine | unassigned (S162-A)
   const [stateFilter, setStateFilter] = useState('active'); // active | closed | all (S163 work-queue)
+  const [tagFilter, setTagFilter] = useState('');           // tag facet (S163)
+  const [allTags, setAllTags] = useState([]);
   const [threads, setThreads] = useState([]);
   const [stats, setStats] = useState({
     instagram: { total: 0, awaiting: 0, mine: 0, unassigned: 0 },
@@ -96,11 +99,12 @@ export default function InboxPage() {
       if (channel !== 'all') p.channel = channel;
       if (assignTab !== 'all') p.tab = assignTab;
       if (stateFilter !== 'active') p.state = stateFilter;   // 'active' is the worker default
+      if (tagFilter) p.tag = tagFilter;
       const d = await csopsGet('getMessagingThreads', p, session);
       setThreads(d?.threads || []);
     } catch (e) { setErr(e.message); }
     finally { setLoadingList(false); }
-  }, [session, channel, assignTab, stateFilter]);
+  }, [session, channel, assignTab, stateFilter, tagFilter]);
 
   const loadStats = useCallback(async () => {
     if (!session) return;
@@ -147,6 +151,7 @@ export default function InboxPage() {
   useEffect(() => {
     if (!session) return;
     if (canReassign) csopsGet('getCsAgents', {}, session).then(d => setAgents(Array.isArray(d) ? d : (d?.data || []))).catch(() => {});
+    csopsGet('getTags', {}, session).then(d => setAllTags(d?.tags || [])).catch(() => {});
     loadCanned();
   }, [session, canReassign, loadCanned]);
 
@@ -304,6 +309,17 @@ export default function InboxPage() {
     } catch (e) { setErr(e.message); }
   }
 
+  // Replace-set the conversation's tags (S163).
+  async function setThreadTagsAction(tagIds) {
+    if (!convo?.thread) return;
+    setErr(null);
+    try {
+      await csopsPost('setThreadTags', { thread_id: convo.thread.id, tag_ids: tagIds }, session);
+      await loadConvo(selectedId);
+      loadThreads();
+    } catch (e) { setErr(e.message); }
+  }
+
   async function linkTicket() {
     const tn = linkVal.trim();
     if (!tn || !convo?.thread) return;
@@ -375,6 +391,16 @@ export default function InboxPage() {
               </button>
             ))}
           </div>
+          {allTags.length > 0 && (
+            <div style={{ padding: '6px 10px', borderBottom: '1px solid var(--border)' }}>
+              <select value={tagFilter} onChange={e => setTagFilter(e.target.value)} title="Filter by tag"
+                style={{ width: '100%', fontSize: 11, padding: '4px 6px', borderRadius: 'var(--radius-sm)',
+                  border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--t1)' }}>
+                <option value="">All tags</option>
+                {allTags.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            </div>
+          )}
           <div style={{ overflowY: 'auto', flex: 1 }}>
             {loadingList ? (
               <Empty>Loading…</Empty>
@@ -439,6 +465,14 @@ export default function InboxPage() {
                     </button>
                   )}
                 </div>
+              </div>
+
+              {/* Tags */}
+              <div style={{ padding: '7px 16px', borderBottom: '1px solid var(--border)', display: 'flex',
+                alignItems: 'center', gap: 8, background: 'var(--surface)' }}>
+                <Tag size={12} style={{ color: 'var(--t4)', flexShrink: 0 }} />
+                <TagPicker session={session} value={convo?.tags || []} onSave={setThreadTagsAction}
+                  canManage={canManage} canCreate={canManage} small />
               </div>
 
               {/* Link-ticket inline row */}
@@ -798,6 +832,7 @@ function ThreadRow({ t, active, myId, onClick }) {
           {t.linked_ticket_no && (
             <ToneBadge tone="info" style={{ fontSize: 8.5 }}>{t.linked_ticket_no}</ToneBadge>
           )}
+          {(t.tags || []).map(tag => <TagChip key={tag.id} tag={tag} small />)}
         </div>
       </div>
     </button>

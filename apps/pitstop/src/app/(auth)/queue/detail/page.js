@@ -4,8 +4,9 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Modal, Spinner, useToast } from '@throttle/ui';
-import { ChevronLeft, ChevronRight, Link2, MessageSquare } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Link2, MessageSquare, Tag } from 'lucide-react';
 import { csopsGet, csopsPost } from '../../../../lib/csopsFetch.js';
+import TagPicker from '../../../../components/TagPicker.js';
 import { Stepper as VoltStepper, StepperToggle, Icon, btnPrimary, btnGhost } from '../../../../components/kit/index.js';
 import { ShopifyPanel } from '../../../../components/ShopifyPanel.js';
 import { IssuePicker } from '../../../../components/IssuePicker.js';
@@ -103,6 +104,11 @@ export default function TicketDetailPage() {
   const stages = lifecycleStages(t.disposition);
   const stageIndex = stages.indexOf(t.stage);
   const isClosed = !!t.closed_at;
+  const canManage = !!perms?.cs_ticket_manage;
+  const saveTags = async (ids) => {
+    try { await csopsPost('setTicketTags', { ticket_id: t.id, tag_ids: ids }, session); await refresh(); }
+    catch (e) { setError(e.message); }
+  };
 
   return (
     <div>
@@ -113,6 +119,12 @@ export default function TicketDetailPage() {
 
       {/* Stepper */}
       <LifecycleStepper ticket={t} />
+
+      {/* Tags */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 'var(--space-3, 12px)' }}>
+        <Tag size={13} style={{ color: 'var(--t4)', flexShrink: 0 }} />
+        <TagPicker session={session} value={data.tags || []} onSave={saveTags} canManage={canManage} canCreate={canManage} />
+      </div>
 
       {/* Three-column body — Activity collapses to a slim rail (default collapsed) */}
       <div style={{
