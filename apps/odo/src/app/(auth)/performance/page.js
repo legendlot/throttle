@@ -3,58 +3,8 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
 import { salesGet, inr, fmtInt, rangePresets, priorPeriod, istToday } from '../../../lib/api.js';
-
-// Aggregate f_order_rollup rows (per sale_date × channel) → the segregation metric set.
-function agg(rows) {
-  const a = { gross: 0, cancelledValue: 0, discount: 0, tax: 0, orders: 0, cancelledOrders: 0,
-              returnsCount: 0, returnsValue: 0, repl: 0, infl: 0, repair: 0 };
-  for (const r of (rows || [])) {
-    a.gross += Number(r.gross || 0);
-    a.cancelledValue += Number(r.cancelled_value || 0);
-    a.discount += Number(r.discount || 0);
-    a.tax += Number(r.tax || 0);
-    a.orders += Number(r.orders || 0);
-    a.cancelledOrders += Number(r.cancelled_orders || 0);
-    a.returnsCount += Number(r.returns_count || 0);
-    a.returnsValue += Number(r.returns_value || 0);
-    a.repl += Number(r.replacement_orders || 0);
-    a.infl += Number(r.influencer_orders || 0);
-    a.repair += Number(r.repair_orders || 0);
-  }
-  a.grossAll = a.gross + a.cancelledValue;          // Total Sales (incl cancellations)
-  a.netCancel = a.gross;                            // Net Sales (excl cancellations)
-  a.netExGst = a.netCancel - a.tax;                 // Net of GST (true tax, tax-inclusive store)
-  a.totalOrders = a.orders + a.cancelledOrders;
-  a.aov = a.totalOrders ? a.grossAll / a.totalOrders : 0;
-  a.cancelRate = a.totalOrders ? a.cancelledOrders / a.totalOrders * 100 : 0;
-  return a;
-}
-
-// % delta vs prior period; tone: 'pos' colours up=green/down=red, 'neutral' = grey (cost metrics).
-function Delta({ now, prev, tone = 'pos' }) {
-  if (prev == null || !isFinite(prev) || prev === 0) return null;
-  const pct = (now - prev) / Math.abs(prev) * 100;
-  const up = pct >= 0;
-  const color = tone === 'neutral' ? 'var(--t3)' : (up ? 'var(--green)' : 'var(--red)');
-  return (
-    <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color, display: 'inline-flex', alignItems: 'center', gap: 2 }}>
-      {up ? '↗' : '↘'} {Math.abs(pct).toFixed(1)}%
-    </span>
-  );
-}
-
-function Kpi({ lbl, val, sub, now, prev, tone }) {
-  return (
-    <div className="so-card" style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-        <div className="so-kpi-lbl">{lbl}</div>
-        <Delta now={now} prev={prev} tone={tone} />
-      </div>
-      <span className="so-kpi-val">{val}</span>
-      {sub && <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>{sub}</div>}
-    </div>
-  );
-}
+import { aggOrders } from '../../../lib/segregation.js';
+import { Delta, Kpi } from '../../../components/kit.js';
 
 export default function PerformancePage() {
   const { session } = useAuth();
@@ -75,11 +25,11 @@ export default function PerformancePage() {
       salesGet('getSegregation', { from: pp.from, to: pp.to }, session),
     ]).then(([cur, prv]) => {
       setData({ rows: cur?.rows || [], channels: cur?.channels || [] });
-      setPrev(agg(prv?.rows || []));
+      setPrev(aggOrders(prv?.rows || []));
     }).catch(e => setErr(e.message || String(e)));
   }, [session, from, to]);
 
-  const a = data ? agg(data.rows) : null;
+  const a = data ? aggOrders(data.rows) : null;
   const p = prev || {};
   const chById = {}; (data?.channels || []).forEach(c => { chById[c.id] = c.name; });
 
@@ -88,7 +38,7 @@ export default function PerformancePage() {
   for (const r of (data?.rows || [])) {
     const k = r.channel_id; (byCh[k] = byCh[k] || []).push(r);
   }
-  const chRows = Object.entries(byCh).map(([id, rs]) => ({ id, name: chById[id] || id, ...agg(rs) }))
+  const chRows = Object.entries(byCh).map(([id, rs]) => ({ id, name: chById[id] || id, ...aggOrders(rs) }))
     .sort((x, y) => y.grossAll - x.grossAll);
 
   return (

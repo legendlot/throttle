@@ -4,6 +4,9 @@ import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
 import { salesGet, inr, fmtInt, istToday, istDaysAgo, downloadCsv, rangePresets, priorPeriod } from '../../lib/api.js';
 import StackedTrendChart from '../../components/StackedTrendChart.js';
+// Channel families — single source of truth (shared with the Channels section). Aliased so the
+// existing chart/chip code keeps its names.
+import { FAMILIES as GROUP_META, FAMILY_ORDER as GROUP_ORDER, familyOf as channelGroup } from '../../lib/families.js';
 
 const GROUPS = [
   { key: 'variant', label: 'By Variant' },
@@ -23,24 +26,6 @@ function ago(iso) {
   return Math.round(s / 86400) + 'd ago';
 }
 const HEALTH_COLOR = { ok: 'var(--green)', partial: 'var(--amber)', error: 'var(--red)', never: 'var(--t3)' };
-
-// Channel families — drive both the chart colours and the chip ordering.
-const GROUP_META = {
-  marketplace: { label: 'Marketplaces', color: '#4C63F0' },
-  quickcom:    { label: 'Quick-com',    color: '#34D27B' },
-  website:     { label: 'Website',      color: '#F2CD1A' },
-  gtmt:        { label: 'GT / MT',      color: '#F59E0B' },
-  other:       { label: 'Other',        color: '#8A8C95' },
-};
-const GROUP_ORDER = ['marketplace', 'quickcom', 'website', 'gtmt', 'other'];
-function channelGroup(name) {
-  const n = (name || '').toLowerCase();
-  if (/amazon|flipkart/.test(n)) return 'marketplace';
-  if (/blinkit|zepto|instamart|swiggy|quick/.test(n)) return 'quickcom';
-  if (/website|shopify|web/.test(n)) return 'website';
-  if (n === 'gt' || n === 'mt' || /general trade|modern trade/.test(n)) return 'gtmt';
-  return 'other';
-}
 
 const PRESETS = rangePresets();
 
