@@ -13,7 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import {
   Instagram, Facebook, MessageCircle, Send, Clock, ExternalLink, Link2,
-  Image as ImageIcon, FileText, Smile, Lock, Bold, Italic, StickyNote, UserPlus, X,
+  FileText, Smile, Lock, Bold, Italic, StickyNote, UserPlus, X, Paperclip,
 } from 'lucide-react';
 import { Panel, Tabs, ToneBadge, btnPrimary, btnGhost, inputStyle, selectStyle } from '../../../components/kit/index.js';
 import { csopsGet, csopsPost } from '../../../lib/csopsFetch.js';
@@ -71,8 +71,10 @@ export default function InboxPage() {
   const [showEmoji, setShowEmoji] = useState(false);
   const [showCanned, setShowCanned] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
+  const [pendingFile, setPendingFile] = useState(null);   // { name, mime, size, dataUrl } (S162-C)
   const scrollRef = useRef(null);
   const taRef = useRef(null);
+  const fileRef = useRef(null);
 
   // List is channel-scoped (WhatsApp has thousands of threads — fetching "all"
   // would bury the low-volume IG/FB threads). Tiles get their own stats call.
@@ -133,7 +135,7 @@ export default function InboxPage() {
     if (!selectedId) { setConvo(null); return undefined; }
     setLoadingConvo(true);
     loadConvo(selectedId);
-    setMode('reply'); setShowEmoji(false); setShowCanned(false); setAssignOpen(false);
+    setMode('reply'); setShowEmoji(false); setShowCanned(false); setAssignOpen(false); setPendingFile(null);
     const iv = setInterval(() => loadConvo(selectedId), 15000);
     return () => clearInterval(iv);
   }, [selectedId, loadConvo]);
@@ -192,9 +194,37 @@ export default function InboxPage() {
     requestAnimationFrame(() => { ta.focus(); ta.setSelectionRange(s, e + 2 * token.length); });
   }
 
+  const ATTACH_MIMES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'application/pdf'];
+  function onPickFile(e) {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (!f) return;
+    if (!ATTACH_MIMES.includes(f.type)) { setErr('Only images (PNG/JPG/WEBP/GIF) or PDF can be attached.'); return; }
+    if (f.size > 8 * 1024 * 1024) { setErr('File too large — max 8MB.'); return; }
+    setErr(null);
+    const reader = new FileReader();
+    reader.onload = () => setPendingFile({ name: f.name, mime: f.type, size: f.size, dataUrl: reader.result });
+    reader.readAsDataURL(f);
+  }
+
   async function send() {
+    if (sending || !convo?.thread) return;
     const t = text.trim();
-    if (!t || !convo?.thread || sending) return;
+    // Attachment send (reply mode only) — caption = whatever's in the box.
+    if (mode === 'reply' && pendingFile) {
+      setSending(true); setErr(null);
+      try {
+        await csopsPost('sendMetaAttachment', {
+          thread_id: convo.thread.id, mime_type: pendingFile.mime,
+          data_base64: pendingFile.dataUrl, filename: pendingFile.name, caption: t || null,
+        }, session);
+        setText(''); setPendingFile(null); setShowEmoji(false); setShowCanned(false);
+        await loadConvo(selectedId); loadThreads(); loadStats();
+      } catch (e) { setErr(e.message); }
+      finally { setSending(false); }
+      return;
+    }
+    if (!t) return;
     setSending(true); setErr(null);
     try {
       if (mode === 'note') {
@@ -358,7 +388,7 @@ export default function InboxPage() {
                   {/* Reply / Note toggle */}
                   <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
                     <ModeBtn active={!noteMode} onClick={() => setMode('reply')} icon={Send} label="Reply" />
-                    <ModeBtn active={noteMode} onClick={() => setMode('note')} icon={StickyNote} label="Private note" tone="warn" />
+                    <ModeBtn active={noteMode} onClick={() => { setMode('note'); setPendingFile(null); }} icon={StickyNote} label="Private note" tone="warn" />
                   </div>
 
                   {noteMode ? (
@@ -380,9 +410,16 @@ export default function InboxPage() {
                         <ToolBtn title="Italic" onClick={() => wrapSelection('_')} disabled={!canManage}><Italic size={15} /></ToolBtn>
                       </>
                     ) : (
-                      <ToolBtn title="Canned responses" onClick={() => { setShowCanned(v => !v); setShowEmoji(false); }} disabled={!canManage || !templates.length}>
-                        <FileText size={15} />
-                      </ToolBtn>
+                      <>
+                        <ToolBtn title="Canned responses" onClick={() => { setShowCanned(v => !v); setShowEmoji(false); }} disabled={!canManage || !templates.length}>
+                          <FileText size={15} />
+                        </ToolBtn>
+                        <ToolBtn title="Attach image / PDF" onClick={() => fileRef.current?.click()} disabled={!canManage}>
+                          <Paperclip size={15} />
+                        </ToolBtn>
+                        <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif,application/pdf"
+                          onChange={onPickFile} style={{ display: 'none' }} />
+                      </>
                     )}
                     {showEmoji && (
                       <Popover onClose={() => setShowEmoji(false)}>
@@ -411,6 +448,23 @@ export default function InboxPage() {
                     )}
                   </div>
 
+                  {/* Staged attachment preview (reply mode) */}
+                  {pendingFile && !noteMode && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, padding: '6px 8px',
+                      background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
+                      {pendingFile.mime.startsWith('image/')
+                        ? <img src={pendingFile.dataUrl} alt="" style={{ width: 38, height: 38, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }} />
+                        : <FileText size={22} style={{ color: 'var(--t3)', flexShrink: 0 }} />}
+                      <span style={{ fontSize: 12, color: 'var(--t2)', flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {pendingFile.name} <span style={{ color: 'var(--t4)' }}>· {(pendingFile.size / 1024).toFixed(0)} KB</span>
+                      </span>
+                      <button onClick={() => setPendingFile(null)} title="Remove"
+                        style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'var(--t3)', display: 'grid', placeItems: 'center' }}>
+                        <X size={14} />
+                      </button>
+                    </div>
+                  )}
+
                   <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
                     <textarea
                       ref={taRef}
@@ -418,14 +472,16 @@ export default function InboxPage() {
                       onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
                       placeholder={!canManage ? 'You need cs_ticket_manage to reply.'
                         : noteMode ? 'Write an internal note for the team…  (Enter to save)'
+                        : pendingFile ? 'Add a caption (optional)…  (Enter to send)'
                         : 'Type a reply…  (Enter to send, Shift+Enter for newline)'}
                       disabled={!canManage || sending} rows={2}
                       style={{ ...inputStyle, flex: 1, resize: 'none', fontFamily: 'var(--f-ui)',
                         background: noteMode ? 'var(--surface)' : inputStyle.background }} />
-                    <button onClick={send} disabled={!canManage || sending || !text.trim()}
-                      style={{ ...btnPrimary, opacity: (!canManage || sending || !text.trim()) ? 0.5 : 1,
+                    <button onClick={send} disabled={!canManage || sending || (!text.trim() && !pendingFile)}
+                      style={{ ...btnPrimary, opacity: (!canManage || sending || (!text.trim() && !pendingFile)) ? 0.5 : 1,
                         background: noteMode ? 'var(--warn-fg)' : btnPrimary.background }}>
-                      {noteMode ? <StickyNote size={13} /> : <Send size={13} />} {sending ? 'Saving' : noteMode ? 'Save note' : 'Send'}
+                      {noteMode ? <StickyNote size={13} /> : pendingFile ? <Paperclip size={13} /> : <Send size={13} />}
+                      {sending ? 'Sending' : noteMode ? 'Save note' : pendingFile ? 'Send' : 'Send'}
                     </button>
                   </div>
                 </div>
@@ -647,12 +703,17 @@ function Bubble({ m, accent }) {
           <div style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--info-fg)', textTransform: 'uppercase',
             letterSpacing: '0.05em', marginBottom: 4 }}>Template · {m.template_name}</div>
         )}
-        {m.media_url && (
+        {m.media_url && (m.kind === 'image' ? (
+          <a href={m.media_url} target="_blank" rel="noreferrer" style={{ display: 'block', marginBottom: m.body ? 6 : 2 }}>
+            <img src={m.media_url} alt={m.media_filename || 'image'}
+              style={{ maxWidth: 240, maxHeight: 240, borderRadius: 8, display: 'block' }} />
+          </a>
+        ) : (
           <a href={m.media_url} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 6,
             marginBottom: 4, fontSize: 11, color: 'var(--accent)' }}>
-            {m.kind === 'image' ? <ImageIcon size={12} /> : <FileText size={12} />}{m.media_filename || 'media'}
+            <FileText size={12} />{m.media_filename || 'media'}
           </a>
-        )}
+        ))}
         {m.body && <div style={{ fontSize: 13, color: 'var(--t1)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.body}</div>}
         <div style={{ marginTop: 4, fontSize: 9.5, color: 'var(--t4)', display: 'flex', gap: 7, alignItems: 'center',
           justifyContent: 'flex-end' }}>

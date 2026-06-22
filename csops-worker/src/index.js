@@ -531,6 +531,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'createTicketFromCall':     return createTicketFromCall(body, auth, env);
     case 'sendWaMessage':            return sendWaMessage(body, auth, env);
     case 'sendMetaMessage':          return sendMetaMessage(body, auth, env);
+    case 'sendMetaAttachment':       return sendMetaAttachment(body, auth, env);
     case 'linkMessagingThread':      return linkMessagingThread(body, auth, env);
     case 'assignThread':             return assignThread(body, auth, env);
     case 'addThreadNote':            return addThreadNote(body, auth, env);
@@ -3114,6 +3115,112 @@ async function sendMetaMessage(body, auth, env) {
   }
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(threadPatch) }).catch(() => {});
   return ok({ sent: true, message_id: mid, auto_claimed: !thread.assigned_agent_id });
+}
+
+// ── Outbound media attachments (S162, Feature C) ─────────────────────────────
+// Agents send instructional images ("do it like this") to IG/FB customers. Meta's
+// send API needs a PUBLIC URL (IG has no multipart path), so we host on the public
+// bucket cs-inbox-media (service_role upload) then pass the URL to Graph. Low-volume,
+// outbound, agent-initiated, non-sensitive → public-read is fine.
+const ATTACH_MIME = {
+  'image/png':       { ext: 'png',  kind: 'image',    graph: 'image' },
+  'image/jpeg':      { ext: 'jpg',  kind: 'image',    graph: 'image' },
+  'image/webp':      { ext: 'webp', kind: 'image',    graph: 'image' },
+  'image/gif':       { ext: 'gif',  kind: 'image',    graph: 'image' },
+  'application/pdf': { ext: 'pdf',  kind: 'document', graph: 'file'  },
+};
+const ATTACH_MAX_BYTES = 8 * 1024 * 1024;
+
+function b64ToBytes(b64) {
+  const bin = atob(b64.includes(',') ? b64.split(',')[1] : b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+async function sendMetaAttachment(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { thread_id, mime_type, data_base64, filename, caption } = body;
+  if (!thread_id || !mime_type || !data_base64) return err('thread_id, mime_type and data_base64 required');
+  const spec = ATTACH_MIME[mime_type];
+  if (!spec) return err(`Unsupported file type: ${mime_type} (images + PDF only)`, 415);
+
+  let bytes;
+  try { bytes = b64ToBytes(data_base64); } catch { return err('Invalid file data'); }
+  if (!bytes.length) return err('Empty file');
+  if (bytes.length > ATTACH_MAX_BYTES) return err('File too large (max 8MB)', 413);
+
+  const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=*&limit=1`, env);
+  const thread = tRes.data?.[0];
+  if (!thread || !thread.external_user_id) return err('Thread not found or has no recipient', 404);
+  const token = metaToken(thread.channel, env);
+  if (!token) return err('Meta send not configured (no token for this channel)', 503);
+
+  // 1. Upload to the public bucket (service_role, bypasses RLS).
+  const path = `${thread.id}/${crypto.randomUUID()}.${spec.ext}`;
+  const up = await fetch(`${env.SUPABASE_URL}/storage/v1/object/cs-inbox-media/${path}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, 'Content-Type': mime_type, 'x-upsert': 'true' },
+    body: bytes,
+  });
+  if (!up.ok) { const t = await up.text().catch(() => ''); return err(`Upload failed: ${t.slice(0, 200)}`, up.status || 500); }
+  const publicUrl = `${env.SUPABASE_URL}/storage/v1/object/public/cs-inbox-media/${path}`;
+
+  // 2. Send via Graph (URL attachment — the IG+FB common path).
+  const withinWindow = thread.customer_window_until && new Date(thread.customer_window_until).getTime() > Date.now();
+  const tagFields = withinWindow ? { messaging_type: 'RESPONSE' } : { messaging_type: 'MESSAGE_TAG', tag: 'HUMAN_AGENT' };
+  const r = await fetch(`${metaGraphBase(thread.channel)}/me/messages?access_token=${token}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      recipient: { id: thread.external_user_id },
+      message: { attachment: { type: spec.graph, payload: { url: publicUrl, is_reusable: true } } },
+      ...tagFields,
+    }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) return err(`Meta send failed: ${JSON.stringify(d?.error || d)}`, r.status);
+  const mid = d?.message_id || null;
+
+  const senderName = auth.fullName || auth.name || auth.email || null;
+  await sb(`/rest/v1/cs_wa_messages`, env, {
+    method: 'POST',
+    body: JSON.stringify({
+      thread_id: thread.id, channel: thread.channel, direction: 'outbound', kind: spec.kind,
+      body: null, media_url: publicUrl, media_filename: filename || `attachment.${spec.ext}`,
+      media_mime_type: mime_type, media_size_bytes: bytes.length,
+      provider_message_id: mid, status: 'sent', sent_by_user_id: auth.userId, sent_by_name: senderName,
+      sent_at: new Date().toISOString(),
+    }),
+  });
+
+  // 3. Optional caption — delivered as a separate text message (Graph attachments
+  // carry no caption field), best-effort + recorded as its own row.
+  if (caption && caption.trim()) {
+    const cr = await fetch(`${metaGraphBase(thread.channel)}/me/messages?access_token=${token}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recipient: { id: thread.external_user_id }, message: { text: caption.trim() }, ...tagFields }),
+    });
+    const cd = await cr.json().catch(() => ({}));
+    if (cr.ok) {
+      await sb(`/rest/v1/cs_wa_messages`, env, {
+        method: 'POST',
+        body: JSON.stringify({
+          thread_id: thread.id, channel: thread.channel, direction: 'outbound', kind: 'text',
+          body: caption.trim(), provider_message_id: cd?.message_id || null, status: 'sent',
+          sent_by_user_id: auth.userId, sent_by_name: senderName, sent_at: new Date().toISOString(),
+        }),
+      });
+    }
+  }
+
+  const threadPatch = { last_message_at: new Date().toISOString() };
+  if (!thread.assigned_agent_id) {
+    threadPatch.assigned_agent_id = auth.userId;
+    threadPatch.assigned_agent_name = senderName;
+    threadPatch.assigned_at = new Date().toISOString();
+  }
+  await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(threadPatch) }).catch(() => {});
+  return ok({ sent: true, message_id: mid, media_url: publicUrl });
 }
 
 // ── Agent Inbox — cross-channel thread list + reader + ticket link ───────────
