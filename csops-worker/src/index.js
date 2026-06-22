@@ -489,6 +489,7 @@ async function handleGet(action, params, auth, env) {
     case 'getDeptAgents':    return getDeptAgents(params, auth, env);
     case 'getProductCatalog': return getProductCatalog(params, auth, env);
     case 'getCsAgents':      return getCsAgents(params, auth, env);
+    case 'getCannedResponses': return getCannedResponses(params, auth, env);
     case 'getMyopAccounts':  return getMyopAccounts(params, auth, env);
     case 'getCalls':         return getCalls(params, auth, env);
     case 'getCall':          return getCall(params, auth, env);
@@ -535,6 +536,8 @@ async function handlePost(action, body, auth, env, request) {
     case 'linkMessagingThread':      return linkMessagingThread(body, auth, env);
     case 'assignThread':             return assignThread(body, auth, env);
     case 'addThreadNote':            return addThreadNote(body, auth, env);
+    case 'createCannedResponse':     return createCannedResponse(body, auth, env);
+    case 'updateCannedResponse':     return updateCannedResponse(body, auth, env);
     case 'recordInboundWaStub':      return recordInboundWaStub(body, auth, env);
     case 'createWaTemplate':         return createWaTemplate(body, auth, env);
     case 'updateWaTemplate':         return updateWaTemplate(body, auth, env);
@@ -3420,4 +3423,41 @@ async function addThreadNote(body, auth, env) {
     method: 'PATCH', body: JSON.stringify({ updated_at: new Date().toISOString() }),
   }).catch(() => {});
   return ok({ note: ins.data?.[0] || null });
+}
+
+// ── Canned responses (S162) — agent-managed quick replies for the composer ───
+async function getCannedResponses(_params, auth, env) {
+  const g = require('cs_ticket_view', auth); if (g) return g;
+  const r = await sb(`/rest/v1/cs_canned_responses?is_active=eq.true&select=*&order=sort_order.asc,title.asc`, env);
+  if (!r.ok) return err('failed to load canned responses', 500);
+  return ok(r.data || []);
+}
+async function createCannedResponse(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { title, body: text, sort_order } = body;
+  if (!title?.trim() || !text?.trim()) return err('title and body required');
+  const r = await sb(`/rest/v1/cs_canned_responses`, env, {
+    method: 'POST',
+    body: JSON.stringify({
+      title: title.trim(), body: text.trim(), sort_order: Math.round(Number(sort_order) || 0),
+      created_by_user_id: auth.userId, created_by_name: auth.fullName || auth.name || auth.email || null,
+    }),
+  });
+  if (!r.ok) return err('failed to create canned response', r.status || 500);
+  return ok({ canned: r.data?.[0] || null });
+}
+async function updateCannedResponse(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { id, title, body: text, is_active, sort_order } = body;
+  if (!id) return err('id required');
+  const patch = { updated_at: new Date().toISOString() };
+  if (title != null) patch.title = String(title).trim();
+  if (text != null) patch.body = String(text).trim();
+  if (is_active != null) patch.is_active = !!is_active;       // is_active=false = archive (soft delete)
+  if (sort_order != null) patch.sort_order = Math.round(Number(sort_order) || 0);
+  const r = await sb(`/rest/v1/cs_canned_responses?id=eq.${encodeURIComponent(id)}`, env, {
+    method: 'PATCH', body: JSON.stringify(patch),
+  });
+  if (!r.ok) return err('failed to update canned response', r.status || 500);
+  return ok({ canned: r.data?.[0] || null });
 }

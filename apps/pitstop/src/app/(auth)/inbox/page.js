@@ -10,13 +10,20 @@
    • Link a thread to a ticket (IG/FB have no phone to auto-match on).
    ════════════════════════════════════════════════════════════ */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { useAuth } from '@throttle/auth';
 import {
   Instagram, Facebook, MessageCircle, Send, Clock, ExternalLink, Link2,
-  FileText, Smile, Lock, Bold, Italic, StickyNote, UserPlus, X, Paperclip,
+  FileText, Smile, Lock, Bold, Italic, StickyNote, UserPlus, X, Paperclip, Plus, Search,
 } from 'lucide-react';
 import { Panel, Tabs, ToneBadge, btnPrimary, btnGhost, inputStyle, selectStyle } from '../../../components/kit/index.js';
 import { csopsGet, csopsPost } from '../../../lib/csopsFetch.js';
+
+// Full emoji picker — lazy, client-only (keeps the emoji dataset off the main bundle).
+const EmojiPicker = dynamic(() => import('../../../components/EmojiPicker.js'), {
+  ssr: false,
+  loading: () => <div style={{ padding: 20, fontSize: 12, color: 'var(--t3)' }}>Loading emoji…</div>,
+});
 
 const CHANNELS = {
   instagram: { label: 'Instagram', color: '#E1306C', Glyph: Instagram, sendable: true },
@@ -24,7 +31,6 @@ const CHANNELS = {
   whatsapp:  { label: 'WhatsApp',  color: '#25D366', Glyph: MessageCircle, sendable: false },
 };
 const chanOf = (c) => CHANNELS[c] || { label: c || 'DM', color: 'var(--t3)', Glyph: MessageCircle, sendable: false };
-const EMOJIS = ['👍', '🙏', '😊', '🎉', '❤️', '✅', '👏', '🚗', '📦', '🔧', '⏳', '😅', '🙌', '👌', '🤝', '📸'];
 
 const shortTime = (iso) => iso ? new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
 const relTime = (iso) => {
@@ -57,7 +63,10 @@ export default function InboxPage() {
     whatsapp:  { total: 0, awaiting: null, mine: 0, unassigned: 0 },
   });
   const [agents, setAgents] = useState([]);
-  const [templates, setTemplates] = useState([]);
+  const [canned, setCanned] = useState([]);
+  const [cannedSearch, setCannedSearch] = useState('');
+  const [cannedDraft, setCannedDraft] = useState(null);   // null | { title, body } (inline create)
+  const [savingCanned, setSavingCanned] = useState(false);
   const [loadingList, setLoadingList] = useState(true);
   const [selectedId, setSelectedId] = useState(null);
   const [convo, setConvo] = useState(null);          // { thread, messages, linked_ticket, within_customer_window }
@@ -123,12 +132,20 @@ export default function InboxPage() {
     return () => clearInterval(iv);
   }, [session, loadStats]);
 
-  // Agents (for assign dropdown) + canned-response templates — load once.
+  const loadCanned = useCallback(async () => {
+    if (!session) return;
+    try {
+      const d = await csopsGet('getCannedResponses', {}, session);
+      setCanned(Array.isArray(d) ? d : (d?.data || []));
+    } catch { /* picker degrades gracefully */ }
+  }, [session]);
+
+  // Agents (for assign dropdown) + canned responses — load once.
   useEffect(() => {
     if (!session) return;
     if (canReassign) csopsGet('getCsAgents', {}, session).then(d => setAgents(Array.isArray(d) ? d : (d?.data || []))).catch(() => {});
-    csopsGet('getWaTemplates', {}, session).then(d => setTemplates(Array.isArray(d) ? d : (d?.data || d?.templates || []))).catch(() => {});
-  }, [session, canReassign]);
+    loadCanned();
+  }, [session, canReassign, loadCanned]);
 
   // Open conversation — load on select + 15s poll.
   useEffect(() => {
@@ -192,6 +209,30 @@ export default function InboxPage() {
     const next = text.slice(0, s) + token + text.slice(s, e) + token + text.slice(e);
     setText(next);
     requestAnimationFrame(() => { ta.focus(); ta.setSelectionRange(s, e + 2 * token.length); });
+  }
+
+  // Insert a canned response. In slash mode the whole "/query" is replaced by the body;
+  // otherwise it's inserted at the caret.
+  function pickCanned(c) {
+    if (!c) return;
+    if (!noteMode && text.startsWith('/')) {
+      setText(c.body);
+      requestAnimationFrame(() => { const ta = taRef.current; if (ta) { ta.focus(); ta.setSelectionRange(c.body.length, c.body.length); } });
+    } else {
+      insertAtCaret(c.body);
+    }
+    setShowCanned(false); setCannedSearch('');
+  }
+  async function saveCanned() {
+    const d = cannedDraft;
+    if (!d?.title?.trim() || !d?.body?.trim() || savingCanned) return;
+    setSavingCanned(true); setErr(null);
+    try {
+      await csopsPost('createCannedResponse', { title: d.title.trim(), body: d.body.trim() }, session);
+      setCannedDraft(null);
+      await loadCanned();
+    } catch (e) { setErr(e.message); }
+    finally { setSavingCanned(false); }
   }
 
   const ATTACH_MIMES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'application/pdf'];
@@ -266,6 +307,11 @@ export default function InboxPage() {
   const windowOpen = !!convo?.within_customer_window;
   const mineThread = thread && thread.assigned_agent_id && thread.assigned_agent_id === myId;
   const noteMode = mode === 'note';
+  const slashActive = !noteMode && text.startsWith('/');           // "/" quick-access to canned
+  const cannedQuery = (slashActive ? text.slice(1) : cannedSearch).trim().toLowerCase();
+  const filteredCanned = cannedQuery
+    ? canned.filter(c => `${c.title} ${c.body}`.toLowerCase().includes(cannedQuery))
+    : canned;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, height: 'calc(100vh - 132px)', minHeight: 480 }}>
@@ -411,7 +457,7 @@ export default function InboxPage() {
                       </>
                     ) : (
                       <>
-                        <ToolBtn title="Canned responses" onClick={() => { setShowCanned(v => !v); setShowEmoji(false); }} disabled={!canManage || !templates.length}>
+                        <ToolBtn title="Canned responses (or type / in the box)" onClick={() => { setShowCanned(v => !v); setShowEmoji(false); }} disabled={!canManage}>
                           <FileText size={15} />
                         </ToolBtn>
                         <ToolBtn title="Attach image / PDF" onClick={() => fileRef.current?.click()} disabled={!canManage}>
@@ -422,28 +468,17 @@ export default function InboxPage() {
                       </>
                     )}
                     {showEmoji && (
-                      <Popover onClose={() => setShowEmoji(false)}>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(8, 1fr)', gap: 2 }}>
-                          {EMOJIS.map(e => (
-                            <button key={e} onClick={() => { insertAtCaret(e); setShowEmoji(false); }}
-                              style={{ fontSize: 18, padding: 4, cursor: 'pointer', background: 'transparent', border: 'none', borderRadius: 6 }}>{e}</button>
-                          ))}
-                        </div>
+                      <Popover onClose={() => setShowEmoji(false)} width="auto" pad={0} hideClose scroll={false}>
+                        <EmojiPicker onSelect={(native) => insertAtCaret(native)} />
                       </Popover>
                     )}
-                    {showCanned && !noteMode && (
-                      <Popover onClose={() => setShowCanned(false)} width={300}>
-                        <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Canned responses</div>
-                        {templates.length === 0 ? (
-                          <div style={{ fontSize: 12, color: 'var(--t3)', padding: '4px 0' }}>No templates yet.</div>
-                        ) : templates.map(tp => (
-                          <button key={tp.id || tp.name} onClick={() => { insertAtCaret(tp.body || ''); setShowCanned(false); }}
-                            style={{ display: 'block', width: '100%', textAlign: 'left', cursor: 'pointer', padding: '7px 8px',
-                              border: 'none', borderRadius: 6, background: 'transparent', borderBottom: '1px solid var(--border)' }}>
-                            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--t1)' }}>{tp.name}</div>
-                            <div style={{ fontSize: 11, color: 'var(--t3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{tp.body}</div>
-                          </button>
-                        ))}
+                    {(showCanned || slashActive) && !noteMode && (
+                      <Popover onClose={() => { setShowCanned(false); setCannedDraft(null); }} width={320}>
+                        <CannedPanel
+                          slashActive={slashActive} query={cannedQuery} list={filteredCanned}
+                          search={cannedSearch} setSearch={setCannedSearch} canManage={canManage}
+                          draft={cannedDraft} setDraft={setCannedDraft}
+                          onPick={pickCanned} onSave={saveCanned} saving={savingCanned} />
                       </Popover>
                     )}
                   </div>
@@ -468,8 +503,15 @@ export default function InboxPage() {
                   <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
                     <textarea
                       ref={taRef}
-                      value={text} onChange={e => setText(e.target.value)}
-                      onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
+                      value={text}
+                      onChange={e => { const v = e.target.value; setText(v); if (!noteMode && v.startsWith('/')) { setShowCanned(true); setShowEmoji(false); } }}
+                      onKeyDown={e => {
+                        if (e.key === 'Escape') { setShowCanned(false); setShowEmoji(false); setCannedDraft(null); return; }
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          if (slashActive && filteredCanned.length) { e.preventDefault(); pickCanned(filteredCanned[0]); return; }
+                          e.preventDefault(); send();
+                        }
+                      }}
                       placeholder={!canManage ? 'You need cs_ticket_manage to reply.'
                         : noteMode ? 'Write an internal note for the team…  (Enter to save)'
                         : pendingFile ? 'Add a caption (optional)…  (Enter to send)'
@@ -529,14 +571,72 @@ function ToolBtn({ children, title, onClick, disabled }) {
         color: disabled ? 'var(--t4)' : 'var(--t2)', opacity: disabled ? 0.5 : 1 }}>{children}</button>
   );
 }
-function Popover({ children, onClose, width = 280 }) {
+// Anchored popover. The transparent fixed backdrop catches any outside click and
+// closes it (click-outside-to-dismiss for every composer popup — S162).
+function Popover({ children, onClose, width = 280, pad = 10, hideClose = false, scroll = true }) {
   return (
-    <div style={{ position: 'absolute', bottom: 'calc(100% + 6px)', left: 0, zIndex: 40, width,
-      background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius)',
-      boxShadow: 'var(--shadow, 0 8px 28px rgba(0,0,0,0.28))', padding: 10, maxHeight: 280, overflowY: 'auto' }}>
-      <button onClick={onClose} style={{ position: 'absolute', top: 6, right: 6, cursor: 'pointer', border: 'none',
-        background: 'transparent', color: 'var(--t3)' }}><X size={13} /></button>
-      {children}
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 39 }} />
+      <div style={{ position: 'absolute', bottom: 'calc(100% + 6px)', left: 0, zIndex: 40, width,
+        background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius)',
+        boxShadow: 'var(--shadow, 0 8px 28px rgba(0,0,0,0.28))', padding: pad,
+        ...(scroll ? { maxHeight: 320, overflowY: 'auto' } : {}) }}>
+        {!hideClose && (
+          <button onClick={onClose} style={{ position: 'absolute', top: 6, right: 6, zIndex: 1, cursor: 'pointer',
+            border: 'none', background: 'transparent', color: 'var(--t3)' }}><X size={13} /></button>
+        )}
+        {children}
+      </div>
+    </>
+  );
+}
+function CannedPanel({ slashActive, query, list, search, setSearch, canManage, draft, setDraft, onPick, onSave, saving }) {
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, paddingRight: 16 }}>
+        <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Canned responses</span>
+        {canManage && !draft && (
+          <button onClick={() => setDraft({ title: '', body: '' })} style={{ ...btnGhost, padding: '3px 8px', fontSize: 11 }}>
+            <Plus size={12} /> New
+          </button>
+        )}
+      </div>
+      {draft ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <input autoFocus value={draft.title} onChange={e => setDraft(d => ({ ...d, title: e.target.value }))}
+            placeholder="Title (e.g. Refund acknowledged)" style={{ ...inputStyle, fontSize: 12 }} />
+          <textarea value={draft.body} onChange={e => setDraft(d => ({ ...d, body: e.target.value }))}
+            placeholder="Response text…" rows={3} style={{ ...inputStyle, resize: 'vertical', fontSize: 12, fontFamily: 'var(--f-ui)' }} />
+          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+            <button onClick={() => setDraft(null)} style={{ ...btnGhost, padding: '4px 10px', fontSize: 11 }}>Cancel</button>
+            <button onClick={onSave} disabled={saving || !draft.title.trim() || !draft.body.trim()}
+              style={{ ...btnPrimary, padding: '4px 10px', fontSize: 11, opacity: (saving || !draft.title.trim() || !draft.body.trim()) ? 0.5 : 1 }}>
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          {slashActive ? (
+            <div style={{ fontSize: 10.5, color: 'var(--t3)', marginBottom: 6 }}>Filtering by <code>/{query}</code> — Enter picks the top match.</div>
+          ) : (
+            <div style={{ position: 'relative', marginBottom: 6 }}>
+              <Search size={12} style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: 'var(--t4)' }} />
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search…" style={{ ...inputStyle, fontSize: 12, paddingLeft: 26 }} />
+            </div>
+          )}
+          {list.length === 0 ? (
+            <div style={{ fontSize: 12, color: 'var(--t3)', padding: '8px 0' }}>{query ? 'No match.' : 'No canned responses yet — add one with “New”.'}</div>
+          ) : list.map((c, i) => (
+            <button key={c.id} onClick={() => onPick(c)}
+              style={{ display: 'block', width: '100%', textAlign: 'left', cursor: 'pointer', padding: '7px 8px', border: 'none',
+                borderRadius: 6, background: (slashActive && i === 0) ? 'var(--accent-bg)' : 'transparent', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--t1)' }}>{c.title}</div>
+              <div style={{ fontSize: 11, color: 'var(--t3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.body}</div>
+            </button>
+          ))}
+        </>
+      )}
     </div>
   );
 }
@@ -563,6 +663,9 @@ function AssignControl({ thread, mineThread, canReassign, agents, open, setOpen,
           </button>
           {canReassign && <button onClick={() => setOpen(v => !v)} style={{ ...btnGhost, padding: '5px 9px', fontSize: 11 }}>Assign…</button>}
         </>
+      )}
+      {open && canReassign && (
+        <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 39 }} />
       )}
       {open && canReassign && (
         <div style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 40, width: 240,
