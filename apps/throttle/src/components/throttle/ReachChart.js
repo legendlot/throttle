@@ -29,7 +29,11 @@ function TT({ active, payload, label }) {
 }
 
 export default function ReachChart({ series }) {
-  const data = (series || []).map(d => ({ date: d.date, reach: Number(d.reach || 0) }));
+  // Drop days with no finalized reach (null) — e.g. the in-progress day — so the
+  // line doesn't dive to 0 at the right edge. A genuine numeric 0 is kept.
+  const data = (series || [])
+    .filter(d => d.reach != null)
+    .map(d => ({ date: d.date, reach: Number(d.reach) }));
   if (data.length < 2) {
     return <div style={{ fontSize: 12, color: T3, padding: '24px 0' }}>Not enough history yet — the daily sync builds this out.</div>;
   }

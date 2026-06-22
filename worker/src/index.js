@@ -313,10 +313,13 @@ export default {
   },
 
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(runSprintClose(env));
-    // Social analytics sync runs on the same cron tick (weekly today; a daily
-    // trigger is a wrangler.toml change — see the Tier 1 spec). Manual refresh
-    // via the syncSocialInsights action covers daily needs meanwhile.
+    // Two crons (wrangler.toml): "29 18 * * 3" = weekly sprint close (Wed);
+    // "30 20 * * *" = daily social-analytics snapshot. Sprint close must fire
+    // ONLY on the Wed tick — without this gate the daily cron would close
+    // sprints every night.
+    if (event.cron === '29 18 * * 3') ctx.waitUntil(runSprintClose(env));
+    // Social sync runs on every tick (weekly Wed + the daily 02:00 IST snapshot)
+    // so follower_count + reach accumulate one row per day for trend/gain math.
     ctx.waitUntil(runSocialSync(env).catch(e => console.error('[socialSync]', e)));
   },
 };
@@ -3146,7 +3149,11 @@ async function runSocialSync(env) {
   const summary = { media_upserted: 0, insights_synced: 0, account_days: 0, reconciled: 0 };
 
   // 1) Account daily insights → social_account_metrics (upsert by channel+date).
-  const acc = await igGet('me/insights?metric=reach,profile_views,follower_count&period=day', env);
+  // NB: follower_count is deliberately NOT requested here — the insights
+  // `follower_count` metric is unreliable/empty and would overwrite real days
+  // with 0, poisoning follower-gain math. Step 1b is the sole follower writer
+  // (authoritative profile count, stamped on today's row only).
+  const acc = await igGet('me/insights?metric=reach,profile_views&period=day', env);
   if (acc.ok) {
     const byDate = {};
     for (const m of (acc.data?.data || [])) {
@@ -3311,7 +3318,13 @@ async function handleGetSocialAnalytics(body, ctx, env) {
     sbFetch(`social_media?channel_id=eq.${channel.id}&select=ig_media_id,permalink,caption,media_type,published_at,like_count,comments_count,reach,total_interactions,matched_post_id&order=published_at.desc&limit=300`, { method: 'GET' }, env),
   ]);
   const account_series = accRes.ok ? (await accRes.json()).map(r => ({
-    date: r.metric_date, reach: Number(r.reach || 0), profile_views: Number(r.profile_views || 0), follower_count: Number(r.follower_count || 0),
+    // reach kept null (not coerced to 0) so the chart skips a day with no
+    // finalized reach yet — e.g. today, which IG hasn't closed out — instead
+    // of drawing a false drop to zero. follower_count: 0 means "no snapshot".
+    date: r.metric_date,
+    reach: r.reach == null ? null : Number(r.reach),
+    profile_views: r.profile_views == null ? null : Number(r.profile_views),
+    follower_count: Number(r.follower_count || 0),
   })) : [];
   const media = mediaRes.ok ? await mediaRes.json() : [];
 

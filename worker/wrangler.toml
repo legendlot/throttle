@@ -12,5 +12,8 @@ SUPABASE_URL = "https://jkxcnjabmrkteanzoofj.supabase.co"
 # SLACK_WEBHOOK_URL
 
 [triggers]
-crons = ["29 18 * * 3"]
-# Wed 18:29 UTC = Wed 23:59 IST — sprint close fires end of Wednesday
+crons = ["29 18 * * 3", "30 20 * * *"]
+# "29 18 * * 3"  = Wed 18:29 UTC = Wed 23:59 IST — sprint close (Wed only)
+# "30 20 * * *"  = daily 20:30 UTC = 02:00 IST — social analytics snapshot
+#                  (captures the previous day's finalized reach + today's follower count)
+# scheduled() gates sprint close to the Wed cron; social sync runs on every tick.
