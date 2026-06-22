@@ -783,7 +783,9 @@ const ga4Adapter = {
 // target channels are a small slice of volume, so a bounded batch of gets/run stays under the
 // 50-subrequest cap. Forward-walking ≤30-day UPDATED windows (mirrors the Amazon adapter).
 // connector_config.config = { uniware_channel, backfill_start?, window_days?, max_gets? }.
-const UNI_WINDOW_DAYS_DEFAULT = 30;
+// Keep windows bounded: a too-wide saleOrder/search (40+ days) times out server-side and returns
+// an empty result (silently), so we walk ≤14-day windows.
+const UNI_WINDOW_DAYS_DEFAULT = 14;
 const UNI_MAX_GETS_DEFAULT = 40;
 const uniMs = (iso) => Date.parse(iso);
 const uniISO = (ms) => new Date(Number(ms)).toISOString();           // → "yyyy-MM-ddTHH:mm:ss.SSSZ" (uniware-accepted)
@@ -857,7 +859,13 @@ const uniwareAdapter = {
       const j = await r.json().catch(() => ({}));
       if (!j.successful) throw new Error('Uniware search: ' + JSON.stringify(j.errors || j).slice(0, 160));
       const els = j.elements || [];
-      for (const e of els) codes.push({ code: e.code, updated: Number(e.updated) || Number(e.created) || winEndMs });
+      // Type-guard: the search `channel` filter is a channel-NAME match, and an UNRECOGNISED value
+      // silently returns ALL channels (not an error). Keep only elements whose result channel matches
+      // the target type — so a config typo can never pull the website/other channels into this one.
+      for (const e of els) {
+        if (String(e.channel || '').toUpperCase() !== uchan.toUpperCase()) continue;
+        codes.push({ code: e.code, updated: Number(e.updated) || Number(e.created) || winEndMs });
+      }
       if (els.length < PAGE) break;
       start += PAGE;
     }
