@@ -25,7 +25,9 @@ This spec adds three capabilities, all channel-agnostic:
 
 | # | Decision | Choice |
 |---|---|---|
-| Presence model | how "on duty" is determined | **Availability toggle** — Online/Away/Offline; auto-online on login + heartbeat; auto-away on idle; EOD cron → offline; manual topbar toggle. (Helpdesk/Chatwoot model.) |
+| Presence model | how "on duty" is determined | **Availability toggle + shift windows** — Online/Away/Offline; auto-online on login + **activity-gated** heartbeat; auto-away on idle; manual topbar toggle. Routing eligibility is gated by the agent's **department shift window**, not a blind heartbeat. (Helpdesk/Chatwoot model.) |
+| Shift structure | how working hours are defined | **Per-department windows** — each CS lane (Messaging/Inbound/Outbound/Confirm) has its own daily window; agents inherit their department's hours. |
+| Off-schedule | assignable outside scheduled hours? | **Shift OR manual "Available" override** — outside the window an agent gets no auto-assignment UNLESS they manually toggle "Available" (covers a late shift). Carried by `auto=false` on the presence row. |
 | RR algorithm | how a thread picks an agent | **Least-loaded + rotation tiebreak** — fewest open threads wins; tie broken by longest-since-last-assigned. |
 | WhatsApp transport | the BiteSpeed-redundancy lever | **Workflow-layer first** — ship tags/presence/RR live on IG+FB now; WhatsApp stays read-only mirror; WA send-side is a separate spec/workstream. |
 | Tag creation | who can mint tags | **Any agent (`cs_ticket_manage`) creates inline; leads/admins (`cs_ticket_admin`) rename/merge/archive.** |
@@ -134,7 +136,7 @@ Single RPC so the pick + claim is **atomic** (two concurrent webhooks can't doub
 3. **Eligible pool** = users who:
    - hold `cs_ticket_manage` AND are CS-team (mirror `getCsAgents`: CS-tier role OR `cs_user_departments` member),
    - are members of the **`messaging`** department (via `cs_user_departments`); **fallback**: if none of those are present, widen to all present CS agents,
-   - have presence **`online`** (Feature 3) — `cs_agent_presence.status='online'` AND `last_seen_at` within the freshness window,
+   - are **eligible by presence + shift** (Feature 3): `cs_agent_presence.status='online'` AND `last_seen_at` within the freshness window AND ( **now is inside their department's shift window** OR the presence row is a **manual override** (`auto=false`) ),
    - are **under cap** (`open_thread_count < max_open_per_agent`, or no cap). If everyone is capped, ignore the cap (never strand a customer).
 4. **Pick** = the eligible agent with the **fewest open assigned threads**, tie broken by **oldest `assigned_at`** (longest since last assignment), final tie by `user_id` for determinism. "Open" = `cs_wa_threads` rows assigned to them not closed/resolved (define an open predicate — threads have no close field today; use "has an inbound message awaiting reply" OR add a lightweight `thread_state`; **see open question Q1**).
 5. **Claim** — `UPDATE cs_wa_threads SET assigned_agent_id/_name/_at` for the chosen agent; return the agent.
@@ -156,7 +158,13 @@ Manual `assignThread` and auto-claim-on-first-reply (S162) remain and **override
 
 ---
 
-## 4. Feature 3 — Agent presence (availability)
+## 4. Feature 3 — Agent presence (availability) + shift windows
+
+Eligibility for auto-assignment is the AND of **two independent gates**:
+- **Shift window** — "is this agent *scheduled* to be working now?" (predictable, hard boundary; closes the forgotten-open-tab-after-hours hole).
+- **Live presence** — "is this agent *actually here* right now?" (online + fresh, activity-gated heartbeat).
+
+Neither alone is sufficient: shift-only would route to an absent-but-scheduled agent; presence-only would route to an off-shift agent who left a tab open. A **manual "Available" override** lets an agent opt in outside their window (late-shift cover).
 
 ### 4.1 Data
 
@@ -165,23 +173,43 @@ store.cs_agent_presence
   user_id       uuid PK references auth.users(id)
   status        text not null default 'offline'  -- 'online' | 'away' | 'offline'
   status_since  timestamptz default now()        -- when current status began
-  last_seen_at  timestamptz                      -- last heartbeat
-  auto          boolean not null default true     -- true = system-set, false = manual toggle
+  last_seen_at  timestamptz                      -- last (activity-gated) heartbeat
+  auto          boolean not null default true     -- true = login/heartbeat-derived; false = MANUAL toggle (= off-schedule override)
   updated_at    timestamptz default now()
+
+store.cs_shifts                                   -- per-department working window
+  cs_department_id  bigint PK references store.cs_departments(id)
+  start_min         int not null                  -- minutes past IST midnight (e.g. 600 = 10:00)
+  end_min           int not null                  -- (e.g. 1140 = 19:00); end < start => overnight (rare; flag if needed)
+  working_days      int[] not null default '{1,2,3,4,5,6}'  -- ISO dow; default Mon–Sat (mirrors RULE-ATT-001), Sun off
+  is_active         boolean not null default true
+  updated_at        timestamptz
+  updated_by_user_id uuid
 ```
-RLS-on, service_role-only. **Effective status** for routing = `status='online' AND last_seen_at >= now() - INTERVAL '<freshness>'` (freshness ≈ 3× heartbeat interval, e.g. 3 min). A manual `offline`/`away` (`auto=false`) is respected regardless of heartbeat until the agent flips back or the EOD cron resets.
+Both RLS-on, service_role-only. Window values are **TBD pending Afshaan** (see §8 Q2). Per-department, agent inherits via their **home** `users_profile.cs_department_id` (and/or messaging-dept membership for thread routing).
+
+**Effective eligibility** (computed live at routing time, no cron needed for correctness):
+```
+in_shift   = today's ISO-dow ∈ cs_shifts.working_days
+             AND now()::IST-time within [start_min, end_min)   (for the agent's dept)
+live       = status='online' AND last_seen_at >= now() - INTERVAL '<freshness>'   (≈3 min)
+override   = (status='online' AND auto=false)                  -- manual "Available", off-schedule
+eligible   = live AND (in_shift OR override)                   -- away/offline never eligible
+```
+A manual `away`/`offline` (`auto=false`) is respected regardless of heartbeat. `auto=true` online (login/heartbeat) only counts **inside** the shift window — so logging in early or leaving a tab open after hours does **not** make an agent eligible.
 
 ### 4.2 Worker (csops)
-- POST `setPresence {status}` — manual toggle (`auto=false`); validates enum; gate `cs_ticket_view` (any signed-in CS user).
-- POST `heartbeat` — stamps `last_seen_at=now()`; if currently `offline` with `auto=true`, promotes to `online`; **never** overrides a manual `away`/`offline`. Gate `cs_ticket_view`. Cheap upsert.
-- GET `getPresence` — roster of CS agents with effective status + `last_seen_at` (lead "who's on duty"). Gate `cs_ticket_view`.
+- POST `setPresence {status}` — manual toggle (`auto=false`); validates enum; gate `cs_ticket_view` (any signed-in CS user). Manual `online` outside the window = the "Available" override.
+- POST `heartbeat` — stamps `last_seen_at=now()`; if currently `offline` with `auto=true`, promotes to `online`; **never** overrides a manual `away`/`offline` (`auto=false`). Gate `cs_ticket_view`. Cheap upsert.
+- GET `getPresence` — roster of CS agents with effective status + `in_shift` + `last_seen_at` (lead "who's on duty"). Gate `cs_ticket_view`.
+- GET `getShifts` / POST `setShift {cs_department_id, start_min, end_min, working_days}` — per-department window admin. Gate `cs_ticket_admin`.
 
 ### 4.3 Mechanics
-- **Login → online**: authenticated app load calls `setPresence('online')` (auto) once, then starts the heartbeat.
-- **Heartbeat**: client pings `heartbeat` every ~60s **while the tab is visible** (Page Visibility API — pause when hidden so a backgrounded tab decays to away). Docket `user_activity` is the precedent.
-- **Idle → away**: derived (no fresh heartbeat) — effective status computes to away/offline without a cron; a cron isn't required for correctness, only for tidy roster display.
-- **EOD → offline**: `pg_cron` ~ end of day IST (mirrors `auto-close-attendance`) sets all `auto=true` rows to `offline`. Ensures "didn't sign in today → offline → no assignment" even if a stale heartbeat lingered.
-- **Manual toggle**: topbar Available/Away/Offline control (`auto=false`); overrides heartbeat for breaks / end-of-shift.
+- **Login → online**: authenticated app load calls `setPresence('online')` (`auto=true`) once, then starts the heartbeat. (Eligible only once inside the dept window.)
+- **Activity-gated heartbeat**: client pings `heartbeat` every ~60s **only when the tab is visible AND there was real user interaction** (mousemove/keydown/click) in the last interval — Page Visibility API + an interaction flag. So an **unattended-but-awake tab stops beating** → decays stale → ineligible, *without* relying on the shift window. (Docket `user_activity` is the lighter precedent.)
+- **Idle → away**: derived from stale `last_seen_at` (no cron needed for correctness). A short idle inside a shift (lunch) decays the agent to ineligible within ~the freshness window; status display may show `away`.
+- **EOD → offline (cosmetic)**: a small `pg_cron` near end-of-day IST resets lingering `auto=true` rows to `offline` purely for a clean roster — it is **not** the assignment gate (the shift window + freshness already are). Mirrors the floor `auto-close-attendance` cadence.
+- **Manual toggle**: topbar Available/Away/Offline control (`auto=false`). "Available" outside the window is the off-schedule override; Away/Offline removes the agent immediately regardless of shift.
 
 ### 4.4 UI
 - **Topbar availability toggle** (next to DeptSwitcher) — Online/Away/Offline pill, optimistic.
@@ -194,7 +222,7 @@ Not in v1. If wanted, derive daily on-duty sessions/hours from presence transiti
 ---
 
 ## 5. Migrations
-Single additive migration `pitstop_tags_routing_presence_v1` (or split per phase if preferred): `cs_tags`, `cs_ticket_tags`, `cs_thread_tags`, `cs_agent_presence`, `cs_routing_config` + the `cs_autoassign_thread` RPC + EOD `pg_cron` job. All RLS-on at creation, service_role grants, advisor-clean. No existing column altered. Schema-verify each touched parent table first.
+Single additive migration `pitstop_tags_routing_presence_v1` (or split per phase if preferred): `cs_tags`, `cs_ticket_tags`, `cs_thread_tags`, `cs_agent_presence`, `cs_shifts` (+ seed the 4 department windows), `cs_routing_config` + the `cs_autoassign_thread` RPC + cosmetic EOD `pg_cron` job. All RLS-on at creation, service_role grants, advisor-clean. No existing column altered. Schema-verify each touched parent table first.
 
 ## 6. Blast radius & deploy
 - **csops worker** (Pitstop only — sibling worker, single-system blast radius). Sequence: edit → commit → push → `cd 05_Throttle/csops-worker && npx wrangler deploy`.
@@ -202,14 +230,14 @@ Single additive migration `pitstop_tags_routing_presence_v1` (or split per phase
 - **Path-scoped commits** — stage only `csops-worker` / `apps/pitstop` / spec; never `git add -A` (the uncommitted Throttle-worker `wrangler.toml`/`index.js` must stay out).
 
 ## 7. Build phasing (each independently shippable)
-- **Phase 1 — Presence** (foundation): migration (presence table + EOD cron) + `setPresence`/`heartbeat`/`getPresence` + topbar toggle + lead roster.
+- **Phase 1 — Presence + shifts** (foundation): migration (`cs_agent_presence` + `cs_shifts` seeded + cosmetic EOD cron) + `setPresence`/`heartbeat`/`getPresence`/`getShifts`/`setShift` + activity-gated heartbeat + topbar availability toggle + lead "who's on duty" roster + per-department shift-window admin.
 - **Phase 2 — Round-robin**: `cs_routing_config` + `cs_autoassign_thread` RPC + 3 webhook hooks + admin routing card. Enable IG/FB; WA off.
 - **Phase 3 — Tags**: 3 tables + tag worker actions + `TagPicker` + rails + facets + admin tag mgmt.
 - **(Parallel) WhatsApp transport** — separate spec; the actual BiteSpeed-retirement lever (direct WhatsApp Cloud API vs C2-B). Until it lands, RR/presence are live on IG+FB and WA stays a read-only mirror.
 
 ## 8. Open questions (confirm before/at build)
 - **Q1 — "open thread" definition for least-loaded + the Stale view.** `cs_wa_threads` has no close/resolve state today. Options: (a) treat "open" = thread whose last message is inbound (awaiting reply); (b) add a lightweight `thread_state` (`open`/`snoozed`/`closed`) so agents can clear handled threads (cleaner load math + a real "done" action, mild scope add). Recommend (b) — it also makes the inbox a true work queue. **Decide at Phase 2.**
-- **Q2 — heartbeat freshness + heartbeat interval** (default 60s ping / 3-min freshness) and **EOD cron time** (IST). Confirm values.
+- **Q2 — the actual per-department shift windows + working days.** TBD pending Afshaan — need start/end (IST) for **Messaging** (the only lane that gates thread round-robin in v1) and ideally Inbound/Outbound/Confirm too. Default working days Mon–Sat (Sun off, per RULE-ATT-001); confirm if CS runs 7 days. Also confirm heartbeat interval/freshness (default 60s / 3-min) + EOD cosmetic-cron time (IST).
 - **Q3 — does `away` ever receive assignments?** Default: no (only `online`); `away` is excluded but not offline. Confirm.
 - **Q4 — auto-release stale threads** when owner goes offline (v2): after how long, and to whom (pool / lead)? Deferred unless wanted in v1.
 - **Q5 — notify agent on auto-assign** (in-app/Slack) — v2; ties into the Docket V2 notifications track.
