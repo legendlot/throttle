@@ -816,7 +816,10 @@ function uniMapOrder(so) {
     if (cancelledOrder || !itemCancelled) { oGross += gross; oDisc += disc; oTax += tax; }
     lines.push({
       source_line_id: `${so.code}:${it.code || it.id}`, source_order_id: so.code,
-      channel_sku: it.itemSku || it.sellerSkuCode || it.ean || null, title: it.itemName || null,
+      // EAN first: LOT controls EANs and product_master.ean is populated, so resolveSkus auto-maps
+      // by ean (the fk-/lotcars- itemSku/sellerSkuCode don't match product_master.sku). Fallback to
+      // the channel SKU when a line carries no EAN (→ unmapped queue, mapped once).
+      channel_sku: it.ean || it.itemSku || it.sellerSkuCode || null, title: it.itemName || null,
       qty: 1, gross_value: gross, discount_value: disc, tax_value: tax, row_type: 'sale',
       occurred_at: occurred, sale_date: saleDate, order_status: status, is_cancelled: itemCancelled,
       raw: { ean: it.ean, sellerSku: it.sellerSkuCode, fsn: it.channelProductId, statusCode: it.statusCode },
