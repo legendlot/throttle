@@ -1,15 +1,21 @@
 'use client';
 /* ════════════════════════════════════════════════════════════
-   Pitstop "Volt" — Agent Inbox (S161).
+   Pitstop "Volt" — Agent Inbox (S161; tabs + notes + composer S162).
    Cross-channel DM console over store.cs_wa_threads / cs_wa_messages.
    • Instagram + Facebook Messenger = two-way (reply via sendMetaMessage).
    • WhatsApp = read-only mirror (reply in BiteSpeed) until C2-B.
+   • Mine / Unassigned / All assignment tabs + thread claim/assign (S162-A).
+   • Private (internal) notes for agent hand-off (S162-B).
+   • Composer: emoji · canned responses · note formatting (S162-C).
    • Link a thread to a ticket (IG/FB have no phone to auto-match on).
    ════════════════════════════════════════════════════════════ */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@throttle/auth';
-import { Instagram, Facebook, MessageCircle, Send, Clock, ExternalLink, Link2, Image as ImageIcon, FileText } from 'lucide-react';
-import { Panel, Tabs, ToneBadge, btnPrimary, btnGhost, inputStyle } from '../../../components/kit/index.js';
+import {
+  Instagram, Facebook, MessageCircle, Send, Clock, ExternalLink, Link2,
+  Image as ImageIcon, FileText, Smile, Lock, Bold, Italic, StickyNote, UserPlus, X,
+} from 'lucide-react';
+import { Panel, Tabs, ToneBadge, btnPrimary, btnGhost, inputStyle, selectStyle } from '../../../components/kit/index.js';
 import { csopsGet, csopsPost } from '../../../lib/csopsFetch.js';
 
 const CHANNELS = {
@@ -18,6 +24,7 @@ const CHANNELS = {
   whatsapp:  { label: 'WhatsApp',  color: '#25D366', Glyph: MessageCircle, sendable: false },
 };
 const chanOf = (c) => CHANNELS[c] || { label: c || 'DM', color: 'var(--t3)', Glyph: MessageCircle, sendable: false };
+const EMOJIS = ['👍', '🙏', '😊', '🎉', '❤️', '✅', '👏', '🚗', '📦', '🔧', '⏳', '😅', '🙌', '👌', '🤝', '📸'];
 
 const shortTime = (iso) => iso ? new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
 const relTime = (iso) => {
@@ -36,37 +43,50 @@ const biteSpeedLink = (t) => (t?.provider_account_id && t?.provider_thread_ref)
   : BITESPEED_BASE;
 
 export default function InboxPage() {
-  const { session, perms } = useAuth();
+  const { session, user, perms } = useAuth();
   const canManage = !!perms?.cs_ticket_manage;
+  const canReassign = !!(perms?.cs_ticket_reassign || perms?.cs_ticket_admin);
+  const myId = user?.id || null;
 
   const [channel, setChannel] = useState('all');
+  const [assignTab, setAssignTab] = useState('all');  // all | mine | unassigned (S162-A)
   const [threads, setThreads] = useState([]);
   const [stats, setStats] = useState({
-    instagram: { total: 0, awaiting: 0 },
-    messenger: { total: 0, awaiting: 0 },
-    whatsapp:  { total: 0, awaiting: null },
+    instagram: { total: 0, awaiting: 0, mine: 0, unassigned: 0 },
+    messenger: { total: 0, awaiting: 0, mine: 0, unassigned: 0 },
+    whatsapp:  { total: 0, awaiting: null, mine: 0, unassigned: 0 },
   });
+  const [agents, setAgents] = useState([]);
+  const [templates, setTemplates] = useState([]);
   const [loadingList, setLoadingList] = useState(true);
   const [selectedId, setSelectedId] = useState(null);
   const [convo, setConvo] = useState(null);          // { thread, messages, linked_ticket, within_customer_window }
   const [loadingConvo, setLoadingConvo] = useState(false);
   const [text, setText] = useState('');
+  const [mode, setMode] = useState('reply');          // reply | note (S162-B/C)
   const [sending, setSending] = useState(false);
   const [err, setErr] = useState(null);
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkVal, setLinkVal] = useState('');
+  const [showEmoji, setShowEmoji] = useState(false);
+  const [showCanned, setShowCanned] = useState(false);
+  const [assignOpen, setAssignOpen] = useState(false);
   const scrollRef = useRef(null);
+  const taRef = useRef(null);
 
   // List is channel-scoped (WhatsApp has thousands of threads — fetching "all"
   // would bury the low-volume IG/FB threads). Tiles get their own stats call.
   const loadThreads = useCallback(async () => {
     if (!session) return;
     try {
-      const d = await csopsGet('getMessagingThreads', channel === 'all' ? {} : { channel }, session);
+      const p = {};
+      if (channel !== 'all') p.channel = channel;
+      if (assignTab !== 'all') p.tab = assignTab;
+      const d = await csopsGet('getMessagingThreads', p, session);
       setThreads(d?.threads || []);
     } catch (e) { setErr(e.message); }
     finally { setLoadingList(false); }
-  }, [session, channel]);
+  }, [session, channel, assignTab]);
 
   const loadStats = useCallback(async () => {
     if (!session) return;
@@ -85,7 +105,7 @@ export default function InboxPage() {
     finally { setLoadingConvo(false); }
   }, [session]);
 
-  // Thread list — load + 20s poll.
+  // Thread list — load + 20s poll. Re-fires on channel or assignment-tab change.
   useEffect(() => { setLoadingList(true); loadThreads(); }, [loadThreads]);
   useEffect(() => {
     if (!session) return undefined;
@@ -101,11 +121,19 @@ export default function InboxPage() {
     return () => clearInterval(iv);
   }, [session, loadStats]);
 
+  // Agents (for assign dropdown) + canned-response templates — load once.
+  useEffect(() => {
+    if (!session) return;
+    if (canReassign) csopsGet('getAgents', {}, session).then(d => setAgents(Array.isArray(d) ? d : (d?.data || []))).catch(() => {});
+    csopsGet('getWaTemplates', {}, session).then(d => setTemplates(Array.isArray(d) ? d : (d?.data || d?.templates || []))).catch(() => {});
+  }, [session, canReassign]);
+
   // Open conversation — load on select + 15s poll.
   useEffect(() => {
     if (!selectedId) { setConvo(null); return undefined; }
     setLoadingConvo(true);
     loadConvo(selectedId);
+    setMode('reply'); setShowEmoji(false); setShowCanned(false); setAssignOpen(false);
     const iv = setInterval(() => loadConvo(selectedId), 15000);
     return () => clearInterval(iv);
   }, [selectedId, loadConvo]);
@@ -123,6 +151,13 @@ export default function InboxPage() {
     [stats],
   );
 
+  // Assignment-tab counts, scoped to the channel currently in view.
+  const scoped = useMemo(() => {
+    const ch = channel === 'all' ? ['instagram', 'messenger', 'whatsapp'] : [channel];
+    const sum = (k) => ch.reduce((a, c) => a + (stats[c]?.[k] || 0), 0);
+    return { all: sum('total'), mine: sum('mine'), unassigned: sum('unassigned') };
+  }, [stats, channel]);
+
   const tabs = [
     { id: 'all', label: 'All', count: allTotal },
     { id: 'instagram', label: 'Instagram', count: stats.instagram.total },
@@ -130,17 +165,58 @@ export default function InboxPage() {
     { id: 'whatsapp', label: 'WhatsApp', count: stats.whatsapp.total },
   ];
 
+  const assignTabs = [
+    { id: 'all', label: 'All', count: scoped.all },
+    { id: 'mine', label: 'Mine', count: scoped.mine },
+    { id: 'unassigned', label: 'Unassigned', count: scoped.unassigned },
+  ];
+
+  // ── composer helpers ────────────────────────────────────────
+  function insertAtCaret(snippet) {
+    const ta = taRef.current;
+    if (!ta) { setText(t => t + snippet); return; }
+    const s = ta.selectionStart ?? text.length;
+    const e = ta.selectionEnd ?? text.length;
+    const next = text.slice(0, s) + snippet + text.slice(e);
+    setText(next);
+    requestAnimationFrame(() => { ta.focus(); const p = s + snippet.length; ta.setSelectionRange(p, p); });
+  }
+  function wrapSelection(token) {
+    const ta = taRef.current;
+    if (!ta) return;
+    const s = ta.selectionStart ?? 0;
+    const e = ta.selectionEnd ?? 0;
+    if (s === e) { insertAtCaret(token + token); return; }
+    const next = text.slice(0, s) + token + text.slice(s, e) + token + text.slice(e);
+    setText(next);
+    requestAnimationFrame(() => { ta.focus(); ta.setSelectionRange(s, e + 2 * token.length); });
+  }
+
   async function send() {
     const t = text.trim();
     if (!t || !convo?.thread || sending) return;
     setSending(true); setErr(null);
     try {
-      await csopsPost('sendMetaMessage', { thread_id: convo.thread.id, text: t }, session);
-      setText('');
+      if (mode === 'note') {
+        await csopsPost('addThreadNote', { thread_id: convo.thread.id, text: t }, session);
+      } else {
+        await csopsPost('sendMetaMessage', { thread_id: convo.thread.id, text: t }, session);
+      }
+      setText(''); setShowEmoji(false); setShowCanned(false);
       await loadConvo(selectedId);
-      loadThreads();
+      loadThreads(); loadStats();
     } catch (e) { setErr(e.message); }
     finally { setSending(false); }
+  }
+
+  async function assign(agentId) {
+    if (!convo?.thread) return;
+    setErr(null); setAssignOpen(false);
+    try {
+      await csopsPost('assignThread', { thread_id: convo.thread.id, agent_id: agentId }, session);
+      await loadConvo(selectedId);
+      loadThreads(); loadStats();
+    } catch (e) { setErr(e.message); }
   }
 
   async function linkTicket() {
@@ -158,6 +234,8 @@ export default function InboxPage() {
   const thread = convo?.thread;
   const ch = thread ? chanOf(thread.channel) : null;
   const windowOpen = !!convo?.within_customer_window;
+  const mineThread = thread && thread.assigned_agent_id && thread.assigned_agent_id === myId;
+  const noteMode = mode === 'note';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, height: 'calc(100vh - 132px)', minHeight: 480 }}>
@@ -181,18 +259,31 @@ export default function InboxPage() {
         {/* ── Thread list ───────────────────────────────────── */}
         <div style={{ width: 340, flexShrink: 0, display: 'flex', flexDirection: 'column',
           background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
-          <div style={{ padding: '11px 14px', borderBottom: '1px solid var(--border)', display: 'flex',
+          <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', display: 'flex',
             alignItems: 'center', justifyContent: 'space-between' }}>
             <span className="label" style={{ fontSize: 11, fontWeight: 700, color: 'var(--t1)' }}>Conversations</span>
             <span className="num" style={{ fontSize: 10.5, color: 'var(--t3)' }}>{threads.length}</span>
+          </div>
+          {/* Assignment axis — Mine / Unassigned / All (S162-A) */}
+          <div style={{ display: 'flex', gap: 4, padding: '8px 10px', borderBottom: '1px solid var(--border)' }}>
+            {assignTabs.map(t => (
+              <button key={t.id} onClick={() => setAssignTab(t.id)} style={{
+                flex: 1, cursor: 'pointer', fontSize: 11, fontWeight: 600, padding: '5px 6px',
+                borderRadius: 'var(--radius-sm)', border: '1px solid',
+                borderColor: assignTab === t.id ? 'var(--accent)' : 'var(--border)',
+                background: assignTab === t.id ? 'var(--accent-bg)' : 'transparent',
+                color: assignTab === t.id ? 'var(--accent)' : 'var(--t2)' }}>
+                {t.label} <span className="num" style={{ opacity: 0.7 }}>{t.count}</span>
+              </button>
+            ))}
           </div>
           <div style={{ overflowY: 'auto', flex: 1 }}>
             {loadingList ? (
               <Empty>Loading…</Empty>
             ) : threads.length === 0 ? (
-              <Empty>No conversations yet.</Empty>
+              <Empty>{assignTab === 'unassigned' ? 'No unassigned conversations.' : assignTab === 'mine' ? 'Nothing assigned to you.' : 'No conversations yet.'}</Empty>
             ) : threads.map(t => (
-              <ThreadRow key={t.id} t={t} active={t.id === selectedId} onClick={() => setSelectedId(t.id)} />
+              <ThreadRow key={t.id} t={t} active={t.id === selectedId} myId={myId} onClick={() => setSelectedId(t.id)} />
             ))}
           </div>
         </div>
@@ -220,7 +311,13 @@ export default function InboxPage() {
                     </div>
                   </div>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                  {/* Assign / claim (S162-A) */}
+                  {canManage && (
+                    <AssignControl
+                      thread={thread} mineThread={mineThread} canReassign={canReassign} agents={agents}
+                      open={assignOpen} setOpen={setAssignOpen} onAssign={assign} myId={myId} />
+                  )}
                   {ch.sendable && <WindowPill open={windowOpen} until={thread.customer_window_until} />}
                   {convo?.linked_ticket ? (
                     <a href={`/queue/detail?ticket_no=${convo.linked_ticket.ticket_no}`}
@@ -256,22 +353,79 @@ export default function InboxPage() {
 
               {/* Composer */}
               {ch.sendable ? (
-                <div style={{ borderTop: '1px solid var(--border)', padding: 12 }}>
-                  {!windowOpen && (
+                <div style={{ borderTop: '1px solid var(--border)', padding: 12,
+                  background: noteMode ? 'var(--warn-bg)' : 'transparent' }}>
+                  {/* Reply / Note toggle */}
+                  <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                    <ModeBtn active={!noteMode} onClick={() => setMode('reply')} icon={Send} label="Reply" />
+                    <ModeBtn active={noteMode} onClick={() => setMode('note')} icon={StickyNote} label="Private note" tone="warn" />
+                  </div>
+
+                  {noteMode ? (
+                    <div style={{ fontSize: 10.5, color: 'var(--warn-fg)', marginBottom: 7, display: 'flex', alignItems: 'center', gap: 5 }}>
+                      <Lock size={11} /> Internal note — only your team can see this. Never sent to the customer.
+                    </div>
+                  ) : !windowOpen && (
                     <div style={{ fontSize: 10.5, color: 'var(--warn-fg)', marginBottom: 7, display: 'flex', alignItems: 'center', gap: 5 }}>
                       <Clock size={11} /> Outside the 24h window — sends with a HUMAN_AGENT tag.
                     </div>
                   )}
+
+                  {/* Toolbar */}
+                  <div style={{ display: 'flex', gap: 4, marginBottom: 6, position: 'relative', alignItems: 'center' }}>
+                    <ToolBtn title="Emoji" onClick={() => { setShowEmoji(v => !v); setShowCanned(false); }} disabled={!canManage}><Smile size={15} /></ToolBtn>
+                    {noteMode ? (
+                      <>
+                        <ToolBtn title="Bold" onClick={() => wrapSelection('**')} disabled={!canManage}><Bold size={15} /></ToolBtn>
+                        <ToolBtn title="Italic" onClick={() => wrapSelection('_')} disabled={!canManage}><Italic size={15} /></ToolBtn>
+                      </>
+                    ) : (
+                      <ToolBtn title="Canned responses" onClick={() => { setShowCanned(v => !v); setShowEmoji(false); }} disabled={!canManage || !templates.length}>
+                        <FileText size={15} />
+                      </ToolBtn>
+                    )}
+                    {showEmoji && (
+                      <Popover onClose={() => setShowEmoji(false)}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(8, 1fr)', gap: 2 }}>
+                          {EMOJIS.map(e => (
+                            <button key={e} onClick={() => { insertAtCaret(e); setShowEmoji(false); }}
+                              style={{ fontSize: 18, padding: 4, cursor: 'pointer', background: 'transparent', border: 'none', borderRadius: 6 }}>{e}</button>
+                          ))}
+                        </div>
+                      </Popover>
+                    )}
+                    {showCanned && !noteMode && (
+                      <Popover onClose={() => setShowCanned(false)} width={300}>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Canned responses</div>
+                        {templates.length === 0 ? (
+                          <div style={{ fontSize: 12, color: 'var(--t3)', padding: '4px 0' }}>No templates yet.</div>
+                        ) : templates.map(tp => (
+                          <button key={tp.id || tp.name} onClick={() => { insertAtCaret(tp.body || ''); setShowCanned(false); }}
+                            style={{ display: 'block', width: '100%', textAlign: 'left', cursor: 'pointer', padding: '7px 8px',
+                              border: 'none', borderRadius: 6, background: 'transparent', borderBottom: '1px solid var(--border)' }}>
+                            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--t1)' }}>{tp.name}</div>
+                            <div style={{ fontSize: 11, color: 'var(--t3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{tp.body}</div>
+                          </button>
+                        ))}
+                      </Popover>
+                    )}
+                  </div>
+
                   <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
                     <textarea
+                      ref={taRef}
                       value={text} onChange={e => setText(e.target.value)}
                       onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
-                      placeholder={canManage ? 'Type a reply…  (Enter to send, Shift+Enter for newline)' : 'You need cs_ticket_manage to reply.'}
+                      placeholder={!canManage ? 'You need cs_ticket_manage to reply.'
+                        : noteMode ? 'Write an internal note for the team…  (Enter to save)'
+                        : 'Type a reply…  (Enter to send, Shift+Enter for newline)'}
                       disabled={!canManage || sending} rows={2}
-                      style={{ ...inputStyle, flex: 1, resize: 'none', fontFamily: 'var(--f-ui)' }} />
+                      style={{ ...inputStyle, flex: 1, resize: 'none', fontFamily: 'var(--f-ui)',
+                        background: noteMode ? 'var(--surface)' : inputStyle.background }} />
                     <button onClick={send} disabled={!canManage || sending || !text.trim()}
-                      style={{ ...btnPrimary, opacity: (!canManage || sending || !text.trim()) ? 0.5 : 1 }}>
-                      <Send size={13} /> {sending ? 'Sending' : 'Send'}
+                      style={{ ...btnPrimary, opacity: (!canManage || sending || !text.trim()) ? 0.5 : 1,
+                        background: noteMode ? 'var(--warn-fg)' : btnPrimary.background }}>
+                      {noteMode ? <StickyNote size={13} /> : <Send size={13} />} {sending ? 'Saving' : noteMode ? 'Save note' : 'Send'}
                     </button>
                   </div>
                 </div>
@@ -298,6 +452,78 @@ function displayName(t) {
 }
 function Empty({ children }) {
   return <div style={{ padding: 24, textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>{children}</div>;
+}
+function ModeBtn({ active, onClick, icon: I, label, tone }) {
+  const accent = tone === 'warn' ? 'var(--warn-fg)' : 'var(--accent)';
+  return (
+    <button onClick={onClick} style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer',
+      fontSize: 11.5, fontWeight: 600, padding: '5px 11px', borderRadius: 'var(--radius-sm)',
+      border: `1px solid ${active ? accent : 'var(--border)'}`,
+      background: active ? (tone === 'warn' ? 'var(--warn-bg)' : 'var(--accent-bg)') : 'transparent',
+      color: active ? accent : 'var(--t2)' }}>
+      <I size={13} /> {label}
+    </button>
+  );
+}
+function ToolBtn({ children, title, onClick, disabled }) {
+  return (
+    <button title={title} onClick={onClick} disabled={disabled}
+      style={{ display: 'grid', placeItems: 'center', width: 30, height: 28, cursor: disabled ? 'default' : 'pointer',
+        border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', background: 'var(--surface)',
+        color: disabled ? 'var(--t4)' : 'var(--t2)', opacity: disabled ? 0.5 : 1 }}>{children}</button>
+  );
+}
+function Popover({ children, onClose, width = 280 }) {
+  return (
+    <div style={{ position: 'absolute', bottom: 'calc(100% + 6px)', left: 0, zIndex: 40, width,
+      background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius)',
+      boxShadow: 'var(--shadow, 0 8px 28px rgba(0,0,0,0.28))', padding: 10, maxHeight: 280, overflowY: 'auto' }}>
+      <button onClick={onClose} style={{ position: 'absolute', top: 6, right: 6, cursor: 'pointer', border: 'none',
+        background: 'transparent', color: 'var(--t3)' }}><X size={13} /></button>
+      {children}
+    </div>
+  );
+}
+function AssignControl({ thread, mineThread, canReassign, agents, open, setOpen, onAssign, myId }) {
+  const assigned = thread.assigned_agent_id;
+  // Owned by me → green pill + release. Owned by other → name (+ reassign for TL+).
+  // Unassigned → Claim (+ assign-to for TL+).
+  return (
+    <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6 }}>
+      {mineThread ? (
+        <>
+          <ToneBadge tone="ok"><UserPlus size={10} style={{ marginRight: 3 }} /> Mine</ToneBadge>
+          <button onClick={() => onAssign(null)} style={{ ...btnGhost, padding: '5px 9px', fontSize: 11 }}>Release</button>
+        </>
+      ) : assigned ? (
+        <>
+          <ToneBadge tone="info">{thread.assigned_agent_name || 'Assigned'}</ToneBadge>
+          {canReassign && <button onClick={() => setOpen(v => !v)} style={{ ...btnGhost, padding: '5px 9px', fontSize: 11 }}>Reassign</button>}
+        </>
+      ) : (
+        <>
+          <button onClick={() => onAssign(myId)} style={{ ...btnPrimary, padding: '5px 11px', fontSize: 11.5 }}>
+            <UserPlus size={12} /> Claim
+          </button>
+          {canReassign && <button onClick={() => setOpen(v => !v)} style={{ ...btnGhost, padding: '5px 9px', fontSize: 11 }}>Assign…</button>}
+        </>
+      )}
+      {open && canReassign && (
+        <div style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 40, width: 240,
+          background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius)',
+          boxShadow: 'var(--shadow, 0 8px 28px rgba(0,0,0,0.28))', padding: 8, maxHeight: 300, overflowY: 'auto' }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Assign to</div>
+          {(agents || []).map(a => (
+            <button key={a.id} onClick={() => onAssign(a.id)}
+              style={{ display: 'block', width: '100%', textAlign: 'left', cursor: 'pointer', padding: '7px 8px',
+                border: 'none', borderRadius: 6, background: a.id === myId ? 'var(--accent-bg)' : 'transparent', fontSize: 12, color: 'var(--t1)' }}>
+              {a.full_name}{a.id === myId ? ' (me)' : ''}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 function ChannelTile({ chKey, stat, active, onClick }) {
   const ch = chanOf(chKey);
@@ -350,10 +576,11 @@ function Avatar({ t, size = 34 }) {
     </div>
   );
 }
-function ThreadRow({ t, active, onClick }) {
+function ThreadRow({ t, active, myId, onClick }) {
   const ch = chanOf(t.channel);
   const lm = t.last_message;
   const preview = lm ? (lm.body || (lm.kind && lm.kind !== 'text' ? `[${lm.kind}]` : '')) : '';
+  const mine = t.assigned_agent_id && t.assigned_agent_id === myId;
   return (
     <button onClick={onClick} style={{ width: '100%', textAlign: 'left', cursor: 'pointer',
       display: 'flex', gap: 10, padding: '11px 13px', border: 'none', borderBottom: '1px solid var(--border)',
@@ -371,16 +598,42 @@ function ThreadRow({ t, active, onClick }) {
           <span style={{ fontSize: 12, color: 'var(--t3)', whiteSpace: 'nowrap', overflow: 'hidden',
             textOverflow: 'ellipsis', flex: 1 }}>{preview || '—'}</span>
         </div>
-        {t.linked_ticket_no && (
-          <div style={{ marginTop: 4 }}>
+        <div style={{ display: 'flex', gap: 5, marginTop: 4, flexWrap: 'wrap' }}>
+          {t.assigned_agent_id && (
+            <ToneBadge tone={mine ? 'ok' : 'mute'} style={{ fontSize: 8.5 }}>{mine ? 'Mine' : (t.assigned_agent_name || 'Assigned')}</ToneBadge>
+          )}
+          {t.linked_ticket_no && (
             <ToneBadge tone="info" style={{ fontSize: 8.5 }}>{t.linked_ticket_no}</ToneBadge>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </button>
   );
 }
+function noteHtml(s) {
+  // Minimal **bold** / _italic_ rendering for internal notes (escaped first).
+  const esc = String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return esc.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/_([^_]+)_/g, '<em>$1</em>');
+}
 function Bubble({ m, accent }) {
+  // Internal note — full-width, centered, amber, never customer-facing (S162-B).
+  if (m.is_internal || m.kind === 'note') {
+    const ts = m.sent_at || m.created_at;
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 9 }}>
+        <div style={{ maxWidth: '86%', padding: '8px 12px', borderRadius: 10, background: 'var(--warn-bg)',
+          border: '1px dashed var(--warn-bd, var(--warn-fg))' }}>
+          <div style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--warn-fg)', textTransform: 'uppercase',
+            letterSpacing: '0.05em', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 4 }}>
+            <Lock size={10} /> Internal note{m.sent_by_name ? ` · ${m.sent_by_name}` : ''}
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--t1)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+            dangerouslySetInnerHTML={{ __html: noteHtml(m.body || '') }} />
+          <div style={{ marginTop: 4, fontSize: 9.5, color: 'var(--t4)', textAlign: 'right' }}>{shortTime(ts)}</div>
+        </div>
+      </div>
+    );
+  }
   const isIn = m.direction === 'inbound';
   const ts = m.received_at || m.sent_at || m.created_at;
   const failed = m.status === 'failed';

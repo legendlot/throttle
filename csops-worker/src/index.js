@@ -531,6 +531,8 @@ async function handlePost(action, body, auth, env, request) {
     case 'sendWaMessage':            return sendWaMessage(body, auth, env);
     case 'sendMetaMessage':          return sendMetaMessage(body, auth, env);
     case 'linkMessagingThread':      return linkMessagingThread(body, auth, env);
+    case 'assignThread':             return assignThread(body, auth, env);
+    case 'addThreadNote':            return addThreadNote(body, auth, env);
     case 'recordInboundWaStub':      return recordInboundWaStub(body, auth, env);
     case 'createWaTemplate':         return createWaTemplate(body, auth, env);
     case 'updateWaTemplate':         return updateWaTemplate(body, auth, env);
@@ -3082,8 +3084,14 @@ async function sendMetaMessage(body, auth, env) {
       sent_at: new Date().toISOString(),
     }),
   });
-  await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify({ last_message_at: new Date().toISOString() }) }).catch(() => {});
-  return ok({ sent: true, message_id: mid });
+  const threadPatch = { last_message_at: new Date().toISOString() };
+  if (!thread.assigned_agent_id) {                 // auto-claim on first reply (D4, S162)
+    threadPatch.assigned_agent_id = auth.userId;
+    threadPatch.assigned_agent_name = auth.fullName || auth.name || auth.email || null;
+    threadPatch.assigned_at = new Date().toISOString();
+  }
+  await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(threadPatch) }).catch(() => {});
+  return ok({ sent: true, message_id: mid, auto_claimed: !thread.assigned_agent_id });
 }
 
 // ── Agent Inbox — cross-channel thread list + reader + ticket link ───────────
@@ -3093,9 +3101,12 @@ async function sendMetaMessage(body, auth, env) {
 // read-only (BiteSpeed deep-link) until C2-B.
 async function getMessagingThreads(params, auth, env) {
   const channel = params.get('channel');
+  const tab = params.get('tab');              // mine | unassigned | all (assignment axis, S162)
   const limit = Math.min(Number(params.get('limit')) || 60, 300);
   let q = `/rest/v1/cs_wa_threads?select=*&order=last_message_at.desc.nullslast&limit=${limit}`;
   if (channel && channel !== 'all') q += `&channel=eq.${encodeURIComponent(channel)}`;
+  if (tab === 'mine') q += `&assigned_agent_id=eq.${auth.userId}`;
+  else if (tab === 'unassigned') q += `&assigned_agent_id=is.null`;
   const tRes = await sb(q, env);
   const threads = tRes.data || [];
   if (!threads.length) return ok({ threads: [] });
@@ -3104,13 +3115,14 @@ async function getMessagingThreads(params, auth, env) {
   // + linked ticket per thread (avoids N+1; PostgREST has no "latest per group").
   const ids = threads.map(t => t.id);
   const mRes = await sb(
-    `/rest/v1/cs_wa_messages?thread_id=in.(${ids.join(',')})&select=thread_id,body,kind,direction,ticket_id,created_at&order=created_at.desc&limit=1500`,
+    `/rest/v1/cs_wa_messages?thread_id=in.(${ids.join(',')})&select=thread_id,body,kind,direction,ticket_id,is_internal,created_at&order=created_at.desc&limit=1500`,
     env,
   );
   const lastByThread = {};
   const ticketByThread = {};
   for (const m of (mRes.data || [])) {
-    if (!lastByThread[m.thread_id]) lastByThread[m.thread_id] = m;
+    // Private notes never surface as the customer-facing preview line.
+    if (!m.is_internal && !lastByThread[m.thread_id]) lastByThread[m.thread_id] = m;
     if (m.ticket_id && !ticketByThread[m.thread_id]) ticketByThread[m.thread_id] = m.ticket_id;
   }
   const ticketIds = [...new Set(Object.values(ticketByThread))];
@@ -3139,18 +3151,26 @@ async function getMessagingThreads(params, auth, env) {
 // BiteSpeed mirror (replies happen there) so it gets an exact total only.
 async function getMessagingStats(params, auth, env) {
   const stats = {
-    instagram: { total: 0, awaiting: 0 },
-    messenger: { total: 0, awaiting: 0 },
-    whatsapp:  { total: 0, awaiting: null },
+    instagram: { total: 0, awaiting: 0, mine: 0, unassigned: 0 },
+    messenger: { total: 0, awaiting: 0, mine: 0, unassigned: 0 },
+    whatsapp:  { total: 0, awaiting: null, mine: 0, unassigned: 0 },
   };
   // Two-way channels: small volume → fetch threads + last-message direction.
-  const twRes = await sb(`/rest/v1/cs_wa_threads?channel=in.(instagram,messenger)&select=id,channel&limit=1000`, env);
+  const twRes = await sb(`/rest/v1/cs_wa_threads?channel=in.(instagram,messenger)&select=id,channel,assigned_agent_id&limit=1000`, env);
   const tw = twRes.data || [];
   const chById = {};
-  for (const t of tw) { chById[t.id] = t.channel; if (stats[t.channel]) stats[t.channel].total += 1; }
+  for (const t of tw) {
+    chById[t.id] = t.channel;
+    const s = stats[t.channel];
+    if (!s) continue;
+    s.total += 1;
+    if (t.assigned_agent_id === auth.userId) s.mine += 1;
+    if (!t.assigned_agent_id) s.unassigned += 1;
+  }
   if (tw.length) {
+    // Exclude internal notes — "awaiting reply" means the customer's last message is unanswered.
     const mRes = await sb(
-      `/rest/v1/cs_wa_messages?thread_id=in.(${tw.map(t => t.id).join(',')})&select=thread_id,direction,created_at&order=created_at.desc&limit=3000`,
+      `/rest/v1/cs_wa_messages?thread_id=in.(${tw.map(t => t.id).join(',')})&is_internal=eq.false&select=thread_id,direction,created_at&order=created_at.desc&limit=3000`,
       env,
     );
     const lastDir = {};
@@ -3159,8 +3179,10 @@ async function getMessagingStats(params, auth, env) {
       if (dir === 'inbound' && stats[chById[tid]]) stats[chById[tid]].awaiting += 1;
     }
   }
-  // WhatsApp: exact count only (read-only mirror — awaiting tracked in BiteSpeed).
+  // WhatsApp: exact counts only (read-only mirror — awaiting tracked in BiteSpeed).
   stats.whatsapp.total = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.whatsapp&select=id`, env);
+  stats.whatsapp.mine = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.whatsapp&assigned_agent_id=eq.${auth.userId}&select=id`, env);
+  stats.whatsapp.unassigned = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.whatsapp&assigned_agent_id=is.null&select=id`, env);
   return ok({ stats });
 }
 
@@ -3198,4 +3220,75 @@ async function linkMessagingThread(body, auth, env) {
   });
   if (!upd.ok) return err('Failed to link thread', upd.status || 500);
   return ok({ linked: true, ticket_no: ticket.ticket_no, ticket_id: ticket.id });
+}
+
+// Assign / claim / release a DM thread to an agent (Feature A, S162). Mirrors the
+// ticket assignAgent gate exactly: self-claim (or self-release) needs cs_ticket_manage;
+// assigning to ANOTHER agent needs cs_ticket_reassign or cs_ticket_admin. agent_id null
+// = unassign (return to the pool — open to managers, or to the current owner releasing self).
+async function assignThread(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { thread_id, agent_id } = body;
+  if (!thread_id) return err('thread_id required');
+
+  const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=id,assigned_agent_id&limit=1`, env);
+  const thread = tRes.data?.[0];
+  if (!thread) return err('Thread not found', 404);
+
+  const canReassign = !!auth?.permissions?.cs_ticket_reassign || !!auth?.permissions?.cs_ticket_admin;
+  const isSelf = agent_id === auth.userId;
+  // Releasing (agent_id null): allowed if you own it OR you can reassign.
+  const isSelfRelease = !agent_id && thread.assigned_agent_id === auth.userId;
+  if (!isSelf && !isSelfRelease && !canReassign) {
+    return err('Forbidden — only Team Lead+ can assign threads to other agents (missing cs_ticket_reassign)', 403);
+  }
+
+  let name = null;
+  if (agent_id) {
+    const aRes = await sb(`/rest/v1/users_profile?id=eq.${agent_id}&select=id,full_name&limit=1`, env);
+    const agent = aRes.data?.[0];
+    if (!agent) return err('Agent not found', 404);
+    name = agent.full_name;
+  }
+
+  const upd = await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      assigned_agent_id: agent_id || null,
+      assigned_agent_name: name,
+      assigned_at: agent_id ? new Date().toISOString() : null,
+    }),
+  });
+  if (!upd.ok) return err('Assign failed', upd.status || 500);
+  return ok({ assigned_agent_id: agent_id || null, assigned_agent_name: name });
+}
+
+// Add a private (internal) note to a DM thread (Feature B, S162). Agent-only —
+// stored as a cs_wa_messages row with is_internal=true / kind='note', NEVER sent to
+// Graph. Stamps updated_at (NOT last_message_at) so a note doesn't reorder the thread
+// above customers genuinely awaiting a reply or flip "awaiting reply".
+async function addThreadNote(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { thread_id, text } = body;
+  if (!thread_id || !text || !text.trim()) return err('thread_id and text required');
+
+  const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=id,channel&limit=1`, env);
+  const thread = tRes.data?.[0];
+  if (!thread) return err('Thread not found', 404);
+
+  const ins = await sb(`/rest/v1/cs_wa_messages`, env, {
+    method: 'POST',
+    headers: { Prefer: 'return=representation' },
+    body: JSON.stringify({
+      thread_id: thread.id, channel: thread.channel, direction: 'outbound', kind: 'note',
+      is_internal: true, body: text.trim(), status: null,
+      sent_by_user_id: auth.userId, sent_by_name: auth.fullName || auth.name || auth.email || null,
+      sent_at: new Date().toISOString(),
+    }),
+  });
+  if (!ins.ok) return err('Failed to add note', ins.status || 500);
+  await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, {
+    method: 'PATCH', body: JSON.stringify({ updated_at: new Date().toISOString() }),
+  }).catch(() => {});
+  return ok({ note: ins.data?.[0] || null });
 }
