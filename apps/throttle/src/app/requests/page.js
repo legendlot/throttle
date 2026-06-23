@@ -59,7 +59,6 @@ function ReqCard({ r, onOpen, onAct }) {
 }
 
 function RequestDrawer({ req, onClose, onAct, meId }) {
-  const canEditOwn = meId && req.requester_id === meId && (req.status === 'pending' || req.status === 'info_needed');
   useEffect(() => {
     if (!req) return;
     const onKey = e => { if (e.key === 'Escape') onClose(); };
@@ -67,6 +66,7 @@ function RequestDrawer({ req, onClose, onAct, meId }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [req, onClose]);
   if (!req) return null;
+  const canEditOwn = meId && req.requester_id === meId && (req.status === 'pending' || req.status === 'info_needed');
   const t = reqTypeOf(req.type);
   const st = REQ_STATUS[req.status] || { label: req.status, tone: 'info' };
   const meta = [
