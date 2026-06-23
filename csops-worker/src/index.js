@@ -824,7 +824,7 @@ async function getOverviewSummary(params, auth, env) {
   if (!scope) return err('Unknown department slug', 404);
   const scopeQs = scope.length ? `&${scope.join('&')}` : '';
 
-  const [openR, slaR, awaitingR, resolvedR, unassignedR, refundsR, agentRowsR, rosterR, rolesR, createdTodayR] = await Promise.all([
+  const [openR, slaR, awaitingR, resolvedR, unassignedR, refundsR, agentRowsR, rosterR, membersR, createdTodayR] = await Promise.all([
     sb(`/rest/v1/cs_tickets?closed_at=is.null&select=id&limit=5000${scopeQs}`, env),
     sb(`/rest/v1/cs_tickets?closed_at=is.null&due_at=lt.${encodeURIComponent(nowIso)}&select=created_at&order=created_at.asc&limit=5000${scopeQs}`, env),
     sb(`/rest/v1/cs_tickets?stage=eq.awaiting_evidence&closed_at=is.null&stage_changed_at=lt.${encodeURIComponent(agingIso)}&select=id&limit=5000${scopeQs}`, env),
@@ -832,8 +832,8 @@ async function getOverviewSummary(params, auth, env) {
     sb(`/rest/v1/cs_tickets?closed_at=is.null&assigned_agent_id=is.null&select=auto_created&limit=5000${scopeQs}`, env),
     sb(`/rest/v1/cs_tickets?closed_at=is.null&disposition=eq.refund&stage=eq.inspected&select=refund_amount_inr&limit=5000${scopeQs}`, env),
     sb(`/rest/v1/cs_tickets?closed_at=is.null&assigned_agent_id=not.is.null&select=assigned_agent_id,assigned_agent_name&limit=5000${scopeQs}`, env),
-    sb(`/rest/v1/users_profile?active=eq.true&select=id,full_name,role&order=full_name.asc&limit=500`, env),
-    sb(`/rest/v1/roles?select=role_id,permissions`, env),
+    sb(`/rest/v1/users_profile?active=eq.true&select=id,full_name,role,cs_department_id&order=full_name.asc&limit=500`, env),
+    sb(`/rest/v1/cs_user_departments?select=user_id`, env),
     sb(`/rest/v1/cs_tickets?created_at=gte.${encodeURIComponent(startOfTodayIso)}&select=created_at&limit=5000${scopeQs}`, env),
   ]);
 
@@ -854,13 +854,18 @@ async function getOverviewSummary(params, auth, env) {
   const refunds = refundsR.data || [];
   const refundsTotal = refunds.reduce((s, r) => s + (Number(r.refund_amount_inr) || 0), 0);
 
-  // EXACT per-agent open load — seed from the cs_ticket_manage roster (so idle
-  // agents show at 0) then add the grouped open counts.
-  const rolesMap = {};
-  for (const r of (rolesR.data || [])) rolesMap[r.role_id] = r.permissions || {};
+  // EXACT per-agent open load — seed from the CS-TEAM roster (so idle agents show
+  // at 0) then add the grouped open counts. NOT every cs_ticket_manage holder: the
+  // generic admin/super_admin roles carry that perm via the catch-all grant, which
+  // floods the widget with non-CS org users. CS-team = a CS-tier role OR a CS-dept
+  // member (mirrors getCsAgents, S162/S163).
+  const CS_ROLES = new Set(['cs_agent', 'cs_lead']);
+  const inCsDept = new Set((membersR.data || []).map(m => m.user_id));
   const agentMap = {};
   for (const u of (rosterR.data || [])) {
-    if (rolesMap[u.role]?.cs_ticket_manage) agentMap[u.id] = { user_id: u.id, name: u.full_name || '—', open: 0 };
+    if (CS_ROLES.has(u.role) || !!u.cs_department_id || inCsDept.has(u.id)) {
+      agentMap[u.id] = { user_id: u.id, name: u.full_name || '—', open: 0 };
+    }
   }
   for (const t of (agentRowsR.data || [])) {
     const id = t.assigned_agent_id;
