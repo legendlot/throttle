@@ -3,6 +3,13 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.2.1] - 2026-06-23
+### Changed
+- The Inbox: documented multi-select + bulk assign (tick rows or Select-all,
+  then Assign to… / Me / another agent / Release in one action).
+- Calls: documented the new Prev / Next pagination (50 per page) for browsing
+  older call records.
+
 ## [1.2.0] - 2026-06-23
 ### Added
 - New chapter **The Inbox** (Work part): the cross-channel conversations console
