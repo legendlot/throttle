@@ -300,33 +300,51 @@ const snorkelAdapter = {
     const cfgR = await sbStore(`/rest/v1/sales_channels?channel_key=eq.${encodeURIComponent(cname)}&select=feeds_odo_sellout&limit=1`);
     if (!(cfgR.ok && cfgR.data?.[0]?.feeds_odo_sellout)) return { rows: [], cursorAfter: sinceDate, subreqs: 1, partial: false };
     // confirmed + cancelled (cancelled nets out on recompute). channel_key = GT|MT.
-    const sel = 'id,order_no,order_date,channel_key,status,confirmed_at,sales_order_lines(id,product,model,color,sku,qty,taxable_value)';
+    const sel = 'id,order_no,order_date,channel_key,status,confirmed_at,sales_order_lines(id,product,model,color,sku,qty,rate,discount_pct,gst_pct,taxable_value,gst_amount,line_total)';
     const r = await sbStore(`/rest/v1/sales_orders?status=in.(confirmed,cancelled)&channel_key=eq.${encodeURIComponent(cname)}&order_date=gte.${sinceDate}&select=${sel}&order=order_date.asc`);
     if (!r.ok) throw new Error('Snorkel read failed: ' + JSON.stringify(r.data));
-    const rows = []; let maxDate = sinceDate;
+    const rows = [], orderRows = []; let maxDate = sinceDate;
     for (const o of (r.data || [])) {
       if (o.order_date && o.order_date > maxDate) maxDate = o.order_date;
       const cancelled = o.status === 'cancelled';
+      // Normalize to Shopify's basis: gross = PRE-discount, TAX-INCLUSIVE (taxable rate is ex-GST →
+      // ×(1+gst%)); discount = the cut, also tax-incl; tax = the invoice GST (gst_amount). So
+      // gross − discount ≈ line_total and gross − discount − tax ≈ taxable_value (ex-GST net).
+      let og = 0, od = 0, ot = 0;
       for (const l of (o.sales_order_lines || [])) {
+        const gpf = 1 + num(l.gst_pct) / 100;
+        const base = num(l.qty) * num(l.rate);                          // pre-discount ex-GST
+        const disc = base * (num(l.discount_pct) / 100);                // discount ex-GST
+        const gross = base * gpf;                                       // pre-discount tax-incl
+        const discIncl = disc * gpf;                                    // discount tax-incl
+        const tax = num(l.gst_amount);                                  // GST on post-discount taxable
+        og += gross; od += discIncl; ot += tax;
         rows.push({
           source_line_id: String(l.id), source_order_id: o.order_no,
           channel_sku: l.sku || [l.product, l.model, l.color].filter(Boolean).join(' '),
           title: [l.product, l.model, l.color].filter(Boolean).join(' '),
-          qty: num(l.qty), gross_value: num(l.taxable_value),
+          qty: num(l.qty), gross_value: gross, discount_value: discIncl, tax_value: tax,
           occurred_at: o.order_date, sale_date: o.order_date, order_status: o.status, is_cancelled: cancelled, raw: l,
         });
       }
+      orderRows.push({
+        source_order_id: o.order_no, refund_id: '', row_kind: 'order', sale_date: o.order_date, order_name: o.order_no,
+        gross: og, discount: od, tax: ot, currency: 'INR', is_cancelled: cancelled, returned_value: 0, tags: [],
+      });
     }
-    return { rows, cursorAfter: maxDate, subreqs: 1, partial: false };
+    return { rows, orderRows, cursorAfter: maxDate, subreqs: 1, partial: false };
   },
-  async stage(rows, runId, channelId) {
-    if (!rows.length) return;
-    const body = rows.map(r => ({
-      run_id: runId, channel_id: channelId, source_order_id: r.source_order_id, source_line_id: r.source_line_id,
-      sale_date: r.sale_date, channel_sku: r.channel_sku, title: r.title,
-      qty: Math.round(r.qty), gross_value: r.gross_value, order_status: r.order_status, is_cancelled: r.is_cancelled, raw: r.raw,
-    }));
-    await sbInsertChunked('/rest/v1/stg_snorkel?on_conflict=source_line_id', body, 'return=minimal,resolution=merge-duplicates');
+  async stage(rows, runId, channelId, fetched) {
+    if (rows.length) {
+      const body = rows.map(r => ({
+        run_id: runId, channel_id: channelId, source_order_id: r.source_order_id, source_line_id: r.source_line_id,
+        sale_date: r.sale_date, channel_sku: r.channel_sku, title: r.title,
+        qty: Math.round(r.qty), gross_value: r.gross_value, discount_value: r.discount_value || 0, tax_value: r.tax_value || 0, row_type: 'sale',
+        order_status: r.order_status, is_cancelled: r.is_cancelled, raw: r.raw,
+      }));
+      await sbInsertChunked('/rest/v1/stg_snorkel?on_conflict=source_line_id', body, 'return=minimal,resolution=merge-duplicates');
+    }
+    await stageOrders((fetched && fetched.orderRows) || [], runId, channelId);
   },
 };
 
@@ -454,7 +472,10 @@ async function fetchAmazonDoc(doc) {
   }
   return await res.text();
 }
-const AMZ_COLUMNS_DEFAULT = { date: 'purchase-date', sku: 'sku', title: 'product-name', units: 'quantity', gross: 'item-price', status: 'order-status', order_id: 'amazon-order-id' };
+// item-price is tax-INCLUSIVE for the IN marketplace (confirmed empirically S164: per-unit gross
+// runs ~8% below Website on high-volume SKUs, not the ~15% an ex-tax basis would show) → same basis
+// as Shopify's originalTotalSet. item-tax = the GST within it; item-promotion-discount = the discount.
+const AMZ_COLUMNS_DEFAULT = { date: 'purchase-date', sku: 'sku', title: 'product-name', units: 'quantity', gross: 'item-price', tax: 'item-tax', discount: 'item-promotion-discount', status: 'order-status', order_id: 'amazon-order-id' };
 const AMZ_REPORT_TYPE = 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL';
 // HARD LIMIT: this report can only be requested for ≤30 days per call ("Date range exceeded"
 // otherwise). So we chunk: one ≤30-day window per report, walking the cursor forward.
@@ -529,9 +550,22 @@ const amazonAdapter = {
     const body = rows.map(r => ({
       run_id: runId, channel_id: channelId, source_order_id: r.source_order_id || null, sale_date: r.sale_date,
       channel_sku: r.channel_sku, title: r.title, qty: Math.round(r.qty), gross_value: r.gross_value,
+      discount_value: r.discount_value || 0, tax_value: r.tax_value || 0, row_type: 'sale',
       order_status: r.order_status || null, is_cancelled: !!r.is_cancelled, raw: r.raw,
     }));
     await sbInsertChunked('/rest/v1/stg_amazon', body, 'return=minimal');
+    // Order-grain rows (drives f_order_rollup: Total Orders / AOV / cancel rate). The all-orders
+    // report is item-grain → aggregate item lines by amazon-order-id. No tags; returns = a separate
+    // Returns report (Phase C2, deferred). is_cancelled = order-status Cancelled (all lines agree).
+    const byOrder = {};
+    for (const r of rows) {
+      const oid = r.source_order_id; if (!oid) continue;
+      const o = (byOrder[oid] = byOrder[oid] || { source_order_id: oid, refund_id: '', row_kind: 'order', sale_date: r.sale_date, order_name: oid, gross: 0, discount: 0, tax: 0, currency: 'INR', is_cancelled: false, returned_value: 0, tags: [] });
+      o.gross += num(r.gross_value); o.discount += num(r.discount_value); o.tax += num(r.tax_value);
+      if (r.is_cancelled) o.is_cancelled = true;
+      if (r.sale_date && r.sale_date < o.sale_date) o.sale_date = r.sale_date;
+    }
+    await stageOrders(Object.values(byOrder), runId, channelId);
   },
 };
 
@@ -983,8 +1017,8 @@ function gridToQcRows(grid, cm, fallbackDate) {
   }
   const header = grid[hr].map(h => String(h).trim());
   const idx = name => header.findIndex(h => h.toLowerCase() === String(name || '').toLowerCase());
-  // status/order_id are optional (Amazon flat-file carries them; QC sheets don't).
-  const ci = { sku: idx(cm.sku), title: idx(cm.title), units: idx(cm.units), gross: idx(cm.gross), date: idx(cm.date), status: idx(cm.status), order_id: idx(cm.order_id) };
+  // status/order_id/discount/tax are optional (Amazon flat-file carries them; QC sheets don't).
+  const ci = { sku: idx(cm.sku), title: idx(cm.title), units: idx(cm.units), gross: idx(cm.gross), date: idx(cm.date), status: idx(cm.status), order_id: idx(cm.order_id), discount: idx(cm.discount), tax: idx(cm.tax) };
   if (ci.sku < 0 || ci.units < 0) throw new Error(`column_map needs sku + units to match real headers. Found header row: [${header.join(', ')}]`);
   const rows = [];
   for (let r = hr + 1; r < grid.length; r++) {
@@ -999,6 +1033,8 @@ function gridToQcRows(grid, cm, fallbackDate) {
       row_no: r, channel_sku: sku,
       title: ci.title >= 0 ? String(line[ci.title] ?? '').trim() : null,
       qty: num(line[ci.units]), gross_value: ci.gross >= 0 ? num(line[ci.gross]) : 0, sale_date,
+      discount_value: ci.discount >= 0 ? Math.abs(num(line[ci.discount])) : 0,   // promo-discount (positive amount)
+      tax_value: ci.tax >= 0 ? num(line[ci.tax]) : 0,                            // GST within the tax-incl gross
       source_order_id: ci.order_id >= 0 ? (String(line[ci.order_id] ?? '').trim() || null) : null,
       order_status: statusCell || null, is_cancelled: /cancel/i.test(statusCell),
       raw: { line },
