@@ -1,0 +1,18 @@
+name = "courierops"
+main = "src/index.js"
+compatibility_date = "2026-05-28"
+workers_dev = true
+
+# courierops — LOT courier-tracking service. Headless: cron-driven only, no inbound HTTP auth.
+# service_role on the SAME Supabase project as lotopsproxy. Polls Delhivery by AWB and writes
+# tracking back onto public.dispatch_shipments (tracking_status/_stage_label/_checkpoints/_synced_at
+# + keeps expected_delivery_date/delivery_date fresh) via the apply_courier_tracking RPC.
+# V1 = Delhivery, forward shipments only. Shiprocket + webhooks + returns = V2.
+
+# Every 30 min: sweep open Delhivery shipments and refresh tracking.
+[triggers]
+crons = ["*/30 * * * *"]
+
+# Secrets set via `wrangler secret put` — never stored in this file:
+#   SUPABASE_SERVICE_KEY   (Supabase service_role sb_secret key — same project as lotopsproxy)
+#   DELHIVERY_API_TOKEN    (production token — Delhivery One → Settings → API Setup; header is `Token <t>`, not Bearer)
