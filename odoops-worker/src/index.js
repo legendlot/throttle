@@ -490,6 +490,101 @@ async function createAmazonReport(host, H, mkt, startISO, endISO) {
   if (!cj.reportId) throw new Error('Amazon createReport: no reportId — ' + JSON.stringify(cj).slice(0, 160));
   return cj.reportId;
 }
+// ── Amazon Finances (SP-API listFinancialEvents) → discount/GST/returns ────────
+// The all-orders report carries gross+units+cancellations but the IN marketplace ships
+// item-tax/promotion BLANK. The Finances API exposes Principal/Tax/Promotion per order-item
+// (+ refund events). Stored in stg_amazon_fin; surfaced via the v_staged amazon_fin branch.
+// Own posted-date cursor (config.fin_cursor) — independent of the report cursor.
+const AMZ_FIN_WINDOW_MS = 7 * 24 * 3600 * 1000;   // posted-date windows
+const AMZ_FIN_MAX_PAGES = 6;                       // ≤~600 events/tick — keeps subreqs well under the cap
+function amzCharge(list, type) { let s = 0; for (const c of (list || [])) if (c.ChargeType === type) s += num(c.ChargeAmount?.CurrencyAmount); return s; }
+function amzPromo(list) { let s = 0; for (const p of (list || [])) s += num(p.PromotionAmount?.CurrencyAmount); return s; }
+// One financialEvents payload → flat finance rows (aggregated by stageAmazonFinance).
+function parseAmazonFinance(fe) {
+  const out = [];
+  for (const ev of (fe?.ShipmentEventList || [])) {
+    const oid = ev.AmazonOrderId, pd = ev.PostedDate ? istDate(ev.PostedDate) : null;
+    if (!oid || !pd) continue;
+    for (const it of (ev.ShipmentItemList || [])) {
+      const sku = it.SellerSKU; if (!sku) continue;
+      out.push({ amazon_order_id: oid, seller_sku: sku, event_type: 'shipment', posted_date: pd,
+        qty: Math.abs(num(it.QuantityShipped)),
+        principal: amzCharge(it.ItemChargeList, 'Principal'), tax: amzCharge(it.ItemChargeList, 'Tax'),
+        promo: Math.abs(amzPromo(it.PromotionList)), raw: it });
+    }
+  }
+  for (const ev of (fe?.RefundEventList || [])) {
+    const oid = ev.AmazonOrderId, pd = ev.PostedDate ? istDate(ev.PostedDate) : null;
+    if (!oid || !pd) continue;
+    for (const it of (ev.ShipmentItemAdjustmentList || [])) {
+      const sku = it.SellerSKU; if (!sku) continue;
+      out.push({ amazon_order_id: oid, seller_sku: sku, event_type: 'refund', posted_date: pd,
+        qty: Math.abs(num(it.QuantityShipped)),
+        principal: Math.abs(amzCharge(it.ItemChargeAdjustmentList, 'Principal')),
+        tax: Math.abs(amzCharge(it.ItemChargeAdjustmentList, 'Tax')),
+        promo: Math.abs(amzPromo(it.PromotionAdjustmentList)), raw: it });
+    }
+  }
+  return out;
+}
+// Fetch ONE posted-date finance window (paged, ≤AMZ_FIN_MAX_PAGES). PostedBefore must be ≥2min ago.
+async function fetchAmazonFinanceWindow(host, H, cfg, nowMs) {
+  const startISO = cfg.fin_cursor || cfg.backfill_start || BACKFILL_START;
+  const startMs = Date.parse(startISO) || nowMs;
+  if (startMs >= nowMs - 120_000) return { events: [], finCursorAfter: null, partial: false, subreqs: 0 }; // caught up
+  const endMs = Math.min(startMs + AMZ_FIN_WINDOW_MS, nowMs - 120_000);
+  const endISO = new Date(endMs).toISOString();
+  const events = []; let nextToken = null, pages = 0, subreqs = 0, partial = false;
+  do {
+    const qs = nextToken
+      ? `MaxResultsPerPage=100&NextToken=${encodeURIComponent(nextToken)}`
+      : `MaxResultsPerPage=100&PostedAfter=${encodeURIComponent(startISO)}&PostedBefore=${encodeURIComponent(endISO)}`;
+    const r = await fetch(`${host}/finances/v0/financialEvents?${qs}`, { headers: H }); subreqs++;
+    if (r.status === 429) { partial = true; break; }                       // throttled → resume window next tick
+    if (!r.ok) throw new Error(`Amazon finances ${r.status}: ${(await r.text().catch(() => '')).slice(0, 160)}`);
+    const j = await r.json();
+    events.push(...parseAmazonFinance(j.payload?.FinancialEvents || {}));
+    nextToken = j.payload?.NextToken || null; pages++;
+    if (nextToken && pages >= AMZ_FIN_MAX_PAGES) { partial = true; break; } // more pages → resume next tick
+  } while (nextToken);
+  return { events, finCursorAfter: partial ? null : endISO, partial, subreqs }; // advance only on a fully-paged (incl. empty) window
+}
+
+// Report state machine (create→poll→ingest, one ≤30-day window/tick). Returns the rows for this
+// window + the config it should persist (configAfter) so the caller can merge fin_cursor in one write.
+async function amazonReportPhase(host, H, mkt, columns, cfg, channelId, nowMs, cursor) {
+  let subreqs = 1; // token (fetched by caller; counted here for parity with prior logs)
+  if (cfg.pending_report_id) {
+    const pr = await fetch(`${host}/reports/2021-06-30/reports/${cfg.pending_report_id}`, { headers: H }); subreqs++;
+    if (!pr.ok) throw new Error(`Amazon getReport ${pr.status}: ${(await pr.text().catch(() => '')).slice(0, 160)}`);
+    const rep = await pr.json();
+    const st = rep.processingStatus;
+    if (st === 'IN_QUEUE' || st === 'IN_PROGRESS') return { rows: [], cursorAfter: null, subreqs, partial: true, configAfter: cfg };
+    if (st === 'CANCELLED' || st === 'FATAL') { await patchConnectorConfig(channelId, cfg, { pending_report_id: null, pending_through: null }); throw new Error(`Amazon report ${st}`); }
+    const dr = await fetch(`${host}/reports/2021-06-30/documents/${rep.reportDocumentId}`, { headers: H }); subreqs++;
+    if (!dr.ok) throw new Error(`Amazon getDocument ${dr.status}`);
+    const doc = await dr.json();
+    const text = await fetchAmazonDoc(doc); subreqs++;
+    if (/date range exceeded/i.test(text)) throw new Error('Amazon: ' + text.trim().slice(0, 120));
+    const grid = text.split(/\r?\n/).filter(l => l.length).map(l => l.split('\t'));
+    const rows = grid.length >= 2 ? gridToQcRows(grid, columns, todayISO()) : [];
+    const windowEnd = cfg.pending_through;
+    const endMs = Date.parse(windowEnd || '') || 0;
+    let partial = false, next = { pending_report_id: null, pending_through: null };
+    if (endMs && endMs < nowMs - 60_000) {
+      const nextEnd = new Date(Math.min(endMs + AMZ_WINDOW_MS, nowMs)).toISOString();
+      try { const rid = await createAmazonReport(host, H, mkt, windowEnd, nextEnd); subreqs++; next = { pending_report_id: rid, pending_through: nextEnd }; partial = true; }
+      catch (_) { /* leave pending cleared — next tick re-creates from the advanced cursor */ }
+    }
+    return { rows, cursorAfter: windowEnd, subreqs, partial, configAfter: { ...cfg, ...next } };
+  }
+  const startISO = cursor || cfg.backfill_start || BACKFILL_START;
+  const startMs = Date.parse(startISO) || nowMs;
+  const endISO = new Date(Math.min(startMs + AMZ_WINDOW_MS, nowMs)).toISOString();
+  const rid = await createAmazonReport(host, H, mkt, startISO, endISO); subreqs++;
+  return { rows: [], cursorAfter: null, subreqs, partial: true, configAfter: { ...cfg, pending_report_id: rid, pending_through: endISO } };
+}
+
 const amazonAdapter = {
   kind: 'amazon_spapi', stgTable: 'stg_amazon', sourceKind: 'amazon',
   async fetch({ env, channelId, cursor, config }) {
@@ -501,73 +596,88 @@ const amazonAdapter = {
     const token = await getAmazonToken(env);
     const H = { Authorization: `Bearer ${token}`, 'x-amz-access-token': token, 'Content-Type': 'application/json' };
     const nowMs = Date.now();
-    let subreqs = 1; // token
-
-    // ── A pending report is in flight → poll it ──
-    if (cfg.pending_report_id) {
-      const pr = await fetch(`${host}/reports/2021-06-30/reports/${cfg.pending_report_id}`, { headers: H }); subreqs++;
-      if (!pr.ok) throw new Error(`Amazon getReport ${pr.status}: ${(await pr.text().catch(() => '')).slice(0, 160)}`);
-      const rep = await pr.json();
-      const st = rep.processingStatus;
-      if (st === 'IN_QUEUE' || st === 'IN_PROGRESS') return { rows: [], cursorAfter: null, subreqs, partial: true }; // still cooking; keep pending, next tick re-polls
-      if (st === 'CANCELLED' || st === 'FATAL') { await patchConnectorConfig(channelId, cfg, { pending_report_id: null, pending_through: null }); throw new Error(`Amazon report ${st}`); }
-      // DONE → fetch the document, gunzip, parse the TSV grid
-      const dr = await fetch(`${host}/reports/2021-06-30/documents/${rep.reportDocumentId}`, { headers: H }); subreqs++;
-      if (!dr.ok) throw new Error(`Amazon getDocument ${dr.status}`);
-      const doc = await dr.json();
-      const text = await fetchAmazonDoc(doc); subreqs++;
-      if (/date range exceeded/i.test(text)) throw new Error('Amazon: ' + text.trim().slice(0, 120)); // defensive — window too wide
-      const grid = text.split(/\r?\n/).filter(l => l.length).map(l => l.split('\t'));
-      const rows = grid.length >= 2 ? gridToQcRows(grid, columns, todayISO()) : [];
-      const windowEnd = cfg.pending_through;
-      // Walk forward: if history remains beyond this window, immediately queue the NEXT ≤30-day
-      // report (so each tick ingests one window AND queues the next — backfill self-walks).
-      const endMs = Date.parse(windowEnd || '') || 0;
-      let partial = false, next = { pending_report_id: null, pending_through: null };
-      if (endMs && endMs < nowMs - 60_000) {
-        const nextEnd = new Date(Math.min(endMs + AMZ_WINDOW_MS, nowMs)).toISOString();
-        try { const rid = await createAmazonReport(host, H, mkt, windowEnd, nextEnd); subreqs++; next = { pending_report_id: rid, pending_through: nextEnd }; partial = true; }
-        catch (_) { /* leave pending cleared — next tick re-creates from the advanced cursor */ }
-      }
-      await patchConnectorConfig(channelId, cfg, next);
-      return { rows, cursorAfter: windowEnd, subreqs, partial }; // cursor advances to this window's end
-    }
-
-    // ── No pending → create the first/next ≤30-day report from the cursor ──
-    const startISO = cursor || cfg.backfill_start || BACKFILL_START;
-    const startMs = Date.parse(startISO) || nowMs;
-    const endISO = new Date(Math.min(startMs + AMZ_WINDOW_MS, nowMs)).toISOString();
-    const rid = await createAmazonReport(host, H, mkt, startISO, endISO); subreqs++;
-    await patchConnectorConfig(channelId, cfg, { pending_report_id: rid, pending_through: endISO });
-    return { rows: [], cursorAfter: null, subreqs, partial: true }; // report queued; next tick ingests
+    const rep = await amazonReportPhase(host, H, mkt, columns, cfg, channelId, nowMs, cursor);
+    // Finance phase — cheap (≤AMZ_FIN_MAX_PAGES pages). Must never break the orders pipeline.
+    let finance = { events: [] }, finSub = 0, configAfter = rep.configAfter;
+    try {
+      const fw = await fetchAmazonFinanceWindow(host, H, configAfter, nowMs);
+      finSub = fw.subreqs; finance = { events: fw.events };
+      if (fw.finCursorAfter) configAfter = { ...configAfter, fin_cursor: fw.finCursorAfter };
+    } catch (e) { finance = { events: [], error: String(e?.message || e) }; }
+    // Persist report + finance config in ONE write (avoids clobbering pending_report_id).
+    await patchConnectorConfig(channelId, cfg, configAfter);
+    return { rows: rep.rows, cursorAfter: rep.cursorAfter, subreqs: rep.subreqs + finSub, partial: rep.partial, finance };
   },
-  async stage(rows, runId, channelId) {
-    if (!rows.length) return;
-    const from = rows.reduce((m, x) => x.sale_date < m ? x.sale_date : m, rows[0].sale_date);
-    const to   = rows.reduce((m, x) => x.sale_date > m ? x.sale_date : m, rows[0].sale_date);
-    // stg_amazon has no stable source line id (flat file) → supersede by date range, like the gsheet adapter.
-    await sbSales(`/rest/v1/stg_amazon?channel_id=eq.${channelId}&sale_date=gte.${from}&sale_date=lte.${to}`, { method: 'DELETE', prefer: 'return=minimal' });
-    const body = rows.map(r => ({
-      run_id: runId, channel_id: channelId, source_order_id: r.source_order_id || null, sale_date: r.sale_date,
-      channel_sku: r.channel_sku, title: r.title, qty: Math.round(r.qty), gross_value: r.gross_value,
-      discount_value: r.discount_value || 0, tax_value: r.tax_value || 0, row_type: 'sale',
-      order_status: r.order_status || null, is_cancelled: !!r.is_cancelled, raw: r.raw,
-    }));
-    await sbInsertChunked('/rest/v1/stg_amazon', body, 'return=minimal');
-    // Order-grain rows (drives f_order_rollup: Total Orders / AOV / cancel rate). The all-orders
-    // report is item-grain → aggregate item lines by amazon-order-id. No tags; returns = a separate
-    // Returns report (Phase C2, deferred). is_cancelled = order-status Cancelled (all lines agree).
-    const byOrder = {};
-    for (const r of rows) {
-      const oid = r.source_order_id; if (!oid) continue;
-      const o = (byOrder[oid] = byOrder[oid] || { source_order_id: oid, refund_id: '', row_kind: 'order', sale_date: r.sale_date, order_name: oid, gross: 0, discount: 0, tax: 0, currency: 'INR', is_cancelled: false, returned_value: 0, tags: [] });
-      o.gross += num(r.gross_value); o.discount += num(r.discount_value); o.tax += num(r.tax_value);
-      if (r.is_cancelled) o.is_cancelled = true;
-      if (r.sale_date && r.sale_date < o.sale_date) o.sale_date = r.sale_date;
+  async stage(rows, runId, channelId, fetched) {
+    if (rows.length) {
+      const from = rows.reduce((m, x) => x.sale_date < m ? x.sale_date : m, rows[0].sale_date);
+      const to   = rows.reduce((m, x) => x.sale_date > m ? x.sale_date : m, rows[0].sale_date);
+      // stg_amazon has no stable source line id (flat file) → supersede by date range, like the gsheet adapter.
+      await sbSales(`/rest/v1/stg_amazon?channel_id=eq.${channelId}&sale_date=gte.${from}&sale_date=lte.${to}`, { method: 'DELETE', prefer: 'return=minimal' });
+      const body = rows.map(r => ({
+        run_id: runId, channel_id: channelId, source_order_id: r.source_order_id || null, sale_date: r.sale_date,
+        channel_sku: r.channel_sku, title: r.title, qty: Math.round(r.qty), gross_value: r.gross_value,
+        discount_value: r.discount_value || 0, tax_value: r.tax_value || 0, row_type: 'sale',
+        order_status: r.order_status || null, is_cancelled: !!r.is_cancelled, raw: r.raw,
+      }));
+      await sbInsertChunked('/rest/v1/stg_amazon', body, 'return=minimal');
+      // Order-grain rows (drives f_order_rollup: Total Orders / AOV / cancel rate). The all-orders
+      // report is item-grain → aggregate item lines by amazon-order-id. Cancellations from order-status;
+      // discount/tax/returns come from the Finances feed (stageAmazonFinance), not this report.
+      const byOrder = {};
+      for (const r of rows) {
+        const oid = r.source_order_id; if (!oid) continue;
+        const o = (byOrder[oid] = byOrder[oid] || { source_order_id: oid, refund_id: '', row_kind: 'order', sale_date: r.sale_date, order_name: oid, gross: 0, discount: 0, tax: 0, currency: 'INR', is_cancelled: false, returned_value: 0, tags: [] });
+        o.gross += num(r.gross_value); o.discount += num(r.discount_value); o.tax += num(r.tax_value);
+        if (r.is_cancelled) o.is_cancelled = true;
+        if (r.sale_date && r.sale_date < o.sale_date) o.sale_date = r.sale_date;
+      }
+      await stageOrders(Object.values(byOrder), runId, channelId);
     }
-    await stageOrders(Object.values(byOrder), runId, channelId);
+    // Finance: stg_amazon_fin (+ order-grain return rows) and record the dates recompute must touch.
+    const ev = (fetched && fetched.finance && fetched.finance.events) || [];
+    const affected = await stageAmazonFinance(ev, runId, channelId);
+    if (fetched && fetched.finance) fetched.finance.affectedDates = affected;
+  },
+  datesOf(rows, fetched) {
+    const ds = new Set(distinctDates(rows));
+    for (const d of ((fetched && fetched.finance && fetched.finance.affectedDates) || [])) ds.add(d);
+    return [...ds];
   },
 };
+
+// Stage finance events: aggregate by the unique key (split shipments → multiple events/order/sku/date),
+// upsert into stg_amazon_fin, write order-grain RETURN rows into stg_orders, and return the set of
+// dates recompute_facts must touch (shipment → the order's purchase date; refund → posted_date).
+async function stageAmazonFinance(events, runId, channelId) {
+  if (!events.length) return [];
+  const agg = {};
+  for (const e of events) {
+    const k = `${e.amazon_order_id}|${e.seller_sku}|${e.event_type}|${e.posted_date}`;
+    const a = (agg[k] = agg[k] || { amazon_order_id: e.amazon_order_id, seller_sku: e.seller_sku, event_type: e.event_type, posted_date: e.posted_date, qty: 0, principal: 0, tax: 0, promo: 0, raw: e.raw });
+    a.qty += e.qty; a.principal += e.principal; a.tax += e.tax; a.promo += e.promo;
+  }
+  const all = Object.values(agg);
+  const body = all.map(a => ({ run_id: runId, channel_id: channelId, amazon_order_id: a.amazon_order_id, seller_sku: a.seller_sku, event_type: a.event_type, posted_date: a.posted_date, qty: Math.round(a.qty), principal: a.principal, tax: a.tax, promo: a.promo, raw: a.raw }));
+  await sbInsertChunked('/rest/v1/stg_amazon_fin?on_conflict=channel_id,amazon_order_id,seller_sku,event_type,posted_date', body, 'return=minimal,resolution=merge-duplicates');
+  // Order-grain returns → stg_orders (mirrors Shopify; distinct refund_id so the orders report never wipes them).
+  const refundRows = {};
+  for (const a of all) {
+    if (a.event_type !== 'refund') continue;
+    const k = `${a.amazon_order_id}|${a.posted_date}`;
+    const o = (refundRows[k] = refundRows[k] || { source_order_id: a.amazon_order_id, refund_id: `fin:${a.posted_date}`, row_kind: 'return', sale_date: a.posted_date, order_name: a.amazon_order_id, gross: 0, discount: 0, tax: 0, currency: 'INR', is_cancelled: false, returned_value: 0, tags: [] });
+    o.returned_value += a.principal + a.tax;
+  }
+  await stageOrders(Object.values(refundRows), runId, channelId);
+  // Affected recompute dates: shipment → the order's PURCHASE date (from stg_orders); refund → posted_date.
+  const shipOrderIds = uniq(all.filter(a => a.event_type === 'shipment').map(a => a.amazon_order_id));
+  let purchaseDates = [];
+  if (shipOrderIds.length) {
+    const q = await sbSales(`/rest/v1/stg_orders?channel_id=eq.${channelId}&row_kind=eq.order&source_order_id=in.${inList(shipOrderIds)}&select=sale_date`);
+    purchaseDates = (q.ok ? q.data : []).map(x => x.sale_date);
+  }
+  return uniq([...purchaseDates, ...all.filter(a => a.event_type === 'refund').map(a => a.posted_date)]);
+}
 
 // ── Amazon Ads (Advertising API v3 · LWA refresh-token · async reporting) → mkt_fact ──
 // SEPARATE LWA app from SP-API (AMAZON_ADS_*). India = EU host. Profile discovered once + cached.
@@ -1108,7 +1218,7 @@ async function executeRun(cfg, runId, env, { budget = CRON_BUDGET, cursorOverrid
     await adapter.stage(rows, runId, cfg.channel_id, fetched);
     // Sales adapters use sale_date + the SKU-mapping tail (default). Non-sales domains
     // (marketing/traffic) supply their own date field (datesOf) + their own recompute.
-    const dates = adapter.datesOf ? adapter.datesOf(rows) : distinctDates(rows);
+    const dates = adapter.datesOf ? adapter.datesOf(rows, fetched) : distinctDates(rows);
     let res = { mapped: 0, unmapped: 0, factsUpserted: 0 };
     if (dates.length) {
       res = adapter.recompute
@@ -1372,6 +1482,24 @@ export default {
               } catch (e) { out[k] = { host, error: String(e?.message || e) }; }
             }
             return ok(out);
+          }
+          case 'financeProbe': {  // diagnostic: parse one Finances window (no staging) — verify the mapping
+            if (!canConnector(P)) return err('No permission', 403);
+            let token; try { token = await getAmazonToken(env); } catch (e) { return err(String(e?.message || e), 400); }
+            const host = qp('host') || 'https://sellingpartnerapi-eu.amazon.com';
+            const H = { Authorization: `Bearer ${token}`, 'x-amz-access-token': token, 'Content-Type': 'application/json' };
+            const after = qp('after'); const before = qp('before');
+            if (!after || !before) return err('after + before (ISO) required');
+            const r = await fetch(`${host}/finances/v0/financialEvents?MaxResultsPerPage=100&PostedAfter=${encodeURIComponent(after)}&PostedBefore=${encodeURIComponent(before)}`, { headers: H });
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok) return err(`finances ${r.status}: ${JSON.stringify(j).slice(0, 200)}`, 400);
+            const fe = j.payload?.FinancialEvents || {};
+            const ev = parseAmazonFinance(fe);
+            const ship = ev.filter(e => e.event_type === 'shipment'), ref = ev.filter(e => e.event_type === 'refund');
+            return ok({ status: r.status, hasNextToken: !!j.payload?.NextToken,
+              shipmentItems: ship.length, refundItems: ref.length,
+              shipTotals: { principal: ship.reduce((s, e) => s + e.principal, 0), tax: ship.reduce((s, e) => s + e.tax, 0), promo: ship.reduce((s, e) => s + e.promo, 0) },
+              sampleShipment: ship[0] || null, sampleRefund: ref[0] || null });
           }
           case 'uniwareProbe': {  // diagnostic: auth + which channels are flowing (last N days, default 14)
             if (!canConnector(P)) return err('No permission', 403);
