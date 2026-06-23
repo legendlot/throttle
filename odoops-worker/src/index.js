@@ -495,8 +495,9 @@ async function createAmazonReport(host, H, mkt, startISO, endISO) {
 // item-tax/promotion BLANK. The Finances API exposes Principal/Tax/Promotion per order-item
 // (+ refund events). Stored in stg_amazon_fin; surfaced via the v_staged amazon_fin branch.
 // Own posted-date cursor (config.fin_cursor) — independent of the report cursor.
-const AMZ_FIN_WINDOW_MS = 7 * 24 * 3600 * 1000;   // posted-date windows
-const AMZ_FIN_MAX_PAGES = 6;                       // ≤~600 events/tick — keeps subreqs well under the cap
+const AMZ_FIN_WINDOW_MS = 5 * 24 * 3600 * 1000;   // posted-date windows
+const AMZ_FIN_MAX_PAGES = 15;                      // per window — financialEvents pages ALL event types, not just ours
+const AMZ_FIN_SUBREQ_BUDGET = 30;                  // finance budget/tick (report uses ~5; total stays <45). Loops windows to drain backfill.
 function amzCharge(list, type) { let s = 0; for (const c of (list || [])) if (c.ChargeType === type) s += num(c.ChargeAmount?.CurrencyAmount); return s; }
 function amzPromo(list) { let s = 0; for (const p of (list || [])) s += num(p.PromotionAmount?.CurrencyAmount); return s; }
 // One financialEvents payload → flat finance rows (aggregated by stageAmazonFinance).
@@ -527,27 +528,34 @@ function parseAmazonFinance(fe) {
   }
   return out;
 }
-// Fetch ONE posted-date finance window (paged, ≤AMZ_FIN_MAX_PAGES). PostedBefore must be ≥2min ago.
-async function fetchAmazonFinanceWindow(host, H, cfg, nowMs) {
-  const startISO = cfg.fin_cursor || cfg.backfill_start || BACKFILL_START;
-  const startMs = Date.parse(startISO) || nowMs;
-  if (startMs >= nowMs - 120_000) return { events: [], finCursorAfter: null, partial: false, subreqs: 0 }; // caught up
-  const endMs = Math.min(startMs + AMZ_FIN_WINDOW_MS, nowMs - 120_000);
-  const endISO = new Date(endMs).toISOString();
-  const events = []; let nextToken = null, pages = 0, subreqs = 0, partial = false;
-  do {
-    const qs = nextToken
-      ? `MaxResultsPerPage=100&NextToken=${encodeURIComponent(nextToken)}`
-      : `MaxResultsPerPage=100&PostedAfter=${encodeURIComponent(startISO)}&PostedBefore=${encodeURIComponent(endISO)}`;
-    const r = await fetch(`${host}/finances/v0/financialEvents?${qs}`, { headers: H }); subreqs++;
-    if (r.status === 429) { partial = true; break; }                       // throttled → resume window next tick
-    if (!r.ok) throw new Error(`Amazon finances ${r.status}: ${(await r.text().catch(() => '')).slice(0, 160)}`);
-    const j = await r.json();
-    events.push(...parseAmazonFinance(j.payload?.FinancialEvents || {}));
-    nextToken = j.payload?.NextToken || null; pages++;
-    if (nextToken && pages >= AMZ_FIN_MAX_PAGES) { partial = true; break; } // more pages → resume next tick
-  } while (nextToken);
-  return { events, finCursorAfter: partial ? null : endISO, partial, subreqs }; // advance only on a fully-paged (incl. empty) window
+// Walk posted-date windows forward (oldest→now) within a per-tick subrequest budget, draining
+// each window fully (paging the NextToken). fin_cursor advances only past windows that fully
+// drained, so a page-capped window is retried next tick (idempotent upsert). Returns accumulated
+// events + the furthest fully-drained window end. PostedBefore must be ≥2min ago.
+async function fetchAmazonFinance(host, H, cfg, nowMs) {
+  let cursorISO = cfg.fin_cursor || cfg.backfill_start || BACKFILL_START;
+  const events = []; let subreqs = 0, advancedTo = null, partial = false;
+  while (subreqs < AMZ_FIN_SUBREQ_BUDGET) {
+    const startMs = Date.parse(cursorISO) || nowMs;
+    if (startMs >= nowMs - 120_000) break;                                 // caught up to ~now
+    const endISO = new Date(Math.min(startMs + AMZ_FIN_WINDOW_MS, nowMs - 120_000)).toISOString();
+    let nextToken = null, pages = 0, windowDone = true;
+    do {
+      const qs = nextToken
+        ? `MaxResultsPerPage=100&NextToken=${encodeURIComponent(nextToken)}`
+        : `MaxResultsPerPage=100&PostedAfter=${encodeURIComponent(cursorISO)}&PostedBefore=${encodeURIComponent(endISO)}`;
+      const r = await fetch(`${host}/finances/v0/financialEvents?${qs}`, { headers: H }); subreqs++;
+      if (r.status === 429) { windowDone = false; break; }                 // throttled → retry window next tick
+      if (!r.ok) throw new Error(`Amazon finances ${r.status}: ${(await r.text().catch(() => '')).slice(0, 160)}`);
+      const j = await r.json();
+      events.push(...parseAmazonFinance(j.payload?.FinancialEvents || {}));
+      nextToken = j.payload?.NextToken || null; pages++;
+      if (nextToken && (pages >= AMZ_FIN_MAX_PAGES || subreqs >= AMZ_FIN_SUBREQ_BUDGET)) { windowDone = false; break; }
+    } while (nextToken);
+    if (!windowDone) { partial = true; break; }                            // window not fully drained → don't advance past it
+    advancedTo = endISO; cursorISO = endISO;                               // fully drained (incl. empty) → advance + continue
+  }
+  return { events, finCursorAfter: advancedTo, partial, subreqs };
 }
 
 // Report state machine (create→poll→ingest, one ≤30-day window/tick). Returns the rows for this
@@ -600,7 +608,7 @@ const amazonAdapter = {
     // Finance phase — cheap (≤AMZ_FIN_MAX_PAGES pages). Must never break the orders pipeline.
     let finance = { events: [] }, finSub = 0, configAfter = rep.configAfter;
     try {
-      const fw = await fetchAmazonFinanceWindow(host, H, configAfter, nowMs);
+      const fw = await fetchAmazonFinance(host, H, configAfter, nowMs);
       finSub = fw.subreqs; finance = { events: fw.events };
       if (fw.finCursorAfter) configAfter = { ...configAfter, fin_cursor: fw.finCursorAfter };
     } catch (e) { finance = { events: [], error: String(e?.message || e) }; }
@@ -669,14 +677,15 @@ async function stageAmazonFinance(events, runId, channelId) {
     o.returned_value += a.principal + a.tax;
   }
   await stageOrders(Object.values(refundRows), runId, channelId);
-  // Affected recompute dates: shipment → the order's PURCHASE date (from stg_orders); refund → posted_date.
-  const shipOrderIds = uniq(all.filter(a => a.event_type === 'shipment').map(a => a.amazon_order_id));
-  let purchaseDates = [];
-  if (shipOrderIds.length) {
-    const q = await sbSales(`/rest/v1/stg_orders?channel_id=eq.${channelId}&row_kind=eq.order&source_order_id=in.${inList(shipOrderIds)}&select=sale_date`);
-    purchaseDates = (q.ok ? q.data : []).map(x => x.sale_date);
-  }
-  return uniq([...purchaseDates, ...all.filter(a => a.event_type === 'refund').map(a => a.posted_date)]);
+  // Recompute dates: shipment discount/tax land on the order's PURCHASE date (v_staged maps it
+  // exactly via stg_amazon), refunds on posted_date. The purchase→post gap can be weeks (Amazon
+  // posts the financial event when shipped/settled — observed up to ~31d), so recompute the span
+  // [min posted − 60d .. max posted] — a safe superset of purchase+refund dates (idempotent).
+  const ds = all.map(a => a.posted_date).sort();
+  const startD = Date.parse(ds[0]) - 60 * 86400000, endD = Date.parse(ds[ds.length - 1]);
+  const out = [];
+  for (let t = startD; t <= endD; t += 86400000) out.push(new Date(t).toISOString().slice(0, 10));
+  return out;
 }
 
 // ── Amazon Ads (Advertising API v3 · LWA refresh-token · async reporting) → mkt_fact ──
