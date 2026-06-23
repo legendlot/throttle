@@ -1,0 +1,9 @@
+name = "maintainer-trigger"
+main = "src/index.js"
+compatibility_date = "2026-05-28"
+workers_dev = true
+
+# Secrets set via `wrangler secret put` — never stored in this file:
+# SLACK_SIGNING_SECRET  — Slack app → Basic Information → Signing Secret (verifies inbound events)
+# ROUTINE_FIRE_URL      — claude.ai/code → LOT Maintainer routine → "Call via API" Fire URL
+# ROUTINE_TOKEN         — the API-trigger token generated alongside the Fire URL
