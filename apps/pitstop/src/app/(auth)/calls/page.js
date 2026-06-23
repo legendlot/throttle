@@ -18,6 +18,8 @@ const TABS = [
   { id: 'missed',     label: 'Missed' },
 ];
 
+const PAGE_SIZE = 50;
+
 function maskPhone(p) {
   if (!p) return '—';
   const s = String(p);
@@ -67,6 +69,11 @@ export default function CallsPage() {
   const [error, setError] = useState(null);
   const [searchInput, setSearchInput] = useState(searchQ);
   const [openCalldetailId, setOpenCalldetailId] = useState(null);
+  const [page, setPage] = useState(0);      // 0-based page index
+  const [hasNext, setHasNext] = useState(false);
+
+  // Reset to the first page whenever the tab / filters / dept change.
+  useEffect(() => { setPage(0); }, [activeTab, direction, status, searchQ, deptSlug]);
 
   // Hourly call-volume chart (a particular day, default today).
   const [chartDay, setChartDay] = useState(() => {
@@ -125,7 +132,7 @@ export default function CallsPage() {
     let alive = true;
     setLoading(true);
     async function go() {
-      const params = { tab: activeTab };
+      const params = { tab: activeTab, limit: PAGE_SIZE, offset: page * PAGE_SIZE };
       if (direction) params.direction = direction;
       if (status)    params.status    = status;
       if (searchQ)   params.search    = searchQ;
@@ -133,7 +140,12 @@ export default function CallsPage() {
 
       try {
         const d = await csopsGet('getCalls', params, session);
-        if (alive) { setCalls(d?.calls || []); setError(null); }
+        if (alive) {
+          const rows = d?.calls || [];
+          setCalls(rows);
+          setHasNext(rows.length === PAGE_SIZE);   // a full page implies more may follow
+          setError(null);
+        }
       } catch (e) {
         if (alive) setError(e.message);
       } finally { if (alive) setLoading(false); }
@@ -141,18 +153,20 @@ export default function CallsPage() {
     go();
     const t = setInterval(go, 30_000);
     return () => { alive = false; clearInterval(t); };
-  }, [session, activeTab, direction, status, searchQ, deptSlug, perms?.cs_ticket_admin]);
+  }, [session, activeTab, direction, status, searchQ, deptSlug, perms?.cs_ticket_admin, page]);
 
   function submitSearch(e) { e.preventDefault(); setParam('q', searchInput.trim()); }
 
   async function refresh() {
-    const params = { tab: activeTab };
+    const params = { tab: activeTab, limit: PAGE_SIZE, offset: page * PAGE_SIZE };
     if (direction) params.direction = direction;
     if (status)    params.status    = status;
     if (searchQ)   params.search    = searchQ;
     if (perms?.cs_ticket_admin) params.department = deptSlug || 'all';
     const d = await csopsGet('getCalls', params, session);
-    setCalls(d?.calls || []);
+    const rows = d?.calls || [];
+    setCalls(rows);
+    setHasNext(rows.length === PAGE_SIZE);
     const k = await csopsGet('getCallsKpis', {}, session);
     setKpis(k);
   }
@@ -224,7 +238,7 @@ export default function CallsPage() {
             ))}
           </tbody>
         </table>
-        {!loading && calls.length > 0 && (
+        {!loading && (calls.length > 0 || page > 0) && (
           <div style={{
             padding: '8px 14px',
             background: 'var(--surface-2)',
@@ -232,9 +246,20 @@ export default function CallsPage() {
             display: 'flex', justifyContent: 'space-between', alignItems: 'center',
             fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--t3)',
           }}>
-            <span>{calls.length} call{calls.length === 1 ? '' : 's'}</span>
-            <span style={{ color: 'var(--t4)' }}>
-              <Kbd>↑</Kbd><Kbd>↓</Kbd> navigate · <Kbd>↵</Kbd> open · <Kbd>/</Kbd> search
+            <span>
+              {calls.length > 0
+                ? `${page * PAGE_SIZE + 1}–${page * PAGE_SIZE + calls.length}`
+                : '0 calls'}
+              {(page > 0 || hasNext) && <span style={{ color: 'var(--t4)' }}> · page {page + 1}</span>}
+            </span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <span style={{ color: 'var(--t4)' }}>
+                <Kbd>↑</Kbd><Kbd>↓</Kbd> navigate · <Kbd>↵</Kbd> open · <Kbd>/</Kbd> search
+              </span>
+              <span style={{ display: 'flex', gap: 6 }}>
+                <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0} style={pageBtn(page === 0)}>‹ Prev</button>
+                <button onClick={() => setPage(p => p + 1)} disabled={!hasNext} style={pageBtn(!hasNext)}>Next ›</button>
+              </span>
             </span>
           </div>
         )}
@@ -356,3 +381,15 @@ function Th({ children }) { return <th style={{ textAlign:'left', padding:'10px 
 function Td({ children, ...rest }) { return <td {...rest} style={{ padding:'9px 12px', verticalAlign:'middle', ...rest.style }}>{children}</td>; }
 
 const btnIcon = { padding:4, background:'transparent', border:'none', color:'var(--t3)', cursor:'pointer', display:'inline-flex', alignItems:'center' };
+
+function pageBtn(disabled) {
+  return {
+    padding: '4px 10px', borderRadius: 5,
+    background: disabled ? 'transparent' : 'var(--surface-1)',
+    border: '1px solid var(--border-1)',
+    color: disabled ? 'var(--t4)' : 'var(--t1)',
+    cursor: disabled ? 'default' : 'pointer',
+    fontFamily: 'var(--font-mono)', fontSize: 11,
+    opacity: disabled ? 0.5 : 1,
+  };
+}
