@@ -98,6 +98,9 @@ export default function InboxPage() {
   const [showCanned, setShowCanned] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
   const [pendingFile, setPendingFile] = useState(null);   // { name, mime, size, dataUrl } (S162-C)
+  const [selectedIds, setSelectedIds] = useState(() => new Set());  // bulk-select thread ids (S164)
+  const [bulkAgent, setBulkAgent] = useState('');         // target of the bulk assign action
+  const [bulkBusy, setBulkBusy] = useState(false);
   const scrollRef = useRef(null);
   const taRef = useRef(null);
   const fileRef = useRef(null);
@@ -137,6 +140,10 @@ export default function InboxPage() {
     } catch (e) { setErr(e.message); }
     finally { setLoadingConvo(false); }
   }, [session]);
+
+  // Drop any bulk selection when the visible set changes (filters/tab/channel).
+  useEffect(() => { setSelectedIds(new Set()); setBulkAgent(''); },
+    [channel, assignTab, stateFilter, tagFilter, priorityFilter, agentFilter]);
 
   // Thread list — load + 20s poll. Re-fires on channel or assignment-tab change.
   useEffect(() => { setLoadingList(true); loadThreads(); }, [loadThreads]);
@@ -313,6 +320,31 @@ export default function InboxPage() {
     } catch (e) { setErr(e.message); }
   }
 
+  // ── bulk multi-select (S164, Pruthvi) ───────────────────────
+  function toggleSelect(id) {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+  function toggleSelectAll() {
+    const visible = threads.map(t => t.id);
+    const allSel = visible.length > 0 && visible.every(id => selectedIds.has(id));
+    setSelectedIds(allSel ? new Set() : new Set(visible));
+  }
+  async function bulkAssign() {
+    if (selectedIds.size === 0 || !bulkAgent) return;
+    setErr(null); setBulkBusy(true);
+    const agent_id = bulkAgent === '__release__' ? null : bulkAgent;
+    try {
+      await csopsPost('bulkAssignThreads', { thread_ids: [...selectedIds], agent_id }, session);
+      setSelectedIds(new Set()); setBulkAgent('');
+      loadThreads(); loadStats();
+    } catch (e) { setErr(e.message); }
+    finally { setBulkBusy(false); }
+  }
+
   // Mark the conversation Done (closed) / Reopen (open) — the work-queue toggle (S163).
   async function setThreadStateAction(state) {
     if (!convo?.thread) return;
@@ -460,14 +492,68 @@ export default function InboxPage() {
               </select>
             )}
           </div>
+          {/* Bulk multi-select + assign (S164, Pruthvi) */}
+          {threads.length > 0 && (() => {
+            const visible = threads.map(t => t.id);
+            const allSel = visible.every(id => selectedIds.has(id));
+            const someSel = visible.some(id => selectedIds.has(id));
+            return (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px',
+                borderBottom: '1px solid var(--border)', flexWrap: 'wrap',
+                background: selectedIds.size > 0 ? 'var(--accent-bg)' : 'transparent' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--t2)', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={allSel}
+                    ref={el => { if (el) el.indeterminate = someSel && !allSel; }}
+                    onChange={toggleSelectAll} style={{ cursor: 'pointer' }} />
+                  {selectedIds.size > 0 ? `${selectedIds.size} selected` : 'Select'}
+                </label>
+                {selectedIds.size > 0 && (
+                  <>
+                    <select value={bulkAgent} onChange={e => setBulkAgent(e.target.value)} title="Assign selected to…" style={miniSelect}>
+                      <option value="">Assign to…</option>
+                      {myId && <option value={myId}>Me</option>}
+                      {canReassign && agents.filter(a => a.id !== myId).map(a => (
+                        <option key={a.id} value={a.id}>{a.full_name || a.email}</option>
+                      ))}
+                      {canReassign && <option value="__release__">Release (unassign)</option>}
+                    </select>
+                    <button onClick={bulkAssign} disabled={!bulkAgent || bulkBusy}
+                      style={{ fontSize: 11, fontWeight: 600, padding: '4px 10px', borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--accent)', background: 'var(--accent)', color: '#000',
+                        cursor: (!bulkAgent || bulkBusy) ? 'default' : 'pointer', opacity: (!bulkAgent || bulkBusy) ? 0.5 : 1 }}>
+                      {bulkBusy ? '…' : 'Apply'}
+                    </button>
+                    <button onClick={() => { setSelectedIds(new Set()); setBulkAgent(''); }}
+                      style={{ fontSize: 11, padding: '4px 8px', borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--border)', background: 'transparent', color: 'var(--t2)', cursor: 'pointer' }}>
+                      Clear
+                    </button>
+                  </>
+                )}
+              </div>
+            );
+          })()}
           <div style={{ overflowY: 'auto', flex: 1 }}>
             {loadingList ? (
               <Empty>Loading…</Empty>
             ) : threads.length === 0 ? (
               <Empty>{assignTab === 'unassigned' ? 'No unassigned conversations.' : assignTab === 'mine' ? 'Nothing assigned to you.' : 'No conversations yet.'}</Empty>
-            ) : threads.map(t => (
-              <ThreadRow key={t.id} t={t} active={t.id === selectedId} myId={myId} onClick={() => setSelectedId(t.id)} />
-            ))}
+            ) : threads.map(t => {
+              const checked = selectedIds.has(t.id);
+              return (
+                <div key={t.id} style={{ display: 'flex', alignItems: 'stretch',
+                  borderBottom: '1px solid var(--border)',
+                  background: checked ? 'var(--accent-bg)' : 'transparent' }}>
+                  <label onClick={e => e.stopPropagation()}
+                    style={{ display: 'flex', alignItems: 'center', padding: '0 4px 0 10px', cursor: 'pointer' }}>
+                    <input type="checkbox" checked={checked} onChange={() => toggleSelect(t.id)} style={{ cursor: 'pointer' }} />
+                  </label>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <ThreadRow t={t} active={t.id === selectedId} myId={myId} onClick={() => setSelectedId(t.id)} noBorder />
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
 
@@ -877,14 +963,15 @@ function Avatar({ t, size = 34 }) {
     </div>
   );
 }
-function ThreadRow({ t, active, myId, onClick }) {
+function ThreadRow({ t, active, myId, onClick, noBorder }) {
   const ch = chanOf(t.channel);
   const lm = t.last_message;
   const preview = lm ? (lm.body || (lm.kind && lm.kind !== 'text' ? `[${lm.kind}]` : '')) : '';
   const mine = t.assigned_agent_id && t.assigned_agent_id === myId;
   return (
     <button onClick={onClick} style={{ width: '100%', textAlign: 'left', cursor: 'pointer',
-      display: 'flex', gap: 10, padding: '11px 13px', border: 'none', borderBottom: '1px solid var(--border)',
+      display: 'flex', gap: 10, padding: '11px 13px', border: 'none',
+      borderBottom: noBorder ? 'none' : '1px solid var(--border)',
       background: active ? 'var(--surface-2)' : 'transparent',
       borderLeft: `2px solid ${active ? ch.color : 'transparent'}` }}>
       <Avatar t={t} />

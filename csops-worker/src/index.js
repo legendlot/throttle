@@ -548,6 +548,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'sendMetaAttachment':       return sendMetaAttachment(body, auth, env);
     case 'linkMessagingThread':      return linkMessagingThread(body, auth, env);
     case 'assignThread':             return assignThread(body, auth, env);
+    case 'bulkAssignThreads':        return bulkAssignThreads(body, auth, env);
     case 'setThreadPriority':        return setThreadPriority(body, auth, env);
     case 'createTicketFromThread':   return createTicketFromThread(body, auth, env);
     case 'addThreadNote':            return addThreadNote(body, auth, env);
@@ -3815,6 +3816,49 @@ async function assignThread(body, auth, env) {
   });
   if (!upd.ok) return err('Assign failed', upd.status || 500);
   return ok({ assigned_agent_id: agent_id || null, assigned_agent_name: name });
+}
+
+// Bulk assign/claim/release many DM threads in ONE PATCH (S164, Pruthvi).
+// Same permission split as assignThread: self-claim = cs_ticket_manage,
+// assigning to another agent = cs_ticket_reassign/admin. A plain agent
+// releasing (agent_id null) only ever clears their OWN threads (scoped filter).
+// One subrequest regardless of count, so no Cloudflare subrequest-limit risk.
+async function bulkAssignThreads(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { thread_ids, agent_id } = body;
+  if (!Array.isArray(thread_ids) || thread_ids.length === 0) return err('thread_ids[] required');
+  if (thread_ids.length > 200) return err('too many threads in one action (max 200)');
+
+  const canReassign = !!auth?.permissions?.cs_ticket_reassign || !!auth?.permissions?.cs_ticket_admin;
+  const isSelf = agent_id === auth.userId;
+
+  let name = null;
+  if (agent_id) {
+    if (!isSelf && !canReassign) {
+      return err('Forbidden — only Team Lead+ can assign threads to other agents (missing cs_ticket_reassign)', 403);
+    }
+    const aRes = await sb(`/rest/v1/users_profile?id=eq.${agent_id}&select=id,full_name&limit=1`, env);
+    const agent = aRes.data?.[0];
+    if (!agent) return err('Agent not found', 404);
+    name = agent.full_name;
+  }
+
+  const idList = thread_ids.map(id => encodeURIComponent(id)).join(',');
+  let path = `/rest/v1/cs_wa_threads?id=in.(${idList})`;
+  // A plain agent releasing to the pool may only clear threads they own.
+  if (!agent_id && !canReassign) path += `&assigned_agent_id=eq.${auth.userId}`;
+
+  const upd = await sb(path, env, {
+    method: 'PATCH',
+    headers: { Prefer: 'return=representation' },
+    body: JSON.stringify({
+      assigned_agent_id: agent_id || null,
+      assigned_agent_name: name,
+      assigned_at: agent_id ? new Date().toISOString() : null,
+    }),
+  });
+  if (!upd.ok) return err('Bulk assign failed', upd.status || 500);
+  return ok({ updated: (upd.data || []).length, assigned_agent_id: agent_id || null, assigned_agent_name: name });
 }
 
 // Set a DM thread's priority (S164, Pruthvi). Urgent/High/Normal/Low; sortable
