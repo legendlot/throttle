@@ -1119,6 +1119,47 @@ export default function DispatchShipmentsPage() {
                   </div>
                 )}
 
+                {/* Courier tracking timeline (courierops). Read-only; current stage + full scan history. */}
+                {Array.isArray(detailShipment.tracking_checkpoints) && detailShipment.tracking_checkpoints.length > 0 && (
+                  <div style={{ marginBottom: 18 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                      <span className="label" style={{ fontSize: 11, color: 'var(--t2)' }}>Courier timeline</span>
+                      {detailShipment.tracking_status && (
+                        <ToneBadge tone={STAGE_TONE[detailShipment.tracking_status] || 'mute'}>
+                          {STAGE_LABEL[detailShipment.tracking_status] || detailShipment.tracking_status}
+                        </ToneBadge>
+                      )}
+                      <div style={{ flex: 1 }} />
+                      {detailShipment.tracking_synced_at && (
+                        <span className="num" style={{ fontSize: 10.5, color: 'var(--t3)' }}>updated {relTime(detailShipment.tracking_synced_at)}</span>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+                      {detailShipment.tracking_checkpoints.map((c, i) => (
+                        <div key={i} style={{ display: 'flex', gap: 10, paddingBottom: 12 }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0 }}>
+                            <span style={{ width: 9, height: 9, borderRadius: '50%', marginTop: 4,
+                              background: i === 0 ? 'var(--ok-fg)' : 'var(--border-2)' }} />
+                            {i < detailShipment.tracking_checkpoints.length - 1 &&
+                              <span style={{ width: 1, flex: 1, background: 'var(--border)', marginTop: 2 }} />}
+                          </div>
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <div style={{ fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t1)' }}>
+                              {c.label || STAGE_LABEL[c.stage] || c.stage}
+                            </div>
+                            <div style={{ fontFamily: 'var(--font-ui)', fontSize: 11, color: 'var(--t3)' }}>
+                              {c.location || '—'}{c.timestamp ? ` · ${formatDateTime(c.timestamp)}` : ''}
+                            </div>
+                            {c.description && (
+                              <div style={{ fontFamily: 'var(--font-ui)', fontSize: 11, color: 'var(--t4)', marginTop: 1 }}>{c.description}</div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* Manifest */}
                 <div className="label" style={{ fontSize: 11, color: 'var(--t2)', marginBottom: 10 }}>Manifest</div>
                 {detailLines.length === 0 ? (
