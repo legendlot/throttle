@@ -8,8 +8,9 @@
    deleteShipment / createBoxes / deleteBox / reopenBox /
    reprintBoxLabel / removeBoxUnit mutations — all unchanged.
    Detail moved from a centered overlay to the kit Drawer.
-   Prototype carrier/AWB block skipped — no awb/carrier fields
-   in the shipment payload.
+   Tracking & delivery (courier / AWB / link / expected + actual
+   delivery) editable in the drawer via updateShipmentTracking —
+   surfaced to Snorkel on the sales order (Snorkel↔Depot fulfilment).
    ════════════════════════════════════════════════════════════ */
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
@@ -97,6 +98,9 @@ const actionBtn = (color) => ({
   fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer',
   whiteSpace: 'nowrap',
 });
+// Tracking-panel input — full-width, compact.
+const trkInput = { background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-sm)',
+  color: 'var(--t1)', fontFamily: 'var(--font-ui)', fontSize: 12.5, padding: '7px 9px', outline: 'none', width: '100%' };
 
 // ── Shipments Page ────────────────────────────────────────────
 export default function DispatchShipmentsPage() {
@@ -118,6 +122,11 @@ export default function DispatchShipmentsPage() {
   const [expandedBoxes,  setExpandedBoxes]  = useState(new Set());
   const [boxUnitsCache,  setBoxUnitsCache]  = useState({});
   const [addBoxCount,    setAddBoxCount]    = useState(1);
+
+  // Tracking & delivery editor (Snorkel↔Depot fulfilment). Seeded per shipment;
+  // committed together via updateShipmentTracking.
+  const [trk,       setTrk]       = useState(null);
+  const [trkSaving, setTrkSaving] = useState(false);
 
   // Product codes cache
   const [productCodes, setProductCodes] = useState({});
@@ -151,6 +160,20 @@ export default function DispatchShipmentsPage() {
 
   // Create + Edit modals use shared <Modal/> (handles ESC internally). Detail drawer handled here.
   useEscapeClose(!!detailShipment,  () => setDetailShipment(null));
+
+  // Seed the tracking editor when a different shipment opens (not on every
+  // refresh — keeps in-progress edits across a post-save reload).
+  useEffect(() => {
+    if (!detailShipment) { setTrk(null); return; }
+    setTrk({
+      courier_partner:        detailShipment.courier_partner || '',
+      tracking_number:        detailShipment.tracking_number || '',
+      tracking_link:          detailShipment.tracking_link || '',
+      expected_delivery_date: detailShipment.expected_delivery_date || '',
+      delivery_date:          detailShipment.delivery_date || '',
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detailShipment?.id]);
 
   // ── Loaders ───────────────────────────────────────────────
   const loadShipments = useCallback(async () => {
@@ -228,15 +251,26 @@ export default function DispatchShipmentsPage() {
     }
   }
 
-  // Offline-sales shipments (carry sales_order_no) record a delivery date here.
-  // Snorkel reads it to start the payment-due clock (45d from delivery, falling back to dispatch).
-  async function saveDeliveryDate(shipment_id, delivery_date) {
+  // Tracking + delivery for a shipment. Snorkel surfaces these on the sales order
+  // (read-side) and the actual delivery_date starts the partner's payment-due clock.
+  async function saveTracking() {
+    if (!detailShipment || !trk) return;
+    setTrkSaving(true);
     try {
-      await workerFetch('updateShipment', { shipment_id, delivery_date: delivery_date || null }, session);
-      showToast('Delivery date saved', 'success');
-      refreshDetail();
+      await workerFetch('updateShipmentTracking', {
+        shipment_id:            detailShipment.id,
+        courier_partner:        trk.courier_partner || null,
+        tracking_number:        trk.tracking_number || null,
+        tracking_link:          trk.tracking_link || null,
+        expected_delivery_date: trk.expected_delivery_date || null,
+        delivery_date:          trk.delivery_date || null,
+      }, session);
+      showToast('Tracking saved', 'success');
+      await refreshDetail();
     } catch (e) {
-      showToast(e.message || 'Failed to save delivery date', 'error');
+      showToast(e.message || 'Failed to save tracking', 'error');
+    } finally {
+      setTrkSaving(false);
     }
   }
 
@@ -902,6 +936,12 @@ export default function DispatchShipmentsPage() {
                             </span>
                           )}
                           {ready && <ToneBadge tone="ok">Ready</ToneBadge>}
+                          {s.tracking_number && (
+                            <span title={`Tracked${s.courier_partner ? ` · ${s.courier_partner}` : ''}: ${s.tracking_number}`}
+                              style={{ display: 'inline-flex', color: 'var(--blue-bright)', flexShrink: 0 }}>
+                              <Icon name="truck" size={13} />
+                            </span>
+                          )}
                         </span>
                         <span style={{ fontFamily: 'var(--font-ui)', fontSize: 13, color: s.title ? 'var(--t1)' : 'var(--t4)',
                           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.title || '—'}</span>
@@ -983,22 +1023,61 @@ export default function DispatchShipmentsPage() {
                   <MetaCard label="Scheduled" value={formatDate(detailShipment.scheduled_date)} />
                 </div>
 
-                {/* Offline-sales delivery date — drives the partner's payment-due clock in Snorkel */}
-                {detailShipment.sales_order_no && (
-                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 18, padding: '11px 14px',
+                {/* Tracking & delivery — courier/AWB/link + expected & actual delivery.
+                    Snorkel reads these on the sales order; actual delivery starts the
+                    partner's payment-due clock (falls back to dispatch date if blank). */}
+                {detailShipment.status !== 'cancelled' && trk && (
+                  <div style={{ marginBottom: 18, padding: '13px 14px',
                     background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)' }}>
-                    <div style={{ flexShrink: 0 }}>
-                      <span className="eyebrow" style={{ display: 'block', marginBottom: 6 }}>Delivery date</span>
-                      <input
-                        type="date"
-                        defaultValue={detailShipment.delivery_date || ''}
-                        onChange={e => saveDeliveryDate(detailShipment.id, e.target.value)}
-                        style={{ ...inputStyle, width: 160, padding: '7px 9px' }}
-                      />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 11 }}>
+                      <span className="label" style={{ fontSize: 11, color: 'var(--t2)' }}>Tracking &amp; delivery</span>
+                      <div style={{ flex: 1 }} />
+                      <span className="num" style={{ fontSize: 11, color: 'var(--t3)' }}>Dispatched {formatDate(detailShipment.shipped_at)}</span>
                     </div>
-                    <span style={{ fontFamily: 'var(--font-ui)', fontSize: 11.5, color: 'var(--t3)', lineHeight: 1.5, paddingTop: 2 }}>
-                      Sales order {detailShipment.sales_order_no} — set the date goods reached the partner (defaults to dispatch date if blank).
-                    </span>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                      <div>
+                        <span className="eyebrow" style={{ display: 'block', marginBottom: 5 }}>Courier</span>
+                        <input style={trkInput} value={trk.courier_partner}
+                          onChange={e => setTrk(t => ({ ...t, courier_partner: e.target.value }))} placeholder="e.g. Delhivery" />
+                      </div>
+                      <div>
+                        <span className="eyebrow" style={{ display: 'block', marginBottom: 5 }}>Tracking number</span>
+                        <input style={trkInput} value={trk.tracking_number}
+                          onChange={e => setTrk(t => ({ ...t, tracking_number: e.target.value }))} placeholder="AWB / docket no." />
+                      </div>
+                      <div style={{ gridColumn: '1 / -1' }}>
+                        <span className="eyebrow" style={{ display: 'block', marginBottom: 5 }}>Tracking link</span>
+                        <input style={trkInput} value={trk.tracking_link}
+                          onChange={e => setTrk(t => ({ ...t, tracking_link: e.target.value }))} placeholder="https://…" />
+                      </div>
+                      <div>
+                        <span className="eyebrow" style={{ display: 'block', marginBottom: 5 }}>Expected delivery</span>
+                        <input type="date" style={trkInput} value={trk.expected_delivery_date}
+                          onChange={e => setTrk(t => ({ ...t, expected_delivery_date: e.target.value }))} />
+                      </div>
+                      <div>
+                        <span className="eyebrow" style={{ display: 'block', marginBottom: 5 }}>Actual delivery</span>
+                        <input type="date" style={trkInput} value={trk.delivery_date}
+                          onChange={e => setTrk(t => ({ ...t, delivery_date: e.target.value }))} />
+                      </div>
+                    </div>
+                    {detailShipment.sales_order_no && (
+                      <div style={{ fontFamily: 'var(--font-ui)', fontSize: 11.5, color: 'var(--t3)', lineHeight: 1.5, marginTop: 9 }}>
+                        Sales order {detailShipment.sales_order_no} — actual delivery starts the partner&apos;s payment-due clock in Snorkel (defaults to dispatch date if blank).
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, marginTop: 11 }}>
+                      {trk.tracking_link && (
+                        <a href={trk.tracking_link} target="_blank" rel="noreferrer"
+                          style={{ ...actionBtn('var(--blue-bright)'), textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <Icon name="upRight" size={11} /> Open link
+                        </a>
+                      )}
+                      <button onClick={saveTracking} disabled={trkSaving}
+                        style={{ ...btnGhost, padding: '6px 14px', fontSize: 12, opacity: trkSaving ? 0.5 : 1 }}>
+                        {trkSaving ? 'Saving…' : 'Save Tracking'}
+                      </button>
+                    </div>
                   </div>
                 )}
 
