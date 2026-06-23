@@ -34,6 +34,10 @@ export function aggOrders(rows) {
   a.gstSettled = a.tax;                             // exact GST from settlement (lags weeks; reconciliation only)
   a.tax = a.netReturns - a.netReturns / (1 + GST_RATE);  // GST stripped at the standard rate — LIVE, derived from gross
   a.netExGst = a.netReturns - a.tax;                // = netReturns / 1.18 — NET REVENUE (ex-GST), the metric
+  // Reconciliation confidence: how much of the period's GST is confirmed by marketplace settlement
+  // (exact gstSettled) vs the live 18% estimate (a.tax). ~100% = fully reconciled (older periods,
+  // real-time channels like Shopify); low = recent marketplace sales whose settlement hasn't posted.
+  a.settledPct = a.tax > 0 ? Math.min(100, Math.round(a.gstSettled / a.tax * 100)) : null;
   a.totalOrders = a.orders + a.cancelledOrders;
   a.aov = a.totalOrders ? a.grossAll / a.totalOrders : 0;
   a.cancelRate = a.totalOrders ? a.cancelledOrders / a.totalOrders * 100 : 0;

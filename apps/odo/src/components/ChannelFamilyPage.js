@@ -5,7 +5,7 @@ import { Spinner } from '@throttle/ui';
 import { salesGet, inr, fmtInt, rangePresets, priorPeriod, istToday } from '../lib/api.js';
 import { FAMILIES, familyOf, SUBCHANNEL_PALETTE } from '../lib/families.js';
 import { aggOrders } from '../lib/segregation.js';
-import { Kpi } from './kit.js';
+import { Kpi, SettledBadge } from './kit.js';
 import StackedTrendChart from './StackedTrendChart.js';
 
 // gross/units totals + per-channel + per-variant from f_sales_rollup (group=variant) rows.
@@ -150,7 +150,7 @@ export default function ChannelFamilyPage({ familyKey }) {
                 <Kpi lbl="Total Orders" val={fmtInt(segA.totalOrders)} sub="placed (incl. cancelled)" now={segA.totalOrders} prev={segP.totalOrders} />
                 <Kpi lbl="Total Sales" val={inr(segA.grossAll)} sub="gross revenue" now={segA.grossAll} prev={segP.grossAll} />
                 <Kpi lbl="Net Sales" val={inr(segA.netCancel)} sub="excl. cancellations" now={segA.netCancel} prev={segP.netCancel} />
-                <Kpi lbl="Net Revenue (ex-GST)" val={inr(segA.netExGst)} sub="after disc · returns · GST" now={segA.netExGst} prev={segP.netExGst} />
+                <Kpi lbl="Net Revenue (ex-GST)" val={inr(segA.netExGst)} sub="after disc · returns · GST" now={segA.netExGst} prev={segP.netExGst} badge={<SettledBadge pct={segA.settledPct} />} />
                 <Kpi lbl="AOV" val={inr(segA.aov)} sub="gross / order" now={segA.aov} prev={segP.aov} />
                 <Kpi lbl="Cancellations" val={`${fmtInt(segA.cancelledOrders)} · ${segA.cancelRate.toFixed(1)}%`} sub={inr(segA.cancelledValue)} now={segA.cancelledOrders} prev={segP.cancelledOrders} tone="neutral" />
                 <Kpi lbl="Returns" val={`${fmtInt(segA.returnsCount)} · ${inr(segA.returnsValue)}`} sub="refund value" now={segA.returnsValue} prev={segP.returnsValue} tone="neutral" />
