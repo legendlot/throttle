@@ -1282,14 +1282,17 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
       return;
     }
 
-    const pairCount = Math.min(availableOperators.length, slots.length);
+    const deptOf = (o) => (o.operator_department || '').toLowerCase();
+    const usedIds = new Set();
     const assignments = [];
-    for (let i = 0; i < pairCount; i++) {
-      assignments.push({
-        operator_id: availableOperators[i].id,
-        line:        slots[i].line,
-        station:     slots[i].station,
-      });
+    for (const slot of slots) {
+      const isLine = ['L1', 'L2', 'L3'].includes(slot.line);
+      const op = availableOperators.find(
+        (o) => !usedIds.has(o.id) && (!isLine || !['store', 'dispatch'].includes(deptOf(o)))
+      );
+      if (!op) continue;
+      usedIds.add(op.id);
+      assignments.push({ operator_id: op.id, line: slot.line, station: slot.station });
     }
 
     const skipped  = availableOperators.length - assignments.length;
