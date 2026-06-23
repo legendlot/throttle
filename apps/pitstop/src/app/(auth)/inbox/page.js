@@ -34,6 +34,15 @@ const CHANNELS = {
 };
 const chanOf = (c) => CHANNELS[c] || { label: c || 'DM', color: 'var(--t3)', Glyph: MessageCircle, sendable: false };
 
+// Conversation priority (S164, Pruthvi) — Urgent/High/Normal/Low, default Normal.
+const PRIORITIES = {
+  urgent: { label: 'Urgent', tone: 'bad' },
+  high:   { label: 'High',   tone: 'warn' },
+  normal: { label: 'Normal', tone: 'mute' },
+  low:    { label: 'Low',    tone: 'info' },
+};
+const PRIORITY_OPTS = ['urgent', 'high', 'normal', 'low'];
+
 const shortTime = (iso) => iso ? new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
 const relTime = (iso) => {
   if (!iso) return '';
@@ -60,6 +69,9 @@ export default function InboxPage() {
   const [assignTab, setAssignTab] = useState('all');  // all | mine | unassigned (S162-A)
   const [stateFilter, setStateFilter] = useState('active'); // active | closed | all (S163 work-queue)
   const [tagFilter, setTagFilter] = useState('');           // tag facet (S163)
+  const [priorityFilter, setPriorityFilter] = useState(''); // '' | urgent|high|normal|low (S164)
+  const [agentFilter, setAgentFilter] = useState('');       // '' | assigned-agent id — managers (S164)
+  const [sort, setSort] = useState('recent');               // recent | oldest | priority (S164)
   const [allTags, setAllTags] = useState([]);
   const [threads, setThreads] = useState([]);
   const [stats, setStats] = useState({
@@ -100,11 +112,14 @@ export default function InboxPage() {
       if (assignTab !== 'all') p.tab = assignTab;
       if (stateFilter !== 'active') p.state = stateFilter;   // 'active' is the worker default
       if (tagFilter) p.tag = tagFilter;
+      if (priorityFilter) p.priority = priorityFilter;
+      if (agentFilter) p.agent = agentFilter;
+      if (sort !== 'recent') p.sort = sort;
       const d = await csopsGet('getMessagingThreads', p, session);
       setThreads(d?.threads || []);
     } catch (e) { setErr(e.message); }
     finally { setLoadingList(false); }
-  }, [session, channel, assignTab, stateFilter, tagFilter]);
+  }, [session, channel, assignTab, stateFilter, tagFilter, priorityFilter, agentFilter, sort]);
 
   const loadStats = useCallback(async () => {
     if (!session) return;
@@ -309,6 +324,28 @@ export default function InboxPage() {
     } catch (e) { setErr(e.message); }
   }
 
+  // Set the conversation's priority (S164, Pruthvi).
+  async function setPriorityAction(priority) {
+    if (!convo?.thread) return;
+    setErr(null);
+    try {
+      await csopsPost('setThreadPriority', { thread_id: convo.thread.id, priority }, session);
+      await loadConvo(selectedId);
+      loadThreads();
+    } catch (e) { setErr(e.message); }
+  }
+
+  // Quick-create a ticket from this conversation + auto-link it (S164, Pruthvi).
+  async function createTicketFromConvo() {
+    if (!convo?.thread) return;
+    setErr(null);
+    try {
+      await csopsPost('createTicketFromThread', { thread_id: convo.thread.id }, session);
+      await loadConvo(selectedId);
+      loadThreads();
+    } catch (e) { setErr(e.message); }
+  }
+
   // Replace-set the conversation's tags (S163).
   async function setThreadTagsAction(tagIds) {
     if (!convo?.thread) return;
@@ -342,6 +379,10 @@ export default function InboxPage() {
   const filteredCanned = cannedQuery
     ? canned.filter(c => `${c.title} ${c.body}`.toLowerCase().includes(cannedQuery))
     : canned;
+
+  const miniSelect = { flex: 1, minWidth: 92, fontSize: 11, padding: '4px 6px',
+    borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)',
+    background: 'var(--surface)', color: 'var(--t1)', cursor: 'pointer' };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, height: 'calc(100vh - 132px)', minHeight: 480 }}>
@@ -401,6 +442,24 @@ export default function InboxPage() {
               </select>
             </div>
           )}
+          {/* Filter + Sort (S164, Pruthvi) */}
+          <div style={{ display: 'flex', gap: 6, padding: '6px 10px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+            <select value={sort} onChange={e => setSort(e.target.value)} title="Sort conversations" style={miniSelect}>
+              <option value="recent">↓ Recent activity</option>
+              <option value="oldest">↑ Oldest first</option>
+              <option value="priority">★ Priority</option>
+            </select>
+            <select value={priorityFilter} onChange={e => setPriorityFilter(e.target.value)} title="Filter by priority" style={miniSelect}>
+              <option value="">All priorities</option>
+              {PRIORITY_OPTS.map(p => <option key={p} value={p}>{PRIORITIES[p].label}</option>)}
+            </select>
+            {canReassign && agents.length > 0 && (
+              <select value={agentFilter} onChange={e => setAgentFilter(e.target.value)} title="Filter by assigned agent" style={miniSelect}>
+                <option value="">All agents</option>
+                {agents.map(a => <option key={a.id} value={a.id}>{a.full_name || a.email}</option>)}
+              </select>
+            )}
+          </div>
           <div style={{ overflowY: 'auto', flex: 1 }}>
             {loadingList ? (
               <Empty>Loading…</Empty>
@@ -442,6 +501,16 @@ export default function InboxPage() {
                       thread={thread} mineThread={mineThread} canReassign={canReassign} agents={agents}
                       open={assignOpen} setOpen={setAssignOpen} onAssign={assign} myId={myId} />
                   )}
+                  {/* Priority (S164, Pruthvi) */}
+                  {canManage && (
+                    <select value={thread.priority || 'normal'} onChange={e => setPriorityAction(e.target.value)}
+                      title="Conversation priority"
+                      style={{ fontSize: 11, fontWeight: 600, padding: '6px 8px', borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--border)', background: 'var(--surface)', cursor: 'pointer',
+                        color: thread.priority === 'urgent' ? 'var(--bad-fg)' : thread.priority === 'high' ? 'var(--warn-fg)' : 'var(--t2)' }}>
+                      {PRIORITY_OPTS.map(p => <option key={p} value={p}>{PRIORITIES[p].label}</option>)}
+                    </select>
+                  )}
                   {canManage && (
                     thread.thread_state === 'closed' ? (
                       <button onClick={() => setThreadStateAction('open')} style={{ ...btnGhost, padding: '6px 10px' }} title="Reopen this conversation">
@@ -460,9 +529,15 @@ export default function InboxPage() {
                       <Link2 size={12} /> {convo.linked_ticket.ticket_no}
                     </a>
                   ) : canManage && (
-                    <button onClick={() => setLinkOpen(v => !v)} style={{ ...btnGhost, padding: '6px 10px' }}>
-                      <Link2 size={12} /> Link ticket
-                    </button>
+                    <>
+                      <button onClick={createTicketFromConvo} style={{ ...btnGhost, padding: '6px 10px' }}
+                        title="Create a new ticket from this conversation and link it">
+                        <Plus size={12} /> Create ticket
+                      </button>
+                      <button onClick={() => setLinkOpen(v => !v)} style={{ ...btnGhost, padding: '6px 10px' }}>
+                        <Link2 size={12} /> Link ticket
+                      </button>
+                    </>
                   )}
                 </div>
               </div>
@@ -825,6 +900,9 @@ function ThreadRow({ t, active, myId, onClick }) {
             textOverflow: 'ellipsis', flex: 1 }}>{preview || '—'}</span>
         </div>
         <div style={{ display: 'flex', gap: 5, marginTop: 4, flexWrap: 'wrap' }}>
+          {t.priority && t.priority !== 'normal' && (
+            <ToneBadge tone={PRIORITIES[t.priority]?.tone || 'mute'} style={{ fontSize: 8.5 }}>{PRIORITIES[t.priority]?.label || t.priority}</ToneBadge>
+          )}
           {t.thread_state === 'closed' && <ToneBadge tone="mute" style={{ fontSize: 8.5 }}>Done</ToneBadge>}
           {t.assigned_agent_id && (
             <ToneBadge tone={mine ? 'ok' : 'mute'} style={{ fontSize: 8.5 }}>{mine ? 'Mine' : (t.assigned_agent_name || 'Assigned')}</ToneBadge>

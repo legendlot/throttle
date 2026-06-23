@@ -548,6 +548,8 @@ async function handlePost(action, body, auth, env, request) {
     case 'sendMetaAttachment':       return sendMetaAttachment(body, auth, env);
     case 'linkMessagingThread':      return linkMessagingThread(body, auth, env);
     case 'assignThread':             return assignThread(body, auth, env);
+    case 'setThreadPriority':        return setThreadPriority(body, auth, env);
+    case 'createTicketFromThread':   return createTicketFromThread(body, auth, env);
     case 'addThreadNote':            return addThreadNote(body, auth, env);
     case 'createCannedResponse':     return createCannedResponse(body, auth, env);
     case 'updateCannedResponse':     return updateCannedResponse(body, auth, env);
@@ -3622,14 +3624,34 @@ async function getMessagingThreads(params, auth, env) {
   const channel = params.get('channel');
   const tab = params.get('tab');              // mine | unassigned | all (assignment axis, S162)
   const limit = Math.min(Number(params.get('limit')) || 60, 300);
-  let q = `/rest/v1/cs_wa_threads?select=*&order=last_message_at.desc.nullslast&limit=${limit}`;
+  // Sort axis (S164, Pruthvi): recent activity (default) | oldest-first | priority high→low.
+  const sort = params.get('sort') || 'recent';
+  const ORDERS = {
+    recent:   'last_message_at.desc.nullslast',
+    oldest:   'last_message_at.asc.nullsfirst',
+    priority: 'priority_rank.asc,last_message_at.desc.nullslast',
+  };
+  const orderClause = ORDERS[sort] || ORDERS.recent;
+  let q = `/rest/v1/cs_wa_threads?select=*&order=${orderClause}&limit=${limit}`;
   const state = params.get('state') || 'active';   // active (open+snoozed) | closed | all (S163 work-queue)
   if (channel && channel !== 'all') q += `&channel=eq.${encodeURIComponent(channel)}`;
   if (tab === 'mine') q += `&assigned_agent_id=eq.${auth.userId}`;
   else if (tab === 'unassigned') q += `&assigned_agent_id=is.null`;
+  else {
+    // Explicit assigned-agent facet — managers filtering to one agent (S164). Only
+    // meaningful on the "all" tab (mine/unassigned already pin the agent axis).
+    const agent = params.get('agent');
+    if (agent) q += `&assigned_agent_id=eq.${encodeURIComponent(agent)}`;
+  }
   if (state === 'active') q += `&thread_state=in.(open,snoozed)`;
   else if (state === 'closed') q += `&thread_state=eq.closed`;
   // state === 'all' → no thread_state filter
+  const priority = params.get('priority');         // urgent|high|normal|low facet (S164)
+  if (priority) q += `&priority=eq.${encodeURIComponent(priority)}`;
+  const since = params.get('since');               // ISO — last activity ≥ (S164 date filter)
+  if (since) q += `&last_message_at=gte.${encodeURIComponent(since)}`;
+  const until = params.get('until');               // ISO — last activity ≤ (S164 date filter)
+  if (until) q += `&last_message_at=lte.${encodeURIComponent(until)}`;
   const tagFilter = params.get('tag');             // tag facet (S163)
   if (tagFilter) {
     const tagged = await idsWithTag('thread', tagFilter, env);
@@ -3793,6 +3815,84 @@ async function assignThread(body, auth, env) {
   });
   if (!upd.ok) return err('Assign failed', upd.status || 500);
   return ok({ assigned_agent_id: agent_id || null, assigned_agent_name: name });
+}
+
+// Set a DM thread's priority (S164, Pruthvi). Urgent/High/Normal/Low; sortable
+// via the generated priority_rank column. Gate cs_ticket_manage (same as assign).
+async function setThreadPriority(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { thread_id, priority } = body;
+  if (!thread_id) return err('thread_id required');
+  const ALLOWED = new Set(['urgent', 'high', 'normal', 'low']);
+  if (!ALLOWED.has(priority)) return err('priority must be one of urgent|high|normal|low');
+  const upd = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}`, env, {
+    method: 'PATCH', headers: { Prefer: 'return=representation' },
+    body: JSON.stringify({ priority, updated_at: new Date().toISOString() }),
+  });
+  if (!upd.ok || !upd.data?.[0]) return err('Failed to set priority', upd.status || 500);
+  return ok({ thread_id, priority });
+}
+
+// Quick-create a ticket FROM a DM conversation and auto-link it (S164, Pruthvi).
+// Mirrors createTicket's insert shape; prefills customer + channel from the thread.
+// IG/FB have no phone → intake_channel='other', customer_name = handle. Idempotent:
+// if the thread already links a ticket, returns it instead of minting a duplicate.
+async function createTicketFromThread(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { thread_id } = body;
+  if (!thread_id) return err('thread_id required');
+
+  const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=*&limit=1`, env);
+  const thread = tRes.data?.[0];
+  if (!thread) return err('Thread not found', 404);
+
+  // Already linked? Return that ticket (no dup).
+  const linkRes = await sb(`/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(thread_id)}&ticket_id=not.is.null&select=ticket_id&limit=1`, env);
+  const existingId = linkRes.data?.[0]?.ticket_id;
+  if (existingId) {
+    const ex = await sb(`/rest/v1/cs_tickets?id=eq.${existingId}&select=id,ticket_no&limit=1`, env);
+    const exTk = ex.data?.[0];
+    if (exTk) return ok({ ticket_no: exTk.ticket_no, id: exTk.id, already_linked: true });
+  }
+
+  const year = String(new Date().getFullYear());
+  const seqRes = await sb(`/rest/v1/rpc/next_cs_ticket_seq`, env, { method: 'POST', body: JSON.stringify({ p_year: year }) });
+  if (!seqRes.ok) return err(`Failed to claim ticket number: ${JSON.stringify(seqRes.data)}`, 500);
+  const ticket_no = `CS-${year}-${String(Number(seqRes.data)).padStart(5, '0')}`;
+
+  const isWa = thread.channel === 'whatsapp';
+  const customer_name = thread.customer_handle || thread.customer_phone || (isWa ? 'WhatsApp customer' : 'Social customer');
+  const due_at = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(); // pending → 7d default SLA
+
+  const insertRes = await sb(`/rest/v1/cs_tickets`, env, {
+    method: 'POST', headers: { Prefer: 'return=representation' },
+    body: JSON.stringify({
+      ticket_no,
+      cs_department_id: auth.cs_department_id || null,
+      created_by_user_id: auth.userId,
+      created_by_name: auth.fullName,
+      intake_channel: isWa ? 'whatsapp' : 'other',
+      customer_name,
+      customer_phone: isWa ? (thread.customer_phone || null) : null,
+      disposition: 'pending',
+      assigned_agent_id: thread.assigned_agent_id || auth.userId,
+      assigned_agent_name: thread.assigned_agent_name || auth.fullName,
+      stage: 'intake',
+      issue_description: '',
+      due_at,
+    }),
+  });
+  if (!insertRes.ok) return err(`Failed to create ticket: ${JSON.stringify(insertRes.data)}`, insertRes.status);
+  const ticket = insertRes.data?.[0];
+  await insertHistory(ticket.id, 'ticket_created', null, ticket_no, null, auth, env);
+
+  // Auto-link the whole thread to the new ticket (mirror linkMessagingThread —
+  // the link lives on the thread's cs_wa_messages rows).
+  await sb(`/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(thread_id)}`, env, {
+    method: 'PATCH', body: JSON.stringify({ ticket_id: ticket.id }),
+  }).catch(() => {});
+
+  return ok({ ticket_no, id: ticket.id, linked: true });
 }
 
 // Add a private (internal) note to a DM thread (Feature B, S162). Agent-only —
