@@ -58,6 +58,27 @@ const STATUS_DOT = {
   cancelled:   'var(--bad-fg)',
 };
 
+// Normalized courier stage → kit tone + human label (courierops tracking_status).
+const STAGE_TONE = {
+  manifested: 'info', in_transit: 'brand', out_for_delivery: 'warn', delivered: 'ok',
+  undelivered: 'bad', rto_in_transit: 'warn', rto_delivered: 'mute', cancelled: 'bad', lost: 'bad', unknown: 'mute',
+};
+const STAGE_LABEL = {
+  manifested: 'Manifested', in_transit: 'In transit', out_for_delivery: 'Out for delivery',
+  delivered: 'Delivered', undelivered: 'Undelivered', rto_in_transit: 'RTO in transit',
+  rto_delivered: 'RTO delivered', cancelled: 'Cancelled', lost: 'Lost', unknown: 'Unknown',
+};
+function relTime(iso) {
+  if (!iso) return '';
+  const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  if (!Number.isFinite(mins)) return '';
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const h = Math.round(mins / 60);
+  if (h < 24) return `${h} h ago`;
+  return `${Math.round(h / 24)} d ago`;
+}
+
 function ShipmentStatusBadge({ status }) {
   if (!status) return <ToneBadge tone="mute">—</ToneBadge>;
   return <ToneBadge tone={STATUS_TONE[status] || 'mute'}>{status}</ToneBadge>;
@@ -101,6 +122,10 @@ const actionBtn = (color) => ({
 // Tracking-panel input — full-width, compact.
 const trkInput = { background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-sm)',
   color: 'var(--t1)', fontFamily: 'var(--font-ui)', fontSize: 12.5, padding: '7px 9px', outline: 'none', width: '100%' };
+
+// Known couriers for the dropdown (decision #6) — canonical values the poller matches on
+// (courierops polls courier_partner = 'Delhivery'). "Other" reveals a free-text field.
+const COURIERS = ['Delhivery', 'Shiprocket', 'Other'];
 
 // ── Shipments Page ────────────────────────────────────────────
 export default function DispatchShipmentsPage() {
@@ -1037,8 +1062,21 @@ export default function DispatchShipmentsPage() {
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                       <div>
                         <span className="eyebrow" style={{ display: 'block', marginBottom: 5 }}>Courier</span>
-                        <input style={trkInput} value={trk.courier_partner}
-                          onChange={e => setTrk(t => ({ ...t, courier_partner: e.target.value }))} placeholder="e.g. Delhivery" />
+                        <select style={trkInput}
+                          value={COURIERS.includes(trk.courier_partner) ? trk.courier_partner : (trk.courier_partner ? 'Other' : '')}
+                          onChange={e => setTrk(t => ({ ...t, courier_partner: e.target.value === 'Other' ? '' : e.target.value }))}>
+                          <option value="">Select courier…</option>
+                          {COURIERS.map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                        {!['Delhivery', 'Shiprocket', ''].includes(trk.courier_partner) && (
+                          <input style={{ ...trkInput, marginTop: 6 }} value={trk.courier_partner}
+                            onChange={e => setTrk(t => ({ ...t, courier_partner: e.target.value }))} placeholder="Courier name" />
+                        )}
+                        {trk.courier_partner === 'Delhivery' && (
+                          <span style={{ display: 'block', marginTop: 4, fontSize: 10.5, color: 'var(--t3)' }}>
+                            Auto-tracked every 30 min once an AWB is set.
+                          </span>
+                        )}
                       </div>
                       <div>
                         <span className="eyebrow" style={{ display: 'block', marginBottom: 5 }}>Tracking number</span>
