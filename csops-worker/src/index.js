@@ -534,6 +534,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'setPresence':          return setPresence(body, auth, env);
     case 'heartbeat':            return heartbeat(body, auth, env);
     case 'setShift':             return setShift(body, auth, env);
+    case 'setAgentShift':        return setAgentShift(body, auth, env);
     case 'setThreadState':       return setThreadState(body, auth, env);
     case 'setRoutingConfig':     return setRoutingConfig(body, auth, env);
     case 'createTag':            return createTag(body, auth, env);
@@ -1306,12 +1307,23 @@ async function getPresence(_params, auth, env) {
   const shiftByDept = {};
   for (const s of (sh.data || [])) shiftByDept[s.cs_department_id] = s;
 
+  // Per-agent shift overrides (S164). A present + active row wins over the dept
+  // window for that agent; an inactive/absent row falls back to the department.
+  const ash = await sb(
+    `/rest/v1/cs_agent_shifts?user_id=in.(${team.map(p => p.id).join(',') || '00000000-0000-0000-0000-000000000000'})&select=*`,
+    env,
+  );
+  const agentShiftByUser = {};
+  for (const s of (ash.data || [])) agentShiftByUser[s.user_id] = s;
+
   const nowParts = istNow();
   const nowMs = Date.now();
   const roster = team.map(p => {
     const pres = presByUser[p.id] || null;
     const eff = effectivePresence(pres, nowMs);
-    const in_shift = inShiftWindow(shiftByDept[p.cs_department_id], nowParts);
+    const custom = agentShiftByUser[p.id] || null;
+    const effShift = (custom && custom.is_active !== false) ? custom : shiftByDept[p.cs_department_id];
+    const in_shift = inShiftWindow(effShift, nowParts);
     const override = !!pres && pres.auto === false && eff === 'online';
     return {
       user_id: p.id,
@@ -1323,6 +1335,7 @@ async function getPresence(_params, auth, env) {
       auto: pres ? pres.auto : true,
       last_seen_at: pres?.last_seen_at || null,
       in_shift,
+      custom_shift: custom && { start_min: custom.start_min, end_min: custom.end_min, working_days: custom.working_days, is_active: custom.is_active },
       eligible: eff === 'online' && (in_shift || override),
     };
   });
@@ -1417,6 +1430,44 @@ async function setShift(body, auth, env) {
     body: JSON.stringify(row),
   });
   if (!r.ok) return err('failed to save shift', 500);
+  return ok({ shift: r.data?.[0] || row });
+}
+
+// Admin: set (or clear) a single agent's personal shift override (S164, Pruthvi).
+// { user_id, start_min, end_min, working_days, is_active } upserts the override;
+// { user_id, clear: true } removes it so the agent reverts to their dept window.
+async function setAgentShift(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const { user_id, clear, start_min, end_min, working_days, is_active } = body || {};
+  if (!user_id) return err('user_id required');
+
+  if (clear) {
+    const d = await sb(`/rest/v1/cs_agent_shifts?user_id=eq.${encodeURIComponent(user_id)}`, env, { method: 'DELETE' });
+    if (!d.ok) return err('failed to clear agent shift', 500);
+    return ok({ cleared: true, user_id });
+  }
+
+  const sMin = Number(start_min), eMin = Number(end_min);
+  if (!Number.isInteger(sMin) || sMin < 0 || sMin > 1440) return err('invalid start_min');
+  if (!Number.isInteger(eMin) || eMin < 0 || eMin > 1440) return err('invalid end_min');
+  const days = Array.isArray(working_days) ? [...new Set(working_days.map(Number))] : [];
+  if (!days.length || days.some(d => !Number.isInteger(d) || d < 1 || d > 7))
+    return err('working_days must be ISO day numbers 1-7');
+  const row = {
+    user_id,
+    start_min: sMin,
+    end_min: eMin,
+    working_days: days.sort((a, b) => a - b),
+    is_active: is_active === undefined ? true : !!is_active,
+    updated_at: new Date().toISOString(),
+    updated_by_user_id: auth.userId,
+  };
+  const r = await sb(`/rest/v1/cs_agent_shifts?on_conflict=user_id`, env, {
+    method: 'POST',
+    prefer: 'resolution=merge-duplicates,return=representation',
+    body: JSON.stringify(row),
+  });
+  if (!r.ok) return err('failed to save agent shift', 500);
   return ok({ shift: r.data?.[0] || row });
 }
 

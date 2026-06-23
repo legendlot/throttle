@@ -79,6 +79,11 @@ export default function ShiftsPage() {
       (b.eligible - a.eligible) || (b.in_shift - a.in_shift) || a.full_name.localeCompare(b.full_name)),
     [roster],
   );
+  const deptShiftById = useMemo(() => {
+    const m = {};
+    for (const s of shifts) m[s.cs_department_id] = s;
+    return m;
+  }, [shifts]);
 
   async function saveShift(s) {
     setSavingId(s.cs_department_id);
@@ -133,7 +138,7 @@ export default function ShiftsPage() {
         <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700 }}>Shifts &amp; Presence</h1>
         <p style={{ margin: '4px 0 0', color: 'var(--t3)', fontSize: 13 }}>
           An agent is eligible for thread auto-assignment when they’re <b>online</b> (a live tab)
-          <b> and</b> inside their department’s shift window — or have manually set “Available”.
+          <b> and</b> inside their shift window (their own if set, else their department’s) — or have manually set “Available”.
           {istNowMin != null && <> Now: <b>{minToHHMM(istNowMin)} IST</b>.</>}
         </p>
       </header>
@@ -252,6 +257,24 @@ export default function ShiftsPage() {
         </div>
       </section>
 
+      {/* Per-agent shift overrides (S164, Pruthvi) */}
+      <section style={{ background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 8, marginTop: 22, overflow: 'hidden' }}>
+        <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-1)', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Users size={15} style={{ color: 'var(--t3)' }} />
+          <span style={{ fontWeight: 600, fontSize: 14 }}>Per-agent shift windows (IST)</span>
+          <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--t3)' }}>
+            {canEdit ? 'Override an agent’s hours / weekly offs — blank = department default' : 'Read-only (admin to edit)'}
+          </span>
+        </div>
+        <div style={{ padding: 12, display: 'grid', gap: 10 }}>
+          {sortedRoster.map(a => (
+            <AgentShiftRow key={a.user_id} agent={a} deptDefault={deptShiftById[a.cs_department_id]}
+              canEdit={canEdit} session={session} onSaved={loadRoster} setError={setError} />
+          ))}
+          {sortedRoster.length === 0 && <div style={{ padding: 16, color: 'var(--t3)' }}>No CS agents found.</div>}
+        </div>
+      </section>
+
       {/* Auto-assignment (round-robin) — admin only */}
       {canEdit && (
         <section style={{ background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 8, marginTop: 22, overflow: 'hidden' }}>
@@ -295,6 +318,108 @@ export default function ShiftsPage() {
             </div>
           </div>
         </section>
+      )}
+    </div>
+  );
+}
+
+const DEFAULT_WIN = { start_min: 600, end_min: 1140, working_days: [1, 2, 3, 4, 5], is_active: true };
+
+// One agent's personal shift override. Seeds from their custom window if set,
+// else their department default. Save upserts the override; Reset clears it so
+// the agent reverts to the department window.
+function AgentShiftRow({ agent, deptDefault, canEdit, session, onSaved, setError }) {
+  const hasCustom = !!agent.custom_shift;
+  const base = agent.custom_shift || deptDefault || DEFAULT_WIN;
+  const [draft, setDraft] = useState(base);
+  const [saving, setSaving] = useState(false);
+
+  // Re-seed after a save/reset (roster reload changes agent.custom_shift).
+  useEffect(() => {
+    setDraft(agent.custom_shift || deptDefault || DEFAULT_WIN);
+  }, [agent.custom_shift, deptDefault]);
+
+  function toggleDay(d) {
+    setDraft(prev => {
+      const set = new Set(prev.working_days || []);
+      set.has(d) ? set.delete(d) : set.add(d);
+      return { ...prev, working_days: [...set].sort((a, b) => a - b) };
+    });
+  }
+  async function save() {
+    setSaving(true);
+    try {
+      await csopsPost('setAgentShift', {
+        user_id: agent.user_id,
+        start_min: draft.start_min, end_min: draft.end_min,
+        working_days: draft.working_days, is_active: draft.is_active !== false,
+      }, session);
+      await onSaved();
+    } catch (e) { setError(e.message); }
+    finally { setSaving(false); }
+  }
+  async function reset() {
+    setSaving(true);
+    try {
+      await csopsPost('setAgentShift', { user_id: agent.user_id, clear: true }, session);
+      await onSaved();
+    } catch (e) { setError(e.message); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div style={{
+      display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12,
+      padding: '12px 14px', background: 'var(--surface-2)', border: '1px solid var(--border-1)', borderRadius: 6,
+    }}>
+      <div style={{ minWidth: 170 }}>
+        <div style={{ fontWeight: 600 }}>{agent.full_name}</div>
+        <div style={{ fontSize: 10.5, color: hasCustom ? 'var(--accent)' : 'var(--t4)' }}>
+          {hasCustom ? 'Custom window' : 'Department default'}
+        </div>
+      </div>
+      <label style={{ fontSize: 12, color: 'var(--t3)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        From
+        <input type="time" value={minToHHMM(draft.start_min)} disabled={!canEdit}
+          onChange={e => setDraft(p => ({ ...p, start_min: hhmmToMin(e.target.value) }))} style={timeInput} />
+      </label>
+      <label style={{ fontSize: 12, color: 'var(--t3)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        To
+        <input type="time" value={minToHHMM(draft.end_min)} disabled={!canEdit}
+          onChange={e => setDraft(p => ({ ...p, end_min: hhmmToMin(e.target.value) }))} style={timeInput} />
+      </label>
+      <div style={{ display: 'inline-flex', gap: 4 }}>
+        {DAYS.map(([d, lbl]) => {
+          const on = (draft.working_days || []).includes(d);
+          return (
+            <button key={d} type="button" disabled={!canEdit}
+              onClick={() => canEdit && toggleDay(d)} title={lbl}
+              style={{
+                width: 30, height: 26, borderRadius: 5, fontSize: 11, fontWeight: 600,
+                cursor: canEdit ? 'pointer' : 'default',
+                background: on ? 'var(--accent)' : 'transparent',
+                color: on ? '#1b1b1e' : 'var(--t3)',
+                border: `1px solid ${on ? 'var(--accent)' : 'var(--border-1)'}`,
+              }}>{lbl[0]}</button>
+          );
+        })}
+      </div>
+      {canEdit && (
+        <div style={{ marginLeft: 'auto', display: 'inline-flex', gap: 8 }}>
+          {hasCustom && (
+            <button onClick={reset} disabled={saving}
+              style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid var(--border-1)',
+                background: 'transparent', color: 'var(--t2)', fontSize: 12, cursor: 'pointer', opacity: saving ? 0.6 : 1 }}>
+              Reset to dept
+            </button>
+          )}
+          <button onClick={save} disabled={saving}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 6,
+              border: '1px solid var(--border-1)', background: 'var(--accent)', color: '#1b1b1e', fontWeight: 600,
+              fontSize: 12, cursor: 'pointer', opacity: saving ? 0.6 : 1 }}>
+            <Save size={13} /> {saving ? 'Saving…' : (hasCustom ? 'Update' : 'Set custom')}
+          </button>
+        </div>
       )}
     </div>
   );
