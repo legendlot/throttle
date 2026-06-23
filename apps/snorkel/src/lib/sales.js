@@ -7,13 +7,24 @@ export function orderStatusLabel(s) {
 
 // Fulfilment status is derived from the linked Redline shipment (read-only).
 export const FULFILMENT = {
+  // legacy (pre-cutover single-shipment orders)
   not_dispatched: { label: 'Not dispatched', tone: 'gray' },
   pending:        { label: 'Pending',        tone: 'yellow' },
   in_progress:    { label: 'In progress',    tone: 'blue' },
   fulfilled:      { label: 'Fulfilled',      tone: 'green' },
-  cancelled:      { label: 'Cancelled',      tone: 'red' },
+  // fulfilment-flow statuses (request → accept → ship)
+  not_submitted:       { label: 'Not submitted',       tone: 'gray' },
+  awaiting_acceptance: { label: 'Awaiting acceptance', tone: 'yellow' },
+  in_fulfilment:       { label: 'In fulfilment',       tone: 'blue' },
+  partially_fulfilled: { label: 'Partially fulfilled', tone: 'yellow' },
+  fully_fulfilled:     { label: 'Fully fulfilled',     tone: 'green' },
+  not_fulfilled:       { label: 'Not fulfilled',       tone: 'red' },
+  rejected:            { label: 'Rejected',            tone: 'red' },
+  cancelled:           { label: 'Cancelled',           tone: 'red' },
 };
-export function fulfilmentMeta(s) { return FULFILMENT[s] || FULFILMENT.not_dispatched; }
+// terminal "done" fulfilment states (fully shipped or closed)
+export const FULFILMENT_DONE = new Set(['fulfilled', 'fully_fulfilled']);
+export function fulfilmentMeta(s) { return FULFILMENT[s] || FULFILMENT.not_submitted; }
 
 export const PAYMENT_STATUS = {
   unpaid:  { label: 'Unpaid',  tone: 'red' },

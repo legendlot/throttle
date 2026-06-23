@@ -272,13 +272,17 @@ function deriveFulfilment(request, shipments) {
   if (shipped_units === 0) return { fulfilment_status: 'not_fulfilled', shipped_units, requested_units };
   return { fulfilment_status: shipped_units >= requested_units ? 'fully_fulfilled' : 'partially_fulfilled', shipped_units, requested_units };
 }
-// Batched loader: orderIds[] → { [sales_order_id]: { request, shipments:[{...,_shipped_units}] } }.
-async function loadFulfilment(orderIds) {
-  const ids = [...new Set((orderIds || []).filter(Boolean))];
-  if (!ids.length) return {};
+// Batched loader: orders[] → { [sales_order_id]: { request, shipments:[{...,_shipped_units}], legacyShipment } }.
+// New orders link via a fulfilment request; legacy (pre-cutover) orders link via the single
+// sales_orders.dispatch_shipment_id — both paths resolved here so historical orders keep their dates/status.
+async function loadFulfilment(orders) {
+  const list = (orders || []).filter(Boolean);
+  if (!list.length) return {};
+  const ids = [...new Set(list.map(o => o.id).filter(Boolean))];
   const reqR = await queryPublic('dispatch_fulfilment_requests',
     `?sales_order_id=in.(${ids.map(encodeURIComponent).join(',')})&select=*`);
   const requests = reqR.ok ? reqR.data : [];
+  const reqByOrder = {}; requests.forEach(r => { reqByOrder[r.sales_order_id] = r; });
   const reqIds = requests.map(r => r.id);
   let shipments = [];
   if (reqIds.length) {
@@ -294,9 +298,35 @@ async function loadFulfilment(orderIds) {
       shipments.forEach(s => { s._shipped_units = byShip[s.id] || 0; });
     }
   }
+  // Legacy fallback: orders with no request but a linked single shipment (pre-cutover GT/MT).
+  const legacyIds = [...new Set(list.filter(o => !reqByOrder[o.id] && o.dispatch_shipment_id).map(o => o.dispatch_shipment_id))];
+  const legacyMap = {};
+  if (legacyIds.length) {
+    const lsR = await queryPublic('dispatch_shipments',
+      `?id=in.(${legacyIds.map(encodeURIComponent).join(',')})&select=id,shipment_no,status,shipped_at,delivery_date`);
+    (lsR.ok ? lsR.data : []).forEach(s => { legacyMap[s.id] = s; });
+  }
   const out = {};
-  requests.forEach(r => { out[r.sales_order_id] = { request: r, shipments: shipments.filter(s => s.fulfilment_request_id === r.id) }; });
+  list.forEach(o => {
+    const request = reqByOrder[o.id] || null;
+    out[o.id] = request
+      ? { request, shipments: shipments.filter(s => s.fulfilment_request_id === request.id), legacyShipment: null }
+      : { request: null, shipments: [], legacyShipment: o.dispatch_shipment_id ? (legacyMap[o.dispatch_shipment_id] || null) : null };
+  });
   return out;
+}
+// Resolve derived fulfilment + due-date anchor for one order (request path, legacy path, or none).
+function resolveFulfilment(f) {
+  if (f?.request) return { der: deriveFulfilment(f.request, f.shipments), anchor: fulfilmentAnchor(f.shipments) };
+  if (f?.legacyShipment) {
+    const sh = f.legacyShipment;
+    const disp = sh.shipped_at ? String(sh.shipped_at).slice(0, 10) : null;
+    return {
+      der: { fulfilment_status: fulfilmentFromShipment(sh), shipped_units: 0, requested_units: 0 },
+      anchor: { dispatch_date: disp, delivery_date: sh.delivery_date || null, anchor_date: sh.delivery_date || disp || null },
+    };
+  }
+  return { der: { fulfilment_status: 'not_submitted', shipped_units: 0, requested_units: 0 }, anchor: null };
 }
 // Reconcile reject→cancel: snorkelops is the only writer of sales_orders.status.
 async function reconcileRejections(list) {
@@ -970,14 +1000,14 @@ export default {
             const r = await query('sales_orders', params);
             if (!r.ok) return err(r.data);
             const orders = r.data || [];
-            const ful = await loadFulfilment(orders.map(o => o.id));
+            const ful = await loadFulfilment(orders);
             const toCancel = [];
             const rows = orders.map(o => {
               const f = ful[o.id];
-              const der = deriveFulfilment(f?.request, f?.shipments);
+              const { der, anchor } = resolveFulfilment(f);
               if (der.fulfilment_status === 'rejected' && o.status !== 'cancelled')
                 toCancel.push({ o, reason: f.request.reject_reason });
-              const dec = decorateSalesOrder(o, fulfilmentAnchor(f?.shipments));
+              const dec = decorateSalesOrder(o, anchor);
               return { ...dec, ...der, partner_name: o.sales_partners?.name || null,
                        partner_state: o.sales_partners?.state || null, sales_partners: undefined };
             });
@@ -998,12 +1028,13 @@ export default {
               query('sales_order_lines', `?order_id=eq.${encodeURIComponent(id)}&order=sort_order.asc`),
               query('sales_payments', `?order_id=eq.${encodeURIComponent(id)}&order=received_date.desc,created_at.desc`),
             ]);
-            const f = (await loadFulfilment([id]))[id];
-            const der = deriveFulfilment(f?.request, f?.shipments);
+            const f = (await loadFulfilment([o]))[o.id];
+            const { der, anchor } = resolveFulfilment(f);
             if (der.fulfilment_status === 'rejected' && o.status !== 'cancelled')
               await reconcileRejections([{ o, reason: f.request.reject_reason }]);
-            const dec = decorateSalesOrder({ ...o, sales_partners: undefined }, fulfilmentAnchor(f?.shipments));
-            return ok({ ...dec, ...der, partner, request: f?.request || null, shipments: f?.shipments || [],
+            const dec = decorateSalesOrder({ ...o, sales_partners: undefined }, anchor);
+            return ok({ ...dec, ...der, partner, request: f?.request || null,
+              shipments: f?.shipments?.length ? f.shipments : (f?.legacyShipment ? [f.legacyShipment] : []),
               lines: linesR.ok ? linesR.data : [], payments: paysR.ok ? paysR.data : [] });
           }
 
@@ -1013,15 +1044,15 @@ export default {
               `?status=eq.confirmed&invoice_generated=eq.true&select=*,sales_partners(name)`);
             if (!r.ok) return err(r.data);
             const orders = r.data || [];
-            const ful = await loadFulfilment(orders.map(o => o.id));
+            const ful = await loadFulfilment(orders);
             const toCancel = [];
             const rows = orders
               .map(o => {
                 const f = ful[o.id];
-                const der = deriveFulfilment(f?.request, f?.shipments);
+                const { der, anchor } = resolveFulfilment(f);
                 if (der.fulfilment_status === 'rejected' && o.status !== 'cancelled')
                   toCancel.push({ o, reason: f.request.reject_reason });
-                return { ...decorateSalesOrder(o, fulfilmentAnchor(f?.shipments)), ...der,
+                return { ...decorateSalesOrder(o, anchor), ...der,
                          partner_name: o.sales_partners?.name || null, sales_partners: undefined };
               })
               .filter(o => o.balance > 0.005)

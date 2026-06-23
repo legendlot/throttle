@@ -58,8 +58,8 @@ export default function SalesOrdersPage() {
 
   const thisFy = fyLabel(new Date().toISOString().slice(0, 10));
   const kpi = {
-    open: rows.filter(r => r.status === 'confirmed' && r.fulfilment_status !== 'fulfilled').length,
-    toDispatch: rows.filter(r => r.status === 'confirmed' && (r.fulfilment_status === 'pending' || r.fulfilment_status === 'in_progress')).reduce((s, r) => s + Number(r.grand_total || 0), 0),
+    open: rows.filter(r => r.status === 'confirmed' && !['fulfilled', 'fully_fulfilled'].includes(r.fulfilment_status)).length,
+    toDispatch: rows.filter(r => r.status === 'confirmed' && ['pending', 'in_progress', 'awaiting_acceptance', 'in_fulfilment'].includes(r.fulfilment_status)).reduce((s, r) => s + Number(r.grand_total || 0), 0),
     overdue: rows.filter(r => r.overdue).reduce((s, r) => s + Number(r.balance || 0), 0),
     fySales: rows.filter(r => r.status !== 'cancelled' && r.invoice_date && fyLabel(r.invoice_date) === thisFy).reduce((s, r) => s + Number(r.grand_total || 0), 0),
   };
