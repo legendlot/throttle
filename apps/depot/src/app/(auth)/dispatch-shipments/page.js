@@ -152,6 +152,7 @@ export default function DispatchShipmentsPage() {
   // committed together via updateShipmentTracking.
   const [trk,       setTrk]       = useState(null);
   const [trkSaving, setTrkSaving] = useState(false);
+  const [courierOther, setCourierOther] = useState(false);
 
   // Product codes cache
   const [productCodes, setProductCodes] = useState({});
@@ -197,6 +198,8 @@ export default function DispatchShipmentsPage() {
       expected_delivery_date: detailShipment.expected_delivery_date || '',
       delivery_date:          detailShipment.delivery_date || '',
     });
+    const cp = detailShipment.courier_partner || '';
+    setCourierOther(!!cp && !['Delhivery', 'Shiprocket'].includes(cp));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detailShipment?.id]);
 
@@ -1063,14 +1066,19 @@ export default function DispatchShipmentsPage() {
                       <div>
                         <span className="eyebrow" style={{ display: 'block', marginBottom: 5 }}>Courier</span>
                         <select style={trkInput}
-                          value={COURIERS.includes(trk.courier_partner) ? trk.courier_partner : (trk.courier_partner ? 'Other' : '')}
-                          onChange={e => setTrk(t => ({ ...t, courier_partner: e.target.value === 'Other' ? '' : e.target.value }))}>
+                          value={courierOther ? 'Other' : (COURIERS.includes(trk.courier_partner) ? trk.courier_partner : '')}
+                          onChange={e => {
+                            const v = e.target.value;
+                            if (v === 'Other') { setCourierOther(true); setTrk(t => ({ ...t, courier_partner: '' })); }
+                            else { setCourierOther(false); setTrk(t => ({ ...t, courier_partner: v })); }
+                          }}>
                           <option value="">Select courier…</option>
                           {COURIERS.map(c => <option key={c} value={c}>{c}</option>)}
                         </select>
-                        {!['Delhivery', 'Shiprocket', ''].includes(trk.courier_partner) && (
+                        {courierOther && (
                           <input style={{ ...trkInput, marginTop: 6 }} value={trk.courier_partner}
-                            onChange={e => setTrk(t => ({ ...t, courier_partner: e.target.value }))} placeholder="Courier name" />
+                            onChange={e => setTrk(t => ({ ...t, courier_partner: e.target.value }))}
+                            placeholder="Courier name" autoFocus />
                         )}
                         {trk.courier_partner === 'Delhivery' && (
                           <span style={{ display: 'block', marginTop: 4, fontSize: 10.5, color: 'var(--t3)' }}>
