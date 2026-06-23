@@ -3,6 +3,16 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.2.0] - 2026-06-23
+### Added
+- New chapter **The Inbox** (Work part): the cross-channel conversations console
+  (Instagram, Messenger, WhatsApp). Covers the channel / Mine-Unassigned-All /
+  Active-Closed layout, setting conversation **Priority** (Urgent / High / Normal /
+  Low), **filtering and sorting** the list (by recent / oldest / priority, and by
+  priority, tag or assigned agent), tagging and assigning, replying with the emoji /
+  canned-response / attachment composer and private notes, the 24-hour reply window,
+  WhatsApp being read-only for now, and **linking or creating a ticket** from a chat.
+
 ## [1.1.0] - 2026-06-15
 ### Changed
 - Departments: now also where you set a teammate's CS role. Documented the new

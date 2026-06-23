@@ -2,8 +2,8 @@
   "title": "Pitstop",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to customer support tickets, calls and admin at Legend of Toys.",
-  "version": "1.1.0",
-  "date": "2026-06-15",
+  "version": "1.2.0",
+  "date": "2026-06-23",
   "app_url": "pitstop.legendoftoys.com",
   "owner": "Legend of Toys",
   "roles": {
@@ -23,11 +23,12 @@
     },
     {
       "part": "Work",
-      "subtitle": "The queue, the ticket workspace, creating tickets, and the call log.",
+      "subtitle": "The queue, the ticket workspace, creating tickets, the conversations inbox, and the call log.",
       "chapters": [
         { "id": "queue",       "title": "The Queue",      "route": "/queue",        "file": "work-queue.html",      "roles": ["agt","lead","adm"] },
         { "id": "ticket",      "title": "Working a Ticket","route": "/queue/detail", "file": "work-ticket.html",     "roles": ["agt","lead","adm"] },
         { "id": "new",         "title": "New Ticket",     "route": "/new",          "file": "work-new.html",        "roles": ["agt","lead","adm"] },
+        { "id": "inbox",       "title": "The Inbox",      "route": "/inbox",        "file": "work-inbox.html",      "roles": ["agt","lead","adm"] },
         { "id": "calls",       "title": "Calls",          "route": "/calls",        "file": "work-calls.html",      "roles": ["agt","lead","adm"] },
         { "id": "call-detail", "title": "Call Detail",    "route": "/calls/detail", "file": "work-calldetail.html", "roles": ["agt","lead","adm"] }
       ]
