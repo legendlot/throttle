@@ -287,7 +287,7 @@ async function loadFulfilment(orders) {
   let shipments = [];
   if (reqIds.length) {
     const shR = await queryPublic('dispatch_shipments',
-      `?fulfilment_request_id=in.(${reqIds.map(encodeURIComponent).join(',')})&select=id,shipment_no,status,scheduled_date,shipped_at,delivery_date,expected_delivery_date,courier_partner,tracking_number,tracking_link,fulfilment_request_id`);
+      `?fulfilment_request_id=in.(${reqIds.map(encodeURIComponent).join(',')})&select=id,shipment_no,status,scheduled_date,shipped_at,delivery_date,expected_delivery_date,courier_partner,tracking_number,tracking_link,tracking_status,tracking_stage_label,tracking_checkpoints,tracking_synced_at,fulfilment_request_id`);
     shipments = shR.ok ? shR.data : [];
     const shIds = shipments.map(s => s.id);
     if (shIds.length) {
