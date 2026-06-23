@@ -707,14 +707,14 @@ async function fetchDispatchInfo(upc, env) {
   // unit → product_master, dispatch_allocations, dispatch_shipments
   const [unitRes, allocRes] = await Promise.all([
     sbPublic(`/rest/v1/units?upc=eq.${encodeURIComponent(upc)}&select=upc,product,model,color,sku,current_status,production_run_id&limit=1`, env),
-    sb(`/rest/v1/dispatch_allocations?unit_upc=eq.${encodeURIComponent(upc)}&select=*&order=allocated_at.desc&limit=1`, env),
+    sbPublic(`/rest/v1/dispatch_allocations?unit_upc=eq.${encodeURIComponent(upc)}&select=*&order=allocated_at.desc&limit=1`, env),
   ]);
   if (!unitRes.ok || !unitRes.data?.[0]) return null;
   const unit = unitRes.data[0];
   let shipment = null;
   const alloc = allocRes.data?.[0];
   if (alloc?.shipment_id) {
-    const shipRes = await sb(`/rest/v1/dispatch_shipments?id=eq.${alloc.shipment_id}&select=*&limit=1`, env);
+    const shipRes = await sbPublic(`/rest/v1/dispatch_shipments?id=eq.${alloc.shipment_id}&select=*&limit=1`, env);
     shipment = shipRes.data?.[0] || null;
   }
   return { unit, allocation: alloc || null, shipment };
@@ -1681,7 +1681,7 @@ async function createTicket(body, auth, env) {
       customer_address: customer_address || null,
       platform: platform || null,
       external_order_id: external_order_id || null,
-      lot_unit_upc: lot_unit_upc || null,
+      lot_unit_upc: lot_unit_upc ? normalizeUpc(lot_unit_upc) : null,
       product: product || null,
       product_sku: product_sku || null,
       product_model: product_model || null,
