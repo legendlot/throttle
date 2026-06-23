@@ -7,3 +7,15 @@ workers_dev = true
 # SLACK_SIGNING_SECRET  — Slack app → Basic Information → Signing Secret (verifies inbound events)
 # ROUTINE_FIRE_URL      — claude.ai/code → LOT Maintainer routine → "Call via API" Fire URL
 # ROUTINE_TOKEN         — the API-trigger token generated alongside the Fire URL
+# DONE_TOKEN            — shared secret for the /done completion callback (also set as a routine
+#                         env var of the same name so the run can POST /done). Until set, /done
+#                         returns 503 and the single-flight lock releases via the safety lease.
+
+# Durable Object — the burst/single-flight coordinator (one named instance).
+[[durable_objects.bindings]]
+name = "COORDINATOR"
+class_name = "MaintainerCoordinator"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MaintainerCoordinator"]
