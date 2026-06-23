@@ -1,3 +1,11 @@
+// Standard GST on LOT's toys. Gross is staged tax-INCLUSIVE on every channel, so ex-GST is a
+// deterministic strip at this rate — available LIVE from gross with no settlement lag. Marketplace
+// settlement (e.g. Amazon Finances) gives the EXACT GST per order, but that posts WEEKS after the
+// sale; using it for the headline would make recent net lag/wobble as orders trickle in. So the
+// metric derives GST here; the exact settled GST is kept as `gstSettled` for reconciliation only.
+// (Afshaan S166 — "live recent data, settled as a refinement".)
+const GST_RATE = 0.18;
+
 // Order-grain ladder math over f_order_rollup rows (per sale_date × channel).
 // Single definition shared by /performance and the Channels family pages.
 export function aggOrders(rows) {
@@ -22,8 +30,10 @@ export function aggOrders(rows) {
   a.grossAll = a.gross + a.cancelledValue;          // Total Sales — gross, incl. cancellations + GST (P&L only)
   a.netCancel = a.gross;                            // after cancellations (non-cancelled, pre-discount, tax-incl)
   a.netDisc = a.gross - a.discount;                 // after discounts
-  a.netReturns = a.netDisc - a.returnsValue;        // after returns
-  a.netExGst = a.netReturns - a.tax;                // NET REVENUE (ex-GST) — the metric
+  a.netReturns = a.netDisc - a.returnsValue;        // after returns (realized tax-incl revenue)
+  a.gstSettled = a.tax;                             // exact GST from settlement (lags weeks; reconciliation only)
+  a.tax = a.netReturns - a.netReturns / (1 + GST_RATE);  // GST stripped at the standard rate — LIVE, derived from gross
+  a.netExGst = a.netReturns - a.tax;                // = netReturns / 1.18 — NET REVENUE (ex-GST), the metric
   a.totalOrders = a.orders + a.cancelledOrders;
   a.aov = a.totalOrders ? a.grossAll / a.totalOrders : 0;
   a.cancelRate = a.totalOrders ? a.cancelledOrders / a.totalOrders * 100 : 0;
