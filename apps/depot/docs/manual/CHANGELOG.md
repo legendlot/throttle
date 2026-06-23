@@ -1,5 +1,11 @@
 # Changelog — Depot Operations Manual
 
+## 1.1.0 — 2026-06-23 (Session 164)
+Added the **Fulfilment Requests** chapter (Outbound, first), covering the new Snorkel-to-Depot
+sales-order fulfilment flow: how a confirmed order arrives as a pending request (and surfaces on
+the Overview tile), Accept Full vs Accept Split (with per-shipment dispatch dates), Reject (which
+cancels the Snorkel order), and how fulfilment status + dates flow back to the sales order.
+
 ## 1.0.0 — 2026-06-17 (Session 149)
 First complete Depot manual. 20 chapters across 7 parts mirroring the app's IA:
 - **Getting Started** — Welcome, Signing In and Navigation, Roles and What You Can See.

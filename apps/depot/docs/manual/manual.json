@@ -2,8 +2,8 @@
   "title": "Depot",
   "title_accent": "Operations",
   "subtitle": "Dispatch back-office: outbound, returns, floor and stock audit",
-  "version": "1.0.0",
-  "date": "2026-06-17",
+  "version": "1.1.0",
+  "date": "2026-06-23",
   "app_url": "depot.legendoftoys.com",
   "owner": "Legend of Toys",
   "accent": "#DE2A2A",
@@ -34,6 +34,7 @@
       "part": "Outbound",
       "subtitle": "The ship-out flow",
       "chapters": [
+        { "id": "fulfilment", "title": "Fulfilment Requests", "route": "/fulfilment-requests", "file": "out-fulfilment.html", "roles": ["sup", "adm"] },
         { "id": "pipeline",  "title": "Pipeline",        "route": "/dispatch-pipeline",  "file": "out-pipeline.html",  "roles": ["op", "sup", "adm"] },
         { "id": "shipments", "title": "Shipments",       "route": "/dispatch-shipments", "file": "out-shipments.html", "roles": ["sup", "adm"] },
         { "id": "challans",  "title": "Challans",        "route": "/dispatch-challans",  "file": "out-challans.html",  "roles": ["sup", "adm"] },
