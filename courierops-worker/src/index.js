@@ -32,21 +32,22 @@ async function sweep(env) {
   const token = env.DELHIVERY_API_TOKEN;
   if (!key || !token) { console.error('courierops: missing SUPABASE_SERVICE_KEY or DELHIVERY_API_TOKEN'); return; }
 
-  // Open Delhivery shipments that carry an AWB and are not in a terminal stage, < 30 days old.
+  // Delhivery shipments that carry an AWB, < 30 days old; terminal stages filtered JS-side below.
   const cutoff = new Date(Date.now() - 30 * 864e5).toISOString();
-  const terminal = TERMINAL_STAGES.join(',');     // unquoted: values have no special chars
-  const q = `?select=id,tracking_number&courier_partner=eq.Delhivery&tracking_number=not.is.null`
-    + `&or=(tracking_status.is.null,tracking_status.not.in.(${terminal}))`
-    + `&created_at=gte.${cutoff}&limit=${MAX_AWBS}`;
+  const q = `?select=id,tracking_number,tracking_status&courier_partner=eq.Delhivery&tracking_number=not.is.null`
+    + `&created_at=gte.${cutoff}&order=tracking_synced_at.asc.nullsfirst&limit=${MAX_AWBS}`;
   const r = await sbPublic(key, `/rest/v1/dispatch_shipments${q}`);
   if (!r.ok) { console.error('courierops: shipment query failed', r.status, r.data); return; }
 
   const rows = Array.isArray(r.data) ? r.data : [];
-  if (!rows.length) { console.log('courierops: no open Delhivery shipments'); return; }
+  // Terminal filter in JS — deterministic, vs the fragile PostgREST or/not.in grammar.
+  // A null tracking_status is not in TERMINAL_STAGES, so new shipments are correctly included.
+  const open = rows.filter(s => !TERMINAL_STAGES.includes(s.tracking_status));
+  if (!open.length) { console.log('courierops: no open Delhivery shipments'); return; }
 
   // AWB → shipment id (last one wins if an AWB somehow repeats; realistically 1:1).
   const byAwb = {};
-  for (const row of rows) byAwb[String(row.tracking_number).trim()] = row.id;
+  for (const row of open) byAwb[String(row.tracking_number).trim()] = row.id;
   const awbs = Object.keys(byAwb);
 
   const results = await trackBulk(awbs, token);
@@ -67,7 +68,7 @@ async function sweep(env) {
   const w = await sbPublic(key, '/rest/v1/rpc/apply_courier_tracking',
     { method: 'POST', body: JSON.stringify({ updates }) });
   if (!w.ok) console.error('courierops: apply RPC failed', w.status, w.data);
-  else console.log(`courierops: updated ${w.data} of ${updates.length} (${rows.length} open)`);
+  else console.log(`courierops: updated ${w.data} of ${updates.length} (${open.length} open)`);
 }
 
 export default {

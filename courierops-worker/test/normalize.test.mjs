@@ -54,3 +54,27 @@ test('in-transit (UD) shipment is non-terminal with no delivered_at', () => {
   assert.equal(r.delivered_at, null);
   assert.ok(!TERMINAL_STAGES.includes(r.stage));
 });
+
+test('cancelled (CN) → cancelled terminal stage', () => {
+  const r = normalizeDelhivery({
+    Scans: [{ ScanDetail: { ScanDateTime: '2023-02-07T10:00:00', ScanType: 'CN',
+      Scan: 'Canceled', ScannedLocation: 'Gurgaon (Haryana)', Instructions: 'Shipment canceled', StatusCode: 'CN-CANC' } }],
+    Status: { Status: 'Canceled', StatusDateTime: '2023-02-07T10:00:00', StatusType: 'CN', StatusCode: 'CN-CANC' },
+    AWB: 'TESTAWB3',
+  });
+  assert.equal(r.stage, 'cancelled');
+  assert.ok(TERMINAL_STAGES.includes(r.stage));
+  assert.equal(r.delivered_at, null);
+});
+
+test('returned-to-origin (DL + DTO) → rto_delivered terminal stage', () => {
+  const r = normalizeDelhivery({
+    Scans: [{ ScanDetail: { ScanDateTime: '2023-02-20T16:00:00', ScanType: 'DL',
+      Scan: 'RTO Delivered', ScannedLocation: 'Origin Hub (Delhi)', Instructions: 'Returned to origin', StatusCode: 'DTO-001' } }],
+    Status: { Status: 'RTO Delivered', StatusDateTime: '2023-02-20T16:00:00', StatusType: 'DL', StatusCode: 'DTO-001' },
+    AWB: 'TESTAWB4',
+  });
+  assert.equal(r.stage, 'rto_delivered');
+  assert.ok(TERMINAL_STAGES.includes(r.stage));
+  assert.equal(r.delivered_at, null);  // delivered_at only set for forward 'delivered'
+});
