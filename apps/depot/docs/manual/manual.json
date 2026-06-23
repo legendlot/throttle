@@ -2,8 +2,8 @@
   "title": "Depot",
   "title_accent": "Operations",
   "subtitle": "Dispatch back-office: outbound, returns, floor and stock audit",
-  "version": "1.1.0",
-  "date": "2026-06-23",
+  "version": "1.2.0",
+  "date": "2026-06-24",
   "app_url": "depot.legendoftoys.com",
   "owner": "Legend of Toys",
   "accent": "#DE2A2A",
@@ -28,6 +28,13 @@
       "subtitle": "The live warehouse cockpit",
       "chapters": [
         { "id": "dashboard", "title": "Overview Dashboard", "route": "/dashboard", "file": "ov-dashboard.html", "roles": ["op", "sup", "adm"] }
+      ]
+    },
+    {
+      "part": "Reports",
+      "subtitle": "Every dispatch report, any period, with CSV export",
+      "chapters": [
+        { "id": "reports", "title": "Reports", "route": "/reports", "file": "rpt-reports.html", "roles": ["sup", "adm"] }
       ]
     },
     {

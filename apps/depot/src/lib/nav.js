@@ -20,6 +20,7 @@ import {
 
 export const NAV_PRIMARY = [
   { id: 'overview', label: 'Overview', icon: Gauge, route: '/dashboard' },
+  { id: 'reports',  label: 'Reports',  icon: BarChart3, route: '/reports' },
   {
     id: 'outbound', label: 'Outbound', icon: Send,
     children: [
