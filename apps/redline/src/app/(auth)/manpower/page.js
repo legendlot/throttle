@@ -1273,7 +1273,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
       for (let i = 0; i < n; i++) slots.push({ line, station: null });
     }
     const storeN = Math.max(0, parseInt(targets.Store, 10) || 0);
-    for (let i = 0; i < storeN; i++) slots.push({ line: 'Others', station: null });
+    for (let i = 0; i < storeN; i++) slots.push({ line: 'Others', station: null, _store: true });
     const othersN = Math.max(0, parseInt(targets.Others, 10) || 0);
     for (let i = 0; i < othersN; i++) slots.push({ line: 'Others', station: null });
 
@@ -1282,14 +1282,28 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
       return;
     }
 
-    const pairCount = Math.min(availableOperators.length, slots.length);
+    const deptOf = (op) => (op.department || '').toLowerCase();
+    const used = new Set();
+    const pick = (preferFn) => {
+      const preferred = availableOperators.find((o) => !used.has(o.id) && preferFn(o));
+      if (preferred) { used.add(preferred.id); return preferred; }
+      const fallback = availableOperators.find((o) => !used.has(o.id));
+      if (fallback) used.add(fallback.id);
+      return fallback || null;
+    };
     const assignments = [];
-    for (let i = 0; i < pairCount; i++) {
-      assignments.push({
-        operator_id: availableOperators[i].id,
-        line:        slots[i].line,
-        station:     slots[i].station,
-      });
+    for (const slot of slots) {
+      let preferFn;
+      if (slot.line === 'D1' || slot.line === 'D2') {
+        preferFn = (o) => deptOf(o) === 'dispatch';
+      } else if (slot._store) {
+        preferFn = (o) => deptOf(o) === 'store';
+      } else {
+        preferFn = (o) => !['store', 'dispatch'].includes(deptOf(o));
+      }
+      const op = pick(preferFn);
+      if (!op) break;
+      assignments.push({ operator_id: op.id, line: slot.line, station: slot.station || null });
     }
 
     const skipped  = availableOperators.length - assignments.length;
