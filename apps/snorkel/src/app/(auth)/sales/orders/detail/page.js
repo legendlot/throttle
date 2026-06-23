@@ -131,7 +131,7 @@ function OrderDetailInner() {
       <div style={{ color: 'var(--t1)' }}>
         <div style={{ marginBottom: 16 }}><h1 style={pageH1}>Edit {o.order_no}</h1></div>
         <OrderForm partners={partners} channels={channels} saving={busy}
-          initial={{ partner_id: o.partner_id, channel_key: o.channel_key, order_date: o.order_date, credit_days: o.credit_days, partner_po_ref: o.partner_po_ref, expected_dispatch_date: o.expected_dispatch_date, notes: o.notes, lines }}
+          initial={{ partner_id: o.partner_id, channel_key: o.channel_key, order_date: o.order_date, credit_days: o.credit_days, partner_po_ref: o.partner_po_ref, expected_dispatch_date: o.expected_dispatch_date, destination_warehouse: o.destination_warehouse, notes: o.notes, lines }}
           onSubmit={saveEdit} onCancel={() => setEditing(false)} onCreatePartner={perms?.sales_partner_manage ? createPartner : null} />
       </div>
     );
@@ -165,7 +165,7 @@ function OrderDetailInner() {
         </div>
         <div style={panelBodyStyle}>
           <div style={grid}>
-            <Stat label="Shipment" value={o.shipment?.shipment_no} />
+            <Stat label="Warehouse" value={o.destination_warehouse} />
             <Stat label="Dispatch date" value={o.dispatch_date ? fmtDate(o.dispatch_date) : null} />
             <Stat label="Delivery date" value={o.delivery_date ? fmtDate(o.delivery_date) : null} />
             <Stat label="Due date" value={o.due_date ? fmtDate(o.due_date) : null} color={o.overdue ? '#ff7070' : undefined} />
@@ -174,8 +174,25 @@ function OrderDetailInner() {
             <Stat label="Place of supply" value={o.place_of_supply} />
             <Stat label="Partner PO ref" value={o.partner_po_ref} />
           </div>
-          {isConfirmed && o.fulfilment_status !== 'fulfilled' && (
-            <p style={{ ...pageSub, marginTop: 12 }}>Dispatch happens in Redline — this order is visible in their Shipments tab as <b>{o.shipment?.shipment_no || 'a shipment'}</b>. Status updates here automatically.</p>
+          {Array.isArray(o.shipments) && o.shipments.length > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-3)', marginBottom: 8 }}>Shipments &amp; tracking</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {o.shipments.map(s => (
+                  <div key={s.id} style={{ border: '1px solid var(--border)', borderRadius: 6, padding: '8px 12px', fontFamily: 'var(--mono)', fontSize: 12.5, color: 'var(--text-1)', display: 'flex', flexWrap: 'wrap', gap: 14 }}>
+                    <span><b>{s.shipment_no}</b> · {s.status}</span>
+                    {s.courier_partner && <span>{s.courier_partner}</span>}
+                    {s.tracking_number && <span>AWB {s.tracking_number}</span>}
+                    {s.tracking_link && <a href={s.tracking_link} target="_blank" rel="noreferrer" style={{ color: '#6af' }}>track ↗</a>}
+                    {s.expected_delivery_date && <span>ETA {fmtDate(s.expected_delivery_date)}</span>}
+                    {s.delivery_date && <span>delivered {fmtDate(s.delivery_date)}</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {isConfirmed && o.fulfilment_status === 'awaiting_acceptance' && (
+            <p style={{ ...pageSub, marginTop: 12 }}>Sent to Depot for fulfilment — awaiting the dispatch team to accept. Tracking + status update here automatically.</p>
           )}
         </div>
       </div>

@@ -39,6 +39,7 @@ export default function OrderForm({ partners, channels, initial, saving, onSubmi
     credit_days: initial?.credit_days ?? 45,
     partner_po_ref: initial?.partner_po_ref || '',
     expected_dispatch_date: initial?.expected_dispatch_date || '',
+    destination_warehouse: initial?.destination_warehouse || '',
     notes: initial?.notes || '',
   });
   const [lines, setLines] = useState(initial?.lines?.length ? initial.lines.map(l => ({ ...blankLine(), ...l })) : [blankLine()]);
@@ -94,6 +95,7 @@ export default function OrderForm({ partners, channels, initial, saving, onSubmi
       credit_days: Math.round(Number(meta.credit_days) || 0),
       partner_po_ref: meta.partner_po_ref.trim() || null,
       expected_dispatch_date: meta.expected_dispatch_date || null,
+      destination_warehouse: meta.destination_warehouse.trim() || null,
       notes: meta.notes.trim() || null,
       lines: lines.filter(l => l.product || Number(l.qty) > 0).map((l, i) => ({
         product: l.product || null, model: l.model || null, color: l.color || null,
@@ -141,6 +143,7 @@ export default function OrderForm({ partners, channels, initial, saving, onSubmi
             <Field label="Order date"><input type="date" style={{ ...inputStyle, width: '100%' }} value={meta.order_date} onChange={e => setM('order_date', e.target.value)} /></Field>
             <Field label="Expected dispatch"><input type="date" style={{ ...inputStyle, width: '100%' }} value={meta.expected_dispatch_date} onChange={e => setM('expected_dispatch_date', e.target.value)} /></Field>
             <Field label="Partner PO ref"><input style={{ ...inputStyle, width: '100%' }} value={meta.partner_po_ref} onChange={e => setM('partner_po_ref', e.target.value)} /></Field>
+            <Field label="Destination warehouse"><input style={{ ...inputStyle, width: '100%' }} placeholder="e.g. Blinkit Bhiwandi DC (for quick-commerce)" value={meta.destination_warehouse} onChange={e => setM('destination_warehouse', e.target.value)} /></Field>
             {partner && (
               <Field label="Place of supply" span>
                 <div style={{ fontSize: 12, color: 'var(--t2)' }}>{partner.state || <span style={{ color: '#ff7070' }}>No state on partner — GST split needs it (set on the partner)</span>}{partner.gstin ? ` · GSTIN ${partner.gstin}` : ''}</div>
