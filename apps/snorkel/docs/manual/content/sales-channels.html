@@ -8,16 +8,32 @@
 </div>
 
 <h2 class="sec">The mapping</h2>
-<p>Each channel has a short key (GT, MT), a label, a <strong>dispatch channel</strong> it maps to, a sort order and an active flag. The dispatch-channel link is the important part: when an order on this channel is confirmed, the shipment that is created for the dispatch team is filed under the mapped dispatch channel.</p>
+<p>Each channel has a short key (GT, MT), a label, a <strong>dispatch channel</strong> it maps to, a sort order and an active flag. The dispatch-channel link is the important part: when an order on this channel is confirmed, the fulfilment request it raises, and the shipments the dispatch team makes from it, are filed under the mapped dispatch channel.</p>
+
+<h2 class="sec">Type, collection and sell-out</h2>
+<p>Three more settings per channel control how it behaves elsewhere:</p>
+<table class="tbl">
+  <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Type</strong></td><td>General Trade, Modern Trade, Quick Commerce, Marketplace or Other. A label that groups the channel.</td></tr>
+    <tr><td><strong>Collection</strong></td><td><strong>Auto</strong> sets the payment-due credit period from a fixed number of days you enter here, applied to every order on the channel. <strong>Manual</strong> leaves the credit days to the partner&rsquo;s own terms on each order.</td></tr>
+    <tr><td><strong>Sell-out</strong></td><td>When on, a confirmed order on this channel counts as a sell-out (a real consumer sale) in Odo, our sales-intelligence tool. Keep it on for General Trade and Modern Trade only.</td></tr>
+  </tbody>
+</table>
 
 <h2 class="sec">Adding a channel</h2>
 <ol class="steps">
-  <li><span class="s-title">Fill the Add channel row</span> with a key, a label and the dispatch channel it should hand off to.</li>
-  <li><span class="s-title">Set a sort order</span> to control where it appears in dropdowns.</li>
-  <li><span class="s-title">Add it.</span> You can later change its dispatch mapping or toggle it active from the table.</li>
+  <li><span class="s-title">Fill the Add channel row.</span> Give it a key, a label and the dispatch channel it should hand off to.</li>
+  <li><span class="s-title">Set its type, collection and sell-out.</span> Pick the type, choose Auto (with a period) or Manual collection, and turn Sell-out on only for GT or MT.</li>
+  <li><span class="s-title">Set a sort order and add it.</span> The sort order controls where it appears in dropdowns. You can change any of this from the table later.</li>
 </ol>
 
 <div class="callout warn">
   <div class="c-title">&#9888; Map every channel to a dispatch channel</div>
-  <p>A sales channel with no dispatch channel mapped has nowhere to send its shipments when an order is confirmed. Set the mapping before orders start flowing on a new channel.</p>
+  <p>A sales channel with no dispatch channel mapped has nowhere to send its goods when an order is confirmed, the fulfilment request will be refused. Set the mapping before orders start flowing on a new channel.</p>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Sell-out vs sell-in</div>
+  <p>Quick-commerce and marketplace channels are sell-in (stock we push to a platform), not a final consumer sale, so they stay off the Sell-out feed and are counted by Odo from the platform&rsquo;s own data instead. Turning Sell-out on for those would double-count. GT and MT, where the order is the actual sale, are the ones that feed Odo from here.</p>
 </div>

@@ -3,6 +3,21 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.2.0] - 2026-06-23
+### Added
+- New "Fulfilment & tracking" chapter in Offline Sales: what happens after you confirm
+  an order, now that confirming raises a fulfilment request the Depot team accepts
+  (full or split) or rejects, the six fulfilment labels, and the courier/tracking and
+  delivery dates that flow back read-only.
+### Changed
+- "Sales Orders": confirming now raises a fulfilment request (not a single shipment),
+  dispatch happens in Depot (not Redline), and the fulfilment labels were updated to the
+  new vocabulary; cross-links to the new chapter; steps de-em-dashed to house style.
+- "Channels": documented the per-channel Type, Collection (Auto with period vs Manual)
+  and Sell-out (feeds Odo, GT/MT only) settings, plus a sell-out vs sell-in note.
+- "Collections": due date now uses the channel's Auto collection period when set, else
+  the partner's credit days.
+
 ## [1.1.0] - 2026-06-16
 ### Changed
 - Rewrote "Signing In & Navigation" for the front-end redesign: the auto-collapsing

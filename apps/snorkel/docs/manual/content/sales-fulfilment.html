@@ -1,0 +1,52 @@
+<p class="lead">When you confirm a sales order, Snorkel does not ship it. It raises a fulfilment request that the dispatch team in Depot picks up. They decide how to fulfil it, in one delivery or several, add courier tracking as it moves, and all of that flows back onto your order on its own. This chapter explains what happens after Confirm, so the labels you see on an order make sense.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it is</div><div class="g-val">What happens after you confirm an order.</div></div>
+  <div class="g-cell"><div class="g-lbl">Where</div><div class="g-val">You confirm in Snorkel; Depot fulfils.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role proc">Sales</span> <span class="role fin">Finance</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">You see</div><div class="g-val">Fulfilment status &amp; tracking, read-only.</div></div>
+</div>
+
+<h2 class="sec">From confirm to delivery</h2>
+<ol class="steps">
+  <li><span class="s-title">You confirm the order.</span> Snorkel raises one fulfilment request for the whole order and hands it to the Depot dispatch team. The order is now locked for editing.</li>
+  <li><span class="s-title">Depot accepts or rejects it.</span> The dispatch team sees the request in their queue. They either accept it and start preparing the goods, or reject it with a reason.</li>
+  <li><span class="s-title">They ship it, in one or more deliveries.</span> An accepted request can go out as a single full shipment, or be split into several shipments that each leave on their own date.</li>
+  <li><span class="s-title">Tracking flows back.</span> As each shipment is dispatched, Depot records the courier, tracking number and dates. You see all of it on the order without doing anything.</li>
+</ol>
+
+<h2 class="sec">Full or split</h2>
+<table class="tbl">
+  <thead><tr><th>Depot chooses</th><th>What it means for you</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Full</strong></td><td>The whole order goes out as one shipment. Once it ships, the order is fully fulfilled.</td></tr>
+    <tr><td><strong>Split</strong></td><td>The order goes out in several shipments, each with its own scheduled date and quantities. The order stays partially fulfilled until the last one ships.</td></tr>
+  </tbody>
+</table>
+
+<h2 class="sec">The fulfilment labels</h2>
+<p>The fulfilment column on the Sales Orders list, and the panel inside an order, read straight from the dispatch side. You never set these by hand.</p>
+<table class="tbl">
+  <thead><tr><th>Label</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Not submitted</strong></td><td>The order is still a draft. Nothing has gone to dispatch yet.</td></tr>
+    <tr><td><strong>Awaiting acceptance</strong></td><td>Confirmed. The request is sitting in Depot&rsquo;s queue, not yet accepted.</td></tr>
+    <tr><td><strong>In fulfilment</strong></td><td>Accepted. One or more shipments are being prepared, but none has shipped yet.</td></tr>
+    <tr><td><strong>Partially fulfilled</strong></td><td>Some, but not all, of the ordered quantity has shipped.</td></tr>
+    <tr><td><strong>Fully fulfilled</strong></td><td>The full ordered quantity has shipped.</td></tr>
+    <tr><td><strong>Rejected</strong></td><td>Depot rejected the request, so the order is cancelled with the reason shown.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; A rejection cancels the order</div>
+  <p>If the dispatch team rejects a fulfilment request, the sales order is cancelled automatically and the rejection reason is shown on it. If the order is still valid, fix whatever caused the rejection and raise it again as a new order. There is no way to un-reject in place.</p>
+</div>
+
+<h2 class="sec">Tracking and delivery</h2>
+<p>Each shipment carries its courier, tracking number, a tracking link, the expected delivery date and the actual delivery date. They appear on the order&rsquo;s shipments panel, and the tracking link is clickable so you can check progress with the courier directly. The actual delivery date also matters for money: it starts the payment-due clock (see Collections).</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; You read this, you do not set it</div>
+  <p>Everything here comes from the dispatch team&rsquo;s work in Depot. Snorkel shows it so you can answer a partner&rsquo;s &ldquo;where is my order&rdquo; without leaving your screen, but the dispatch and tracking details are entered on the Depot side.</p>
+</div>

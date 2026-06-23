@@ -2,8 +2,8 @@
   "title": "Snorkel",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to procurement at Legend of Toys: requests, purchase orders, vendors, payments, offline sales and the asset register.",
-  "version": "1.1.0",
-  "date": "2026-06-16",
+  "version": "1.2.0",
+  "date": "2026-06-23",
   "app_url": "snorkel.legendoftoys.com",
   "owner": "Legend of Toys",
   "roles": {
@@ -57,6 +57,7 @@
       "subtitle": "Selling to General Trade and Modern Trade: orders, dispatch handoff, invoicing and collections.",
       "chapters": [
         { "id": "sales-orders",    "title": "Sales Orders",         "route": "/sales/orders",      "file": "sales-orders.html",    "roles": ["proc","fin","adm"] },
+        { "id": "sales-fulfilment","title": "Fulfilment & tracking","route": "/sales/orders",      "file": "sales-fulfilment.html","roles": ["proc","fin","adm"] },
         { "id": "sales-collections","title": "Collections",         "route": "/sales/collections", "file": "sales-collections.html","roles": ["proc","fin","adm"] },
         { "id": "sales-partners",  "title": "Partners",             "route": "/sales/partners",    "file": "sales-partners.html",  "roles": ["proc","fin","adm"] },
         { "id": "sales-settings",  "title": "Channels",             "route": "/sales/settings",    "file": "sales-channels.html",  "roles": ["adm"] }

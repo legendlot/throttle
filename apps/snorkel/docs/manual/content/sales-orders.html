@@ -15,30 +15,30 @@
   <thead><tr><th>Stage</th><th>What it means</th></tr></thead>
   <tbody>
     <tr><td><strong>Draft</strong></td><td>Being built. Freely editable. Not yet seen by dispatch.</td></tr>
-    <tr><td><strong>Confirmed</strong></td><td>Locked and handed to dispatch (a shipment is created for them). Can now be invoiced.</td></tr>
-    <tr><td><strong>Cancelled</strong></td><td>Stopped, with a reason.</td></tr>
+    <tr><td><strong>Confirmed</strong></td><td>Locked and handed to dispatch (a fulfilment request is raised for them). Can now be invoiced.</td></tr>
+    <tr><td><strong>Cancelled</strong></td><td>Stopped, with a reason. A request the dispatch team rejects also lands the order here.</td></tr>
   </tbody>
 </table>
-<p>Separate from that, a <strong>fulfilment</strong> label (Not dispatched, Pending, In progress, Fulfilled) is read straight from the dispatch shipment, and a <strong>payment</strong> label (Unpaid, Partial, Paid) reflects collections.</p>
+<p>Separate from that, a <strong>fulfilment</strong> label (Not submitted, Awaiting acceptance, In fulfilment, Partially fulfilled, Fully fulfilled, Rejected) is read straight from the dispatch side, and a <strong>payment</strong> label (Unpaid, Partial, Paid) reflects collections. The <a href="#sales-fulfilment">Fulfilment &amp; tracking</a> chapter explains the fulfilment labels in full.</p>
 
 <div class="callout danger">
   <div class="c-title">&#9940; Confirming hands the order to dispatch</div>
-  <p>Confirming an order is a one-way handoff: it locks the lines for editing and creates a shipment that the dispatch team works in our production system. After that, the fulfilment status here is <strong>read from</strong> that shipment, you do not set it. Get the order right before you confirm.</p>
+  <p>Confirming an order is a one-way handoff: it locks the lines for editing and raises a fulfilment request that the dispatch team works in Depot. After that, the fulfilment status here is <strong>read from</strong> that request and its shipments, you do not set it. Get the order right before you confirm.</p>
 </div>
 
 <div class="callout note">
-  <div class="c-title">&#9432; Dispatch happens in Redline</div>
-  <p>Once an order is confirmed it appears in the dispatch team&rsquo;s Shipments tab. They pack and ship it there; the dispatch and delivery dates flow back here automatically and drive the payment-due clock. Nothing about boxes or scans lives in Snorkel.</p>
+  <div class="c-title">&#9432; Dispatch happens in Depot</div>
+  <p>Once an order is confirmed, the dispatch team picks up its fulfilment request in Depot and ships it, in one delivery or several. Courier tracking, dispatch and delivery dates flow back here on their own and drive the payment-due clock. Nothing about boxes or scans lives in Snorkel. See <a href="#sales-fulfilment">Fulfilment &amp; tracking</a>.</p>
 </div>
 
 <h2 class="sec">Creating and working an order</h2>
 <p><strong>New Order</strong> opens a form: pick the partner and channel, set the order date and credit days (these default from the partner), and add lines (product, model, colour, quantity, rate, discount and GST). It saves as a Draft. Open any order to work it; the buttons follow its stage:</p>
 <ol class="steps">
-  <li><span class="s-title">Edit</span> &mdash; change a Draft&rsquo;s lines or details. Disabled once confirmed or invoiced.</li>
-  <li><span class="s-title">Confirm &rarr; Dispatch</span> &mdash; locks the order and creates the dispatch shipment. You are asked to confirm because it is one-way.</li>
-  <li><span class="s-title">Generate Invoice</span> &mdash; on a confirmed order, mints the GST tax invoice and opens it to print. The number is permanent.</li>
-  <li><span class="s-title">Record receipt</span> &mdash; in the Collections panel, log a payment (amount, date, mode, reference). Partial payments are fine; the balance and payment state update themselves.</li>
-  <li><span class="s-title">Cancel</span> &mdash; stop a draft or confirmed order, with a reason.</li>
+  <li><span class="s-title">Edit a draft.</span> Change its lines or details. Disabled once confirmed or invoiced.</li>
+  <li><span class="s-title">Confirm and hand to dispatch.</span> Locks the order and raises its fulfilment request for the Depot team. You are asked to confirm because it is one-way.</li>
+  <li><span class="s-title">Generate the invoice.</span> On a confirmed order, mints the GST tax invoice and opens it to print. The number is permanent.</li>
+  <li><span class="s-title">Record a receipt.</span> In the Collections panel, log a payment (amount, date, mode, reference). Partial payments are fine, and the balance and payment state update themselves.</li>
+  <li><span class="s-title">Cancel the order.</span> Stop a draft or confirmed order, with a reason.</li>
 </ol>
 
 <div class="callout danger">
