@@ -220,10 +220,10 @@ export default function ManpowerPage() {
       </div>
 
       {activeTab === 'live'        && <LiveViewTab session={session} canManageFloor={canManageFloor} />}
-      {activeTab === 'attendance'  && <AttendanceTab session={session} canManageFloor={canManageFloor} operators={allOperators} team="production" />}
+      {activeTab === 'attendance'  && <AttendanceTab session={session} canManageFloor={canManageFloor} operators={allOperators} />}
       {activeTab === 'roster'      && <DailyRosterTab session={session} canManageFloor={canManageFloor} operators={allOperators} />}
       {activeTab === 'performance' && <PerformanceTab session={session} canManageFloor={canManageFloor} operators={allOperators} />}
-      {activeTab === 'analytics'   && <ManpowerAnalyticsTab session={session} canManageFloor={canManageFloor} operators={allOperators} team="production" />}
+      {activeTab === 'analytics'   && <ManpowerAnalyticsTab session={session} canManageFloor={canManageFloor} operators={allOperators} />}
       {activeTab === 'shifts'      && <ShiftsTab session={session} canManageFloor={canManageFloor} />}
     </div>
   );
@@ -1038,6 +1038,7 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
     L3: { Assembly: '', QC: '', Packaging: '' },
     D1: '',
     D2: '',
+    Store: '',
     Others: '',
   });
   // null = no active run for that line; { product, run_no } = run that seeded its targets
@@ -1271,6 +1272,8 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
       const n = Math.max(0, parseInt(targets[line], 10) || 0);
       for (let i = 0; i < n; i++) slots.push({ line, station: null });
     }
+    const storeN = Math.max(0, parseInt(targets.Store, 10) || 0);
+    for (let i = 0; i < storeN; i++) slots.push({ line: 'Others', station: null });
     const othersN = Math.max(0, parseInt(targets.Others, 10) || 0);
     for (let i = 0; i < othersN; i++) slots.push({ line: 'Others', station: null });
 
@@ -1508,6 +1511,17 @@ function DailyRosterTab({ session, canManageFloor, operators }) {
               ))}
             </div>
           ))}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span className="num" style={{ fontSize: 11.5, color: BUCKET_COLOR.Store, fontWeight: 700 }}>STORE</span>
+            <input
+              type="number"
+              min="0"
+              className="num"
+              value={targets.Store}
+              onChange={(e) => setTargets((prev) => ({ ...prev, Store: e.target.value }))}
+              style={{ ...inputStyle, width: 48, textAlign: 'center', padding: '3px 6px', fontSize: 12 }}
+            />
+          </label>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <span className="num" style={{ fontSize: 11.5, color: BUCKET_COLOR.Others, fontWeight: 700 }}>OTHERS</span>
             <input
@@ -2185,7 +2199,7 @@ function Field({ label, full, children }) {
 // audit trail. Worker: getShifts / createShift / renameShift / setShiftActive /
 // addShiftVersion / getShiftHistory. Read by the recordAttendance resolver.
 // ═══════════════════════════════════════════════════════════════════════════
-const SHIFT_DEPTS = ['assembly', 'qc', 'packaging', 'admin', 'dispatch']; // store lives in Garage
+const SHIFT_DEPTS = ['assembly', 'qc', 'packaging', 'admin', 'dispatch', 'store'];
 const modalInput = { ...kitInput, width: '100%', fontSize: 13, padding: '8px 11px' };
 const shTd = { padding: '9px 10px', fontSize: 13, color: 'var(--t2)', borderBottom: '1px solid var(--border)' };
 const shTh = { textAlign: 'left', padding: '8px 10px', fontSize: 11, textTransform: 'uppercase',

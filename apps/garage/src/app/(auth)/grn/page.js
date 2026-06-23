@@ -582,44 +582,50 @@ function BulkGrnPanel({ session, onSuccess }) {
   );
 }
 
-// ── FBU GRN Panel — units only ─────────────────────────────────────────────────
+// ── FBU GRN Panel — units only, multi-line ─────────────────────────────────────
+const emptyFbuLine = () => ({ product: '', variant: '', color: '', units: '' });
+
 function FbuGrnPanel({ session, onSuccess }) {
   const { showToast }               = useToast();
-  const { PRODUCTS, PRODUCT_COLORS, loading: productsLoading } = useProducts();
-  const [product, setProduct]       = useState('');
-  const [variant, setVariant]       = useState('');
-  const [color, setColor]           = useState('');
-  const [units, setUnits]           = useState('');
+  const { PRODUCTS, PRODUCT_VARIANTS, PRODUCT_COLORS, loading: productsLoading } = useProducts();
+  const [lines, setLines]           = useState([emptyFbuLine()]);
   const [supplier, setSupplier]     = useState('');
   const [grnDate, setGrnDate]       = useState(todayISO());
   const [poRef, setPoRef]           = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  // Colours available for the chosen product + variant (FBU units are unit-level,
-  // so colour is captured here rather than via a BOM).
-  const colorOptions = (product && variant) ? (PRODUCT_COLORS[product]?.[variant] || []) : [];
-  // Reset colour whenever the product or variant changes.
-  useEffect(() => { setColor(''); }, [product, variant]);
+  function updateLine(idx, updates) {
+    setLines(prev => prev.map((l, i) => i !== idx ? l : { ...l, ...updates }));
+  }
+
+  function addLine() { setLines(prev => [...prev, emptyFbuLine()]); }
+  function removeLine(idx) { setLines(prev => prev.filter((_, i) => i !== idx)); }
 
   function clearForm() {
-    setProduct(''); setVariant(''); setColor('');
-    setUnits(''); setSupplier(''); setPoRef('');
+    setLines([emptyFbuLine()]);
+    setSupplier(''); setPoRef('');
     setGrnDate(todayISO());
   }
 
   async function submit() {
-    if (!product) { showToast('Select a product', 'error'); return; }
-    const qty = parseInt(units) || 0;
-    if (qty <= 0) { showToast('Enter units received', 'error'); return; }
     if (!grnDate) { showToast('Select a GRN date', 'error'); return; }
+    for (let i = 0; i < lines.length; i++) {
+      const l = lines[i];
+      if (!l.product) { showToast(`Line ${i + 1}: select a product`, 'error'); return; }
+      if (!(parseInt(l.units) > 0)) { showToast(`Line ${i + 1}: enter units received`, 'error'); return; }
+    }
     setSubmitting(true);
     try {
-      const res = await workerFetch('postFbuGRN', {
-        data: { product, variant: variant || null, color: color || null, qty_received: qty, grn_date: grnDate, supplier, po_ref: poRef }
-      }, session);
-      showToast(`FBU GRN ${res.data.grn_no} created — ${qty} units`, 'success');
-      // Non-blocking nudge: open outsourced (job-work) run for this product → use EXT Inwarding.
-      if (res.data.warning) showToast(res.data.warning, 'warning');
+      const created = [];
+      for (const l of lines) {
+        const res = await workerFetch('postFbuGRN', {
+          data: { product: l.product, variant: l.variant || null, color: l.color || null,
+                  qty_received: parseInt(l.units), grn_date: grnDate, supplier, po_ref: poRef }
+        }, session);
+        created.push(res.data.grn_no);
+        if (res.data.warning) showToast(res.data.warning, 'warning');
+      }
+      showToast(`${created.length} FBU GRN${created.length > 1 ? 's' : ''} created: ${created.join(', ')}`, 'success');
       clearForm();
       onSuccess();
     } catch (e) {
@@ -634,37 +640,77 @@ function FbuGrnPanel({ session, onSuccess }) {
       <p style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 12 }}>
         Use for fully-built units received in retail-ready condition. Records unit count only — no part-level BOM tracking.
       </p>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
-        <div>
-          <span style={label}>Product *</span>
-          <Combobox
-            value={product}
-            options={PRODUCTS.map((p) => ({ value: p, label: p }))}
-            onChange={(v) => { setProduct(v); setVariant(''); }}
-            placeholder="Search products…"
-            loading={productsLoading}
-          />
-        </div>
-        <div>
-          <span style={label}>Units Received *</span>
-          <input style={inp} type="number" min="1" value={units} onChange={e => setUnits(e.target.value)} placeholder="e.g. 200" />
-        </div>
-      </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, alignItems: 'end' }}>
-        <VariantSelects product={product} variant={variant} setVariant={setVariant} />
-        {colorOptions.length > 0 && (
-          <div>
-            <span style={label}>Colour</span>
-            <select style={{ ...sel, width: '100%' }} value={color} onChange={e => setColor(e.target.value)}>
-              <option value="">— Select colour —</option>
-              {colorOptions.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
+      {/* Lines */}
+      {lines.map((line, idx) => {
+        const variants     = line.product ? (PRODUCT_VARIANTS[line.product] || []) : [];
+        const colorOptions = (line.product && line.variant) ? (PRODUCT_COLORS[line.product]?.[line.variant] || []) : [];
+        return (
+          <div key={idx} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr auto', gap: 8, alignItems: 'end', marginBottom: 8 }}>
+            <div>
+              {idx === 0 && <span style={label}>Product *</span>}
+              <Combobox
+                value={line.product}
+                options={PRODUCTS.map((p) => ({ value: p, label: p }))}
+                onChange={(v) => updateLine(idx, { product: v, variant: '', color: '' })}
+                placeholder="Search products…"
+                loading={productsLoading}
+              />
+            </div>
+            <div>
+              {idx === 0 && <span style={label}>Variant</span>}
+              <select
+                style={{ ...sel, width: '100%' }}
+                value={line.variant}
+                disabled={!line.product || variants.length === 0}
+                onChange={(e) => updateLine(idx, { variant: e.target.value, color: '' })}
+              >
+                <option value="">— Any —</option>
+                {variants.map(v => <option key={v} value={v}>{v}</option>)}
+              </select>
+            </div>
+            <div>
+              {idx === 0 && <span style={label}>Colour</span>}
+              <select
+                style={{ ...sel, width: '100%' }}
+                value={line.color}
+                disabled={colorOptions.length === 0}
+                onChange={(e) => updateLine(idx, { color: e.target.value })}
+              >
+                <option value="">— Any —</option>
+                {colorOptions.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div>
+              {idx === 0 && <span style={label}>Units *</span>}
+              <input
+                style={inp}
+                type="number"
+                min="1"
+                value={line.units}
+                onChange={(e) => updateLine(idx, { units: e.target.value })}
+                placeholder="Qty"
+              />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'flex-end', paddingBottom: 1 }}>
+              {lines.length > 1 && (
+                <button
+                  style={{ ...btnSec, padding: '6px 10px', fontSize: 12 }}
+                  onClick={() => removeLine(idx)}
+                  disabled={submitting}
+                  title="Remove line"
+                >✕</button>
+              )}
+            </div>
           </div>
-        )}
-      </div>
+        );
+      })}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginTop: 10, marginBottom: 14 }}>
+      <button style={{ ...btnSec, marginBottom: 14, fontSize: 11 }} onClick={addLine} disabled={submitting}>
+        + Add Line
+      </button>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 14 }}>
         <div>
           <span style={label}>Supplier</span>
           <input style={inp} value={supplier} onChange={e => setSupplier(e.target.value)} placeholder="Supplier name" />
@@ -681,7 +727,7 @@ function FbuGrnPanel({ session, onSuccess }) {
 
       <div style={{ display: 'flex', gap: 8 }}>
         <button style={btnPri} onClick={submit} disabled={submitting}>
-          {submitting ? 'Submitting…' : 'Submit FBU GRN'}
+          {submitting ? 'Submitting…' : `Submit ${lines.length > 1 ? `${lines.length} FBU GRNs` : 'FBU GRN'}`}
         </button>
         <button style={btnSec} onClick={clearForm} disabled={submitting}>Clear</button>
       </div>
