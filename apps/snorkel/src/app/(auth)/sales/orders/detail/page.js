@@ -11,6 +11,18 @@ import {
 import { orderStatusLabel, ORDER_STATUS_TONES, fulfilmentMeta, paymentMeta, PAYMENT_MODES, inr } from '@/lib/sales';
 import OrderForm from '../OrderForm';
 
+// Normalized courier stage (from courierops tracking_status) → label + colour for the SO timeline.
+const STAGE_LABEL = {
+  manifested: 'Manifested', in_transit: 'In transit', out_for_delivery: 'Out for delivery',
+  delivered: 'Delivered', undelivered: 'Undelivered', rto_in_transit: 'RTO in transit',
+  rto_delivered: 'RTO delivered', cancelled: 'Cancelled', lost: 'Lost', unknown: 'Unknown',
+};
+const STAGE_COLOR = {
+  delivered: 'var(--green-fg, #2faa5a)', out_for_delivery: '#d98a00', in_transit: '#6af',
+  undelivered: '#e2574c', rto_in_transit: '#d98a00', rto_delivered: '#9aa', cancelled: '#e2574c',
+  lost: '#e2574c', manifested: '#6af', unknown: '#9aa',
+};
+
 function Stat({ label, value, color }) {
   return (<div><div style={labelStyle}>{label}</div><div style={{ fontSize: 13, color: color || 'var(--t1)' }}>{value ?? <span style={{ color: 'var(--t3)' }}>—</span>}</div></div>);
 }
@@ -179,13 +191,33 @@ function OrderDetailInner() {
               <div style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-3)', marginBottom: 8 }}>Shipments &amp; tracking</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {o.shipments.map(s => (
-                  <div key={s.id} style={{ border: '1px solid var(--border)', borderRadius: 6, padding: '8px 12px', fontFamily: 'var(--mono)', fontSize: 12.5, color: 'var(--text-1)', display: 'flex', flexWrap: 'wrap', gap: 14 }}>
-                    <span><b>{s.shipment_no}</b> · {s.status}</span>
-                    {s.courier_partner && <span>{s.courier_partner}</span>}
-                    {s.tracking_number && <span>AWB {s.tracking_number}</span>}
-                    {s.tracking_link && <a href={s.tracking_link} target="_blank" rel="noreferrer" style={{ color: '#6af' }}>track ↗</a>}
-                    {s.expected_delivery_date && <span>ETA {fmtDate(s.expected_delivery_date)}</span>}
-                    {s.delivery_date && <span>delivered {fmtDate(s.delivery_date)}</span>}
+                  <div key={s.id}>
+                    <div style={{ border: '1px solid var(--border)', borderRadius: 6, padding: '8px 12px', fontFamily: 'var(--mono)', fontSize: 12.5, color: 'var(--text-1)', display: 'flex', flexWrap: 'wrap', gap: 14 }}>
+                      <span><b>{s.shipment_no}</b> · {s.status}</span>
+                      {s.courier_partner && <span>{s.courier_partner}</span>}
+                      {s.tracking_number && <span>AWB {s.tracking_number}</span>}
+                      {s.tracking_link && <a href={s.tracking_link} target="_blank" rel="noreferrer" style={{ color: '#6af' }}>track ↗</a>}
+                      {s.expected_delivery_date && <span>ETA {fmtDate(s.expected_delivery_date)}</span>}
+                      {s.delivery_date && <span>delivered {fmtDate(s.delivery_date)}</span>}
+                      {s.tracking_status && (
+                        <span style={{ padding: '1px 7px', borderRadius: 4, fontSize: 11, fontWeight: 600,
+                          color: '#fff', background: STAGE_COLOR[s.tracking_status] || '#9aa' }}>
+                          {STAGE_LABEL[s.tracking_status] || s.tracking_status}
+                        </span>
+                      )}
+                    </div>
+                    {Array.isArray(s.tracking_checkpoints) && s.tracking_checkpoints.length > 0 && (
+                      <div style={{ margin: '6px 0 4px 4px', borderLeft: '1px solid var(--border, #2a2a2a)', paddingLeft: 12 }}>
+                        {s.tracking_checkpoints.map((c, i) => (
+                          <div key={i} style={{ marginBottom: 7 }}>
+                            <div style={{ fontSize: 12, color: 'var(--text-1, #eee)' }}>{c.label || STAGE_LABEL[c.stage] || c.stage}</div>
+                            <div style={{ fontSize: 10.5, color: 'var(--text-3, #999)' }}>
+                              {(c.location || '—')}{c.timestamp ? ` · ${fmtDate(c.timestamp)}` : ''}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
