@@ -30,10 +30,14 @@ export function ThrottleMark({ size = 30 }) {
     <span style={{ width: size, height: size, borderRadius: 'var(--radius-mark)', overflow: 'hidden',
       display: 'grid', placeItems: 'center', flexShrink: 0, boxShadow: 'var(--mark-shadow)' }}>
       <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true" style={{ display: 'block' }}>
-        {rows.map(r => rows.map(c => (
-          <rect key={`${r}-${c}`} x={c * 8} y={r * 8} width="8" height="8"
-            fill={(r + c) % 2 === 0 ? '#F2CD1A' : '#151515'} />
-        )))}
+        {rows.map(r => (
+          <React.Fragment key={r}>
+            {rows.map(c => (
+              <rect key={`${r}-${c}`} x={c * 8} y={r * 8} width="8" height="8"
+                fill={(r + c) % 2 === 0 ? '#F2CD1A' : '#151515'} />
+            ))}
+          </React.Fragment>
+        ))}
       </svg>
     </span>
   );
