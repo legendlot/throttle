@@ -16,9 +16,14 @@ export function aggOrders(rows) {
     a.infl += Number(r.influencer_orders || 0);
     a.repair += Number(r.repair_orders || 0);
   }
-  a.grossAll = a.gross + a.cancelledValue;          // Total Sales (incl cancellations)
-  a.netCancel = a.gross;                            // Net Sales (excl cancellations)
-  a.netExGst = a.netCancel - a.tax;                 // Net of GST (tax-inclusive store)
+  // NET-revenue ladder (Afshaan S164): NET = gross − discounts − cancellations − returns − GST,
+  // ex-GST everywhere. Gross rungs are tax-inclusive (every channel now stages tax-incl gross +
+  // true GST separately); the final rung strips GST to the taxable base = THE net-revenue metric.
+  a.grossAll = a.gross + a.cancelledValue;          // Total Sales — gross, incl. cancellations + GST (P&L only)
+  a.netCancel = a.gross;                            // after cancellations (non-cancelled, pre-discount, tax-incl)
+  a.netDisc = a.gross - a.discount;                 // after discounts
+  a.netReturns = a.netDisc - a.returnsValue;        // after returns
+  a.netExGst = a.netReturns - a.tax;                // NET REVENUE (ex-GST) — the metric
   a.totalOrders = a.orders + a.cancelledOrders;
   a.aov = a.totalOrders ? a.grossAll / a.totalOrders : 0;
   a.cancelRate = a.totalOrders ? a.cancelledOrders / a.totalOrders * 100 : 0;
