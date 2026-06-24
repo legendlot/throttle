@@ -35,7 +35,7 @@ export default function AuthLayout({ children }) {
 }
 
 function AuthLayoutInner({ children }) {
-  const { user, session, role, signOut, loading } = useAuth();
+  const { user, session, role, perms, signOut, loading } = useAuth();
   const { refreshing, lastRefreshed } = useRefreshState();
   const { alertCount, returnCount }   = usePendingCounts(session);
   const [cmdkOpen, setCmdkOpen] = useState(false);
@@ -69,6 +69,7 @@ function AuthLayoutInner({ children }) {
         badges={{ alerts: alertCount, returns: returnCount }}
         userLabel={displayName}
         userRole={role || ''}
+        perms={perms}
         onLogout={signOut}
       />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>

@@ -22,9 +22,9 @@ import {
    Inbox renamed Activities. Dispatch dropped lower (it's just a Depot pointer +
    the still-here Repack screens). */
 export const NAV_PRIMARY = [
-  { id: 'overview', label: 'Overview', icon: Gauge, route: '/exec' },
+  { id: 'overview', label: 'Overview', icon: Gauge, route: '/exec', perm: 'dashboard' },
   {
-    id: 'plan', label: 'Plan', icon: CalendarClock,
+    id: 'plan', label: 'Plan', icon: CalendarClock, perm: 'dashboard',
     children: [
       { id: 'planner',     label: 'Planner',     route: '/planner',     icon: CalendarClock },
       { id: 'new-run',     label: 'New Run',     route: '/new-run',     icon: FilePlus2 },
@@ -33,7 +33,7 @@ export const NAV_PRIMARY = [
     ],
   },
   {
-    id: 'floor', label: 'Floor', icon: Factory,
+    id: 'floor', label: 'Floor', icon: Factory, perm: 'dashboard',
     children: [
       { id: 'lines',      label: 'Lines',      route: '/lines',      icon: GitBranch },
       { id: 'hourly',     label: 'Hourly',     route: '/hourly',     icon: Clock },
@@ -42,7 +42,7 @@ export const NAV_PRIMARY = [
     ],
   },
   {
-    id: 'quality', label: 'Quality', icon: ShieldCheck,
+    id: 'quality', label: 'Quality', icon: ShieldCheck, perm: 'dashboard',
     children: [
       { id: 'qc',         label: 'QC',         route: '/qc',                 icon: ShieldCheck },
       { id: 'audit',      label: 'Audit',      route: '/audit',              icon: ClipboardCheck },
@@ -50,14 +50,14 @@ export const NAV_PRIMARY = [
     ],
   },
   {
-    id: 'reports', label: 'Reports', icon: BarChart3,
+    id: 'reports', label: 'Reports', icon: BarChart3, perm: 'dashboard',
     children: [
       { id: 'prod-history', label: 'Production History', route: '/production-history', icon: History },
       { id: 'reporting',    label: 'Reporting',          route: '/reporting',          icon: BarChart3 },
     ],
   },
   {
-    id: 'inbox', label: 'Activities', icon: Bell, badged: true,
+    id: 'inbox', label: 'Activities', icon: Bell, badged: true, perm: 'dashboard',
     children: [
       { id: 'alerts',      label: 'Alerts',      route: '/alerts',       icon: Bell,    badgeKey: 'alerts' },
       { id: 'returns',     label: 'Returns',     route: '/returns',      icon: Undo2,   badgeKey: 'returns' },
@@ -70,7 +70,7 @@ export const NAV_PRIMARY = [
     // Dispatch carved out into Depot (depot.legendoftoys.com) — S152 cutover.
     // Group kept only as a pointer + the still-here Repack screens (repack stays
     // in Redline as a production activity; its tab placement is a later decision).
-    id: 'dispatch', label: 'Dispatch', icon: Truck,
+    id: 'dispatch', label: 'Dispatch', icon: Truck, perm: 'dashboard',
     children: [
       { id: 'dispatch-moved', label: 'Moved to Depot →', route: '/dispatch',           icon: Truck },
       { id: 'repack',         label: 'Repack',           route: '/repack-runs',         icon: ArrowLeftRight },
@@ -81,11 +81,12 @@ export const NAV_PRIMARY = [
 
 export const NAV_MANUAL = { id: 'manual', label: 'System Manual', icon: BookOpen, route: '/manual' };
 
-/* Setup = done-once admin config only (planning moved to the Plan group, S152). */
+/* Setup = done-once admin config only (planning moved to the Plan group, S152).
+   perm: 'dashboard' = production roles only; no perm = visible to all authenticated users. */
 export const NAV_SETUP = [
-  { id: 'upc',       label: 'UPC Generator', route: '/upc',       icon: QrCode },
+  { id: 'upc',       label: 'UPC Generator', route: '/upc',       icon: QrCode,   perm: 'dashboard' },
   { id: 'operators', label: 'Operators',     route: '/operators', icon: Users },
-  { id: 'print',     label: 'Print',         route: '/print',     icon: Printer },
+  { id: 'print',     label: 'Print',         route: '/print',     icon: Printer,  perm: 'dashboard' },
 ];
 
 /* ⌘K-only destinations — pages that exist but live outside the sidebar.

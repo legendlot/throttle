@@ -18,7 +18,15 @@ const routeMatch = (pathname, route) => {
   return norm === r || norm.startsWith(r + '/');
 };
 
-export function RedlineSidebar({ onCmdK, badges = {}, userLabel = '', userRole = '', onLogout }) {
+// Returns true when the nav item should be visible for the given permissions.
+// Items without a `perm` field are always visible. When perms haven't loaded
+// (null) we show everything — the layout blocks until auth resolves anyway.
+function canShow(item, perms) {
+  if (!item.perm || !perms) return true;
+  return perms[item.perm] === true;
+}
+
+export function RedlineSidebar({ onCmdK, badges = {}, userLabel = '', userRole = '', perms = null, onLogout }) {
   const pathname = usePathname();
   const router = useRouter();
 
@@ -82,7 +90,7 @@ export function RedlineSidebar({ onCmdK, badges = {}, userLabel = '', userRole =
       </div>
 
       <nav style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: collapsed ? '4px 14px' : '4px 10px' }}>
-        {NAV_PRIMARY.map(item => {
+        {NAV_PRIMARY.filter(item => canShow(item, perms)).map(item => {
           const on = activeGroup?.id === item.id;
           const expanded = !!open[item.id];
           const hasKids = !!(item.children && item.children.length);
@@ -204,7 +212,7 @@ export function RedlineSidebar({ onCmdK, badges = {}, userLabel = '', userRole =
                   <ChevronDown size={14} strokeWidth={1.75} />
                 </span>
               </div>
-              {setupOpen && NAV_SETUP.map(s => {
+              {setupOpen && NAV_SETUP.filter(s => canShow(s, perms)).map(s => {
                 const cur = routeMatch(pathname, s.route);
                 return (
                   <div key={s.id} onClick={() => go(s.route)} style={{ display: 'flex', alignItems: 'center', gap: 9,
