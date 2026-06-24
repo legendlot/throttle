@@ -5,6 +5,7 @@ import { Spinner } from '@throttle/ui';
 import { salesGet, inr, fmtInt, istToday, istDaysAgo, downloadCsv, rangePresets, priorPeriod } from '../../lib/api.js';
 import StackedTrendChart from '../../components/StackedTrendChart.js';
 import { Kpi, Delta, RangePicker, SegmentedToggle } from '../../components/kit.js';
+import ChannelFilter from '../../components/ChannelFilter.js';
 // Channel families — single source of truth (shared with the Channels section). Aliased so the
 // existing chart/chip code keeps its names.
 import { FAMILIES as GROUP_META, FAMILY_ORDER as GROUP_ORDER, familyOf as channelGroup } from '../../lib/families.js';
@@ -186,20 +187,13 @@ export default function Dashboard() {
 
   return (
     <div className="so-page">
-      {/* controls */}
+      {/* controls — range + channel filter + export, one row */}
       <RangePicker from={from} to={to}
         onChange={({ from, to, preset }) => { setFrom(from); setTo(to); setPreset(preset); }}
-        right={<button className="so-btn ghost" onClick={exportCsv} disabled={!rows.length}>Export CSV</button>} />
-
-      {/* channel chips (ordered + colour-dotted by family) */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
-        <span className={`so-chip${sel.length === 0 ? ' on' : ''}`} onClick={() => setSel([])}>All channels</span>
-        {orderedChannels.map(c => (
-          <span key={c.channel_id} className={`so-chip${sel.includes(c.channel_id) ? ' on' : ''}`} onClick={() => toggleCh(c.channel_id)}>
-            <span className="so-dot" style={{ background: GROUP_META[channelGroup(c.name)].color }} />{c.name}
-          </span>
-        ))}
-      </div>
+        right={<>
+          <ChannelFilter channels={orderedChannels} value={sel} onChange={setSel} />
+          <button className="so-btn ghost" onClick={exportCsv} disabled={!rows.length}>Export CSV</button>
+        </>} />
 
       {err && <div className="so-card" style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12 }}>{err}</div>}
 
