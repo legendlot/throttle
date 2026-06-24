@@ -5,9 +5,9 @@ import { garageFetch, workerFetch } from '@throttle/db';
 import { Badge, EmptyState, Spinner, useToast, Panel, Chip, StatusBadge } from '@throttle/ui';
 import { Icon as KitIcon } from '../../../components/kit/index.js';
 
-const LINES = ['L1', 'L2', 'L3'];
+const LINES = ['L1', 'L2', 'L3', 'L4', 'L5'];
 const DEPT_ORDER = ['Prep', 'Assembly', 'QC', 'Packaging'];
-const LINE_COLORS = { L1: 'var(--yellow)', L2: 'var(--blue)', L3: 'var(--green)' };
+const LINE_COLORS = { L1: 'var(--yellow)', L2: 'var(--blue)', L3: 'var(--green)', L4: '#f97316', L5: '#c084fc' };
 const STATUS_COLORS = {
   Submitted:     'var(--blue)',
   Issued:        'var(--yellow)',
@@ -164,7 +164,7 @@ export default function LineSetupPage() {
         <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}><Spinner /></div>
       ) : (
         <div style={{
-          display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12,
+          display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 12,
         }}>
           {LINES.map(line => (
             <LineColumn
