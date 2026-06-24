@@ -32,9 +32,15 @@ export default function AdminPage() {
   const users = boot.accessUsers || [];
 
   const doGrant = () => salesPost('grantAccess', grant, session).then(() => { toast?.showToast?.('Access granted', 'success'); setGrant({ email: '', role_key: '' }); load(); }).catch(e => toast?.showToast?.(e.message, 'error'));
-  const toggleUser = (u) => salesPost('setUserActive', { user_id: u.user_id, active: !u.active }, session).then(load).catch(e => toast?.showToast?.(e.message, 'error'));
+  const toggleUser = (u) => {
+    if (u.active && !window.confirm(`Disable ${u.full_name}? They lose all Odo access until re-enabled.`)) return;
+    salesPost('setUserActive', { user_id: u.user_id, active: !u.active }, session).then(load).catch(e => toast?.showToast?.(e.message, 'error'));
+  };
   const saveRole = () => salesPost('saveRole', editRole, session).then(() => { toast?.showToast?.('Role saved', 'success'); setEditRole(null); load(); }).catch(e => toast?.showToast?.(e.message, 'error'));
-  const delRole = (rk) => salesPost('deleteRole', { role_key: rk }, session).then(load).catch(e => toast?.showToast?.(e.message, 'error'));
+  const delRole = (rk) => {
+    if (!window.confirm(`Delete role “${rk}”? Users on this role lose its permissions. This can't be undone.`)) return;
+    salesPost('deleteRole', { role_key: rk }, session).then(load).catch(e => toast?.showToast?.(e.message, 'error'));
+  };
 
   return (
     <div style={{ maxWidth: 980, display: 'flex', flexDirection: 'column', gap: 18 }}>

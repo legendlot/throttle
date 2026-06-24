@@ -4,6 +4,7 @@ import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
 import { salesGet, inr, fmtInt, istToday, istDaysAgo, downloadCsv, rangePresets, priorPeriod } from '../../lib/api.js';
 import StackedTrendChart from '../../components/StackedTrendChart.js';
+import { Kpi, Delta, RangePicker, SegmentedToggle } from '../../components/kit.js';
 // Channel families — single source of truth (shared with the Channels section). Aliased so the
 // existing chart/chip code keeps its names.
 import { FAMILIES as GROUP_META, FAMILY_ORDER as GROUP_ORDER, familyOf as channelGroup } from '../../lib/families.js';
@@ -28,29 +29,6 @@ function ago(iso) {
 const HEALTH_COLOR = { ok: 'var(--green)', partial: 'var(--amber)', error: 'var(--red)', never: 'var(--t3)' };
 
 const PRESETS = rangePresets();
-
-// ── tiny inline charts (dependency-free, theme-coloured) ──
-function Spark({ data, color }) {
-  if (!data || data.length < 2) return <div style={{ height: 30 }} />;
-  const W = 130, H = 30, max = Math.max(...data), min = Math.min(...data, 0), span = (max - min) || 1;
-  const pts = data.map((v, i) => `${(i / (data.length - 1)) * W},${H - ((v - min) / span) * (H - 2) - 1}`);
-  return (
-    <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ display: 'block' }}>
-      <polyline points={`0,${H} ${pts.join(' ')} ${W},${H}`} fill={color} fillOpacity="0.10" stroke="none" />
-      <polyline points={pts.join(' ')} fill="none" stroke={color} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
-    </svg>
-  );
-}
-
-function Delta({ pct }) {
-  if (pct == null || !isFinite(pct)) return null;
-  const up = pct >= 0;
-  return (
-    <span style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600, color: up ? 'var(--green)' : 'var(--red)' }}>
-      {up ? '▲' : '▼'} {Math.abs(pct).toFixed(0)}%
-    </span>
-  );
-}
 
 export default function Dashboard() {
   const { session } = useAuth();
@@ -206,23 +184,11 @@ export default function Dashboard() {
   const ppLabel = preset ? `prior ${PRESETS.find(p => p.key === preset)?.label || ''}` : 'prior period';
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 1320 }}>
+    <div className="so-page">
       {/* controls */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
-        <div style={{ display: 'flex', gap: 4, background: 'var(--surface2)', borderRadius: 8, padding: 3 }}>
-          {PRESETS.map(p => (
-            <button key={p.key} onClick={() => applyPreset(p)}
-              style={{ background: preset === p.key ? 'var(--accent)' : 'transparent', color: preset === p.key ? 'var(--accent-fg)' : 'var(--t2)', border: 'none', borderRadius: 6, padding: '7px 11px', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer' }}>
-              {p.label}
-            </button>
-          ))}
-        </div>
-        <input className="so-input" type="date" value={from} max={to} onChange={e => setCustomFrom(e.target.value)} />
-        <span style={{ color: 'var(--t3)' }}>→</span>
-        <input className="so-input" type="date" value={to} min={from} max={istToday()} onChange={e => setCustomTo(e.target.value)} />
-        <div style={{ flex: 1 }} />
-        <button className="so-btn ghost" onClick={exportCsv} disabled={!rows.length}>Export CSV</button>
-      </div>
+      <RangePicker from={from} to={to}
+        onChange={({ from, to, preset }) => { setFrom(from); setTo(to); setPreset(preset); }}
+        right={<button className="so-btn ghost" onClick={exportCsv} disabled={!rows.length}>Export CSV</button>} />
 
       {/* channel chips (ordered + colour-dotted by family) */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
@@ -246,14 +212,7 @@ export default function Dashboard() {
             { lbl: 'Avg selling price', val: inr(curAsp), d: pct(curAsp, prevAsp), spark: daySeries.asp, color: 'var(--green)' },
             { lbl: 'Active channels', val: fmtInt(activeChannels), d: pct(activeChannels, prevActive), spark: null, color: 'var(--t2)' },
           ].map((k, i) => (
-            <div key={i} className="so-card" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <div className="so-kpi-lbl">{k.lbl}</div>
-              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
-                <span className="so-kpi-val">{k.val}</span><Delta pct={k.d} />
-              </div>
-              <Spark data={k.spark} color={k.color} />
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 9.5, color: 'var(--t3)' }}>vs {ppLabel}</div>
-            </div>
+            <Kpi key={i} lbl={k.lbl} val={k.val} pct={k.d} spark={k.spark} sparkColor={k.color} deltaNote={`vs ${ppLabel}`} />
           ))}
         </div>
 
@@ -269,12 +228,7 @@ export default function Dashboard() {
                   </span>
                 ))}
               </div>
-              <div style={{ display: 'flex', gap: 4, background: 'var(--surface2)', borderRadius: 7, padding: 3 }}>
-                {['gross', 'units'].map(m => (
-                  <button key={m} onClick={() => setTrendMetric(m)}
-                    style={{ background: trendMetric === m ? 'var(--accent)' : 'transparent', color: trendMetric === m ? 'var(--accent-fg)' : 'var(--t2)', border: 'none', borderRadius: 5, padding: '5px 10px', fontFamily: 'var(--mono)', fontSize: 10.5, cursor: 'pointer', textTransform: 'capitalize' }}>{m}</button>
-                ))}
-              </div>
+              <SegmentedToggle options={['gross', 'units']} value={trendMetric} onChange={setTrendMetric} size="sm" />
             </div>
           </div>
           <StackedTrendChart days={trend.days} dayVals={trend.dv} metric={trendMetric}
@@ -313,18 +267,8 @@ export default function Dashboard() {
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
               <div className="so-kpi-lbl" style={{ margin: 0 }}>Top {sellerRollup === 'product' ? 'products' : 'variants'}</div>
               <div style={{ display: 'flex', gap: 8 }}>
-                <div style={{ display: 'flex', gap: 4, background: 'var(--surface2)', borderRadius: 7, padding: 3 }}>
-                  {[['variant', 'Variant'], ['product', 'Product']].map(([k, l]) => (
-                    <button key={k} onClick={() => setSellerRollup(k)}
-                      style={{ background: sellerRollup === k ? 'var(--accent)' : 'transparent', color: sellerRollup === k ? 'var(--accent-fg)' : 'var(--t2)', border: 'none', borderRadius: 5, padding: '5px 10px', fontFamily: 'var(--mono)', fontSize: 10.5, cursor: 'pointer' }}>{l}</button>
-                  ))}
-                </div>
-                <div style={{ display: 'flex', gap: 4, background: 'var(--surface2)', borderRadius: 7, padding: 3 }}>
-                  {['gross', 'units'].map(m => (
-                    <button key={m} onClick={() => setVariantMetric(m)}
-                      style={{ background: variantMetric === m ? 'var(--accent)' : 'transparent', color: variantMetric === m ? 'var(--accent-fg)' : 'var(--t2)', border: 'none', borderRadius: 5, padding: '5px 10px', fontFamily: 'var(--mono)', fontSize: 10.5, cursor: 'pointer', textTransform: 'capitalize' }}>{m}</button>
-                  ))}
-                </div>
+                <SegmentedToggle options={[['variant', 'Variant'], ['product', 'Product']]} value={sellerRollup} onChange={setSellerRollup} size="sm" />
+                <SegmentedToggle options={['gross', 'units']} value={variantMetric} onChange={setVariantMetric} size="sm" />
               </div>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginTop: 12 }}>
@@ -391,12 +335,7 @@ export default function Dashboard() {
         <div className="so-card" style={{ padding: 0, overflow: 'hidden' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 18px', borderBottom: '1px solid var(--border)' }}>
             <div className="so-kpi-lbl" style={{ margin: 0 }}>Detail</div>
-            <div style={{ display: 'flex', gap: 4, background: 'var(--surface2)', borderRadius: 7, padding: 3 }}>
-              {GROUPS.map(g => (
-                <button key={g.key} onClick={() => setGroup(g.key)}
-                  style={{ background: group === g.key ? 'var(--accent)' : 'transparent', color: group === g.key ? 'var(--accent-fg)' : 'var(--t2)', border: 'none', borderRadius: 5, padding: '5px 11px', fontFamily: 'var(--mono)', fontSize: 10.5, cursor: 'pointer' }}>{g.label}</button>
-              ))}
-            </div>
+            <SegmentedToggle options={GROUPS.map(g => [g.key, g.label])} value={group} onChange={setGroup} size="sm" />
           </div>
           {table.length === 0 ? (
             <div style={{ padding: 36, textAlign: 'center', color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12 }}>

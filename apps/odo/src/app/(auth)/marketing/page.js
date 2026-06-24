@@ -2,44 +2,56 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
-import { salesGet, istToday, istDaysAgo } from '../../../lib/api.js';
+import { salesGet, inr, fmtInt, rangePresets, priorPeriod } from '../../../lib/api.js';
+import { Kpi, RangePicker, SegmentedToggle } from '../../../components/kit.js';
 import PerfTrendChart from '../../../components/PerfTrendChart.js';
 
-const inr = n => '₹' + Math.round(Number(n || 0)).toLocaleString('en-IN');
-const numfmt = n => Number(n || 0).toLocaleString('en-IN');
+const sumBy = (rows, k) => (rows || []).reduce((a, r) => a + Number(r[k] || 0), 0);
+const grossOf = (rows) => (rows || []).reduce((a, r) => a + Number(r.gross_value ?? r.gross ?? 0), 0);
 
 export default function MarketingPage() {
   const { session } = useAuth();
-  const [from, setFrom] = useState(istDaysAgo(30));
-  const [to, setTo] = useState(istToday());
+  const d30 = rangePresets().find(p => p.key === '30d');
+  const [from, setFrom] = useState(d30.from);
+  const [to, setTo] = useState(d30.to);
   const [group, setGroup] = useState('platform');
   const [rows, setRows] = useState(null);        // marketing by platform/campaign (table)
   const [mktDaily, setMktDaily] = useState([]);   // marketing by day (chart)
   const [salesRows, setSalesRows] = useState([]); // sales by variant (revenue + total)
   const [trafDaily, setTrafDaily] = useState([]); // traffic by day (chart)
+  const [prevAgg, setPrevAgg] = useState(null);   // prior-period { spend, gross, clicks, convs }
   const [err, setErr] = useState('');
 
   useEffect(() => {
     if (!session) return;
     setRows(null); setErr('');
+    const pp = priorPeriod(from, to);
     Promise.all([
       salesGet('getMarketing', { from, to, group }, session),
       salesGet('getMarketing', { from, to, group: 'date' }, session),
       salesGet('getSales', { from, to, group: 'variant' }, session),
       salesGet('getTraffic', { from, to, group: 'date' }, session),
-    ]).then(([mt, md, s, tr]) => {
+      salesGet('getMarketing', { from: pp.from, to: pp.to, group: 'platform' }, session),
+      salesGet('getSales', { from: pp.from, to: pp.to, group: 'variant' }, session),
+    ]).then(([mt, md, s, tr, pm, ps]) => {
       setRows(mt?.rows || []);
       setMktDaily(md?.rows || []);
       setSalesRows(s?.rows || []);
       setTrafDaily(tr?.rows || []);
+      setPrevAgg({
+        spend: sumBy(pm?.rows, 'spend'), gross: grossOf(ps?.rows),
+        clicks: sumBy(pm?.rows, 'clicks'), convs: sumBy(pm?.rows, 'conversions'),
+      });
     }).catch(e => setErr(e.message || String(e)));
   }, [session, from, to, group]);
 
-  const spend = (rows || []).reduce((a, r) => a + Number(r.spend || 0), 0);
-  const clicks = (rows || []).reduce((a, r) => a + Number(r.clicks || 0), 0);
-  const convs = (rows || []).reduce((a, r) => a + Number(r.conversions || 0), 0);
-  const salesGross = salesRows.reduce((a, r) => a + Number(r.gross_value ?? r.gross ?? 0), 0);
+  const spend = sumBy(rows, 'spend');
+  const clicks = sumBy(rows, 'clicks');
+  const convs = sumBy(rows, 'conversions');
+  const salesGross = grossOf(salesRows);
   const roas = spend > 0 ? salesGross / spend : 0;
+  const pv = prevAgg || {};
+  const prevRoas = pv.spend > 0 ? pv.gross / pv.spend : 0;
 
   // Merge marketing-daily + sales-daily(summed by date) + traffic-daily → one series.
   const series = useMemo(() => {
@@ -55,43 +67,27 @@ export default function MarketingPage() {
     }));
   }, [mktDaily, salesRows, trafDaily]);
 
-  const KPIS = [
-    { lbl: 'Ad spend', val: inr(spend) },
-    { lbl: 'Sales gross', val: inr(salesGross) },
-    { lbl: 'Blended ROAS', val: roas.toFixed(2) + '×' },
-    { lbl: 'Clicks', val: numfmt(clicks) },
-    { lbl: 'Conversions', val: numfmt(convs) },
-  ];
-
   return (
-    <div style={{ padding: 28, display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-        <input className="so-input" type="date" value={from} max={to} onChange={e => setFrom(e.target.value)} />
-        <input className="so-input" type="date" value={to} min={from} max={istToday()} onChange={e => setTo(e.target.value)} />
-        <button className={`so-chip${group === 'platform' ? ' active' : ''}`} onClick={() => setGroup('platform')}>By platform</button>
-        <button className={`so-chip${group === 'campaign' ? ' active' : ''}`} onClick={() => setGroup('campaign')}>By campaign</button>
-      </div>
+    <div className="so-page">
+      <RangePicker from={from} to={to} onChange={({ from, to }) => { setFrom(from); setTo(to); }}
+        right={<SegmentedToggle options={[['platform', 'By platform'], ['campaign', 'By campaign']]} value={group} onChange={setGroup} size="sm" />} />
 
       {err && <div className="so-card" style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12 }}>{err}</div>}
-      {!rows ? <Spinner /> : (
+      {!rows ? <div style={{ padding: 60, textAlign: 'center' }}><Spinner /></div> : (
         <>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12 }}>
-            {KPIS.map((k, i) => (
-              <div key={i} className="so-card" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <div className="so-kpi-lbl">{k.lbl}</div>
-                <span className="so-kpi-val">{k.val}</span>
-              </div>
-            ))}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(165px,1fr))', gap: 12 }}>
+            <Kpi lbl="Ad spend" val={inr(spend)} now={spend} prev={pv.spend} tone="neutral" />
+            <Kpi lbl="Sales gross" val={inr(salesGross)} sub="blended, all channels" now={salesGross} prev={pv.gross} />
+            <Kpi lbl="Blended ROAS" val={roas.toFixed(2) + '×'} sub="gross / spend" now={roas} prev={prevRoas} />
+            <Kpi lbl="Clicks" val={fmtInt(clicks)} now={clicks} prev={pv.clicks} tone="neutral" />
+            <Kpi lbl="Conversions" val={fmtInt(convs)} now={convs} prev={pv.convs} />
           </div>
 
-          <div>
-            <div className="so-kpi-lbl" style={{ marginBottom: 10 }}>Performance Trends</div>
-            <PerfTrendChart data={series} />
-          </div>
+          <PerfTrendChart data={series} />
 
-          <div className="so-card">
-            <div className="so-kpi-lbl">{group === 'campaign' ? 'Campaigns' : 'Platforms'} · spend & performance</div>
-            <table className="so-table" style={{ marginTop: 10 }}>
+          <div className="so-card" style={{ padding: 0, overflow: 'hidden' }}>
+            <div className="so-kpi-lbl" style={{ padding: '16px 18px 0' }}>{group === 'campaign' ? 'Campaigns' : 'Platforms'} · spend & performance</div>
+            <table className="so-table" style={{ marginTop: 8 }}>
               <thead><tr>
                 <th>{group === 'campaign' ? 'Campaign' : 'Platform'}</th>
                 <th className="so-num">Spend</th><th className="so-num">Impressions</th>
@@ -102,9 +98,9 @@ export default function MarketingPage() {
                 {rows.map((r, i) => (<tr key={i}>
                   <td>{r.grp || '—'}</td>
                   <td className="so-num">{inr(r.spend)}</td>
-                  <td className="so-num">{numfmt(r.impressions)}</td>
-                  <td className="so-num">{numfmt(r.clicks)}</td>
-                  <td className="so-num">{numfmt(r.conversions)}</td>
+                  <td className="so-num">{fmtInt(r.impressions)}</td>
+                  <td className="so-num">{fmtInt(r.clicks)}</td>
+                  <td className="so-num">{fmtInt(r.conversions)}</td>
                   <td className="so-num">{inr(r.conv_value)}</td>
                 </tr>))}
               </tbody>

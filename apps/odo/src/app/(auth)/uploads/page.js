@@ -48,10 +48,10 @@ export default function UploadsPage() {
   if (loading) return <Spinner />;
   const chName = Object.fromEntries(channels.map(c => [c.channel_id, c.name]));
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 22, maxWidth: 900 }}>
+    <div className="so-page" style={{ gap: 22, maxWidth: 900 }}>
       <section className="so-card">
-        <h2 style={{ fontFamily: 'var(--cond)', fontSize: 15, color: 'var(--t1)', marginBottom: 4 }}>Upload a sales report</h2>
-        <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginBottom: 16 }}>
+        <h2 className="so-h2">Upload a sales report</h2>
+        <p className="so-sub" style={{ margin: '4px 0 16px', maxWidth: '68ch' }}>
           For Quick-Commerce (Zepto / Blinkit / Instamart) and other report-fed channels. CSV export from the seller portal.
           Re-uploading for the same date range replaces the prior data (no double-count).
         </p>
@@ -79,7 +79,7 @@ export default function UploadsPage() {
       </section>
 
       <section>
-        <h2 style={{ fontFamily: 'var(--cond)', fontSize: 15, color: 'var(--t1)', marginBottom: 12 }}>Upload history</h2>
+        <h2 className="so-h2" style={{ marginBottom: 12 }}>Upload history</h2>
         <div className="so-card" style={{ padding: 0, overflow: 'hidden' }}>
           <table className="so-table">
             <thead><tr><th>Uploaded</th><th>Channel</th><th>File</th><th>Period</th><th>Status</th><th className="so-num">Rows</th><th className="so-num">Unmapped</th></tr></thead>

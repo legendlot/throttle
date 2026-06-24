@@ -45,14 +45,17 @@ export default function MappingPage() {
       .then(r => { toast?.showToast?.(`Mapped — ${r.dates} day(s) backfilled`, 'success'); load(); })
       .catch(e => toast?.showToast?.(e.message, 'error'));
   };
-  const delMap = (id) => salesPost('deleteSkuMap', { id }, session).then(() => load()).catch(e => toast?.showToast?.(e.message, 'error'));
+  const delMap = (id) => {
+    if (!window.confirm('Remove this SKU mapping? This channel SKU will return to the unmapped queue on the next pull.')) return;
+    salesPost('deleteSkuMap', { id }, session).then(() => load()).catch(e => toast?.showToast?.(e.message, 'error'));
+  };
 
   if (loading) return <Spinner />;
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 24, maxWidth: 1080 }}>
+    <div className="so-page" style={{ gap: 24, maxWidth: 1080 }}>
       <section>
-        <h2 style={{ fontFamily: 'var(--cond)', fontSize: 15, color: 'var(--t1)', marginBottom: 4 }}>Unmapped SKUs <span style={{ color: 'var(--amber)' }}>({unmapped.length})</span></h2>
-        <p style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginBottom: 12 }}>Channel SKUs we couldn’t auto-match. Map each once → its history backfills.</p>
+        <h2 className="so-h2">Unmapped SKUs <span style={{ color: 'var(--amber)' }}>({unmapped.length})</span></h2>
+        <p className="so-sub" style={{ margin: '4px 0 12px' }}>Channel SKUs we couldn’t auto-match. Map each once → its history backfills.</p>
         <div className="so-card" style={{ padding: 0, overflow: 'hidden' }}>
           {unmapped.length === 0 ? <div style={{ padding: 28, textAlign: 'center', color: 'var(--green)', fontFamily: 'var(--mono)', fontSize: 12 }}>All clear — nothing unmapped.</div> : (
             <table className="so-table">
@@ -86,7 +89,7 @@ export default function MappingPage() {
       </section>
 
       <section>
-        <h2 style={{ fontFamily: 'var(--cond)', fontSize: 15, color: 'var(--t1)', marginBottom: 12 }}>SKU map ({maps.length})</h2>
+        <h2 className="so-h2" style={{ marginBottom: 12 }}>SKU map ({maps.length})</h2>
         <div className="so-card" style={{ padding: 0, overflow: 'hidden' }}>
           <table className="so-table">
             <thead><tr><th>Channel</th><th>Channel SKU</th><th>→ Variant</th><th>Matched</th><th></th></tr></thead>

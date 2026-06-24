@@ -5,7 +5,7 @@ import { Spinner } from '@throttle/ui';
 import { salesGet, inr, fmtInt, rangePresets, priorPeriod, istToday } from '../lib/api.js';
 import { FAMILIES, familyOf, SUBCHANNEL_PALETTE } from '../lib/families.js';
 import { aggOrders } from '../lib/segregation.js';
-import { Kpi, SettledBadge } from './kit.js';
+import { Kpi, SettledBadge, RangePicker, SegmentedToggle } from './kit.js';
 import StackedTrendChart from './StackedTrendChart.js';
 
 // gross/units totals + per-channel + per-variant from f_sales_rollup (group=variant) rows.
@@ -116,22 +116,13 @@ export default function ChannelFamilyPage({ familyKey }) {
   const fmt = metric === 'units' ? fmtInt : inr;
 
   return (
-    <div style={{ padding: 28, display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div className="so-page">
       {/* header: title + range */}
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-        <span style={{ width: 10, height: 10, borderRadius: 3, background: fam.color }} />
-        <span style={{ fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 18, letterSpacing: '0.03em', color: 'var(--t1)' }}>{fam.label}</span>
-        <div style={{ flex: 1 }} />
-        {presets.map(pr => (
-          <button key={pr.key}
-            className={`so-btn${(pr.from === from && pr.to === to) ? '' : ' ghost'}`}
-            onClick={() => { setFrom(pr.from); setTo(pr.to); }} style={{ padding: '5px 12px', fontSize: 12 }}>
-            {pr.label}
-          </button>
-        ))}
-        <input className="so-input" type="date" value={from} max={to} onChange={e => setFrom(e.target.value)} />
-        <input className="so-input" type="date" value={to} min={from} max={istToday()} onChange={e => setTo(e.target.value)} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span style={{ width: 11, height: 11, borderRadius: 3, background: fam.color }} />
+        <span className="so-h2" style={{ fontSize: 18 }}>{fam.label}</span>
       </div>
+      <RangePicker from={from} to={to} onChange={({ from, to }) => { setFrom(from); setTo(to); }} />
 
       {err && <div className="so-card" style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12 }}>{err}</div>}
       {!ready ? <Spinner /> : !hasAnyData ? (
@@ -179,12 +170,7 @@ export default function ChannelFamilyPage({ familyKey }) {
           <div className="so-card">
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
               <div className="so-kpi-lbl" style={{ margin: 0 }}>Daily {metric === 'units' ? 'units' : 'gross'} by channel</div>
-              <div style={{ display: 'flex', gap: 4, background: 'var(--surface2)', borderRadius: 7, padding: 3 }}>
-                {['gross', 'units'].map(m => (
-                  <button key={m} onClick={() => setMetric(m)}
-                    style={{ background: metric === m ? 'var(--accent)' : 'transparent', color: metric === m ? 'var(--accent-fg)' : 'var(--t2)', border: 'none', borderRadius: 5, padding: '5px 10px', fontFamily: 'var(--mono)', fontSize: 10.5, cursor: 'pointer', textTransform: 'capitalize' }}>{m}</button>
-                ))}
-              </div>
+              <SegmentedToggle options={['gross', 'units']} value={metric} onChange={setMetric} size="sm" />
             </div>
             <StackedTrendChart days={shownTrend.days} dayVals={shownTrend.dv} metric={metric} groups={trendGroups} />
           </div>

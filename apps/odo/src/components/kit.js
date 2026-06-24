@@ -1,30 +1,102 @@
 'use client';
-// Shared dashboard primitives (KPI tile + period-over-period delta).
-// Used by /performance and the Channels family pages.
+// Shared dashboard primitives — the single vocabulary for KPI tiles, deltas, sparklines,
+// range selection and segmented toggles. Every page (cockpit, Performance, Marketing, Funnel,
+// Channels) renders these, so the controls + tiles look and behave identically everywhere.
+import { rangePresets, istToday } from '../lib/api.js';
 
-// % delta vs prior period; tone: 'pos' colours up=green/down=red, 'neutral' = grey (cost metrics).
-export function Delta({ now, prev, tone = 'pos' }) {
-  if (prev == null || !isFinite(prev) || prev === 0) return null;
-  const pct = (now - prev) / Math.abs(prev) * 100;
+const PRESETS = rangePresets();
+
+// ── period-over-period delta ──────────────────────────────────────────────
+// Pass now/prev (preferred) OR a precomputed pct. tone:'pos' colours up=green/down=red;
+// 'neutral' stays grey (cost/volume metrics where direction isn't inherently good/bad).
+export function Delta({ now, prev, pct: pctIn, tone = 'pos' }) {
+  let pct = pctIn;
+  if (pct == null) {
+    if (prev == null || !isFinite(prev) || prev === 0) return null;
+    pct = (now - prev) / Math.abs(prev) * 100;
+  }
+  if (!isFinite(pct)) return null;
   const up = pct >= 0;
   const color = tone === 'neutral' ? 'var(--t3)' : (up ? 'var(--green)' : 'var(--red)');
   return (
-    <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color, display: 'inline-flex', alignItems: 'center', gap: 2 }}>
-      {up ? '↗' : '↘'} {Math.abs(pct).toFixed(1)}%
+    <span style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600, color, display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+      {up ? '↗' : '↘'} {Math.abs(pct).toFixed(0)}%
     </span>
   );
 }
 
-export function Kpi({ lbl, val, sub, now, prev, tone, badge }) {
+// ── dependency-free sparkline ─────────────────────────────────────────────
+export function Spark({ data, color = 'var(--accent)', height = 30 }) {
+  if (!data || data.length < 2) return <div style={{ height }} />;
+  const W = 130, H = height, max = Math.max(...data), min = Math.min(...data, 0), span = (max - min) || 1;
+  const pts = data.map((v, i) => `${(i / (data.length - 1)) * W},${H - ((v - min) / span) * (H - 2) - 1}`);
+  return (
+    <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ display: 'block' }}>
+      <polyline points={`0,${H} ${pts.join(' ')} ${W},${H}`} fill={color} fillOpacity="0.10" stroke="none" />
+      <polyline points={pts.join(' ')} fill="none" stroke={color} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}
+
+// ── KPI tile ───────────────────────────────────────────────────────────────
+// One tile used everywhere. Optional spark (sparkline data) + sparkColor; optional badge slot;
+// deltaNote shows what the delta compares against.
+export function Kpi({ lbl, val, sub, now, prev, pct, tone, badge, spark, sparkColor = 'var(--accent)', deltaNote }) {
   return (
     <div className="so-card" style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-        <div className="so-kpi-lbl">{lbl}</div>
-        <Delta now={now} prev={prev} tone={tone} />
+        <div className="so-kpi-lbl" style={{ margin: 0 }}>{lbl}</div>
+        <Delta now={now} prev={prev} pct={pct} tone={tone} />
       </div>
       <span className="so-kpi-val">{val}</span>
-      {sub && <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>{sub}</div>}
+      {sub && <div className="so-sub" style={{ fontSize: 11 }}>{sub}</div>}
+      {spark && <Spark data={spark} color={sparkColor} />}
+      {deltaNote && <div className="so-sub" style={{ fontSize: 9.5 }}>{deltaNote}</div>}
       {badge}
+    </div>
+  );
+}
+
+// ── segmented toggle ────────────────────────────────────────────────────────
+// options: ['gross','units'] | [['variant','Variant'],['product','Product']] | [{key,label}]
+export function SegmentedToggle({ options, value, onChange, size = 'md' }) {
+  const opts = (options || []).map(o =>
+    Array.isArray(o) ? { key: o[0], label: o[1] } : (typeof o === 'object' ? o : { key: o, label: o }));
+  const pad = size === 'sm' ? '5px 9px' : '6px 11px';
+  const fs = size === 'sm' ? 11 : 12;
+  return (
+    <div className="so-seg">
+      {opts.map(o => (
+        <button key={o.key} className={value === o.key ? 'on' : ''} onClick={() => onChange(o.key)}
+          style={{ padding: pad, fontSize: fs, textTransform: o.label === o.key ? 'capitalize' : 'none' }}>
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ── range picker ─────────────────────────────────────────────────────────────
+// Preset segmented control + from/to date inputs. One control for every page's date range.
+// onChange({ from, to, preset }). `right` renders extra controls flush-right on the same row.
+export function RangePicker({ from, to, onChange, right }) {
+  const activePreset = PRESETS.find(p => p.from === from && p.to === to)?.key || '';
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
+      <div className="so-seg">
+        {PRESETS.map(p => (
+          <button key={p.key} className={activePreset === p.key ? 'on' : ''}
+            onClick={() => onChange({ from: p.from, to: p.to, preset: p.key })}>
+            {p.label}
+          </button>
+        ))}
+      </div>
+      <input className="so-input" type="date" value={from} max={to}
+        onChange={e => onChange({ from: e.target.value, to, preset: '' })} />
+      <span style={{ color: 'var(--t3)' }}>→</span>
+      <input className="so-input" type="date" value={to} min={from} max={istToday()}
+        onChange={e => onChange({ from, to: e.target.value, preset: '' })} />
+      {right && <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-end', gap: 10, alignItems: 'center' }}>{right}</div>}
     </div>
   );
 }

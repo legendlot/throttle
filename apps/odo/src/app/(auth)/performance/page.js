@@ -1,17 +1,19 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
-import { salesGet, inr, fmtInt, rangePresets, priorPeriod, istToday } from '../../../lib/api.js';
+import { salesGet, inr, fmtInt, rangePresets, priorPeriod } from '../../../lib/api.js';
 import { aggOrders } from '../../../lib/segregation.js';
-import { Delta, Kpi, SettledBadge } from '../../../components/kit.js';
+import { Kpi, SettledBadge, RangePicker, SegmentedToggle } from '../../../components/kit.js';
+import { familyOf, FAMILIES, SUBCHANNEL_PALETTE } from '../../../lib/families.js';
+import StackedTrendChart from '../../../components/StackedTrendChart.js';
 
 export default function PerformancePage() {
   const { session } = useAuth();
-  const presets = rangePresets();
-  const mtd = presets.find(p => p.key === 'mtd');
+  const mtd = rangePresets().find(p => p.key === 'mtd');
   const [from, setFrom] = useState(mtd.from);
   const [to, setTo] = useState(mtd.to);
+  const [metric, setMetric] = useState('gross');   // trend: gross (Total Sales) | net (ex-GST)
   const [data, setData] = useState(null);   // { rows, channels }
   const [prev, setPrev] = useState(null);    // prior-period agg
   const [err, setErr] = useState('');
@@ -31,37 +33,46 @@ export default function PerformancePage() {
 
   const a = data ? aggOrders(data.rows) : null;
   const p = prev || {};
-  const chById = {}; (data?.channels || []).forEach(c => { chById[c.id] = c.name; });
+  const chById = useMemo(() => Object.fromEntries((data?.channels || []).map(c => [c.id, c.name])), [data]);
 
   // per-channel rollup for the breakdown table
-  const byCh = {};
-  for (const r of (data?.rows || [])) {
-    const k = r.channel_id; (byCh[k] = byCh[k] || []).push(r);
-  }
-  const chRows = Object.entries(byCh).map(([id, rs]) => ({ id, name: chById[id] || id, ...aggOrders(rs) }))
-    .sort((x, y) => y.grossAll - x.grossAll);
+  const chRows = useMemo(() => {
+    const byCh = {};
+    for (const r of (data?.rows || [])) (byCh[r.channel_id] = byCh[r.channel_id] || []).push(r);
+    return Object.entries(byCh).map(([id, rs]) => ({ id, name: chById[id] || id, ...aggOrders(rs) }))
+      .sort((x, y) => y.grossAll - x.grossAll);
+  }, [data, chById]);
+
+  // daily trend, stacked by channel — Total Sales (gross) or Net Revenue ex-GST per day
+  const trend = useMemo(() => {
+    const byDayCh = {};
+    for (const r of (data?.rows || [])) {
+      const k = `${r.sale_date}|${r.channel_id}`;
+      (byDayCh[k] = byDayCh[k] || []).push(r);
+    }
+    const dv = {};
+    for (const [k, rs] of Object.entries(byDayCh)) {
+      const [d, ch] = k.split('|'); const ag = aggOrders(rs);
+      (dv[d] = dv[d] || {})[ch] = metric === 'net' ? ag.netExGst : ag.grossAll;
+    }
+    return { days: Object.keys(dv).sort(), dv };
+  }, [data, metric]);
+
+  const trendGroups = useMemo(() => chRows.map((c, i) => {
+    const fam = FAMILIES[familyOf(c.name)];
+    return { key: c.id, label: c.name, color: fam?.color || SUBCHANNEL_PALETTE[i % SUBCHANNEL_PALETTE.length] };
+  }), [chRows]);
 
   return (
-    <div style={{ padding: 28, display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        {presets.map(pr => (
-          <button key={pr.key}
-            className={`so-btn${(pr.from === from && pr.to === to) ? '' : ' ghost'}`}
-            onClick={() => { setFrom(pr.from); setTo(pr.to); }} style={{ padding: '5px 12px', fontSize: 12 }}>
-            {pr.label}
-          </button>
-        ))}
-        <span style={{ width: 1, height: 22, background: 'var(--border)', margin: '0 4px' }} />
-        <input className="so-input" type="date" value={from} max={to} onChange={e => setFrom(e.target.value)} />
-        <input className="so-input" type="date" value={to} min={from} max={istToday()} onChange={e => setTo(e.target.value)} />
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', marginLeft: 'auto' }}>vs prior period · order-grain channels</span>
-      </div>
+    <div className="so-page">
+      <RangePicker from={from} to={to} onChange={({ from, to }) => { setFrom(from); setTo(to); }}
+        right={<span className="so-sub">vs prior period · order-grain channels</span>} />
 
       {err && <div className="so-card" style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12 }}>{err}</div>}
-      {!a ? <Spinner /> : (
+      {!a ? <div style={{ padding: 60, textAlign: 'center' }}><Spinner /></div> : (
         <>
           {/* Headline ladder + tiles */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12 }}>
             <Kpi lbl="Total Orders" val={fmtInt(a.totalOrders)} sub="placed (incl. cancelled)" now={a.totalOrders} prev={p.totalOrders} />
             <Kpi lbl="Total Sales" val={inr(a.grossAll)} sub="gross revenue" now={a.grossAll} prev={p.grossAll} />
             <Kpi lbl="Net Sales" val={inr(a.netCancel)} sub="excl. cancellations" now={a.netCancel} prev={p.netCancel} />
@@ -72,18 +83,27 @@ export default function PerformancePage() {
             <Kpi lbl="Total Discounts" val={inr(a.discount)} sub="discount given" now={a.discount} prev={p.discount} tone="neutral" />
           </div>
 
+          {/* trend */}
+          <div className="so-card">
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 10 }}>
+              <div className="so-kpi-lbl" style={{ margin: 0 }}>Daily {metric === 'net' ? 'net revenue (ex-GST)' : 'total sales'} by channel</div>
+              <SegmentedToggle options={[['gross', 'Total Sales'], ['net', 'Net ex-GST']]} value={metric} onChange={setMetric} size="sm" />
+            </div>
+            <StackedTrendChart days={trend.days} dayVals={trend.dv} metric="gross" groups={trendGroups} />
+          </div>
+
           {/* Order-type tiles (Shopify MO tags) */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12 }}>
-            <Kpi lbl="Replacements" val={fmtInt(a.repl)} sub="mo_replacement" now={a.repl} prev={p.repl} tone="neutral" />
-            <Kpi lbl="Influencer Orders" val={fmtInt(a.infl)} sub="mo_influencer" now={a.infl} prev={p.infl} tone="neutral" />
-            <Kpi lbl="Repairs" val={fmtInt(a.repair)} sub="mo_repair" now={a.repair} prev={p.repair} tone="neutral" />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12 }}>
+            <Kpi lbl="Replacements" val={fmtInt(a.repl)} sub="replacement orders" now={a.repl} prev={p.repl} tone="neutral" />
+            <Kpi lbl="Influencer Orders" val={fmtInt(a.infl)} sub="influencer / seeding" now={a.infl} prev={p.infl} tone="neutral" />
+            <Kpi lbl="Repairs" val={fmtInt(a.repair)} sub="repair orders" now={a.repair} prev={p.repair} tone="neutral" />
           </div>
 
           {/* Per-channel breakdown */}
-          <div className="so-card">
-            <div className="so-kpi-lbl">By channel</div>
+          <div className="so-card" style={{ padding: 0, overflow: 'hidden' }}>
+            <div className="so-kpi-lbl" style={{ padding: '16px 18px 0' }}>By channel</div>
             <div style={{ overflowX: 'auto' }}>
-              <table className="so-table" style={{ marginTop: 10 }}>
+              <table className="so-table" style={{ marginTop: 8 }}>
                 <thead><tr>
                   <th>Channel</th><th className="so-num">Orders</th><th className="so-num">Gross</th>
                   <th className="so-num">Net (excl. canc.)</th><th className="so-num">Discounts</th>
