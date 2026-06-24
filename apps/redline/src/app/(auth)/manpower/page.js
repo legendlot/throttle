@@ -2207,11 +2207,12 @@ function Field({ label, full, children }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ShiftsTab (Phase 2) — team-owned, effective-dated, audited shift timings.
-// Production + Dispatch manage their shifts here (Store manages in Garage).
+// ShiftsTab — team-owned, effective-dated, audited shift timings for all depts.
 // Editing a time writes a NEW effective-dated version (never overwrites) → full
-// audit trail. Worker: getShifts / createShift / renameShift / setShiftActive /
-// addShiftVersion / getShiftHistory. Read by the recordAttendance resolver.
+// audit trail. Depts with 2+ active shifts get an operator-assignment panel so
+// each operator can be pinned to their home shift.
+// Worker: getShifts / createShift / renameShift / setShiftActive /
+// addShiftVersion / getShiftHistory / setOperatorShift. Read by recordAttendance.
 // ═══════════════════════════════════════════════════════════════════════════
 const SHIFT_DEPTS = ['assembly', 'qc', 'packaging', 'admin', 'dispatch', 'store'];
 const modalInput = { ...kitInput, width: '100%', fontSize: 13, padding: '8px 11px' };
@@ -2223,7 +2224,7 @@ function fmtHM(t) { return t ? String(t).slice(0, 5) : null; }
 function ShiftsTab({ session, canManageFloor }) {
   const { showToast } = useToast();
   const [shifts, setShifts] = useState([]);
-  const [dispatchOps, setDispatchOps] = useState([]);
+  const [opsByDept, setOpsByDept] = useState({});
   const [loading, setLoading] = useState(true);
   const [editTarget, setEditTarget] = useState(null);
   const [histTarget, setHistTarget] = useState(null);
@@ -2233,13 +2234,24 @@ function ShiftsTab({ session, canManageFloor }) {
     if (!session || !canManageFloor) return;
     setLoading(true);
     try {
-      const [shRes, opRes] = await Promise.all([
-        workerFetch('getShifts', { data: {} }, session),
-        workerFetch('getOperators', { data: { department: 'dispatch', status: 'active' } }, session),
-      ]);
+      const shRes = await workerFetch('getShifts', { data: {} }, session);
       const list = Array.isArray(shRes?.data) ? shRes.data : [];
-      setShifts(list.filter((s) => SHIFT_DEPTS.includes(s.department)));
-      setDispatchOps(Array.isArray(opRes?.data) ? opRes.data : []);
+      const filtered = list.filter((s) => SHIFT_DEPTS.includes(s.department));
+      setShifts(filtered);
+      // depts with 2+ active shifts need explicit operator-to-shift assignment
+      const activeByDept = {};
+      for (const s of filtered) if (s.is_active) (activeByDept[s.department] = activeByDept[s.department] || []).push(s);
+      const multiDepts = Object.keys(activeByDept).filter((d) => activeByDept[d].length > 1);
+      if (multiDepts.length) {
+        const opResults = await Promise.all(
+          multiDepts.map((dept) => workerFetch('getOperators', { data: { department: dept, status: 'active' } }, session))
+        );
+        const collected = {};
+        multiDepts.forEach((dept, i) => { collected[dept] = Array.isArray(opResults[i]?.data) ? opResults[i].data : []; });
+        setOpsByDept(collected);
+      } else {
+        setOpsByDept({});
+      }
     } catch (e) {
       showToast(e.message || 'Failed to load shifts', 'error');
     } finally { setLoading(false); }
@@ -2270,7 +2282,7 @@ function ShiftsTab({ session, canManageFloor }) {
       <div style={{ fontSize: 13, color: 'var(--t3)', maxWidth: 700 }}>
         Shift timings drive attendance — the clock-in window, the end time, and overtime.
         Changing a time takes effect from the date you pick and is saved as a new version;
-        older versions stay for the record. Names are yours to set. (Store shifts are managed in Garage.)
+        older versions stay for the record. Names are yours to set.
       </div>
       {SHIFT_DEPTS.map((dept) => (
         <Panel key={dept} title={capitalize(dept)}
@@ -2307,24 +2319,24 @@ function ShiftsTab({ session, canManageFloor }) {
         </Panel>
       ))}
 
-      {(byDept['dispatch'] || []).length > 1 && (
-        <Panel title="Dispatch — assign operators to shifts">
+      {Object.entries(opsByDept).map(([dept, ops]) => (
+        <Panel key={dept} title={`${capitalize(dept)} — assign operators to shifts`}>
           <div style={{ fontSize: 12.5, color: 'var(--t3)', marginBottom: 10 }}>
-            Dispatch shifts overlap, so a person's shift can't be read from scan time — set each
-            operator's home shift here. (Unassigned falls back to the earliest matching shift.)
+            This department has multiple active shifts — set each operator&apos;s home shift here.
+            Unassigned operators fall back to the earliest matching shift.
           </div>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr><th style={shTh}>Operator</th><th style={shTh}>ID</th><th style={shTh}>Home shift</th></tr></thead>
               <tbody>
-                {dispatchOps.map((o) => (
+                {ops.map((o) => (
                   <tr key={o.id}>
                     <td style={shTd}>{o.name}</td>
                     <td style={shTd}>{o.employee_id}</td>
                     <td style={shTd}>
                       <select value={o.shift_id || ''} onChange={(e) => assignOp(o.id, e.target.value)} style={selectStyle}>
                         <option value="">— unassigned —</option>
-                        {(byDept['dispatch'] || []).map((s) => (
+                        {(byDept[dept] || []).filter((s) => s.is_active).map((s) => (
                           <option key={s.id} value={s.id}>
                             {s.name}{s.current ? ` (${fmtHM(s.current.start_time)}–${fmtHM(s.current.end_time)})` : ''}
                           </option>
@@ -2333,12 +2345,12 @@ function ShiftsTab({ session, canManageFloor }) {
                     </td>
                   </tr>
                 ))}
-                {!dispatchOps.length && <tr><td colSpan={3} style={{ ...shTd, color: 'var(--t3)' }}>No active dispatch operators.</td></tr>}
+                {!ops.length && <tr><td colSpan={3} style={{ ...shTd, color: 'var(--t3)' }}>No active operators.</td></tr>}
               </tbody>
             </table>
           </div>
         </Panel>
-      )}
+      ))}
 
       {editTarget && <EditTimingModal shift={editTarget} session={session} onClose={() => setEditTarget(null)} onSaved={() => { setEditTarget(null); load(); }} />}
       {histTarget && <ShiftHistoryModal shift={histTarget} session={session} onClose={() => setHistTarget(null)} />}
