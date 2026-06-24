@@ -34,9 +34,10 @@ export default function Dashboard() {
   const { session } = useAuth();
   const [channels, setChannels] = useState([]);
   const [sel, setSel] = useState([]);            // selected channel ids ([] = all)
-  const [preset, setPreset] = useState('30d');
-  const [from, setFrom] = useState(istDaysAgo(29));
-  const [to, setTo] = useState(istToday());
+  const MTD = PRESETS.find(p => p.key === 'mtd');
+  const [preset, setPreset] = useState('mtd');
+  const [from, setFrom] = useState(MTD.from);
+  const [to, setTo] = useState(MTD.to);
   const [group, setGroup] = useState('variant'); // drill table axis
   const [trendMetric, setTrendMetric] = useState('gross');
   const [variantMetric, setVariantMetric] = useState('gross');

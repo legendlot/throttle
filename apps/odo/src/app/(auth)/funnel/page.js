@@ -7,6 +7,7 @@ import { RangePicker } from '../../../components/kit.js';
 
 const numfmt = n => Number(n || 0).toLocaleString('en-IN');
 const pctOf = (n, d) => (d > 0 ? (n / d * 100) : 0);
+const fmtPct = n => `${+Number(n || 0).toFixed(2)}%`;   // up to 2 decimals, no trailing zeros
 
 // Stepped conversion funnel: each stage's bar is sized to its share of Sessions, with the
 // step-to-step conversion rate called out between stages. The drop-off is the story.
@@ -23,7 +24,7 @@ function Funnel({ steps }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0 2px 4px' }}>
                 <span style={{ color: 'var(--t3)', fontSize: 13 }}>↳</span>
                 <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: stepConv >= 50 ? 'var(--green)' : stepConv >= 20 ? 'var(--amber)' : 'var(--t2)' }}>
-                  {stepConv.toFixed(1)}%
+                  {fmtPct(stepConv)}
                 </span>
                 <span className="so-sub" style={{ fontSize: 11 }}>continue to {s.label.toLowerCase()}</span>
               </div>
@@ -34,7 +35,7 @@ function Funnel({ steps }) {
                 <div style={{ position: 'absolute', inset: 0, transformOrigin: 'left', transform: `scaleX(${Math.max(share, 0) / 100})`, background: `linear-gradient(90deg, ${s.color}, color-mix(in srgb, ${s.color} 65%, transparent))`, borderRadius: 8, transition: 'transform .45s cubic-bezier(.22,1,.36,1)' }} />
                 <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 13px' }}>
                   <span style={{ fontFamily: 'var(--mono)', fontSize: 14, fontWeight: 700, color: 'var(--t1)' }}>{numfmt(s.value)}</span>
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)' }}>{share.toFixed(0)}%</span>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)' }}>{fmtPct(share)}</span>
                 </div>
               </div>
             </div>
@@ -47,9 +48,9 @@ function Funnel({ steps }) {
 
 export default function FunnelPage() {
   const { session } = useAuth();
-  const d30 = rangePresets().find(p => p.key === '30d');
-  const [from, setFrom] = useState(d30.from);
-  const [to, setTo] = useState(d30.to);
+  const mtd = rangePresets().find(p => p.key === 'mtd');
+  const [from, setFrom] = useState(mtd.from);
+  const [to, setTo] = useState(mtd.to);
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState('');
 

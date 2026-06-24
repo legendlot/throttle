@@ -11,9 +11,9 @@ const grossOf = (rows) => (rows || []).reduce((a, r) => a + Number(r.gross_value
 
 export default function MarketingPage() {
   const { session } = useAuth();
-  const d30 = rangePresets().find(p => p.key === '30d');
-  const [from, setFrom] = useState(d30.from);
-  const [to, setTo] = useState(d30.to);
+  const mtd = rangePresets().find(p => p.key === 'mtd');
+  const [from, setFrom] = useState(mtd.from);
+  const [to, setTo] = useState(mtd.to);
   const [group, setGroup] = useState('platform');
   const [rows, setRows] = useState(null);        // marketing by platform/campaign (table)
   const [mktDaily, setMktDaily] = useState([]);   // marketing by day (chart)
