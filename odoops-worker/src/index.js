@@ -886,6 +886,80 @@ const metaAdsAdapter = {
   },
 };
 
+// ── Google Ads (Google Ads API searchStream) — domain: marketing → mkt_fact ──
+const GADS_API_VER = 'v23';
+async function getGoogleAdsToken(env) {
+  // OAuth2 refresh-token grant → short-lived access token (one per run).
+  const body = new URLSearchParams({
+    client_id: env.GOOGLE_ADS_CLIENT_ID, client_secret: env.GOOGLE_ADS_CLIENT_SECRET,
+    refresh_token: env.GOOGLE_ADS_REFRESH_TOKEN, grant_type: 'refresh_token',
+  });
+  const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
+  if (!r.ok) throw new Error('Google Ads token ' + r.status + ': ' + (await r.text().catch(() => '')).slice(0, 160));
+  const j = await r.json();
+  if (!j.access_token) throw new Error('Google Ads token: no access_token');
+  return j.access_token;
+}
+const googleAdsAdapter = {
+  kind: 'google_ads', stgTable: 'stg_google_ads',
+  datesOf(rows) { return [...new Set(rows.map(r => r.the_date))].sort(); },
+  async fetch({ env, channelId, cursor, budget, config }) {
+    if (!env.GOOGLE_ADS_DEVELOPER_TOKEN || !env.GOOGLE_ADS_REFRESH_TOKEN) throw new Error('Google Ads not configured (set GOOGLE_ADS_* secrets)');
+    const cfg = config || {};
+    const customers = (cfg.customer_ids || []).map(c => String(c).replace(/[^0-9]/g, '')).filter(Boolean);
+    if (!customers.length) throw new Error('Google Ads config.customer_ids empty');
+    const loginCid = String(cfg.login_customer_id || '').replace(/[^0-9]/g, '');
+    const backfillStart = (cfg.backfill_start || BACKFILL_START).slice(0, 10);
+    const today = istDate(nowISO());
+    const WIN = 90;   // mirror Meta: one window/run, walk BACKWARD from today; cursor = earliest date fetched.
+    const addDays = (d, n) => { const t = new Date(d + 'T00:00:00Z'); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); };
+    const earliest = cursor ? String(cursor).slice(0, 10) : null;
+    let winEnd, winStart, mode;
+    if (earliest === null) { mode = 'initial'; winEnd = today; winStart = addDays(today, -(WIN - 1)); }
+    else if (earliest > backfillStart) { mode = 'backfill'; winEnd = addDays(earliest, -1); winStart = addDays(winEnd, -(WIN - 1)); }
+    else { mode = 'steady'; winEnd = today; winStart = addDays(today, -(WIN - 1)); }
+    if (winStart < backfillStart) winStart = backfillStart;
+    const token = await getGoogleAdsToken(env);
+    const H = { 'developer-token': env.GOOGLE_ADS_DEVELOPER_TOKEN, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+    if (loginCid) H['login-customer-id'] = loginCid;
+    const query = `SELECT campaign.id, campaign.name, segments.date, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.conversions_value FROM campaign WHERE segments.date BETWEEN '${winStart}' AND '${winEnd}'`;
+    const rows = []; let subreqs = 1, partial = false;   // +1 for the token call
+    for (const cid of customers) {
+      if (subreqs >= budget) { partial = true; break; }
+      const res = await fetch(`https://googleads.googleapis.com/${GADS_API_VER}/customers/${cid}/googleAds:searchStream`, { method: 'POST', headers: H, body: JSON.stringify({ query }) }).catch(() => null); subreqs++;
+      if (!res || !res.ok) { const b = res ? await res.text().catch(() => '') : ''; throw new Error(`Google Ads ${res ? res.status : 'network'} cust ${cid}: ${b.slice(0, 200)}`); }
+      const batches = await res.json();   // searchStream → array of { results: [...] }
+      for (const batch of (Array.isArray(batches) ? batches : [])) {
+        for (const r of (batch.results || [])) {
+          const m = r.metrics || {}, camp = r.campaign || {}, seg = r.segments || {};
+          rows.push({
+            channel_id: channelId, ad_account_id: cid, campaign_id: String(camp.id ?? ''),
+            campaign_name: camp.name || null, the_date: seg.date,
+            spend: num(m.costMicros) / 1e6, impressions: num(m.impressions), clicks: num(m.clicks),
+            conversions: num(m.conversions), conv_value: num(m.conversionsValue), raw: r,
+          });
+        }
+      }
+    }
+    const cursorAfter = (mode === 'steady') ? backfillStart : winStart;
+    if (mode !== 'steady') partial = partial || (winStart > backfillStart);
+    return { rows: rows.filter(r => r.the_date), cursorAfter, subreqs, partial };
+  },
+  async stage(rows, runId, channelId) {
+    if (!rows.length) return;
+    const body = rows.map(r => ({
+      run_id: runId, channel_id: channelId, ad_account_id: r.ad_account_id, campaign_id: r.campaign_id,
+      campaign_name: r.campaign_name, the_date: r.the_date, spend: r.spend, impressions: Math.round(r.impressions),
+      clicks: Math.round(r.clicks), conversions: r.conversions, conv_value: r.conv_value, raw: r.raw,
+    }));
+    await sbInsertChunked('/rest/v1/stg_google_ads?on_conflict=channel_id,ad_account_id,campaign_id,the_date', body, 'return=minimal,resolution=merge-duplicates');
+  },
+  async recompute({ channelId, dates, runId }) {
+    const f = await rpcSales('recompute_google_ads', { p_channel: channelId, p_dates: dates, p_run_id: runId });
+    return { mapped: 0, unmapped: 0, factsUpserted: (f.ok ? Number(f.data) : 0) };
+  },
+};
+
 // ── GA4 (Analytics Data API runReport) — domain: traffic → traffic_fact ───
 const GA4_SCOPE = 'https://www.googleapis.com/auth/analytics.readonly';
 const ga4Adapter = {
@@ -1081,7 +1155,7 @@ const uniwareAdapter = {
   },
 };
 
-const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter, amazon_spapi: amazonAdapter, amazon_ads: amazonAdsAdapter, meta_ads: metaAdsAdapter, ga4: ga4Adapter, uniware: uniwareAdapter };
+const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter, amazon_spapi: amazonAdapter, amazon_ads: amazonAdsAdapter, meta_ads: metaAdsAdapter, google_ads: googleAdsAdapter, ga4: ga4Adapter, uniware: uniwareAdapter };
 
 // minimal RFC-4180-ish CSV parser (handles quoted fields, commas, newlines)
 function parseCSV(text) {
@@ -1430,7 +1504,7 @@ export default {
             const lastByChannel = {}; runs.forEach(r => { if (!lastByChannel[r.channel_id]) lastByChannel[r.channel_id] = r; });
             const cfgByChannel = {}; cfgs.forEach(c => { cfgByChannel[c.channel_id] = c; });
             return ok({
-              secrets: { shopify: !!(env.SHOPIFY_ACCESS_TOKEN || env.SHOPIFY_CLIENT_ID), amazon: !!env.AMAZON_LWA_CLIENT_ID, amazon_ads: !!env.AMAZON_ADS_CLIENT_ID, flipkart: !!env.FLIPKART_CLIENT_ID, google: !!env.GOOGLE_SA_JSON, meta: !!env.META_SYSTEM_USER_TOKEN, uniware: !!(env.UNIWARE_TENANT && env.UNIWARE_USERNAME && env.UNIWARE_PASSWORD) },
+              secrets: { shopify: !!(env.SHOPIFY_ACCESS_TOKEN || env.SHOPIFY_CLIENT_ID), amazon: !!env.AMAZON_LWA_CLIENT_ID, amazon_ads: !!env.AMAZON_ADS_CLIENT_ID, flipkart: !!env.FLIPKART_CLIENT_ID, google: !!env.GOOGLE_SA_JSON, meta: !!env.META_SYSTEM_USER_TOKEN, google_ads: !!(env.GOOGLE_ADS_DEVELOPER_TOKEN && env.GOOGLE_ADS_REFRESH_TOKEN), uniware: !!(env.UNIWARE_TENANT && env.UNIWARE_USERNAME && env.UNIWARE_PASSWORD) },
               connectors: allCh.map(c => ({ channel_id: c.id, name: c.name, adapter_kind: cfgByChannel[c.id]?.adapter_kind || null, enabled: !!cfgByChannel[c.id]?.enabled, cursor: cfgByChannel[c.id]?.cursor || null, last_ok_at: cfgByChannel[c.id]?.last_ok_at || null, last_error: cfgByChannel[c.id]?.last_error || null, last_run: lastByChannel[c.id] || null })),
             });
           }
