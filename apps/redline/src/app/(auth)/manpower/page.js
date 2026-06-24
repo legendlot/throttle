@@ -2230,9 +2230,9 @@ function ShiftsTab({ session, canManageFloor }) {
   const [histTarget, setHistTarget] = useState(null);
   const [addDept, setAddDept] = useState(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (silent = false) => {
     if (!session || !canManageFloor) return;
-    setLoading(true);
+    if (!silent) setLoading(true);
     try {
       const shRes = await workerFetch('getShifts', { data: {} }, session);
       const list = Array.isArray(shRes?.data) ? shRes.data : [];
@@ -2261,13 +2261,13 @@ function ShiftsTab({ session, canManageFloor }) {
   async function toggleActive(s) {
     try {
       await workerFetch('setShiftActive', { data: { shift_id: s.id, is_active: !s.is_active } }, session);
-      load();
+      load(true);
     } catch (e) { showToast(e.message || 'Failed', 'error'); }
   }
   async function assignOp(operator_id, shift_id) {
     try {
       await workerFetch('setOperatorShift', { data: { operator_id, shift_id: shift_id || null } }, session);
-      load();
+      load(true);
     } catch (e) { showToast(e.message || 'Failed', 'error'); }
   }
 
