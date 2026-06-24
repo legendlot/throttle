@@ -1,8 +1,11 @@
-import { trackBulk } from './adapters/delhivery.js';
-import { TERMINAL_STAGES } from './normalize.js';
+import { loginB2B, trackLrn } from './adapters/delhivery.js';
+import { TERMINAL_STAGES, mergeCheckpoint } from './normalize.js';
 
 const SUPABASE_URL = 'https://jkxcnjabmrkteanzoofj.supabase.co';
-const MAX_AWBS = 600;   // ≤20 bulk pulls + 1 RPC write per run — well under the 50-subrequest limit
+// Each LRN is its OWN subrequest now (B2B has no bulk track). Budget per run: 1 select + 1 login +
+// N tracks + 1 RPC ≤ 50. Cap N at 45; overflow rolls to the next 30-min cron (ordered oldest-synced-first).
+const MAX_LRNS = 45;
+const FETCH_LIMIT = 400;   // pull a wider window (1 subrequest), filter terminal JS-side, then track the oldest 45
 
 // service-role: sb_secret key sent as BOTH apikey and Authorization (not a JWT). public schema = no profile.
 async function sbPublic(key, path, opts = {}) {
@@ -19,7 +22,7 @@ async function sbPublic(key, path, opts = {}) {
   catch { return { ok: res.ok, status: res.status, data: text }; }
 }
 
-// UTC ISO timestamp → IST calendar date (delivery_date is a date col; a 23:30 IST delivery is the IST day).
+// UTC ISO → IST calendar date (delivery_date is a date col; a 23:30 IST delivery is the IST day).
 function istDate(iso) {
   if (!iso) return null;
   const d = new Date(iso);
@@ -29,46 +32,54 @@ function istDate(iso) {
 
 async function sweep(env) {
   const key = env.SUPABASE_SERVICE_KEY;
-  const token = env.DELHIVERY_API_TOKEN;
-  if (!key || !token) { console.error('courierops: missing SUPABASE_SERVICE_KEY or DELHIVERY_API_TOKEN'); return; }
+  const username = env.DELHIVERY_B2B_USERNAME;
+  const password = env.DELHIVERY_B2B_PASSWORD;
+  if (!key || !username || !password) {
+    console.error('courierops: missing SUPABASE_SERVICE_KEY / DELHIVERY_B2B_USERNAME / DELHIVERY_B2B_PASSWORD');
+    return;
+  }
 
-  // Delhivery shipments that carry an AWB, < 30 days old; terminal stages filtered JS-side below.
+  // Delhivery shipments carrying an LRN (stored in tracking_number), < 30 days old. tracking_checkpoints
+  // is fetched so we can ACCUMULATE the timeline (B2B track returns only the latest status). Oldest-synced
+  // first so coverage rotates fairly across runs.
   const cutoff = new Date(Date.now() - 30 * 864e5).toISOString();
-  const q = `?select=id,tracking_number,tracking_status&courier_partner=eq.Delhivery&tracking_number=not.is.null`
-    + `&created_at=gte.${cutoff}&order=tracking_synced_at.asc.nullsfirst&limit=${MAX_AWBS}`;
+  const q = `?select=id,tracking_number,tracking_status,tracking_checkpoints`
+    + `&courier_partner=eq.Delhivery&tracking_number=not.is.null`
+    + `&created_at=gte.${cutoff}&order=tracking_synced_at.asc.nullsfirst&limit=${FETCH_LIMIT}`;
   const r = await sbPublic(key, `/rest/v1/dispatch_shipments${q}`);
   if (!r.ok) { console.error('courierops: shipment query failed', r.status, r.data); return; }
 
-  const rows = Array.isArray(r.data) ? r.data : [];
-  // Terminal filter in JS — deterministic, vs the fragile PostgREST or/not.in grammar.
-  // A null tracking_status is not in TERMINAL_STAGES, so new shipments are correctly included.
-  const open = rows.filter(s => !TERMINAL_STAGES.includes(s.tracking_status));
+  // Terminal filter in JS — a null tracking_status is not terminal, so new shipments are included.
+  const open = (Array.isArray(r.data) ? r.data : [])
+    .filter(s => !TERMINAL_STAGES.includes(s.tracking_status))
+    .slice(0, MAX_LRNS);
   if (!open.length) { console.log('courierops: no open Delhivery shipments'); return; }
 
-  // AWB → shipment id (last one wins if an AWB somehow repeats; realistically 1:1).
-  const byAwb = {};
-  for (const row of open) byAwb[String(row.tracking_number).trim()] = row.id;
-  const awbs = Object.keys(byAwb);
+  let jwt;
+  try { jwt = await loginB2B(username, password); }
+  catch (e) { console.error('courierops: B2B login failed —', e?.message || e); return; }
 
-  const results = await trackBulk(awbs, token);
-  const updates = results.map(res => {
-    const id = byAwb[String(res.awb).trim()];
-    if (!id) return null;
-    return {
-      id,
+  const observedIso = new Date().toISOString();   // one sync timestamp for every checkpoint added this run
+  const updates = [];
+  for (const s of open) {
+    const lrn = String(s.tracking_number).trim();
+    const res = await trackLrn(lrn, jwt);
+    if (!res) continue;                            // fetch/parse error already logged; skip, others proceed
+    updates.push({
+      id: s.id,
       tracking_status: res.stage,
       tracking_stage_label: res.stage_label,
-      tracking_checkpoints: res.checkpoints,
-      expected_delivery_date: res.expected_delivery_date,
-      delivery_date: istDate(res.delivered_at),   // null unless terminal-delivered; RPC COALESCEs so manual stays
-    };
-  }).filter(Boolean);
+      tracking_checkpoints: mergeCheckpoint(s.tracking_checkpoints, res, observedIso),
+      expected_delivery_date: res.expected_delivery_date,   // RPC COALESCEs — never nulls a manual entry
+      delivery_date: istDate(res.delivered_at),             // null unless delivered; RPC COALESCEs
+    });
+  }
 
   if (!updates.length) { console.log('courierops: nothing to update'); return; }
   const w = await sbPublic(key, '/rest/v1/rpc/apply_courier_tracking',
     { method: 'POST', body: JSON.stringify({ updates }) });
   if (!w.ok) console.error('courierops: apply RPC failed', w.status, w.data);
-  else console.log(`courierops: updated ${w.data} of ${updates.length} (${open.length} open)`);
+  else console.log(`courierops: updated ${w.data} of ${updates.length} (${open.length} open this run)`);
 }
 
 export default {

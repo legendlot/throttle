@@ -60,13 +60,14 @@ const STATUS_DOT = {
 
 // Normalized courier stage → kit tone + human label (courierops tracking_status).
 const STAGE_TONE = {
-  manifested: 'info', in_transit: 'brand', out_for_delivery: 'warn', delivered: 'ok',
-  undelivered: 'bad', rto_in_transit: 'warn', rto_delivered: 'mute', cancelled: 'bad', lost: 'bad', unknown: 'mute',
+  manifested: 'info', picked_up: 'brand', in_transit: 'brand', out_for_delivery: 'warn',
+  part_delivered: 'warn', delivered: 'ok', undelivered: 'bad', not_picked: 'bad',
+  rto_in_transit: 'warn', rto_delivered: 'mute', cancelled: 'bad', lost: 'bad', unknown: 'mute',
 };
 const STAGE_LABEL = {
-  manifested: 'Manifested', in_transit: 'In transit', out_for_delivery: 'Out for delivery',
-  delivered: 'Delivered', undelivered: 'Undelivered', rto_in_transit: 'RTO in transit',
-  rto_delivered: 'RTO delivered', cancelled: 'Cancelled', lost: 'Lost', unknown: 'Unknown',
+  manifested: 'Manifested', picked_up: 'Picked up', in_transit: 'In transit', out_for_delivery: 'Out for delivery',
+  part_delivered: 'Partially delivered', delivered: 'Delivered', undelivered: 'Undelivered', not_picked: 'Not picked',
+  rto_in_transit: 'RTO in transit', rto_delivered: 'RTO delivered', cancelled: 'Cancelled', lost: 'Lost', unknown: 'Unknown',
 };
 function relTime(iso) {
   if (!iso) return '';

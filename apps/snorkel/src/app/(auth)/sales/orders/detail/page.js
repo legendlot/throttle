@@ -13,14 +13,14 @@ import OrderForm from '../OrderForm';
 
 // Normalized courier stage (from courierops tracking_status) → label + colour for the SO timeline.
 const STAGE_LABEL = {
-  manifested: 'Manifested', in_transit: 'In transit', out_for_delivery: 'Out for delivery',
-  delivered: 'Delivered', undelivered: 'Undelivered', rto_in_transit: 'RTO in transit',
-  rto_delivered: 'RTO delivered', cancelled: 'Cancelled', lost: 'Lost', unknown: 'Unknown',
+  manifested: 'Manifested', picked_up: 'Picked up', in_transit: 'In transit', out_for_delivery: 'Out for delivery',
+  part_delivered: 'Partially delivered', delivered: 'Delivered', undelivered: 'Undelivered', not_picked: 'Not picked',
+  rto_in_transit: 'RTO in transit', rto_delivered: 'RTO delivered', cancelled: 'Cancelled', lost: 'Lost', unknown: 'Unknown',
 };
 const STAGE_COLOR = {
-  delivered: 'var(--green-fg, #2faa5a)', out_for_delivery: '#d98a00', in_transit: '#6af',
-  undelivered: '#e2574c', rto_in_transit: '#d98a00', rto_delivered: '#9aa', cancelled: '#e2574c',
-  lost: '#e2574c', manifested: '#6af', unknown: '#9aa',
+  delivered: 'var(--green-fg, #2faa5a)', out_for_delivery: '#d98a00', part_delivered: '#d98a00', in_transit: '#6af',
+  picked_up: '#6af', undelivered: '#e2574c', not_picked: '#e2574c', rto_in_transit: '#d98a00', rto_delivered: '#9aa',
+  cancelled: '#e2574c', lost: '#e2574c', manifested: '#6af', unknown: '#9aa',
 };
 
 function Stat({ label, value, color }) {
