@@ -2272,7 +2272,7 @@ function ShiftsTab({ session, canManageFloor }) {
   }
 
   if (!canManageFloor) return <Panel><div style={{ padding: 20, color: 'var(--t3)' }}>Restricted to floor supervisors.</div></Panel>;
-  if (loading) return <div style={{ padding: 40, textAlign: 'center' }}><Spinner /></div>;
+  if (loading && !shifts.length) return <div style={{ padding: 40, textAlign: 'center' }}><Spinner /></div>;
 
   const byDept = {};
   for (const s of shifts) (byDept[s.department] = byDept[s.department] || []).push(s);
