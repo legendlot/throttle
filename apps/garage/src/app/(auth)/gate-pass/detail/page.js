@@ -131,20 +131,22 @@ function DetailContent() {
   async function uploadDocs() {
     if (!docFiles.length) { showToast('Choose file(s) first', 'error'); return; }
     setUploading(true);
+    let anyFailed = false;
     try {
       for (const file of docFiles) {
-        const r1 = await workerFetch('createGatePassDocUploadUrl', { data: { gate_pass_id: gp.id, file_name: file.name } }, session);
-        if (!r1.ok || !r1.data?.token) throw new Error(r1.error || 'No upload token');
-        const { storage_path, token } = r1.data;
-        const up = await supabase.storage.from(GATEPASS_BUCKET).uploadToSignedUrl(storage_path, token, file);
-        if (up.error) throw up.error;
-        await workerFetch('recordGatePassDocument', { data: { gate_pass_id: gp.id, file_name: file.name, storage_path, mime_type: file.type || null } }, session);
+        try {
+          const r1 = await workerFetch('createGatePassDocUploadUrl', { data: { gate_pass_id: gp.id, file_name: file.name } }, session);
+          if (!r1.ok || !r1.data?.token) throw new Error(r1.error || 'No upload token');
+          const { storage_path, token } = r1.data;
+          const up = await supabase.storage.from(GATEPASS_BUCKET).uploadToSignedUrl(storage_path, token, file);
+          if (up.error) throw up.error;
+          await workerFetch('recordGatePassDocument', { data: { gate_pass_id: gp.id, file_name: file.name, storage_path, mime_type: file.type || null } }, session);
+        } catch (e) { showToast(`"${file.name}" failed: ${e.message || e}`, 'error'); anyFailed = true; }
       }
-      showToast('Document(s) uploaded', 'success');
+      if (!anyFailed) showToast('Document(s) uploaded', 'success');
       setDocFiles([]);
       await load();
-    } catch (e) { showToast(e.message || 'Upload failed', 'error'); }
-    finally { setUploading(false); }
+    } finally { setUploading(false); }
   }
 
   async function viewDoc(docId) {
