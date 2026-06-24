@@ -35,7 +35,7 @@ export default function AuthLayout({ children }) {
 }
 
 function AuthLayoutInner({ children }) {
-  const { user, session, role, signOut, loading } = useAuth();
+  const { user, session, role, perms, signOut, loading } = useAuth();
   const { refreshing, lastRefreshed } = useRefreshState();
   const { alertCount, returnCount }   = usePendingCounts(session);
   const [cmdkOpen, setCmdkOpen] = useState(false);
@@ -70,6 +70,7 @@ function AuthLayoutInner({ children }) {
         userLabel={displayName}
         userRole={role || ''}
         onLogout={signOut}
+        perms={perms}
       />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <RedlineTopbar refreshing={refreshing} lastRefreshed={lastRefreshed} />

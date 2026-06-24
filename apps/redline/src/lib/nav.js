@@ -24,7 +24,7 @@ import {
 export const NAV_PRIMARY = [
   { id: 'overview', label: 'Overview', icon: Gauge, route: '/exec' },
   {
-    id: 'plan', label: 'Plan', icon: CalendarClock,
+    id: 'plan', label: 'Plan', icon: CalendarClock, perm: 'run_request',
     children: [
       { id: 'planner',     label: 'Planner',     route: '/planner',     icon: CalendarClock },
       { id: 'new-run',     label: 'New Run',     route: '/new-run',     icon: FilePlus2 },
@@ -33,7 +33,7 @@ export const NAV_PRIMARY = [
     ],
   },
   {
-    id: 'floor', label: 'Floor', icon: Factory,
+    id: 'floor', label: 'Floor', icon: Factory, perm: 'run_request',
     children: [
       { id: 'lines',      label: 'Lines',      route: '/lines',      icon: GitBranch },
       { id: 'hourly',     label: 'Hourly',     route: '/hourly',     icon: Clock },
@@ -42,7 +42,7 @@ export const NAV_PRIMARY = [
     ],
   },
   {
-    id: 'quality', label: 'Quality', icon: ShieldCheck,
+    id: 'quality', label: 'Quality', icon: ShieldCheck, perm: 'deviation_propose',
     children: [
       { id: 'qc',         label: 'QC',         route: '/qc',                 icon: ShieldCheck },
       { id: 'audit',      label: 'Audit',      route: '/audit',              icon: ClipboardCheck },
@@ -50,7 +50,7 @@ export const NAV_PRIMARY = [
     ],
   },
   {
-    id: 'reports', label: 'Reports', icon: BarChart3,
+    id: 'reports', label: 'Reports', icon: BarChart3, perm: 'reports',
     children: [
       { id: 'prod-history', label: 'Production History', route: '/production-history', icon: History },
       { id: 'reporting',    label: 'Reporting',          route: '/reporting',          icon: BarChart3 },
@@ -70,7 +70,7 @@ export const NAV_PRIMARY = [
     // Dispatch carved out into Depot (depot.legendoftoys.com) — S152 cutover.
     // Group kept only as a pointer + the still-here Repack screens (repack stays
     // in Redline as a production activity; its tab placement is a later decision).
-    id: 'dispatch', label: 'Dispatch', icon: Truck,
+    id: 'dispatch', label: 'Dispatch', icon: Truck, perm: 'repack_run_manage',
     children: [
       { id: 'dispatch-moved', label: 'Moved to Depot →', route: '/dispatch',           icon: Truck },
       { id: 'repack',         label: 'Repack',           route: '/repack-runs',         icon: ArrowLeftRight },
@@ -83,9 +83,9 @@ export const NAV_MANUAL = { id: 'manual', label: 'System Manual', icon: BookOpen
 
 /* Setup = done-once admin config only (planning moved to the Plan group, S152). */
 export const NAV_SETUP = [
-  { id: 'upc',       label: 'UPC Generator', route: '/upc',       icon: QrCode },
-  { id: 'operators', label: 'Operators',     route: '/operators', icon: Users },
-  { id: 'print',     label: 'Print',         route: '/print',     icon: Printer },
+  { id: 'upc',       label: 'UPC Generator', route: '/upc',       icon: QrCode,   perm: 'bag_sticker' },
+  { id: 'operators', label: 'Operators',     route: '/operators', icon: Users,    perm: 'users_manage' },
+  { id: 'print',     label: 'Print',         route: '/print',     icon: Printer,  perm: 'bag_sticker' },
 ];
 
 /* ⌘K-only destinations — pages that exist but live outside the sidebar.

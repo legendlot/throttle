@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { Search, ChevronDown, ChevronRight, ChevronLeft, SlidersHorizontal, LogOut, BookOpen } from 'lucide-react';
 import { NAV_PRIMARY, NAV_SETUP, NAV_MANUAL } from '../../lib/nav.js';
+import { hasPermission } from '@throttle/auth';
 import { RedlineIcon } from '../RedlineIcon.js';
 
 const routeMatch = (pathname, route) => {
@@ -18,16 +19,19 @@ const routeMatch = (pathname, route) => {
   return norm === r || norm.startsWith(r + '/');
 };
 
-export function RedlineSidebar({ onCmdK, badges = {}, userLabel = '', userRole = '', onLogout }) {
+export function RedlineSidebar({ onCmdK, badges = {}, userLabel = '', userRole = '', onLogout, perms = null }) {
   const pathname = usePathname();
   const router = useRouter();
 
+  const visiblePrimary = NAV_PRIMARY.filter(item => !item.perm || hasPermission(perms, item.perm));
+  const visibleSetup   = NAV_SETUP.filter(s => !s.perm || hasPermission(perms, s.perm));
+
   // which primary group is active for the current route?
-  const activeGroup = NAV_PRIMARY.find(g =>
+  const activeGroup = visiblePrimary.find(g =>
     (g.route && routeMatch(pathname, g.route)) ||
     (g.children || []).some(c => routeMatch(pathname, c.route))
   );
-  const setupActive = NAV_SETUP.some(s => routeMatch(pathname, s.route));
+  const setupActive = visibleSetup.some(s => routeMatch(pathname, s.route));
   const manualActive = routeMatch(pathname, NAV_MANUAL.route);
 
   const [open, setOpen] = useState({});
@@ -82,7 +86,7 @@ export function RedlineSidebar({ onCmdK, badges = {}, userLabel = '', userRole =
       </div>
 
       <nav style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: collapsed ? '4px 14px' : '4px 10px' }}>
-        {NAV_PRIMARY.map(item => {
+        {visiblePrimary.map(item => {
           const on = activeGroup?.id === item.id;
           const expanded = !!open[item.id];
           const hasKids = !!(item.children && item.children.length);
@@ -183,7 +187,7 @@ export function RedlineSidebar({ onCmdK, badges = {}, userLabel = '', userRole =
           )}
 
           {/* Setup — collapsed config drawer (done-once config, out of the daily flow) */}
-          {collapsed ? (
+          {visibleSetup.length > 0 && collapsed ? (
             <div title="Setup" onClick={() => { setCol(false); setSetupOpen(true); }}
               style={{ height: 40, borderRadius: 'var(--r-sm)', display: 'grid', placeItems: 'center', cursor: 'pointer',
                 color: setupActive ? 'var(--yellow)' : 'var(--t3)',
@@ -192,7 +196,7 @@ export function RedlineSidebar({ onCmdK, badges = {}, userLabel = '', userRole =
               onMouseLeave={e => { if (!setupActive) e.currentTarget.style.background = 'transparent'; }}>
               <SlidersHorizontal size={18} strokeWidth={1.75} />
             </div>
-          ) : (
+          ) : visibleSetup.length > 0 ? (
             <>
               <div onClick={() => setSetupOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', gap: 11,
                 padding: '8px 11px', borderRadius: 'var(--r-sm)', cursor: 'pointer',
@@ -204,7 +208,7 @@ export function RedlineSidebar({ onCmdK, badges = {}, userLabel = '', userRole =
                   <ChevronDown size={14} strokeWidth={1.75} />
                 </span>
               </div>
-              {setupOpen && NAV_SETUP.map(s => {
+              {setupOpen && visibleSetup.map(s => {
                 const cur = routeMatch(pathname, s.route);
                 return (
                   <div key={s.id} onClick={() => go(s.route)} style={{ display: 'flex', alignItems: 'center', gap: 9,
@@ -218,7 +222,7 @@ export function RedlineSidebar({ onCmdK, badges = {}, userLabel = '', userRole =
                 );
               })}
             </>
-          )}
+          ) : null}
         </div>
       </nav>
 
