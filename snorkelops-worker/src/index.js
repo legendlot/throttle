@@ -408,12 +408,14 @@ function normSalesPartner(field, v) {
 // Recompute an order's amount_received + payment_status from its receipts.
 async function recomputeSalesPayment(orderId) {
   const [oR, pR] = await Promise.all([
-    query('sales_orders', `?id=eq.${encodeURIComponent(orderId)}&select=grand_total&limit=1`),
+    query('sales_orders', `?id=eq.${encodeURIComponent(orderId)}&select=grand_total,credit_total&limit=1`),
     query('sales_payments', `?order_id=eq.${encodeURIComponent(orderId)}&select=amount`),
   ]);
-  const grand = oR.ok ? Number(oR.data?.[0]?.grand_total) || 0 : 0;
-  const recv  = pR.ok ? (pR.data || []).reduce((s, p) => s + (Number(p.amount) || 0), 0) : 0;
-  const status = (recv > 0 && recv >= grand - 0.005) ? 'paid' : recv > 0 ? 'partial' : 'unpaid';
+  const grand  = oR.ok ? Number(oR.data?.[0]?.grand_total) || 0 : 0;
+  const credit = oR.ok ? Number(oR.data?.[0]?.credit_total) || 0 : 0;
+  const net    = +(grand - credit).toFixed(2);
+  const recv   = pR.ok ? (pR.data || []).reduce((s, p) => s + (Number(p.amount) || 0), 0) : 0;
+  const status = (recv > 0 && recv >= net - 0.005) ? 'paid' : recv > 0 ? 'partial' : 'unpaid';
   await update('sales_orders',
     { amount_received: +recv.toFixed(2), payment_status: status, updated_at: new Date().toISOString() },
     `id=eq.${encodeURIComponent(orderId)}`);
@@ -1147,6 +1149,74 @@ export default {
             });
             return ok({ order: { ...o, sales_partners: undefined }, partner: o.sales_partners || null,
               seller, place_of_supply: placeOfSupply, intra, lines });
+          }
+
+          case 'getCreditNotes': {
+            if (!canSalesView(P)) return err('No permission', 403);
+            let params = '?order=created_at.desc&select=*,sales_partners(name)';
+            const st = url.searchParams.get('status');
+            const pid = url.searchParams.get('partner_id');
+            const oid = url.searchParams.get('order_id');
+            if (st)  params += `&status=eq.${encodeURIComponent(st)}`;
+            if (pid) params += `&partner_id=eq.${encodeURIComponent(pid)}`;
+            if (oid) params += `&order_id=eq.${encodeURIComponent(oid)}`;
+            const r = await query('sales_credit_notes', params);
+            if (!r.ok) return err(r.data);
+            const rows = (r.data || []).map(c => ({ ...c, partner_name: c.sales_partners?.name || null, sales_partners: undefined }));
+            return ok(rows);
+          }
+
+          case 'getCreditNote': {
+            if (!canSalesView(P)) return err('No permission', 403);
+            const id = url.searchParams.get('id');
+            if (!id) return err('id required');
+            const r = await query('sales_credit_notes', `?id=eq.${encodeURIComponent(id)}&select=*,sales_partners(*)&limit=1`);
+            if (!r.ok) return err(r.data);
+            const cn = r.data?.[0];
+            if (!cn) return err('Credit note not found', 404);
+            const [linesR, orderR, sellerR] = await Promise.all([
+              query('sales_credit_note_lines', `?credit_note_id=eq.${encodeURIComponent(id)}&order=sort_order.asc`),
+              query('sales_orders', `?id=eq.${encodeURIComponent(cn.order_id)}&select=order_no,grand_total,credit_total,amount_received&limit=1`),
+              query('company_addresses', '?is_registered_office=eq.true&active=eq.true&select=*&limit=1'),
+            ]);
+            const seller = sellerR.ok ? sellerR.data?.[0] || null : null;
+            const intra = !!(seller?.state && cn.place_of_supply &&
+                           seller.state.trim().toLowerCase() === cn.place_of_supply.trim().toLowerCase());
+            const lines = (linesR.ok ? linesR.data : []).map(l => splitGstLine(l, intra));
+            return ok({ cn: { ...cn, sales_partners: undefined }, partner: cn.sales_partners || null,
+              order: orderR.ok ? orderR.data?.[0] || null : null, seller, intra, lines });
+          }
+
+          case 'getOrderForCreditNote': {
+            if (!canSalesView(P)) return err('No permission', 403);
+            const id = url.searchParams.get('order_id');
+            if (!id) return err('order_id required');
+            const r = await query('sales_orders', `?id=eq.${encodeURIComponent(id)}&select=*,sales_partners(*)&limit=1`);
+            if (!r.ok) return err(r.data);
+            const o = r.data?.[0];
+            if (!o) return err('Order not found', 404);
+            if (!o.invoice_generated) return err('Order has no invoice — cannot raise a credit note', 422);
+            const [linesR, cnR] = await Promise.all([
+              query('sales_order_lines', `?order_id=eq.${encodeURIComponent(id)}&order=sort_order.asc`),
+              query('sales_credit_notes', `?order_id=eq.${encodeURIComponent(id)}&status=in.(draft,issued)&select=id,grand_total`),
+            ]);
+            const cnIds = (cnR.ok ? cnR.data : []).map(c => c.id);
+            const creditedByLine = {};
+            if (cnIds.length) {
+              const clR = await query('sales_credit_note_lines',
+                `?credit_note_id=in.(${cnIds.map(encodeURIComponent).join(',')})&select=order_line_id,qty`);
+              (clR.ok ? clR.data : []).forEach(cl => {
+                if (cl.order_line_id) creditedByLine[cl.order_line_id] = (creditedByLine[cl.order_line_id] || 0) + (Number(cl.qty) || 0);
+              });
+            }
+            const existingCredit = (cnR.ok ? cnR.data : []).reduce((s, c) => s + (Number(c.grand_total) || 0), 0);
+            const lines = (linesR.ok ? linesR.data : []).map(l => ({
+              ...l, credited_qty: creditedByLine[l.id] || 0,
+              remaining_qty: Math.max(0, (Number(l.qty) || 0) - (creditedByLine[l.id] || 0)),
+            }));
+            return ok({ order: { ...o, sales_partners: undefined }, partner: o.sales_partners || null,
+              lines, existing_credit_total: +existingCredit.toFixed(2),
+              remaining_value: +(Number(o.grand_total || 0) - existingCredit).toFixed(2) });
           }
 
           default:
@@ -2217,6 +2287,119 @@ export default {
             const del = await sb(`/rest/v1/sales_payments?id=eq.${encodeURIComponent(d.id)}`, { method: 'DELETE', prefer: 'return=minimal' });
             if (!del.ok) return err('Delete failed: ' + JSON.stringify(del.data));
             if (orderId) await recomputeSalesPayment(orderId);
+            return ok({ deleted: d.id });
+          }
+
+          case 'createCreditNote': {
+            if (!canSalesCreditNote(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.order_id) return err('order_id required');
+            if (!d.reason) return err('reason required');
+            if (!d.lines?.length) return err('At least one credit line required');
+            const oR = await query('sales_orders',
+              `?id=eq.${encodeURIComponent(d.order_id)}&select=*,sales_partners(id,state)&limit=1`);
+            if (!oR.ok || !oR.data[0]) return err('Order not found', 404);
+            const o = oR.data[0];
+            if (!o.invoice_generated) return err('Order has no invoice — cannot raise a credit note', 422);
+            const { lines, subtotal, tax_total, grand_total } = buildCreditNote(d.lines);
+            if (!(grand_total > 0)) return err('Credit value must be greater than 0', 422);
+            const remaining = await creditCapRemaining(d.order_id, null);
+            if (grand_total > remaining + 0.005)
+              return err(`Credit ${grand_total} exceeds remaining invoice value ${remaining}`, 422);
+            const hdr = await insert('sales_credit_notes', {
+              order_id: d.order_id, partner_id: o.partner_id, invoice_no: o.invoice_no,
+              invoice_date: o.invoice_date, cn_date: d.cn_date || todayISO(),
+              reason: d.reason, reason_note: d.reason_note || null, status: 'draft',
+              place_of_supply: o.place_of_supply || o.sales_partners?.state || null,
+              subtotal, tax_total, grand_total, created_by: userId,
+            }, false);
+            if (!hdr.ok) return err('Credit note insert failed: ' + JSON.stringify(hdr.data));
+            const cn = Array.isArray(hdr.data) ? hdr.data[0] : hdr.data;
+            const lineRows = lines.map((l, i) => ({
+              ...l, credit_note_id: cn.id,
+              order_line_id: d.lines[i]?.order_line_id || null, sort_order: l.sort_order || i,
+            }));
+            const li = await insert('sales_credit_note_lines', lineRows, false);
+            if (!li.ok) return err('Credit line insert failed: ' + JSON.stringify(li.data));
+            return ok({ id: cn.id });
+          }
+
+          case 'updateCreditNote': {
+            if (!canSalesCreditNote(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.id) return err('id required');
+            const cur = await query('sales_credit_notes', `?id=eq.${encodeURIComponent(d.id)}&select=status,order_id&limit=1`);
+            if (!cur.ok || !cur.data[0]) return err('Credit note not found', 404);
+            if (cur.data[0].status !== 'draft') return err('Only draft credit notes can be edited', 422);
+            const updates = { updated_at: new Date().toISOString() };
+            if (d.reason !== undefined) updates.reason = d.reason;
+            if (d.reason_note !== undefined) updates.reason_note = d.reason_note || null;
+            if (d.cn_date !== undefined) updates.cn_date = d.cn_date || todayISO();
+            if (Array.isArray(d.lines)) {
+              const { lines, subtotal, tax_total, grand_total } = buildCreditNote(d.lines);
+              if (!(grand_total > 0)) return err('Credit value must be greater than 0', 422);
+              const remaining = await creditCapRemaining(cur.data[0].order_id, d.id);
+              if (grand_total > remaining + 0.005)
+                return err(`Credit ${grand_total} exceeds remaining invoice value ${remaining}`, 422);
+              updates.subtotal = subtotal; updates.tax_total = tax_total; updates.grand_total = grand_total;
+              await sb(`/rest/v1/sales_credit_note_lines?credit_note_id=eq.${encodeURIComponent(d.id)}`, { method: 'DELETE', prefer: 'return=minimal' });
+              const lineRows = lines.map((l, i) => ({ ...l, credit_note_id: d.id, order_line_id: d.lines[i]?.order_line_id || null, sort_order: l.sort_order || i }));
+              const li = await insert('sales_credit_note_lines', lineRows, false);
+              if (!li.ok) return err('Credit line update failed: ' + JSON.stringify(li.data));
+            }
+            const r = await update('sales_credit_notes', updates, `id=eq.${encodeURIComponent(d.id)}`);
+            if (!r.ok) return err('Update failed: ' + JSON.stringify(r.data));
+            return ok({ updated: d.id });
+          }
+
+          case 'issueCreditNote': {
+            if (!canSalesCreditNote(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.id) return err('id required');
+            const cur = await query('sales_credit_notes', `?id=eq.${encodeURIComponent(d.id)}&select=*&limit=1`);
+            if (!cur.ok || !cur.data[0]) return err('Credit note not found', 404);
+            const cn = cur.data[0];
+            if (cn.status !== 'draft') return err('Only draft credit notes can be issued', 422);
+            const remaining = await creditCapRemaining(cn.order_id, cn.id);
+            if (Number(cn.grand_total) > remaining + 0.005)
+              return err(`Credit ${cn.grand_total} exceeds remaining invoice value ${remaining}`, 422);
+            const date = cn.cn_date || todayISO();
+            const cn_no = await nextCreditNoteNo(date);
+            const now = new Date().toISOString();
+            const r = await update('sales_credit_notes',
+              { cn_no, status: 'issued', cn_date: date, issued_by: userId, issued_at: now, updated_at: now },
+              `id=eq.${encodeURIComponent(d.id)}`);
+            if (!r.ok) return err('Issue failed: ' + JSON.stringify(r.data));
+            await recomputeOrderCredit(cn.order_id);
+            return ok({ cn_no });
+          }
+
+          case 'cancelCreditNote': {
+            if (!canSalesCreditNote(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.id) return err('id required');
+            if (!d.reason) return err('reason required');
+            const cur = await query('sales_credit_notes', `?id=eq.${encodeURIComponent(d.id)}&select=status,order_id&limit=1`);
+            if (!cur.ok || !cur.data[0]) return err('Credit note not found', 404);
+            if (!['draft','issued'].includes(cur.data[0].status)) return err('Only draft/issued credit notes can be cancelled', 422);
+            const now = new Date().toISOString();
+            const r = await update('sales_credit_notes',
+              { status: 'cancelled', cancelled_by: userId, cancelled_at: now, cancel_reason: d.reason, updated_at: now },
+              `id=eq.${encodeURIComponent(d.id)}`);
+            if (!r.ok) return err('Cancel failed: ' + JSON.stringify(r.data));
+            await recomputeOrderCredit(cur.data[0].order_id);
+            return ok({ cancelled: d.id });
+          }
+
+          case 'deleteCreditNote': {
+            if (!canSalesCreditNote(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.id) return err('id required');
+            const cur = await query('sales_credit_notes', `?id=eq.${encodeURIComponent(d.id)}&select=status&limit=1`);
+            if (!cur.ok || !cur.data[0]) return err('Credit note not found', 404);
+            if (cur.data[0].status !== 'draft') return err('Only draft credit notes can be deleted', 422);
+            const del = await sb(`/rest/v1/sales_credit_notes?id=eq.${encodeURIComponent(d.id)}`, { method: 'DELETE', prefer: 'return=minimal' });
+            if (!del.ok) return err('Delete failed: ' + JSON.stringify(del.data));
             return ok({ deleted: d.id });
           }
 
