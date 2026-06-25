@@ -499,10 +499,10 @@ const AMZ_REPORT_TYPE = 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL';
 // HARD LIMIT: this report can only be requested for ≤30 days per call ("Date range exceeded"
 // otherwise). So we chunk: one ≤30-day window per report, walking the cursor forward.
 const AMZ_WINDOW_MS = 30 * 24 * 3600 * 1000;
-async function createAmazonReport(host, H, mkt, startISO, endISO) {
+async function createAmazonReport(host, H, mkt, startISO, endISO, reportType = AMZ_REPORT_TYPE) {
   const cr = await fetch(`${host}/reports/2021-06-30/reports`, {
     method: 'POST', headers: H,
-    body: JSON.stringify({ reportType: AMZ_REPORT_TYPE, marketplaceIds: [mkt], dataStartTime: startISO, dataEndTime: endISO }),
+    body: JSON.stringify({ reportType, marketplaceIds: [mkt], dataStartTime: startISO, dataEndTime: endISO }),
   });
   if (!cr.ok) throw new Error(`Amazon createReport ${cr.status}: ${(await cr.text().catch(() => '')).slice(0, 200)}`);
   const cj = await cr.json();
@@ -612,6 +612,79 @@ async function amazonReportPhase(host, H, mkt, columns, cfg, channelId, nowMs, c
   return { rows: [], cursorAfter: null, subreqs, partial: true, configAfter: { ...cfg, pending_report_id: rid, pending_through: endISO } };
 }
 
+// ── Amazon FBA customer-returns report → stg_amazon_returns (the RTV classification source) ──
+// Async report (create→poll→download), own cursor in config (returns_cursor / returns_pending_*),
+// independent of the orders + finance phases. Low volume → walks one ≤30-day window per cron tick;
+// it does NOT drive the workflow loop (returns « orders). After staging, the refund events are
+// (re)classified rto/rtv via sales.classify_amazon_returns.
+const AMZ_RETURNS_REPORT_TYPE = 'GET_FBA_FULFILLMENT_CUSTOMER_RETURNS_DATA';
+const AMZ_RETURNS_WINDOW_MS = 30 * 24 * 3600 * 1000;
+function gridToReturnRows(grid) {
+  if (!grid || grid.length < 2) return [];
+  const header = grid[0].map(h => String(h).trim());
+  const idx = n => header.findIndex(h => h.toLowerCase() === n.toLowerCase());
+  const ci = { date: idx('return-date'), order: idx('order-id'), sku: idx('sku'), asin: idx('asin'), qty: idx('quantity'), disp: idx('detailed-disposition'), reason: idx('reason'), status: idx('status') };
+  if (ci.order < 0 || ci.sku < 0) return [];               // unexpected shape → skip safely
+  const rows = [];
+  for (let r = 1; r < grid.length; r++) {
+    const line = grid[r]; const oid = String(line[ci.order] ?? '').trim(); if (!oid) continue;
+    const rd = ci.date >= 0 ? String(line[ci.date] ?? '').trim() : '';
+    rows.push({
+      source_order_id: oid,
+      channel_sku: ci.sku >= 0 ? (String(line[ci.sku] ?? '').trim() || null) : null,
+      asin: ci.asin >= 0 ? (String(line[ci.asin] ?? '').trim() || null) : null,
+      return_date: rd ? (rd.includes('T') ? istDate(rd) : parseSheetDate(rd)) : null,
+      qty: ci.qty >= 0 ? Math.round(num(line[ci.qty])) : 0,
+      disposition: ci.disp >= 0 ? (String(line[ci.disp] ?? '').trim() || null) : null,
+      reason: ci.reason >= 0 ? (String(line[ci.reason] ?? '').trim() || null) : null,
+      status: ci.status >= 0 ? (String(line[ci.status] ?? '').trim() || null) : null,
+      raw: { line },
+    });
+  }
+  return rows;
+}
+// One returns window: create→poll→download, advancing returns_cursor. NEVER throws (returns are
+// auxiliary — a failure must not break the sell-out pipeline); errors return the cfg unchanged.
+async function amazonReturnsPhase(host, H, mkt, cfg, nowMs) {
+  let subreqs = 0;
+  try {
+    if (cfg.returns_pending_report_id) {
+      const pr = await fetch(`${host}/reports/2021-06-30/reports/${cfg.returns_pending_report_id}`, { headers: H }); subreqs++;
+      const rep = await pr.json().catch(() => ({}));
+      const st = rep.processingStatus;
+      if (st === 'IN_QUEUE' || st === 'IN_PROGRESS') return { rows: [], subreqs, configAfter: cfg };
+      const through = cfg.returns_pending_through || null;
+      if (st !== 'DONE' || !rep.reportDocumentId) {        // CANCELLED/FATAL → skip the window, advance
+        return { rows: [], subreqs, configAfter: { ...cfg, returns_pending_report_id: null, returns_window_from: null, returns_pending_through: null, returns_cursor: through || cfg.returns_cursor } };
+      }
+      const dr = await fetch(`${host}/reports/2021-06-30/documents/${rep.reportDocumentId}`, { headers: H }); subreqs++;
+      const doc = await dr.json().catch(() => ({}));
+      const text = await fetchAmazonDoc(doc); subreqs++;
+      const grid = text.split(/\r?\n/).filter(l => l.length).map(l => l.split('\t'));
+      const rows = gridToReturnRows(grid);
+      // queue the next window if not caught up to ~now
+      let next = { returns_pending_report_id: null, returns_window_from: null, returns_pending_through: null, returns_cursor: through || cfg.returns_cursor };
+      const ns = Date.parse(through || cfg.returns_cursor || cfg.backfill_start || BACKFILL_START);
+      if (ns && ns < nowMs - 120000) {
+        const nsISO = new Date(ns).toISOString();
+        const neISO = new Date(Math.min(ns + AMZ_RETURNS_WINDOW_MS, nowMs - 120000)).toISOString();
+        const rid = await createAmazonReport(host, H, mkt, nsISO, neISO, AMZ_RETURNS_REPORT_TYPE); subreqs++;
+        next = { returns_pending_report_id: rid, returns_window_from: nsISO, returns_pending_through: neISO, returns_cursor: through || cfg.returns_cursor };
+      }
+      return { rows, subreqs, configAfter: { ...cfg, ...next } };
+    }
+    // no pending → create the next window from returns_cursor
+    const startISO = cfg.returns_cursor || cfg.backfill_start || BACKFILL_START;
+    const startMs = Date.parse(startISO);
+    if (!startMs || startMs >= nowMs - 120000) return { rows: [], subreqs, configAfter: cfg };   // caught up
+    const endISO = new Date(Math.min(startMs + AMZ_RETURNS_WINDOW_MS, nowMs - 120000)).toISOString();
+    const rid = await createAmazonReport(host, H, mkt, startISO, endISO, AMZ_RETURNS_REPORT_TYPE); subreqs++;
+    return { rows: [], subreqs, configAfter: { ...cfg, returns_pending_report_id: rid, returns_window_from: startISO, returns_pending_through: endISO } };
+  } catch (e) {
+    return { rows: [], subreqs, configAfter: cfg, error: String(e?.message || e) };
+  }
+}
+
 const amazonAdapter = {
   kind: 'amazon_spapi', stgTable: 'stg_amazon', sourceKind: 'amazon',
   async fetch({ env, channelId, cursor, config }) {
@@ -631,9 +704,13 @@ const amazonAdapter = {
       finSub = fw.subreqs; finance = { events: fw.events };
       if (fw.finCursorAfter) configAfter = { ...configAfter, fin_cursor: fw.finCursorAfter };
     } catch (e) { finance = { events: [], error: String(e?.message || e) }; }
-    // Persist report + finance config in ONE write (avoids clobbering pending_report_id).
+    // Returns phase (FBA customer returns → RTV source). Auxiliary; never breaks the pipeline.
+    let returns = { rows: [] }, retSub = 0;
+    try { const rw = await amazonReturnsPhase(host, H, mkt, configAfter, nowMs); retSub = rw.subreqs; returns = { rows: rw.rows }; configAfter = rw.configAfter; }
+    catch (e) { returns = { rows: [], error: String(e?.message || e) }; }
+    // Persist report + finance + returns config in ONE write (avoids clobbering pending ids).
     await patchConnectorConfig(channelId, cfg, configAfter);
-    return { rows: rep.rows, cursorAfter: rep.cursorAfter, subreqs: rep.subreqs + finSub, partial: rep.partial, finance };
+    return { rows: rep.rows, cursorAfter: rep.cursorAfter, subreqs: rep.subreqs + finSub + retSub, partial: rep.partial, finance, returns };
   },
   async stage(rows, runId, channelId, fetched) {
     if (rows.length) {
@@ -666,6 +743,17 @@ const amazonAdapter = {
     const ev = (fetched && fetched.finance && fetched.finance.events) || [];
     const affected = await stageAmazonFinance(ev, runId, channelId);
     if (fetched && fetched.finance) fetched.finance.affectedDates = affected;
+    // FBA customer returns → stg_amazon_returns (supersede the window by actual return-date range,
+    // robust whether or not the report honours dataStart/EndTime), then (re)classify refund return_kind.
+    const retRows = (fetched && fetched.returns && fetched.returns.rows) || [];
+    if (retRows.length) {
+      const rds = retRows.map(r => r.return_date).filter(Boolean).sort();
+      if (rds.length) await sbSales(`/rest/v1/stg_amazon_returns?channel_id=eq.${channelId}&return_date=gte.${rds[0]}&return_date=lte.${rds[rds.length - 1]}`, { method: 'DELETE', prefer: 'return=minimal' });
+      const rbody = retRows.map(r => ({ run_id: runId, channel_id: channelId, source_order_id: r.source_order_id, channel_sku: r.channel_sku, asin: r.asin, return_date: r.return_date, qty: r.qty, disposition: r.disposition, reason: r.reason, status: r.status, raw: r.raw }));
+      await sbInsertChunked('/rest/v1/stg_amazon_returns', rbody, 'return=minimal');
+    }
+    // Reclassify refund return_kind across history (cheap + idempotent) whenever finance or returns moved.
+    if (ev.length || retRows.length) await rpcSales('classify_amazon_returns', { p_channel: channelId, p_from: '2024-01-01', p_to: todayISO() });
   },
   datesOf(rows, fetched) {
     const ds = new Set(distinctDates(rows));
@@ -1539,6 +1627,12 @@ export default {
             if (!canView(P)) return err('No permission', 403);
             const r = await rpcSales('f_amazon_geo_rollup', { p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO() });
             if (!r.ok) return err('Geo rollup failed: ' + JSON.stringify(r.data), 502);
+            return ok({ rows: r.data || [] });
+          }
+          case 'getAmazonReturns': {
+            if (!canView(P)) return err('No permission', 403);
+            const r = await rpcSales('f_amazon_returns_rollup', { p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO(), p_group: qp('group') || 'overall' });
+            if (!r.ok) return err('Returns rollup failed: ' + JSON.stringify(r.data), 502);
             return ok({ rows: r.data || [] });
           }
           case 'getSales': {
