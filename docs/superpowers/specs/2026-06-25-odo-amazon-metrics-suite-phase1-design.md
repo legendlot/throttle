@@ -65,8 +65,7 @@ All overall + per-channel (and campaign where ad-sourced); **SKU/model where the
 - Add `return_kind text` (`rto`|`rtv`|`unknown`) to the return representation — on `stg_orders` return rows and a `returned_units`/`returned_value` split path. Extend `f_order_rollup` to emit `rto_units/rto_value/rtv_units/rtv_value` alongside the existing `returns_*`.
 - **No double-count (key invariant):** returns **value** continues to come from Finances refunds (already live, RULE-SALES-001). The returns report is the **classifier + unit/reason source** — it assigns `return_kind` to existing return rows by joining on `order-id`+`sku`; it does **not** add new return value. FBA returns with no matching refund (e.g. returnless refunds / replacements) are reconciled explicitly, not summed twice.
 
-**Replacement (Amazon) — P1 stretch / confirm signal first:**
-- Amazon has **no replacement tag** like Shopify (`order_type_rules` is tag-based, Shopify-only). Candidate signals: ₹0-value `Shipped` orders in all-orders (Amazon-issued replacement shipments), or Finances events with no `Principal`. **Needs one investigation pass** to confirm the reliable signal before modeling — do NOT block 1A/location/RTO-RTV on it.
+**Replacement (Amazon) — DEFERRED (Afshaan, 2026-06-25).** Not in this build. Amazon has no replacement tag like Shopify; the signal will come from **another Amazon report** (TBD) — revisit after this suite ships. The 8-metric table will show replacement as a placeholder ("—" / "coming") so the layout is ready when the source lands. Do NOT model a guessed signal now.
 
 ---
 
@@ -83,9 +82,9 @@ All on the shared `RangePicker` (default MTD) + prior-period deltas, matching th
 - **Deferred separate build:** ranking-position tracker + competitor/price/BSR scraping (Nikhil #9/#10) — backlogged, scope with Afshaan after this suite ships.
 
 ## Open decisions / risks
-1. **RTO/RTV classification rules** — Amazon's `disposition`/`reason`/`status` fields don't map 1:1 to Nikhil's definitions. Ship the default mapping above, show an `unknown` bucket, and have **Nikhil confirm/adjust the reason→kind rules** against a week of real returns (the rules live in a small lookup so they're editable without a deploy).
+1. **RTO/RTV classification rules** — DECISION (Afshaan): **build it.** Amazon's `disposition`/`reason`/`status` fields don't map 1:1 to Nikhil's definitions, so ship the default mapping in an **editable lookup table** (`sales.amazon_return_reason_map`) + an `unknown` bucket; Nikhil tunes the reason→kind rules against real returns without a deploy. No build blocker.
 2. **Returns value reconciliation** — the FBA returns report must enrich, not re-sum, the Finances-sourced returned value. Build a reconciliation check (returns-report units vs refund-events) and log unmatched.
-3. **Replacement signal** — confirm the Amazon signal before modeling (don't block the rest).
+3. **Replacement** — DEFERRED (Afshaan): sourced from another Amazon report later. UI shows a placeholder; not modeled now.
 4. **FBA returns report cadence** — daily pull, supersede-by-return-date window; runs as its own connector window inside the existing Workflows machinery (no scheduler change).
 
 ## Verification model

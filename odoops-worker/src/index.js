@@ -631,7 +631,8 @@ const amazonAdapter = {
         run_id: runId, channel_id: channelId, source_order_id: r.source_order_id || null, sale_date: r.sale_date,
         channel_sku: r.channel_sku, title: r.title, qty: Math.round(r.qty), gross_value: r.gross_value,
         discount_value: r.discount_value || 0, tax_value: r.tax_value || 0, row_type: 'sale',
-        order_status: r.order_status || null, is_cancelled: !!r.is_cancelled, raw: r.raw,
+        order_status: r.order_status || null, is_cancelled: !!r.is_cancelled,
+        ship_state: r.ship_state || null, ship_city: r.ship_city || null, raw: r.raw,
       }));
       await sbInsertChunked('/rest/v1/stg_amazon', body, 'return=minimal');
       // Order-grain rows (drives f_order_rollup: Total Orders / AOV / cancel rate). The all-orders
@@ -1216,7 +1217,7 @@ function gridToQcRows(grid, cm, fallbackDate) {
   const header = grid[hr].map(h => String(h).trim());
   const idx = name => header.findIndex(h => h.toLowerCase() === String(name || '').toLowerCase());
   // status/order_id/discount/tax are optional (Amazon flat-file carries them; QC sheets don't).
-  const ci = { sku: idx(cm.sku), title: idx(cm.title), units: idx(cm.units), gross: idx(cm.gross), date: idx(cm.date), status: idx(cm.status), order_id: idx(cm.order_id), discount: idx(cm.discount), tax: idx(cm.tax) };
+  const ci = { sku: idx(cm.sku), title: idx(cm.title), units: idx(cm.units), gross: idx(cm.gross), date: idx(cm.date), status: idx(cm.status), order_id: idx(cm.order_id), discount: idx(cm.discount), tax: idx(cm.tax), ship_state: idx('ship-state'), ship_city: idx('ship-city') };
   if (ci.sku < 0 || ci.units < 0) throw new Error(`column_map needs sku + units to match real headers. Found header row: [${header.join(', ')}]`);
   const rows = [];
   for (let r = hr + 1; r < grid.length; r++) {
@@ -1235,6 +1236,8 @@ function gridToQcRows(grid, cm, fallbackDate) {
       tax_value: ci.tax >= 0 ? num(line[ci.tax]) : 0,                            // GST within the tax-incl gross
       source_order_id: ci.order_id >= 0 ? (String(line[ci.order_id] ?? '').trim() || null) : null,
       order_status: statusCell || null, is_cancelled: /cancel/i.test(statusCell),
+      ship_state: ci.ship_state >= 0 ? (String(line[ci.ship_state] ?? '').trim() || null) : null,
+      ship_city:  ci.ship_city  >= 0 ? (String(line[ci.ship_city]  ?? '').trim() || null) : null,
       raw: { line },
     });
   }
@@ -1510,6 +1513,12 @@ export default {
               catch (e) { status = { error: String(e?.message || e) }; }
             }
             return ok({ channel_id: cid, wf_instance_id: cfg?.wf_instance_id || null, cursor: cfg?.cursor || null, last_ok_at: cfg?.last_ok_at || null, last_error: cfg?.last_error || null, status });
+          }
+          case 'getAmazonGeo': {
+            if (!canView(P)) return err('No permission', 403);
+            const r = await rpcSales('f_amazon_geo_rollup', { p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO() });
+            if (!r.ok) return err('Geo rollup failed: ' + JSON.stringify(r.data), 502);
+            return ok({ rows: r.data || [] });
           }
           case 'getSales': {
             const chans = (qp('channel_id') || '').split(',').map(s => s.trim()).filter(Boolean);
