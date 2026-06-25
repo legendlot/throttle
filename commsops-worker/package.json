@@ -1,0 +1,9 @@
+{
+  "name": "commsops-worker",
+  "version": "1.0.0",
+  "description": "Relay — LOT CX comms orchestration API (Cloudflare Worker)",
+  "main": "src/index.js",
+  "scripts": { "dev": "wrangler dev", "deploy": "wrangler deploy", "tail": "wrangler tail" },
+  "type": "commonjs",
+  "devDependencies": { "wrangler": "^4.83.0" }
+}
