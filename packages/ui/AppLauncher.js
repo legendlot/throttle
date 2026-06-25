@@ -13,6 +13,7 @@ const SYSTEMS = [
   { key: 'pitstop',  label: 'Pitstop',  url: 'https://pitstop.legendoftoys.com',  mono: 'PS', tint: '#10b981' },
   { key: 'odo',      label: 'Odo',      url: 'https://odo.legendoftoys.com',      mono: 'OD', tint: '#f2cd1a' },
   { key: 'throttle', label: 'Throttle', url: 'https://throttle.legendoftoys.com', mono: 'TH', tint: '#eab308' },
+  { key: 'relay',    label: 'Relay',    url: 'https://relay.legendoftoys.com',    mono: 'RY', tint: '#F2CD1A' },
 ];
 
 function WaffleIcon({ size = 18 }) {

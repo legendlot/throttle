@@ -1,0 +1,196 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Tomorrow:wght@400;500;600;700;900&family=Rubik:wght@300;400;500;600&display=swap');
+
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+/* ════════════════════════════════════════════════════════════
+   DESIGN TOKENS — Relay (CX comms)
+   Mirrors apps/snorkel/src/app/globals.css for cross-app
+   consistency. Same lifted-dark surface scale, same text ramp,
+   same semantic state colors, same focus ring. Brand palette:
+   Relay Yellow (#F2CD1A · accent), Ink (#282828), Signal Red
+   (#DE2A2A · danger).
+   ════════════════════════════════════════════════════════════ */
+
+:root {
+  /* ── Surface ramp (cooler/darker, 4 steps) ───────────────── */
+  --bg:         #16181a;   /* body */
+  --surface:    #1e2023;   /* cards, panels, sidebar, modals */
+  --surface-2:  #26282c;   /* inputs, table-row hover, raised inner */
+  --surface-3:  #30343a;   /* active fills, chip-neutral bg, hover */
+  --border:     #2c2f33;   /* default 1px border */
+  --border-2:   #3a3e44;   /* emphasized border, focus, raised secondary */
+
+  /* ── Text ramp (4 steps, AA-conformant on --bg) ──────── */
+  --text-1:     #f3f4f5;   /* primary */
+  --text-2:     #a7acb2;   /* secondary */
+  --text-3:     #71767c;   /* tertiary */
+  --text-4:     #565b61;   /* decorative-only — icons, dividers */
+
+  /* ── Brand colors (Relay) ────────────────────────────── */
+  --brand-yellow:      #F2CD1A;   /* Relay Yellow */
+  --brand-yellow-deep: #d4b200;
+  --brand-ink:         #282828;   /* Ink */
+  --ink:               #282828;
+  --brand-blue:        #213CE2;
+  --brand-red:         #DE2A2A;   /* Signal Red */
+  --danger:            #DE2A2A;
+  --brand-green:       #22c55e;
+  --brand-orange:      #f97316;
+
+  /* ── Redesign foreground variants (lighter text/badge fills on dark) ── */
+  --blue-fg:    #9aabff;
+  --green-fg:   #5fe08a;
+  --red-fg:     #ff7a7a;
+  --orange-fg:  #ffa459;
+  --blue-bright: #4d68ff;
+  --blue-solid:  #213CE2;
+
+  /* ── Semantic state ───────────────────────────────────── */
+  --state-warning:    #fbbf24;
+  --state-warning-fg: #fbbf24;
+  --state-warning-bg: rgba(251, 191, 36, 0.12);
+  --state-error:      #DE2A2A;
+  --state-error-fg:   #ff7070;
+  --state-error-bg:   rgba(222, 42, 42, 0.15);
+  --state-success:    #22c55e;
+  --state-success-fg: #4ade80;
+  --state-success-bg: rgba(34, 197, 94, 0.12);
+  --state-info:       #7b93ff;
+  --state-info-fg:    #7b93ff;
+  --state-info-bg:    rgba(33, 60, 226, 0.20);
+
+  /* Accent (primary action) — Relay Yellow on Ink */
+  --accent:      var(--brand-yellow);
+  --accent-fg:   #282828;
+  --accent-bg:   rgba(242, 205, 26, 0.08);
+  --accent-soft: rgba(242, 205, 26, 0.13);  /* tinted fill (active nav, soft badges) */
+  --accent-bd:   rgba(242, 205, 26, 0.32);  /* tinted border */
+
+  /* ── Type scale ──────────────────────────────────────── */
+  --text-2xs:  11px;
+  --text-xs:   12px;
+  --text-sm:   13px;
+  --text-base: 14px;
+  --text-md:   16px;
+  --text-lg:   18px;
+  --text-xl:   22px;
+  --text-2xl:  28px;
+  --text-3xl:  36px;
+
+  --tracking-tight:  0.04em;
+  --tracking-mid:    0.06em;
+  --tracking-wide:   0.08em;
+
+  /* ── Spacing scale ───────────────────────────────────── */
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  20px;
+  --space-6:  24px;
+  --space-8:  32px;
+  --space-10: 40px;
+
+  /* ── Radius scale ────────────────────────────────────── */
+  --radius-sm:   3px;
+  --radius-md:   4px;
+  --radius-lg:   8px;
+  --radius-full: 9999px;
+
+  /* ── Fonts (LOT design system — three type roles) ─────────
+     Display = Tomorrow, Body/UI = Rubik, Data/mono = JetBrains Mono */
+  --font-mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+  --font-cond: 'Tomorrow', system-ui, sans-serif;
+  --font-ui:   'Rubik', system-ui, sans-serif;
+
+  /* ── Motion ──────────────────────────────────────────── */
+  --duration-fast:    120ms;
+  --duration-default: 180ms;
+  --duration-slow:    260ms;
+  --ease-out:         cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* ── Redesign layout primitives ── */
+  --ease:       cubic-bezier(0.22, 1, 0.36, 1);
+  --radius:     7px;
+  --row-pad:    11px 12px;
+  --panel-pad:  16px 18px;
+  --shadow:     0 1px 0 rgba(255,255,255,.025) inset, 0 8px 24px -12px rgba(0,0,0,.6);
+
+  /* ════════════════════════════════════════════════════════
+     LEGACY ALIASES — shared components reference these names.
+     ════════════════════════════════════════════════════════ */
+  --surface2: var(--surface-2);
+  --surface3: var(--surface-3);
+  --border2:  var(--border-2);
+  --t1:       var(--text-1);
+  --t2:       var(--text-2);
+  --t3:       var(--text-3);
+  --yellow:      var(--brand-yellow);
+  --yellow2:     var(--brand-yellow-deep);
+  --yellow-deep: var(--brand-yellow-deep);
+  --blue:     var(--blue-bright);
+  --red:      var(--brand-red);
+  --green:    var(--brand-green);
+  --orange:   var(--brand-orange);
+  --mono:     var(--font-mono);
+  --cond:     var(--font-cond);
+  --disp:     var(--font-cond);
+  --body:     var(--font-ui);
+}
+
+/* ══════════════════════════════════════════════════════════
+   BASE
+   ══════════════════════════════════════════════════════════ */
+
+html, body {
+  background: var(--bg);
+  color: var(--text-1);
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  line-height: 1.5;
+  height: 100%;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a { color: inherit; text-decoration: none; }
+button { font-family: inherit; }
+
+/* ── Focus ring — keyboard only ──────────────────────────── */
+:focus { outline: none; }
+:focus-visible {
+  outline: 2px solid rgba(242, 205, 26, 0.6);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ── Selection ───────────────────────────────────────────── */
+::selection {
+  background: rgba(242, 205, 26, 0.35);
+  color: var(--text-1);
+}
+
+/* ── Scrollbars — match dark theme ───────────────────────── */
+::-webkit-scrollbar       { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-2); }
+* { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+
+/* ══════════════════════════════════════════════════════════
+   ACCESSIBILITY
+   ══════════════════════════════════════════════════════════ */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
