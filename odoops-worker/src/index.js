@@ -17,6 +17,11 @@
 // outside `sales` (+ the salesops perm tables on grant). No cross-worker calls.
 // ============================================================
 
+import { WorkflowEntrypoint } from 'cloudflare:workers';
+// Max windows a single ConnectorWorkflow instance pulls before ending (a still-backfilling
+// connector simply continues on the next cron tick). Bounds instance lifetime.
+const MAX_WINDOWS = 24;
+
 const SUPABASE_URL = 'https://jkxcnjabmrkteanzoofj.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_1Dd-r3h9Mou2Wqgn6t24Dw_lmWdBtLh'; // publishable — auth verify only
 let SUPABASE_SERVICE_KEY = ''; // loaded from env each invocation
@@ -1318,16 +1323,34 @@ async function executeRun(cfg, runId, env, { budget = CRON_BUDGET, cursorOverrid
     const okPatch = { last_ok_at: nowISO(), last_error: null };
     if (cursorAfter) okPatch.cursor = cursorAfter;
     await sbSales(`/rest/v1/connector_config?channel_id=eq.${cfg.channel_id}`, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify(okPatch) });
-    return { subreqs };
+    // Workflow loop hints (small, serializable — never return row arrays):
+    //  partial → more work remains for this connector (another window, or a pending report)
+    //  waitMs  → an async report is still processing (partial + no rows + no cursor advance);
+    //            the workflow step.sleeps this long instead of hot-looping. 0 = continue now.
+    const waitMs = (partial && rows.length === 0 && !cursorAfter) ? 10 * 60 * 1000 : 0;
+    return { subreqs, partial: !!partial, cursorAfter: cursorAfter || null, status: partial ? 'partial' : 'ok', rows: rows.length, waitMs };
   } catch (e) {
     await finishRun(runId, { status: 'error', error: String(e?.message || e) });
     await sbSales(`/rest/v1/connector_config?channel_id=eq.${cfg.channel_id}`, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ last_error: String(e?.message || e) }) });
-    return { subreqs: 0 };
+    return { subreqs: 0, partial: false, cursorAfter: null, status: 'error', rows: 0, waitMs: 0, error: String(e?.message || e) };
   }
 }
 async function runChannel(cfg, trigger, env, userId, opts = {}) {
   const runId = await startRun(cfg, trigger, userId);
   return executeRun({ ...cfg, started_by: userId }, runId, env, opts);
+}
+
+// Load one connector's live config row (fresh — picks up a cursor advanced by a prior step).
+async function loadConnectorCfg(channelId) {
+  const r = await sbSales(`/rest/v1/connector_config?channel_id=eq.${channelId}&select=*`);
+  return (r.ok && r.data[0]) ? r.data[0] : null;
+}
+// Spawn a ConnectorWorkflow instance for one connector and record its id for single-flight.
+async function startConnectorWf(env, channelId, trigger, cursorOverride) {
+  const id = `${channelId}-${Date.now()}`;
+  await env.CONNECTOR_WF.create({ id, params: { channelId, trigger, cursorOverride: cursorOverride || null } });
+  await sbSales(`/rest/v1/connector_config?channel_id=eq.${channelId}`, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ wf_instance_id: id }) });
+  return id;
 }
 
 // QC report ingest — download file from Storage, parse, supersede, stage, map.
@@ -1358,25 +1381,58 @@ async function ingestUpload(batch, env) {
 }
 
 // ============================================================
+// One instance per connector. Each step.do() is a fresh execution with its own 50-subreq
+// budget; the loop drains windows until the adapter reports no more work (partial=false),
+// sleeping when an async report is still processing (waitMs>0). executeRun is idempotent,
+// so any step retry is safe.
+export class ConnectorWorkflow extends WorkflowEntrypoint {
+  async run(event, step) {
+    SUPABASE_SERVICE_KEY = this.env.SUPABASE_SERVICE_KEY || '';
+    _channels = null;
+    const { channelId, trigger = 'cron', cursorOverride = null } = event.payload || {};
+    for (let i = 0; i < MAX_WINDOWS; i++) {
+      const res = await step.do(
+        `window-${i}`,
+        { retries: { limit: 3, delay: '30 seconds', backoff: 'exponential' }, timeout: '5 minutes' },
+        async () => {
+          SUPABASE_SERVICE_KEY = this.env.SUPABASE_SERVICE_KEY || '';
+          _channels = null;
+          const cfg = await loadConnectorCfg(channelId);
+          if (!cfg || !cfg.enabled) return { partial: false, status: 'skipped', rows: 0, waitMs: 0, subreqs: 0, cursorAfter: null };
+          const ov = (i === 0 && cursorOverride) ? cursorOverride : undefined;
+          const runId = await startRun(cfg, trigger, null, ov);
+          return await executeRun({ ...cfg, started_by: null }, runId, this.env, { budget: 50, cursorOverride: ov });
+        }
+      );
+      if (!res || !res.partial) break;
+      if (res.waitMs) await step.sleep(`wait-${i}`, res.waitMs);
+    }
+    return { channelId, windows: 'done' };
+  }
+}
+
 export default {
   async scheduled(event, env, ctx) {
     SUPABASE_SERVICE_KEY = env.SUPABASE_SERVICE_KEY || '';
     _channels = null;
     try {
-      // Fair scheduler: process the least-recently-succeeded connector first. Every successful/partial
-      // run stamps last_ok_at=now(), so this rotates round-robin — a connector that just ran drops to the
-      // back, letting starved ones lead. Without this, a fixed order let multi-day backfills (Google/Meta
-      // Ads + Amazon finance, all from 2025-04-01) eat the whole 45-subreq budget every tick and the cheap
-      // daily sell-out connectors (Website/QC/GT/MT) at the tail were deferred forever (stale since S166/S168).
-      const r = await sbSales('/rest/v1/connector_config?enabled=eq.true&order=last_ok_at.asc.nullsfirst&select=*');
-      let budget = CRON_BUDGET;
+      // PRODUCER: spawn one ConnectorWorkflow per enabled connector. Single-flight — skip a
+      // connector whose previous instance is still in flight (long backfill), so we never run two
+      // instances for the same connector concurrently. Each instance gets its own per-step subrequest
+      // budget, so connectors no longer compete for one shared 45-subreq tick budget (the starvation
+      // that left daily sell-out connectors stale since S166/S168 — see the Workflows design spec).
+      const r = await sbSales('/rest/v1/connector_config?enabled=eq.true&select=channel_id,wf_instance_id');
       for (const cfg of (r.ok ? r.data : [])) {
-        if (budget < 8) break;                       // defer remaining channels to next hour
-        const runId = await startRun(cfg, 'cron', null);
-        const { subreqs } = await executeRun(cfg, runId, env, { budget });
-        budget -= (subreqs || 1);
+        if (cfg.wf_instance_id) {
+          try {
+            const st = await (await env.CONNECTOR_WF.get(cfg.wf_instance_id)).status();
+            if (['queued', 'running', 'waiting', 'paused'].includes(st?.status)) continue; // already in flight
+          } catch { /* unknown/expired instance id → safe to start a new one */ }
+        }
+        try { await startConnectorWf(env, cfg.channel_id, 'cron', null); }
+        catch (e) { console.error('odoops producer: failed to start', cfg.channel_id, e?.message || e); }
       }
-    } catch (e) { console.error('salesops cron failed:', e?.message || e); }
+    } catch (e) { console.error('odoops cron (producer) failed:', e?.message || e); }
   },
 
   async fetch(request, env, ctx) {
@@ -1442,6 +1498,19 @@ export default {
             });
           }
 
+          case 'wfProbe': {
+            if (!canConnector(P)) return err('No permission', 403);
+            const cid = qp('channel_id');
+            if (!cid) return err('channel_id required');
+            const cfgR = await sbSales(`/rest/v1/connector_config?channel_id=eq.${cid}&select=wf_instance_id,cursor,last_ok_at,last_error`);
+            const cfg = (cfgR.ok && cfgR.data[0]) ? cfgR.data[0] : null;
+            let status = null;
+            if (cfg?.wf_instance_id) {
+              try { status = await (await env.CONNECTOR_WF.get(cfg.wf_instance_id)).status(); }
+              catch (e) { status = { error: String(e?.message || e) }; }
+            }
+            return ok({ channel_id: cid, wf_instance_id: cfg?.wf_instance_id || null, cursor: cfg?.cursor || null, last_ok_at: cfg?.last_ok_at || null, last_error: cfg?.last_error || null, status });
+          }
           case 'getSales': {
             const chans = (qp('channel_id') || '').split(',').map(s => s.trim()).filter(Boolean);
             const r = await rpcSales('f_sales_rollup', {
@@ -1625,24 +1694,22 @@ export default {
         switch (act) {
           case 'refreshNow': {
             if (!canRefresh(P)) return err('No permission', 403);
-            const channels = d.channel_id ? [d.channel_id] : null;
-            const cfgR = await sbSales(`/rest/v1/connector_config?enabled=eq.true${channels ? `&channel_id=eq.${channels[0]}` : ''}&select=*`);
+            const one = d.channel_id;
+            const cfgR = await sbSales(`/rest/v1/connector_config?enabled=eq.true${one ? `&channel_id=eq.${one}` : ''}&select=channel_id`);
             const cfgs = cfgR.ok ? cfgR.data : [];
             if (!cfgs.length) return err('No enabled connector for that channel', 404);
             const ids = [];
-            for (const cfg of cfgs) { const runId = await startRun(cfg, 'manual', userId); ids.push(runId); ctx.waitUntil(executeRun({ ...cfg, started_by: userId }, runId, env, { budget: CRON_BUDGET })); }
-            return ok({ run_ids: ids, started: cfgs.length });
+            for (const c of cfgs) ids.push(await startConnectorWf(env, c.channel_id, 'manual', null));
+            return ok({ instances: ids, started: cfgs.length });
           }
           case 'backfill': {
             if (!canConnector(P)) return err('No permission', 403);
             if (!d.channel_id) return err('channel_id required');
-            const cfgR = await sbSales(`/rest/v1/connector_config?channel_id=eq.${d.channel_id}&select=*`);
+            const cfgR = await sbSales(`/rest/v1/connector_config?channel_id=eq.${d.channel_id}&select=channel_id`);
             if (!cfgR.ok || !cfgR.data[0]) return err('Connector not found', 404);
-            const cfg = cfgR.data[0];
             const cursorOverride = d.from ? (d.from.length === 10 ? d.from + 'T00:00:00Z' : d.from) : BACKFILL_START;
-            const runId = await startRun(cfg, 'backfill', userId, cursorOverride);
-            ctx.waitUntil(executeRun({ ...cfg, started_by: userId }, runId, env, { budget: CRON_BUDGET, cursorOverride }));
-            return ok({ run_id: runId });
+            const instance = await startConnectorWf(env, d.channel_id, 'backfill', cursorOverride);
+            return ok({ instance });
           }
           case 'uploadReport': {
             if (!canUpload(P)) return err('No permission', 403);

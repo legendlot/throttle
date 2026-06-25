@@ -12,10 +12,18 @@ workers_dev = true
 # (Internal DB names keep the `sales`/`salesops_*` build identifiers — they predate the
 #  Odo branding and are invisible to users; system/app/worker/domain are all "Odo".)
 
-# Hourly connector pull — iterates enabled sales.connector_config adapters with a
-# global subrequest budget, advancing each channel's cursor on success.
+# Hourly cron is now a thin PRODUCER: it spawns one ConnectorWorkflow instance per enabled
+# connector (single-flight). Each instance loops one window per step.do(), and each step gets
+# its own 50-subrequest budget — so connectors no longer share one tick budget (the starvation
+# that left daily sell-out connectors stale). Design spec:
+# docs/superpowers/specs/2026-06-25-odo-ingestion-workflows-design.md.
 [triggers]
 crons = ["0 * * * *"]
+
+[[workflows]]
+name = "odoops-connector"
+binding = "CONNECTOR_WF"
+class_name = "ConnectorWorkflow"
 
 # Secrets set via `wrangler secret put` — never stored in this file:
 #   SUPABASE_SERVICE_KEY   (Supabase service_role sb_secret key — same project as lotopsproxy)
