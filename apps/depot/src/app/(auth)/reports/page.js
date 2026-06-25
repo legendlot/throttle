@@ -11,7 +11,7 @@
      scan log exports by paging the existing getAllScans.
    Gate = perms.reports (canDownload), same as every other system.
    ════════════════════════════════════════════════════════════ */
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, Fragment } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
@@ -133,6 +133,82 @@ function Table({ title, rows, columns, csvName, action }) {
               {rows.map((r,i) => (
                 <tr key={i}>{columns.map(c => <td key={c.key} style={c.num ? tdNum : td}>{c.fmt ? c.fmt(r[c.key], r) : (r[c.key] ?? '—')}</td>)}</tr>
               ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+// Units sent out (DOUT) by product — searchable combobox, product-level by
+// default, expand a product to see its variant·color breakdown.
+function DispatchedByProduct({ data, from, to }) {
+  const [q, setQ] = useState('');
+  const [open, setOpen] = useState(() => new Set());
+  const products = data?.by_product || [];
+  const csvRows  = data?.rows || [];
+  const filtered = useMemo(() => {
+    const term = q.trim().toLowerCase();
+    return term ? products.filter(p => (p.product || '').toLowerCase().includes(term)) : products;
+  }, [products, q]);
+  const toggle = (p) => setOpen(prev => { const n = new Set(prev); n.has(p) ? n.delete(p) : n.add(p); return n; });
+
+  return (
+    <Panel
+      header="Units sent out by product (DOUT)"
+      headerAction={csvRows.length
+        ? <button style={btnS} onClick={() => downloadCsv(`dispatched-by-product-${from||'all'}_${to||'today'}.csv`, csvRows, [
+            { key: 'product', label: 'Product' }, { key: 'variant', label: 'Variant' },
+            { key: 'color', label: 'Color' }, { key: 'units', label: 'Units' },
+          ])}>CSV</button>
+        : null}
+    >
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
+        <input
+          list="dout-products" value={q} onChange={e => setQ(e.target.value)}
+          placeholder="Search product…"
+          style={{ ...btnS, color: 'var(--t1)', minWidth: 240, textTransform: 'none', letterSpacing: 0 }}
+        />
+        <datalist id="dout-products">{products.map(p => <option key={p.product} value={p.product} />)}</datalist>
+        {q ? <button style={btnS} onClick={() => setQ('')}>Clear</button> : null}
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>
+          {filtered.length} product{filtered.length === 1 ? '' : 's'} · tap a row for variant &amp; colour
+        </span>
+      </div>
+      {!filtered.length ? <EmptyState message="No units dispatched in range." /> : (
+        <div style={{ overflowX: 'auto', maxHeight: 520 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>
+              <th style={th}>Product</th>
+              <th style={{ ...th, textAlign: 'right' }}>Units sent out</th>
+            </tr></thead>
+            <tbody>
+              {filtered.map(p => {
+                const isOpen = open.has(p.product);
+                return (
+                  <Fragment key={p.product}>
+                    <tr onClick={() => toggle(p.product)} style={{ cursor: 'pointer' }}>
+                      <td style={{ ...td, fontWeight: 700 }}>
+                        <span style={{ display: 'inline-block', width: 14, color: 'var(--t3)' }}>{isOpen ? '▾' : '▸'}</span>
+                        {p.product}
+                        <span style={{ color: 'var(--t3)', fontWeight: 400, marginLeft: 8, fontSize: 11 }}>
+                          ({p.variants.length} variant{p.variants.length === 1 ? '' : 's'})
+                        </span>
+                      </td>
+                      <td style={tdNum}>{nf(p.units)}</td>
+                    </tr>
+                    {isOpen && p.variants.slice().sort((a,b) => b.units - a.units).map((v,i) => (
+                      <tr key={i} style={{ background: 'rgba(255,255,255,.02)' }}>
+                        <td style={{ ...td, paddingLeft: 34, color: 'var(--t2)' }}>
+                          {v.model}{v.color && v.color !== '—' ? ` · ${v.color}` : ''}
+                        </td>
+                        <td style={{ ...tdNum, fontWeight: 400, color: 'var(--t2)' }}>{nf(v.units)}</td>
+                      </tr>
+                    ))}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -368,6 +444,14 @@ export default function ReportsPage() {
             ]}
             csvName={`dispatch-fulfilment-${from||'all'}_${to||'today'}.csv`}
           />
+
+          {/* ── DISPATCHED OUT BY PRODUCT ───────────────────── */}
+          <div style={sectionHead}>Dispatched out · By product</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
+            <KpiCard label="Units sent out (DOUT)" value={nf(data?.dispatched?.total)} />
+            <KpiCard label="Products dispatched" value={nf((data?.dispatched?.by_product || []).length)} />
+          </div>
+          <DispatchedByProduct data={data?.dispatched} from={from} to={to} />
 
           {/* ── RETURNS ─────────────────────────────────────── */}
           <div style={sectionHead}>Returns · Restocks &amp; repack</div>
