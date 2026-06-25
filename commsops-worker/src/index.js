@@ -3,6 +3,7 @@ const { ingest } = require('./ingest.js');
 const { recordConsent } = require('./consent.js');
 const { send } = require('./send.js');
 const { handleResendWebhook, handleUnsubscribe } = require('./webhooks.js');
+const CAMP = require('./campaigns.js');
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -65,6 +66,28 @@ async function handleGet(url, auth, env) {
     case 'getTemplates': {             // M5
       const r = await A.sbComms('/rest/v1/templates?select=*&order=updated_at.desc', env);
       return r.ok ? ok(r.data) : err('db_error', 500);
+    }
+
+    case 'getSegments': {              // M6
+      const r = await A.sbComms('/rest/v1/segments?select=*&order=updated_at.desc', env);
+      return r.ok ? ok(r.data) : err('db_error', 500);
+    }
+    case 'getSegment': {
+      const id = url.searchParams.get('id'); if (!id) return err('id_required', 400);
+      const [s, mc] = await Promise.all([
+        A.sbComms(`/rest/v1/segments?id=eq.${A.enc(id)}&select=*&limit=1`, env),
+        A.sbComms(`/rest/v1/segment_members?segment_id=eq.${A.enc(id)}&select=profile_id`, env),
+      ]);
+      return ok({ segment: s.data?.[0] || null, member_count: Array.isArray(mc.data) ? mc.data.length : 0 });
+    }
+    case 'getCampaigns': {
+      const r = await A.sbComms('/rest/v1/campaigns?select=*&order=updated_at.desc', env);
+      return r.ok ? ok(r.data) : err('db_error', 500);
+    }
+    case 'getCampaign': {
+      const id = url.searchParams.get('id'); if (!id) return err('id_required', 400);
+      const c = await CAMP.getCampaign(env, id);
+      return ok(c);
     }
     default:
       return err(`unknown_action:${action}`, 404);
@@ -167,7 +190,73 @@ async function handlePost(body, auth, env) {
       return ok(r);
     }
 
-    // M6: campaigns · M7: journeys — wired per milestone
+    // ── M6: segments ──
+    case 'saveSegment': {
+      if (!A.canSegment(auth.permissions)) return err('forbidden', 403);
+      const { id, name, kind, definition } = body;
+      if (!name) return err('name_required', 400);
+      const row = { name, kind: kind || 'dynamic', definition: definition || {}, updated_at: nowIso() };
+      const r = id
+        ? await A.sbComms(`/rest/v1/segments?id=eq.${A.enc(id)}`, env, { method: 'PATCH', headers: { Prefer: 'return=representation' }, body: JSON.stringify(row) })
+        : await A.sbComms('/rest/v1/segments', env, { method: 'POST', headers: { Prefer: 'return=representation' }, body: JSON.stringify({ ...row, created_by: auth.userId }) });
+      return r.ok ? ok(r.data?.[0]) : err('db_error:' + JSON.stringify(r.data), 500);
+    }
+    case 'previewSegment': {           // size + reachable-on-(channel,purpose), no materialize
+      const { definition, channel, purpose } = body;
+      const r = await A.sbComms('/rest/v1/rpc/preview_segment', env, {
+        method: 'POST', body: JSON.stringify({ p_def: definition || {}, p_channel: channel || 'email', p_purpose: purpose || 'marketing' }),
+      });
+      const row = Array.isArray(r.data) ? r.data[0] : r.data;
+      return r.ok ? ok(row) : err('eval_error:' + JSON.stringify(r.data), 500);
+    }
+    case 'materializeSegment': {
+      if (!A.canSegment(auth.permissions)) return err('forbidden', 403);
+      const r = await A.sbComms('/rest/v1/rpc/materialize_segment', env, { method: 'POST', body: JSON.stringify({ p_segment_id: body.id }) });
+      return r.ok ? ok({ members: r.data }) : err('db_error', 500);
+    }
+
+    // ── M6: campaigns + approval lifecycle ──
+    case 'saveCampaign': {
+      if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
+      const { id, name, channel, purpose, segment_id, template_id, vars, scheduled_at } = body;
+      if (!name) return err('name_required', 400);
+      const row = { name, channel: channel || 'email', purpose: purpose || 'marketing',
+        segment_id: segment_id || null, template_id: template_id || null, vars: vars || {},
+        scheduled_at: scheduled_at || null, updated_at: nowIso() };
+      const r = id
+        ? await A.sbComms(`/rest/v1/campaigns?id=eq.${A.enc(id)}`, env, { method: 'PATCH', headers: { Prefer: 'return=representation' }, body: JSON.stringify(row) })
+        : await A.sbComms('/rest/v1/campaigns', env, { method: 'POST', headers: { Prefer: 'return=representation' }, body: JSON.stringify({ ...row, status: 'draft', created_by: auth.userId }) });
+      return r.ok ? ok(r.data?.[0]) : err('db_error:' + JSON.stringify(r.data), 500);
+    }
+    case 'submitCampaign': {           // draft → approved (auto) or pending_approval (threshold)
+      if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
+      const camp = await CAMP.getCampaign(env, body.id);
+      if (!camp) return err('not_found', 404);
+      if (!camp.segment_id || !camp.template_id) return err('segment_and_template_required', 400);
+      const { reachable } = await CAMP.reachableCount(env, camp.segment_id, camp.channel, camp.purpose);
+      const mustApprove = await CAMP.needsApproval(env, camp, reachable);
+      await CAMP.setStatus(env, body.id, { status: mustApprove ? 'pending_approval' : 'approved', audience_snapshot: reachable });
+      return ok({ status: mustApprove ? 'pending_approval' : 'approved', reachable });
+    }
+    case 'approveCampaign': {
+      if (!A.canApprove(auth.permissions)) return err('forbidden', 403);
+      const camp = await CAMP.getCampaign(env, body.id);
+      if (!camp || camp.status !== 'pending_approval') return err('not_pending', 400);
+      await CAMP.setStatus(env, body.id, { status: 'approved', approved_by: auth.userId });
+      return ok({ status: 'approved' });
+    }
+    case 'rejectCampaign': {
+      if (!A.canApprove(auth.permissions)) return err('forbidden', 403);
+      await CAMP.setStatus(env, body.id, { status: 'draft', reject_reason: body.reason || null });
+      return ok({ status: 'draft' });
+    }
+    case 'sendCampaign': {             // approved → sending (queued fan-out)
+      if (!A.canActivate(auth.permissions)) return err('forbidden', 403);
+      const r = await CAMP.startCampaign(env, body.id, auth.userId);
+      return r.ok ? ok(r) : err(r.error, 400);
+    }
+
+    // M7: journeys — wired per milestone
     default:
       return err(`unknown_action:${body.action}`, 404);
   }
@@ -227,6 +316,18 @@ export default {
       return err('method_not_allowed', 405);
     } catch (e) {
       return err(e?.message || 'server_error', 500);
+    }
+  },
+
+  // Broadcast fan-out consumer (M6). max_batch_size=1 → one chunk per invocation.
+  async queue(batch, env) {
+    for (const msg of batch.messages) {
+      try {
+        await CAMP.processQueueMessage(env, msg.body);
+        msg.ack();
+      } catch (e) {
+        msg.retry();
+      }
     }
   },
 };

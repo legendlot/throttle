@@ -19,3 +19,16 @@ SUPABASE_URL = "https://jkxcnjabmrkteanzoofj.supabase.co"
 # RESEND_API_KEY           (M5)
 # SHOPIFY_WEBHOOK_SECRET   (M4)
 # RESEND_WEBHOOK_SECRET    (M5)
+
+# Broadcast fan-out (M6) — throttled campaign sends, respects the 50-subrequest limit.
+[[queues.producers]]
+queue = "commsops-broadcast"
+binding = "BROADCAST_QUEUE"
+
+# max_batch_size=1: each message paginates its own small recipient chunk and
+# self-enqueues the next, so one invocation stays well under the 50-subrequest limit.
+[[queues.consumers]]
+queue = "commsops-broadcast"
+max_batch_size = 1
+max_batch_timeout = 5
+max_retries = 3
