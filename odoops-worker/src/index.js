@@ -1363,7 +1363,12 @@ export default {
     SUPABASE_SERVICE_KEY = env.SUPABASE_SERVICE_KEY || '';
     _channels = null;
     try {
-      const r = await sbSales('/rest/v1/connector_config?enabled=eq.true&select=*');
+      // Fair scheduler: process the least-recently-succeeded connector first. Every successful/partial
+      // run stamps last_ok_at=now(), so this rotates round-robin — a connector that just ran drops to the
+      // back, letting starved ones lead. Without this, a fixed order let multi-day backfills (Google/Meta
+      // Ads + Amazon finance, all from 2025-04-01) eat the whole 45-subreq budget every tick and the cheap
+      // daily sell-out connectors (Website/QC/GT/MT) at the tail were deferred forever (stale since S166/S168).
+      const r = await sbSales('/rest/v1/connector_config?enabled=eq.true&order=last_ok_at.asc.nullsfirst&select=*');
       let budget = CRON_BUDGET;
       for (const cfg of (r.ok ? r.data : [])) {
         if (budget < 8) break;                       // defer remaining channels to next hour
