@@ -24,13 +24,17 @@ function aggReturns(rows) {
   }
   return { ...k, total: k.rto.value + k.rtv.value + k.unknown.value };
 }
-// sum f_sales_rollup rows (one per code × date) → one row per product_code
-function topByCode(rows) {
+// sum f_sales_rollup variant rows (one per code × date) → top 15 at the chosen rollup.
+// mode 'variant' = per SKU (product_code, full variant label); 'product' = per product family
+// (Shadow/Ghost/Flare…) via the code→product map (the RPC's own 'product' group is a no-op).
+function topByCode(rows, mode, c2p) {
   const by = {};
   for (const r of (rows || [])) {
     const code = r.product_code; if (!code) continue;
-    (by[code] = by[code] || { code, label: r.grp_label || code, units: 0, gross: 0 });
-    by[code].units += Number(r.units) || 0; by[code].gross += Number(r.gross_value) || 0;
+    const key = mode === 'product' ? (c2p[code] || r.grp_label || code) : code;
+    const label = mode === 'product' ? (c2p[code] || r.grp_label || code) : (r.grp_label || code);
+    (by[key] = by[key] || { code: key, label, units: 0, gross: 0 });
+    by[key].units += Number(r.units) || 0; by[key].gross += Number(r.gross_value) || 0;
   }
   const arr = Object.values(by).sort((a, b) => b.gross - a.gross).slice(0, 15);
   return { arr, max: Math.max(...arr.map(v => v.gross), 1) };
@@ -49,18 +53,22 @@ export default function AmazonPage() {
 
   // Amazon family channels (Amazon - FBA etc.) for getSegregation/getSales + trend groups
   const [amzCh, setAmzCh] = useState(null);
+  const [c2p, setC2p] = useState({});                // product_code → product family (for the Model rollup)
   useEffect(() => {
     if (!session) return;
     salesGet('getBootstrap', {}, session)
       .then(b => setAmzCh((b?.channels || []).filter(c => familyOf(c.name) === 'amazon').map(c => ({ channel_id: c.channel_id || c.id, name: c.name }))))
       .catch(() => setAmzCh([]));
+    salesGet('getVariants', {}, session)
+      .then(r => { const m = {}; (r?.rows || []).forEach(v => { m[v.product_code] = v.product; }); setC2p(m); })
+      .catch(() => {});
   }, [session]);
   const idsKey = (amzCh || []).map(c => c.channel_id).join(',');
 
   useEffect(() => {
     if (!session || amzCh === null) return;
     setD(null); setErr('');
-    if (!idsKey) { setD({ seg: [], segPrev: [], mkt: [], mktPrev: [], ret: [], geo: [], salesVar: [], salesProd: [] }); return; }
+    if (!idsKey) { setD({ seg: [], segPrev: [], mkt: [], mktPrev: [], ret: [], geo: [], salesVar: [] }); return; }
     const pp = priorPeriod(from, to);
     Promise.all([
       salesGet('getSegregation', { from, to, channel_id: idsKey }, session),
@@ -70,9 +78,8 @@ export default function AmazonPage() {
       salesGet('getAmazonReturns', { from, to, group: 'overall' }, session),
       salesGet('getAmazonGeo', { from, to }, session),
       salesGet('getSales', { from, to, group: 'variant', channel_id: idsKey }, session),
-      salesGet('getSales', { from, to, group: 'product', channel_id: idsKey }, session),
-    ]).then(([seg, segPrev, mkt, mktPrev, ret, geo, sv, sp]) => {
-      setD({ seg: seg?.rows || [], segPrev: segPrev?.rows || [], mkt: mkt?.rows || [], mktPrev: mktPrev?.rows || [], ret: ret?.rows || [], geo: geo?.rows || [], salesVar: sv?.rows || [], salesProd: sp?.rows || [] });
+    ]).then(([seg, segPrev, mkt, mktPrev, ret, geo, sv]) => {
+      setD({ seg: seg?.rows || [], segPrev: segPrev?.rows || [], mkt: mkt?.rows || [], mktPrev: mktPrev?.rows || [], ret: ret?.rows || [], geo: geo?.rows || [], salesVar: sv?.rows || [] });
     }).catch(e => setErr(e.message || String(e)));
   }, [session, amzCh, idsKey, from, to]);
 
@@ -81,7 +88,7 @@ export default function AmazonPage() {
   const ad = useMemo(() => (d?.mkt || []).find(r => /amazon/i.test(r.grp || '')) || {}, [d]);
   const adP = useMemo(() => (d?.mktPrev || []).find(r => /amazon/i.test(r.grp || '')) || {}, [d]);
   const ret = useMemo(() => aggReturns(d?.ret), [d]);
-  const sellers = useMemo(() => topByCode(grp === 'product' ? d?.salesProd : d?.salesVar), [d, grp]);
+  const sellers = useMemo(() => topByCode(d?.salesVar, grp, c2p), [d, grp, c2p]);
 
   const spend = Number(ad.spend) || 0, clicks = Number(ad.clicks) || 0, impr = Number(ad.impressions) || 0, convs = Number(ad.conversions) || 0, attr = Number(ad.conv_value) || 0;
   const pSpend = Number(adP.spend) || 0, pAttr = Number(adP.conv_value) || 0;
