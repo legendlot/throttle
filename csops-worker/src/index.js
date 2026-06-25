@@ -502,6 +502,7 @@ async function handleGet(action, params, auth, env) {
     case 'getWaTemplates':   return getWaTemplates(params, auth, env);
     case 'getMessagingThreads': return getMessagingThreads(params, auth, env);
     case 'getMessagingThread':  return getMessagingThread(params, auth, env);
+    case 'getWaConversation':   return getWaConversation(params, auth, env);
     case 'getMessagingStats':   return getMessagingStats(params, auth, env);
     case 'searchShopifyCustomer':
       return ok(await shopifyLookup({ phone: params.get('phone'), email: params.get('email') }, env));
@@ -545,6 +546,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'markCalledBack':           return markCalledBack(body, auth, env);
     case 'createTicketFromCall':     return createTicketFromCall(body, auth, env);
     case 'sendWaMessage':            return sendWaMessage(body, auth, env);
+    case 'sendWaReply':              return sendWaReply(body, auth, env);
     case 'sendMetaMessage':          return sendMetaMessage(body, auth, env);
     case 'sendMetaAttachment':       return sendMetaAttachment(body, auth, env);
     case 'linkMessagingThread':      return linkMessagingThread(body, auth, env);
@@ -2919,6 +2921,164 @@ async function sendWaMessage(body, auth, env) {
     provider_wired: false,
     note: 'Recorded in Pitstop. Outbound delivery wires up in Phase C2 (Meta/BSP integration).',
   });
+}
+
+// ── Phase C2-B: two-way WhatsApp via the BiteSpeed (Chatwoot) Application API ──
+//
+// Interim path until the WABA migrates off BiteSpeed to direct Meta (Relay).
+// KEY FACT: BiteSpeed's *webhook* only mirrors our OUTBOUND side (it never forwards
+// customer replies — that's the documented "one-sided" limitation and why the local
+// cs_wa_threads.customer_window_until column is always null). But the Chatwoot *API*
+// returns the full two-way conversation, so we PULL it on demand to (a) show the
+// customer's messages in Pitstop and (b) derive the real 24h window from the latest
+// inbound. At WABA cutover these fetch()es swap to Meta Graph (like sendMetaMessage)
+// and nothing else here changes.
+function biteSpeedApiBase(env) {
+  return (env.BITESPEED_API_BASE || 'https://chat.bitespeed.co').replace(/\/+$/, '');
+}
+
+// Pull the live Chatwoot conversation messages for a WA thread.
+async function chatwootGetMessages(thread, env) {
+  const url = `${biteSpeedApiBase(env)}/api/v1/accounts/${encodeURIComponent(thread.provider_account_id)}/conversations/${encodeURIComponent(thread.provider_thread_ref)}/messages`;
+  let r;
+  try { r = await fetch(url, { headers: { 'api_access_token': env.BITESPEED_API_TOKEN } }); }
+  catch (e) { return { ok: false, status: 502, error: e.message }; }
+  if (!r.ok) { const t = await r.text().catch(() => ''); return { ok: false, status: r.status, error: t.slice(0, 200) }; }
+  const d = await r.json().catch(() => ({}));
+  const raw = Array.isArray(d?.payload) ? d.payload : (Array.isArray(d) ? d : []);
+  return { ok: true, raw };
+}
+
+// Map a Chatwoot message → the shape the Pitstop inbox Bubble renders.
+function mapChatwootMessage(m) {
+  const typeNum = Number(m?.message_type);   // 0=in 1=out 2=activity 3=template
+  if (typeNum === 2) return null;            // activity / system — skip
+  const isInternal = m?.private === true;
+  const direction = typeNum === 0 ? 'inbound' : 'outbound';
+  const atts = Array.isArray(m?.attachments) ? m.attachments : [];
+  let kind = 'text';
+  if (isInternal) kind = 'note';
+  else if (atts.length) kind = attachmentKindFromChatwoot(atts[0]?.file_type);
+  else if (typeNum === 3) kind = 'template';
+  const ts = m?.created_at != null
+    ? (typeof m.created_at === 'number' ? new Date(m.created_at * 1000).toISOString() : new Date(m.created_at).toISOString())
+    : null;
+  return {
+    id: m?.id != null ? String(m.id) : `${direction}-${ts}`,
+    provider_message_id: m?.id != null ? String(m.id) : null,
+    direction, kind, is_internal: isInternal,
+    body: m?.content || null,
+    template_name: typeNum === 3 ? (m?.content_attributes?.template_name || m?.content_attributes?.template?.name || null) : null,
+    media_url: atts[0]?.data_url || atts[0]?.file_url || null,
+    media_filename: atts[0]?.file_name || null,
+    status: m?.status || (direction === 'outbound' ? 'sent' : null),
+    sent_by_name: direction === 'outbound' ? (m?.sender?.name || m?.sender?.available_name || null) : null,
+    received_at: direction === 'inbound' ? ts : null,
+    sent_at: direction === 'outbound' ? ts : null,
+    created_at: ts,
+  };
+}
+
+// 24h Meta customer-initiated window, derived from the latest INBOUND message — the
+// only authoritative source (the local column is fed by the one-way webhook, so dead).
+function deriveWaWindow(mapped) {
+  let latestInbound = 0;
+  for (const m of mapped) {
+    if (m.direction !== 'inbound') continue;
+    const t = new Date(m.received_at || m.created_at).getTime();
+    if (Number.isFinite(t) && t > latestInbound) latestInbound = t;
+  }
+  if (!latestInbound) return { open: false, until: null };
+  const until = latestInbound + 24 * 60 * 60 * 1000;
+  return { open: until > Date.now(), until: new Date(until).toISOString() };
+}
+
+async function loadWaLive(thread, env) {
+  const res = await chatwootGetMessages(thread, env);
+  if (!res.ok) return res;
+  const messages = res.raw.map(mapChatwootMessage).filter(Boolean)
+    .sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
+  return { ok: true, messages, window: deriveWaWindow(messages) };
+}
+
+// GET getWaConversation — the live two-way WhatsApp thread pulled from Chatwoot.
+async function getWaConversation(params, auth, env) {
+  const g = require('cs_ticket_view', auth); if (g) return g;
+  const thread_id = params.get('thread_id');
+  if (!thread_id) return err('thread_id required');
+  if (!env.BITESPEED_API_TOKEN) return err('WhatsApp not configured (no BiteSpeed API token)', 503);
+
+  const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=*&limit=1`, env);
+  const thread = tRes.data?.[0];
+  if (!thread) return err('Thread not found', 404);
+  if (!thread.provider_account_id || !thread.provider_thread_ref) {
+    return ok({ messages: [], within_customer_window: false, window_until: null, live: false,
+                note: 'No BiteSpeed conversation reference on this thread yet.' });
+  }
+
+  const live = await loadWaLive(thread, env);
+  if (!live.ok) return err(`Failed to load WhatsApp conversation from BiteSpeed (${live.status}): ${live.error}`, 502);
+
+  return ok({
+    messages: live.messages,
+    within_customer_window: live.window.open,
+    window_until: live.window.until,
+    live: true,
+  });
+}
+
+async function sendWaReply(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { thread_id, text } = body;
+  if (!thread_id || !text || !String(text).trim()) return err('thread_id and text required');
+  if (!env.BITESPEED_API_TOKEN) return err('WhatsApp send not configured (no BiteSpeed API token)', 503);
+
+  const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=*&limit=1`, env);
+  const thread = tRes.data?.[0];
+  if (!thread) return err('Thread not found', 404);
+  if ((thread.channel || 'whatsapp') !== 'whatsapp') return err('Not a WhatsApp thread — use sendMetaMessage', 422);
+  if (!thread.provider_account_id || !thread.provider_thread_ref) {
+    return err('Thread has no BiteSpeed conversation reference yet', 422);
+  }
+
+  // Meta utility-message-first rule (RULE-PITSTOP-013): free-text only inside the 24h
+  // window, derived LIVE from the latest inbound (the local column is dead — one-way
+  // webhook). Outside it, a pre-approved template is required (fast-follow, not v1).
+  const live = await loadWaLive(thread, env);
+  if (!live.ok) return err(`Couldn't verify the customer window with BiteSpeed (${live.status}): ${live.error}`, 502);
+  if (!live.window.open) {
+    return err('Outside the 24h customer window — free-text replies are blocked until the customer messages again (templates coming soon)', 422);
+  }
+
+  // Send through Chatwoot's Application API into the existing conversation. Chatwoot
+  // then fires a message_created webhook → /webhooks/bitespeed, which mirrors this
+  // outbound row into cs_wa_messages (deduped on the Chatwoot message id). So we do
+  // NOT insert locally here; the UI re-pulls the live thread for instant display.
+  const apiUrl = `${biteSpeedApiBase(env)}/api/v1/accounts/${encodeURIComponent(thread.provider_account_id)}/conversations/${encodeURIComponent(thread.provider_thread_ref)}/messages`;
+  let resp, data;
+  try {
+    resp = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'api_access_token': env.BITESPEED_API_TOKEN },
+      body: JSON.stringify({ content: String(text), message_type: 'outgoing' }),
+    });
+    data = await resp.json().catch(() => ({}));
+  } catch (e) {
+    return err(`BiteSpeed send failed: ${e.message}`, 502);
+  }
+  if (!resp.ok) return err(`BiteSpeed send failed (${resp.status}): ${JSON.stringify(data)?.slice(0, 300)}`, resp.status);
+
+  const now = new Date().toISOString();
+  const threadPatch = { last_message_at: now };
+  if (!thread.assigned_agent_id) {                 // auto-claim on first reply (mirror sendMetaMessage)
+    threadPatch.assigned_agent_id = auth.userId;
+    threadPatch.assigned_agent_name = auth.fullName || auth.name || auth.email || null;
+    threadPatch.assigned_at = now;
+  }
+  if (thread.thread_state && thread.thread_state !== 'open') threadPatch.thread_state = 'open';
+  await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(threadPatch) }).catch(() => {});
+
+  return ok({ sent: true, message_id: data?.id != null ? String(data.id) : null, auto_claimed: !thread.assigned_agent_id });
 }
 
 // Phase C admin-only: simulate an inbound message for testing the UI before

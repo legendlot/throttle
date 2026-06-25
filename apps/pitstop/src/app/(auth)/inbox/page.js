@@ -30,7 +30,7 @@ const EmojiPicker = dynamic(() => import('../../../components/EmojiPicker.js'), 
 const CHANNELS = {
   instagram: { label: 'Instagram', color: '#E1306C', Glyph: Instagram, sendable: true },
   messenger: { label: 'Messenger', color: '#0084FF', Glyph: Facebook, sendable: true },
-  whatsapp:  { label: 'WhatsApp',  color: '#25D366', Glyph: MessageCircle, sendable: false },
+  whatsapp:  { label: 'WhatsApp',  color: '#25D366', Glyph: MessageCircle, sendable: true },
 };
 const chanOf = (c) => CHANNELS[c] || { label: c || 'DM', color: 'var(--t3)', Glyph: MessageCircle, sendable: false };
 
@@ -136,7 +136,20 @@ export default function InboxPage() {
     if (!session || !id) return;
     try {
       const d = await csopsGet('getMessagingThread', { thread_id: id }, session);
-      setConvo(d);
+      // WhatsApp: BiteSpeed's webhook only mirrors our outbound side, so pull the
+      // live two-way conversation (+ real 24h window) from Chatwoot on demand (C2-B).
+      if (d?.thread?.channel === 'whatsapp') {
+        try {
+          const live = await csopsGet('getWaConversation', { thread_id: id }, session);
+          setConvo({ ...d, messages: live.messages || [],
+            within_customer_window: !!live.within_customer_window,
+            window_until: live.window_until || null, wa_live: !!live.live });
+        } catch (e) {
+          setConvo({ ...d, wa_live_error: e.message });   // fall back to mirrored view, flag it
+        }
+      } else {
+        setConvo(d);
+      }
     } catch (e) { setErr(e.message); }
     finally { setLoadingConvo(false); }
   }, [session]);
@@ -283,6 +296,7 @@ export default function InboxPage() {
     const t = text.trim();
     // Attachment send (reply mode only) — caption = whatever's in the box.
     if (mode === 'reply' && pendingFile) {
+      if (convo?.thread?.channel === 'whatsapp') { setErr('Attachments to WhatsApp are not supported yet — send text only.'); return; }
       setSending(true); setErr(null);
       try {
         await csopsPost('sendMetaAttachment', {
@@ -300,6 +314,8 @@ export default function InboxPage() {
     try {
       if (mode === 'note') {
         await csopsPost('addThreadNote', { thread_id: convo.thread.id, text: t }, session);
+      } else if (convo.thread.channel === 'whatsapp') {
+        await csopsPost('sendWaReply', { thread_id: convo.thread.id, text: t }, session);   // C2-B BiteSpeed tunnel
       } else {
         await csopsPost('sendMetaMessage', { thread_id: convo.thread.id, text: t }, session);
       }
@@ -406,6 +422,11 @@ export default function InboxPage() {
   const windowOpen = !!convo?.within_customer_window;
   const mineThread = thread && thread.assigned_agent_id && thread.assigned_agent_id === myId;
   const noteMode = mode === 'note';
+  // WhatsApp (C2-B) replies tunnel through BiteSpeed: free-text only, and only
+  // inside the 24h customer window (worker enforces; template send is a fast-follow).
+  // No outbound attachments on WA in v1 (Chatwoot media send is a later add).
+  const isWa = thread?.channel === 'whatsapp';
+  const waReplyBlocked = isWa && !noteMode && !windowOpen;
   const slashActive = !noteMode && text.startsWith('/');           // "/" quick-access to canned
   const cannedQuery = (slashActive ? text.slice(1) : cannedSearch).trim().toLowerCase();
   const filteredCanned = cannedQuery
@@ -671,7 +692,9 @@ export default function InboxPage() {
                     </div>
                   ) : !windowOpen && (
                     <div style={{ fontSize: 10.5, color: 'var(--warn-fg)', marginBottom: 7, display: 'flex', alignItems: 'center', gap: 5 }}>
-                      <Clock size={11} /> Outside the 24h window — sends with a HUMAN_AGENT tag.
+                      <Clock size={11} /> {isWa
+                        ? 'Outside the 24h window — free-text replies are blocked until the customer messages again (templates coming soon).'
+                        : 'Outside the 24h window — sends with a HUMAN_AGENT tag.'}
                     </div>
                   )}
 
@@ -688,9 +711,11 @@ export default function InboxPage() {
                         <ToolBtn title="Canned responses (or type / in the box)" onClick={() => { setShowCanned(v => !v); setShowEmoji(false); }} disabled={!canManage}>
                           <FileText size={15} />
                         </ToolBtn>
-                        <ToolBtn title="Attach image / PDF" onClick={() => fileRef.current?.click()} disabled={!canManage}>
-                          <Paperclip size={15} />
-                        </ToolBtn>
+                        {!isWa && (
+                          <ToolBtn title="Attach image / PDF" onClick={() => fileRef.current?.click()} disabled={!canManage}>
+                            <Paperclip size={15} />
+                          </ToolBtn>
+                        )}
                         <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif,application/pdf"
                           onChange={onPickFile} style={{ display: 'none' }} />
                       </>
@@ -742,13 +767,14 @@ export default function InboxPage() {
                       }}
                       placeholder={!canManage ? 'You need cs_ticket_manage to reply.'
                         : noteMode ? 'Write an internal note for the team…  (Enter to save)'
+                        : waReplyBlocked ? 'Waiting on the customer — WhatsApp replies need an open 24h window.'
                         : pendingFile ? 'Add a caption (optional)…  (Enter to send)'
                         : 'Type a reply…  (Enter to send, Shift+Enter for newline)'}
-                      disabled={!canManage || sending} rows={2}
+                      disabled={!canManage || sending || waReplyBlocked} rows={2}
                       style={{ ...inputStyle, flex: 1, resize: 'none', fontFamily: 'var(--f-ui)',
                         background: noteMode ? 'var(--surface)' : inputStyle.background }} />
-                    <button onClick={send} disabled={!canManage || sending || (!text.trim() && !pendingFile)}
-                      style={{ ...btnPrimary, opacity: (!canManage || sending || (!text.trim() && !pendingFile)) ? 0.5 : 1,
+                    <button onClick={send} disabled={!canManage || sending || waReplyBlocked || (!text.trim() && !pendingFile)}
+                      style={{ ...btnPrimary, opacity: (!canManage || sending || waReplyBlocked || (!text.trim() && !pendingFile)) ? 0.5 : 1,
                         background: noteMode ? 'var(--warn-fg)' : btnPrimary.background }}>
                       {noteMode ? <StickyNote size={13} /> : pendingFile ? <Paperclip size={13} /> : <Send size={13} />}
                       {sending ? 'Sending' : noteMode ? 'Save note' : pendingFile ? 'Send' : 'Send'}
