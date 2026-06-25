@@ -3,6 +3,14 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.3.0] - 2026-06-25
+### Added
+- New "Credit Notes" chapter in Offline Sales: when to raise one (under-supply, sales
+  return, price drop after supply, transit loss/damage), how to raise it from an invoiced
+  order, the draft to issue to cancel lifecycle and the LOT/CN number, the effect on the
+  order's net due and reported GST, printing to PDF, and that a credit note is money and
+  tax only (it does not move stock).
+
 ## [1.2.0] - 2026-06-23
 ### Added
 - New "Fulfilment & tracking" chapter in Offline Sales: what happens after you confirm

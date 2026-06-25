@@ -1,0 +1,42 @@
+<p class="lead">A credit note reduces an invoice you have already raised. You issue one when a partner was billed for more than they should pay: short supply, goods lost or damaged on us, unsold stock returned, or a price drop after supply. It lowers what the partner owes and reduces the GST you report, so the transaction balances on the government portal.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Crediting back part of an invoiced order.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Act: raise, issue, print.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role proc">Sales</span> <span class="role fin">Finance</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Needs</div><div class="g-val">An order with an invoice already generated.</div></div>
+</div>
+
+<h2 class="sec">When to raise one</h2>
+<p>Pick the reason that fits; it prints on the document and helps at filing time.</p>
+<ul>
+  <li><strong>Under-supply:</strong> you billed more than you actually supplied.</li>
+  <li><strong>Sales return:</strong> unsold stock came back from a channel.</li>
+  <li><strong>Price drop after supply:</strong> a new discount or market correction. Keep the quantity the same and credit only the drop in rate.</li>
+  <li><strong>Transit loss or damage:</strong> goods lost or damaged on the way, our responsibility. Use a free-form line when it does not map to a specific product.</li>
+</ul>
+
+<h2 class="sec">Raising a credit note</h2>
+<ol class="steps">
+  <li><span class="s-title">Start from the invoiced order.</span> Open the sales order and click <strong>Raise credit note</strong> in its Credit Notes panel, or go to <strong>Credit Notes &rarr; New credit note</strong> and pick the order. Only orders that already have an invoice can be credited.</li>
+  <li><span class="s-title">Choose the reason and set the lines.</span> The order&rsquo;s invoice lines load in. Enter the <strong>credit quantity</strong> on each line you are crediting (it cannot exceed what remains on that line), and adjust the <strong>rate</strong> if needed. For a price drop, leave the quantity and lower the rate to the per-unit drop. Use <strong>+ Free-form line</strong> for anything without a product line, such as transit damage.</li>
+  <li><span class="s-title">Check the total.</span> The running total and the remaining creditable amount show at the bottom. A credit note can never credit more than the invoice value, and the form blocks you if it would.</li>
+  <li><span class="s-title">Save as draft.</span> A draft is fully editable and has no number yet. Nothing changes on the order until you issue it.</li>
+  <li><span class="s-title">Issue it.</span> Issuing assigns the permanent credit-note number (LOT/CN/&lt;year&gt;/NNNN), locks the lines, and reduces the order&rsquo;s net due straight away.</li>
+</ol>
+
+<h2 class="sec">What it does to the order</h2>
+<p>Once issued, the credit lowers the <strong>net due</strong> on the order: net due is the invoice total, minus credits, minus what has already been received. In the ₹2,00,000 example, a ₹50,000 credit note means once ₹1,50,000 is collected the order is fully settled. The credited GST is shown on the document so you can include it in your next return.</p>
+
+<h2 class="sec">Printing and sharing</h2>
+<p>Open an issued credit note and click <strong>Print</strong>. It opens the formatted CREDIT NOTE, which references the original invoice, and prints automatically. To send it as a file, choose <strong>Save as PDF</strong> in the print dialog. The document mirrors the tax invoice, with CGST and SGST for in-state partners or IGST for out-of-state.</p>
+
+<div class="callout note">
+  <div class="c-title">&#9432; A credit note is money and tax only, not stock</div>
+  <p>Issuing a credit note does not move any inventory. Returned or short goods are handled separately by the dispatch team. The credit note only adjusts what the partner owes and the GST you report.</p>
+</div>
+
+<div class="callout warn">
+  <div class="c-title">Cancelling</div>
+  <p>An issued credit note can be cancelled with a reason, which reverses its effect on the order&rsquo;s balance. If you have already reported it in a GST return, account for the reversal in your next return as well.</p>
+</div>
