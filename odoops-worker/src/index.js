@@ -1571,11 +1571,13 @@ export default {
 
           case 'getBootstrap': {
             const channels = await getChannels();
-            const [cfgR, runR, unmR] = await Promise.all([
+            const [cfgR, runR, unmR, setR] = await Promise.all([
               sbSales('/rest/v1/connector_config?select=*'),
               sbSales('/rest/v1/connector_runs?order=started_at.desc&limit=60&select=*'),
               sbSales('/rest/v1/unmapped_sku?status=eq.open&select=id'),
+              sbSales('/rest/v1/settings?key=eq.drr_window_days&select=value'),
             ]);
+            const drrWindowDays = Number((setR.ok && setR.data[0]) ? setR.data[0].value : 7) || 7;
             const cfgs = cfgR.ok ? cfgR.data : [];
             const runs = runR.ok ? runR.data : [];
             const lastByChannel = {}; runs.forEach(r => { if (!lastByChannel[r.channel_id]) lastByChannel[r.channel_id] = r; });
@@ -1607,6 +1609,7 @@ export default {
             return ok({
               me: { id: userId, email: auth.email, full_name: auth.fullName, role_key: auth.roleKey, permissions: P },
               channels, connectors, unmapped_count: (unmR.ok ? unmR.data.length : 0), roles, accessUsers,
+              drr_window_days: drrWindowDays,
             });
           }
 
@@ -1633,6 +1636,13 @@ export default {
             if (!canView(P)) return err('No permission', 403);
             const r = await rpcSales('f_amazon_returns_rollup', { p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO(), p_group: qp('group') || 'overall' });
             if (!r.ok) return err('Returns rollup failed: ' + JSON.stringify(r.data), 502);
+            return ok({ rows: r.data || [] });
+          }
+          case 'getProductDrr': {
+            if (!canView(P)) return err('No permission', 403);
+            const w = qp('window');
+            const r = await rpcSales('f_product_drr', { p_window: w ? Number(w) : null, p_ref_date: qp('ref_date') || null });
+            if (!r.ok) return err('DRR failed: ' + JSON.stringify(r.data), 502);
             return ok({ rows: r.data || [] });
           }
           case 'getSales': {
@@ -1846,6 +1856,14 @@ export default {
             const batch = { ...ins.data[0], column_map: d.column_map || {}, csv_text: d.csv_text };
             try { const res = await ingestUpload(batch, env); return ok({ batch_id: batch.id, ...res }); }
             catch (e) { await sbSales(`/rest/v1/upload_batch?id=eq.${batch.id}`, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ status: 'error', error: String(e?.message || e) }) }); return err('Parse failed: ' + String(e?.message || e), 422); }
+          }
+          case 'setDrrWindow': {
+            if (!canAdmin(P)) return err('No permission', 403);
+            const days = Math.round(Number(d.days));
+            if (!Number.isFinite(days) || days < 1 || days > 365) return err('days must be 1–365');
+            const r = await sbSales('/rest/v1/settings?on_conflict=key', { method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify({ key: 'drr_window_days', value: String(days), updated_at: nowISO(), updated_by: userId }) });
+            if (!r.ok) return err('Save failed: ' + JSON.stringify(r.data), 502);
+            return ok({ drr_window_days: days });
           }
           case 'createSkuMap':
           case 'updateSkuMap': {
