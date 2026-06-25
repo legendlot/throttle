@@ -438,7 +438,7 @@ export default function InboxPage() {
     background: 'var(--surface)', color: 'var(--t1)', cursor: 'pointer' };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, height: 'calc(100vh - 132px)', minHeight: 480 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, height: '100%', minHeight: 420 }}>
       {/* Header tiles — per-channel volume + awaiting-reply. Click to filter. */}
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
         {['instagram', 'messenger', 'whatsapp'].map(k => (
@@ -455,9 +455,13 @@ export default function InboxPage() {
           border: '1px solid var(--bad-bd)', borderRadius: 'var(--radius-sm)', padding: '8px 12px' }}>{err}</div>
       )}
 
-      <div style={{ display: 'flex', gap: 14, flex: 1, minHeight: 0 }}>
+      {/* Two-pane via grid: list shrinks 320→200, conversation holds a 340px floor so
+          it never collapses to a sliver in narrow/zoomed desktop windows (was a fixed
+          340 list + flex chat that could squeeze the chat to ~0). */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, 320px) minmax(340px, 1fr)',
+        gap: 14, flex: 1, minHeight: 0 }}>
         {/* ── Thread list ───────────────────────────────────── */}
-        <div style={{ width: 340, flexShrink: 0, display: 'flex', flexDirection: 'column',
+        <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column',
           background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
           <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', display: 'flex',
             alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
