@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { RequireAuth, useAuth } from '@throttle/auth';
 import { Spinner, AppLauncher } from '@throttle/ui';
-import { LayoutDashboard, Receipt, Store, Megaphone, Filter, GitMerge, PlugZap, Upload, ShieldCheck, LogOut, ChevronDown, ChevronRight } from 'lucide-react';
+import { LayoutDashboard, Receipt, Store, Megaphone, Filter, GitMerge, PlugZap, Upload, ShieldCheck, LogOut, ChevronDown, ChevronRight, ShoppingCart } from 'lucide-react';
 import { FAMILY_ORDER, FAMILIES } from '../../lib/families.js';
 
 const CHANNEL_CHILDREN = FAMILY_ORDER.map(k => ({ route: `/channels/${k}`, label: FAMILIES[k].label }));
@@ -11,6 +11,7 @@ const CHANNEL_CHILDREN = FAMILY_ORDER.map(k => ({ route: `/channels/${k}`, label
 const NAV = [
   { route: '/',            label: 'Dashboard',   icon: LayoutDashboard, perm: 'sales_view' },
   { route: '/performance', label: 'Performance', icon: Receipt,         perm: 'sales_view' },
+  { route: '/amazon',      label: 'Amazon',      icon: ShoppingCart,    perm: 'sales_view' },
   { group: 'channels',     label: 'Channels',    icon: Store,           perm: 'sales_view', children: CHANNEL_CHILDREN },
   { route: '/marketing',   label: 'Marketing',   icon: Megaphone,       perm: 'sales_view' },
   { route: '/funnel',      label: 'Funnel',      icon: Filter,          perm: 'sales_view' },

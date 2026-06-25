@@ -1,0 +1,214 @@
+'use client';
+// Amazon cockpit — Nikhil's power-user view. Order/sales value (overall/model/SKU) + the ad
+// metrics (ROAS/TACOS/ACOS/CTR/CPC/conversion/organic) + RTO-vs-RTV + location-wise sales, all
+// composed from existing endpoints (getSegregation/getSales/getMarketing) plus the Amazon-specific
+// getAmazonReturns + getAmazonGeo. Built on the shared S169 kit.
+import { useEffect, useMemo, useState } from 'react';
+import { useAuth } from '@throttle/auth';
+import { Spinner } from '@throttle/ui';
+import { salesGet, inr, fmtInt, rangePresets, priorPeriod } from '../../../lib/api.js';
+import { familyOf } from '../../../lib/families.js';
+import { aggOrders } from '../../../lib/segregation.js';
+import { Kpi, SettledBadge, RangePicker, SegmentedToggle } from '../../../components/kit.js';
+
+const AMZ = '#4C63F0';                       // Amazon family colour
+const pct1 = (n, d) => (d > 0 ? (n / d) * 100 : 0);
+
+// returns rollup rows [{return_kind, orders, units, value}] → keyed totals + grand total.
+function aggReturns(rows) {
+  const k = { rto: { orders: 0, units: 0, value: 0 }, rtv: { orders: 0, units: 0, value: 0 }, unknown: { orders: 0, units: 0, value: 0 } };
+  for (const r of (rows || [])) {
+    const t = k[r.return_kind] || k.unknown;
+    t.orders += Number(r.orders) || 0; t.units += Number(r.units) || 0; t.value += Number(r.value) || 0;
+  }
+  const total = ['rto', 'rtv', 'unknown'].reduce((s, key) => s + k[key].value, 0);
+  return { ...k, total };
+}
+
+export default function AmazonCockpit() {
+  const { session } = useAuth();
+  const presets = rangePresets();
+  const mtd = presets.find(p => p.key === 'mtd');
+  const [from, setFrom] = useState(mtd.from);
+  const [to, setTo] = useState(mtd.to);
+  const [grp, setGrp] = useState('variant');         // sellers table: variant=SKU | product=Model
+  const [d, setD] = useState(null);                  // { seg, segPrev, mkt, mktPrev, ret, geo }
+  const [sales, setSales] = useState(null);          // f_sales_rollup rows for the chosen grp
+  const [err, setErr] = useState('');
+
+  // resolve the Amazon family channel ids (Amazon - FBA etc.) for getSegregation/getSales
+  const [amzIds, setAmzIds] = useState(null);
+  useEffect(() => {
+    if (!session) return;
+    salesGet('getBootstrap', {}, session)
+      .then(b => setAmzIds((b?.channels || []).filter(c => familyOf(c.name) === 'amazon').map(c => c.channel_id || c.id)))
+      .catch(() => setAmzIds([]));
+  }, [session]);
+  const idsKey = (amzIds || []).join(',');
+
+  // main metrics (range-keyed)
+  useEffect(() => {
+    if (!session || amzIds === null) return;
+    setD(null); setErr('');
+    const pp = priorPeriod(from, to);
+    Promise.all([
+      salesGet('getSegregation', { from, to, channel_id: idsKey }, session),
+      salesGet('getSegregation', { from: pp.from, to: pp.to, channel_id: idsKey }, session),
+      salesGet('getMarketing', { from, to, group: 'platform' }, session),
+      salesGet('getMarketing', { from: pp.from, to: pp.to, group: 'platform' }, session),
+      salesGet('getAmazonReturns', { from, to, group: 'overall' }, session),
+      salesGet('getAmazonGeo', { from, to }, session),
+    ]).then(([seg, segPrev, mkt, mktPrev, ret, geo]) => {
+      setD({ seg: seg?.rows || [], segPrev: segPrev?.rows || [], mkt: mkt?.rows || [], mktPrev: mktPrev?.rows || [], ret: ret?.rows || [], geo: geo?.rows || [] });
+    }).catch(e => setErr(e.message || String(e)));
+  }, [session, amzIds, idsKey, from, to]);
+
+  // sellers table (range + grp keyed; separate so the Model/SKU toggle doesn't refetch everything)
+  useEffect(() => {
+    if (!session || amzIds === null || !idsKey) { setSales([]); return; }
+    setSales(null);
+    salesGet('getSales', { from, to, group: grp, channel_id: idsKey }, session)
+      .then(s => setSales(s?.rows || [])).catch(() => setSales([]));
+  }, [session, amzIds, idsKey, from, to, grp]);
+
+  const seg = useMemo(() => aggOrders(d?.seg), [d]);
+  const segP = useMemo(() => aggOrders(d?.segPrev), [d]);
+  const ad = useMemo(() => (d?.mkt || []).find(r => /amazon/i.test(r.grp || '')) || {}, [d]);
+  const adP = useMemo(() => (d?.mktPrev || []).find(r => /amazon/i.test(r.grp || '')) || {}, [d]);
+  const ret = useMemo(() => aggReturns(d?.ret), [d]);
+
+  // ad-derived metrics
+  const spend = Number(ad.spend) || 0, clicks = Number(ad.clicks) || 0, impr = Number(ad.impressions) || 0, convs = Number(ad.conversions) || 0, attr = Number(ad.conv_value) || 0;
+  const pSpend = Number(adP.spend) || 0, pAttr = Number(adP.conv_value) || 0;
+  const gross = seg.grossAll || 0, pGross = segP.grossAll || 0;
+  const roas = spend > 0 ? attr / spend : 0,        pRoas = pSpend > 0 ? pAttr / pSpend : 0;
+  const acos = attr > 0 ? (spend / attr) * 100 : 0,  pAcos = pAttr > 0 ? (pSpend / pAttr) * 100 : 0;
+  const tacos = gross > 0 ? (spend / gross) * 100 : 0, pTacos = pGross > 0 ? (pSpend / pGross) * 100 : 0;
+  const ctr = pct1(clicks, impr), cpc = clicks > 0 ? spend / clicks : 0, cvr = pct1(convs, clicks);
+  const organic = Math.max(gross - attr, 0), organicPct = pct1(organic, gross);
+  const pOrganic = Math.max(pGross - pAttr, 0);
+
+  // sellers (top by gross), location (top states)
+  const sellers = useMemo(() => {
+    const arr = (sales || []).map(r => ({ code: r.product_code, label: r.grp_label || r.product_code, units: Number(r.units) || 0, gross: Number(r.gross_value) || 0 }))
+      .sort((a, b) => b.gross - a.gross).slice(0, 15);
+    return { arr, max: Math.max(...arr.map(v => v.gross), 1) };
+  }, [sales]);
+  const geo = useMemo(() => {
+    const arr = (d?.geo || []).map(r => ({ state: r.ship_state, units: Number(r.units) || 0, gross: Number(r.gross) || 0 }))
+      .sort((a, b) => b.gross - a.gross).slice(0, 12);
+    return { arr, max: Math.max(...arr.map(v => v.gross), 1) };
+  }, [d]);
+
+  const ready = amzIds !== null && d !== null;
+
+  return (
+    <div className="so-page">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span style={{ width: 11, height: 11, borderRadius: 3, background: AMZ }} />
+        <span className="so-h2" style={{ fontSize: 18 }}>Amazon</span>
+      </div>
+      <RangePicker from={from} to={to} onChange={({ from, to }) => { setFrom(from); setTo(to); }} />
+
+      {err && <div className="so-card" style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12 }}>{err}</div>}
+      {!ready ? <Spinner /> : (
+        <>
+          {/* ── Order & sales value ── */}
+          <div className="so-kpi-lbl" style={{ marginTop: 4 }}>Orders &amp; sales value</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12 }}>
+            <Kpi lbl="Total Orders" val={fmtInt(seg.totalOrders)} sub="incl. cancelled" now={seg.totalOrders} prev={segP.totalOrders} />
+            <Kpi lbl="Total Sales" val={inr(gross)} sub="gross (tax-incl)" now={gross} prev={pGross} />
+            <Kpi lbl="Net Sales" val={inr(seg.netCancel)} sub="excl. cancellations" now={seg.netCancel} prev={segP.netCancel} />
+            <Kpi lbl="Net Revenue (ex-GST)" val={inr(seg.netExGst)} sub="after disc · returns · GST" now={seg.netExGst} prev={segP.netExGst} badge={<SettledBadge pct={seg.settledPct} />} />
+            <Kpi lbl="Organic Sales" val={inr(organic)} sub={`${organicPct.toFixed(0)}% · not ad-attributed`} now={organic} prev={pOrganic} />
+            <Kpi lbl="AOV" val={inr(seg.aov)} sub="gross / order" now={seg.aov} prev={segP.aov} />
+            <Kpi lbl="Cancellations" val={`${fmtInt(seg.cancelledOrders)} · ${seg.cancelRate.toFixed(1)}%`} sub={inr(seg.cancelledValue)} now={seg.cancelledOrders} prev={segP.cancelledOrders} tone="neutral" />
+            <Kpi lbl="Returns" val={`${fmtInt(seg.returnsCount)} · ${inr(seg.returnsValue)}`} sub="refund value" now={seg.returnsValue} prev={segP.returnsValue} tone="neutral" />
+            <Kpi lbl="RTO" val={`${fmtInt(ret.rto.units)} · ${inr(ret.rto.value)}`} sub="undelivered / refused" tone="neutral" />
+            <Kpi lbl="RTV" val={`${fmtInt(ret.rtv.units)} · ${inr(ret.rtv.value)}`} sub="customer returns" tone="neutral" />
+            <Kpi lbl="Replacement" val="—" sub="from another Amazon report (later)" tone="neutral" />
+          </div>
+
+          {/* ── Advertising ── */}
+          <div className="so-kpi-lbl" style={{ marginTop: 4 }}>Advertising</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 12 }}>
+            <Kpi lbl="Ad Spend" val={inr(spend)} now={spend} prev={pSpend} tone="neutral" />
+            <Kpi lbl="ROAS" val={roas.toFixed(2) + '×'} sub="attributed sales / spend" now={roas} prev={pRoas} />
+            <Kpi lbl="ACOS" val={acos.toFixed(1) + '%'} sub="spend / attributed sales" now={acos} prev={pAcos} tone="neutral" />
+            <Kpi lbl="TACOS" val={tacos.toFixed(1) + '%'} sub="spend / total sales" now={tacos} prev={pTacos} tone="neutral" />
+            <Kpi lbl="CTR" val={ctr.toFixed(2) + '%'} sub="clicks / impressions" tone="neutral" />
+            <Kpi lbl="CPC" val={inr(cpc)} sub="spend / click" tone="neutral" />
+            <Kpi lbl="Conversion" val={cvr.toFixed(2) + '%'} sub="orders / click" tone="neutral" />
+          </div>
+
+          {/* ── RTO vs RTV vs overall ── */}
+          <div className="so-card">
+            <div className="so-kpi-lbl" style={{ marginBottom: 12 }}>Returns — RTO vs RTV</div>
+            {ret.total === 0 ? <div style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12 }}>No returns in this range.</div> : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+                {[['rto', 'RTO · undelivered', 'var(--green)'], ['rtv', 'RTV · customer return', '#EC6A5E'], ['unknown', 'Unclassified (backfilling)', 'var(--t3)']].map(([key, label, color]) => {
+                  const v = ret[key].value;
+                  return (
+                    <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <div style={{ width: 200, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t2)' }}>{label}</div>
+                      <div style={{ flex: 1, height: 16, background: 'var(--surface2)', borderRadius: 4, overflow: 'hidden' }}>
+                        <div style={{ width: `${pct1(v, ret.total)}%`, height: '100%', background: color, opacity: 0.85 }} />
+                      </div>
+                      <div style={{ width: 150, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t1)' }}>{inr(v)} · {pct1(v, ret.total).toFixed(0)}%</div>
+                    </div>
+                  );
+                })}
+                {ret.unknown.value > 0 && <div className="so-sub" style={{ fontSize: 10.5 }}>Unclassified returns reclassify to RTV as the FBA customer-returns report backfills.</div>}
+              </div>
+            )}
+          </div>
+
+          {/* ── Location-wise sales ── */}
+          <div className="so-card">
+            <div className="so-kpi-lbl" style={{ marginBottom: 12 }}>Sales by state</div>
+            {geo.arr.length === 0 ? <div style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12 }}>No location data in this range.</div> : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                {geo.arr.map(s => (
+                  <div key={s.state} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div style={{ width: 160, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.state}</div>
+                    <div style={{ flex: 1, height: 16, background: 'var(--surface2)', borderRadius: 4, overflow: 'hidden' }}>
+                      <div style={{ width: `${(s.gross / geo.max) * 100}%`, height: '100%', background: AMZ, opacity: 0.85 }} />
+                    </div>
+                    <div style={{ width: 130, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t1)' }}>{inr(s.gross)} · {fmtInt(s.units)}u</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* ── By model / SKU ── */}
+          <div className="so-card">
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <div className="so-kpi-lbl" style={{ margin: 0 }}>Top sellers</div>
+              <SegmentedToggle options={[['product', 'Model'], ['variant', 'SKU']]} value={grp} onChange={setGrp} size="sm" />
+            </div>
+            {sales === null ? <Spinner /> : sellers.arr.length === 0 ? (
+              <div style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12 }}>No mapped sales in this range.</div>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table className="so-table">
+                  <thead><tr><th>{grp === 'product' ? 'Model' : 'SKU'}</th><th className="so-num">Units</th><th className="so-num">Gross</th><th className="so-num">ASP</th></tr></thead>
+                  <tbody>
+                    {sellers.arr.map(v => (
+                      <tr key={v.code}>
+                        <td>{v.label}</td>
+                        <td className="so-num">{fmtInt(v.units)}</td>
+                        <td className="so-num">{inr(v.gross)}</td>
+                        <td className="so-num">{inr(v.units ? v.gross / v.units : 0)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
