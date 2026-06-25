@@ -3274,6 +3274,19 @@ function attachmentKindFromChatwoot(fileType) {
   }
 }
 
+// Chatwoot inbox.channel_type (Ruby class name) → our channel enum
+function chatwootChannelFromPayload(body) {
+  const ct = (
+    body?.inbox?.channel_type ||
+    body?.conversation?.inbox?.channel_type ||
+    ''
+  ).toLowerCase();
+  if (ct.includes('instagram')) return 'instagram';
+  if (ct.includes('messenger') || ct.includes('facebook')) return 'messenger';
+  if (ct.includes('email')) return 'email';
+  return 'whatsapp';
+}
+
 async function handleBiteSpeedWebhook(request, env) {
   const url = new URL(request.url);
   if (!verifyBiteSpeedAuth(url, env)) return err('Invalid webhook token', 401);
@@ -3309,6 +3322,7 @@ async function biteSpeedFindOrCreateThread(payload, env) {
   // exact conversation: chat.bitespeed.co/app/accounts/<id>/conversations/<conv>
   const accountId = (payload?.account?.id ?? payload?.conversation?.account_id ?? payload?.inbox?.account_id ?? null);
   const accountIdStr = accountId != null ? String(accountId) : null;
+  const channel = chatwootChannelFromPayload(payload);
   if (!phoneRaw && !convId) return { thread: null, reason: 'no_phone_or_conv_id' };
 
   const phone = phoneRaw ? toE164(phoneRaw) : null;
@@ -3322,12 +3336,15 @@ async function biteSpeedFindOrCreateThread(payload, env) {
       env,
     );
     if (byRef.data?.[0]) {
-      // Backfill provider_account_id if we now know it and the thread didn't
-      if (accountIdStr && byRef.data[0].provider_account_id !== accountIdStr) {
+      // Backfill provider_account_id and channel if we now know them and the thread didn't
+      const patch = {};
+      if (accountIdStr && byRef.data[0].provider_account_id !== accountIdStr) patch.provider_account_id = accountIdStr;
+      if ((byRef.data[0].channel || 'whatsapp') === 'whatsapp' && channel !== 'whatsapp') patch.channel = channel;
+      if (Object.keys(patch).length) {
         await sb(`/rest/v1/cs_wa_threads?id=eq.${byRef.data[0].id}`, env, {
-          method: 'PATCH', body: JSON.stringify({ provider_account_id: accountIdStr }),
+          method: 'PATCH', body: JSON.stringify(patch),
         }).catch(() => {});
-        byRef.data[0].provider_account_id = accountIdStr;
+        Object.assign(byRef.data[0], patch);
       }
       return { thread: byRef.data[0] };
     }
@@ -3360,6 +3377,7 @@ async function biteSpeedFindOrCreateThread(payload, env) {
       customer_phone: phone,
       provider_thread_ref: convId != null ? String(convId) : null,
       provider_account_id: accountIdStr,
+      channel,
     }),
   });
   if (!ins.ok) {
