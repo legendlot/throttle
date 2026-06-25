@@ -41,8 +41,9 @@ export function PitstopSidebar({ perms = {}, badges = {}, userLabel = '', userRo
       borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', height: '100%',
       overflow: 'hidden', transition: hydrated ? 'width 180ms cubic-bezier(0.4,0,0.2,1)' : 'none' }}>
 
-      {/* brand */}
-      <div style={{ height: 63, display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0,
+      {/* brand — click to collapse/expand */}
+      <div onClick={() => setCol(!collapsed)} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        style={{ height: 63, display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0, cursor: 'pointer',
         padding: collapsed ? 0 : '0 18px', justifyContent: collapsed ? 'center' : 'flex-start',
         borderBottom: '1px solid var(--border)' }}>
         <div style={{ width: 30, height: 30, borderRadius: 8, background: 'var(--accent)', display: 'grid',

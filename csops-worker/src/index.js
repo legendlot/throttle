@@ -3019,12 +3019,45 @@ async function getWaConversation(params, auth, env) {
   const live = await loadWaLive(thread, env);
   if (!live.ok) return err(`Failed to load WhatsApp conversation from BiteSpeed (${live.status}): ${live.error}`, 502);
 
+  // Internal notes live ONLY in our DB (Chatwoot never sees them), so merge the
+  // local notes back into the live pull — otherwise notes added on a WA thread
+  // vanish on the next re-pull.
+  const notesRes = await sb(
+    `/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(thread.id)}&is_internal=eq.true&select=*&order=created_at.asc&limit=200`,
+    env,
+  );
+  const tsOf = (m) => new Date(m.received_at || m.sent_at || m.created_at || 0).getTime();
+  const messages = [...live.messages, ...(notesRes.data || [])].sort((a, b) => tsOf(a) - tsOf(b));
+
   return ok({
-    messages: live.messages,
+    messages,
     within_customer_window: live.window.open,
     window_until: live.window.until,
     live: true,
   });
+}
+
+// Replying to a customer = taking ownership: assign the thread's linked ticket to
+// the replying agent (overwrite if it was someone else's; no-op if already theirs).
+// Shared by sendWaReply + sendMetaMessage. Best-effort — never blocks the send.
+async function assignLinkedTicketToReplier(threadId, auth, env) {
+  try {
+    const r = await sb(
+      `/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(threadId)}&ticket_id=not.is.null&select=ticket_id&order=created_at.desc&limit=1`,
+      env,
+    );
+    const ticketId = r.data?.[0]?.ticket_id;
+    if (!ticketId) return null;
+    const tRes = await sb(`/rest/v1/cs_tickets?id=eq.${ticketId}&select=assigned_agent_id&limit=1`, env);
+    const t = tRes.data?.[0];
+    if (!t || t.assigned_agent_id === auth.userId) return ticketId;   // none / already ours
+    const name = auth.fullName || auth.name || auth.email || null;
+    await sb(`/rest/v1/cs_tickets?id=eq.${ticketId}`, env, {
+      method: 'PATCH', body: JSON.stringify({ assigned_agent_id: auth.userId, assigned_agent_name: name }),
+    });
+    await insertHistory(ticketId, 'assigned_agent_id', t.assigned_agent_id, auth.userId, 'auto-assigned on reply', auth, env);
+    return ticketId;
+  } catch (_) { return null; }
 }
 
 async function sendWaReply(body, auth, env) {
@@ -3078,7 +3111,8 @@ async function sendWaReply(body, auth, env) {
   if (thread.thread_state && thread.thread_state !== 'open') threadPatch.thread_state = 'open';
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(threadPatch) }).catch(() => {});
 
-  return ok({ sent: true, message_id: data?.id != null ? String(data.id) : null, auto_claimed: !thread.assigned_agent_id });
+  const ticketId = await assignLinkedTicketToReplier(thread.id, auth, env);
+  return ok({ sent: true, message_id: data?.id != null ? String(data.id) : null, auto_claimed: !thread.assigned_agent_id, ticket_assigned: ticketId });
 }
 
 // Phase C admin-only: simulate an inbound message for testing the UI before
@@ -3718,7 +3752,8 @@ async function sendMetaMessage(body, auth, env) {
     threadPatch.assigned_at = new Date().toISOString();
   }
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(threadPatch) }).catch(() => {});
-  return ok({ sent: true, message_id: mid, auto_claimed: !thread.assigned_agent_id });
+  const ticketId = await assignLinkedTicketToReplier(thread.id, auth, env);
+  return ok({ sent: true, message_id: mid, auto_claimed: !thread.assigned_agent_id, ticket_assigned: ticketId });
 }
 
 // ── Outbound media attachments (S162, Feature C) ─────────────────────────────
