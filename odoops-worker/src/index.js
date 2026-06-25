@@ -74,11 +74,25 @@ async function rpcSales(fn, body) {
 // Shopify re-pull whose line rows each carry the full `raw` JSON) can exceed the request-body
 // limit and fail — and a plain sbSales POST whose result is ignored drops the whole batch
 // SILENTLY. Chunk it (default 200 rows) and surface failures so a run errors loudly instead.
-async function sbInsertChunked(path, rows, prefer = 'return=minimal') {
-  const CHUNK = 300;   // ~600KB/POST for fat Shopify line rows — under the body limit, few subrequests
-  for (let i = 0; i < rows.length; i += CHUNK) {
-    const r = await sbSales(path, { method: 'POST', prefer, body: JSON.stringify(rows.slice(i, i + CHUNK)) });
-    if (!r.ok) throw new Error(`insert ${path.split('?')[0].split('/').pop()} [${i}..${i + CHUNK}) failed (${r.status}): ${JSON.stringify(r.data).slice(0, 160)}`);
+const _sleep = ms => new Promise(r => setTimeout(r, ms));
+// Transient Postgres errors worth retrying: statement_timeout, serialization, deadlock,
+// lock-not-available, too-many-connections. Since the connector cron now fans out many
+// connectors concurrently (Workflows), a heavy write can briefly block on a lock and trip the
+// 2-min statement_timeout; idempotent staging makes a retry safe.
+const TRANSIENT_PG = new Set(['57014', '40001', '40P01', '55P03', '53300', '53400']);
+async function sbInsertChunked(path, rows, prefer = 'return=minimal', chunkSize = 200) {
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const slice = rows.slice(i, i + chunkSize);
+    let lastErr = null;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const r = await sbSales(path, { method: 'POST', prefer, body: JSON.stringify(slice) });
+      if (r.ok) { lastErr = null; break; }
+      const code = (r.data && typeof r.data === 'object') ? r.data.code : null;
+      lastErr = `insert ${path.split('?')[0].split('/').pop()} [${i}..${i + chunkSize}) failed (${r.status}${code ? ' ' + code : ''}): ${JSON.stringify(r.data).slice(0, 160)}`;
+      if (!code || !TRANSIENT_PG.has(code)) break;        // non-transient → fail loudly now
+      await _sleep(400 * (attempt + 1) * (attempt + 1));   // 400ms · 1.6s · 3.6s backoff
+    }
+    if (lastErr) throw new Error(lastErr);
   }
 }
 
@@ -1348,8 +1362,19 @@ async function loadConnectorCfg(channelId) {
   const r = await sbSales(`/rest/v1/connector_config?channel_id=eq.${channelId}&select=*`);
   return (r.ok && r.data[0]) ? r.data[0] : null;
 }
-// Spawn a ConnectorWorkflow instance for one connector and record its id for single-flight.
+// Spawn a ConnectorWorkflow instance for one connector. SINGLE-FLIGHT for ALL spawn paths
+// (cron, manual refresh, backfill): if an instance is already in flight for this connector, do
+// NOT start a second — return the running id. Two concurrent instances for one connector double-
+// pull and collide on that connector's staging writes (the stg_amazon_fin lock-timeout incident).
 async function startConnectorWf(env, channelId, trigger, cursorOverride) {
+  const cur = await sbSales(`/rest/v1/connector_config?channel_id=eq.${channelId}&select=wf_instance_id`);
+  const existing = (cur.ok && cur.data[0]) ? cur.data[0].wf_instance_id : null;
+  if (existing) {
+    try {
+      const st = await (await env.CONNECTOR_WF.get(existing)).status();
+      if (['queued', 'running', 'waiting', 'paused'].includes(st?.status)) return existing; // already in flight
+    } catch { /* unknown/expired id → safe to start a new one */ }
+  }
   const id = `${channelId}-${Date.now()}`;
   await env.CONNECTOR_WF.create({ id, params: { channelId, trigger, cursorOverride: cursorOverride || null } });
   await sbSales(`/rest/v1/connector_config?channel_id=eq.${channelId}`, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ wf_instance_id: id }) });
@@ -1424,14 +1449,10 @@ export default {
       // instances for the same connector concurrently. Each instance gets its own per-step subrequest
       // budget, so connectors no longer compete for one shared 45-subreq tick budget (the starvation
       // that left daily sell-out connectors stale since S166/S168 — see the Workflows design spec).
-      const r = await sbSales('/rest/v1/connector_config?enabled=eq.true&select=channel_id,wf_instance_id');
+      // startConnectorWf is single-flight (skips a connector already in flight), so the producer
+      // just asks for each enabled connector.
+      const r = await sbSales('/rest/v1/connector_config?enabled=eq.true&select=channel_id');
       for (const cfg of (r.ok ? r.data : [])) {
-        if (cfg.wf_instance_id) {
-          try {
-            const st = await (await env.CONNECTOR_WF.get(cfg.wf_instance_id)).status();
-            if (['queued', 'running', 'waiting', 'paused'].includes(st?.status)) continue; // already in flight
-          } catch { /* unknown/expired instance id → safe to start a new one */ }
-        }
         try { await startConnectorWf(env, cfg.channel_id, 'cron', null); }
         catch (e) { console.error('odoops producer: failed to start', cfg.channel_id, e?.message || e); }
       }
