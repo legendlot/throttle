@@ -1,4 +1,6 @@
 const A = require('./auth.js');
+const { ingest } = require('./ingest.js');
+const { recordConsent } = require('./consent.js');
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -36,6 +38,26 @@ async function handleGet(url, auth, env) {
     case 'getSenderIdentities': {
       const r = await A.sbComms('/rest/v1/sender_identities?select=*&order=channel.asc', env);
       return r.ok ? ok(r.data) : err('db_error', 500);
+    }
+
+    case 'getProfiles': {              // contacts list (M3)
+      const limit = url.searchParams.get('limit') || '100';
+      const r = await A.sbComms(
+        `/rest/v1/profiles?select=id,display_name,locale,city,attributes,created_at` +
+        `&order=created_at.desc&limit=${A.enc(limit)}`, env);
+      return r.ok ? ok(r.data) : err('db_error', 500);
+    }
+    case 'getProfile': {               // contact detail: identifiers + consent + recent events (M3)
+      const id = url.searchParams.get('id');
+      if (!id) return err('id_required', 400);
+      const [p, ids, cons, evs] = await Promise.all([
+        A.sbComms(`/rest/v1/profiles?id=eq.${A.enc(id)}&select=*&limit=1`, env),
+        A.sbComms(`/rest/v1/identifiers?profile_id=eq.${A.enc(id)}&select=*&order=first_seen.asc`, env),
+        A.sbComms(`/rest/v1/consent?profile_id=eq.${A.enc(id)}&select=*&order=captured_at.desc`, env),
+        A.sbComms(`/rest/v1/events?profile_id=eq.${A.enc(id)}&select=*&order=occurred_at.desc&limit=50`, env),
+      ]);
+      return ok({ profile: p.data?.[0] || null, identifiers: ids.data || [],
+                  consent: cons.data || [], events: evs.data || [] });
     }
     default:
       return err(`unknown_action:${action}`, 404);
@@ -95,7 +117,13 @@ async function handlePost(body, auth, env) {
       return r.ok ? ok(r.data?.[0]) : err('db_error', 500);
     }
 
-    // M3: ingest · M5: send · M6: campaigns · M7: journeys — wired per milestone
+    case 'recordConsent': {            // manual consent admin write (M3)
+      if (!A.canConsentAdmin(auth.permissions)) return err('forbidden', 403);
+      const r = await recordConsent(env, body);
+      return r.ok ? ok(r.data?.[0]) : err('db_error', 500);
+    }
+
+    // M5: send · M6: campaigns · M7: journeys — wired per milestone
     default:
       return err(`unknown_action:${body.action}`, 404);
   }
@@ -108,8 +136,19 @@ export default {
     if (url.pathname === '/health' || url.pathname === '/healthz')
       return ok({ service: 'commsops', time: nowIso() });
 
-    // Public, unauthenticated endpoints added in later milestones are matched here
-    // BEFORE the auth gate: /unsubscribe (M5), /webhooks/shopify (M4), /webhooks/resend (M5).
+    // ── Internal ingestion seam (M3): token-authed, NOT a user JWT. Shopify, internal
+    //    events, delivery receipts (later Pitstop) POST here. Matched before the user gate.
+    if (url.pathname === '/ingest' && request.method === 'POST') {
+      const hdr = request.headers.get('Authorization') || '';
+      const tok = hdr.startsWith('Bearer ') ? hdr.slice(7) : (request.headers.get('X-Ingest-Token') || '');
+      if (!env.INGEST_TOKEN || tok !== env.INGEST_TOKEN) return err('unauthorised', 401);
+      const body = await request.json().catch(() => ({}));
+      const r = await ingest(env, body);
+      return r.ok ? ok(r) : err(r.error, 400);
+    }
+
+    // Other public endpoints in later milestones: /unsubscribe (M5), /webhooks/shopify (M4),
+    // /webhooks/resend (M5) — matched here BEFORE the auth gate.
 
     const auth = await A.verifyJWT(request.headers.get('Authorization'), env);
     if (!auth) return err('unauthorised', 401);
