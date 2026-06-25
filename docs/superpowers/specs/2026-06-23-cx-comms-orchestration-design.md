@@ -1,5 +1,7 @@
 # CX Communications Orchestration Platform — Design
 
+> **⚠ SUPERSEDED (2026-06-25, S170) by [`2026-06-25-relay-foundation-design.md`](2026-06-25-relay-foundation-design.md)** — the authoritative Relay PRD, which absorbs this strategy/phasing spine and adds the full foundational data model. This doc is retained for history; the WABA deep-dive (§8 here) is carried forward into §11 there.
+>
 > **Name:** Relay (confirmed, S163). · **Status:** Design / not yet building. · **Date:** 2026-06-23.
 > **Goal:** Replace Bitespeed with an in-house, multi-channel (email · SMS · WhatsApp) customer-communications
 > orchestration platform — broadcasts, scheduled campaigns, and trigger-based customer journeys — that LOT fully
