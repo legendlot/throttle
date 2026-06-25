@@ -336,3 +336,17 @@ Two primitives sharing segments, templates, the gate, and the `messages` log.
 | `profile_traits` (provenance) | enrichment layer under `attributes` | later |
 
 > **Naming:** the system is **Relay** — multi-channel message relay; the outbound voice of the Odo control plane.
+
+## 17. Brand
+
+Logo + favicon set staged at `apps/relay/public/` (S170): `favicon.svg`, `favicon.png` (512), `apple-touch-icon.png` (180), and `relay-16/32/48/64/180/512.png`. The mark is a relay baton mid-pass with a forward chevron — the message being relayed onward. The Phase-0 scaffold wires these into the Next.js head/manifest; the AppLauncher reads `/favicon.png`.
+
+**Palette (starting design-system tokens):**
+
+| Token | Hex | Role |
+|---|---|---|
+| Relay Yellow | `#F2CD1A` | primary / `--accent` |
+| Ink | `#282828` | dark / surface text / the baton |
+| Signal Red | `#DE2A2A` | accent-2 / highlight / the chevron |
+
+See `apps/relay/README.md`.
