@@ -143,10 +143,10 @@ export default function AmazonPage() {
             <Kpi lbl="Net Revenue (ex-GST)" val={inr(seg.netExGst)} sub="after disc · returns · GST" now={seg.netExGst} prev={segP.netExGst} badge={<SettledBadge pct={seg.settledPct} />} />
             <Kpi lbl="Organic Sales" val={inr(organic)} sub={`${organicPct.toFixed(0)}% · not ad-attributed`} now={organic} prev={pOrganic} />
             <Kpi lbl="AOV" val={inr(seg.aov)} sub="gross / order" now={seg.aov} prev={segP.aov} />
-            <Kpi lbl="Cancellations" val={`${fmtInt(seg.cancelledOrders)} · ${seg.cancelRate.toFixed(1)}%`} sub={inr(seg.cancelledValue)} now={seg.cancelledOrders} prev={segP.cancelledOrders} tone="neutral" />
-            <Kpi lbl="Returns" val={`${fmtInt(seg.returnsCount)} · ${inr(seg.returnsValue)}`} sub="refund value" now={seg.returnsValue} prev={segP.returnsValue} tone="neutral" />
-            <Kpi lbl="RTO" val={`${fmtInt(ret.rto.units)} · ${inr(ret.rto.value)}`} sub="undelivered / refused" tone="neutral" />
-            <Kpi lbl="RTV" val={`${fmtInt(ret.rtv.units)} · ${inr(ret.rtv.value)}`} sub="customer returns" tone="neutral" />
+            <Kpi lbl="Cancellations" val={fmtInt(seg.cancelledOrders)} sub={`${seg.cancelRate.toFixed(1)}% · ${inr(seg.cancelledValue)}`} now={seg.cancelledOrders} prev={segP.cancelledOrders} tone="neutral" />
+            <Kpi lbl="Returns" val={fmtInt(seg.returnsCount)} sub={`${inr(seg.returnsValue)} refunded`} now={seg.returnsValue} prev={segP.returnsValue} tone="neutral" />
+            <Kpi lbl="RTO" val={inr(ret.rto.value)} sub={`${fmtInt(ret.rto.units)}u · undelivered`} tone="neutral" />
+            <Kpi lbl="RTV" val={inr(ret.rtv.value)} sub={`${fmtInt(ret.rtv.units)}u · customer returns`} tone="neutral" />
             <Kpi lbl="Total Discounts" val={inr(seg.discount)} sub="discount given" now={seg.discount} prev={segP.discount} tone="neutral" />
             <Kpi lbl="Replacement" val="—" sub="from another Amazon report (later)" tone="neutral" />
           </div>

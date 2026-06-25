@@ -41,17 +41,25 @@ export function Spark({ data, color = 'var(--accent)', height = 30 }) {
 // ── KPI tile ───────────────────────────────────────────────────────────────
 // One tile used everywhere. Optional spark (sparkline data) + sparkColor; optional badge slot;
 // deltaNote shows what the delta compares against.
-export function Kpi({ lbl, val, sub, now, prev, pct, tone, badge, spark, sparkColor = 'var(--accent)', deltaNote }) {
+export function Kpi({ lbl, val, sub, now, prev, pct, tone, badge, spark, sparkColor = 'var(--accent)', deltaNote, accent }) {
+  // Left accent: explicit `accent` wins; else tone-aware (green up / red down) when there's a
+  // directional delta; else a neutral edge. Gives the Redline at-a-glance read without per-tile config.
+  let acc = accent;
+  if (!acc) {
+    let p = pct;
+    if (p == null && prev != null && isFinite(prev) && prev !== 0) p = (now - prev) / Math.abs(prev) * 100;
+    acc = (tone !== 'neutral' && p != null && isFinite(p)) ? (p >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--border-strong)';
+  }
   return (
-    <div className="so-card" style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-        <div className="so-kpi-lbl" style={{ margin: 0 }}>{lbl}</div>
+    <div className="so-stat" style={{ '--stat-accent': acc }}>
+      <div className="so-stat-top">
+        <div className="so-stat-lbl">{lbl}</div>
         <Delta now={now} prev={prev} pct={pct} tone={tone} />
       </div>
-      <span className="so-kpi-val">{val}</span>
-      {sub && <div className="so-sub" style={{ fontSize: 11 }}>{sub}</div>}
+      <span className="so-stat-val">{val}</span>
+      {sub && <div className="so-stat-sub">{sub}</div>}
       {spark && <Spark data={spark} color={sparkColor} />}
-      {deltaNote && <div className="so-sub" style={{ fontSize: 9.5 }}>{deltaNote}</div>}
+      {deltaNote && <div className="so-stat-sub" style={{ fontSize: 9.5 }}>{deltaNote}</div>}
       {badge}
     </div>
   );
