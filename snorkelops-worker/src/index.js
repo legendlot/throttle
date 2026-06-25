@@ -300,9 +300,10 @@ function addDays(dateISO, days) {
 function decorateSalesOrder(o, anchor) {
   const a = anchor || { dispatch_date: null, delivery_date: null, anchor_date: null };
   const due_date = addDays(a.anchor_date, Number(o.credit_days) || 0);
-  const balance = +(Number(o.grand_total) - Number(o.amount_received)).toFixed(2);
+  const net_due = +(Number(o.grand_total) - (Number(o.credit_total) || 0)).toFixed(2);
+  const balance = +(net_due - Number(o.amount_received)).toFixed(2);
   const overdue = balance > 0.005 && !!due_date && due_date < todayISO();
-  return { ...o, dispatch_date: a.dispatch_date, delivery_date: a.delivery_date, due_date, balance, overdue };
+  return { ...o, dispatch_date: a.dispatch_date, delivery_date: a.delivery_date, due_date, net_due, balance, overdue };
 }
 
 // ── Fulfilment (request → shipments) — derived, read-only (RULE-SNORKEL-004 #4 extended) ──
