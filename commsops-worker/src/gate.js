@@ -5,13 +5,16 @@ const A = require('./auth.js');
 const { latestConsent } = require('./consent.js');
 
 let _settingsCache = null;
+let _settingsAt = 0;
+const SETTINGS_TTL_MS = 60 * 1000; // short TTL so admin threshold/quiet-hour changes take effect within a minute
 async function getSettings(env) {
-  if (_settingsCache) return _settingsCache;
+  if (_settingsCache && (Date.now() - _settingsAt) < SETTINGS_TTL_MS) return _settingsCache;
   const r = await A.sbComms('/rest/v1/settings?id=eq.1&select=*&limit=1', env);
   _settingsCache = (r.ok && r.data?.[0]) || {
     frequency_cap_per_day: 3, frequency_cap_window_hours: 24,
     quiet_hours_start: 21, quiet_hours_end: 9,
   };
+  _settingsAt = Date.now();
   return _settingsCache;
 }
 
