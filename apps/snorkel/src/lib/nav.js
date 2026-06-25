@@ -1,6 +1,6 @@
 import {
   ShoppingCart, BarChart3, FileText, RefreshCw, Building, Truck, Package, BookOpen,
-  Inbox, Wallet, Shield, Users, Boxes, Settings, Store, ClipboardList, HandCoins,
+  Inbox, Wallet, Shield, Users, Boxes, Settings, Store, ClipboardList, HandCoins, ReceiptText,
 } from 'lucide-react';
 
 export const NAV_GROUPS = [
@@ -34,6 +34,7 @@ export const NAV_GROUPS = [
     items: [
       { id: 'sales-orders',      label: 'Sales Orders',  route: '/sales/orders',      icon: ClipboardList, requires: 'sales_view' },
       { id: 'sales-collections', label: 'Collections',   route: '/sales/collections', icon: HandCoins,     requires: 'sales_view' },
+      { id: 'sales-credit-notes', label: 'Credit Notes', route: '/sales/credit-notes', icon: ReceiptText,  requires: 'sales_view' },
       { id: 'sales-partners',    label: 'Partners',      route: '/sales/partners',    icon: Building,      requires: 'sales_view' },
       { id: 'sales-settings',    label: 'Channels',      route: '/sales/settings',    icon: Settings,      requires: 'sales_partner_manage' },
     ],

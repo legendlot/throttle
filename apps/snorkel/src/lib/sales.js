@@ -92,3 +92,14 @@ export function csvCell(v) {
   const s = v == null ? '' : String(v);
   return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
+
+export const CREDIT_NOTE_REASONS = [
+  { key: 'under_supply',        label: 'Under-supply (billed > supplied)' },
+  { key: 'sales_return',        label: 'Sales return (unsold inventory back)' },
+  { key: 'price_drop',          label: 'Price drop after supply' },
+  { key: 'transit_loss_damage', label: 'Transit loss / damage (our responsibility)' },
+  { key: 'other',               label: 'Other adjustment' },
+];
+export function creditReasonLabel(k) { return (CREDIT_NOTE_REASONS.find(r => r.key === k) || {}).label || k || '—'; }
+export const CN_STATUS_TONES = { draft: 'gray', issued: 'green', cancelled: 'red' };
+export function cnStatusLabel(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : '—'; }

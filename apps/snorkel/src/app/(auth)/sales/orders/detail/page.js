@@ -8,7 +8,7 @@ import {
   panelStyle, panelHeaderStyle, panelBodyStyle, tableThStyle, tableTdStyle, inputStyle, selectStyle, labelStyle,
   btnPrimary, btnSecondary, btnDanger, pageH1, pageSub, StatusBadge, fmtDate,
 } from '@/lib/snorkelui';
-import { orderStatusLabel, ORDER_STATUS_TONES, fulfilmentMeta, paymentMeta, PAYMENT_MODES, inr } from '@/lib/sales';
+import { orderStatusLabel, ORDER_STATUS_TONES, fulfilmentMeta, paymentMeta, PAYMENT_MODES, inr, creditReasonLabel, cnStatusLabel, CN_STATUS_TONES } from '@/lib/sales';
 import OrderForm from '../OrderForm';
 
 // Normalized courier stage (from courierops tracking_status) → label + colour for the SO timeline.
@@ -40,10 +40,12 @@ function OrderDetailInner() {
   const [partners, setPartners] = useState([]);
   const [channels, setChannels] = useState([]);
   const [pay, setPay] = useState({ open: false, amount: '', received_date: new Date().toISOString().slice(0, 10), mode: 'bank', reference: '', note: '' });
+  const [creditNotes, setCreditNotes] = useState([]);
 
   const canManage = !!perms?.sales_order_manage;
   const canConfirm = !!perms?.sales_order_confirm;
   const canPay = !!perms?.sales_payment_manage;
+  const canCN = !!perms?.sales_credit_note;
 
   const load = useCallback(async () => {
     if (!session || !id) return;
@@ -51,6 +53,10 @@ function OrderDetailInner() {
     try {
       const o = await garageFetch('getSalesOrder', { id }, session);
       setData(o || null);
+      if (o?.invoice_generated) {
+        const cns = await garageFetch('getCreditNotes', { order_id: id }, session).catch(() => []);
+        setCreditNotes(Array.isArray(cns) ? cns : []);
+      } else setCreditNotes([]);
     } catch (e) { showToast(e.message || 'Failed to load order', 'error'); }
     finally { setLoading(false); }
   }, [session, id, showToast]);
@@ -306,6 +312,39 @@ function OrderDetailInner() {
           )}
         </div>
       </div>
+
+      {/* Credit notes (invoiced orders only) */}
+      {o.invoice_generated && (
+        <div style={panelStyle}>
+          <div style={panelHeaderStyle}>
+            <span>Credit notes · net due after credits <b style={{ color: 'var(--yellow)' }}>{inr(+(Number(o.grand_total) - Number(o.credit_total || 0) - Number(o.amount_received)).toFixed(2))}</b>{Number(o.credit_total) > 0 ? <span style={{ color: 'var(--t3)' }}> · {inr(o.credit_total)} credited</span> : null}</span>
+            {canCN && o.status !== 'cancelled' && <button style={btnSecondary} onClick={() => router.push(`/sales/credit-notes/new?order=${encodeURIComponent(id)}`)}>+ Raise credit note</button>}
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            {creditNotes.length === 0 ? (
+              <div style={{ padding: 18, textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>No credit notes</div>
+            ) : (
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead><tr>
+                  <th style={tableThStyle}>CN No</th><th style={tableThStyle}>Status</th><th style={tableThStyle}>Date</th>
+                  <th style={tableThStyle}>Reason</th><th style={{ ...tableThStyle, textAlign: 'right' }}>Total</th>
+                </tr></thead>
+                <tbody>
+                  {creditNotes.map(c => (
+                    <tr key={c.id} style={{ cursor: 'pointer' }} onClick={() => router.push(`/sales/credit-notes/detail?id=${encodeURIComponent(c.id)}`)}>
+                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)' }}>{c.cn_no || '(draft)'}</td>
+                      <td style={tableTdStyle}><StatusBadge label={cnStatusLabel(c.status)} tone={CN_STATUS_TONES[c.status] || 'gray'} /></td>
+                      <td style={tableTdStyle}>{fmtDate(c.cn_date)}</td>
+                      <td style={tableTdStyle}>{creditReasonLabel(c.reason)}</td>
+                      <td style={{ ...tableTdStyle, textAlign: 'right', fontFamily: 'var(--mono)' }}>{inr(c.grand_total)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -28,6 +28,7 @@ const PERM_DEFS = [
     { key: 'sales_order_confirm', label: 'Confirm orders → hand off to dispatch' },
     { key: 'sales_payment_manage', label: 'Record / delete collection receipts' },
     { key: 'sales_partner_manage', label: 'Manage partners + sales channels' },
+    { key: 'sales_credit_note',   label: 'Raise / issue / cancel credit notes' },
   ] },
   { group: 'Admin', items: [
     { key: 'snorkel_admin', label: 'Manage Snorkel roles & assign users' },
