@@ -3,6 +3,21 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.3.0] - 2026-06-25
+### Changed
+- The Inbox: WhatsApp is now two-way. Agents reply to WhatsApp from Pitstop;
+  the customer's messages are pulled in live (both sides visible). Free-text
+  works inside the 24-hour window; the composer is disabled once it closes
+  (templates to reopen are a fast-follow). Replaced the old "read-only mirror"
+  note. WhatsApp attachments not supported yet.
+- The Inbox: new Transfer action (pick an agent, add an optional note, the chat
+  moves to their queue with the note). Agents can transfer their own /
+  unassigned chats; leads and admins can transfer any chat.
+- The Inbox: replying to a customer now also assigns the linked ticket to the
+  replier (whoever answers owns the case).
+- Navigation: the sidebar is now collapsible (collapsed by default) via the
+  bottom chevron or the PITSTOP header; added Inbox + Overview to the Work menu.
+
 ## [1.2.1] - 2026-06-23
 ### Changed
 - The Inbox: documented multi-select + bulk assign (tick rows or Select-all,
