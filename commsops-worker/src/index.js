@@ -290,6 +290,16 @@ export default {
       const r = await send(env, body);
       return ok(r);
     }
+    // Internal campaign trigger (M6) — token-authed; the seam a scheduler/automation
+    // uses to fire an approved campaign's fan-out (same entry as the user sendCampaign).
+    if (url.pathname === '/campaign/send' && request.method === 'POST') {
+      const hdr = request.headers.get('Authorization') || '';
+      const tok = hdr.startsWith('Bearer ') ? hdr.slice(7) : (request.headers.get('X-Ingest-Token') || '');
+      if (!env.INGEST_TOKEN || tok !== env.INGEST_TOKEN) return err('unauthorised', 401);
+      const body = await request.json().catch(() => ({}));
+      const r = await CAMP.startCampaign(env, body.campaignId, 'automation');
+      return r.ok ? ok(r) : err(r.error, 400);
+    }
 
     // Public unsubscribe (M5) — one-click List-Unsubscribe target, returns HTML.
     if (url.pathname === '/unsubscribe' && request.method === 'GET') {
