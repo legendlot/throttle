@@ -185,10 +185,10 @@ export default function InboxPage() {
   // Agents (for assign dropdown) + canned responses — load once.
   useEffect(() => {
     if (!session) return;
-    if (canReassign) csopsGet('getCsAgents', {}, session).then(d => setAgents(Array.isArray(d) ? d : (d?.data || []))).catch(() => {});
+    if (canManage) csopsGet('getCsAgents', {}, session).then(d => setAgents(Array.isArray(d) ? d : (d?.data || []))).catch(() => {});
     csopsGet('getTags', {}, session).then(d => setAllTags(d?.tags || [])).catch(() => {});
     loadCanned();
-  }, [session, canReassign, loadCanned]);
+  }, [session, canManage, loadCanned]);
 
   // Open conversation — load on select + 15s poll.
   useEffect(() => {
@@ -331,6 +331,17 @@ export default function InboxPage() {
     setErr(null); setAssignOpen(false);
     try {
       await csopsPost('assignThread', { thread_id: convo.thread.id, agent_id: agentId }, session);
+      await loadConvo(selectedId);
+      loadThreads(); loadStats();
+    } catch (e) { setErr(e.message); }
+  }
+
+  // Transfer to another agent + optional handoff note (Pruthvi's request).
+  async function transfer(agentId, note) {
+    if (!convo?.thread || !agentId) return;
+    setErr(null); setAssignOpen(false);
+    try {
+      await csopsPost('transferThread', { thread_id: convo.thread.id, to_agent_id: agentId, note: note || null }, session);
       await loadConvo(selectedId);
       loadThreads(); loadStats();
     } catch (e) { setErr(e.message); }
@@ -610,7 +621,7 @@ export default function InboxPage() {
                   {canManage && (
                     <AssignControl
                       thread={thread} mineThread={mineThread} canReassign={canReassign} agents={agents}
-                      open={assignOpen} setOpen={setAssignOpen} onAssign={assign} myId={myId} />
+                      open={assignOpen} setOpen={setAssignOpen} onAssign={assign} onTransfer={transfer} myId={myId} />
                   )}
                   {/* Priority (S164, Pruthvi) */}
                   {canManage && (
@@ -898,45 +909,73 @@ function CannedPanel({ slashActive, query, list, search, setSearch, canManage, d
     </div>
   );
 }
-function AssignControl({ thread, mineThread, canReassign, agents, open, setOpen, onAssign, myId }) {
+function AssignControl({ thread, mineThread, canReassign, agents, open, setOpen, onAssign, onTransfer, myId }) {
   const assigned = thread.assigned_agent_id;
-  // Owned by me → green pill + release. Owned by other → name (+ reassign for TL+).
-  // Unassigned → Claim (+ assign-to for TL+).
+  const [sel, setSel] = useState('');
+  const [note, setNote] = useState('');
+  // Transfer scope (mirrors the worker): leads can transfer any thread; a regular
+  // agent can transfer one they own or that's unassigned (not steal another's).
+  const ownsOrFree = !assigned || assigned === myId;
+  const canTransfer = canReassign || ownsOrFree;
+  const openPanel = () => { setSel(''); setNote(''); setOpen(true); };
+  const targets = (agents || []).filter(a => a.id !== assigned);   // can't transfer to the current owner
+  const submit = () => { if (sel) onTransfer(sel, note.trim() || null); };
+  const xferBtn = <button onClick={openPanel} style={{ ...btnGhost, padding: '5px 9px', fontSize: 11 }}>Transfer…</button>;
+  // Owned by me → green pill + release + transfer. Owned by other → name (+ transfer for TL+).
+  // Unassigned → Claim (+ transfer).
   return (
     <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6 }}>
       {mineThread ? (
         <>
           <ToneBadge tone="ok"><UserPlus size={10} style={{ marginRight: 3 }} /> Mine</ToneBadge>
           <button onClick={() => onAssign(null)} style={{ ...btnGhost, padding: '5px 9px', fontSize: 11 }}>Release</button>
+          {canTransfer && xferBtn}
         </>
       ) : assigned ? (
         <>
           <ToneBadge tone="info">{thread.assigned_agent_name || 'Assigned'}</ToneBadge>
-          {canReassign && <button onClick={() => setOpen(v => !v)} style={{ ...btnGhost, padding: '5px 9px', fontSize: 11 }}>Reassign</button>}
+          {canTransfer && xferBtn}
         </>
       ) : (
         <>
           <button onClick={() => onAssign(myId)} style={{ ...btnPrimary, padding: '5px 11px', fontSize: 11.5 }}>
             <UserPlus size={12} /> Claim
           </button>
-          {canReassign && <button onClick={() => setOpen(v => !v)} style={{ ...btnGhost, padding: '5px 9px', fontSize: 11 }}>Assign…</button>}
+          {canTransfer && xferBtn}
         </>
       )}
-      {open && canReassign && (
+      {open && (
         <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 39 }} />
       )}
-      {open && canReassign && (
-        <div style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 40, width: 240,
+      {open && (
+        <div style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 40, width: 260,
           background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius)',
-          boxShadow: 'var(--shadow, 0 8px 28px rgba(0,0,0,0.28))', padding: 8, maxHeight: 300, overflowY: 'auto' }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Assign to</div>
-          {(agents || []).map(a => (
-            <button key={a.id} onClick={() => onAssign(a.id)}
-              style={{ display: 'block', width: '100%', textAlign: 'left', cursor: 'pointer', padding: '7px 8px',
-                border: 'none', borderRadius: 6, background: a.id === myId ? 'var(--accent-bg)' : 'transparent', fontSize: 12, color: 'var(--t1)' }}>
-              {a.full_name}{a.id === myId ? ' (me)' : ''}
-            </button>
-          ))}
+          boxShadow: 'var(--shadow, 0 8px 28px rgba(0,0,0,0.28))', padding: 10 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Transfer to</div>
+          <div style={{ maxHeight: 180, overflowY: 'auto', marginBottom: 8 }}>
+            {targets.length === 0 ? (
+              <div style={{ fontSize: 12, color: 'var(--t3)', padding: '6px 4px' }}>No other agents available.</div>
+            ) : targets.map(a => (
+              <button key={a.id} onClick={() => setSel(a.id)}
+                style={{ display: 'flex', alignItems: 'center', gap: 7, width: '100%', textAlign: 'left', cursor: 'pointer',
+                  padding: '7px 8px', border: `1px solid ${sel === a.id ? 'var(--accent-bd)' : 'transparent'}`, borderRadius: 6,
+                  background: sel === a.id ? 'var(--accent-bg)' : 'transparent', fontSize: 12, color: 'var(--t1)' }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+                  background: sel === a.id ? 'var(--accent)' : 'var(--border-2)' }} />
+                {a.full_name}{a.id === myId ? ' (me)' : ''}
+              </button>
+            ))}
+          </div>
+          <textarea value={note} onChange={e => setNote(e.target.value)} rows={2}
+            placeholder="Add a note for them (optional)…"
+            style={{ width: '100%', resize: 'none', fontSize: 12, padding: '6px 8px', marginBottom: 8,
+              borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--bg-2)',
+              color: 'var(--t1)', fontFamily: 'var(--f-ui)' }} />
+          <button onClick={submit} disabled={!sel}
+            style={{ ...btnPrimary, width: '100%', justifyContent: 'center', padding: '7px 0', fontSize: 12,
+              opacity: sel ? 1 : 0.5, cursor: sel ? 'pointer' : 'default' }}>
+            <UserPlus size={12} /> Transfer
+          </button>
         </div>
       )}
     </div>

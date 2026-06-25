@@ -551,6 +551,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'sendMetaAttachment':       return sendMetaAttachment(body, auth, env);
     case 'linkMessagingThread':      return linkMessagingThread(body, auth, env);
     case 'assignThread':             return assignThread(body, auth, env);
+    case 'transferThread':           return transferThread(body, auth, env);
     case 'bulkAssignThreads':        return bulkAssignThreads(body, auth, env);
     case 'setThreadPriority':        return setThreadPriority(body, auth, env);
     case 'createTicketFromThread':   return createTicketFromThread(body, auth, env);
@@ -4213,6 +4214,52 @@ async function addThreadNote(body, auth, env) {
     method: 'PATCH', body: JSON.stringify({ updated_at: new Date().toISOString() }),
   }).catch(() => {});
   return ok({ note: ins.data?.[0] || null });
+}
+
+// Transfer a thread to another agent + leave an internal handoff note (Pruthvi's ask).
+// Any cs_ticket_manage agent can hand off a thread they own or that's unassigned; only
+// Team Lead+ (cs_ticket_reassign/admin) can transfer a thread assigned to someone else.
+async function transferThread(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { thread_id, to_agent_id, note } = body;
+  if (!thread_id || !to_agent_id) return err('thread_id and to_agent_id required');
+
+  const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=id,channel,assigned_agent_id,thread_state&limit=1`, env);
+  const thread = tRes.data?.[0];
+  if (!thread) return err('Thread not found', 404);
+
+  const canReassign = !!auth?.permissions?.cs_ticket_reassign || !!auth?.permissions?.cs_ticket_admin;
+  const ownsOrFree = !thread.assigned_agent_id || thread.assigned_agent_id === auth.userId;
+  if (!canReassign && !ownsOrFree) {
+    return err("Forbidden — you can only transfer a conversation you're handling (missing cs_ticket_reassign)", 403);
+  }
+  if (to_agent_id === thread.assigned_agent_id) return err('Conversation is already assigned to that agent', 422);
+
+  const aRes = await sb(`/rest/v1/users_profile?id=eq.${encodeURIComponent(to_agent_id)}&select=id,full_name&limit=1`, env);
+  const agent = aRes.data?.[0];
+  if (!agent) return err('Target agent not found', 404);
+
+  const now = new Date().toISOString();
+  const patch = { assigned_agent_id: agent.id, assigned_agent_name: agent.full_name, assigned_at: now };
+  if (thread.thread_state && thread.thread_state !== 'open') patch.thread_state = 'open';   // a transfer = active work
+  const upd = await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+  if (!upd.ok) return err('Transfer failed', upd.status || 500);
+
+  // Internal handoff note (team-only; for WhatsApp it surfaces via getWaConversation's
+  // note merge). Always records the handoff line; appends the agent's note if given.
+  const fromName = auth.fullName || auth.name || auth.email || 'Agent';
+  const noteText = (note && String(note).trim()) ? `\n${String(note).trim()}` : '';
+  await sb(`/rest/v1/cs_wa_messages`, env, {
+    method: 'POST',
+    body: JSON.stringify({
+      thread_id: thread.id, channel: thread.channel || 'whatsapp', direction: 'outbound',
+      kind: 'note', is_internal: true, body: `↪ Transferred to ${agent.full_name}${noteText}`,
+      status: null, sent_by_user_id: auth.userId, sent_by_name: fromName, sent_at: now,
+    }),
+  }).catch(() => {});
+  await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify({ updated_at: now }) }).catch(() => {});
+
+  return ok({ transferred_to: agent.full_name, to_agent_id: agent.id });
 }
 
 // ── Canned responses (S162) — agent-managed quick replies for the composer ───

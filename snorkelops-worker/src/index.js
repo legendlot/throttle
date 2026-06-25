@@ -52,6 +52,7 @@ const canSalesManage  = p => !!p.sales_order_manage;   // create/edit/cancel dra
 const canSalesConfirm = p => !!p.sales_order_confirm;  // confirm → auto-create dispatch shipment
 const canSalesPayment = p => !!p.sales_payment_manage; // record/delete collection receipts
 const canSalesPartner = p => !!p.sales_partner_manage; // partner master + sales channels
+const canSalesCreditNote = p => !!p.sales_credit_note; // raise/edit/issue/cancel credit notes
 
 // Strip financial fields from a China PO read when caller lacks po_china.
 function stripChinaPOHeader(row) {
@@ -206,6 +207,64 @@ async function nextInvoiceNo(dateISO) {
   const r = await rpc('next_seq', { seq_name: key });
   if (!r.ok || r.data == null) throw new Error('Invoice seq error: ' + JSON.stringify(r.data));
   return `LOT/SL/${fy}/${String(r.data).padStart(4, '0')}`;
+}
+// GST-continuous credit-note no per FY: LOT/CN/<fy>/NNNN (same lazy-seq pattern as nextInvoiceNo).
+async function nextCreditNoteNo(dateISO) {
+  const fy = fyLabel(dateISO);
+  const key = 'sales_credit_note_' + fy;
+  await sb('/rest/v1/sequences', {
+    method: 'POST', body: JSON.stringify({ name: key, current_val: 0 }), prefer: 'return=minimal',
+  });
+  const r = await rpc('next_seq', { seq_name: key });
+  if (!r.ok || r.data == null) throw new Error('Credit-note seq error: ' + JSON.stringify(r.data));
+  return `LOT/CN/${fy}/${String(r.data).padStart(4, '0')}`;
+}
+// Roll up ISSUED credit notes onto the order, then net the payment status.
+async function recomputeOrderCredit(orderId) {
+  const [oR, cR, pR] = await Promise.all([
+    query('sales_orders', `?id=eq.${encodeURIComponent(orderId)}&select=grand_total&limit=1`),
+    query('sales_credit_notes', `?order_id=eq.${encodeURIComponent(orderId)}&status=eq.issued&select=grand_total`),
+    query('sales_payments', `?order_id=eq.${encodeURIComponent(orderId)}&select=amount`),
+  ]);
+  const grand  = oR.ok ? Number(oR.data?.[0]?.grand_total) || 0 : 0;
+  const credit = cR.ok ? (cR.data || []).reduce((s, c) => s + (Number(c.grand_total) || 0), 0) : 0;
+  const recv   = pR.ok ? (pR.data || []).reduce((s, p) => s + (Number(p.amount) || 0), 0) : 0;
+  const net    = +(grand - credit).toFixed(2);
+  const status = (recv > 0 && recv >= net - 0.005) ? 'paid' : recv > 0 ? 'partial' : 'unpaid';
+  await update('sales_orders',
+    { credit_total: +credit.toFixed(2), amount_received: +recv.toFixed(2),
+      payment_status: status, updated_at: new Date().toISOString() },
+    `id=eq.${encodeURIComponent(orderId)}`);
+}
+// Per-line GST split for intra vs inter (same logic getSalesInvoiceData uses).
+function splitGstLine(l, intra) {
+  const gstAmt = Number(l.gst_amount) || 0, gstPct = Number(l.gst_pct) || 0;
+  return { ...l,
+    cgst_pct: intra ? gstPct / 2 : 0, sgst_pct: intra ? gstPct / 2 : 0, igst_pct: intra ? 0 : gstPct,
+    cgst_amount: intra ? +(gstAmt / 2).toFixed(2) : 0,
+    sgst_amount: intra ? +(gstAmt / 2).toFixed(2) : 0,
+    igst_amount: intra ? 0 : +gstAmt.toFixed(2) };
+}
+// Build CN header totals + line rows from incoming lines (reuses computeSalesLine math).
+function buildCreditNote(linesIn) {
+  const lines = (linesIn || []).map(computeSalesLine);
+  const subtotal    = +lines.reduce((s, l) => s + l.taxable_value, 0).toFixed(2);
+  const tax_total   = +lines.reduce((s, l) => s + l.gst_amount, 0).toFixed(2);
+  const grand_total = +(subtotal + tax_total).toFixed(2);
+  return { lines, subtotal, tax_total, grand_total };
+}
+// Cap check: existing (draft+issued, optionally excluding self) credit + this ≤ invoice grand_total.
+async function creditCapRemaining(orderId, excludeCnId) {
+  const oR = await query('sales_orders', `?id=eq.${encodeURIComponent(orderId)}&select=grand_total&limit=1`);
+  const grand = oR.ok ? Number(oR.data?.[0]?.grand_total) || 0 : 0;
+  const cR = await query('sales_credit_notes', `?order_id=eq.${encodeURIComponent(orderId)}&status=in.(draft,issued)&select=grand_total`);
+  let used = cR.ok ? (cR.data || []).reduce((s, c) => s + (Number(c.grand_total) || 0), 0) : 0;
+  if (excludeCnId) {
+    const selfR = await query('sales_credit_notes', `?id=eq.${encodeURIComponent(excludeCnId)}&select=grand_total,status&limit=1`);
+    const self = selfR.ok ? selfR.data?.[0] : null;
+    if (self && ['draft','issued'].includes(self.status)) used -= Number(self.grand_total) || 0;
+  }
+  return +(grand - used).toFixed(2);
 }
 // Line math (PostgREST returns numerics as strings → Number()).
 function computeSalesLine(l) {
