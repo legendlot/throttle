@@ -88,10 +88,17 @@ export default function AmazonCockpit() {
   const organic = Math.max(gross - attr, 0), organicPct = pct1(organic, gross);
   const pOrganic = Math.max(pGross - pAttr, 0);
 
-  // sellers (top by gross), location (top states)
+  // sellers (top by gross). f_sales_rollup emits one row per (product_code × sale_date),
+  // so SUM to one row per code before ranking (else a SKU shows once per day it sold).
   const sellers = useMemo(() => {
-    const arr = (sales || []).map(r => ({ code: r.product_code, label: r.grp_label || r.product_code, units: Number(r.units) || 0, gross: Number(r.gross_value) || 0 }))
-      .sort((a, b) => b.gross - a.gross).slice(0, 15);
+    const by = {};
+    for (const r of (sales || [])) {
+      const code = r.product_code; if (!code) continue;
+      (by[code] = by[code] || { code, label: r.grp_label || code, units: 0, gross: 0 });
+      by[code].units += Number(r.units) || 0;
+      by[code].gross += Number(r.gross_value) || 0;
+    }
+    const arr = Object.values(by).sort((a, b) => b.gross - a.gross).slice(0, 15);
     return { arr, max: Math.max(...arr.map(v => v.gross), 1) };
   }, [sales]);
   const geo = useMemo(() => {
