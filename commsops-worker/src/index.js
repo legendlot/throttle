@@ -1,6 +1,8 @@
 const A = require('./auth.js');
 const { ingest } = require('./ingest.js');
 const { recordConsent } = require('./consent.js');
+const { send } = require('./send.js');
+const { handleResendWebhook, handleUnsubscribe } = require('./webhooks.js');
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -58,6 +60,11 @@ async function handleGet(url, auth, env) {
       ]);
       return ok({ profile: p.data?.[0] || null, identifiers: ids.data || [],
                   consent: cons.data || [], events: evs.data || [] });
+    }
+
+    case 'getTemplates': {             // M5
+      const r = await A.sbComms('/rest/v1/templates?select=*&order=updated_at.desc', env);
+      return r.ok ? ok(r.data) : err('db_error', 500);
     }
     default:
       return err(`unknown_action:${action}`, 404);
@@ -123,7 +130,44 @@ async function handlePost(body, auth, env) {
       return r.ok ? ok(r.data?.[0]) : err('db_error', 500);
     }
 
-    // M5: send · M6: campaigns · M7: journeys — wired per milestone
+    case 'saveTemplate': {             // M5 — editing an active template publishes a new version
+      if (!A.canTemplate(auth.permissions)) return err('forbidden', 403);
+      const { id, channel, name, purpose, language, content, variables, status } = body;
+      if (!name) return err('name_required', 400);
+      if (id) {
+        const cur = await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(id)}&select=version&limit=1`, env);
+        const v = (cur.ok && Number(cur.data?.[0]?.version)) || 1;
+        const r = await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(id)}`, env, {
+          method: 'PATCH', body: JSON.stringify({
+            channel, name, purpose, language: language || 'en', content: content || {},
+            variables: variables || [], status: status || 'active', version: v + 1, updated_at: nowIso(),
+          }),
+        });
+        return r.ok ? ok(r.data?.[0]) : err('db_error', 500);
+      }
+      const r = await A.sbComms('/rest/v1/templates', env, {
+        method: 'POST', body: JSON.stringify({
+          channel: channel || 'email', name, purpose: purpose || 'marketing',
+          language: language || 'en', content: content || {}, variables: variables || [],
+          status: status || 'active', created_by: auth.userId,
+        }),
+      });
+      return r.ok ? ok(r.data?.[0]) : err('db_error:' + JSON.stringify(r.data), 500);
+    }
+
+    case 'sendTest': {                 // M5 — test-send: always allowed, no approval; transactional bypasses marketing gate
+      if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
+      if (!body.to) return err('to_required', 400);
+      const r = await send(env, {
+        channel: body.channel || 'email', purpose: 'transactional',
+        to: body.to, templateId: body.templateId || null, template: body.template || null,
+        profileId: body.profileId || null, constants: body.constants || {},
+        recipient: body.recipient || {}, source: 'test',
+      });
+      return ok(r);
+    }
+
+    // M6: campaigns · M7: journeys — wired per milestone
     default:
       return err(`unknown_action:${body.action}`, 404);
   }
@@ -147,8 +191,28 @@ export default {
       return r.ok ? ok(r) : err(r.error, 400);
     }
 
-    // Other public endpoints in later milestones: /unsubscribe (M5), /webhooks/shopify (M4),
-    // /webhooks/resend (M5) — matched here BEFORE the auth gate.
+    // Internal send gateway (M5) — token-authed service-to-service (Pitstop re-points
+    // here at WhatsApp cutover). Runs the full gate; never a user JWT.
+    if (url.pathname === '/send' && request.method === 'POST') {
+      const hdr = request.headers.get('Authorization') || '';
+      const tok = hdr.startsWith('Bearer ') ? hdr.slice(7) : (request.headers.get('X-Ingest-Token') || '');
+      if (!env.INGEST_TOKEN || tok !== env.INGEST_TOKEN) return err('unauthorised', 401);
+      const body = await request.json().catch(() => ({}));
+      const r = await send(env, body);
+      return ok(r);
+    }
+
+    // Public unsubscribe (M5) — one-click List-Unsubscribe target, returns HTML.
+    if (url.pathname === '/unsubscribe' && request.method === 'GET') {
+      const r = await handleUnsubscribe(env, url.searchParams.get('token'));
+      return new Response(r.html, { status: r.status, headers: { ...CORS, 'Content-Type': 'text/html; charset=utf-8' } });
+    }
+    // Public Resend status webhook (M5) — svix-verified if RESEND_WEBHOOK_SECRET set.
+    if (url.pathname === '/webhooks/resend' && request.method === 'POST') {
+      const r = await handleResendWebhook(env, request);
+      return r.ok ? ok(r) : err(r.error, r.status || 400);
+    }
+    // Other public endpoints in later milestones: /webhooks/shopify (M4).
 
     const auth = await A.verifyJWT(request.headers.get('Authorization'), env);
     if (!auth) return err('unauthorised', 401);
