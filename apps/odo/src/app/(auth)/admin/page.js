@@ -21,9 +21,11 @@ export default function AdminPage() {
   const [tab, setTab] = useState('access');
   const [grant, setGrant] = useState({ email: '', role_key: '' });
   const [editRole, setEditRole] = useState(null);   // { role_key, label, permissions }
+  const [drrDays, setDrrDays] = useState('');
 
   const load = () => { if (session) salesGet('getBootstrap', {}, session).then(setBoot); };
   useEffect(load, [session]);
+  useEffect(() => { if (boot?.drr_window_days != null) setDrrDays(String(boot.drr_window_days)); }, [boot]);
 
   if (!perms?.salesops_admin && !perms?.salesops_super_admin) return <div style={{ fontFamily: 'var(--mono)', color: 'var(--t3)' }}>Admin access required.</div>;
   if (!boot) return <Spinner />;
@@ -41,11 +43,16 @@ export default function AdminPage() {
     if (!window.confirm(`Delete role “${rk}”? Users on this role lose its permissions. This can't be undone.`)) return;
     salesPost('deleteRole', { role_key: rk }, session).then(load).catch(e => toast?.showToast?.(e.message, 'error'));
   };
+  const saveDrr = () => {
+    const n = Number(drrDays);
+    if (!(Number.isFinite(n) && n >= 1 && n <= 365)) return toast?.showToast?.('Days must be 1–365', 'error');
+    salesPost('setDrrWindow', { days: Math.round(n) }, session).then(() => { toast?.showToast?.('DRR window saved', 'success'); load(); }).catch(e => toast?.showToast?.(e.message, 'error'));
+  };
 
   return (
     <div style={{ maxWidth: 980, display: 'flex', flexDirection: 'column', gap: 18 }}>
       <div style={{ display: 'flex', gap: 8 }}>
-        {['access', 'roles'].map(t => (
+        {['access', 'roles', 'settings'].map(t => (
           <button key={t} onClick={() => setTab(t)} className={`so-chip${tab === t ? ' on' : ''}`} style={{ textTransform: 'capitalize' }}>{t}</button>
         ))}
       </div>
@@ -130,6 +137,22 @@ export default function AdminPage() {
             </div>
           )}
         </>
+      )}
+
+      {tab === 'settings' && (
+        <div className="so-card" style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 460 }}>
+          <div style={{ fontFamily: 'var(--cond)', fontWeight: 600, color: 'var(--t1)' }}>DRR window</div>
+          <div className="so-sub" style={{ fontSize: 12 }}>
+            Daily Run Rate = average units sold per day over the last N full days (ending yesterday). This is global — it sets the DRR shown on Products and the metric other systems read.
+          </div>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 10, textTransform: 'uppercase', color: 'var(--t3)' }}>Days (1–365)</span>
+              <input className="so-input" type="number" min={1} max={365} style={{ width: 120 }} value={drrDays} onChange={e => setDrrDays(e.target.value)} />
+            </label>
+            <button className="so-btn" onClick={saveDrr} disabled={String(drrDays) === String(boot.drr_window_days)}>Save</button>
+          </div>
+        </div>
       )}
     </div>
   );
