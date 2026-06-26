@@ -4752,9 +4752,10 @@ async function handleIgnitionBridge(request, env) {
   let body = {};
   try { body = await request.json(); } catch {}
   switch (body.action) {
-    case 'getIgnitionConnects': return bridgeGetConnects(body, env);
-    case 'getIgnitionThread':   return bridgeGetThread(body, env);
-    case 'sendConnectReply':    return bridgeSendReply(body, env);
+    case 'getIgnitionConnects':    return bridgeGetConnects(body, env);
+    case 'getIgnitionThread':      return bridgeGetThread(body, env);
+    case 'sendConnectReply':       return bridgeSendReply(body, env);
+    case 'returnConnectToPitstop': return bridgeReturnConnect(body, env);
     default: return err(`Unknown bridge action: ${body.action}`, 404);
   }
 }
@@ -4824,6 +4825,34 @@ async function bridgeSendReply(body, env) {
   if (channel === 'instagram' || channel === 'messenger') return sendMetaMessage({ thread_id, text }, synthAuth, env);
   if (channel === 'email') return sendEmailReply({ thread_id, text, html }, synthAuth, env);
   return err(`Unsupported channel: ${channel}`, 422);
+}
+
+// Return a transferred connect back to Pitstop CS (reclaim). Clears the
+// ignition_connect gate → the thread reappears in the CS inbox (Unassigned, since
+// transfer released its agent); leaves an internal note. Scope-checked.
+async function bridgeReturnConnect(body, env) {
+  const { thread_id, actor } = body;
+  if (!thread_id) return err('thread_id required');
+  const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=id,channel,ignition_connect&limit=1`, env);
+  const thread = tRes.data?.[0];
+  if (!thread) return err('Thread not found', 404);
+  if (!thread.ignition_connect) return err('Not an Ignition connect', 403);
+  const now = new Date().toISOString();
+  const upd = await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, {
+    method: 'PATCH',
+    body: JSON.stringify({ ignition_connect: false, ignition_transferred_at: null, ignition_transferred_by: null, updated_at: now }),
+  });
+  if (!upd.ok) return err('Return failed', upd.status || 500);
+  await sb(`/rest/v1/cs_wa_messages`, env, {
+    method: 'POST',
+    body: JSON.stringify({
+      thread_id: thread.id, channel: thread.channel || 'whatsapp', direction: 'outbound',
+      kind: 'note', is_internal: true,
+      body: `↩ Returned to Pitstop CS from the Influencer team${actor?.name ? ' by ' + actor.name : ''}.`,
+      status: null, sent_by_user_id: actor?.id || null, sent_by_name: actor?.name || null, sent_at: now,
+    }),
+  }).catch(() => {});
+  return ok({ returned: true, thread_id: thread.id });
 }
 
 // ── Canned responses (S162) — agent-managed quick replies for the composer ───
