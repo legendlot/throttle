@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 /**
  * Searchable combobox — drop-in replacement for native `<select>` when the option
@@ -268,7 +269,14 @@ export function Combobox({
           ×
         </button>
       )}
-      {open && !disabled && !loading && (!portal || rect) && (
+      {open && !disabled && !loading && (!portal || rect) && (() => {
+        // In portal mode the dropdown is rendered into document.body via a real
+        // portal, NOT just position:fixed. A bare fixed element is still trapped
+        // (positioned + clipped) by any ancestor with transform/filter/will-change
+        // — which our hover-animated panels/cards have — so fixed alone wasn't
+        // enough. Portaling to body escapes every overflow + stacking + transform
+        // context. Non-portal mode keeps the in-flow absolute dropdown.
+        const node = (
         <div
           style={portal ? {
             position: 'fixed',
@@ -354,7 +362,11 @@ export function Combobox({
             })
           )}
         </div>
-      )}
+        );
+        return portal && typeof document !== 'undefined'
+          ? createPortal(node, document.body)
+          : node;
+      })()}
     </div>
   );
 }
