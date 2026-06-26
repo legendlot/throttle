@@ -13,7 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useAuth } from '@throttle/auth';
 import {
-  Instagram, Facebook, MessageCircle, Send, Clock, ExternalLink, Link2,
+  Instagram, Facebook, MessageCircle, Mail, Send, Clock, ExternalLink, Link2,
   FileText, Smile, Lock, Bold, Italic, StickyNote, UserPlus, X, Paperclip, Plus, Search,
   CheckCircle2, RotateCcw, Tag,
 } from 'lucide-react';
@@ -28,9 +28,11 @@ const EmojiPicker = dynamic(() => import('../../../components/EmojiPicker.js'), 
 });
 
 const CHANNELS = {
-  instagram: { label: 'Instagram', color: '#E1306C', Glyph: Instagram, sendable: true },
-  messenger: { label: 'Messenger', color: '#0084FF', Glyph: Facebook, sendable: true },
-  whatsapp:  { label: 'WhatsApp',  color: '#25D366', Glyph: MessageCircle, sendable: true },
+  instagram: { label: 'Instagram', color: '#E1306C', Glyph: Instagram, sendable: true, hasWindow: true },
+  messenger: { label: 'Messenger', color: '#0084FF', Glyph: Facebook, sendable: true, hasWindow: true },
+  whatsapp:  { label: 'WhatsApp',  color: '#25D366', Glyph: MessageCircle, sendable: true, hasWindow: true },
+  // Email (carecrew@, S175) — two-way via Gmail; no 24h customer window (always sendable).
+  email:     { label: 'Email',     color: '#7C5CFC', Glyph: Mail, sendable: true, hasWindow: false },
 };
 const chanOf = (c) => CHANNELS[c] || { label: c || 'DM', color: 'var(--t3)', Glyph: MessageCircle, sendable: false };
 
@@ -78,6 +80,7 @@ export default function InboxPage() {
     instagram: { total: 0, awaiting: 0, mine: 0, unassigned: 0 },
     messenger: { total: 0, awaiting: 0, mine: 0, unassigned: 0 },
     whatsapp:  { total: 0, awaiting: null, mine: 0, unassigned: 0 },
+    email:     { total: 0, awaiting: null, mine: 0, unassigned: 0 },
   });
   const [agents, setAgents] = useState([]);
   const [canned, setCanned] = useState([]);
@@ -209,13 +212,13 @@ export default function InboxPage() {
   // is a read-only BiteSpeed mirror so its awaiting is not tracked here.
   const totalAwaiting = (stats.instagram.awaiting || 0) + (stats.messenger.awaiting || 0);
   const allTotal = useMemo(
-    () => (stats.instagram.total || 0) + (stats.messenger.total || 0) + (stats.whatsapp.total || 0),
+    () => (stats.instagram.total || 0) + (stats.messenger.total || 0) + (stats.whatsapp.total || 0) + (stats.email?.total || 0),
     [stats],
   );
 
   // Assignment-tab counts, scoped to the channel currently in view.
   const scoped = useMemo(() => {
-    const ch = channel === 'all' ? ['instagram', 'messenger', 'whatsapp'] : [channel];
+    const ch = channel === 'all' ? ['instagram', 'messenger', 'whatsapp', 'email'] : [channel];
     const sum = (k) => ch.reduce((a, c) => a + (stats[c]?.[k] || 0), 0);
     return { all: sum('total'), mine: sum('mine'), unassigned: sum('unassigned') };
   }, [stats, channel]);
@@ -225,6 +228,7 @@ export default function InboxPage() {
     { id: 'instagram', label: 'Instagram', count: stats.instagram.total },
     { id: 'messenger', label: 'Messenger', count: stats.messenger.total },
     { id: 'whatsapp', label: 'WhatsApp', count: stats.whatsapp.total },
+    { id: 'email', label: 'Email', count: stats.email?.total || 0 },
   ];
 
   const assignTabs = [
@@ -296,7 +300,7 @@ export default function InboxPage() {
     const t = text.trim();
     // Attachment send (reply mode only) — caption = whatever's in the box.
     if (mode === 'reply' && pendingFile) {
-      if (convo?.thread?.channel === 'whatsapp') { setErr('Attachments to WhatsApp are not supported yet — send text only.'); return; }
+      if (!['instagram', 'messenger'].includes(convo?.thread?.channel)) { setErr('Attachments are only supported on Instagram/Messenger — send text only.'); return; }
       setSending(true); setErr(null);
       try {
         await csopsPost('sendMetaAttachment', {
@@ -316,6 +320,8 @@ export default function InboxPage() {
         await csopsPost('addThreadNote', { thread_id: convo.thread.id, text: t }, session);
       } else if (convo.thread.channel === 'whatsapp') {
         await csopsPost('sendWaReply', { thread_id: convo.thread.id, text: t }, session);   // C2-B BiteSpeed tunnel
+      } else if (convo.thread.channel === 'email') {
+        await csopsPost('sendEmailReply', { thread_id: convo.thread.id, text: t }, session); // Gmail-native, in-thread (S175)
       } else {
         await csopsPost('sendMetaMessage', { thread_id: convo.thread.id, text: t }, session);
       }
@@ -430,7 +436,8 @@ export default function InboxPage() {
 
   const thread = convo?.thread;
   const ch = thread ? chanOf(thread.channel) : null;
-  const windowOpen = !!convo?.within_customer_window;
+  const hasWindow = !!ch?.hasWindow;                 // email has no 24h window — always sendable
+  const windowOpen = !hasWindow || !!convo?.within_customer_window;
   const mineThread = thread && thread.assigned_agent_id && thread.assigned_agent_id === myId;
   const noteMode = mode === 'note';
   // WhatsApp (C2-B) replies tunnel through BiteSpeed: free-text only, and only
@@ -438,6 +445,7 @@ export default function InboxPage() {
   // No outbound attachments on WA in v1 (Chatwoot media send is a later add).
   const isWa = thread?.channel === 'whatsapp';
   const waReplyBlocked = isWa && !noteMode && !windowOpen;
+  const canAttach = ['instagram', 'messenger'].includes(thread?.channel);   // Graph URL-attachment path only
   const slashActive = !noteMode && text.startsWith('/');           // "/" quick-access to canned
   const cannedQuery = (slashActive ? text.slice(1) : cannedSearch).trim().toLowerCase();
   const filteredCanned = cannedQuery
@@ -452,7 +460,7 @@ export default function InboxPage() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, height: '100%', minHeight: 420 }}>
       {/* Header tiles — per-channel volume + awaiting-reply. Click to filter. */}
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-        {['instagram', 'messenger', 'whatsapp'].map(k => (
+        {['instagram', 'messenger', 'whatsapp', 'email'].map(k => (
           <ChannelTile key={k} chKey={k} stat={stats[k]} active={channel === k}
             onClick={() => setChannel(c => (c === k ? 'all' : k))} />
         ))}
@@ -613,7 +621,16 @@ export default function InboxPage() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 1 }}>
                       <ch.Glyph size={11} style={{ color: ch.color }} />
                       <span style={{ fontSize: 11, color: 'var(--t3)' }}>{ch.label}</span>
+                      {thread.channel === 'email' && thread.external_user_id && (
+                        <span style={{ fontSize: 11, color: 'var(--t4)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          · {thread.external_user_id}</span>
+                      )}
                     </div>
+                    {thread.channel === 'email' && thread.subject && (
+                      <div style={{ fontSize: 11.5, color: 'var(--t2)', fontWeight: 500, marginTop: 2, whiteSpace: 'nowrap',
+                        overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 360 }} title={thread.subject}>
+                        {thread.subject}</div>
+                    )}
                   </div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
@@ -644,7 +661,7 @@ export default function InboxPage() {
                       </button>
                     )
                   )}
-                  {ch.sendable && <WindowPill open={windowOpen} until={thread.customer_window_until} />}
+                  {ch.hasWindow && <WindowPill open={windowOpen} until={thread.customer_window_until} />}
                   {convo?.linked_ticket ? (
                     <a href={`/queue/detail?ticket_no=${convo.linked_ticket.ticket_no}`}
                       style={{ ...btnGhost, textDecoration: 'none', padding: '6px 10px' }}>
@@ -726,7 +743,7 @@ export default function InboxPage() {
                         <ToolBtn title="Canned responses (or type / in the box)" onClick={() => { setShowCanned(v => !v); setShowEmoji(false); }} disabled={!canManage}>
                           <FileText size={15} />
                         </ToolBtn>
-                        {!isWa && (
+                        {canAttach && (
                           <ToolBtn title="Attach image / PDF" onClick={() => fileRef.current?.click()} disabled={!canManage}>
                             <Paperclip size={15} />
                           </ToolBtn>
@@ -983,9 +1000,11 @@ function AssignControl({ thread, mineThread, canReassign, agents, open, setOpen,
 }
 function ChannelTile({ chKey, stat, active, onClick }) {
   const ch = chanOf(chKey);
-  const tracksAwaiting = stat?.awaiting != null; // WhatsApp (null) = BiteSpeed mirror
+  const tracksAwaiting = stat?.awaiting != null; // WhatsApp/Email (null) don't track awaiting here
   const awaiting = stat?.awaiting || 0;
-  const subText = !tracksAwaiting ? 'in BiteSpeed' : awaiting > 0 ? `${awaiting} awaiting reply` : 'all replied';
+  const subText = tracksAwaiting ? (awaiting > 0 ? `${awaiting} awaiting reply` : 'all replied')
+    : chKey === 'whatsapp' ? 'in BiteSpeed'
+    : `${stat?.unassigned || 0} unassigned`;
   const subTone = tracksAwaiting && awaiting > 0 ? 'var(--warn-fg)' : 'var(--t3)';
   return (
     <button onClick={onClick} style={{ flex: '1 1 160px', minWidth: 150, textAlign: 'left', cursor: 'pointer',
@@ -1099,9 +1118,12 @@ function Bubble({ m, accent }) {
   const isIn = m.direction === 'inbound';
   const ts = m.received_at || m.sent_at || m.created_at;
   const failed = m.status === 'failed';
+  // Email HTML — render in a sandboxed iframe (no scripts / no same-origin) so
+  // arbitrary customer markup can't run or escape. Wider bubble for readability.
+  const emailHtml = m.channel === 'email' && m.body_html ? m.body_html : null;
   return (
     <div style={{ display: 'flex', justifyContent: isIn ? 'flex-start' : 'flex-end', marginBottom: 9 }}>
-      <div style={{ maxWidth: '74%', padding: '8px 12px', borderRadius: 12,
+      <div style={{ maxWidth: emailHtml ? '92%' : '74%', padding: '8px 12px', borderRadius: 12,
         borderBottomLeftRadius: isIn ? 3 : 12, borderBottomRightRadius: isIn ? 12 : 3,
         background: isIn ? 'var(--surface)' : 'var(--accent-bg)',
         border: `1px solid ${isIn ? 'var(--border)' : 'var(--accent-bd, var(--border-2))'}` }}>
@@ -1120,7 +1142,13 @@ function Bubble({ m, accent }) {
             <FileText size={12} />{m.media_filename || 'media'}
           </a>
         ))}
-        {m.body && <div style={{ fontSize: 13, color: 'var(--t1)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.body}</div>}
+        {emailHtml ? (
+          <iframe sandbox="" srcDoc={emailHtml} title="email body"
+            style={{ width: 'min(560px, 70vw)', minHeight: 90, maxHeight: 460, border: 'none',
+              background: '#fff', borderRadius: 6, display: 'block' }} />
+        ) : m.body && (
+          <div style={{ fontSize: 13, color: 'var(--t1)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.body}</div>
+        )}
         <div style={{ marginTop: 4, fontSize: 9.5, color: 'var(--t4)', display: 'flex', gap: 7, alignItems: 'center',
           justifyContent: 'flex-end' }}>
           {!isIn && m.sent_by_name && <span style={{ color: 'var(--t4)' }}>{m.sent_by_name}</span>}

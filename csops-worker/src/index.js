@@ -454,6 +454,17 @@ export default {
 
     return err('Method not allowed', 405);
   },
+
+  // Cron: poll carecrew@ for new inbound email (Pitstop email channel, S175).
+  // Armed via wrangler.toml [triggers] crons. Inert (no-op) until the Gmail SA
+  // secrets are set. Idempotent — provider_message_id unique dedupes redelivery.
+  async scheduled(_event, env, ctx) {
+    if (!env.GMAIL_SA_CLIENT_EMAIL) return;   // not configured yet
+    ctx.waitUntil(syncGmail(env).then(
+      r => console.log('[email] cron sync', JSON.stringify(r)),
+      e => console.error('[email] cron sync error', e),
+    ));
+  },
 };
 
 // ── Read dispatcher ──────────────────────────────────────────────────────────
@@ -549,6 +560,8 @@ async function handlePost(action, body, auth, env, request) {
     case 'sendWaReply':              return sendWaReply(body, auth, env);
     case 'sendMetaMessage':          return sendMetaMessage(body, auth, env);
     case 'sendMetaAttachment':       return sendMetaAttachment(body, auth, env);
+    case 'sendEmailReply':           return sendEmailReply(body, auth, env);
+    case 'syncGmailNow':             return syncGmailNow(body, auth, env);
     case 'linkMessagingThread':      return linkMessagingThread(body, auth, env);
     case 'assignThread':             return assignThread(body, auth, env);
     case 'transferThread':           return transferThread(body, auth, env);
@@ -3881,11 +3894,374 @@ async function sendMetaAttachment(body, auth, env) {
   return ok({ sent: true, message_id: mid, media_url: publicUrl });
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+// EMAIL CHANNEL (carecrew@) — inbound + reply via the Gmail API (S175)
+// ─────────────────────────────────────────────────────────────────────────────
+// Email is just another channel on cs_wa_threads/cs_wa_messages (channel='email'),
+// so it inherits the inbox/routing/presence/tags/priority machinery for free.
+//   • thread key  = Gmail threadId        → provider_thread_ref (partial-unique)
+//   • message key = Gmail message id       → provider_message_id (global-unique → idempotency)
+//   • sender email = external_user_id ; sender name = customer_handle
+//   • text body = body ; html = body_html ; RFC headers + addrs = raw_meta
+// Identity is resolved through the LIVE Relay substrate (commsops POST /ingest →
+// comms.resolve_identity) and the returned profile_id is stored on the thread.
+// Replies go out Gmail-native (real carecrew@, perfect threading) and are mirrored
+// to Relay as an `email_replied` event. See spec 2026-06-25-pitstop-inbound-email-design.md.
+// ═════════════════════════════════════════════════════════════════════════════
+
+function commsopsUrl(env) { return env.COMMSOPS_URL || 'https://commsops.afshaan.workers.dev'; }
+function gmailMailbox(env) { return env.GMAIL_MAILBOX || 'carecrew@legendoftoys.com'; }
+const GMAIL_API = 'https://gmail.googleapis.com/gmail/v1';
+const MAX_NEW_EMAILS_PER_RUN = 6;             // subrequest budget (≤50/invocation) — backlog drains across cron ticks
+
+// base64url <-> bytes/strings ------------------------------------------------
+function b64urlToBytes(data) {
+  const b64 = String(data || '').replace(/-/g, '+').replace(/_/g, '/');
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+function b64urlDecodeUtf8(data) {
+  try { return new TextDecoder('utf-8').decode(b64urlToBytes(data)); } catch { return ''; }
+}
+function b64urlEncodeUtf8(str) {
+  const bytes = new TextEncoder().encode(str);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function b64urlEncodeJson(obj) { return b64urlEncodeUtf8(JSON.stringify(obj)); }
+
+// ── Gmail OAuth — service-account JWT (RS256), domain-wide-delegated to carecrew@
+let _gmailTok = { token: null, exp: 0 };
+async function gmailAccessToken(env) {
+  if (_gmailTok.token && Date.now() < _gmailTok.exp - 60_000) return _gmailTok.token;
+  const clientEmail = env.GMAIL_SA_CLIENT_EMAIL;
+  let pk = env.GMAIL_SA_PRIVATE_KEY;
+  if (!clientEmail || !pk) throw new Error('gmail_not_configured');
+  pk = pk.replace(/\\n/g, '\n');   // secrets often carry literal \n
+
+  const iat = Math.floor(Date.now() / 1000);
+  const claim = {
+    iss: clientEmail,
+    sub: gmailMailbox(env),                                   // impersonate the mailbox
+    scope: 'https://www.googleapis.com/auth/gmail.modify',
+    aud: 'https://oauth2.googleapis.com/token',
+    iat, exp: iat + 3600,
+  };
+  const signingInput = `${b64urlEncodeJson({ alg: 'RS256', typ: 'JWT' })}.${b64urlEncodeJson(claim)}`;
+
+  const der = pk.replace(/-----BEGIN PRIVATE KEY-----/, '').replace(/-----END PRIVATE KEY-----/, '').replace(/\s/g, '');
+  const keyBytes = Uint8Array.from(atob(der), c => c.charCodeAt(0));
+  const key = await crypto.subtle.importKey(
+    'pkcs8', keyBytes.buffer, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']);
+  const sigBuf = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, new TextEncoder().encode(signingInput));
+  let sigBin = '';
+  const sigBytes = new Uint8Array(sigBuf);
+  for (let i = 0; i < sigBytes.length; i++) sigBin += String.fromCharCode(sigBytes[i]);
+  const assertion = `${signingInput}.${btoa(sigBin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`;
+
+  const r = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `grant_type=${encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer')}&assertion=${encodeURIComponent(assertion)}`,
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || !d.access_token) throw new Error(`gmail_token_failed: ${JSON.stringify(d).slice(0, 200)}`);
+  _gmailTok = { token: d.access_token, exp: Date.now() + (Number(d.expires_in || 3600) * 1000) };
+  return _gmailTok.token;
+}
+
+async function gmailFetch(env, path, opts = {}) {
+  const token = await gmailAccessToken(env);
+  const mb = encodeURIComponent(gmailMailbox(env));
+  const r = await fetch(`${GMAIL_API}/users/${mb}${path}`, {
+    ...opts,
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(opts.headers || {}) },
+  });
+  const text = await r.text();
+  let data; try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  return { ok: r.ok, status: r.status, data };
+}
+
+// ── MIME parse — walk a Gmail message payload into our fields -----------------
+function hdr(headers, name) {
+  const h = (headers || []).find(x => (x.name || '').toLowerCase() === name.toLowerCase());
+  return h ? h.value : null;
+}
+function parseAddress(raw) {
+  if (!raw) return { name: null, email: null };
+  const m = raw.match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/);
+  if (m) return { name: (m[1] || '').trim() || null, email: m[2].trim().toLowerCase() };
+  return { name: null, email: raw.trim().toLowerCase() };
+}
+function collectBodies(payload, acc) {
+  if (!payload) return acc;
+  const mime = (payload.mimeType || '').toLowerCase();
+  if (payload.body?.data) {
+    if (mime === 'text/plain' && acc.text == null) acc.text = b64urlDecodeUtf8(payload.body.data);
+    else if (mime === 'text/html' && acc.html == null) acc.html = b64urlDecodeUtf8(payload.body.data);
+  }
+  if (payload.filename && payload.body?.attachmentId) {
+    acc.attachments.push({ filename: payload.filename, mime: payload.mimeType, size: payload.body.size, attachment_id: payload.body.attachmentId });
+  }
+  for (const part of (payload.parts || [])) collectBodies(part, acc);
+  return acc;
+}
+function parseGmailMessage(msg) {
+  const headers = msg.payload?.headers || [];
+  const from = parseAddress(hdr(headers, 'From'));
+  const bodies = collectBodies(msg.payload, { text: null, html: null, attachments: [] });
+  return {
+    gmail_message_id: msg.id,
+    gmail_thread_id: msg.threadId,
+    rfc_message_id: hdr(headers, 'Message-ID') || hdr(headers, 'Message-Id'),
+    in_reply_to: hdr(headers, 'In-Reply-To'),
+    references: hdr(headers, 'References'),
+    subject: hdr(headers, 'Subject') || '(no subject)',
+    from_name: from.name,
+    from_email: from.email,
+    to: hdr(headers, 'To'),
+    date: hdr(headers, 'Date'),
+    snippet: msg.snippet || null,
+    text: bodies.text,
+    html: bodies.html,
+    attachments: bodies.attachments,
+    internal_date: msg.internalDate ? new Date(Number(msg.internalDate)).toISOString() : new Date().toISOString(),
+    label_ids: msg.labelIds || [],
+  };
+}
+
+// ── Relay seams (commsops) — identity/events + suppression read ---------------
+async function relayIngest(env, payload) {
+  if (!env.INGEST_TOKEN) return { ok: false, skipped: 'no_ingest_token' };
+  try {
+    const r = await fetch(`${commsopsUrl(env)}/ingest`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.INGEST_TOKEN}` },
+      body: JSON.stringify(payload),
+    });
+    const d = await r.json().catch(() => ({}));
+    return { ok: r.ok, data: d?.data || d };
+  } catch (e) { console.error('[email] relayIngest error', e); return { ok: false }; }
+}
+// Hard-suppression check for an email (comms schema, direct service_role read).
+// Returns { suppressed:boolean, reason } — fails OPEN (allows the support reply)
+// on any infra error, since a CS reply is transactional. Only blocks on a real
+// hard suppression row (bounce/complaint) for the email channel.
+async function emailSuppressed(env, emailAddr) {
+  if (!emailAddr) return { suppressed: false };
+  try {
+    const r = await fetch(
+      `${env.SUPABASE_URL}/rest/v1/suppressions?channel=eq.email&value=eq.${encodeURIComponent(emailAddr.toLowerCase())}&select=reason&limit=1`,
+      { headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, 'Accept-Profile': 'comms' } });
+    if (!r.ok) return { suppressed: false };
+    const d = await r.json().catch(() => []);
+    if (Array.isArray(d) && d[0]) return { suppressed: true, reason: d[0].reason || 'suppressed' };
+    return { suppressed: false };
+  } catch { return { suppressed: false }; }
+}
+
+// ── Inbound sync — poll the carecrew@ mailbox, ingest new messages ------------
+// Stateless + idempotent: list recent INBOX messages, skip any whose Gmail id is
+// already stored (one batched check), fetch+parse+store only the new ones (capped
+// per run; cron drains the backlog). Callable via cron (scheduled) or syncGmailNow.
+async function syncGmail(env, { lookbackDays = 2 } = {}) {
+  const list = await gmailFetch(env, `/messages?q=${encodeURIComponent(`in:inbox newer_than:${lookbackDays}d`)}&maxResults=25`);
+  if (!list.ok) return { ok: false, error: `list_failed_${list.status}`, detail: list.data };
+  const ids = (list.data?.messages || []).map(m => m.id);
+  if (!ids.length) return { ok: true, fetched: 0, new: 0 };
+
+  // Which Gmail ids are already stored? (provider_message_id = Gmail message id)
+  const existRes = await sb(
+    `/rest/v1/cs_wa_messages?channel=eq.email&provider_message_id=in.(${ids.map(encodeURIComponent).join(',')})&select=provider_message_id`, env);
+  const have = new Set((existRes.data || []).map(x => x.provider_message_id));
+  const fresh = ids.filter(id => !have.has(id)).slice(0, MAX_NEW_EMAILS_PER_RUN);
+  if (!fresh.length) return { ok: true, fetched: ids.length, new: 0 };
+
+  let created = 0;
+  for (const id of fresh) {
+    try {
+      const gm = await gmailFetch(env, `/messages/${encodeURIComponent(id)}?format=full`);
+      if (!gm.ok) { console.error('[email] get failed', id, gm.status); continue; }
+      const parsed = parseGmailMessage(gm.data);
+      const ok2 = await ingestInboundEmail(env, parsed);
+      if (ok2) created++;
+    } catch (e) { console.error('[email] sync msg error', id, e); }
+  }
+  return { ok: true, fetched: ids.length, new: created };
+}
+
+// Persist one inbound email: resolve profile via Relay, upsert thread, insert
+// message, auto-reopen + round-robin assign. Mirrors metaHandleMessage.
+async function ingestInboundEmail(env, p) {
+  if (!p.from_email) return false;
+
+  // 1. Identity via the Relay substrate (best-effort).
+  let profileId = null;
+  const ing = await relayIngest(env, {
+    identifiers: [{ type: 'email', value: p.from_email }],
+    name: 'email_received',
+    occurred_at: p.internal_date,
+    properties: { subject: p.subject, gmail_thread_id: p.gmail_thread_id, snippet: p.snippet },
+    source: 'pitstop_email',
+    idempotency_key: `gmail:${p.gmail_message_id}`,
+  });
+  if (ing.ok && ing.data?.profile_id) profileId = ing.data.profile_id;
+
+  // 2. Find-or-create the thread (keyed on Gmail threadId).
+  const found = await sb(
+    `/rest/v1/cs_wa_threads?channel=eq.email&provider_thread_ref=eq.${encodeURIComponent(p.gmail_thread_id)}&select=*&limit=1`, env);
+  let thread = found.data?.[0];
+  if (!thread) {
+    const ins = await sb(`/rest/v1/cs_wa_threads`, env, {
+      method: 'POST',
+      body: JSON.stringify({
+        channel: 'email', provider_thread_ref: p.gmail_thread_id,
+        external_user_id: p.from_email, customer_handle: p.from_name || p.from_email,
+        subject: p.subject, comms_profile_id: profileId,
+      }),
+    });
+    if (!ins.ok) { console.error('[email] thread insert failed', ins.status, JSON.stringify(ins.data)?.slice(0, 200)); return false; }
+    thread = ins.data?.[0];
+  }
+  if (!thread) return false;
+
+  // 3. Insert the inbound message (idempotent via provider_message_id unique).
+  const ins = await sb(`/rest/v1/cs_wa_messages`, env, {
+    method: 'POST', prefer: 'resolution=ignore-duplicates,return=representation',
+    body: JSON.stringify({
+      thread_id: thread.id, channel: 'email', direction: 'inbound', kind: 'text',
+      body: p.text || (p.html ? null : p.snippet), body_html: p.html,
+      provider_message_id: p.gmail_message_id, received_at: p.internal_date,
+      raw_meta: {
+        gmail_message_id: p.gmail_message_id, gmail_thread_id: p.gmail_thread_id,
+        rfc_message_id: p.rfc_message_id, in_reply_to: p.in_reply_to, references: p.references,
+        from_name: p.from_name, from_email: p.from_email, to: p.to, subject: p.subject,
+        date: p.date, attachments: p.attachments,
+      },
+    }),
+  });
+  if (!ins.ok) { console.error('[email] message insert failed', ins.status, JSON.stringify(ins.data)?.slice(0, 200)); return false; }
+
+  // 4. Thread housekeeping: bump activity, backfill profile/subject, auto-reopen.
+  const patch = { last_message_at: p.internal_date };
+  if (!thread.comms_profile_id && profileId) patch.comms_profile_id = profileId;
+  if (!thread.subject && p.subject) patch.subject = p.subject;
+  if (thread.thread_state && thread.thread_state !== 'open') {
+    patch.thread_state = 'open'; patch.closed_at = null; patch.closed_by_user_id = null; patch.snoozed_until = null;
+  }
+  await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) }).catch(() => {});
+
+  // 5. Round-robin assign an unassigned thread (config-gated per channel in the RPC).
+  if (!thread.assigned_agent_id) {
+    await sb(`/rest/v1/rpc/cs_autoassign_thread`, env, { method: 'POST', body: JSON.stringify({ p_thread_id: thread.id }) }).catch(() => {});
+  }
+  return true;
+}
+
+// Manual sync trigger (admin) — runs the same poll on demand. Useful before the
+// cron is armed and for a parallel-run check.
+async function syncGmailNow(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  try {
+    const res = await syncGmail(env, { lookbackDays: Number(body?.lookbackDays) || 2 });
+    return res.ok ? ok(res) : err(`Gmail sync failed: ${res.error || ''}`, 502);
+  } catch (e) { return err(`Gmail sync error: ${String(e.message || e)}`, 502); }
+}
+
+// ── Reply — Gmail-native send, in-thread, mirrored to Relay -------------------
+async function sendEmailReply(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { thread_id, text, html } = body;
+  if (!thread_id || (!text && !html)) return err('thread_id and text (or html) required');
+
+  const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=*&limit=1`, env);
+  const thread = tRes.data?.[0];
+  if (!thread || thread.channel !== 'email') return err('Email thread not found', 404);
+  if (!thread.external_user_id) return err('Thread has no recipient address', 422);
+
+  // Hard-suppression guard (bounce/complaint) — surface to the agent, don't send.
+  const sup = await emailSuppressed(env, thread.external_user_id);
+  if (sup.suppressed) return err(`Recipient is suppressed (${sup.reason}) — do not email. Reach out another way.`, 409);
+
+  // Threading headers from the latest inbound message on this thread.
+  const lastIn = await sb(
+    `/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(thread.id)}&direction=eq.inbound&select=raw_meta,provider_message_id&order=created_at.desc&limit=1`, env);
+  const lastMeta = lastIn.data?.[0]?.raw_meta || {};
+  const inReplyTo = lastMeta.rfc_message_id || null;
+  const references = [lastMeta.references, lastMeta.rfc_message_id].filter(Boolean).join(' ') || null;
+
+  const subjectRaw = thread.subject || lastMeta.subject || '(no subject)';
+  const subject = /^re:/i.test(subjectRaw) ? subjectRaw : `Re: ${subjectRaw}`;
+  const senderName = auth.fullName || auth.name || auth.email || 'LOT Care';
+  const textBody = text || stripHtml(html);
+  const htmlBody = html || `<p>${escapeHtml(text).replace(/\n/g, '<br>')}</p>`;
+
+  // Build the RFC822 message (multipart/alternative).
+  const boundary = `b_${crypto.randomUUID().replace(/-/g, '')}`;
+  const headerLines = [
+    `To: ${thread.external_user_id}`,
+    `From: LOT Care <${gmailMailbox(env)}>`,
+    `Subject: ${subject}`,
+    'MIME-Version: 1.0',
+  ];
+  if (inReplyTo)  headerLines.push(`In-Reply-To: ${inReplyTo}`);
+  if (references) headerLines.push(`References: ${references}`);
+  headerLines.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
+  const raw =
+    headerLines.join('\r\n') + '\r\n\r\n' +
+    `--${boundary}\r\nContent-Type: text/plain; charset="UTF-8"\r\n\r\n${textBody}\r\n\r\n` +
+    `--${boundary}\r\nContent-Type: text/html; charset="UTF-8"\r\n\r\n${htmlBody}\r\n\r\n` +
+    `--${boundary}--`;
+
+  const send = await gmailFetch(env, `/messages/send`, {
+    method: 'POST', body: JSON.stringify({ raw: b64urlEncodeUtf8(raw), threadId: thread.provider_thread_ref }),
+  });
+  if (!send.ok) return err(`Gmail send failed: ${JSON.stringify(send.data)?.slice(0, 200)}`, send.status || 502);
+  const sentId = send.data?.id || null;
+
+  // Record the outbound message (idempotent on the Gmail message id).
+  await sb(`/rest/v1/cs_wa_messages`, env, {
+    method: 'POST',
+    body: JSON.stringify({
+      thread_id: thread.id, channel: 'email', direction: 'outbound', kind: 'text',
+      body: textBody, body_html: htmlBody, provider_message_id: sentId, status: 'sent',
+      sent_by_user_id: auth.userId, sent_by_name: senderName, sent_at: new Date().toISOString(),
+      raw_meta: { gmail_message_id: sentId, in_reply_to: inReplyTo, subject },
+    }),
+  });
+
+  // Thread housekeeping: bump activity + auto-claim on first reply.
+  const threadPatch = { last_message_at: new Date().toISOString() };
+  if (!thread.assigned_agent_id) {
+    threadPatch.assigned_agent_id = auth.userId;
+    threadPatch.assigned_agent_name = senderName;
+    threadPatch.assigned_at = new Date().toISOString();
+  }
+  await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(threadPatch) }).catch(() => {});
+
+  // Mirror the interaction to the Relay substrate (best-effort).
+  await relayIngest(env, {
+    identifiers: [{ type: 'email', value: thread.external_user_id }],
+    name: 'email_replied', occurred_at: new Date().toISOString(),
+    properties: { thread_id: thread.id, channel: 'email', subject },
+    source: 'pitstop_email', idempotency_key: sentId ? `gmail_out:${sentId}` : undefined,
+  });
+
+  const ticketId = await assignLinkedTicketToReplier(thread.id, auth, env);
+  return ok({ sent: true, message_id: sentId, auto_claimed: !thread.assigned_agent_id, ticket_assigned: ticketId });
+}
+
+function stripHtml(h) { return String(h || '').replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(); }
+function escapeHtml(s) { return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
 // ── Agent Inbox — cross-channel thread list + reader + ticket link ───────────
-// Surfaces every cs_wa_threads conversation (whatsapp/instagram/messenger) for
-// the Pitstop /inbox. Read-gated by handleGet's cs_ticket_view; replies go
-// through sendMetaMessage (IG/FB, gated cs_ticket_manage). WhatsApp stays
-// read-only (BiteSpeed deep-link) until C2-B.
+// Surfaces every cs_wa_threads conversation (whatsapp/instagram/messenger/email)
+// for the Pitstop /inbox. Read-gated by handleGet's cs_ticket_view; replies go
+// through sendMetaMessage (IG/FB) / sendEmailReply (email), gated cs_ticket_manage.
+// WhatsApp stays read-only (BiteSpeed deep-link) until C2-B.
 async function getMessagingThreads(params, auth, env) {
   const channel = params.get('channel');
   const tab = params.get('tab');              // mine | unassigned | all (assignment axis, S162)
@@ -3973,6 +4349,7 @@ async function getMessagingStats(params, auth, env) {
     instagram: { total: 0, awaiting: 0, mine: 0, unassigned: 0 },
     messenger: { total: 0, awaiting: 0, mine: 0, unassigned: 0 },
     whatsapp:  { total: 0, awaiting: null, mine: 0, unassigned: 0 },
+    email:     { total: 0, awaiting: null, mine: 0, unassigned: 0 },
   };
   // Two-way channels: small volume → fetch threads + last-message direction.
   const twRes = await sb(`/rest/v1/cs_wa_threads?channel=in.(instagram,messenger)&select=id,channel,assigned_agent_id&limit=1000`, env);
@@ -4002,6 +4379,10 @@ async function getMessagingStats(params, auth, env) {
   stats.whatsapp.total = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.whatsapp&select=id`, env);
   stats.whatsapp.mine = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.whatsapp&assigned_agent_id=eq.${auth.userId}&select=id`, env);
   stats.whatsapp.unassigned = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.whatsapp&assigned_agent_id=is.null&select=id`, env);
+  // Email: exact counts (volume may grow → cheap counts, no per-thread awaiting v1).
+  stats.email.total = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.email&select=id`, env);
+  stats.email.mine = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.email&assigned_agent_id=eq.${auth.userId}&select=id`, env);
+  stats.email.unassigned = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.email&assigned_agent_id=is.null&select=id`, env);
   return ok({ stats });
 }
 
