@@ -738,7 +738,7 @@ export default {
             const status = url.searchParams.get('status')     || '';
             const source = url.searchParams.get('source')     || '';
             const type   = url.searchParams.get('order_type') || '';
-            let filter = '?order=created_at.desc&limit=100';
+            let filter = '?order=created_at.desc&limit=500';
             if (status) filter += `&status=eq.${encodeURIComponent(status)}`;
             if (source) filter += `&source=eq.${encodeURIComponent(source)}`;
             if (type)   filter += `&order_type=eq.${encodeURIComponent(type)}`;
