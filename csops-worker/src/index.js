@@ -3547,6 +3547,7 @@ async function biteSpeedMessageCreated(body, env) {
       sent_by_name: body?.sender?.name || null,
       received_at: direction === 'inbound'  ? ts : null,
       sent_at:     direction === 'outbound' ? ts : null,
+      raw_meta: body,   // TEMP capture (S178) — diagnose BiteSpeed channel mixing (WA vs email/IG); revert once the WhatsApp discriminator is confirmed
     }),
   });
   if (!ins.ok) {
