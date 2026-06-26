@@ -75,6 +75,8 @@ export default function InboxPage() {
   const [priorityFilter, setPriorityFilter] = useState(''); // '' | urgent|high|normal|low (S164)
   const [agentFilter, setAgentFilter] = useState('');       // '' | assigned-agent id — managers (S164)
   const [sort, setSort] = useState('recent');               // recent | oldest | priority (S164)
+  const [searchInput, setSearchInput] = useState('');       // phone/name search box (S178, Pruthvi)
+  const [search, setSearch] = useState('');                 // debounced → server query
   const [allTags, setAllTags] = useState([]);
   const [threads, setThreads] = useState([]);
   const [stats, setStats] = useState({
@@ -139,12 +141,16 @@ export default function InboxPage() {
       if (priorityFilter) p.priority = priorityFilter;
       if (agentFilter) p.agent = agentFilter;
       if (sort !== 'recent') p.sort = sort;
+      if (search) p.q = search;   // phone/name search (S178, Pruthvi) — server-side
       const d = await csopsGet('getMessagingThreads', p, session);
       setThreads(d?.threads || []);
       setErr(null);   // self-heal: a transient poll/auth blip must not leave a sticky banner (S177)
     } catch (e) { setErr(e.message); }
     finally { setLoadingList(false); }
-  }, [session, channel, assignTab, stateFilter, tagFilter, priorityFilter, agentFilter, sort, ignitionScope]);
+  }, [session, channel, assignTab, stateFilter, tagFilter, priorityFilter, agentFilter, sort, ignitionScope, search]);
+
+  // Debounce the search box → server query (S178)
+  useEffect(() => { const id = setTimeout(() => setSearch(searchInput.trim()), 350); return () => clearTimeout(id); }, [searchInput]);
 
   const loadStats = useCallback(async () => {
     if (!session) return;
@@ -587,6 +593,20 @@ export default function InboxPage() {
                 <option value="">All agents</option>
                 {agents.map(a => <option key={a.id} value={a.id}>{a.full_name || a.email}</option>)}
               </select>
+            )}
+          </div>
+          {/* Search box (S178, Pruthvi) — server-side phone/name search across all threads */}
+          <div style={{ padding: '6px 10px', borderBottom: '1px solid var(--border)', position: 'relative' }}>
+            <Search size={13} style={{ position: 'absolute', left: 19, top: '50%', transform: 'translateY(-50%)', color: 'var(--t4)', pointerEvents: 'none' }} />
+            <input value={searchInput} onChange={e => setSearchInput(e.target.value)}
+              placeholder="Search by phone or name…"
+              style={{ ...inputStyle, width: '100%', paddingLeft: 29, paddingRight: 26, fontSize: 12 }} />
+            {searchInput && (
+              <button onClick={() => setSearchInput('')} title="Clear search"
+                style={{ position: 'absolute', right: 17, top: '50%', transform: 'translateY(-50%)', background: 'transparent',
+                  border: 'none', cursor: 'pointer', color: 'var(--t3)', display: 'grid', placeItems: 'center', padding: 0 }}>
+                <X size={13} />
+              </button>
             )}
           </div>
           {/* Bulk multi-select + assign (S164, Pruthvi) */}
