@@ -70,6 +70,7 @@ export default function InboxPage() {
   const [channel, setChannel] = useState('all');
   const [assignTab, setAssignTab] = useState('all');  // all | mine | unassigned (S162-A)
   const [stateFilter, setStateFilter] = useState('active'); // active | closed | all (S163 work-queue)
+  const [ignitionScope, setIgnitionScope] = useState(false); // read-only "Transferred to Ignition" oversight view (S177, leads/admin)
   const [tagFilter, setTagFilter] = useState('');           // tag facet (S163)
   const [priorityFilter, setPriorityFilter] = useState(''); // '' | urgent|high|normal|low (S164)
   const [agentFilter, setAgentFilter] = useState('');       // '' | assigned-agent id — managers (S164)
@@ -126,8 +127,14 @@ export default function InboxPage() {
     try {
       const p = {};
       if (channel !== 'all') p.channel = channel;
-      if (assignTab !== 'all') p.tab = assignTab;
-      if (stateFilter !== 'active') p.state = stateFilter;   // 'active' is the worker default
+      // Oversight scope (S177): list ONLY threads transferred to the Influencer team
+      // (read-only). Bypasses the assignment/state facets — those don't apply to a full handoff.
+      if (ignitionScope) {
+        p.scope = 'ignition';
+      } else {
+        if (assignTab !== 'all') p.tab = assignTab;
+        if (stateFilter !== 'active') p.state = stateFilter;   // 'active' is the worker default
+      }
       if (tagFilter) p.tag = tagFilter;
       if (priorityFilter) p.priority = priorityFilter;
       if (agentFilter) p.agent = agentFilter;
@@ -137,7 +144,7 @@ export default function InboxPage() {
       setErr(null);   // self-heal: a transient poll/auth blip must not leave a sticky banner (S177)
     } catch (e) { setErr(e.message); }
     finally { setLoadingList(false); }
-  }, [session, channel, assignTab, stateFilter, tagFilter, priorityFilter, agentFilter, sort]);
+  }, [session, channel, assignTab, stateFilter, tagFilter, priorityFilter, agentFilter, sort, ignitionScope]);
 
   const loadStats = useCallback(async () => {
     if (!session) return;
@@ -366,6 +373,19 @@ export default function InboxPage() {
     } catch (e) { setErr(e.message); }
   }
 
+  // Full handoff to the Influencer team (Ignition) — S177. Once transferred the
+  // thread leaves the CS active inbox (the worker excludes it). Optional handoff note.
+  async function transferToIgnition(note) {
+    if (!convo?.thread) return;
+    setErr(null); setAssignOpen(false);
+    try {
+      await csopsPost('transferThreadToIgnition', { thread_id: convo.thread.id, note: note || null }, session);
+      // It's gone from the normal inbox now — drop the selection + refresh the list.
+      setSelectedId(null); setConvo(null);
+      loadThreads(); loadStats();
+    } catch (e) { setErr(e.message); }
+  }
+
   // ── bulk multi-select (S164, Pruthvi) ───────────────────────
   function toggleSelect(id) {
     setSelectedIds(prev => {
@@ -449,6 +469,11 @@ export default function InboxPage() {
 
   const thread = convo?.thread;
   const ch = thread ? chanOf(thread.channel) : null;
+  // Transferred to the Influencer team (Ignition) — full handoff (S177). CS keeps a
+  // read-only oversight view: no reply/compose, no re-transfer. The flag rides on the
+  // thread object when present; the oversight scope view is read-only regardless.
+  const isIgnitionThread = !!thread?.ignition_connect;
+  const readOnlyView = ignitionScope || isIgnitionThread;
   const hasWindow = !!ch?.hasWindow;                 // email has no 24h window — always sendable
   const windowOpen = !hasWindow || !!convo?.within_customer_window;
   const mineThread = thread && thread.assigned_agent_id && thread.assigned_agent_id === myId;
@@ -499,13 +524,25 @@ export default function InboxPage() {
             alignItems: 'center', justifyContent: listCollapsed ? 'center' : 'space-between', gap: 6 }}>
             {!listCollapsed && <span className="label" style={{ fontSize: 11, fontWeight: 700, color: 'var(--t1)' }}>Conversations</span>}
             <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-              {!listCollapsed && [['active', 'Active'], ['closed', 'Closed'], ['all', 'All']].map(([id, lbl]) => (
+              {!listCollapsed && !ignitionScope && [['active', 'Active'], ['closed', 'Closed'], ['all', 'All']].map(([id, lbl]) => (
                 <button key={id} onClick={() => setStateFilter(id)} title={`Show ${lbl.toLowerCase()} conversations`}
                   style={{ cursor: 'pointer', fontSize: 10, fontWeight: 600, padding: '3px 7px', borderRadius: 'var(--radius-sm)',
                     border: '1px solid', borderColor: stateFilter === id ? 'var(--accent)' : 'var(--border)',
                     background: stateFilter === id ? 'var(--accent-bg)' : 'transparent',
                     color: stateFilter === id ? 'var(--accent)' : 'var(--t3)' }}>{lbl}</button>
               ))}
+              {/* Read-only oversight: threads transferred to the Influencer team (leads/admin, S177) */}
+              {!listCollapsed && canReassign && (
+                <button onClick={() => { setIgnitionScope(v => !v); setSelectedId(null); }}
+                  title="View conversations transferred to the Influencer team (read-only)"
+                  style={{ cursor: 'pointer', fontSize: 10, fontWeight: 600, padding: '3px 7px', borderRadius: 'var(--radius-sm)',
+                    display: 'flex', alignItems: 'center', gap: 3,
+                    border: '1px solid', borderColor: ignitionScope ? 'var(--accent)' : 'var(--border)',
+                    background: ignitionScope ? 'var(--accent-bg)' : 'transparent',
+                    color: ignitionScope ? 'var(--accent)' : 'var(--t3)' }}>
+                  <ExternalLink size={10} /> Ignition
+                </button>
+              )}
               <button onClick={toggleListCollapse} title={listCollapsed ? 'Expand conversation list' : 'Collapse conversation list'}
                 style={{ display: 'grid', placeItems: 'center', width: 22, height: 22, cursor: 'pointer',
                   border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', background: 'transparent',
@@ -654,10 +691,14 @@ export default function InboxPage() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
                   justifyContent: 'flex-end', minWidth: 0 }}>
                   {/* Assign / claim (S162-A) */}
-                  {canManage && (
+                  {canManage && !isIgnitionThread && (
                     <AssignControl
                       thread={thread} mineThread={mineThread} canReassign={canReassign} agents={agents}
-                      open={assignOpen} setOpen={setAssignOpen} onAssign={assign} onTransfer={transfer} myId={myId} />
+                      open={assignOpen} setOpen={setAssignOpen} onAssign={assign} onTransfer={transfer}
+                      onTransferToIgnition={transferToIgnition} myId={myId} />
+                  )}
+                  {isIgnitionThread && (
+                    <ToneBadge tone="info"><ExternalLink size={10} style={{ marginRight: 3 }} /> Influencer team</ToneBadge>
                   )}
                   {/* Priority (S164, Pruthvi) */}
                   {canManage && (
@@ -727,8 +768,16 @@ export default function InboxPage() {
                 ) : convo.messages.map(m => <Bubble key={m.id} m={m} accent={ch.color} />)}
               </div>
 
-              {/* Composer */}
-              {ch.sendable ? (
+              {/* Composer — suppressed for transferred / oversight threads (read-only handoff, S177) */}
+              {readOnlyView ? (
+                <div style={{ borderTop: '1px solid var(--border)', padding: 12, display: 'flex',
+                  alignItems: 'center', gap: 8, background: 'var(--surface-2)' }}>
+                  <ExternalLink size={13} style={{ color: 'var(--t3)', flexShrink: 0 }} />
+                  <span style={{ fontSize: 11, color: 'var(--t3)' }}>
+                    Transferred to the Influencer team — read-only oversight. Replies are handled in Ignition.
+                  </span>
+                </div>
+              ) : ch.sendable ? (
                 <div style={{ borderTop: '1px solid var(--border)', padding: 12,
                   background: noteMode ? 'var(--warn-bg)' : 'transparent' }}>
                   {/* Reply / Note toggle */}
@@ -945,17 +994,19 @@ function CannedPanel({ slashActive, query, list, search, setSearch, canManage, d
     </div>
   );
 }
-function AssignControl({ thread, mineThread, canReassign, agents, open, setOpen, onAssign, onTransfer, myId }) {
+function AssignControl({ thread, mineThread, canReassign, agents, open, setOpen, onAssign, onTransfer, onTransferToIgnition, myId }) {
   const assigned = thread.assigned_agent_id;
   const [sel, setSel] = useState('');
   const [note, setNote] = useState('');
+  const [ignConfirm, setIgnConfirm] = useState(false);   // two-step confirm for the Ignition handoff (S177)
   // Transfer scope (mirrors the worker): leads can transfer any thread; a regular
   // agent can transfer one they own or that's unassigned (not steal another's).
   const ownsOrFree = !assigned || assigned === myId;
   const canTransfer = canReassign || ownsOrFree;
-  const openPanel = () => { setSel(''); setNote(''); setOpen(true); };
+  const openPanel = () => { setSel(''); setNote(''); setIgnConfirm(false); setOpen(true); };
   const targets = (agents || []).filter(a => a.id !== assigned);   // can't transfer to the current owner
   const submit = () => { if (sel) onTransfer(sel, note.trim() || null); };
+  const submitIgnition = () => onTransferToIgnition?.(note.trim() || null);
   const xferBtn = <button onClick={openPanel} style={{ ...btnGhost, padding: '5px 9px', fontSize: 11 }}>Transfer…</button>;
   // Owned by me → green pill + release + transfer. Owned by other → name (+ transfer for TL+).
   // Unassigned → Claim (+ transfer).
@@ -1012,6 +1063,39 @@ function AssignControl({ thread, mineThread, canReassign, agents, open, setOpen,
               opacity: sel ? 1 : 0.5, cursor: sel ? 'pointer' : 'default' }}>
             <UserPlus size={12} /> Transfer
           </button>
+
+          {/* Hand off to the Influencer team (Ignition) — full transfer out of CS (S177).
+              Reuses the note box above as the optional handoff note. */}
+          {onTransferToIgnition && (
+            <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--t3)', textTransform: 'uppercase',
+                letterSpacing: '0.08em', marginBottom: 6 }}>Influencer team</div>
+              {ignConfirm ? (
+                <>
+                  <div style={{ fontSize: 11, color: 'var(--warn-fg)', marginBottom: 8, lineHeight: 1.4 }}>
+                    This conversation will leave the CS inbox and move to the Influencer team (Ignition).
+                    You&apos;ll keep read-only visibility. This can&apos;t be undone from here.
+                  </div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button onClick={() => setIgnConfirm(false)}
+                      style={{ ...btnGhost, flex: 1, justifyContent: 'center', padding: '7px 0', fontSize: 12 }}>
+                      Cancel
+                    </button>
+                    <button onClick={submitIgnition}
+                      style={{ ...btnPrimary, flex: 1, justifyContent: 'center', padding: '7px 0', fontSize: 12,
+                        background: 'var(--warn-fg)' }}>
+                      <ExternalLink size={12} /> Confirm
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <button onClick={() => setIgnConfirm(true)}
+                  style={{ ...btnGhost, width: '100%', justifyContent: 'center', padding: '7px 0', fontSize: 12 }}>
+                  <ExternalLink size={12} /> Transfer to Influencer team
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

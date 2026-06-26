@@ -9,6 +9,7 @@ export const NAV_GROUPS = [
     id: 'work', label: 'WORK', icon: Inbox,
     items: [
       { id: 'dashboard',   label: 'Dashboard',    route: '/dashboard',    icon: BarChart3 },
+      { id: 'connects',    label: 'Connects',     route: '/connects',     icon: Inbox, requires: 'ignition_connects' },
       { id: 'influencers', label: 'Influencers',  route: '/influencers',  icon: Users },
       { id: 'engagements', label: 'Engagements',  route: '/engagements',  icon: ListChecks },
       { id: 'schedule',    label: 'Schedule',     route: '/schedule',     icon: CalendarDays },
