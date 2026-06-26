@@ -1618,7 +1618,7 @@ async function openPitstopTicket(body, auth, env) {
   if (body.issue_category) csopsBody.issue_category = body.issue_category;
   if (body.issue_subcategory) csopsBody.issue_subcategory = body.issue_subcategory;
 
-  const r = await fetch(csopsUrl, {
+  const csopsReq = new Request(csopsUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -1626,6 +1626,8 @@ async function openPitstopTicket(body, auth, env) {
     },
     body: JSON.stringify(csopsBody),
   });
+  // Worker-to-worker via the service binding (avoids Cloudflare 1042); fall back to fetch if unbound.
+  const r = env.CSOPS ? await env.CSOPS.fetch(csopsReq) : await fetch(csopsReq);
   const text = await r.text();
   let data; try { data = JSON.parse(text); } catch { data = text; }
   if (!r.ok || !data?.ok) {
@@ -1892,11 +1894,14 @@ async function csopsBridge(env, action, payload = {}) {
   const base = env.CSOPS_URL || 'https://csops.afshaan.workers.dev';
   let raw, status;
   try {
-    const r = await fetch(`${base}/bridge/ignition`, {
+    const req = new Request(`${base}/bridge/ignition`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Ignition-Bridge-Token': env.IGNITION_BRIDGE_TOKEN || '' },
       body: JSON.stringify({ action, ...payload }),
     });
+    // Worker-to-worker MUST use the service binding — a public workers.dev fetch is
+    // blocked by Cloudflare (error 1042, same-zone). Fall back to fetch only if unbound.
+    const r = env.CSOPS ? await env.CSOPS.fetch(req) : await fetch(req);
     status = r.status;
     const text = await r.text();
     try { raw = JSON.parse(text); } catch { raw = text; }

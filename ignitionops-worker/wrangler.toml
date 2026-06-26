@@ -7,6 +7,13 @@ workers_dev = true
 SUPABASE_URL = "https://jkxcnjabmrkteanzoofj.supabase.co"
 CSOPS_URL = "https://csops.afshaan.workers.dev"
 
+# Service binding to csops — worker-to-worker calls (the Connects bridge +
+# openPitstopTicket) MUST go via this binding, not a public workers.dev fetch,
+# which Cloudflare blocks with error 1042 (same-zone worker-to-worker). S177.
+[[services]]
+binding = "CSOPS"
+service = "csops"
+
 # Daily UGC Meta ad-metrics pull (Batch C2, S177) — ~07:50 IST. Per-ad-id only
 # (scoped to meta_ad_id on UGC deals), never an account-level sweep (that's Odo).
 [triggers]
