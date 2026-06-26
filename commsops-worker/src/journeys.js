@@ -26,6 +26,8 @@ async function compile(env, definition) {
   const targets = (s) => [s.next, s.if_true, s.if_false].filter(Boolean);
   for (const id of ids) {
     const s = steps[id];
+    if (['load-definition', 'load-enrolment', 'boot'].includes(id) || /^(log:|end:)/.test(id))
+      errors.push(`reserved_step_id:${id}`);
     if (!['wait', 'condition', 'send', 'exit'].includes(s.type)) errors.push(`bad_type:${id}:${s.type}`);
     for (const t of targets(s)) if (!steps[t]) errors.push(`dangling_target:${id}->${t}`);
     if (s.type === 'condition' && (!steps[s.if_true] || !steps[s.if_false])) errors.push(`condition_branch_missing:${id}`);

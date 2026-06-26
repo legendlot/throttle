@@ -18,13 +18,15 @@ class JourneyWorkflow extends WorkflowEntrypoint {
     const def = await step.do('load-definition', async () => {
       const r = await A.sbComms(
         `/rest/v1/journey_versions?journey_id=eq.${A.enc(journeyId)}&version=eq.${journeyVersion}&select=definition&limit=1`, env);
-      return (r.ok && r.data?.[0]?.definition) || null;
+      if (!r.ok) throw new Error('load_definition_failed:' + JSON.stringify(r.data));
+      return r.data?.[0]?.definition || null;
     });
     if (!def?.entry || !def?.steps) { await this.#end(env, step, enrolmentId, 'failed', null); return; }
 
     const enrolledAt = await step.do('load-enrolment', async () => {
       const r = await A.sbComms(`/rest/v1/enrolments?id=eq.${A.enc(enrolmentId)}&select=enrolled_at,context&limit=1`, env);
-      return r.ok && r.data?.[0]?.enrolled_at;
+      if (!r.ok) throw new Error('load_enrolment_failed:' + JSON.stringify(r.data));
+      return r.data?.[0]?.enrolled_at || null;
     });
 
     let cur = def.entry;
@@ -63,7 +65,8 @@ class JourneyWorkflow extends WorkflowEntrypoint {
     const channel = s.channel || 'email';
     const idr = await A.sbComms(
       `/rest/v1/identifiers?profile_id=eq.${A.enc(profileId)}&type=eq.email&select=value&order=last_seen.desc&limit=1`, env);
-    const to = (idr.ok && idr.data?.[0]?.value) || null;
+    if (!idr.ok) throw new Error('identifier_lookup_failed:' + JSON.stringify(idr.data));
+    const to = idr.data?.[0]?.value;
     if (!to) return { status: 'skipped', reason: 'no_email_identifier' };
     return send(env, {
       channel, purpose: s.purpose || 'marketing', profileId, to,
@@ -78,17 +81,20 @@ class JourneyWorkflow extends WorkflowEntrypoint {
       const r = await A.sbComms(
         `/rest/v1/events?profile_id=eq.${A.enc(profileId)}&name=eq.${A.enc(check.event)}` +
         `&occurred_at=gte.${A.enc(enrolledAt)}&select=id&limit=1`, env);
-      return !(r.ok && r.data?.length);   // true = NO such event → take if_true (e.g. send the nudge)
+      if (!r.ok) throw new Error('condition_read_failed:' + JSON.stringify(r.data));
+      return !r.data?.length;   // true = NO such event → take if_true (e.g. send the nudge)
     }
     if (check?.kind === 'event_since_enrol') {
       const r = await A.sbComms(
         `/rest/v1/events?profile_id=eq.${A.enc(profileId)}&name=eq.${A.enc(check.event)}` +
         `&occurred_at=gte.${A.enc(enrolledAt)}&select=id&limit=1`, env);
-      return !!(r.ok && r.data?.length);
+      if (!r.ok) throw new Error('condition_read_failed:' + JSON.stringify(r.data));
+      return !!r.data?.length;
     }
     if (check?.kind === 'attribute') {       // {kind:'attribute', attr, op:'eq'|'gt'|'lt', value}
       const r = await A.sbComms(`/rest/v1/profiles?id=eq.${A.enc(profileId)}&select=attributes&limit=1`, env);
-      const v = (r.ok && r.data?.[0]?.attributes?.[check.attr]);
+      if (!r.ok) throw new Error('condition_read_failed:' + JSON.stringify(r.data));
+      const v = r.data?.[0]?.attributes?.[check.attr];
       if (check.op === 'gt') return Number(v) > Number(check.value);
       if (check.op === 'lt') return Number(v) < Number(check.value);
       return String(v) === String(check.value);
