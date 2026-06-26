@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { Spinner, Chip, useListNav } from '@throttle/ui';
+import { Spinner, Chip, useListNav, useToast } from '@throttle/ui';
 import { ignitionopsGet } from '../../../lib/ignitionopsFetch.js';
 import StageBadge from '../../../components/StageBadge.js';
 import DealTypeBadge from '../../../components/DealTypeBadge.js';
@@ -18,6 +18,7 @@ const TABS = [
 
 export default function EngagementsPage() {
   const { session } = useAuth();
+  const { showToast: toast } = useToast();
   const router = useRouter();
   const [tab, setTab] = useState('all');
   const [type, setType] = useState('all');
@@ -39,6 +40,7 @@ export default function EngagementsPage() {
     if (search) params.search = search;
     ignitionopsGet('getEngagements', params, session)
       .then(r => setRows(r.engagements || []))
+      .catch(e => toast(e.message || 'Failed to load engagements', 'error'))
       .finally(() => setLoading(false));
   }, [tab, type, stages, search, session]);
 
