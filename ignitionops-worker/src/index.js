@@ -2034,6 +2034,23 @@ async function setConnectStatus(body, auth, env) {
   return ok({ connect: ins.data?.[0] || null });
 }
 
+// Return a connect back to Pitstop CS (reclaim a mis-transfer). Flips the thread's
+// ignition_connect off (→ reappears in the CS inbox) via the bridge, then drops the
+// local overlay row so it leaves Connects.
+async function returnConnect(body, auth, env) {
+  const gate = requirePerm('ignition_connects', auth); if (gate) return gate;
+  if (!body.thread_id) return err('thread_id required', 400);
+  const br = await csopsBridge(env, 'returnConnectToPitstop', {
+    thread_id: body.thread_id,
+    actor: { id: auth.userId, name: auth.fullName || auth.email },
+  });
+  if (!br.ok) return err(`csops_bridge_error: ${JSON.stringify(br.raw?.error || br.raw)}`, br.status || 502);
+  await sb(`/rest/v1/connects?thread_id=eq.${encodeURIComponent(body.thread_id)}`, env, {
+    method: 'DELETE', prefer: 'return=minimal',
+  }).catch(() => {});
+  return ok({ returned: true });
+}
+
 // Promote a connect into an influencer (lead → CRM record), prefilled from the
 // conversation. Idempotent — returns the existing influencer if already promoted.
 async function promoteConnect(body, auth, env) {
@@ -2153,6 +2170,7 @@ const POST_ACTIONS = {
   replyConnect,
   promoteConnect,
   setConnectStatus,
+  returnConnect,
 };
 
 async function handleGet(url, request, env) {
