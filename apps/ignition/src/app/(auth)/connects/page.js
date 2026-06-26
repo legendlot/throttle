@@ -65,6 +65,7 @@ export default function ConnectsPage() {
   const [status, setStatus] = useState('all');
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
   const { focusedIdx, setFocusedIdx } = useListNav(rows.length, (i) => {
     const r = rows[i]; if (r) router.push(`/connects/detail/?thread_id=${r.thread_id}`);
   });
@@ -72,8 +73,10 @@ export default function ConnectsPage() {
   useEffect(() => {
     if (!session) return;
     setLoading(true);
+    setError(null);
     ignitionopsGet('getConnects', { channel, status }, session)
       .then(r => setRows(r.connects || []))
+      .catch(e => { setError(e.message || String(e)); setRows([]); })
       .finally(() => setLoading(false));
   }, [channel, status, session]);
 
@@ -97,6 +100,16 @@ export default function ConnectsPage() {
           {STATUS_VALUES.map(s => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
         </select>
       </div>
+
+      {error && (
+        <div style={{
+          background: 'var(--state-error-bg, rgba(220,38,38,0.1))', color: 'var(--state-error-fg, #dc2626)',
+          border: '1px solid var(--state-error-fg, #dc2626)', borderRadius: 'var(--radius-sm)',
+          padding: '10px 12px', marginBottom: 12, fontSize: 13,
+        }}>
+          Couldn’t load Connects: {error}
+        </div>
+      )}
 
       {loading ? <Spinner /> : (
         <div style={{
