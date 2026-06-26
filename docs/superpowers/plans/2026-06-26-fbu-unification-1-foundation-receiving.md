@@ -40,19 +40,31 @@ ALTER TABLE store.grn_register ADD COLUMN IF NOT EXISTS ext_run_no text;     -- 
 
 **File:** `01_worker/worker.js` — `seedReceivingLinesFromPO` (~778–932).
 
-**Change:** make the **declared shipment format** (`shipReceiveFormat`) the *sole* driver of the explode decision, and make the FBU branch produce ordinary built-part `line_type='parts'` rows (not a single `line_type='fbu'` row). The PO line's `receive_format`/`item_type` are no longer read for the explode decision (they become advisory — used only for the mismatch warning in Task 4).
+**Change:** an **explicit declared unit-format (CKD/SKD/FBU) overrides** the PO marker for unit lines; otherwise fall back to **today's exact per-line PO-marker logic**. This is backward-compatible: `shipments.receive_format` is `'parts'`/null for 85/89 shipments today and CKD-unit explosion is PO-marker-driven — so unset/`'parts'` shipments behave **identically to today** (zero regression), while a deliberate receipt-side override (declared ≠ PO marker) re-explodes and fires the mismatch warning (Task 4). Genuine part-level lines (real `part_code`) are never overridden. The FBU branch produces ordinary built-part `line_type='parts'` rows (not a single `line_type='fbu'` row).
 
-- [ ] 2a. Replace the three predicates (lines ~786–793) so they key on the **declared** format, not the PO line:
+- [ ] 2a. Replace the three predicates (lines ~786–793) with declared-overrides-else-fallback:
 ```javascript
-const fmt = String(shipReceiveFormat || '').toUpperCase();   // 'CKD' | 'SKD' | 'FBU' | 'PARTS' (declared at receipt)
-const isSkdLine = ()  => fmt === 'SKD';
-const isFbuLine = ()  => fmt === 'FBU';
-// A product-level unit line (no explicit part_code) under a CKD-declared shipment explodes the CKD BOM.
-const isCkdUnitLine = (l) => fmt === 'CKD' && !l.part_code && !!l.product;
+const declaredFmt  = String(shipReceiveFormat || '').toUpperCase();   // 'CKD'|'SKD'|'FBU'|'PARTS'|''
+const declaredUnit = ['CKD','SKD','FBU'].includes(declaredFmt);       // explicit receipt-side override present?
+// Per-line resolved format: explicit declared unit-format wins for a unit line (no part_code);
+// otherwise = today's PO-marker detection (so 'parts'/unset shipments are byte-identical to today).
+const lineFmt = (l) => {
+  if (declaredUnit && !l.part_code && !!l.product) return declaredFmt;            // receipt-side override
+  if (String(l.receive_format || '').toUpperCase() === 'SKD') return 'SKD';
+  if (l.receive_format === 'FBU' || l.item_type === 'FBU Unit') return 'FBU';
+  if (!l.part_code && !!l.product &&
+      (String(l.item_type || '').toUpperCase().includes('CKD') || String(l.receive_format || '').toUpperCase() === 'CKD'))
+    return 'CKD';
+  return 'PARTS';   // genuine part-level line (real part_code) or unmarked
+};
+const isSkdLine     = (l) => lineFmt(l) === 'SKD';
+const isFbuLine     = (l) => lineFmt(l) === 'FBU';
+const isCkdUnitLine = (l) => lineFmt(l) === 'CKD';
 ```
+(The downstream branches already call `isSkdLine(l)` / `isCkdUnitLine(l)` with the line arg; keep that.)
 - [ ] 2b. In the FBU branch (the `else` at ~893–904), when `isFbuLine()`, emit **built-part rows** instead of one `line_type='fbu'` row. Replace the `else` block with:
 ```javascript
-} else if (isFbuLine()) {
+} else if (isFbuLine(l)) {
   // Receipt-side FBU: land the built unit 1:1 as ordinary parts on the built-part codes.
   // car_qty → <PROD>-CAR-01 ; remote_qty → <PROD>-RM-01 (only when the PO carries remote_qty>0).
   const carQty    = Math.round((Number(l.qty_ordered) || 0) - (Number(l.qty_received) || 0));
