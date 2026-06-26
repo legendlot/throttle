@@ -139,6 +139,19 @@ function ProductionForm({ runType, cat, products, vendors = [], session, toast, 
   const [runDate, setRunDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [notes, setNotes] = useState('');
   const [rows, setRows] = useState([{ variant: '', colour: '', qty_ecomm: '', qty_retail: '' }]);
+  // FBU run-model refinement (S180): production declares the run format; FBU surfaced +
+  // defaulted when built units are in stock ("finish these first").
+  const [format, setFormat] = useState('CKD');
+  const [builtStock, setBuiltStock] = useState(null); // { total, by_combo }
+
+  useEffect(() => {
+    if (!product || outsourced) { setBuiltStock(null); return; }
+    let live = true;
+    garageFetch('getBuiltUnitStock', { product }, session)
+      .then(d => { if (!live) return; setBuiltStock(d || null); setFormat((d?.total || 0) > 0 ? 'FBU' : 'CKD'); })
+      .catch(() => { if (live) setBuiltStock(null); });
+    return () => { live = false; };
+  }, [product, outsourced, session]);
 
   const variants = (cat?.variants?.[product]) || [];
   const colorsFor = (v) => (cat?.colors?.[product]?.[v]) || [];
@@ -158,7 +171,8 @@ function ProductionForm({ runType, cat, products, vendors = [], session, toast, 
     try {
       const r = await workerFetch('createProductionRun', { data: {
         product, run_date: runDate, line_no: outsourced ? null : line, shift, notes: notes.trim() || null,
-        variants: variantsPayload, run_type: runType, vendor_id: outsourced ? Number(vendorId) : null, force,
+        variants: variantsPayload, run_type: runType, vendor_id: outsourced ? Number(vendorId) : null,
+        format: outsourced ? null : format, force,
       } }, session);
       if (r?.warning && !force) {
         if (confirm(r.message || 'An open run already exists. Create another anyway?')) return submit(true);
@@ -185,6 +199,23 @@ function ProductionForm({ runType, cat, products, vendors = [], session, toast, 
         <div><span className="eyebrow" style={lblStyle}>Run date</span><input type="date" value={runDate} onChange={e => setRunDate(e.target.value)} style={numInp} /></div>
         <div><span className="eyebrow" style={lblStyle}>Shift</span><select value={shift} onChange={e => setShift(e.target.value)} style={inp}><option>Morning</option><option>Evening</option><option>Night</option></select></div>
       </div>
+
+      {!outsourced && (
+        <div style={{ marginBottom: 16 }}>
+          <span className="eyebrow" style={lblStyle}>Format *</span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {['FBU', 'CKD', 'SKD'].map(f => (
+              <button key={f} type="button" onClick={() => setFormat(f)}
+                style={format === f ? { ...btnPrimary, padding: '6px 18px' } : { ...btnGhost, padding: '6px 18px' }}>{f}</button>
+            ))}
+          </div>
+          {builtStock && builtStock.total > 0 && (
+            <div style={{ ...helpText, marginTop: 6, color: 'var(--accent)' }}>
+              {builtStock.total} built unit{builtStock.total === 1 ? '' : 's'} in stock — finish these first (FBU).
+            </div>
+          )}
+        </div>
+      )}
 
       <span className="eyebrow" style={lblStyle}>Variants</span>
       <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 10 }}>
@@ -221,6 +252,9 @@ function RepairForm({ cat, products, session, toast, busy, setBusy, router }) {
   const [runDate, setRunDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [notes, setNotes] = useState('');
   const [rows, setRows] = useState([{ product: '', model: '', color: '', target_car_qty: '', target_remote_qty: '' }]);
+  // FBU run-model refinement (S180): repair format is a CLASSIFICATION — FBU = repair-by-
+  // built-unit-swap vs CKD = repair-from-parts (repair parts are requested ad-hoc; no 1:1 pick list).
+  const [format, setFormat] = useState('CKD');
 
   const variantsFor = (p) => (cat?.variants?.[p]) || [];
   const colorsFor = (p, m) => (cat?.colors?.[p]?.[m]) || [];
@@ -234,7 +268,7 @@ function RepairForm({ cat, products, session, toast, busy, setBusy, router }) {
       .map(r => ({ product: r.product, model: r.model || null, color: r.color || null, target_car_qty: parseInt(r.target_car_qty) || 0, target_remote_qty: parseInt(r.target_remote_qty) || 0 }));
     setBusy(true);
     try {
-      const r = await workerFetch('createRepairRun', { data: { line, run_date: runDate, notes: notes.trim() || 'Repair run (Redline)', lines } }, session);
+      const r = await workerFetch('createRepairRun', { data: { line, run_date: runDate, notes: notes.trim() || 'Repair run (Redline)', lines, format } }, session);
       if (!r?.ok) { toast(r?.error || 'Failed', 'error'); return; }
       toast(`${r.data?.run_no || 'Repair run'} created`, 'success');
       router.push('/returns');
@@ -250,6 +284,16 @@ function RepairForm({ cat, products, session, toast, busy, setBusy, router }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 18 }}>
         <div><span className="eyebrow" style={lblStyle}>Line</span><LinePicker value={line} onChange={setLine} lines={LINES_REPAIR} /></div>
         <div><span className="eyebrow" style={lblStyle}>Run date</span><input type="date" value={runDate} onChange={e => setRunDate(e.target.value)} style={numInp} /></div>
+      </div>
+      <div style={{ marginBottom: 16 }}>
+        <span className="eyebrow" style={lblStyle}>Format *</span>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {['FBU', 'CKD', 'SKD'].map(f => (
+            <button key={f} type="button" onClick={() => setFormat(f)}
+              style={format === f ? { ...btnPrimary, padding: '6px 18px' } : { ...btnGhost, padding: '6px 18px' }}>{f}</button>
+          ))}
+        </div>
+        <div style={{ ...helpText, marginTop: 6 }}>FBU = repair by swapping in a built unit · CKD = repair from parts.</div>
       </div>
       <span className="eyebrow" style={lblStyle}>Target lines · optional</span>
       <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 10 }}>
