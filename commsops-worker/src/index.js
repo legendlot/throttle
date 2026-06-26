@@ -91,6 +91,12 @@ async function handleGet(url, auth, env) {
       const c = await CAMP.getCampaign(env, id);
       return ok(c);
     }
+
+    // ── M7: journeys ──
+    case 'getJourneys': { const J = require('./journeys.js');
+      return ok(await J.listJourneys(env)); }
+    case 'getJourney': { const J = require('./journeys.js');
+      return ok(await J.getJourney(env, url.searchParams.get('id'))); }
     default:
       return err(`unknown_action:${action}`, 404);
   }
@@ -258,7 +264,16 @@ async function handlePost(body, auth, env) {
       return r.ok ? ok(r) : err(r.error, 400);
     }
 
-    // M7: journeys — wired per milestone
+    // ── M7: journeys ──
+    case 'saveJourney': { if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
+      const J = require('./journeys.js'); const r = await J.saveJourney(env, body, auth.userId);
+      return r.ok ? ok(r) : err(r.error, 400); }
+    case 'compileJourney': { const J = require('./journeys.js');
+      return ok(await J.compile(env, body.definition)); }
+    case 'setJourneyStatus': { if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
+      const J = require('./journeys.js'); const r = await J.setJourneyStatus(env, body.id, body.status);
+      return r.ok ? ok(r) : err(r.error, 400); }
+
     default:
       return err(`unknown_action:${body.action}`, 404);
   }
