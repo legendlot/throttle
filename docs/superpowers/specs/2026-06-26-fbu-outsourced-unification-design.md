@@ -34,7 +34,7 @@ The PO layer already proves the right model. Every "unit" PO line is identical �
 | **SKD Unit** (Flare) | SKD bundle parts → `stock_ledger` | `bom_format='SKD'` rows |
 | **FBU Unit** (Rift, Dash…) | *today:* `fbu_stock` ❌ + skip-category hack ❌ | — |
 
-CKD and SKD already do what we want. **FBU is the only format that breaks the pattern.** The fix: make FBU behave exactly like SKD — its "bundle" is simply the whole built car (+ remote). RULE-SKD-001 already establishes every piece of machinery required.
+CKD and SKD already do what we want. **FBU is the only format that breaks the pattern.** The fix: make FBU behave exactly like SKD — its "bundle" is simply the whole built car (+ remote). RULE-SKD-001 already establishes every piece of machinery required. *(The table above is the **current** PO-marker-driven discriminator; §4 moves the **binding** format decision to receipt-side declaration — the PO marker becomes advisory.)*
 
 ---
 
@@ -89,13 +89,19 @@ Add to `store.grn_register` (and the FBU branch of receiving): **`source`** ∈ 
 
 ---
 
-## 4. POs & receiving
+## 4. POs & receiving — receipt-side format (captured truth)
 
-- **PO mechanism unchanged.** An FBU-Unit PO line (`receive_format='FBU'`, `remote_qty`) means "buy N built units." No raise-side change.
-- **Receiving explodes from the FBU BOM** (exactly as SKD explodes from the SKD BOM — RULE-SKD-001 §4): an FBU-Unit line posts `<PROD>-CAR-01 × (qty_ordered − qty_received)` and `<PROD>-RM-01 × remote_qty` into `grn_register` + `stock_ledger`. `seedReceivingLinesFromPO` gains an FBU branch parallel to its SKD/CKD-unit branches; the `line_type='fbu' → fbu_stock` path is removed.
-- **GRN writes `source`** = `fbu_purchase` for purchase POs, `jobwork` + `ext_run_no` for vendor returns (§6).
-- **`po_lines.qty_received` write-back** (robustness, fixes a long-standing 0/657 gap): every GRN increments it, so coverage / pending-PO / kit see the true outstanding qty. Applies to all formats, not just FBU.
-- **`stock_ledger` rows must pre-exist** for built-part codes before GRN (`bulk_update_stock_received` is UPDATE-only — RULE-SKD-001 §5). §3.3 mint covers this.
+**The format is declared at receipt, from physical inspection, and is binding.** The PO is raised at the product level ("buy N of product X"); it carries an *advisory* intended-format only for (a) price/GST basis and (b) a mismatch warning — it **never** decides how stock lands. Rationale: the format is a physical fact the receiver is looking at; this removes PO-vs-actual drift (the EXT-003 ↔ GRN-203 class of bug) and the malformed-line failure mode, and the part-level forecasting it would have fed doesn't exist today (coverage keys on `part_code`, which unit-PO lines lack — §9 case 11).
+
+- **Flow:** shipment created against a PO → receiver opens it, inspects, and **declares CKD / SKD / FBU** → the worksheet explodes from the **declared** format's BOM → count → GRN. `seedReceivingLinesFromPO` becomes `seedReceivingLines(shipment, declaredFormat)` — explode from the *declared* format, not a PO marker; the `line_type='fbu' → fbu_stock` path is removed.
+  - **CKD declared** → explode granular CKD BOM (part-level lines; receiver counts parts).
+  - **SKD declared** → explode `bom_format='SKD'` bundle parts.
+  - **FBU declared** → land the built unit **1:1**: `<PROD>-CAR-01 × car_qty` (+ `<PROD>-RM-01 × remote_qty` when the product's FBU built-part list includes a built remote). No heavy "explosion" — a direct mapping.
+  - **part-level line** (a genuine components PO with a real `part_code`) → received 1:1; no format question.
+- **Soft mismatch warning (non-blocking).** If declared format ≠ the PO's intended-format, surface *"Purchased format (X) ≠ received format (Y) — escalate."* and proceed. **Received is always the truth**; the warning is a signal for procurement, never a gate.
+- **GRN writes `source`** (context-derived, **not** receiver-declared): `fbu_purchase` for a purchase PO, `jobwork` + `ext_run_no` for a vendor return (§6). Source and format are independent axes — the receiver can see the *form* but not the *origin*.
+- **`po_lines.qty_received` write-back** (robustness, fixes the 0/657 gap): every GRN increments it so coverage / pending-PO / kit see the true outstanding qty. All formats.
+- **`stock_ledger` rows must pre-exist** for built-part codes before GRN (`bulk_update_stock_received` is UPDATE-only — RULE-SKD-001 §5); §3.3 mint covers this.
 
 ---
 
@@ -189,12 +195,14 @@ A short built-car balance at issue uses the **existing** short-issue WO flow (RU
 8. **Coverage panel** (`getPartCoverage`) for a dual-format product — must check the *intended* format's parts; defaults to registered format, honors the run's chosen format.
 9. **Platform interaction (Drift 1)** — Shadow/Flare are platform-mapped (RULE-PLATFORM-001). The `ANY`/`FBU` tags coexist with `platformCommonRows`; the union must apply the format filter to platform rows too (they default `CKD`). Verify `platformCommonRows` rows carry/inherit a sane `bom_format` (treat platform bottom as `CKD`, and built-car FBU rows as product-level).
 10. **Reporting** that read `fbu_grn_register`/`fbu_issue_register` — re-point to `grn_register`/`issue_register` filtered by built-part code + `source`.
+11. **Open unit-POs are invisible to part-level coverage today** (`getPartCoverage` keys on `part_code`; unit lines are null) — so receipt-side format costs no working forecast. A future enhancement could explode open POs into projected inbound *if* an advisory PO format is present.
+12. **Purchase-vs-receipt format mismatch** — soft, non-blocking warning at receipt (declared ≠ PO intended-format); received format wins and lands stock; the warning is escalated to procurement, never gates the GRN.
 
 ---
 
 ## 10. Business-rule changes (to land in BUSINESS_RULES.md on implementation)
 
-- **RULE-SKD-001** — generalize: `bom_format ∈ {CKD,SKD,FBU,ANY}`; the matcher is `IN(run_format,'ANY')`; the format BOM is the single source of truth for both receiving and issuance, **FBU included**.
+- **RULE-SKD-001** — generalize: `bom_format ∈ {CKD,SKD,FBU,ANY}`; the matcher is `IN(run_format,'ANY')`; the format BOM is the single source of truth for both receiving and issuance, **FBU included**. **Receiving format is receiver-declared at receipt (binding truth)**; the PO carries only an advisory intended-format (cost/GST + a soft mismatch warning).
 - **RULE-FBU-001** — supersede: there is no `issue_mode='fbu'` skip-category path and no `fbu_stock`. A built car/remote is a first-class `FBU`-format part; an FBU run consumes it like any part. Format is a store **fulfillment** choice on a production-triggered run; dual-format detected by the existence of `FBU` rows.
 - **RULE-EXT-001** — amend: the EXT run still spans the full loop for ITC-04, but units-in is a **source-tagged GRN of the built-car part** (not `EXT_INW`/`ext_return_pool`); finishing is decoupled into an ordinary FBU run; built-part receipts carry `source` (`fbu_purchase` vs `jobwork`+`EXT-NNN`).
 - **New RULE-FBU-002** — built-unit source accountability: one stock number per built component; provenance lives on the GRN `source`/`ext_run_no`, queried for FBU-purchase vs job-work counts and the ITC-04 seed.
@@ -206,6 +214,7 @@ A short built-car balance at issue uses the **existing** short-issue WO flow (RU
 1. **Shared kit** → `bom_format='ANY'` tag + `IN(format,'ANY')` matcher (not per-format duplication).
 2. **Format choice** → production triggers the run; store picks the fulfillment source (CKD parts vs FBU built unit) at issue; forced for pure formats, choice only for dual-format.
 3. **Outsourced returns** → collapse fully; kill `EXT_INW` + `ext_return_pool`; GRN built cars as a source-tagged part; finishing is a normal FBU run.
+4. **Receiving format** → receipt-side, receiver-declared = captured truth (binding). PO carries an advisory intended-format only; a **soft non-blocking mismatch warning** fires when declared ≠ intended (escalate to procurement), but received always wins. Source (`fbu_purchase` vs `jobwork`) stays context-derived, not receiver-declared.
 
 ## 12. Open operational items (confirm before/at implementation)
 
