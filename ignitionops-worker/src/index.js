@@ -1540,6 +1540,211 @@ async function upsertMonthlyTarget(body, auth, env) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// CONNECTS — Pitstop→Ignition transferred conversations (S177)
+// ────────────────────────────────────────────────────────────────────────────
+// Pitstop owns the IG/WhatsApp/email channels + stores the conversation. The CS
+// team transfers a thread to the Influencer team; we read/reply through csops's
+// token-authed bridge (scope-checked to ignition_connect=true). `ignition.connects`
+// holds only Reann's workflow overlay (status + influencer link) — never messages.
+// See spec 2026-06-26-ignition-pitstop-connects-transfer-design.md.
+
+async function csopsBridge(env, action, payload = {}) {
+  const base = env.CSOPS_URL || 'https://csops.afshaan.workers.dev';
+  let raw, status;
+  try {
+    const r = await fetch(`${base}/bridge/ignition`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Ignition-Bridge-Token': env.IGNITION_BRIDGE_TOKEN || '' },
+      body: JSON.stringify({ action, ...payload }),
+    });
+    status = r.status;
+    const text = await r.text();
+    try { raw = JSON.parse(text); } catch { raw = text; }
+  } catch (e) {
+    return { ok: false, status: 502, data: null, raw: { error: String(e?.message || e) } };
+  }
+  return { ok: status < 400 && raw?.ok !== false, status, data: raw?.data ?? null, raw };
+}
+
+// Load (and lazily create) the ignition.connects overlay for a set of threads.
+async function loadConnectOverlay(env, threads) {
+  const ids = threads.map(t => t.id);
+  const byThread = {};
+  if (!ids.length) return byThread;
+  const r = await sb(`/rest/v1/connects?thread_id=in.(${ids.join(',')})&select=*`, env);
+  for (const row of (r.ok ? r.data || [] : [])) byThread[row.thread_id] = row;
+  const missing = threads.filter(t => !byThread[t.id]);
+  if (missing.length) {
+    const rows = missing.map(t => ({
+      thread_id: t.id, channel: t.channel || null, status: 'new',
+      transferred_at: t.ignition_transferred_at || null,
+    }));
+    const ins = await sb(`/rest/v1/connects`, env, {
+      method: 'POST', prefer: 'resolution=ignore-duplicates,return=representation',
+      body: JSON.stringify(rows),
+    });
+    for (const row of (ins.ok ? ins.data || [] : [])) byThread[row.thread_id] = row;
+  }
+  return byThread;
+}
+
+async function getConnects(url, auth, env) {
+  const gate = requirePerm('ignition_connects', auth); if (gate) return gate;
+  const channel = url.searchParams.get('channel');
+  const statusFilter = url.searchParams.get('status');
+  const br = await csopsBridge(env, 'getIgnitionConnects',
+    channel && channel !== 'all' ? { channel } : {});
+  if (!br.ok) return err(`csops_bridge_error: ${JSON.stringify(br.raw)}`, br.status || 502);
+  const threads = br.data?.threads || [];
+  if (!threads.length) return ok({ connects: [] });
+
+  const overlay = await loadConnectOverlay(env, threads);
+  let connects = threads.map(t => {
+    const ov = overlay[t.id] || {};
+    return {
+      thread_id: t.id,
+      channel: t.channel,
+      customer_handle: t.customer_handle,
+      customer_phone: t.customer_phone,
+      customer_email: t.channel === 'email' ? t.external_user_id : null,
+      subject: t.subject || null,
+      last_message: t.last_message || null,
+      last_message_at: t.last_message_at,
+      awaiting_reply: !!t.awaiting_reply,
+      within_customer_window: !!t.within_customer_window,
+      transferred_at: t.ignition_transferred_at || ov.transferred_at || null,
+      status: ov.status || 'new',
+      influencer_id: ov.influencer_id || null,
+    };
+  });
+  if (statusFilter && statusFilter !== 'all') connects = connects.filter(c => c.status === statusFilter);
+
+  // Attach influencer codes for any promoted connects (batched).
+  const infIds = [...new Set(connects.map(c => c.influencer_id).filter(Boolean))];
+  if (infIds.length) {
+    const ir = await sb(`/rest/v1/influencers?id=in.(${infIds.join(',')})&select=id,influencer_code,channel_name`, env);
+    const byId = {};
+    for (const row of (ir.ok ? ir.data || [] : [])) byId[row.id] = row;
+    connects = connects.map(c => ({ ...c, influencer: c.influencer_id ? byId[c.influencer_id] || null : null }));
+  }
+  return ok({ connects });
+}
+
+async function getConnect(url, auth, env) {
+  const gate = requirePerm('ignition_connects', auth); if (gate) return gate;
+  const thread_id = url.searchParams.get('thread_id');
+  if (!thread_id) return err('thread_id required', 400);
+  const br = await csopsBridge(env, 'getIgnitionThread', { thread_id });
+  if (!br.ok) return err(`csops_bridge_error: ${JSON.stringify(br.raw)}`, br.status || 502);
+  const thread = br.data?.thread;
+  if (!thread) return err('not_found', 404);
+
+  const overlay = await loadConnectOverlay(env, [thread]);
+  const connect = overlay[thread.id] || { thread_id, status: 'new' };
+  let influencer = null;
+  if (connect.influencer_id) {
+    const ir = await sb(`/rest/v1/influencers?id=eq.${connect.influencer_id}&select=id,influencer_code,channel_name,person_name&limit=1`, env);
+    influencer = ir.ok && ir.data?.[0] ? ir.data[0] : null;
+  }
+  return ok({
+    thread,
+    messages: br.data?.messages || [],
+    within_customer_window: !!br.data?.within_customer_window,
+    connect,
+    influencer,
+  });
+}
+
+async function replyConnect(body, auth, env) {
+  const gate = requirePerm('ignition_connects', auth); if (gate) return gate;
+  const { thread_id, text, html } = body;
+  if (!thread_id || (!text && !html)) return err('thread_id and text required', 400);
+  const br = await csopsBridge(env, 'sendConnectReply', {
+    thread_id, text, html,
+    actor: { id: auth.userId, name: auth.fullName || auth.email, email: auth.email },
+  });
+  if (!br.ok) return err(`csops_bridge_error: ${JSON.stringify(br.raw?.error || br.raw)}`, br.status || 502);
+  // First reply moves a 'new' connect to 'working' (best-effort).
+  await sb(`/rest/v1/connects?thread_id=eq.${encodeURIComponent(thread_id)}&status=eq.new`, env, {
+    method: 'PATCH', prefer: 'return=minimal',
+    body: JSON.stringify({ status: 'working', updated_at: nowIso() }),
+  }).catch(() => {});
+  return ok(br.data);
+}
+
+async function setConnectStatus(body, auth, env) {
+  const gate = requirePerm('ignition_connects', auth); if (gate) return gate;
+  const { thread_id, status } = body;
+  if (!thread_id) return err('thread_id required', 400);
+  if (!['new', 'working', 'promoted', 'closed'].includes(status)) return err('invalid_status', 400);
+  const r = await sb(`/rest/v1/connects?thread_id=eq.${encodeURIComponent(thread_id)}`, env, {
+    method: 'PATCH', prefer: 'return=representation',
+    body: JSON.stringify({ status, updated_at: nowIso() }),
+  });
+  if (r.ok && r.data?.[0]) return ok({ connect: r.data[0] });
+  const ins = await sb(`/rest/v1/connects`, env, {
+    method: 'POST', prefer: 'resolution=ignore-duplicates,return=representation',
+    body: JSON.stringify([{ thread_id, status }]),
+  });
+  return ok({ connect: ins.data?.[0] || null });
+}
+
+// Promote a connect into an influencer (lead → CRM record), prefilled from the
+// conversation. Idempotent — returns the existing influencer if already promoted.
+async function promoteConnect(body, auth, env) {
+  const gate = requirePerm('ignition_connects', auth); if (gate) return gate;
+  const { thread_id } = body;
+  if (!thread_id) return err('thread_id required', 400);
+
+  const overlay = await sb(`/rest/v1/connects?thread_id=eq.${encodeURIComponent(thread_id)}&select=*&limit=1`, env);
+  const existing = overlay.ok && overlay.data?.[0] ? overlay.data[0] : null;
+  if (existing?.influencer_id) {
+    const ir = await sb(`/rest/v1/influencers?id=eq.${existing.influencer_id}&select=id,influencer_code,channel_name&limit=1`, env);
+    return ok({ already_promoted: true, influencer: ir.data?.[0] || null });
+  }
+
+  const br = await csopsBridge(env, 'getIgnitionThread', { thread_id });
+  if (!br.ok) return err(`csops_bridge_error: ${JSON.stringify(br.raw)}`, br.status || 502);
+  const thread = br.data?.thread;
+  if (!thread) return err('not_found', 404);
+
+  const ch = thread.channel || '';
+  const handle = thread.customer_handle || null;
+  const email = ch === 'email' ? (thread.external_user_id || null) : null;
+  const phone = thread.customer_phone || null;
+  const platform = ch === 'instagram' ? 'instagram' : 'other';
+  const channel_name = handle || phone || email || thread.external_user_id || 'New connect';
+  const channel_link = ch === 'instagram' && handle ? `https://instagram.com/${handle}` : null;
+
+  const code = await mintInfluencerCode(env);
+  if (!code) return err('failed_to_mint_influencer_code', 500);
+  const row = {
+    influencer_code: code, created_by: auth.userId,
+    channel_name, person_name: handle || null,
+    channel_platform: platform, channel_platforms: [platform],
+    channel_link, contact_number: phone, email,
+    list_status: 'master',
+  };
+  const ins = await sb(`/rest/v1/influencers`, env, { method: 'POST', body: JSON.stringify([row]) });
+  if (!ins.ok || !ins.data?.[0]) return err(`db_error: ${JSON.stringify(ins.data)}`, 400);
+  const influencer = ins.data[0];
+
+  // Link + mark the connect promoted (upsert).
+  if (existing) {
+    await sb(`/rest/v1/connects?thread_id=eq.${encodeURIComponent(thread_id)}`, env, {
+      method: 'PATCH', prefer: 'return=minimal',
+      body: JSON.stringify({ influencer_id: influencer.id, status: 'promoted', updated_at: nowIso() }),
+    });
+  } else {
+    await sb(`/rest/v1/connects`, env, {
+      method: 'POST', prefer: 'resolution=ignore-duplicates,return=minimal',
+      body: JSON.stringify([{ thread_id, channel: ch || null, influencer_id: influencer.id, status: 'promoted', transferred_at: thread.ignition_transferred_at || null }]),
+    });
+  }
+  return ok({ influencer });
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // DISPATCH
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -1566,6 +1771,8 @@ const GET_ACTIONS = {
   getMe,
   searchShopifyCustomer,
   getInfluencerShopify,
+  getConnects,
+  getConnect,
 };
 
 const POST_ACTIONS = {
@@ -1591,6 +1798,9 @@ const POST_ACTIONS = {
   addMetricSnapshot,
   deleteMetricSnapshot,
   upsertMonthlyTarget,
+  replyConnect,
+  promoteConnect,
+  setConnectStatus,
 };
 
 async function handleGet(url, request, env) {
