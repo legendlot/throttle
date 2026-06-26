@@ -32,3 +32,12 @@ queue = "commsops-broadcast"
 max_batch_size = 1
 max_batch_timeout = 5
 max_retries = 3
+
+# Journey engine (M7) — each enrolment is one durable Workflow instance.
+# step.sleep handles multi-day waits with no resource cost; step.do gives
+# retryable send/condition units. New infra for the monorepo (Workflows-only,
+# no Durable Object — the Queue producer/consumer above is reused for enrol fan-out).
+[[workflows]]
+name = "commsops-journey"
+binding = "JOURNEY_WORKFLOW"
+class_name = "JourneyWorkflow"

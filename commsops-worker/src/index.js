@@ -1,4 +1,6 @@
 const A = require('./auth.js');
+// Workflow class must be a named export of the entry module (wrangler class_name).
+export { JourneyWorkflow } from './journey-workflow.js';
 const { ingest } = require('./ingest.js');
 const { recordConsent } = require('./consent.js');
 const { send } = require('./send.js');
