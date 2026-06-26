@@ -443,9 +443,15 @@ async function getEngagements(url, auth, env) {
   const limit = Math.min(Number(url.searchParams.get('limit') || 50), 200);
   const offset = Math.max(Number(url.searchParams.get('offset') || 0), 0);
 
+  const stages = url.searchParams.get('stages');   // multi-stage filter (Reann #11)
   const filters = [];
   if (type && type !== 'all') filters.push(`engagement_type=eq.${encodeURIComponent(type)}`);
-  if (stage)    filters.push(`stage=eq.${encodeURIComponent(stage)}`);
+  if (stages) {
+    const list = stages.split(',').map(s => s.trim()).filter(Boolean).map(encodeURIComponent).join(',');
+    if (list) filters.push(`stage=in.(${list})`);
+  } else if (stage) {
+    filters.push(`stage=eq.${encodeURIComponent(stage)}`);
+  }
   if (product)  filters.push(`product_code=eq.${encodeURIComponent(product)}`);
   if (dealType) filters.push(`deal_type=eq.${encodeURIComponent(dealType)}`);
   if (dateFrom) filters.push(`post_date=gte.${dateFrom}`);
@@ -477,18 +483,32 @@ async function getEngagement(url, auth, env) {
   const eng = r.data?.[0];
   if (!eng) return err('not_found', 404);
 
-  const [hr, nr, ar, pr] = await Promise.all([
+  const [hr, nr, ar, pr, epr] = await Promise.all([
     sb(`/rest/v1/engagement_history?engagement_id=eq.${eng.id}&select=*&order=created_at.desc&limit=200`, env),
     sb(`/rest/v1/engagement_notes?engagement_id=eq.${eng.id}&select=*&order=created_at.desc&limit=200`, env),
     sb(`/rest/v1/engagement_attachments?engagement_id=eq.${eng.id}&select=*&order=created_at.desc&limit=200`, env),
     sb(`/rest/v1/payments?engagement_id=eq.${eng.id}&select=*&order=paid_on.desc,created_at.desc&limit=200`, env),
+    sb(`/rest/v1/engagement_products?engagement_id=eq.${eng.id}&select=*&order=sort_order.asc`, env),
   ]);
 
   const payments = pr.data || [];
   const paid_total = payments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
 
+  // Multi-product lines (#4). Legacy single-product deals (no lines yet) get a
+  // synthesized line from the engagement row so the UI always has ≥1 product.
+  let products = epr.data || [];
+  if (!products.length && eng.product_code) {
+    products = [{
+      id: null, engagement_id: eng.id, product_code: eng.product_code,
+      product_variant: eng.product_variant || null, quantity: 1,
+      goodies_cost: eng.goodies_cost ?? null, shipping_cost: eng.shipping_cost ?? null,
+      sort_order: 0, synthesized: true,
+    }];
+  }
+
   return ok({
     engagement: eng,
+    products,
     history: hr.data || [],
     notes: nr.data || [],
     attachments: ar.data || [],
@@ -584,6 +604,30 @@ async function getCampaign(url, auth, env) {
   const c = r.data?.[0];
   if (!c) return err('not_found', 404);
   return ok({ campaign: { ...c, rollup: campaignRollup(c) } });
+}
+
+// Delete a campaign (Reann #1). Refuses if any engagement is still linked (detach first).
+async function deleteCampaign(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!body.campaign_id) return err('campaign_id required', 400);
+  const lr = await sb(`/rest/v1/engagements?campaign_id=eq.${body.campaign_id}&select=id&limit=500`, env);
+  const n = (lr.data || []).length;
+  if (n > 0) return err(`campaign_has_${n}_linked_engagements`, 409);
+  const dr = await sb(`/rest/v1/campaigns?id=eq.${body.campaign_id}`, env, { method: 'DELETE', prefer: 'return=minimal' });
+  if (!dr.ok) return err(`db_error: ${JSON.stringify(dr.data)}`, 400);
+  return ok({ deleted: true });
+}
+
+// POC dropdown source (Reann #5): people on roles that carry ignition_view.
+async function getIgnitionUsers(_url, auth, env) {
+  const rr = await sbStore(`/rest/v1/roles?select=role_id,permissions`, env);
+  const roleIds = (rr.ok ? rr.data || [] : [])
+    .filter(r => r.permissions && (r.permissions.ignition_view === true || r.permissions.ignition_view === 'true'))
+    .map(r => r.role_id);
+  if (!roleIds.length) return ok({ users: [] });
+  const inList = roleIds.map(encodeURIComponent).join(',');
+  const ur = await sbStore(`/rest/v1/users_profile?active=eq.true&role=in.(${inList})&select=id,full_name&order=full_name.asc`, env);
+  return ok({ users: (ur.ok ? ur.data || [] : []).filter(u => u.full_name) });
 }
 
 async function getKpis(url, auth, env) {
@@ -1108,7 +1152,51 @@ const ENGAGEMENT_FIELDS = [
   'views','likes','comments','shares','impressions','sessions','orders',
   'conversions_value','roas_on_ad_spend','actual_roas','orders_cc',
   'shipping_order_id','tracking_id','shipping_month','shipping_date','directed_to',
+  'poc_user_id','poc_name',
 ];
+
+// ── Multi-product engagement lines (Reann Batch A #4, S177) ──────────────────
+// Each deal can carry several products. Per-product cost lives on the child line;
+// the worker rolls Σ goodies/shipping up into the engagement's cost columns + mirrors
+// the first line into engagements.product_code/variant, so the GENERATED total_cost
+// and every single-product reader/report stay correct untouched.
+async function insertEngagementProducts(env, engagement_id, products) {
+  const rows = (products || [])
+    .filter(p => p && p.product_code)
+    .map((p, i) => ({
+      engagement_id,
+      product_code: p.product_code,
+      product_variant: p.product_variant || null,
+      quantity: Math.round(Number(p.quantity) || 1),
+      goodies_cost: (p.goodies_cost != null && p.goodies_cost !== '') ? Number(p.goodies_cost) : null,
+      shipping_cost: (p.shipping_cost != null && p.shipping_cost !== '') ? Number(p.shipping_cost) : null,
+      sort_order: i,
+    }));
+  if (!rows.length) return;
+  await sb(`/rest/v1/engagement_products`, env, {
+    method: 'POST', prefer: 'return=minimal', body: JSON.stringify(rows),
+  });
+}
+
+async function rollupEngagementProducts(env, engagement_id) {
+  const lr = await sb(
+    `/rest/v1/engagement_products?engagement_id=eq.${engagement_id}&select=product_code,product_variant,goodies_cost,shipping_cost&order=sort_order.asc`,
+    env,
+  );
+  const lines = lr.ok ? (lr.data || []) : [];
+  if (!lines.length) return;
+  const sum = (k) => lines.reduce((s, l) => s + (Number(l[k]) || 0), 0);
+  await sb(`/rest/v1/engagements?id=eq.${engagement_id}`, env, {
+    method: 'PATCH', prefer: 'return=minimal',
+    body: JSON.stringify({
+      goodies_cost: sum('goodies_cost'),
+      shipping_cost: sum('shipping_cost'),
+      product_code: lines[0].product_code,
+      product_variant: lines[0].product_variant || null,
+      updated_at: nowIso(),
+    }),
+  });
+}
 
 async function createInfluencer(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
@@ -1184,7 +1272,45 @@ async function createEngagement(body, auth, env) {
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
   const eng = r.data?.[0];
   await writeHistory(env, eng.id, 'create', null, startStage, null, auth.userId);
+  // Multi-product (#4): if explicit product lines were supplied, store them + roll up.
+  if (Array.isArray(body.products) && body.products.length) {
+    await insertEngagementProducts(env, eng.id, body.products);
+    await rollupEngagementProducts(env, eng.id);
+  }
   return ok({ engagement_no: eno, id: eng.id });
+}
+
+// Replace the full product-line set for a deal, then roll up (#4).
+async function setEngagementProducts(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!body.engagement_id) return err('engagement_id required', 400);
+  if (!Array.isArray(body.products)) return err('products[] required', 400);
+  await sb(`/rest/v1/engagement_products?engagement_id=eq.${body.engagement_id}`, env, {
+    method: 'DELETE', prefer: 'return=minimal',
+  });
+  if (body.products.length) await insertEngagementProducts(env, body.engagement_id, body.products);
+  await rollupEngagementProducts(env, body.engagement_id);
+  const lr = await sb(`/rest/v1/engagement_products?engagement_id=eq.${body.engagement_id}&select=*&order=sort_order.asc`, env);
+  return ok({ products: lr.data || [] });
+}
+
+// Delete a deal (Reann #2, human-error cleanup). Refuses if payments exist — use
+// cancel/close instead. Children deleted explicitly (robust regardless of FK cascade).
+async function deleteEngagement(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!body.engagement_id) return err('engagement_id required', 400);
+  const er = await sb(`/rest/v1/engagements?id=eq.${body.engagement_id}&select=id,engagement_no&limit=1`, env);
+  if (!er.ok || !er.data?.[0]) return err('not_found', 404);
+  const pr = await sb(`/rest/v1/payments?engagement_id=eq.${body.engagement_id}&select=id&limit=1`, env);
+  if (pr.ok && pr.data?.[0]) return err('has_payments_cannot_delete', 409);
+  // Detach discount codes (one-way utilized stays), then remove children + the deal.
+  await sb(`/rest/v1/discount_codes?engagement_id=eq.${body.engagement_id}`, env, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ engagement_id: null }) }).catch(() => {});
+  for (const child of ['engagement_products', 'engagement_attachments', 'engagement_notes', 'engagement_history']) {
+    await sb(`/rest/v1/${child}?engagement_id=eq.${body.engagement_id}`, env, { method: 'DELETE', prefer: 'return=minimal' }).catch(() => {});
+  }
+  const dr = await sb(`/rest/v1/engagements?id=eq.${body.engagement_id}`, env, { method: 'DELETE', prefer: 'return=minimal' });
+  if (!dr.ok) return err(`db_error: ${JSON.stringify(dr.data)}`, 400);
+  return ok({ deleted: true, engagement_no: er.data[0].engagement_no });
 }
 
 async function updateEngagement(body, auth, env) {
@@ -1208,7 +1334,7 @@ async function advanceStage(body, auth, env) {
   if (!body.to_stage) return err('to_stage required', 400);
 
   const cur = await sb(
-    `/rest/v1/engagements?id=eq.${body.engagement_id}&select=stage,video_link&limit=1`, env,
+    `/rest/v1/engagements?id=eq.${body.engagement_id}&select=stage,video_link,shipping_order_id,influencer_id&limit=1`, env,
   );
   if (!cur.ok || !cur.data?.[0]) return err('not_found', 404);
   const from = cur.data[0].stage;
@@ -1222,6 +1348,31 @@ async function advanceStage(body, auth, env) {
     const incomingLink = (body.video_link != null ? String(body.video_link) : '').trim();
     const existingLink = (cur.data[0].video_link || '').trim();
     if (!incomingLink && !existingLink) return err('video_link_required_for_live', 422);
+  }
+
+  // Shipped requires a Shopify order ID (Reann #7) — accepted inline or already set.
+  if (body.to_stage === 'shipped') {
+    const incoming = (body.shipping_order_id != null ? String(body.shipping_order_id) : '').trim();
+    const existing = (cur.data[0].shipping_order_id || '').trim();
+    if (!incoming && !existing) return err('shipping_order_id_required_for_shipped', 422);
+  }
+
+  // Completed requires a colour rating on the influencer (Reann #3) — apply inline if given.
+  if (body.to_stage === 'completed') {
+    const infId = cur.data[0].influencer_id;
+    let rated = false;
+    if (infId) {
+      const ir = await sb(`/rest/v1/influencers?id=eq.${infId}&select=quality_rating&limit=1`, env);
+      rated = ['green', 'yellow', 'red'].includes(ir.data?.[0]?.quality_rating);
+      if (!rated && ['green', 'yellow', 'red'].includes(body.rating)) {
+        await sb(`/rest/v1/influencers?id=eq.${infId}`, env, {
+          method: 'PATCH', prefer: 'return=minimal',
+          body: JSON.stringify({ quality_rating: body.rating, rating_notes: body.rating_notes || null, updated_at: nowIso() }),
+        });
+        rated = true;
+      }
+    }
+    if (!rated) return err('rating_required_for_completed', 422);
   }
 
   const patch = { stage: body.to_stage, updated_at: nowIso() };
@@ -1773,6 +1924,7 @@ const GET_ACTIONS = {
   getInfluencerShopify,
   getConnects,
   getConnect,
+  getIgnitionUsers,
 };
 
 const POST_ACTIONS = {
@@ -1781,6 +1933,8 @@ const POST_ACTIONS = {
   deleteInfluencer,
   createEngagement,
   updateEngagement,
+  setEngagementProducts,
+  deleteEngagement,
   advanceStage,
   closeEngagement,
   setRating,
@@ -1790,6 +1944,7 @@ const POST_ACTIONS = {
   openPitstopTicket,
   createCampaign,
   updateCampaign,
+  deleteCampaign,
   assignEngagementToCampaign,
   flagOverdueRatings,
   addPayment,
