@@ -10,30 +10,40 @@
 <p>Production owns every run request. The store never issues stock on its own; it only fills a request that lands in its queue. Each tab below explains how the materials move, step by step, and which system handles each step.</p>
 
 <h2 class="sec">Fresh</h2>
-<p>A normal in-house build. Pick the product, line, shift and the variant quantities (E-Comm and Retail). The run is created and submitted to the store; the store issues the full pick list and the floor builds it on the line. Nothing about fresh runs changed.</p>
+<p>A normal in-house build. Pick the product, line, shift and the variant quantities (E-Comm and Retail). <strong>You also pick the run&rsquo;s format.</strong> This is required, and it tells the store exactly what to issue:</p>
+<div class="anatomy">
+  <div class="a-row"><div class="a-key">CKD</div><div class="a-val"><p>Loose parts. The store issues the full component pick list and the floor assembles the car.</p></div></div>
+  <div class="a-row"><div class="a-key">SKD</div><div class="a-val"><p>Part-built bundles. The store issues the SKD bundle plus the finishing kit.</p></div></div>
+  <div class="a-row"><div class="a-key">FBU</div><div class="a-val"><p>Fully built cars. The store issues the built car plus the finishing kit (battery, packaging, para); the car is issued whole, not as parts.</p></div></div>
+</div>
+<div class="callout note">
+  <div class="c-title">&#9432; Built cars in stock? The form defaults to FBU</div>
+  <p>When you pick a product that has built (FBU) units in stock, the form shows how many (for example &ldquo;428 built units in stock&rdquo;) and defaults the format to <strong>FBU</strong>, so we finish those first. Switch it to CKD if you mean to build from loose parts. The format is the run&rsquo;s, set here by production: the store issues exactly that, or rejects the run if stock cannot match. The store no longer decides the format for you.</p>
+</div>
 
 <h2 class="sec">Outsourced</h2>
-<p>Raw materials go to a vendor who builds the units and returns them. This is now a <strong>two-phase</strong> run, so only the parts the vendor needs go out, and the packaging stays in until the units come back.</p>
-<pre class="flow" style="font-family:var(--mono);font-size:11px;line-height:1.5;background:rgba(0,0,0,.04);border:1px solid var(--rule);border-radius:4px;padding:12px;overflow-x:auto;white-space:pre">BUILD  (outside)
-  1. Request Outsourced Run (pick vendor)        -> store Issue Queue
-  2. Store issues the BUILD parts                -> Car / Remote / Fastener only
-  3. Hand to vendor, then Send to Vendor (Garage)-> run goes In Progress
+<p>Raw build materials go to a vendor who builds the cars and returns them; the in-house team finishes them. Your part is clean and linear: <strong>request &rarr; send &rarr; bring back</strong>. There is no finish phase on the outsourced run itself, finishing is a separate Fresh + FBU run.</p>
+<pre class="flow" style="font-family:var(--mono);font-size:11px;line-height:1.5;background:rgba(0,0,0,.04);border:1px solid var(--rule);border-radius:4px;padding:12px;overflow-x:auto;white-space:pre">BUILD-MATERIALS OUT
+  1. Request Outsourced Run (pick vendor)           -> store Issue Queue
+  2. Store issues the BUILD materials               -> coloured car / remote parts only
+  3. Hand to vendor, then Send to Vendor (Garage)   -> run goes In Progress
 
-VENDOR builds. Units come back (in instalments is fine).
+VENDOR builds. Built cars come back (instalments are fine).
 
-RECEIVE  (store)
-  4. Receive built units (count) into the pool   -> Garage run detail
+RECEIVE  (store, in normal Receiving)
+  4. Create the shipment, declare FBU, LINK this run -> built cars into normal stock
+  5. Run auto-completes once the full count is received
 
-FINISH  (in-house, when a line is free)
-  5. Issue Finish Parts                          -> packaging / accessories / battery / sticker
-  6. Sticker each unit at Ext Inwarding          -> then QC -> Packaging -> PKG Out</pre>
+FINISH  (in-house, a separate run)
+  6. Request a Fresh run, format FBU                -> store issues the built car + finishing kit
+       -> build / finish -> QC -> Packaging -> PKG Out</pre>
 <div class="callout note">
-  <div class="c-title">&#9432; Only car, remote and fastener go to the vendor</div>
-  <p>The packaging, accessories, battery and sticker are issued later, in-house, when the built units return. You receive the returns as a simple count (instalments are fine), then issue the finish parts and sticker each unit at Ext Inwarding.</p>
+  <div class="c-title">&#9432; Built cars come back through Receiving, not a separate button</div>
+  <p>The vendor&rsquo;s cars are received like any other FBU shipment: in Garage Receiving, declare <strong>FBU</strong> and <strong>link this outsourced run</strong>. They land in normal stock and the run closes itself when the count reaches the planned quantity. There is no counting pool and no Ext Inwarding scan, both are gone. Finishing is then an ordinary Fresh + FBU run by the in-house team (the built car appears as a normal part to issue).</p>
 </div>
 
 <h2 class="sec">Repair</h2>
-<p>An open-ended recovery run for the broken / returned pile. You can start it with <strong>no target</strong>: just open the run and the floor pulls units in as they go. Add target product lines only if you already know what you are recovering.</p>
+<p>An open-ended recovery run for the broken / returned pile. You can start it with <strong>no target</strong>: just open the run and the floor pulls units in as they go. Add target product lines only if you already know what you are recovering. <strong>Pick a format</strong> too, it classifies the repair: <strong>FBU</strong> = repair by swapping in a built unit, <strong>CKD</strong> = repair from parts. (Repair parts are still requested ad-hoc and linked to the run; the format is the classification, not a fixed pick list.)</p>
 <pre class="flow" style="font-family:var(--mono);font-size:11px;line-height:1.5;background:rgba(0,0,0,.04);border:1px solid var(--rule);border-radius:4px;padding:12px;overflow-x:auto;white-space:pre">  1. Request Repair Run (no target needed)
   2. Floor: at Repair Start, sticker each repairable unit and scan it in
               (scrap goes straight to the scrap pile, no scan)
@@ -78,12 +88,12 @@ FINISH  (in-house, when a line is free)
   <tbody>
     <tr><td class="mono">Requested</td><td>Created but not yet issued by the store. You can <strong>Cancel</strong> a run before it is issued.</td></tr>
     <tr><td class="mono">Issued</td><td>In-house runs the store has issued. <strong>Confirm Receipt</strong> (accept the issued quantities; a shortfall automatically raises a short-supply request for the store), and <strong>Mark Complete</strong> when the run is done.</td></tr>
-    <tr><td class="mono">Upcoming</td><td>Outsourced runs sent to the vendor, waiting for the built units. When the store has inwarded units, <strong>Request Finish</strong> unlocks and pulls the finish parts into the store&rsquo;s Issue Queue. The button stays greyed until units are inwarded.</td></tr>
+    <tr><td class="mono">Upcoming</td><td>Outsourced runs sent to the vendor, waiting for the built cars. The cars come back through the store&rsquo;s Receiving (declare FBU, link the run) and the run auto-completes once fully received. To turn the built cars into finished units, raise a separate <strong>Fresh run, format FBU</strong>.</td></tr>
   </tbody>
 </table>
 <p>Open ad-hoc parts requests are listed here too, with a Cancel action. Click any run to open its detail: vendor info, work orders, the pick list and the receipt status.</p>
 
 <div class="callout note">
   <div class="c-title">&#9432; The store fulfils from Garage</div>
-  <p>Issuing parts, rejecting a run, sending an outsourced run to the vendor and receiving the built units are the store&rsquo;s steps, in Garage&rsquo;s Issue Queue. You request and track here; the store fulfils there.</p>
+  <p>Issuing parts, rejecting a run, and sending an outsourced run to the vendor are the store&rsquo;s steps in Garage&rsquo;s Issue Queue; the built cars come back through Garage Receiving (declare FBU, link the run). The store fills your request exactly as raised or rejects it, it never changes the run. You request and track here; the store fulfils there.</p>
 </div>

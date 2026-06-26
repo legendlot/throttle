@@ -9,7 +9,7 @@
 
 <h2 class="sec">The receiving workflow</h2>
 <ol class="steps">
-  <li><span class="s-title">Log the shipment.</span> Use <strong>+ New Shipment</strong>: supplier (required), optionally a PO reference (auto-fills supplier and origin), arrival date, expected boxes, and the receive format (Parts/CKD or FBU Units). Pending POs are listed at the top under <strong>Upcoming Shipments</strong>; turn one into a shipment in one click. The shipments you are working on sit below, under <strong>Active Shipments</strong>.</li>
+  <li><span class="s-title">Log the shipment.</span> Use <strong>+ New Shipment</strong>: supplier (required), optionally a PO reference (auto-fills supplier and origin), arrival date, expected boxes, and the <strong>receive format</strong> (Parts/CKD or FBU Units). Choosing <strong>FBU Units</strong> reveals an optional <strong>Link outsourced run</strong> box, use it when these are vendor-built cars coming back. Pending POs are listed at the top under <strong>Upcoming Shipments</strong>; turn one into a shipment in one click. The shipments you are working on sit below, under <strong>Active Shipments</strong>.</li>
   <li><span class="s-title">Add shipping marks (boxes).</span> Inside the shipment, add marks one at a time or as a numbered range (for example BOX-1 to BOX-30, skipping any missing).</li>
   <li><span class="s-title">Open a box and count it.</span> For each expected line, enter how many arrived OK versus damaged. Items not on the list go under <strong>Unexpected Items</strong>. Submit the box (optionally printing bag labels for the OK quantity).</li>
   <li><span class="s-title">Reconcile.</span> The Reconciliation panel shows expected versus counted per line, with a status: Matched, Short, Over, Has Damage, Pending or GRN Raised.</li>
@@ -19,6 +19,11 @@
 <div class="callout warn">
   <div class="c-title">&#9888; A few things to know</div>
   <p>Bag labels are generated from the <strong>OK</strong> quantity only; damaged pieces never get labels. Re-opening a counted box to fix it runs in <strong>amend</strong> mode, which overwrites all that box&rsquo;s lines with whatever you enter (including zeros), so do not blank a field you did not mean to clear. <strong>Raise GRN</strong> only picks up lines that have a count and no existing GRN; re-counting after a GRN will not re-raise it.</p>
+</div>
+
+<div class="callout note">
+  <div class="c-title">&#9432; Built cars (FBU): linking an outsourced run auto-closes it</div>
+  <p>When the format is <strong>FBU</strong>, the worksheet lists the fully-built cars (per variant and colour) and they book into <strong>normal stock</strong> on GRN, like any other part. If these are cars coming back from a vendor, pick the <strong>outsourced run</strong> they belong to in the link box: the GRN is tagged to that run and the run <strong>auto-completes</strong> once the full planned count is received. Leave the link empty for cars you simply bought ready-built. Either way there is no counting pool and no one-by-one Ext Inwarding scan, built cars come in here in Receiving.</p>
 </div>
 
 <div class="callout note">

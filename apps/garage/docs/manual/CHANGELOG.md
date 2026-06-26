@@ -6,6 +6,12 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md`).
 
+## [1.9.0] - 2026-06-27
+
+### Changed
+- **Issue Queue** chapter: replaced the old "Issue as CKD parts or FBU units" toggle with the new model. The run's **format** (declared by production at run-create) decides the pick list; the store issues exactly that (1:1) or **rejects** the run if stock cannot match. There is no store-side format toggle anymore. Built cars are now ordinary stock, so an FBU run's car appears as a normal pick line.
+- **Receiving** chapter: declaring **FBU Units** now reveals an optional **Link outsourced run** box. Vendor-built cars come back here in normal Receiving, book into normal stock, and the linked outsourced run **auto-completes** once the full count is received (no counting pool, no Ext Inwarding scan, no separate "Receive built cars" button).
+
 ## [1.8.0] - 2026-06-14
 
 ### Added

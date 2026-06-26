@@ -20,15 +20,16 @@
 </ol>
 <p><strong>Print</strong> produces a pick sheet for the floor. <strong>Reject</strong> (runs and non-short work orders) needs a reason and removes the request. For a scan-picked run, the <strong>Pick Status</strong> panel shows each part as Complete, Partial, Pending or Not needed.</p>
 
-<h2 class="sec">Issue as CKD parts or FBU units</h2>
-<p>For a fresh in-house run whose product also has <strong>built (FBU) units in stock</strong>, the detail shows an <strong>Issue as</strong> toggle: <span class="mono">CKD parts</span> or <span class="mono">FBU units</span>. The store decides at issue time which to give the floor:</p>
+<h2 class="sec">The run&rsquo;s format decides the pick list</h2>
+<p>Production declares each run&rsquo;s <strong>format</strong> when they create it, and the pick list is a direct projection of that. You issue exactly what it shows:</p>
 <div class="anatomy">
-  <div class="a-row"><div class="a-key">CKD parts</div><div class="a-val"><p>The default. The pick list is the full component BOM, the floor assembles the car.</p></div></div>
-  <div class="a-row"><div class="a-key">FBU units</div><div class="a-val"><p>Flip to this when you&rsquo;re issuing ready-built units. The list switches to the <strong>FBU units</strong> on hand plus the outward kit only (packaging, battery, para), the car itself is issued whole, not as parts. Issuing draws down FBU stock.</p></div></div>
+  <div class="a-row"><div class="a-key">CKD</div><div class="a-val"><p>The full component pick list; the floor assembles the car.</p></div></div>
+  <div class="a-row"><div class="a-key">SKD</div><div class="a-val"><p>The SKD bundle plus the finishing kit.</p></div></div>
+  <div class="a-row"><div class="a-key">FBU</div><div class="a-val"><p>The built car, now a normal stock part (for example a &ldquo;Nitro Tarmac Grey&rdquo; car), plus the finishing kit; the car is issued whole, not as parts.</p></div></div>
 </div>
 <div class="callout note">
-  <div class="c-title">&#9432; The toggle only shows when there&rsquo;s a choice</div>
-  <p>If the product has no FBU stock, there&rsquo;s nothing to flip to and the toggle doesn&rsquo;t appear, the run issues as CKD. Flipping back and forth before you issue is safe; the choice is locked in only when you confirm the issue.</p>
+  <div class="c-title">&#9432; You issue what the run asks for, or reject it</div>
+  <p>There is <strong>no CKD/FBU toggle</strong> anymore, the store does not choose the format. If you cannot fulfil what the run asks for (for example it wants built cars that are not in stock), <strong>Reject</strong> the run with a reason and ask production to raise it again to match what is in stock. Built cars are now ordinary stock, so an FBU run&rsquo;s car simply appears as a normal pick line.</p>
 </div>
 
 <div class="callout warn">

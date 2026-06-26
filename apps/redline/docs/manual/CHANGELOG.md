@@ -6,6 +6,13 @@ All notable changes to the manual are recorded here. The version here, in
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning is manual
 (see `README.md` → Versioning).
 
+## [1.9.0] - 2026-06-27
+
+### Changed
+- **New Run / Request** chapter rewritten for the FBU run-model refinement: **Fresh** runs now require a **format** (CKD / SKD / FBU), with built-unit availability surfaced and FBU defaulted when built cars are in stock ("finish these first"). **Repair** runs carry a format as a classification (FBU = repair by built-unit swap; CKD = repair from parts).
+- **Outsourced** runs rewritten: build materials out, vendor builds, the built cars come back through Garage **Receiving** (declare FBU + **link the run**), the run **auto-completes** when fully received, and **finishing is a separate Fresh + FBU run**. Removed the old two-phase pool / **Request Finish** / **Ext Inwarding** steps.
+- The store now issues exactly what the run's format asks for (1:1) or **rejects** the run; it no longer flips the format.
+
 ## [1.6.0] - 2026-06-14
 
 ### Added
