@@ -43,13 +43,36 @@ export function Combobox({
   onBlur: onBlurExternal,
   commitOnTab = false,
   renderOption,
+  // When true, the dropdown renders position:fixed (anchored to the input's
+  // viewport rect) instead of position:absolute. Use inside scroll/overflow
+  // containers (e.g. a horizontally-scrollable table) where an absolute
+  // dropdown would be clipped by the ancestor's overflow. Default off.
+  portal = false,
 }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
   const [highlight, setHighlight] = useState(-1);
+  const [rect, setRect] = useState(null); // input viewport rect, portal mode only
   const inputRef = useRef(null);
   const highlightedRef = useRef(null);
   const blurTimerRef = useRef(null);
+
+  // Portal mode: keep the fixed-position dropdown anchored to the input as the
+  // page/container scrolls or resizes. getBoundingClientRect is cheap; we
+  // reposition rather than close so the dropdown tracks the input.
+  useEffect(() => {
+    if (!portal || !open) return;
+    const update = () => {
+      if (inputRef.current) setRect(inputRef.current.getBoundingClientRect());
+    };
+    update();
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    return () => {
+      window.removeEventListener('scroll', update, true);
+      window.removeEventListener('resize', update);
+    };
+  }, [portal, open]);
 
   // Resolve the label for the currently-selected value.
   const selectedOption = useMemo(
@@ -245,9 +268,22 @@ export function Combobox({
           ×
         </button>
       )}
-      {open && !disabled && !loading && (
+      {open && !disabled && !loading && (!portal || rect) && (
         <div
-          style={{
+          style={portal ? {
+            position: 'fixed',
+            top: rect.bottom,
+            left: rect.left,
+            width: Math.max(rect.width, 280),
+            zIndex: 9999,
+            background: 'var(--surface2)',
+            border: '1px solid var(--border)',
+            borderTop: 'none',
+            borderRadius: '0 0 4px 4px',
+            maxHeight: maxDropdownHeight,
+            overflowY: 'auto',
+            boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+          } : {
             position: 'absolute',
             top: '100%',
             left: 0,

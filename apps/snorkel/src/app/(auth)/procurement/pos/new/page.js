@@ -1122,6 +1122,7 @@ function ManualMode({
                         loading={!partsCache && partsLoading}
                         inputStyle={{ fontFamily: 'var(--mono)' }}
                         commitOnTab
+                        portal
                       />
                     </div>
                   </td>
