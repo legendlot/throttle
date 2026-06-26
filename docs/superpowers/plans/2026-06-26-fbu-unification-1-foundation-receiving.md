@@ -214,6 +214,20 @@ return ok({ shipment_id, receive_format: declared, warning });
 
 ---
 
+## Execution log (S178)
+
+**Shipped + deployed** — worker `lotopsproxy` version `ccd9cf43`; Garage pushed (auto-deploy); migration `fbu_grn_source_v1` applied.
+
+- **Task 1 ✅** — `grn_register.source` + `ext_run_no` added (nullable); snapshot `store.safety_grn_register_2026_06_26` (1,939 rows); RLS intact.
+- **Task 2 ✅** — `seedReceivingLinesFromPO`: declared-overrides-else-fallback predicates + `builtPartCodeResolver` helper. FBU branch deviates from the plan-as-written in two safe ways: (a) uses **`pending.push` one-row-per-PO-line carrying variant/color** (NOT `addExploded`, which aggregates to Common — that would mis-key the `fbu_stock` bridge); (b) **legacy fbu fallback** when a product has no built-part code (Shadow) — auto-scoping Plan 1 to pure-FBU SKUs. Resolver validated via SQL (Rift/Rumble→car+remote, Dash/Mac/Nitro→car, Shadow→none).
+- **Task 3 ✅ (adjusted)** — `raiseGRNFromReceiving`: parts GRN rows carry `source='fbu_purchase'` for FBU shipments; FBU `fbu_stock` bridge added (loops only on FBU shipments → subrequest-safe). **Deviations:** the legacy `fbuLines → fbu_grn_register` path was **KEPT** (not deleted — it's the Shadow fallback); **`po_lines.qty_received` write-back DEFERRED to Plan 2** (per-line query+update loop risks the 50-subrequest limit on large CKD shipments — needs a batched RPC).
+- **Task 4 ✅** — `createShipment` returns a soft `warning` on declared≠intended; Garage receiving surfaces it + best-effort defaults the format toggle to FBU on PO intent. (The new-shipment form already had a Parts/CKD↔FBU toggle, so no new selector was needed.)
+- **Task 5 ✅** — knowledge updated (BACKLOG + RULE-FBU-001 amendment); this log.
+
+**Pending — authenticated browser smoke (Afshaan, ~3 min):** on garage.legendoftoys.com receiving, create a shipment against a pure-FBU PO (e.g. a Nitro/Rift FBU PO), declare **FBU** → confirm the worksheet shows built-part lines (`NT-CAR-01` / `RI-CAR-01`+`RI-RM-01`), not a single SKU line → count + raise GRN → then verify in SQL: `stock_ledger` built-part `total_received` rose, `fbu_stock` mirrored the same qty, and `grn_register.source='fbu_purchase'`. Separately, declare a format ≠ the PO intent → confirm the amber mismatch warning shows and the shipment still creates. Snapshot `stock_ledger`/`fbu_stock` first if testing on a real PO, or use a throwaway PO + revert.
+
+---
+
 ## Roadmap — follow-on plans (each its own bite-sized plan after Plan 1 ships + is floor-proven)
 
 - **Plan 2 — Production cutover & migration.** `bom_format` += `FBU`/`ANY`; retag kit→`ANY` + built-car/remote→`FBU`; format-aware matcher (`IN(runFmt,'ANY')`) across `getProductionRun`/`calcKit`/`getProducibility`/`getPartCoverage`/`checkRunBomStock`; mint `SH-CAR-01` + Shadow dual-format BOM; reframe `setRunIssueMode` as the store fulfillment toggle; unit-line `qty_received` write-back; **migrate `fbu_stock` balances → `stock_ledger` (Piyush physical counts), stop the dual-write, freeze `fbu_stock`.**
