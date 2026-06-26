@@ -21,7 +21,7 @@ export default function EngagementsPage() {
   const router = useRouter();
   const [tab, setTab] = useState('all');
   const [type, setType] = useState('all');
-  const [stage, setStage] = useState('');
+  const [stages, setStages] = useState([]); // multi-select (#11)
   const [search, setSearch] = useState('');
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -35,12 +35,16 @@ export default function EngagementsPage() {
     const params = { type, limit: 100, offset: 0 };
     const tabFilter = TABS.find(t => t.id === tab)?.filter;
     if (tabFilter) params.stage = tabFilter;
-    else if (stage) params.stage = stage;
+    else if (stages.length) params.stages = stages.join(',');
     if (search) params.search = search;
     ignitionopsGet('getEngagements', params, session)
       .then(r => setRows(r.engagements || []))
       .finally(() => setLoading(false));
-  }, [tab, type, stage, search, session]);
+  }, [tab, type, stages, search, session]);
+
+  function toggleStage(s) {
+    setStages(prev => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s]);
+  }
 
   return (
     <div>
@@ -76,13 +80,18 @@ export default function EngagementsPage() {
           <option value="video_tracking">Video</option>
           <option value="ugc">UGC</option>
         </select>
-        {tab === 'all' && (
-          <select value={stage} onChange={e => setStage(e.target.value)} style={inputStyle(160)}>
-            <option value="">Any stage</option>
-            {STAGE_VALUES.map(s => <option key={s} value={s}>{STAGE_LABELS[s]}</option>)}
-          </select>
-        )}
       </div>
+
+      {tab === 'all' && (
+        <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+          {STAGE_VALUES.map(s => (
+            <Chip key={s} active={stages.includes(s)} onClick={() => toggleStage(s)}>{STAGE_LABELS[s]}</Chip>
+          ))}
+          {stages.length > 0 && (
+            <button onClick={() => setStages([])} style={{ marginLeft: 4, padding: '4px 8px', background: 'transparent', color: 'var(--text-3)', border: 'none', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer', textDecoration: 'underline' }}>clear</button>
+          )}
+        </div>
+      )}
 
       {loading ? <Spinner /> : (
         <div style={{

@@ -4,6 +4,8 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { useToast, Spinner } from '@throttle/ui';
 import { ignitionopsGet, ignitionopsPost } from '../../../../lib/ignitionopsFetch.js';
+import ProductLinesEditor, { emptyLine, linesToPayload } from '../../../../components/ProductLinesEditor.js';
+import PocSelect from '../../../../components/PocSelect.js';
 
 export default function NewEngagementPage() {
   const { session } = useAuth();
@@ -13,14 +15,15 @@ export default function NewEngagementPage() {
   const [searchResults, setSearchResults] = useState([]);
   const [selected, setSelected] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [lines, setLines] = useState([emptyLine()]);
   const [form, setForm] = useState({
     engagement_type: 'video_tracking',
     deal_type: 'paid',
     payment_terms: 'on_release',
     payment_amount: 0,
-    product_code: '',
-    product_variant: '',
     directed_to: 'website',
+    poc_user_id: null,
+    poc_name: null,
   });
 
   useEffect(() => {
@@ -36,10 +39,12 @@ export default function NewEngagementPage() {
     if (!selected) { toast('Pick an influencer', 'error'); return; }
     setBusy(true);
     try {
+      const products = linesToPayload(lines);
       const res = await ignitionopsPost('createEngagement', {
         influencer_id: selected.id,
         ...form,
         payment_amount: Number(form.payment_amount) || 0,
+        ...(products.length ? { products } : {}),
       }, session);
       toast(`Created ${res.engagement_no}`, 'success');
       router.push(`/engagements/detail/?id=${res.id}`);
@@ -117,12 +122,6 @@ export default function NewEngagementPage() {
           <Field label="Payment amount (₹)">
             <input type="number" value={form.payment_amount} onChange={e => setField('payment_amount', e.target.value)} style={inputStyle('100%')} />
           </Field>
-          <Field label="Product code">
-            <input value={form.product_code} onChange={e => setField('product_code', e.target.value)} placeholder="e.g. Brutus" style={inputStyle('100%')} />
-          </Field>
-          <Field label="Variant / colour">
-            <input value={form.product_variant} onChange={e => setField('product_variant', e.target.value)} placeholder="e.g. Burnout Yellow" style={inputStyle('100%')} />
-          </Field>
           <Field label="Directed to">
             <select value={form.directed_to} onChange={e => setField('directed_to', e.target.value)} style={inputStyle('100%')}>
               <option value="website">Website</option>
@@ -130,7 +129,20 @@ export default function NewEngagementPage() {
               <option value="flipkart">Flipkart</option>
             </select>
           </Field>
+          <Field label="POC">
+            <PocSelect
+              value={form.poc_user_id}
+              onChange={({ poc_user_id, poc_name }) => setForm(f => ({ ...f, poc_user_id, poc_name }))}
+              session={session}
+              style={inputStyle('100%')}
+            />
+          </Field>
         </div>
+      </section>
+
+      <section style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 16, marginBottom: 12 }}>
+        <h2 style={hd}>Products</h2>
+        <ProductLinesEditor value={lines} onChange={setLines} session={session} />
       </section>
 
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>

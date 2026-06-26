@@ -3,6 +3,8 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Modal, useToast } from '@throttle/ui';
 import { ignitionopsGet, ignitionopsPost } from '../lib/ignitionopsFetch.js';
+import ProductLinesEditor, { emptyLine, linesToPayload } from './ProductLinesEditor.js';
+import PocSelect from './PocSelect.js';
 
 // Quick-add deal (engagement). Essentials only — influencer, type, deal terms,
 // product, expected post date (feeds the Schedule). Lands on the new deal to
@@ -16,10 +18,12 @@ export function NewDealModal({ open, onClose, session, presetInfluencer, onCreat
   const [search, setSearch] = useState('');
   const [results, setResults] = useState([]);
   const [selected, setSelected] = useState(presetInfluencer || null);
+  const [lines, setLines] = useState([emptyLine()]);
   const [form, setForm] = useState({
     engagement_type: 'video_tracking', deal_type: 'paid',
-    product_code: '', product_variant: '', expected_post_date: '',
+    expected_post_date: '',
     payment_amount: '', payment_terms: 'advance', affiliate_pct: '',
+    poc_user_id: null, poc_name: null,
   });
   const setField = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const isPaid      = form.deal_type === 'paid' || form.deal_type === 'paid_plus_affiliate';
@@ -45,6 +49,8 @@ export function NewDealModal({ open, onClose, session, presetInfluencer, onCreat
       else { delete payload.payment_amount; delete payload.payment_terms; }
       if (isAffiliate && payload.affiliate_pct !== '') payload.affiliate_pct = Number(payload.affiliate_pct);
       else delete payload.affiliate_pct;
+      const products = linesToPayload(lines);
+      if (products.length) payload.products = products;
       const res = await ignitionopsPost('createEngagement', payload, session);
       toast(`Created ${res.engagement_no}`, 'success');
       onClose?.();
@@ -123,15 +129,22 @@ export function NewDealModal({ open, onClose, session, presetInfluencer, onCreat
               onChange={e => setField('affiliate_pct', e.target.value)} placeholder="e.g. 10" style={inp} />
           </Field>
         )}
-        <Field label="Product code">
-          <input value={form.product_code} onChange={e => setField('product_code', e.target.value)} placeholder="e.g. Shadow" style={inp} />
-        </Field>
-        <Field label="Variant / colour">
-          <input value={form.product_variant} onChange={e => setField('product_variant', e.target.value)} placeholder="e.g. Tarmac Black" style={inp} />
+        <Field label="POC">
+          <PocSelect
+            value={form.poc_user_id}
+            onChange={({ poc_user_id, poc_name }) => setForm(f => ({ ...f, poc_user_id, poc_name }))}
+            session={session}
+            style={inp}
+          />
         </Field>
         <Field label="Expected post date">
           <input type="date" value={form.expected_post_date} onChange={e => setField('expected_post_date', e.target.value)} style={inp} />
         </Field>
+      </div>
+
+      <div style={{ marginTop: 14 }}>
+        <div style={lbl}>Products</div>
+        <ProductLinesEditor value={lines} onChange={setLines} session={session} />
       </div>
     </Modal>
   );

@@ -1,17 +1,19 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { Spinner, useToast } from '@throttle/ui';
+import { Spinner, Modal, useToast } from '@throttle/ui';
 import { ignitionopsGet, ignitionopsPost } from '../../../../lib/ignitionopsFetch.js';
 import StageBadge from '../../../../components/StageBadge.js';
 import StageStepper from '../../../../components/StageStepper.js';
 import DealTypeBadge from '../../../../components/DealTypeBadge.js';
 import AdvanceModal from '../../../../components/AdvanceModal.js';
 import OpenPitstopButton from '../../../../components/OpenPitstopButton.js';
+import ProductLinesEditor, { linesToPayload } from '../../../../components/ProductLinesEditor.js';
 
 export default function EngagementDetailPage() {
   const sp = useSearchParams();
+  const router = useRouter();
   const id = sp.get('id');
   const eno = sp.get('engagement_no');
   const { session, perms } = useAuth();
@@ -20,6 +22,8 @@ export default function EngagementDetailPage() {
   const [err, setErr] = useState(null);
   const [advOpen, setAdvOpen] = useState(false);
   const [note, setNote] = useState('');
+  const [delOpen, setDelOpen] = useState(false);
+  const canManage = !!perms?.ignition_manage;
 
   function reload() {
     if (!session || (!id && !eno)) return;
@@ -28,10 +32,27 @@ export default function EngagementDetailPage() {
   }
   useEffect(reload, [id, eno, session]);
 
-  async function doAdvance({ to_stage, note }) {
-    await ignitionopsPost('advanceStage', { engagement_id: data.engagement.id, to_stage, note }, session);
+  async function doAdvance({ to_stage, note, ...extra }) {
+    // Forward all extra fields (video_link / rating / shipping_order_id /
+    // expected_post_date) so the AdvanceModal's guard re-tries work.
+    await ignitionopsPost('advanceStage', { engagement_id: data.engagement.id, to_stage, note, ...extra }, session);
     toast(`Advanced to ${to_stage}`, 'success');
     reload();
+  }
+
+  async function doDelete() {
+    try {
+      const res = await ignitionopsPost('deleteEngagement', { engagement_id: data.engagement.id }, session);
+      toast(`Deleted ${res.engagement_no}`, 'success');
+      router.push('/engagements');
+    } catch (e) {
+      if (/has_payments_cannot_delete/.test(e.message)) {
+        toast('Has payments — cancel/close it instead of deleting.', 'error');
+      } else {
+        toast(e.message, 'error');
+      }
+      setDelOpen(false);
+    }
   }
 
   async function addNote() {
@@ -70,6 +91,17 @@ export default function EngagementDetailPage() {
               opacity: data.allowed_next.length === 0 ? 0.5 : 1,
             }}
           >Advance →</button>
+          {canManage && (
+            <button
+              onClick={() => setDelOpen(true)}
+              style={{
+                padding: '6px 14px', background: 'transparent', color: 'var(--state-error-fg)',
+                border: '1px solid var(--state-error-fg)', borderRadius: 'var(--radius-sm)',
+                fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700,
+                letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer',
+              }}
+            >Delete</button>
+          )}
         </div>
       </div>
 
@@ -99,10 +131,17 @@ export default function EngagementDetailPage() {
           {e.commission_amount != null && <KV label="Commission" value={`₹${Number(e.commission_amount).toLocaleString()}`} />}
         </Card>
 
-        <Card title="Product">
-          <KV label="Code" value={e.product_code || '—'} />
-          <KV label="Variant" value={e.product_variant || '—'} />
-          <KV label="Directed to" value={e.directed_to || '—'} />
+        <ProductsCard
+          products={data.products || []}
+          directedTo={e.directed_to}
+          engagementId={e.id}
+          canEdit={canManage}
+          session={session}
+          onSaved={reload}
+        />
+
+        <Card title="POC">
+          <KV label="Assigned to" value={e.poc_name || '—'} />
         </Card>
 
         <Card title="Costs">
@@ -196,7 +235,92 @@ export default function EngagementDetailPage() {
         onClose={() => setAdvOpen(false)}
         onAdvance={doAdvance}
       />
+
+      {delOpen && (
+        <Modal open title={`Delete ${e.engagement_no}?`} onClose={() => setDelOpen(false)}>
+          <div style={{ minWidth: 360, display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 }}>
+              This permanently removes the deal and its products, notes and history.
+              Deals with recorded payments can&apos;t be deleted — cancel/close them instead.
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button onClick={() => setDelOpen(false)} style={{ padding: '8px 14px', background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, cursor: 'pointer' }}>Cancel</button>
+              <button onClick={doDelete} style={{ padding: '8px 14px', background: 'var(--state-error-fg)', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>Delete deal</button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
+  );
+}
+
+// Multi-product lines (#4) with inline edit → setEngagementProducts (replace-set,
+// rolls cost up on the worker). Legacy single-product deals show a synthesized line.
+function ProductsCard({ products, directedTo, engagementId, canEdit, session, onSaved }) {
+  const { showToast: toast } = useToast();
+  const [editing, setEditing] = useState(false);
+  const [lines, setLines] = useState([]);
+  const [busy, setBusy] = useState(false);
+
+  function startEdit() {
+    setLines((products || []).map(p => ({
+      product_code: p.product_code || '',
+      product_variant: p.product_variant || '',
+      quantity: p.quantity ?? 1,
+      goodies_cost: p.goodies_cost ?? '',
+      shipping_cost: p.shipping_cost ?? '',
+    })));
+    setEditing(true);
+  }
+  async function save() {
+    setBusy(true);
+    try {
+      await ignitionopsPost('setEngagementProducts', { engagement_id: engagementId, products: linesToPayload(lines) }, session);
+      toast('Products updated', 'success');
+      setEditing(false);
+      onSaved?.();
+    } catch (err) { toast(err.message, 'error'); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <section style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <h2 style={{ fontSize: 12, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Products</h2>
+        {canEdit && !editing && (
+          <button onClick={startEdit} style={{ padding: '4px 10px', background: 'var(--surface-3)', color: 'var(--text-1)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer' }}>Edit</button>
+        )}
+      </div>
+      {editing ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <ProductLinesEditor value={lines} onChange={setLines} session={session} />
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button onClick={() => setEditing(false)} style={{ padding: '6px 12px', background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, cursor: 'pointer' }}>Cancel</button>
+            <button onClick={save} disabled={busy} style={{ padding: '6px 12px', background: '#FF6B00', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }}>{busy ? 'Saving…' : 'Save'}</button>
+          </div>
+        </div>
+      ) : (
+        <>
+          {(products || []).length === 0 ? (
+            <div style={{ color: 'var(--text-3)', fontSize: 13 }}>No products.</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {products.map((p, i) => (
+                <div key={p.id || i} style={{ display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 13 }}>
+                  <span style={{ color: 'var(--text-1)', fontWeight: 600 }}>{p.product_code || '—'}</span>
+                  {p.product_variant && <span style={{ color: 'var(--text-2)' }}>{p.product_variant}</span>}
+                  {Number(p.quantity) > 1 && <span style={{ color: 'var(--text-3)' }}>×{p.quantity}</span>}
+                  {p.goodies_cost != null && <span style={{ marginLeft: 'auto', color: 'var(--text-3)' }}>₹{Number(p.goodies_cost).toLocaleString()}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+            <KV label="Directed to" value={directedTo || '—'} />
+          </div>
+        </>
+      )}
+    </section>
   );
 }
 

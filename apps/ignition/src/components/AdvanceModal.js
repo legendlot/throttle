@@ -17,27 +17,48 @@ export default function AdvanceModal({ open, engagement, onClose, onAdvance }) {
   const [videoLink, setVideoLink] = useState('');
   const [trackChoice, setTrackChoice] = useState('on_track'); // on_track | delayed (#10)
   const [revisedDate, setRevisedDate] = useState('');
+  const [rating, setRating] = useState('');                  // #3 — required for completed
+  const [ratingNotes, setRatingNotes] = useState('');
+  const [shipOrderId, setShipOrderId] = useState('');        // #7 — required for shipped
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
   if (!engagement) return null;
 
   const options = allowedTransitions(engagement.stage);
   const needsVideoLink = target === 'live';                 // #4
   const isSchedule     = target === 'scheduled';            // #10
+  const isCompleted    = target === 'completed';            // #3
+  const isShipped      = target === 'shipped';              // #7
   const existingLink   = (engagement.video_link || '').trim();
+  const existingRating = (engagement.influencer?.quality_rating || '').trim();
+  const isRated        = ['green', 'yellow', 'red'].includes(existingRating);
+  const existingOrder  = (engagement.shipping_order_id || '').trim();
   const isDelayed      = isSchedule && trackChoice === 'delayed';
+
+  // #3 — only prompt for a rating when the influencer isn't already rated.
+  const needsRating    = isCompleted && !isRated;
+  // #7 — only prompt for an order id when one isn't already on the deal.
+  const needsOrderId   = isShipped && !existingOrder;
 
   const missingVideo   = needsVideoLink && !(videoLink.trim() || existingLink);
   const missingRevised = isDelayed && !revisedDate;
-  const canSubmit = !!target && !busy && !missingVideo && !missingRevised;
+  const missingRating  = needsRating && !rating;
+  const missingOrderId = needsOrderId && !shipOrderId.trim();
+  const canSubmit = !!target && !busy && !missingVideo && !missingRevised && !missingRating && !missingOrderId;
 
   async function submit() {
     if (!canSubmit) return;
-    setBusy(true);
+    setBusy(true); setErr('');
     try {
       let to_stage = target;
       let outNote = note;
       const extra = {};
       if (needsVideoLink) extra.video_link = (videoLink.trim() || existingLink);
+      if (needsRating && rating) {
+        extra.rating = rating;
+        if (ratingNotes.trim()) extra.rating_notes = ratingNotes.trim();
+      }
+      if (needsOrderId && shipOrderId.trim()) extra.shipping_order_id = shipOrderId.trim();
       if (isDelayed) {
         // "Delayed" routes to the delayed stage with a revised post date; the
         // original is preserved in the history note (#10, no new column).
@@ -48,6 +69,14 @@ export default function AdvanceModal({ open, engagement, onClose, onAdvance }) {
       }
       await onAdvance({ to_stage, note: outNote || undefined, ...extra });
       onClose();
+    } catch (e) {
+      // Surface the worker's guard reasons inline so the operator can fill in
+      // the missing field and resubmit (mirrors the video-link prompt).
+      const m = e?.message || '';
+      if (/rating_required_for_completed/.test(m)) setErr('Rate the influencer (green / yellow / red) to mark this completed.');
+      else if (/shipping_order_id_required_for_shipped/.test(m)) setErr('A Shopify order ID is required to mark this shipped.');
+      else if (/video_link_required_for_live/.test(m)) setErr('A video link is required to mark this live.');
+      else setErr(m || 'Could not advance');
     } finally { setBusy(false); }
   }
 
@@ -87,6 +116,50 @@ export default function AdvanceModal({ open, engagement, onClose, onAdvance }) {
               style={fieldStyle}
             />
             {missingVideo && <div style={{ fontSize: 11, color: 'var(--state-error-fg)', marginTop: 4 }}>Required to mark live</div>}
+          </div>
+        )}
+
+        {/* #3 — marking completed requires a colour rating if not already rated */}
+        {needsRating && (
+          <div>
+            <label style={lblStyle}>Rating *</label>
+            <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+              {[['green', 'Green'], ['yellow', 'Yellow'], ['red', 'Red']].map(([v, label]) => {
+                const on = rating === v;
+                const color = v === 'green' ? '#4ade80' : v === 'yellow' ? '#fbbf24' : '#ff7070';
+                return (
+                  <button type="button" key={v} onClick={() => setRating(v)}
+                    style={{
+                      flex: 1, padding: '8px 10px', cursor: 'pointer',
+                      background: on ? `${color}22` : 'var(--surface-2)',
+                      color: on ? color : 'var(--text-2)',
+                      border: `1px solid ${on ? color : 'var(--border)'}`,
+                      borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: on ? 700 : 600,
+                    }}>{label}</button>
+                );
+              })}
+            </div>
+            {missingRating && <div style={{ fontSize: 11, color: 'var(--state-error-fg)', marginTop: 4 }}>Required to mark completed</div>}
+            <input
+              value={ratingNotes}
+              onChange={(e) => setRatingNotes(e.target.value)}
+              placeholder="Rating notes (optional)"
+              style={{ ...fieldStyle, marginTop: 8 }}
+            />
+          </div>
+        )}
+
+        {/* #7 — marking shipped requires a Shopify order ID if none on the deal */}
+        {needsOrderId && (
+          <div>
+            <label style={lblStyle}>Shopify order ID *</label>
+            <input
+              value={shipOrderId}
+              onChange={(e) => setShipOrderId(e.target.value)}
+              placeholder="e.g. #1234 or 1234"
+              style={fieldStyle}
+            />
+            {missingOrderId && <div style={{ fontSize: 11, color: 'var(--state-error-fg)', marginTop: 4 }}>Required to mark shipped</div>}
           </div>
         )}
 
@@ -135,6 +208,7 @@ export default function AdvanceModal({ open, engagement, onClose, onAdvance }) {
             }}
           />
         </div>
+        {err && <div style={{ fontSize: 12, color: 'var(--state-error-fg)' }}>{err}</div>}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <button
             onClick={onClose}
