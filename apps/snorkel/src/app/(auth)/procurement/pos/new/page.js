@@ -190,12 +190,6 @@ function NewPOPage() {
   const [forwarderCache, setForwarderCache] = useState([]);
   const [partsCache, setPartsCache] = useState(null);     // null = not loaded yet
   const [partsLoading, setPartsLoading] = useState(false);
-  const [pickerOpenIdx, setPickerOpenIdx] = useState(null); // which manual-mode line row has the picker open
-  const [pickerQuery, setPickerQuery] = useState('');
-  // Rect of the focused picker input — used to render the dropdown as
-  // position:fixed so it escapes the parent <table>'s overflow clipping.
-  const [pickerRect, setPickerRect] = useState(null);
-  const pickerRef = useRef(null);
   const [companyAddresses, setCompanyAddresses] = useState([]);
   const [deliveryAddressId, setDeliveryAddressId] = useState('');
 
@@ -243,48 +237,6 @@ function NewPOPage() {
       announcedRR.current = true;
     }
   }, [rrParam, showToast]);
-
-  // Close the parts picker on outside click, ESC, scroll, or resize. Scroll/
-  // resize handling matters because the dropdown is position:fixed against a
-  // captured rect — if the page scrolls, the rect becomes stale and the
-  // dropdown would float disconnected from the input. Closing is the
-  // simplest correct behaviour.
-  useEffect(() => {
-    if (pickerOpenIdx === null) return;
-    function onDocClick(e) {
-      // pickerRef covers the input wrapper only — when the dropdown is
-      // position:fixed it lives outside that subtree, so explicitly skip
-      // clicks targeting an element flagged data-picker-dropdown.
-      if (e.target.closest && e.target.closest('[data-picker-dropdown="1"]')) return;
-      if (pickerRef.current && !pickerRef.current.contains(e.target)) {
-        setPickerOpenIdx(null);
-        setPickerQuery('');
-        setPickerRect(null);
-      }
-    }
-    function onKey(e) {
-      if (e.key === 'Escape') {
-        setPickerOpenIdx(null);
-        setPickerQuery('');
-        setPickerRect(null);
-      }
-    }
-    function close() {
-      setPickerOpenIdx(null);
-      setPickerQuery('');
-      setPickerRect(null);
-    }
-    document.addEventListener('mousedown', onDocClick);
-    document.addEventListener('keydown', onKey);
-    window.addEventListener('scroll', close, true);
-    window.addEventListener('resize', close);
-    return () => {
-      document.removeEventListener('mousedown', onDocClick);
-      document.removeEventListener('keydown', onKey);
-      window.removeEventListener('scroll', close, true);
-      window.removeEventListener('resize', close);
-    };
-  }, [pickerOpenIdx]);
 
   function applyCategory(cat, isChina = false) {
     setSelectedCategory(cat);
@@ -831,13 +783,6 @@ function NewPOPage() {
               partsCache={partsCache}
               partsLoading={partsLoading}
               loadParts={loadParts}
-              pickerOpenIdx={pickerOpenIdx}
-              setPickerOpenIdx={setPickerOpenIdx}
-              pickerQuery={pickerQuery}
-              setPickerQuery={setPickerQuery}
-              pickerRef={pickerRef}
-              pickerRect={pickerRect}
-              setPickerRect={setPickerRect}
               hsnMap={hsnMap}
               setLineItems={setLineItems}
             />
@@ -1098,22 +1043,23 @@ function BomMode(props) {
 
 function ManualMode({
   lineItems, addManualLine, updateLine, removeLine, currency,
-  partsCache, partsLoading, loadParts,
-  pickerOpenIdx, setPickerOpenIdx, pickerQuery, setPickerQuery, pickerRef,
-  pickerRect, setPickerRect, hsnMap, setLineItems,
+  partsCache, partsLoading, loadParts, hsnMap, setLineItems,
 }) {
-  const [partHighlight, setPartHighlight] = useState(-1);
-  const highlightedPartRef = useRef(null);
+  // Load the parts catalogue once so the part-code combobox is ready.
+  useEffect(() => { loadParts(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
 
-  useEffect(() => {
-    if (highlightedPartRef.current) {
-      highlightedPartRef.current.scrollIntoView({ block: 'nearest' });
-    }
-  }, [partHighlight]);
-
-  useEffect(() => {
-    setPartHighlight(-1);
-  }, [pickerOpenIdx, pickerQuery]);
+  // Standardised part-code combobox options (same shape as the Part Journey /
+  // stock-adjustments pickers). `hint` carries product · category · type so the
+  // multi-token Combobox matches a query by code, name, product, OR category —
+  // not just code+name. The raw fields ride along on the option for auto-fill.
+  const partOptions = useMemo(() => (partsCache || []).map((p) => ({
+    value: p.part_code,
+    label: `${p.part_code}${p.part_name ? ' — ' + p.part_name : ''}`,
+    hint:  [p.product, p.part_category, p.part_type].filter(Boolean).join(' · '),
+    part_name: p.part_name || '',
+    issue_uom: p.issue_uom || '',
+    hsn_code:  p.hsn_code || '',
+  })), [partsCache]);
 
   return (
     <>
@@ -1141,140 +1087,42 @@ function ManualMode({
             </tr></thead>
             <tbody>
               {lineItems.map((l, i) => {
-                const isActivePicker = pickerOpenIdx === i;
-                const pickerQ = isActivePicker ? (pickerQuery || '').trim().toLowerCase() : '';
-                const matches = isActivePicker
-                  ? (partsCache || []).filter((p) =>
-                      !pickerQ ||
-                      (p.part_code || '').toLowerCase().includes(pickerQ) ||
-                      (p.part_name || '').toLowerCase().includes(pickerQ)
-                    ).slice(0, 50)
-                  : [];
-                const selectPart = (p) => {
+                const selectPart = (opt) => {
                   // Multi-field update — go through setLineItems directly so HSN /
                   // GST auto-fill lands atomically rather than racing per-field
                   // updateLine calls.
                   setLineItems((prev) => prev.map((row, j) => {
                     if (j !== i) return row;
-                    const next = { ...row, part_code: p.part_code, description: p.part_name || '' };
+                    if (!opt) return { ...row, part_code: '' };
+                    const next = { ...row, part_code: opt.value, description: opt.part_name || '' };
                     if (!row.unit || row.unit === 'pcs') {
-                      next.unit = p.issue_uom === 'EA' ? 'pcs' : (p.issue_uom || 'pcs');
+                      next.unit = opt.issue_uom === 'EA' ? 'pcs' : (opt.issue_uom || 'pcs');
                     }
-                    if (p.hsn_code) {
-                      next.hsn_code = p.hsn_code;
-                      if (hsnMap[p.hsn_code] != null) next.gst_percent = String(hsnMap[p.hsn_code]);
+                    if (opt.hsn_code) {
+                      next.hsn_code = opt.hsn_code;
+                      if (hsnMap[opt.hsn_code] != null) next.gst_percent = String(hsnMap[opt.hsn_code]);
                     }
                     return next;
                   }));
-                  setPickerOpenIdx(null);
-                  setPickerQuery('');
-                  setPartHighlight(-1);
-                  setPickerRect(null);
                 };
 
                 return (
                 <tr key={i}>
                   <td style={tableTdStyle}>
-                    <div
-                      ref={isActivePicker ? pickerRef : null}
-                      style={{ position: 'relative', width: 130 }}
-                    >
-                      <input
-                        type="text"
-                        value={isActivePicker ? pickerQuery : l.part_code}
-                        placeholder="Part code"
-                        onFocus={(e) => {
-                          setPickerOpenIdx(i);
-                          setPickerQuery(l.part_code || '');
-                          // Capture the input's rect so the dropdown (rendered
-                          // as position:fixed) lands directly below it,
-                          // escaping the table's overflow clipping.
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          setPickerRect({
-                            top: rect.top, left: rect.left,
-                            bottom: rect.bottom, right: rect.right,
-                            width: rect.width, height: rect.height,
-                          });
-                          loadParts();
-                        }}
-                        onChange={(e) => {
-                          setPickerQuery(e.target.value);
-                          updateLine(i, 'part_code', e.target.value);
-                        }}
-                        onKeyDown={(e) => {
-                          if (!isActivePicker) return;
-                          if (matches.length === 0) {
-                            if (e.key === 'Escape') { setPickerOpenIdx(null); setPickerQuery(''); setPartHighlight(-1); setPickerRect(null); }
-                            return;
-                          }
-                          if (e.key === 'ArrowDown') {
-                            e.preventDefault();
-                            setPartHighlight((idx) => Math.min((idx < 0 ? -1 : idx) + 1, matches.length - 1));
-                          } else if (e.key === 'ArrowUp') {
-                            e.preventDefault();
-                            setPartHighlight((idx) => Math.max(idx - 1, 0));
-                          } else if (e.key === 'Enter') {
-                            if (partHighlight >= 0 && matches[partHighlight]) {
-                              e.preventDefault();
-                              selectPart(matches[partHighlight]);
-                            }
-                          } else if (e.key === 'Escape') {
-                            setPickerOpenIdx(null);
-                            setPickerQuery('');
-                            setPartHighlight(-1);
-                            setPickerRect(null);
-                          }
-                        }}
-                        style={{ ...inputStyle, width: 130, fontFamily: 'var(--mono)' }}
+                    {/* Standardised searchable part picker (query by code / name /
+                        product / category). Catalog-backed: selecting auto-fills
+                        description + unit + HSN/GST. Custom / unnamed lines leave
+                        the code blank and use the free-text Description column. */}
+                    <div style={{ width: 240 }}>
+                      <Combobox
+                        value={l.part_code || ''}
+                        options={partOptions}
+                        onChange={(_, opt) => selectPart(opt)}
+                        placeholder="Search part code / name / product…"
+                        loading={!partsCache && partsLoading}
+                        inputStyle={{ fontFamily: 'var(--mono)' }}
+                        commitOnTab
                       />
-                      {isActivePicker && pickerRect && (partsCache || partsLoading) && (
-                        <div
-                          data-picker-dropdown="1"
-                          style={{
-                            position: 'fixed',
-                            top:  pickerRect.bottom + 4,
-                            left: pickerRect.left,
-                            width: Math.max(pickerRect.width, 320),
-                            maxHeight: 320, overflowY: 'auto',
-                            zIndex: 9999,
-                            background: 'var(--surface2)', border: '1px solid var(--border)',
-                            borderRadius: 4, boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
-                          }}
-                        >
-                          {!partsCache && partsLoading ? (
-                            <div style={{ padding: '8px 10px', color: 'var(--t3)', fontSize: 12 }}>
-                              Loading parts…
-                            </div>
-                          ) : matches.length === 0 ? (
-                            <div style={{ padding: '8px 10px', color: 'var(--t3)', fontSize: 12 }}>
-                              No matching parts — value will be used as typed
-                            </div>
-                          ) : matches.map((p, ri) => {
-                            const isHi = ri === partHighlight;
-                            return (
-                              <div
-                                key={p.part_code}
-                                ref={isHi ? highlightedPartRef : null}
-                                onMouseDown={(e) => { e.preventDefault(); selectPart(p); }}
-                                onMouseEnter={() => setPartHighlight(ri)}
-                                style={{
-                                  padding: '6px 10px', cursor: 'pointer',
-                                  borderBottom: '1px solid var(--border)',
-                                  display: 'flex', flexDirection: 'column', gap: 1,
-                                  background: isHi ? 'var(--surface)' : 'transparent',
-                                }}
-                              >
-                                <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t1)' }}>
-                                  {p.part_code}
-                                </span>
-                                <span style={{ fontSize: 11, color: 'var(--t3)' }}>
-                                  {p.part_name}{p.part_category ? ` · ${p.part_category}` : ''}
-                                </span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
                     </div>
                   </td>
                   <td style={tableTdStyle}>
