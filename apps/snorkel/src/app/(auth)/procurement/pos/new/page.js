@@ -970,8 +970,25 @@ function BomMode(props) {
   return (
     <>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 100px auto', gap: 10, alignItems: 'end', marginBottom: 12 }}>
-        <SelectField label="Product *" value={bomProduct} onChange={(v) => { setBomProduct(v); setBomVariant(''); }} options={['', ...PRODUCTS]} />
-        <SelectField label="Variant" value={bomVariant} onChange={setBomVariant} options={['', ...variants]} />
+        <div>
+          <span style={labelStyle}>Product *</span>
+          <Combobox
+            value={bomProduct}
+            options={PRODUCTS.map((p) => ({ value: p, label: p }))}
+            onChange={(v) => { setBomProduct(v); setBomVariant(''); }}
+            placeholder="Search products…"
+          />
+        </div>
+        <div>
+          <span style={labelStyle}>Variant</span>
+          <Combobox
+            value={bomVariant}
+            options={variants.map((v) => ({ value: v, label: v }))}
+            onChange={(v) => setBomVariant(v)}
+            placeholder={bomProduct ? 'Search variants…' : 'Pick a product first'}
+            disabled={!bomProduct}
+          />
+        </div>
         <Field label="Units Qty" type="number" value={bomQty} onChange={setBomQty} />
       </div>
       {cardFilterLabel ? (
@@ -1247,17 +1264,27 @@ function UnitsMode({ fbuProduct, fbuVariants, fbuColors = {}, productHasRemote =
                     </select>
                   </td>
                   <td style={tableTdStyle}>
-                    <select value={r.variant} onChange={(e) => handleVariantChange(i, e.target.value)} style={{ ...selectStyle, width: 160 }}>
-                      <option value="">Select…</option>
-                      {fbuVariants.map((v) => <option key={v} value={v}>{v}</option>)}
-                    </select>
+                    <div style={{ width: 160 }}>
+                      <Combobox
+                        value={r.variant || ''}
+                        options={fbuVariants.map((v) => ({ value: v, label: v }))}
+                        onChange={(v) => handleVariantChange(i, v)}
+                        placeholder="Select variant…"
+                        portal
+                      />
+                    </div>
                   </td>
                   <td style={tableTdStyle}>
                     {variantColors.length > 0 ? (
-                      <select value={r.color || ''} onChange={(e) => updateUnitRow(i, 'color', e.target.value)} style={{ ...selectStyle, width: 140 }}>
-                        <option value="">Select colour…</option>
-                        {variantColors.map((c) => <option key={c} value={c}>{c}</option>)}
-                      </select>
+                      <div style={{ width: 150 }}>
+                        <Combobox
+                          value={r.color || ''}
+                          options={variantColors.map((c) => ({ value: c, label: c }))}
+                          onChange={(v) => updateUnitRow(i, 'color', v)}
+                          placeholder="Select colour…"
+                          portal
+                        />
+                      </div>
                     ) : (
                       <span style={{ color: 'var(--t3)', fontSize: 11 }}>—</span>
                     )}

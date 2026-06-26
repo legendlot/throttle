@@ -233,6 +233,8 @@ export default function VendorsPage() {
     setVsiPartCode(p.part_code);
     setVsiPartName(p.part_name || '');
     setShowPartSuggestions(false);
+    // Keep the chosen row as the sole option so the async Combobox can resolve its label.
+    setPartSuggestions([p]);
   }
 
   async function addSuppliedItem() {
@@ -426,28 +428,23 @@ export default function VendorsPage() {
                       loading={productsLoading}
                     />
                   ) : vsiType === 'part' ? (
-                    <div style={{ position: 'relative' }}>
-                      <input
-                        type="text"
-                        value={vsiPartCode}
-                        onChange={(e) => handlePartSearch(e.target.value)}
-                        onBlur={() => setTimeout(() => setShowPartSuggestions(false), 200)}
-                        onFocus={() => partSuggestions.length > 0 && setShowPartSuggestions(true)}
-                        placeholder="Type to search…"
-                        style={{ ...inputStyle, width: '100%', fontFamily: 'var(--mono)' }}
-                      />
-                      {vsiPartName && <div style={{ fontSize: 10, color: 'var(--t3)', marginTop: 2 }}>{vsiPartName}</div>}
-                      {showPartSuggestions && partSuggestions.length > 0 && (
-                        <div style={{ position: 'absolute', top: 'calc(100% + 2px)', left: 0, minWidth: 520, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 3, zIndex: 50, maxHeight: 300, overflowY: 'auto' }}>
-                          {partSuggestions.map((p) => (
-                            <div key={p.part_code} style={{ padding: '9px 12px', cursor: 'pointer', fontSize: 11 }} onMouseDown={(e) => { e.preventDefault(); selectPart(p); }}>
-                              <span style={{ fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{p.part_code}</span>
-                              <span style={{ color: 'var(--t2)', marginLeft: 8 }}>{p.part_name}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
+                    <Combobox
+                      value={vsiPartCode}
+                      options={partSuggestions.map((p) => ({
+                        value: p.part_code,
+                        label: `${p.part_code}${p.part_name ? ' — ' + p.part_name : ''}`,
+                        hint: [p.product, p.part_category].filter(Boolean).join(' · '),
+                        part_code: p.part_code, part_name: p.part_name, product: p.product,
+                      }))}
+                      onQueryChange={handlePartSearch}
+                      onChange={(val, opt) => {
+                        if (opt) selectPart(opt);
+                        else { setVsiPartCode(''); setVsiPartName(''); }
+                      }}
+                      placeholder="Type to search part code / name…"
+                      emptyLabel="Type 2+ characters…"
+                      inputStyle={{ fontFamily: 'var(--mono)' }}
+                    />
                   ) : (
                     <select value={vsiCategory} onChange={(e) => setVsiCategory(e.target.value)} style={{ ...selectStyle, width: '100%' }}>
                       <option value="">Select…</option>

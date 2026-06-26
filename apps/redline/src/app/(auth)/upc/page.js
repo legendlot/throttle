@@ -7,10 +7,10 @@
    (generateUpcBatch, markUpcBatchSent, receiveUpcBatch, print
    HTML builder) kept exactly as before — visual layer only.
    ════════════════════════════════════════════════════════════ */
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, useToast, printWindow } from '@throttle/ui';
+import { Spinner, useToast, printWindow, Combobox } from '@throttle/ui';
 import { useRefreshState } from '../layout.js';
 import {
   Icon, Panel, FilterChip, fmt, btnPrimary, btnGhost, inputStyle,
@@ -62,8 +62,6 @@ export default function UpcPage() {
   const [loadingProds, setLoadingProds] = useState(false);
   const [loadingHist,  setLoadingHist]  = useState(false);
 
-  const [search,             setSearch]            = useState('');
-  const [dropdownOpen,       setDropdownOpen]      = useState(false);
   const [selectedCode,       setSelectedCode]      = useState('');
   const [selectedHasRemote,  setSelectedHasRemote] = useState(false);
   const [selectedLabel,      setSelectedLabel]     = useState('');
@@ -72,8 +70,6 @@ export default function UpcPage() {
   const [notes,              setNotes]             = useState('');
   const [genStatus,          setGenStatus]         = useState(null);
   const [generating,         setGenerating]        = useState(false);
-
-  const dropdownRef = useRef(null);
 
   // ── Data loaders ──────────────────────────────────────────
   const loadProducts = useCallback(async () => {
@@ -104,42 +100,10 @@ export default function UpcPage() {
   useEffect(() => { loadProducts(); }, [loadProducts]);
   useEffect(() => { loadHistory(); }, [loadHistory]);
 
-  // ── Click outside dropdown ────────────────────────────────
-  useEffect(() => {
-    function onClick(e) {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
-        setDropdownOpen(false);
-        if (selectedCode) setSearch(selectedLabel);
-      }
-    }
-    if (dropdownOpen) {
-      window.addEventListener('mousedown', onClick);
-      return () => window.removeEventListener('mousedown', onClick);
-    }
-  }, [dropdownOpen, selectedCode, selectedLabel]);
-
-  // ── Filtered products ─────────────────────────────────────
-  const queryUpper = search.trim().toUpperCase();
-  const filteredProducts = !queryUpper ? products : products.filter(p => {
-    const hay = `${p.product_code || ''} ${p.product || ''} ${p.model || ''} ${p.color || ''}`.toUpperCase();
-    return hay.includes(queryUpper);
-  });
-
-  function selectProduct(p) {
-    const label = `${p.product_code} · ${[p.product, p.model, p.color].filter(Boolean).join(' · ')}`;
-    setSelectedCode(p.product_code);
-    setSelectedHasRemote(!!p.has_remote);
-    setSelectedLabel(label);
-    setSearch(label);
-    setComponent('car');
-    setDropdownOpen(false);
-  }
-
   function clearSelection() {
     setSelectedCode('');
     setSelectedHasRemote(false);
     setSelectedLabel('');
-    setSearch('');
     setComponent('car');
   }
 
@@ -275,40 +239,27 @@ export default function UpcPage() {
       {/* Generate new batch */}
       <Panel title="Generate new batch" icon="box" pad={18} style={{ marginBottom: 18 }}>
         {/* Product picker */}
-        <div style={{ position: 'relative', marginBottom: 16 }} ref={dropdownRef}>
+        <div style={{ marginBottom: 16 }}>
           <div className="eyebrow" style={{ marginBottom: 7 }}>Product</div>
-          <input
-            style={inputStyle}
-            placeholder={loadingProds ? 'Loading products…' : 'Search product code, name, model, or color…'}
-            value={search}
-            onChange={e => { setSearch(e.target.value); setDropdownOpen(true); if (!e.target.value) clearSelection(); }}
-            onFocus={() => setDropdownOpen(true)}
-            disabled={loadingProds}
+          <Combobox
+            value={selectedCode}
+            options={products.map(p => ({
+              value: p.product_code,
+              label: `${p.product_code} · ${[p.product, p.model, p.color].filter(Boolean).join(' · ')}`,
+              hint: p.has_remote ? '+ Remote' : '',
+              has_remote: !!p.has_remote,
+            }))}
+            onChange={(v, opt) => {
+              if (!opt) { clearSelection(); return; }
+              setSelectedCode(v);
+              setSelectedHasRemote(!!opt.has_remote);
+              setSelectedLabel(opt.label);
+              setComponent('car');
+            }}
+            placeholder="Search product code, name, model, or color…"
+            loading={loadingProds}
+            portal
           />
-          {dropdownOpen && filteredProducts.length > 0 && (
-            <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 10, marginTop: 4,
-              background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-sm)',
-              boxShadow: 'var(--shadow-pop)', overflow: 'hidden', maxHeight: 280, overflowY: 'auto' }}>
-              {filteredProducts.slice(0, 60).map(p => (
-                <div
-                  key={p.product_code}
-                  className="rl-upc-opt"
-                  onClick={() => selectProduct(p)}
-                  style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 13px', cursor: 'pointer',
-                    transition: 'background var(--fast) var(--ease)' }}
-                >
-                  <span className="num" style={{ fontSize: 12, fontWeight: 700, color: 'var(--yellow)', minWidth: 64 }}>{p.product_code}</span>
-                  <span style={{ fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--t1)', flex: 1 }}>
-                    {p.product}{(p.model || p.color) && <span style={{ color: 'var(--t3)' }}> · {[p.model, p.color].filter(Boolean).join(' · ')}</span>}
-                  </span>
-                  {p.has_remote && (
-                    <span className="label" style={{ fontSize: 9, color: 'var(--info-fg)', background: 'var(--info-bg)',
-                      border: '1px solid var(--info-bd)', borderRadius: 3, padding: '2px 6px', whiteSpace: 'nowrap' }}>+ Remote</span>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
         </div>
 
         {/* Component toggle (only if has_remote) — car and remote are separate products */}

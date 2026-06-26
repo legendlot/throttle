@@ -185,19 +185,34 @@ export default function OrderForm({ partners, channels, initial, saving, onSubmi
                         emptyLabel="No match"
                         inputStyle={cbInput}
                         maxDropdownHeight={220}
+                        portal
                       />
                     </td>
                     <td style={tableTdStyle}>
-                      <select style={{ ...selectStyle, width: '100%', padding: '4px 6px' }} value={l.model} onChange={e => setLine(i, 'model', e.target.value)} disabled={!models.length}>
-                        <option value="">{models.length ? '—' : 'n/a'}</option>
-                        {models.map(mm => <option key={mm} value={mm}>{mm}</option>)}
-                      </select>
+                      <Combobox
+                        value={l.model || ''}
+                        options={models.map(mm => ({ value: mm, label: mm }))}
+                        onChange={v => setLine(i, 'model', v)}
+                        placeholder={models.length ? 'Search…' : 'n/a'}
+                        emptyLabel="No match"
+                        inputStyle={cbInput}
+                        maxDropdownHeight={220}
+                        disabled={!models.length}
+                        portal
+                      />
                     </td>
                     <td style={tableTdStyle}>
-                      <select style={{ ...selectStyle, width: '100%', padding: '4px 6px' }} value={l.color} onChange={e => setLine(i, 'color', e.target.value)} disabled={!colors.length}>
-                        <option value="">{colors.length ? '—' : 'n/a'}</option>
-                        {colors.map(c => <option key={c} value={c}>{c}</option>)}
-                      </select>
+                      <Combobox
+                        value={l.color || ''}
+                        options={colors.map(c => ({ value: c, label: c }))}
+                        onChange={v => setLine(i, 'color', v)}
+                        placeholder={colors.length ? 'Search…' : 'n/a'}
+                        emptyLabel="No match"
+                        inputStyle={cbInput}
+                        maxDropdownHeight={220}
+                        disabled={!colors.length}
+                        portal
+                      />
                     </td>
                     <td style={tableTdStyle}><input style={cell} value={l.sku || ''} onChange={e => setLine(i, 'sku', e.target.value)} /></td>
                     <td style={tableTdStyle}><input style={{ ...cell, fontFamily: 'var(--mono)' }} value={l.hsn_code || ''} onChange={e => setLine(i, 'hsn_code', e.target.value)} placeholder="9503" /></td>

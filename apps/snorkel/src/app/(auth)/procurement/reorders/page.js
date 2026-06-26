@@ -163,6 +163,9 @@ export default function ReordersPage() {
     setPartCode(p.part_code);
     setPartName(p.part_name || '');
     setShowSuggestions(false);
+    // Keep the chosen row as the sole option so the Combobox (async mode, where
+    // options otherwise turn over with each search) can resolve its label.
+    setPartSuggestions([p]);
     if (p.unit) setUnit(p.unit);
     try {
       const stock = await garageFetch('getStock', { part_code: p.part_code }, session);
@@ -259,32 +262,26 @@ export default function ReordersPage() {
 
             {rrType === 'part' ? (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10, position: 'relative' }}>
-                <div style={{ position: 'relative' }}>
+                <div>
                   <span style={labelStyle}>Part Code</span>
-                  <input
-                    type="text"
+                  <Combobox
                     value={partCode}
-                    onChange={(e) => handlePartSearch(e.target.value)}
-                    onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
-                    onFocus={() => partSuggestions.length > 0 && setShowSuggestions(true)}
-                    placeholder="Type to search…"
-                    style={{ ...inputStyle, fontFamily: 'var(--mono)', width: '100%' }}
+                    options={partSuggestions.map((p) => ({
+                      value: p.part_code,
+                      label: `${p.part_code}${p.part_name ? ' — ' + p.part_name : ''}`,
+                      hint: [p.product, p.part_category].filter(Boolean).join(' · '),
+                      part_code: p.part_code, part_name: p.part_name, product: p.product, unit: p.unit,
+                    }))}
+                    onQueryChange={handlePartSearch}
+                    onChange={(val, opt) => {
+                      if (opt) selectPart(opt);
+                      else { setPartCode(''); setPartName(''); setCurrentStock(null); }
+                    }}
+                    placeholder="Type to search part code / name…"
+                    emptyLabel="Type 2+ characters…"
+                    inputStyle={{ fontFamily: 'var(--mono)' }}
                     disabled={submitting}
                   />
-                  {showSuggestions && partSuggestions.length > 0 && (
-                    <div style={{ position: 'absolute', top: 'calc(100% + 2px)', left: 0, minWidth: 520, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 3, zIndex: 50, maxHeight: 300, overflowY: 'auto' }}>
-                      {partSuggestions.map((p) => (
-                        <div
-                          key={p.part_code}
-                          style={{ padding: '9px 12px', borderBottom: '1px solid rgba(42,42,42,.4)', cursor: 'pointer', fontSize: 11 }}
-                          onMouseDown={(e) => { e.preventDefault(); selectPart(p); }}
-                        >
-                          <span style={{ fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{p.part_code}</span>
-                          <span style={{ color: 'var(--t2)', marginLeft: 8 }}>{p.part_name}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
                 </div>
                 <div>
                   <span style={labelStyle}>Part Name</span>
@@ -314,10 +311,13 @@ export default function ReordersPage() {
                 </div>
                 <div>
                   <span style={labelStyle}>Variant</span>
-                  <select value={variant} onChange={(e) => setVariant(e.target.value)} style={{ ...selectStyle, width: '100%' }} disabled={!product}>
-                    <option value="">{variants.length ? 'Select…' : '—'}</option>
-                    {variants.map((v) => <option key={v} value={v}>{v}</option>)}
-                  </select>
+                  <Combobox
+                    value={variant}
+                    options={variants.map((v) => ({ value: v, label: v }))}
+                    onChange={(v) => setVariant(v)}
+                    placeholder={product ? 'Search variants…' : 'Pick a product first'}
+                    disabled={!product}
+                  />
                 </div>
               </div>
             )}

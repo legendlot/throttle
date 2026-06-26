@@ -44,6 +44,11 @@ export function Combobox({
   onBlur: onBlurExternal,
   commitOnTab = false,
   renderOption,
+  // Async/server-search mode. When provided, fires (query) on every keystroke so
+  // the parent can fetch options (e.g. a debounced API search). In this mode the
+  // component does NOT client-filter `options` — the parent owns matching. Selection
+  // still flows through onChange(value, option) with the option's extra fields intact.
+  onQueryChange,
   // When true, the dropdown renders position:fixed (anchored to the input's
   // viewport rect) instead of position:absolute. Use inside scroll/overflow
   // containers (e.g. a horizontally-scrollable table) where an absolute
@@ -96,6 +101,10 @@ export function Combobox({
   // is the code+name and whose hint carries the product/category. A single token
   // behaves exactly as a plain substring match (backward compatible).
   const filtered = useMemo(() => {
+    // Async/server-search mode: the parent feeds already-filtered options via
+    // onQueryChange, so trust them verbatim — don't re-filter client-side (a
+    // server fuzzy/stock match might not substring-match the raw query).
+    if (onQueryChange) return options;
     const q = (query || '').trim().toLowerCase();
     if (!q || (selectedOption && q === selectedOption.label.toLowerCase())) {
       return options;
@@ -105,7 +114,7 @@ export function Combobox({
       const hay = `${(o.label || '').toLowerCase()} ${(o.hint || '').toLowerCase()}`;
       return tokens.every((t) => hay.includes(t));
     });
-  }, [options, query, selectedOption]);
+  }, [options, query, selectedOption, onQueryChange]);
 
   // Scroll the highlighted option into view during keyboard navigation.
   useEffect(() => {
@@ -175,6 +184,7 @@ export function Combobox({
     setQuery(next);
     setOpen(true);
     setHighlight(-1);
+    onQueryChange?.(next);
     // If the user is editing the label of the currently-selected option, clear
     // the underlying value so the form doesn't pretend it's still selected.
     if (selectedOption && next !== selectedOption.label) {

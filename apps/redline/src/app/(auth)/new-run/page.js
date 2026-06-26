@@ -192,8 +192,8 @@ function ProductionForm({ runType, cat, products, vendors = [], session, toast, 
         <tbody>
           {rows.map((r, i) => (
             <tr key={i}>
-              <td style={{ ...td, minWidth: 150 }}><Combobox value={r.variant} onChange={v => { setRow(i, 'variant', v); setRow(i, 'colour', ''); }} options={variants.map(v => ({ value: v, label: v }))} placeholder="—" /></td>
-              <td style={{ ...td, minWidth: 150 }}><Combobox value={r.colour} onChange={v => setRow(i, 'colour', v)} options={colorsFor(r.variant).map(c => ({ value: c, label: c }))} placeholder="—" /></td>
+              <td style={{ ...td, minWidth: 150 }}><Combobox value={r.variant} onChange={v => { setRow(i, 'variant', v); setRow(i, 'colour', ''); }} options={variants.map(v => ({ value: v, label: v }))} placeholder="—" portal /></td>
+              <td style={{ ...td, minWidth: 150 }}><Combobox value={r.colour} onChange={v => setRow(i, 'colour', v)} options={colorsFor(r.variant).map(c => ({ value: c, label: c }))} placeholder="—" portal /></td>
               <td style={td}><input type="number" min="0" value={r.qty_ecomm} onChange={e => setRow(i, 'qty_ecomm', e.target.value)} style={{ ...numInp, width: 80, textAlign: 'right' }} /></td>
               <td style={td}><input type="number" min="0" value={r.qty_retail} onChange={e => setRow(i, 'qty_retail', e.target.value)} style={{ ...numInp, width: 80, textAlign: 'right' }} /></td>
               <td style={{ ...td, textAlign: 'right' }}><button onClick={() => delRow(i)} style={iconBtn} title="Remove row"><Icon name="x" size={13} /></button></td>
@@ -257,9 +257,9 @@ function RepairForm({ cat, products, session, toast, busy, setBusy, router }) {
         <tbody>
           {rows.map((r, i) => (
             <tr key={i}>
-              <td style={{ ...td, minWidth: 140 }}><Combobox value={r.product} onChange={v => { setRow(i, 'product', v); setRow(i, 'model', ''); setRow(i, 'color', ''); }} options={products.map(p => ({ value: p, label: p }))} placeholder="—" /></td>
-              <td style={{ ...td, minWidth: 130 }}><Combobox value={r.model} onChange={v => { setRow(i, 'model', v); setRow(i, 'color', ''); }} options={variantsFor(r.product).map(v => ({ value: v, label: v }))} placeholder="—" /></td>
-              <td style={{ ...td, minWidth: 130 }}><Combobox value={r.color} onChange={v => setRow(i, 'color', v)} options={colorsFor(r.product, r.model).map(c => ({ value: c, label: c }))} placeholder="—" /></td>
+              <td style={{ ...td, minWidth: 140 }}><Combobox value={r.product} onChange={v => { setRow(i, 'product', v); setRow(i, 'model', ''); setRow(i, 'color', ''); }} options={products.map(p => ({ value: p, label: p }))} placeholder="—" portal /></td>
+              <td style={{ ...td, minWidth: 130 }}><Combobox value={r.model} onChange={v => { setRow(i, 'model', v); setRow(i, 'color', ''); }} options={variantsFor(r.product).map(v => ({ value: v, label: v }))} placeholder="—" portal /></td>
+              <td style={{ ...td, minWidth: 130 }}><Combobox value={r.color} onChange={v => setRow(i, 'color', v)} options={colorsFor(r.product, r.model).map(c => ({ value: c, label: c }))} placeholder="—" portal /></td>
               <td style={td}><input type="number" min="0" value={r.target_car_qty} onChange={e => setRow(i, 'target_car_qty', e.target.value)} style={{ ...numInp, width: 72, textAlign: 'right' }} /></td>
               <td style={td}><input type="number" min="0" value={r.target_remote_qty} onChange={e => setRow(i, 'target_remote_qty', e.target.value)} style={{ ...numInp, width: 72, textAlign: 'right' }} /></td>
               <td style={{ ...td, textAlign: 'right' }}><button onClick={() => delRow(i)} style={iconBtn} title="Remove row"><Icon name="x" size={13} /></button></td>
@@ -375,11 +375,6 @@ function AdHocPartsForm({ products, session, toast, busy, setBusy }) {
     }
     setLines(ls => [...ls, { id: nid(), type: 'part', code: '', name: '', qty: '' }]);
   }
-  function codeBlur(id, val) {
-    const c = (val || '').trim().toUpperCase();
-    setL(id, { code: c, name: mat?.[c]?.part_name || '' });
-  }
-
   async function submit() {
     const parts = lines.filter(l => l.type === 'part' && (parseInt(l.qty) || 0) > 0)
       .map(l => ({ part_code: (l.code || '').toUpperCase(), part_name: l.name || '', qty_requested: parseInt(l.qty) || 0 }));
@@ -423,9 +418,21 @@ function AdHocPartsForm({ products, session, toast, busy, setBusy }) {
           {lines.map(l => l.type === 'header'
             ? <tr key={l.id}><td colSpan={4} style={{ ...td, background: 'var(--surface-2)', fontFamily: 'var(--font-display)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--t2)' }}>{l.label}</td></tr>
             : <tr key={l.id}>
-                <td style={{ ...td, minWidth: 120 }}>{mode === 'bom'
+                <td style={{ ...td, minWidth: 160 }}>{mode === 'bom'
                   ? <span className="num" style={{ fontSize: 12, color: 'var(--yellow)' }}>{l.code}</span>
-                  : <input value={l.code} onChange={e => setL(l.id, { code: e.target.value.toUpperCase() })} onBlur={e => codeBlur(l.id, e.target.value)} placeholder="Part code" style={{ ...numInp, fontSize: 12 }} />}</td>
+                  : <Combobox
+                      value={l.code}
+                      options={Object.values(mat || {}).map(m => ({
+                        value: m.part_code,
+                        label: `${m.part_code}${m.part_name ? ' — ' + m.part_name : ''}`,
+                        hint: [m.product, m.part_category].filter(Boolean).join(' · '),
+                        part_name: m.part_name,
+                      }))}
+                      onChange={(v, opt) => setL(l.id, { code: v, name: opt?.part_name || '' })}
+                      placeholder="Search part code / name…"
+                      inputStyle={{ fontSize: 12, fontFamily: 'var(--mono)' }}
+                      portal
+                    />}</td>
                 <td style={td}>{l.name || (mode === 'manual' ? <span style={{ color: 'var(--t3)', fontSize: 12 }}>auto-fills</span> : '')}</td>
                 <td style={{ ...td, textAlign: 'right' }}><input type="number" min="0" value={l.qty} onChange={e => setL(l.id, { qty: e.target.value })} style={{ ...numInp, width: 72, textAlign: 'right' }} /></td>
                 <td style={{ ...td, textAlign: 'right' }}><button onClick={() => delL(l.id)} style={iconBtn} title="Remove part"><Icon name="x" size={13} /></button></td>
