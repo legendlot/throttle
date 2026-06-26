@@ -173,6 +173,9 @@ export default function ReceivingPage() {
     setNewPO(poNumber);
     if (po.vendor_name) setNewSup(po.vendor_name);
     if (po.source)      setNewOrigin(po.source);
+    // FBU unification (Plan 1): default the declared format to the PO's intent when known
+    // (receiver confirms/overrides). Best-effort — no-op if the list row lacks the field.
+    if (String(po.receive_format || '').toLowerCase() === 'fbu') setNewFormat('fbu');
   }
 
   async function submitNewShipment() {
@@ -192,6 +195,8 @@ export default function ReceivingPage() {
         }
       }, session);
       showToast(res.data.shipment_id + ' created', 'success');
+      // FBU unification (Plan 1): soft, non-blocking purchase-vs-receipt mismatch flag.
+      if (res.data.warning) showToast(res.data.warning, 'error');
       resetNewForm();
       openShipment(res.data.shipment_id);
     } catch (e) {
