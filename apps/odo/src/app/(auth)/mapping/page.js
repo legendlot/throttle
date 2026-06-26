@@ -76,6 +76,7 @@ export default function MappingPage() {
                           onChange={(val) => setPick(p => ({ ...p, [u.id]: val }))}
                           placeholder="Search variant…"
                           disabled={!canManage}
+                          portal
                         />
                       </div>
                     </td>
