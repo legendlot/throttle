@@ -780,12 +780,6 @@ export default function InboxPage() {
               ) : ch.sendable ? (
                 <div style={{ borderTop: '1px solid var(--border)', padding: 12,
                   background: noteMode ? 'var(--warn-bg)' : 'transparent' }}>
-                  {/* Reply / Note toggle */}
-                  <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-                    <ModeBtn active={!noteMode} onClick={() => setMode('reply')} icon={Send} label="Reply" />
-                    <ModeBtn active={noteMode} onClick={() => { setMode('note'); setPendingFile(null); }} icon={StickyNote} label="Private note" tone="warn" />
-                  </div>
-
                   {noteMode ? (
                     <div style={{ fontSize: 10.5, color: 'var(--warn-fg)', marginBottom: 7, display: 'flex', alignItems: 'center', gap: 5 }}>
                       <Lock size={11} /> Internal note — only your team can see this. Never sent to the customer.
@@ -820,6 +814,9 @@ export default function InboxPage() {
                           onChange={onPickFile} style={{ display: 'none' }} />
                       </>
                     )}
+                    <ToolBtn title={noteMode ? 'Switch to reply mode' : 'Private note (internal only)'} active={noteMode}
+                      onClick={() => { setMode(noteMode ? 'reply' : 'note'); if (!noteMode) setPendingFile(null); }}
+                      disabled={!canManage}><StickyNote size={15} /></ToolBtn>
                     {showEmoji && (
                       <Popover onClose={() => setShowEmoji(false)} width="auto" pad={0} hideClose scroll={false}>
                         <EmojiPicker onSelect={(native) => insertAtCaret(native)} />
@@ -917,12 +914,13 @@ function ModeBtn({ active, onClick, icon: I, label, tone }) {
     </button>
   );
 }
-function ToolBtn({ children, title, onClick, disabled }) {
+function ToolBtn({ children, title, onClick, disabled, active }) {
   return (
     <button title={title} onClick={onClick} disabled={disabled}
       style={{ display: 'grid', placeItems: 'center', width: 30, height: 28, cursor: disabled ? 'default' : 'pointer',
-        border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', background: 'var(--surface)',
-        color: disabled ? 'var(--t4)' : 'var(--t2)', opacity: disabled ? 0.5 : 1 }}>{children}</button>
+        border: `1px solid ${active ? 'var(--warn-fg)' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)',
+        background: active ? 'var(--warn-bg)' : 'var(--surface)',
+        color: disabled ? 'var(--t4)' : active ? 'var(--warn-fg)' : 'var(--t2)', opacity: disabled ? 0.5 : 1 }}>{children}</button>
   );
 }
 // Anchored popover. The transparent fixed backdrop catches any outside click and
