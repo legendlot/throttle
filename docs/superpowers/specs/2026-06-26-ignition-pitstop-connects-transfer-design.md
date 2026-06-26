@@ -195,8 +195,12 @@ leads keep visibility of what they own. No reply controls there (handoff is full
 ## Permissions
 
 - New perm key **`ignition_connects`** on `store.roles`, granted to `ignition_manager`,
-  `ignition_lead`, `admin`, `super_admin`. (Confirm Reann's role carries it; he is expected to be
-  `ignition_manager`.) Added to Ignition `PERM_DEFS` + `nav.js` so the Connects nav item gates on it.
+  `ignition_lead`, `admin`, `super_admin`. Added to Ignition `PERM_DEFS` + `nav.js` so the Connects
+  nav item gates on it.
+- **Access (Afshaan, S177):** **Reann** (lead on influencer engagements for LOT) **and Himani Nim**
+  both get Connects access. Ensure both users' roles carry `ignition_connects` (grant the key on
+  their role rows; if a user sits on a role that shouldn't broadly get it, set their role to
+  `ignition_manager`/`ignition_lead` which do).
 - CS side: transfer uses existing `cs_ticket_manage`; oversight view uses `cs_ticket_reassign`.
 - The csops bridge endpoints are **not** behind the JWT/perm switch — they are service-to-service,
   authed by `IGNITION_BRIDGE_TOKEN`, and self-limited to `ignition_connect=true` rows. This is what
