@@ -14,7 +14,15 @@
 
 ---
 
-## Task 1: In-flight EXT-run audit + migration (do FIRST — decide the open runs)
+## Task 1 — DECIDED (Afshaan S178): leave the 11 in-flight EXT runs AS-IS; build for future runs only
+
+**Audit finding:** all 11 open `Issued` runs + EXT-001 have **real parts issued** (stock moved — 50 to 102,000 parts each, WOs `Complete`); the in-system "Send to vendor" flag was just never clicked. So they are NOT no-activity and are **NOT cancellable** (cancel would falsely credit ~260k parts or orphan the materials-out record). Afshaan: *"most of these have come back, built in other ways; not sure how they resolve in-system today. Leave them as-is, build for future runs, we'll reconcile later by matching received FBU units against these runs."*
+
+**Therefore:** the new flow (Tasks 2-5) is built **additively for future outsourced runs**. The 11 existing runs are left exactly as they are (a separate later reconciliation: match FBU built-units received ↔ these runs' materials-out). **Old EXT handlers + the `EXT_INW` station + `ext_return_pool` are kept in place (dormant for new runs) so nothing on the old runs breaks** — their removal moves to Plan 4 *after* the old runs are reconciled. **Guard:** the new "Receive built cars" action must not be casually used on the 11 legacy runs (would double-count vs their FBU-path returns) — surface a caution / gate to new runs.
+
+~~Original cancellation plan (SUPERSEDED — do not cancel):~~
+
+### (reference only) In-flight EXT-run audit
 
 **Files:** Supabase SQL; snapshot `production_runs` first.
 
@@ -74,6 +82,15 @@ FROM store.production_runs pr WHERE pr.run_type='outsourced' ORDER BY pr.run_dat
 - [ ] 5c. `BACKLOG.md`: Plan 3 done; Plan 4 (fbu_stock freeze + dead-code) + the team PDF remain.
 
 ---
+
+## Execution log (S178)
+
+**Core outsourced collapse LIVE (future runs).** Worker `2b71bb09` (`receiveExtBuiltUnits`); Garage + Redline + Scanner deployed.
+- **Task 1 ✅ (decided)** — 11 legacy EXT runs left as-is (real materials issued, 50–102k parts each; reconcile separately via FBU matching). New flow is future-only. Old handlers/`EXT_INW`/`ext_return_pool` kept dormant.
+- **Task 3 ✅** — `receiveExtBuiltUnits`: built cars return as a count-based `source='jobwork'` GRN on the built-car part (`ext_run_no=EXT-NNN`) + `stock_ledger`; Issued→In Progress on first receive. (Build-materials issue already worked via the existing `ext_v2` build phase + Plan 2 matcher.)
+- **Task 4 ✅** — Garage issue-queue: "Receive built cars" → `receiveExtBuiltUnits`; pool/finish/Ext-Inwarding copy replaced with the new flow. Redline `RunDetailPanel`: `requestExtFinish` button neutered (finishing = a normal run). Scanner: `outsourced`/`EXT_INW` category removed.
+- **Deferred to Plan 4:** `issueMoreToVendor` (short-supply-to-vendor supplementary issue — Afshaan-flagged convenience, not core to the collapse); freeze `fbu_stock`/`ext_return_pool` + remove dormant old handlers (`requestExtFinish`/`assignOutsourcedLine`/`receiveExtUnits`/`postExtInw`) + the `EXT_INW` SCANNER_ACTION + `outsource_bom_split` finish rows; legacy-run receive gate.
+- **Pending:** authenticated browser smoke (create an outsourced run → issue build materials → send to vendor → Receive built cars → built-car `stock_ledger` rises with a `jobwork` GRN → finish via a normal FBU run).
 
 ## Self-review (spec coverage)
 
