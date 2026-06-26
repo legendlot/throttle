@@ -79,6 +79,17 @@ export default function ReceivingPage() {
   const [newFormat, setNewFormat]         = useState('parts');
   const [newNotes,  setNewNotes]          = useState('');
   const [newSubmitting, setNewSubmitting] = useState(false);
+  // FBU run-model refinement (S180): link an FBU receipt to an open outsourced run → job-work
+  // GRN + auto-close. The picker only shows when the declared format is FBU.
+  const [newExtRun, setNewExtRun]         = useState('');
+  const [extRuns,   setExtRuns]           = useState([]);
+
+  useEffect(() => {
+    if (newFormat !== 'fbu') { setExtRuns([]); setNewExtRun(''); return; }
+    garageFetch('getOpenOutsourcedRuns', {}, session)
+      .then(d => setExtRuns(Array.isArray(d?.runs) ? d.runs : []))
+      .catch(() => setExtRuns([]));
+  }, [newFormat, session]);
 
   // ── Detail view state ────────────────────────────────────────────────────────
   const [shipmentData, setShipmentData]   = useState(null);    // { shipment, marks, lines }
@@ -163,7 +174,7 @@ export default function ReceivingPage() {
   function resetNewForm() {
     setNewSup(''); setNewPO(''); setNewDate(todayISO());
     setNewBoxes(''); setNewWeight(''); setNewOrigin('China');
-    setNewFormat('parts'); setNewNotes('');
+    setNewFormat('parts'); setNewNotes(''); setNewExtRun('');
     setShowNewForm(false);
   }
 
@@ -191,6 +202,7 @@ export default function ReceivingPage() {
           total_weight: parseFloat(newWeight) || null,
           origin:       newOrigin,
           receive_format: newFormat,
+          ext_run_no:   newFormat === 'fbu' ? (newExtRun || null) : null,
           notes:        newNotes.trim() || null,
         }
       }, session);
@@ -729,6 +741,15 @@ export default function ReceivingPage() {
                   <button style={newFormat === 'fbu'   ? btnPri : btnSec} onClick={() => setNewFormat('fbu')}>FBU Units</button>
                 </div>
               </div>
+              {newFormat === 'fbu' && extRuns.length > 0 && (
+                <div style={{ marginBottom: 10 }}>
+                  <span style={lbl}>Link outsourced run · optional</span>
+                  <select style={inp} value={newExtRun} onChange={e => setNewExtRun(e.target.value)}>
+                    <option value="">— Purchased FBU (no link) —</option>
+                    {extRuns.map(r => <option key={r.run_no} value={r.run_no}>{r.run_no} · {r.product} ({r.status})</option>)}
+                  </select>
+                </div>
+              )}
               <div style={{ marginBottom: 12 }}>
                 <span style={lbl}>Notes</span>
                 <input style={inp} value={newNotes} onChange={e => setNewNotes(e.target.value)} placeholder="Optional" />

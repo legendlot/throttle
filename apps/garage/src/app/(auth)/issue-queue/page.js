@@ -106,7 +106,6 @@ export default function IssueQueuePage() {
   const [vendorRuns, setVendorRuns] = useState({ issued: [], progress: [] });
   const [expandedUdr, setExpandedUdr] = useState({}); // ref -> bool: show the per-variant UDR breakdown
   const [vendorBusy, setVendorBusy] = useState(null);
-  const [rcvQty, setRcvQty]         = useState({});
 
   // Refs to read uncontrolled inputs at submit time
   const detailFormRef = useRef(null);
@@ -558,19 +557,9 @@ export default function IssueQueuePage() {
       showToast(e.message || 'Send to vendor failed', 'error');
     } finally { setVendorBusy(null); }
   }
-  async function handleReceiveUnits(run) {
-    const qty = parseInt(rcvQty[run.run_no], 10);
-    if (!qty || qty < 1) { showToast('Enter a quantity to receive', 'error'); return; }
-    setVendorBusy(run.run_no);
-    try {
-      await workerFetch('receiveExtBuiltUnits', { data: { run_no: run.run_no, qty } }, session);
-      showToast(`Received ${qty} built ${run.product} into stock`, 'success');
-      setRcvQty((m) => ({ ...m, [run.run_no]: '' }));
-      loadQueue();
-    } catch (e) {
-      showToast(e.message || 'Receive failed', 'error');
-    } finally { setVendorBusy(null); }
-  }
+  // FBU run-model refinement (S180): receiving vendor-built cars moved to the Receiving flow
+  // (declare FBU + link the outsourced run → job-work GRN + auto-close). The standalone
+  // receiveExtBuiltUnits action is retired from this panel.
 
   async function handleVoidLine() {
     if (!voidModal) return;
@@ -1035,19 +1024,9 @@ export default function IssueQueuePage() {
                     <td style={tableTdStyle}>{run.product}</td>
                     <td style={tableTdStyle}><StatusBadge label={run.finish_requested_at ? 'Finish requested' : 'At vendor'} tone="amber" /></td>
                     <td style={{ ...tableTdStyle, textAlign: 'right' }} onClick={(e) => e.stopPropagation()}>
-                      {run.ext_v2 ? (
-                        <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', justifyContent: 'flex-end' }}>
-                          <input
-                            type="number" min="1" placeholder="qty"
-                            value={rcvQty[run.run_no] || ''}
-                            onChange={(e) => setRcvQty((m) => ({ ...m, [run.run_no]: e.target.value }))}
-                            style={{ ...inputStyle, width: 70, fontFamily: 'var(--mono)' }}
-                          />
-                          <button style={btnSecondary} disabled={vendorBusy === run.run_no} onClick={() => handleReceiveUnits(run)}>
-                            {vendorBusy === run.run_no ? '…' : '+ Receive built cars'}
-                          </button>
-                        </span>
-                      ) : <span style={{ fontSize: 11, color: 'var(--t3)' }}>Legacy run — reconcile manually</span>}
+                      {run.ext_v2
+                        ? <span style={{ fontSize: 11, color: 'var(--t3)' }}>Receive in <strong style={{ color: 'var(--yellow)' }}>Receiving</strong> → declare FBU → link this run</span>
+                        : <span style={{ fontSize: 11, color: 'var(--t3)' }}>Legacy run — reconcile manually</span>}
                     </td>
                   </tr>
                 ))}
@@ -1055,7 +1034,7 @@ export default function IssueQueuePage() {
             </table>
           </div>
           <div style={{ padding: '8px 14px', fontSize: 11, color: 'var(--t3)' }}>
-            Issue the build materials, send them to the vendor, then <strong style={{ color: 'var(--yellow)' }}>Receive built cars</strong> back as stock (count, instalments OK) — they land as a job-work GRN on the built-car part. Finishing is then a normal production run that consumes that built-car stock (no separate finish phase, no Ext Inwarding scan).
+            Issue the build materials, send them to the vendor, then receive the built cars in <strong style={{ color: 'var(--yellow)' }}>Receiving</strong> — create the shipment, declare <strong>FBU</strong>, and <strong>link this outsourced run</strong>. They land as a job-work GRN on the built-car part and the run auto-completes when fully received. Finishing is then a normal Fresh + FBU run that consumes that built-car stock (no separate finish phase, no Ext Inwarding scan).
           </div>
         </div>
       )}
