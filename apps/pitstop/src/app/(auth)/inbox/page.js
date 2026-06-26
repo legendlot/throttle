@@ -526,36 +526,38 @@ export default function InboxPage() {
         {/* ── Thread list ───────────────────────────────────── */}
         <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column',
           background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
-          <div style={{ padding: listCollapsed ? '10px 0' : '10px 12px', borderBottom: '1px solid var(--border)', display: 'flex',
-            alignItems: 'center', justifyContent: listCollapsed ? 'center' : 'space-between', gap: 6 }}>
+          <div style={{ padding: listCollapsed ? '10px 4px' : '10px 12px', borderBottom: '1px solid var(--border)', display: 'flex',
+            alignItems: 'center', gap: 6 }}>
             {!listCollapsed && <span className="label" style={{ fontSize: 11, fontWeight: 700, color: 'var(--t1)' }}>Conversations</span>}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+            {/* Filter buttons in their own flex-1 container so they never push the collapse chevron off-screen */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 3, flex: 1, justifyContent: 'flex-end', minWidth: 0, overflow: 'hidden' }}>
               {!listCollapsed && !ignitionScope && [['active', 'Active'], ['closed', 'Closed'], ['all', 'All']].map(([id, lbl]) => (
                 <button key={id} onClick={() => setStateFilter(id)} title={`Show ${lbl.toLowerCase()} conversations`}
                   style={{ cursor: 'pointer', fontSize: 10, fontWeight: 600, padding: '3px 7px', borderRadius: 'var(--radius-sm)',
                     border: '1px solid', borderColor: stateFilter === id ? 'var(--accent)' : 'var(--border)',
                     background: stateFilter === id ? 'var(--accent-bg)' : 'transparent',
-                    color: stateFilter === id ? 'var(--accent)' : 'var(--t3)' }}>{lbl}</button>
+                    color: stateFilter === id ? 'var(--accent)' : 'var(--t3)', flexShrink: 0 }}>{lbl}</button>
               ))}
               {/* Read-only oversight: threads transferred to the Influencer team (leads/admin, S177) */}
               {!listCollapsed && canReassign && (
                 <button onClick={() => { setIgnitionScope(v => !v); setSelectedId(null); }}
                   title="View conversations transferred to the Influencer team (read-only)"
                   style={{ cursor: 'pointer', fontSize: 10, fontWeight: 600, padding: '3px 7px', borderRadius: 'var(--radius-sm)',
-                    display: 'flex', alignItems: 'center', gap: 3,
+                    display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0,
                     border: '1px solid', borderColor: ignitionScope ? 'var(--accent)' : 'var(--border)',
                     background: ignitionScope ? 'var(--accent-bg)' : 'transparent',
                     color: ignitionScope ? 'var(--accent)' : 'var(--t3)' }}>
                   <ExternalLink size={10} /> Ignition
                 </button>
               )}
-              <button onClick={toggleListCollapse} title={listCollapsed ? 'Expand conversation list' : 'Collapse conversation list'}
-                style={{ display: 'grid', placeItems: 'center', width: 22, height: 22, cursor: 'pointer',
-                  border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', background: 'transparent',
-                  color: 'var(--t3)', flexShrink: 0 }}>
-                {listCollapsed ? <ChevronRight size={12} /> : <ChevronLeft size={12} />}
-              </button>
             </div>
+            {/* Collapse chevron is a direct flex sibling — always pinned to the right, never clipped */}
+            <button onClick={toggleListCollapse} title={listCollapsed ? 'Expand conversation list' : 'Collapse conversation list'}
+              style={{ display: 'grid', placeItems: 'center', width: 22, height: 22, cursor: 'pointer',
+                border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', background: 'transparent',
+                color: 'var(--t3)', flexShrink: 0 }}>
+              {listCollapsed ? <ChevronRight size={12} /> : <ChevronLeft size={12} />}
+            </button>
           </div>
           <div style={{ display: listCollapsed ? 'none' : 'contents' }}>
           {/* Assignment axis — Mine / Unassigned / All (S162-A) */}
