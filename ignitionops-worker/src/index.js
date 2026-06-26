@@ -249,7 +249,11 @@ const STAGES = [
 
 // Terminal stages — entering one stamps closed_at + closed_reason.
 const TERMINAL_FAIL = new Set(['ghosted','dropped']);
-const TERMINAL = new Set(['completed','ghosted','dropped']);
+const TERMINAL = new Set(['completed','ghosted','dropped','retired']);   // 'retired' = UGC terminal (C1, S177)
+
+// UGC pipeline stage set (Reann Batch C1, S177). Reuses engagements with
+// engagement_type='ugc'; vault/paused are non-terminal holds (vault reopenable to live).
+const UGC_STAGES = ['outreach','agreed','shipped','delivered','draft','live','paused','vault','retired','dropped'];
 
 // Free model: from any stage you may move to any other (terminals reopenable).
 function allowedTransitions(stage) {
@@ -268,6 +272,29 @@ function pickPatch(body, allowed) {
 }
 
 function nowIso() { return new Date().toISOString(); }
+// IST (UTC+5:30) YYYY-MM key for month attribution (UGC dashboard, C1).
+function istMonthKey(d) {
+  const ist = new Date(d.getTime() + 5.5 * 3600 * 1000);
+  return `${ist.getUTCFullYear()}-${String(ist.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+// Render the UGC brief / written-agreement body (C1 #11). Logged to ugc_briefs.
+function renderUgcBrief(f, e) {
+  const lines = [];
+  lines.push(`UGC Brief & Agreement — ${f.creator || 'Creator'}${f.handle ? ' (@' + f.handle + ')' : ''}`);
+  lines.push('');
+  lines.push(`Product(s): ${f.products}`);
+  lines.push(`Deal: ${f.is_barter ? 'Barter' : 'Paid'}${f.creator_fee != null ? ' — creator fee ₹' + f.creator_fee : ''}${f.commission_rate != null ? ' + ' + f.commission_rate + '% commission' : ''}`);
+  if (f.hook_version || f.hook_script) lines.push(`Hook ${f.hook_version || ''}: ${f.hook_script || ''}`.trim());
+  lines.push('');
+  lines.push('Creative guidelines:');
+  lines.push('• Show the product/car in motion for 15–20 seconds.');
+  lines.push('• Mention the discount code verbally + put the link in the caption.');
+  lines.push('• Tag @legendoftoys and include the agreed partnership / #ad disclosure.');
+  if (e.expected_post_date) lines.push(`• Target posting date: ${e.expected_post_date}.`);
+  lines.push('');
+  lines.push('This brief also serves as the written agreement for the deal terms above.');
+  return lines.join('\n');
+}
 
 async function mintEngagementNo(env, year) {
   const yyyy = year || String(new Date().getUTCFullYear());
@@ -483,12 +510,13 @@ async function getEngagement(url, auth, env) {
   const eng = r.data?.[0];
   if (!eng) return err('not_found', 404);
 
-  const [hr, nr, ar, pr, epr] = await Promise.all([
+  const [hr, nr, ar, pr, epr, ubr] = await Promise.all([
     sb(`/rest/v1/engagement_history?engagement_id=eq.${eng.id}&select=*&order=created_at.desc&limit=200`, env),
     sb(`/rest/v1/engagement_notes?engagement_id=eq.${eng.id}&select=*&order=created_at.desc&limit=200`, env),
     sb(`/rest/v1/engagement_attachments?engagement_id=eq.${eng.id}&select=*&order=created_at.desc&limit=200`, env),
     sb(`/rest/v1/payments?engagement_id=eq.${eng.id}&select=*&order=paid_on.desc,created_at.desc&limit=200`, env),
     sb(`/rest/v1/engagement_products?engagement_id=eq.${eng.id}&select=*&order=sort_order.asc`, env),
+    sb(`/rest/v1/ugc_briefs?engagement_id=eq.${eng.id}&select=*&order=created_at.desc&limit=50`, env),
   ]);
 
   const payments = pr.data || [];
@@ -509,6 +537,7 @@ async function getEngagement(url, auth, env) {
   return ok({
     engagement: eng,
     products,
+    ugc_briefs: ubr.data || [],
     history: hr.data || [],
     notes: nr.data || [],
     attachments: ar.data || [],
@@ -616,6 +645,76 @@ async function deleteCampaign(body, auth, env) {
   const dr = await sb(`/rest/v1/campaigns?id=eq.${body.campaign_id}`, env, { method: 'DELETE', prefer: 'return=minimal' });
   if (!dr.ok) return err(`db_error: ${JSON.stringify(dr.data)}`, 400);
   return ok({ deleted: true });
+}
+
+// UGC pipeline dashboard + table (Reann Batch C1, S177). One read + JS aggregation.
+async function getUgcPipeline(_url, auth, env) {
+  const r = await sb(
+    `/rest/v1/engagements?engagement_type=eq.ugc&select=*,influencer:influencer_id(channel_name,person_name,channel_link,channel_platform,follower_count,contact_number)&order=updated_at.desc&limit=1000`,
+    env,
+  );
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 500);
+  const engs = r.data || [];
+  const num = v => Number(v) || 0;
+  const now = new Date();
+  const monthKey = istMonthKey(now);
+  const TERMINAL_UGC = new Set(['retired', 'dropped']);
+  let month_ad_spend = 0, month_revenue = 0, commissions_owed = 0, active_creatives = 0;
+  const by_stage = {};
+  const rows = engs.map(e => {
+    const inf = e.influencer || {};
+    const adSpend = num(e.ad_spend);
+    const revenue = num(e.conversions_value);
+    const roas = adSpend > 0 ? revenue / adSpend : null;
+    const commOutstanding = Math.max(0, num(e.commission_earned) - num(e.commission_paid));
+    const feeUnpaid = (e.creator_fee_status !== 'paid') ? num(e.payment_amount) : 0;
+    by_stage[e.stage] = (by_stage[e.stage] || 0) + 1;
+    if (!TERMINAL_UGC.has(e.stage)) active_creatives += 1;
+    commissions_owed += commOutstanding;
+    const when = e.live_at || e.post_date;
+    if (when && istMonthKey(new Date(when)) === monthKey) { month_ad_spend += adSpend; month_revenue += revenue; }
+    let days_active = null;
+    if (e.live_at && !TERMINAL_UGC.has(e.stage)) {
+      days_active = Math.floor((now.getTime() - new Date(e.live_at).getTime()) / 86400000);
+    }
+    return {
+      id: e.id, engagement_no: e.engagement_no, stage: e.stage,
+      creator_name: inf.person_name || inf.channel_name || null,
+      ig_handle: inf.channel_name || null, channel_link: inf.channel_link || null,
+      follower_count: inf.follower_count ?? null,
+      ad_spend: adSpend, revenue, roas, days_active,
+      amount_owed: commOutstanding + feeUnpaid, commission_outstanding: commOutstanding,
+    };
+  });
+  const blended_roas = month_ad_spend > 0 ? month_revenue / month_ad_spend : null;
+  return ok({
+    summary: { active_creatives, month_ad_spend, month_revenue, blended_roas, commissions_owed, by_stage },
+    rows,
+  });
+}
+
+// Generate + log a UGC brief / written agreement (Reann #11). Each call logs a
+// timestamped version (the paper trail). Email send is Batch B.
+async function generateUgcBrief(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!body.engagement_id) return err('engagement_id required', 400);
+  const er = await sb(`/rest/v1/engagements?id=eq.${body.engagement_id}&select=*,influencer:influencer_id(channel_name,person_name,email,contact_number)&limit=1`, env);
+  if (!er.ok || !er.data?.[0]) return err('not_found', 404);
+  const e = er.data[0];
+  const inf = e.influencer || {};
+  const lr = await sb(`/rest/v1/engagement_products?engagement_id=eq.${body.engagement_id}&select=product_code,product_variant,quantity&order=sort_order.asc`, env);
+  let products = (lr.ok ? lr.data || [] : []);
+  if (!products.length && e.product_code) products = [{ product_code: e.product_code, product_variant: e.product_variant, quantity: 1 }];
+  const productList = products.map(p => `${p.product_code}${p.product_variant ? ' / ' + p.product_variant : ''}${p.quantity ? ' ×' + p.quantity : ''}`).join(', ') || '—';
+  const fields = {
+    creator: inf.person_name || inf.channel_name || null, handle: inf.channel_name || null,
+    products: productList, creator_fee: e.payment_amount ?? null, is_barter: !!e.is_barter,
+    commission_rate: e.commission_rate ?? null, hook_version: e.hook_version || null, hook_script: e.hook_script || null,
+  };
+  const bodyText = renderUgcBrief(fields, e);
+  const ins = await sb(`/rest/v1/ugc_briefs`, env, { method: 'POST', body: JSON.stringify([{ engagement_id: body.engagement_id, body: bodyText, fields, created_by: auth.userId }]) });
+  if (!ins.ok) return err(`db_error: ${JSON.stringify(ins.data)}`, 400);
+  return ok({ brief: ins.data?.[0] || null });
 }
 
 // POC dropdown source (Reann #5): people on roles that carry ignition_view.
@@ -1153,6 +1252,11 @@ const ENGAGEMENT_FIELDS = [
   'conversions_value','roas_on_ad_spend','actual_roas','orders_cc',
   'shipping_order_id','tracking_id','shipping_month','shipping_date','directed_to',
   'poc_user_id','poc_name',
+  // UGC pipeline (Reann Batch C1, S177) — live_at is worker-stamped only (not here).
+  'hook_version','hook_script','meta_ad_id','tracking_url',
+  'creator_fee_status','creator_fee_paid_date','is_barter',
+  'commission_rate','commission_earned','commission_paid',
+  'ctr','frequency','purchases',
 ];
 
 // ── Multi-product engagement lines (Reann Batch A #4, S177) ──────────────────
@@ -1334,10 +1438,11 @@ async function advanceStage(body, auth, env) {
   if (!body.to_stage) return err('to_stage required', 400);
 
   const cur = await sb(
-    `/rest/v1/engagements?id=eq.${body.engagement_id}&select=stage,video_link,shipping_order_id,influencer_id&limit=1`, env,
+    `/rest/v1/engagements?id=eq.${body.engagement_id}&select=stage,video_link,shipping_order_id,influencer_id,engagement_type,live_at,tracking_url&limit=1`, env,
   );
   if (!cur.ok || !cur.data?.[0]) return err('not_found', 404);
   const from = cur.data[0].stage;
+  const isUgc = cur.data[0].engagement_type === 'ugc';
   const allowed = allowedTransitions(from);
   if (!allowed.includes(body.to_stage)) {
     return err(`illegal_transition: ${from} → ${body.to_stage}`, 422);
@@ -1350,11 +1455,18 @@ async function advanceStage(body, auth, env) {
     if (!incomingLink && !existingLink) return err('video_link_required_for_live', 422);
   }
 
-  // Shipped requires a Shopify order ID (Reann #7) — accepted inline or already set.
+  // Shipped guard. UGC (C1 #2) requires a tracking LINK; influencer deals (Batch A #7)
+  // require the Shopify order ID. Either accepted inline or already on the row.
   if (body.to_stage === 'shipped') {
-    const incoming = (body.shipping_order_id != null ? String(body.shipping_order_id) : '').trim();
-    const existing = (cur.data[0].shipping_order_id || '').trim();
-    if (!incoming && !existing) return err('shipping_order_id_required_for_shipped', 422);
+    if (isUgc) {
+      const incoming = (body.tracking_url != null ? String(body.tracking_url) : '').trim();
+      const existing = (cur.data[0].tracking_url || '').trim();
+      if (!incoming && !existing) return err('tracking_url_required_for_shipped', 422);
+    } else {
+      const incoming = (body.shipping_order_id != null ? String(body.shipping_order_id) : '').trim();
+      const existing = (cur.data[0].shipping_order_id || '').trim();
+      if (!incoming && !existing) return err('shipping_order_id_required_for_shipped', 422);
+    }
   }
 
   // Completed requires a colour rating on the influencer (Reann #3) — apply inline if given.
@@ -1376,10 +1488,13 @@ async function advanceStage(body, auth, env) {
   }
 
   const patch = { stage: body.to_stage, updated_at: nowIso() };
+  // Stamp live_at on first go-live (drives UGC "days active"). Don't overwrite.
+  if (body.to_stage === 'live' && !cur.data[0].live_at) patch.live_at = nowIso();
   if (TERMINAL.has(body.to_stage)) {
     patch.closed_at = nowIso();
     patch.closed_reason = body.closed_reason
-      || (TERMINAL_FAIL.has(body.to_stage) ? body.to_stage : 'completed');
+      || (TERMINAL_FAIL.has(body.to_stage) ? body.to_stage
+        : (body.to_stage === 'retired' ? 'retired' : 'completed'));
   } else {
     // Moving back out of a terminal stage reopens the deal.
     patch.closed_at = null;
@@ -1925,6 +2040,7 @@ const GET_ACTIONS = {
   getConnects,
   getConnect,
   getIgnitionUsers,
+  getUgcPipeline,
 };
 
 const POST_ACTIONS = {
@@ -1935,6 +2051,7 @@ const POST_ACTIONS = {
   updateEngagement,
   setEngagementProducts,
   deleteEngagement,
+  generateUgcBrief,
   advanceStage,
   closeEngagement,
   setRating,
