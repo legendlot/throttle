@@ -105,6 +105,7 @@ export default function ConnectDetailPage() {
   const [sending, setSending] = useState(false);
   const [sendErr, setSendErr] = useState(null);
   const [promoting, setPromoting] = useState(false);
+  const [returning, setReturning] = useState(false);
   const scrollRef = useRef(null);
 
   function reload() {
@@ -158,6 +159,20 @@ export default function ConnectDetailPage() {
     }
   }
 
+  async function returnToPitstop() {
+    if (!confirm('Return this conversation to the Pitstop CS team? It leaves Connects and goes back to their inbox.')) return;
+    setReturning(true);
+    try {
+      await ignitionopsPost('returnConnect', { thread_id: threadId }, session);
+      toast('Returned to Pitstop CS', 'success');
+      router.push('/connects/');
+    } catch (e) {
+      toast(e.message, 'error');
+    } finally {
+      setReturning(false);
+    }
+  }
+
   if (err) return <div style={{ color: 'var(--state-error-fg)', padding: 16 }}>Error: {err}</div>;
   if (!data) return <Spinner />;
 
@@ -197,6 +212,20 @@ export default function ConnectDetailPage() {
           >
             {STATUS_VALUES.map(s => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
           </select>
+          <button
+            onClick={returnToPitstop}
+            disabled={returning}
+            title="Send this conversation back to the Pitstop CS team"
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              padding: '6px 12px', background: 'var(--surface-2)', color: 'var(--text-2)',
+              border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
+              fontFamily: 'var(--font-mono)', fontSize: 12,
+              cursor: returning ? 'not-allowed' : 'pointer', opacity: returning ? 0.5 : 1,
+            }}
+          >
+            <ArrowLeft size={13} /> {returning ? 'Returning…' : 'Return to Pitstop'}
+          </button>
           {promoted && influencer ? (
             <a
               href={`/influencers/detail/?id=${influencer.id}`}
