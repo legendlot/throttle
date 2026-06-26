@@ -14,7 +14,7 @@ crons = ["*/2 * * * *"]
 # Secrets set via `wrangler secret put` — never stored in this file:
 # SUPABASE_ANON_KEY
 # SUPABASE_SERVICE_ROLE_KEY
-# GMAIL_SA_CLIENT_EMAIL   (service-account email, domain-wide-delegated to carecrew@)
-# GMAIL_SA_PRIVATE_KEY    (service-account private key, PEM)
+# GOOGLE_SA_JSON          (full service-account key JSON — REUSE the shared SA that
+#                          odoops/podiumops use; it already has gmail.modify DWD'd)
 # INGEST_TOKEN            (commsops /ingest + /send service-to-service token)
-# Optional vars (have code fallbacks): COMMSOPS_URL, GMAIL_MAILBOX
+# Optional vars (have code fallbacks): COMMSOPS_URL, GMAIL_MAILBOX (=carecrew@legendoftoys.com)

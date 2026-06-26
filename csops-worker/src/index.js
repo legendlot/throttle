@@ -459,7 +459,7 @@ export default {
   // Armed via wrangler.toml [triggers] crons. Inert (no-op) until the Gmail SA
   // secrets are set. Idempotent — provider_message_id unique dedupes redelivery.
   async scheduled(_event, env, ctx) {
-    if (!env.GMAIL_SA_CLIENT_EMAIL) return;   // not configured yet
+    if (!gmailConfigured(env)) return;   // not configured yet (no GOOGLE_SA_JSON)
     ctx.waitUntil(syncGmail(env).then(
       r => console.log('[email] cron sync', JSON.stringify(r)),
       e => console.error('[email] cron sync error', e),
@@ -3933,14 +3933,18 @@ function b64urlEncodeUtf8(str) {
 }
 function b64urlEncodeJson(obj) { return b64urlEncodeUtf8(JSON.stringify(obj)); }
 
-// ── Gmail OAuth — service-account JWT (RS256), domain-wide-delegated to carecrew@
+// ── Gmail OAuth — service-account JWT (RS256), domain-wide-delegated to carecrew@.
+// Reuses the shared GOOGLE_SA_JSON secret (the full SA key JSON, same convention as
+// odoops/podiumops). That SA already has gmail.modify domain-wide-delegated.
 let _gmailTok = { token: null, exp: 0 };
+function gmailConfigured(env) { return !!env.GOOGLE_SA_JSON; }
 async function gmailAccessToken(env) {
   if (_gmailTok.token && Date.now() < _gmailTok.exp - 60_000) return _gmailTok.token;
-  const clientEmail = env.GMAIL_SA_CLIENT_EMAIL;
-  let pk = env.GMAIL_SA_PRIVATE_KEY;
+  if (!env.GOOGLE_SA_JSON) throw new Error('gmail_not_configured');
+  const sa = JSON.parse(env.GOOGLE_SA_JSON);
+  const clientEmail = sa.client_email;
+  const pk = sa.private_key;                                  // PEM, already with real newlines
   if (!clientEmail || !pk) throw new Error('gmail_not_configured');
-  pk = pk.replace(/\\n/g, '\n');   // secrets often carry literal \n
 
   const iat = Math.floor(Date.now() / 1000);
   const claim = {
