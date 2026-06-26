@@ -528,17 +528,7 @@ export default function InboxPage() {
               </button>
             ))}
           </div>
-          {allTags.length > 0 && (
-            <div style={{ padding: '6px 10px', borderBottom: '1px solid var(--border)' }}>
-              <select value={tagFilter} onChange={e => setTagFilter(e.target.value)} title="Filter by tag"
-                style={{ width: '100%', fontSize: 11, padding: '4px 6px', borderRadius: 'var(--radius-sm)',
-                  border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--t1)' }}>
-                <option value="">All tags</option>
-                {allTags.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-              </select>
-            </div>
-          )}
-          {/* Filter + Sort (S164, Pruthvi) */}
+          {/* Filter + Sort (S164, Pruthvi) — tag filter folded in here (S177) to save a row */}
           <div style={{ display: 'flex', gap: 6, padding: '6px 10px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
             <select value={sort} onChange={e => setSort(e.target.value)} title="Sort conversations" style={miniSelect}>
               <option value="recent">↓ Recent activity</option>
@@ -549,6 +539,12 @@ export default function InboxPage() {
               <option value="">All priorities</option>
               {PRIORITY_OPTS.map(p => <option key={p} value={p}>{PRIORITIES[p].label}</option>)}
             </select>
+            {allTags.length > 0 && (
+              <select value={tagFilter} onChange={e => setTagFilter(e.target.value)} title="Filter by tag" style={miniSelect}>
+                <option value="">All tags</option>
+                {allTags.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            )}
             {canReassign && agents.length > 0 && (
               <select value={agentFilter} onChange={e => setAgentFilter(e.target.value)} title="Filter by assigned agent" style={miniSelect}>
                 <option value="">All agents</option>
@@ -1021,6 +1017,8 @@ function AssignControl({ thread, mineThread, canReassign, agents, open, setOpen,
     </div>
   );
 }
+/* Compact single-row stat chip (S177) — was a ~100px card; now ~40px so the
+   conversation list gets the vertical space back (Pruthvi: only one row showed). */
 function ChannelTile({ chKey, stat, active, onClick }) {
   const ch = chanOf(chKey);
   const tracksAwaiting = stat?.awaiting != null; // WhatsApp/Email (null) don't track awaiting here
@@ -1030,32 +1028,33 @@ function ChannelTile({ chKey, stat, active, onClick }) {
     : `${stat?.unassigned || 0} unassigned`;
   const subTone = tracksAwaiting && awaiting > 0 ? 'var(--warn-fg)' : 'var(--t3)';
   return (
-    <button onClick={onClick} style={{ flex: '1 1 160px', minWidth: 150, textAlign: 'left', cursor: 'pointer',
-      background: 'var(--surface)', border: `1px solid ${active ? ch.color : 'var(--border)'}`,
-      borderRadius: 'var(--radius)', padding: 'var(--cardpad)', position: 'relative', overflow: 'hidden',
+    <button onClick={onClick} style={{ display: 'flex', alignItems: 'center', gap: 9, flex: '1 1 150px', minWidth: 140,
+      textAlign: 'left', cursor: 'pointer', background: 'var(--surface)', border: `1px solid ${active ? ch.color : 'var(--border)'}`,
+      borderRadius: 'var(--radius)', padding: '7px 11px', position: 'relative', overflow: 'hidden',
       boxShadow: active ? `0 0 0 1px ${ch.color}` : 'none' }}>
       <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, background: ch.color }} />
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 9 }}>
-        <ch.Glyph size={13} style={{ color: ch.color }} />
-        <span className="eyebrow" style={{ fontSize: 9.5, letterSpacing: '0.12em' }}>{ch.label}</span>
+      <ch.Glyph size={15} style={{ color: ch.color, flexShrink: 0 }} />
+      <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, lineHeight: 1.2 }}>
+        <span className="eyebrow" style={{ fontSize: 9, letterSpacing: '0.1em' }}>{ch.label}</span>
+        <span style={{ fontSize: 10.5, fontWeight: 500, color: subTone, whiteSpace: 'nowrap',
+          overflow: 'hidden', textOverflow: 'ellipsis' }}>{subText}</span>
       </div>
-      <div className="num" style={{ fontWeight: 700, fontSize: 26, color: 'var(--t1)', lineHeight: 1 }}>{stat?.total || 0}</div>
-      <div style={{ fontSize: 11.5, marginTop: 6, fontWeight: 500, color: subTone }}>{subText}</div>
+      <span className="num" style={{ fontWeight: 700, fontSize: 18, color: 'var(--t1)', lineHeight: 1, marginLeft: 'auto' }}>{stat?.total || 0}</span>
     </button>
   );
 }
 function AwaitingTile({ total }) {
   return (
-    <div style={{ flex: '1 1 160px', minWidth: 150, background: 'var(--surface)',
-      border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 'var(--cardpad)',
-      position: 'relative', overflow: 'hidden' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 9, flex: '1 1 150px', minWidth: 140,
+      background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)',
+      padding: '7px 11px', position: 'relative', overflow: 'hidden' }}>
       <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, background: total > 0 ? 'var(--warn-fg)' : 'var(--ok-fg)' }} />
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 9 }}>
-        <Clock size={13} style={{ color: total > 0 ? 'var(--warn-fg)' : 'var(--ok-fg)' }} />
-        <span className="eyebrow" style={{ fontSize: 9.5, letterSpacing: '0.12em' }}>Awaiting reply</span>
+      <Clock size={15} style={{ color: total > 0 ? 'var(--warn-fg)' : 'var(--ok-fg)', flexShrink: 0 }} />
+      <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, lineHeight: 1.2 }}>
+        <span className="eyebrow" style={{ fontSize: 9, letterSpacing: '0.1em' }}>Awaiting reply</span>
+        <span style={{ fontSize: 10.5, fontWeight: 500, color: 'var(--t3)', whiteSpace: 'nowrap' }}>across all channels</span>
       </div>
-      <div className="num" style={{ fontWeight: 700, fontSize: 26, color: total > 0 ? 'var(--warn-fg)' : 'var(--t1)', lineHeight: 1 }}>{total}</div>
-      <div style={{ fontSize: 11.5, marginTop: 6, fontWeight: 500, color: 'var(--t3)' }}>across all channels</div>
+      <span className="num" style={{ fontWeight: 700, fontSize: 18, color: total > 0 ? 'var(--warn-fg)' : 'var(--t1)', lineHeight: 1, marginLeft: 'auto' }}>{total}</span>
     </div>
   );
 }
