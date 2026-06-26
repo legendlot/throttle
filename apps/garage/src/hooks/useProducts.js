@@ -30,12 +30,11 @@ export function useProducts() {
   const PRODUCT_VARIANTS = data?.variants  || {};
   const PRODUCT_COLORS   = data?.colors    || {}; // { product: { model: [color, ...] } }
   const RECEIVE_FORMAT   = data?.receive_format || {}; // { product: 'FBU' | 'CKD' | 'SKD' }
-  const FBU_PRODUCTS     = new Set(data?.fbu_products || []); // products with FBU stock (dual-format capable)
   const HAS_REMOTE       = new Set(
     Object.entries(data?.has_remote || {})
       .filter(([, v]) => v)
       .map(([k]) => k),
   );
 
-  return { PRODUCTS, PRODUCT_VARIANTS, HAS_REMOTE, PRODUCT_COLORS, RECEIVE_FORMAT, FBU_PRODUCTS, loading };
+  return { PRODUCTS, PRODUCT_VARIANTS, HAS_REMOTE, PRODUCT_COLORS, RECEIVE_FORMAT, loading };
 }
