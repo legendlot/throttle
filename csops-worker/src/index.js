@@ -435,6 +435,13 @@ export default {
       if (request.method === 'GET')  return handleMetaVerify(url, env);
       if (request.method === 'POST') return handleMetaWebhook(request, env);
     }
+    // Ignition bridge — sibling-worker (ignitionops) read/reply on transferred
+    // "Connect" threads. Token-authed (NOT a user JWT), placed BEFORE the JWT gate
+    // like the webhooks. Every handler hard-scopes to ignition_connect=true, so
+    // Ignition can never reach general channel traffic. See the Ignition Connects spec.
+    if (url.pathname === '/bridge/ignition' && request.method === 'POST') {
+      return handleIgnitionBridge(request, env);
+    }
     if (!action && request.method === 'GET') return err('Missing action parameter', 400);
 
     // Authenticate every request (besides /health)
@@ -565,6 +572,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'linkMessagingThread':      return linkMessagingThread(body, auth, env);
     case 'assignThread':             return assignThread(body, auth, env);
     case 'transferThread':           return transferThread(body, auth, env);
+    case 'transferThreadToIgnition': return transferThreadToIgnition(body, auth, env);
     case 'bulkAssignThreads':        return bulkAssignThreads(body, auth, env);
     case 'setThreadPriority':        return setThreadPriority(body, auth, env);
     case 'createTicketFromThread':   return createTicketFromThread(body, auth, env);
@@ -3117,7 +3125,8 @@ async function sendWaReply(body, auth, env) {
 
   const now = new Date().toISOString();
   const threadPatch = { last_message_at: now };
-  if (!thread.assigned_agent_id) {                 // auto-claim on first reply (mirror sendMetaMessage)
+  // Connect replies (via the Ignition bridge) must NOT auto-claim the thread into CS.
+  if (!thread.assigned_agent_id && !auth.viaIgnitionBridge) {   // auto-claim on first reply (mirror sendMetaMessage)
     threadPatch.assigned_agent_id = auth.userId;
     threadPatch.assigned_agent_name = auth.fullName || auth.name || auth.email || null;
     threadPatch.assigned_at = now;
@@ -3125,8 +3134,8 @@ async function sendWaReply(body, auth, env) {
   if (thread.thread_state && thread.thread_state !== 'open') threadPatch.thread_state = 'open';
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(threadPatch) }).catch(() => {});
 
-  const ticketId = await assignLinkedTicketToReplier(thread.id, auth, env);
-  return ok({ sent: true, message_id: data?.id != null ? String(data.id) : null, auto_claimed: !thread.assigned_agent_id, ticket_assigned: ticketId });
+  const ticketId = auth.viaIgnitionBridge ? null : await assignLinkedTicketToReplier(thread.id, auth, env);
+  return ok({ sent: true, message_id: data?.id != null ? String(data.id) : null, auto_claimed: !thread.assigned_agent_id && !auth.viaIgnitionBridge, ticket_assigned: ticketId });
 }
 
 // Phase C admin-only: simulate an inbound message for testing the UI before
@@ -3735,7 +3744,8 @@ async function metaHandleMessage(channel, ev, env) {
 
   // Round-robin: auto-assign an unassigned inbound thread to the least-loaded eligible
   // agent. Config-gated per channel inside the RPC (WhatsApp seeded off). Best-effort.
-  if (direction === 'inbound' && !thread.assigned_agent_id) {
+  // Skip Ignition-transferred threads (S177) — they belong to the Influencer team now.
+  if (direction === 'inbound' && !thread.assigned_agent_id && !thread.ignition_connect) {
     await sb(`/rest/v1/rpc/cs_autoassign_thread`, env, {
       method: 'POST', body: JSON.stringify({ p_thread_id: thread.id }),
     }).catch(() => {});
@@ -3778,14 +3788,14 @@ async function sendMetaMessage(body, auth, env) {
     }),
   });
   const threadPatch = { last_message_at: new Date().toISOString() };
-  if (!thread.assigned_agent_id) {                 // auto-claim on first reply (D4, S162)
+  if (!thread.assigned_agent_id && !auth.viaIgnitionBridge) {   // auto-claim on first reply (D4, S162); skip for Connect replies
     threadPatch.assigned_agent_id = auth.userId;
     threadPatch.assigned_agent_name = auth.fullName || auth.name || auth.email || null;
     threadPatch.assigned_at = new Date().toISOString();
   }
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(threadPatch) }).catch(() => {});
-  const ticketId = await assignLinkedTicketToReplier(thread.id, auth, env);
-  return ok({ sent: true, message_id: mid, auto_claimed: !thread.assigned_agent_id, ticket_assigned: ticketId });
+  const ticketId = auth.viaIgnitionBridge ? null : await assignLinkedTicketToReplier(thread.id, auth, env);
+  return ok({ sent: true, message_id: mid, auto_claimed: !thread.assigned_agent_id && !auth.viaIgnitionBridge, ticket_assigned: ticketId });
 }
 
 // ── Outbound media attachments (S162, Feature C) ─────────────────────────────
@@ -4159,7 +4169,8 @@ async function ingestInboundEmail(env, p) {
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) }).catch(() => {});
 
   // 5. Round-robin assign an unassigned thread (config-gated per channel in the RPC).
-  if (!thread.assigned_agent_id) {
+  //    Skip Ignition-transferred threads (S177) — owned by the Influencer team now.
+  if (!thread.assigned_agent_id && !thread.ignition_connect) {
     await sb(`/rest/v1/rpc/cs_autoassign_thread`, env, { method: 'POST', body: JSON.stringify({ p_thread_id: thread.id }) }).catch(() => {});
   }
   return true;
@@ -4239,7 +4250,7 @@ async function sendEmailReply(body, auth, env) {
 
   // Thread housekeeping: bump activity + auto-claim on first reply.
   const threadPatch = { last_message_at: new Date().toISOString() };
-  if (!thread.assigned_agent_id) {
+  if (!thread.assigned_agent_id && !auth.viaIgnitionBridge) {   // skip auto-claim for Connect replies (S177)
     threadPatch.assigned_agent_id = auth.userId;
     threadPatch.assigned_agent_name = senderName;
     threadPatch.assigned_at = new Date().toISOString();
@@ -4254,8 +4265,8 @@ async function sendEmailReply(body, auth, env) {
     source: 'pitstop_email', idempotency_key: sentId ? `gmail_out:${sentId}` : undefined,
   });
 
-  const ticketId = await assignLinkedTicketToReplier(thread.id, auth, env);
-  return ok({ sent: true, message_id: sentId, auto_claimed: !thread.assigned_agent_id, ticket_assigned: ticketId });
+  const ticketId = auth.viaIgnitionBridge ? null : await assignLinkedTicketToReplier(thread.id, auth, env);
+  return ok({ sent: true, message_id: sentId, auto_claimed: !thread.assigned_agent_id && !auth.viaIgnitionBridge, ticket_assigned: ticketId });
 }
 
 function stripHtml(h) { return String(h || '').replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(); }
@@ -4279,6 +4290,12 @@ async function getMessagingThreads(params, auth, env) {
   };
   const orderClause = ORDERS[sort] || ORDERS.recent;
   let q = `/rest/v1/cs_wa_threads?select=*&order=${orderClause}&limit=${limit}`;
+  // Ignition handoff scope (S177): threads transferred to the Influencer team leave
+  // the CS inbox entirely. Default = exclude them; scope=ignition = ONLY them (a
+  // read-only oversight view for CS leads, since Pitstop still owns the channel).
+  const scope = params.get('scope');
+  if (scope === 'ignition') q += `&ignition_connect=is.true`;
+  else q += `&ignition_connect=is.false`;
   const state = params.get('state') || 'active';   // active (open+snoozed) | closed | all (S163 work-queue)
   if (channel && channel !== 'all') q += `&channel=eq.${encodeURIComponent(channel)}`;
   if (tab === 'mine') q += `&assigned_agent_id=eq.${auth.userId}`;
@@ -4356,7 +4373,8 @@ async function getMessagingStats(params, auth, env) {
     email:     { total: 0, awaiting: null, mine: 0, unassigned: 0 },
   };
   // Two-way channels: small volume → fetch threads + last-message direction.
-  const twRes = await sb(`/rest/v1/cs_wa_threads?channel=in.(instagram,messenger)&select=id,channel,assigned_agent_id&limit=1000`, env);
+  // Exclude Ignition-transferred threads (S177) — they're off the CS inbox.
+  const twRes = await sb(`/rest/v1/cs_wa_threads?channel=in.(instagram,messenger)&ignition_connect=is.false&select=id,channel,assigned_agent_id&limit=1000`, env);
   const tw = twRes.data || [];
   const chById = {};
   for (const t of tw) {
@@ -4380,13 +4398,14 @@ async function getMessagingStats(params, auth, env) {
     }
   }
   // WhatsApp: exact counts only (read-only mirror — awaiting tracked in BiteSpeed).
-  stats.whatsapp.total = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.whatsapp&select=id`, env);
-  stats.whatsapp.mine = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.whatsapp&assigned_agent_id=eq.${auth.userId}&select=id`, env);
-  stats.whatsapp.unassigned = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.whatsapp&assigned_agent_id=is.null&select=id`, env);
+  // All counts exclude Ignition-transferred threads (S177).
+  stats.whatsapp.total = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.whatsapp&ignition_connect=is.false&select=id`, env);
+  stats.whatsapp.mine = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.whatsapp&ignition_connect=is.false&assigned_agent_id=eq.${auth.userId}&select=id`, env);
+  stats.whatsapp.unassigned = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.whatsapp&ignition_connect=is.false&assigned_agent_id=is.null&select=id`, env);
   // Email: exact counts (volume may grow → cheap counts, no per-thread awaiting v1).
-  stats.email.total = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.email&select=id`, env);
-  stats.email.mine = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.email&assigned_agent_id=eq.${auth.userId}&select=id`, env);
-  stats.email.unassigned = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.email&assigned_agent_id=is.null&select=id`, env);
+  stats.email.total = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.email&ignition_connect=is.false&select=id`, env);
+  stats.email.mine = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.email&ignition_connect=is.false&assigned_agent_id=eq.${auth.userId}&select=id`, env);
+  stats.email.unassigned = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.email&ignition_connect=is.false&assigned_agent_id=is.null&select=id`, env);
   return ok({ stats });
 }
 
@@ -4663,6 +4682,139 @@ async function transferThread(body, auth, env) {
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify({ updated_at: now }) }).catch(() => {});
 
   return ok({ transferred_to: agent.full_name, to_agent_id: agent.id });
+}
+
+// ── Ignition Connects bridge (S177) ──────────────────────────────────────────
+// The Pitstop CS team transfers an IG/WhatsApp/email conversation to the Influencer
+// team; Reann (+ Himani) work it inside Ignition. Pitstop stays the channel owner +
+// single store — Ignition reads/replies through these endpoints, never the raw inbox.
+// See spec 2026-06-26-ignition-pitstop-connects-transfer-design.md.
+
+// CS-side action: hand a thread to the Influencer team. Full handoff — the
+// ignition_connect flag excludes it from the CS inbox everywhere, and CS assignment
+// is released. Same own/unassigned-vs-reassign gate as transferThread.
+async function transferThreadToIgnition(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { thread_id, note } = body;
+  if (!thread_id) return err('thread_id required');
+
+  const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=id,channel,assigned_agent_id,ignition_connect&limit=1`, env);
+  const thread = tRes.data?.[0];
+  if (!thread) return err('Thread not found', 404);
+  if (thread.ignition_connect) return err('Conversation is already with the Influencer team', 422);
+
+  const canReassign = !!auth?.permissions?.cs_ticket_reassign || !!auth?.permissions?.cs_ticket_admin;
+  const ownsOrFree = !thread.assigned_agent_id || thread.assigned_agent_id === auth.userId;
+  if (!canReassign && !ownsOrFree) {
+    return err("Forbidden — you can only transfer a conversation you're handling (missing cs_ticket_reassign)", 403);
+  }
+
+  const now = new Date().toISOString();
+  const upd = await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      ignition_connect: true, ignition_transferred_at: now, ignition_transferred_by: auth.userId,
+      assigned_agent_id: null, assigned_agent_name: null, assigned_at: null, updated_at: now,
+    }),
+  });
+  if (!upd.ok) return err('Transfer failed', upd.status || 500);
+
+  // Internal handoff note — the snapshot the Influencer team sees + a CS audit line.
+  const fromName = auth.fullName || auth.name || auth.email || 'Agent';
+  const noteText = (note && String(note).trim()) ? `: ${String(note).trim()}` : '';
+  await sb(`/rest/v1/cs_wa_messages`, env, {
+    method: 'POST',
+    body: JSON.stringify({
+      thread_id: thread.id, channel: thread.channel || 'whatsapp', direction: 'outbound',
+      kind: 'note', is_internal: true, body: `↪ Transferred to Influencer team (Ignition)${noteText}`,
+      status: null, sent_by_user_id: auth.userId, sent_by_name: fromName, sent_at: now,
+    }),
+  }).catch(() => {});
+
+  return ok({ transferred: true, thread_id: thread.id });
+}
+
+// Bridge router — token-authed (NOT a user JWT), routed before the JWT gate. Every
+// handler hard-scopes to ignition_connect=true so Ignition is structurally walled
+// off from general channel traffic even if its UI had a bug.
+async function handleIgnitionBridge(request, env) {
+  if (!env.IGNITION_BRIDGE_TOKEN) return err('Ignition bridge not configured', 503);
+  if (request.headers.get('X-Ignition-Bridge-Token') !== env.IGNITION_BRIDGE_TOKEN) return err('Unauthorized', 401);
+  let body = {};
+  try { body = await request.json(); } catch {}
+  switch (body.action) {
+    case 'getIgnitionConnects': return bridgeGetConnects(body, env);
+    case 'getIgnitionThread':   return bridgeGetThread(body, env);
+    case 'sendConnectReply':    return bridgeSendReply(body, env);
+    default: return err(`Unknown bridge action: ${body.action}`, 404);
+  }
+}
+
+// List every transferred thread + a batched last-message preview + awaiting-reply flag.
+async function bridgeGetConnects(body, env) {
+  const limit = Math.min(Number(body.limit) || 200, 400);
+  const channel = body.channel;
+  let q = `/rest/v1/cs_wa_threads?ignition_connect=is.true&select=*&order=last_message_at.desc.nullslast&limit=${limit}`;
+  if (channel && channel !== 'all') q += `&channel=eq.${encodeURIComponent(channel)}`;
+  const tRes = await sb(q, env);
+  const threads = tRes.data || [];
+  if (!threads.length) return ok({ threads: [] });
+
+  const ids = threads.map(t => t.id);
+  const mRes = await sb(
+    `/rest/v1/cs_wa_messages?thread_id=in.(${ids.join(',')})&is_internal=eq.false&select=thread_id,body,kind,direction,created_at&order=created_at.desc&limit=1500`,
+    env,
+  );
+  const lastByThread = {};
+  for (const m of (mRes.data || [])) if (!lastByThread[m.thread_id]) lastByThread[m.thread_id] = m;
+  const out = threads.map(t => {
+    const lm = lastByThread[t.id] || null;
+    return {
+      ...t,
+      last_message: lm ? { body: lm.body, kind: lm.kind, direction: lm.direction, created_at: lm.created_at } : null,
+      awaiting_reply: lm ? lm.direction === 'inbound' : false,
+      within_customer_window: withinCustomerWindow(t),
+    };
+  });
+  return ok({ threads: out });
+}
+
+// One transferred thread's full message history. 403 if not an Ignition connect.
+async function bridgeGetThread(body, env) {
+  const { thread_id } = body;
+  if (!thread_id) return err('thread_id required');
+  const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=*&limit=1`, env);
+  const thread = tRes.data?.[0];
+  if (!thread) return err('Thread not found', 404);
+  if (!thread.ignition_connect) return err('Not an Ignition connect', 403);
+  const mRes = await sb(
+    `/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(thread_id)}&select=*&order=created_at.asc&limit=500`, env);
+  return ok({ thread, messages: mRes.data || [], within_customer_window: withinCustomerWindow(thread) });
+}
+
+// Reply on a transferred thread → existing provider send path by channel, scope-
+// checked, stamped to the acting Ignition user, with NO CS auto-claim (viaIgnitionBridge).
+async function bridgeSendReply(body, env) {
+  const { thread_id, text, html, actor } = body;
+  if (!thread_id || (!text && !html)) return err('thread_id and text required');
+  const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=id,channel,ignition_connect&limit=1`, env);
+  const thread = tRes.data?.[0];
+  if (!thread) return err('Thread not found', 404);
+  if (!thread.ignition_connect) return err('Not an Ignition connect', 403);
+
+  const synthAuth = {
+    userId: actor?.id || null,
+    fullName: actor?.name || null,
+    name: actor?.name || null,
+    email: actor?.email || null,
+    permissions: { cs_ticket_manage: true },
+    viaIgnitionBridge: true,
+  };
+  const channel = thread.channel || 'whatsapp';
+  if (channel === 'whatsapp') return sendWaReply({ thread_id, text }, synthAuth, env);
+  if (channel === 'instagram' || channel === 'messenger') return sendMetaMessage({ thread_id, text }, synthAuth, env);
+  if (channel === 'email') return sendEmailReply({ thread_id, text, html }, synthAuth, env);
+  return err(`Unsupported channel: ${channel}`, 422);
 }
 
 // ── Canned responses (S162) — agent-managed quick replies for the composer ───
