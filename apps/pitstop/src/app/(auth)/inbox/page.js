@@ -15,7 +15,7 @@ import { useAuth } from '@throttle/auth';
 import {
   Instagram, Facebook, MessageCircle, Mail, Send, Clock, ExternalLink, Link2,
   FileText, Smile, Lock, Bold, Italic, StickyNote, UserPlus, X, Paperclip, Plus, Search,
-  CheckCircle2, RotateCcw, Tag,
+  CheckCircle2, RotateCcw, Tag, ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import { Panel, Tabs, ToneBadge, btnPrimary, btnGhost, inputStyle, selectStyle } from '../../../components/kit/index.js';
 import { csopsGet, csopsPost } from '../../../lib/csopsFetch.js';
@@ -107,6 +107,17 @@ export default function InboxPage() {
   const scrollRef = useRef(null);
   const taRef = useRef(null);
   const fileRef = useRef(null);
+
+  const [listCollapsed, setListCollapsed] = useState(() => {
+    try { return localStorage.getItem('ps-inbox-list-collapsed') === '1'; } catch { return false; }
+  });
+  function toggleListCollapse() {
+    setListCollapsed(v => {
+      const next = !v;
+      try { localStorage.setItem('ps-inbox-list-collapsed', next ? '1' : '0'); } catch {}
+      return next;
+    });
+  }
 
   // List is channel-scoped (WhatsApp has thousands of threads — fetching "all"
   // would bury the low-volume IG/FB threads). Tiles get their own stats call.
@@ -477,24 +488,31 @@ export default function InboxPage() {
       {/* Two-pane via grid: list shrinks 320→200, conversation holds a 340px floor so
           it never collapses to a sliver in narrow/zoomed desktop windows (was a fixed
           340 list + flex chat that could squeeze the chat to ~0). */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, 320px) minmax(340px, 1fr)',
+      <div style={{ display: 'grid', gridTemplateColumns: listCollapsed ? '28px minmax(340px, 1fr)' : 'minmax(200px, 320px) minmax(340px, 1fr)',
         gap: 14, flex: 1, minHeight: 0 }}>
         {/* ── Thread list ───────────────────────────────────── */}
         <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column',
           background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
-          <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', display: 'flex',
-            alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
-            <span className="label" style={{ fontSize: 11, fontWeight: 700, color: 'var(--t1)' }}>Conversations</span>
-            <div style={{ display: 'flex', gap: 3 }}>
-              {[['active', 'Active'], ['closed', 'Closed'], ['all', 'All']].map(([id, lbl]) => (
+          <div style={{ padding: listCollapsed ? '10px 0' : '10px 12px', borderBottom: '1px solid var(--border)', display: 'flex',
+            alignItems: 'center', justifyContent: listCollapsed ? 'center' : 'space-between', gap: 6 }}>
+            {!listCollapsed && <span className="label" style={{ fontSize: 11, fontWeight: 700, color: 'var(--t1)' }}>Conversations</span>}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+              {!listCollapsed && [['active', 'Active'], ['closed', 'Closed'], ['all', 'All']].map(([id, lbl]) => (
                 <button key={id} onClick={() => setStateFilter(id)} title={`Show ${lbl.toLowerCase()} conversations`}
                   style={{ cursor: 'pointer', fontSize: 10, fontWeight: 600, padding: '3px 7px', borderRadius: 'var(--radius-sm)',
                     border: '1px solid', borderColor: stateFilter === id ? 'var(--accent)' : 'var(--border)',
                     background: stateFilter === id ? 'var(--accent-bg)' : 'transparent',
                     color: stateFilter === id ? 'var(--accent)' : 'var(--t3)' }}>{lbl}</button>
               ))}
+              <button onClick={toggleListCollapse} title={listCollapsed ? 'Expand conversation list' : 'Collapse conversation list'}
+                style={{ display: 'grid', placeItems: 'center', width: 22, height: 22, cursor: 'pointer',
+                  border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', background: 'transparent',
+                  color: 'var(--t3)', flexShrink: 0 }}>
+                {listCollapsed ? <ChevronRight size={12} /> : <ChevronLeft size={12} />}
+              </button>
             </div>
           </div>
+          <div style={{ display: listCollapsed ? 'none' : 'contents' }}>
           {/* Assignment axis — Mine / Unassigned / All (S162-A) */}
           <div style={{ display: 'flex', gap: 4, padding: '8px 10px', borderBottom: '1px solid var(--border)' }}>
             {assignTabs.map(t => (
@@ -599,6 +617,7 @@ export default function InboxPage() {
               );
             })}
           </div>
+          </div>{/* end contents wrapper */}
         </div>
 
         {/* ── Conversation ──────────────────────────────────── */}
