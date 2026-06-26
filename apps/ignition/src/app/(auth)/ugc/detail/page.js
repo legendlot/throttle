@@ -133,7 +133,7 @@ export default function UgcDetailPage() {
       <HookCard e={e} canEdit={canManage} onSave={save} />
 
       {/* Ad performance */}
-      <AdPerfCard e={e} roas={roas} canEdit={canManage} onSave={save} />
+      <AdPerfCard e={e} roas={roas} canEdit={canManage} onSave={save} session={session} onRefreshed={reload} />
 
       {/* Payment */}
       <PaymentCard e={e} commOut={commOut} canEdit={canManage} onSave={save} />
@@ -330,12 +330,26 @@ const AD_FIELDS = [
   ['meta_ad_id', 'Meta ad ID', 'text'],
 ];
 
-function AdPerfCard({ e, roas, canEdit, onSave }) {
+function AdPerfCard({ e, roas, canEdit, onSave, session, onRefreshed }) {
   const { showToast: toast } = useToast();
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({});
   const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   function start() { const f = {}; for (const [k] of AD_FIELDS) f[k] = e[k] ?? ''; setForm(f); setEditing(true); }
+  async function refreshMeta() {
+    setRefreshing(true);
+    try {
+      await ignitionopsPost('refreshUgcMetrics', { engagement_id: e.id }, session);
+      toast('Pulled latest from Meta', 'success');
+      onRefreshed && onRefreshed();
+    } catch (err) {
+      const msg = err.message === 'no_meta_ad_id' ? 'Add a Meta ad ID first'
+        : err.message === 'meta_not_configured' ? 'Meta not connected yet (token not set)'
+        : err.message;
+      toast(msg, 'error');
+    } finally { setRefreshing(false); }
+  }
   async function save() {
     setBusy(true);
     try {
@@ -371,8 +385,18 @@ function AdPerfCard({ e, roas, canEdit, onSave }) {
           <KV label="Meta ad ID" value={e.meta_ad_id || '—'} />
         </>
       )}
+      {canEdit && !editing && (
+        <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <button onClick={refreshMeta} disabled={refreshing || !e.meta_ad_id} style={ghostBtn}>
+            {refreshing ? 'Refreshing…' : 'Refresh from Meta'}
+          </button>
+          <span style={{ fontSize: 11, color: 'var(--text-3)' }}>
+            {e.meta_synced_at ? `Last synced ${new Date(e.meta_synced_at).toLocaleString('en-IN')}` : 'Never synced'}
+          </span>
+        </div>
+      )}
       <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-3)', fontStyle: 'italic' }}>
-        Auto-updated from Meta once connected (C2). Editable manually until then.
+        Auto-pulls daily from Meta per the deal's Meta ad ID. Editable manually too.
       </div>
     </Card>
   );
