@@ -581,8 +581,8 @@ export default function IssueQueuePage() {
     if (!qty || qty < 1) { showToast('Enter a quantity to receive', 'error'); return; }
     setVendorBusy(run.run_no);
     try {
-      await workerFetch('receiveExtUnits', { data: { run_no: run.run_no, qty } }, session);
-      showToast(`Received ${qty} built ${run.product} into the pool`, 'success');
+      await workerFetch('receiveExtBuiltUnits', { data: { run_no: run.run_no, qty } }, session);
+      showToast(`Received ${qty} built ${run.product} into stock`, 'success');
       setRcvQty((m) => ({ ...m, [run.run_no]: '' }));
       loadQueue();
     } catch (e) {
@@ -1062,10 +1062,10 @@ export default function IssueQueuePage() {
                             style={{ ...inputStyle, width: 70, fontFamily: 'var(--mono)' }}
                           />
                           <button style={btnSecondary} disabled={vendorBusy === run.run_no} onClick={() => handleReceiveUnits(run)}>
-                            {vendorBusy === run.run_no ? '…' : '+ Receive units'}
+                            {vendorBusy === run.run_no ? '…' : '+ Receive built cars'}
                           </button>
                         </span>
-                      ) : <span style={{ fontSize: 11, color: 'var(--t3)' }}>Scan returns at Ext Inwarding</span>}
+                      ) : <span style={{ fontSize: 11, color: 'var(--t3)' }}>Legacy run — reconcile manually</span>}
                     </td>
                   </tr>
                 ))}
@@ -1073,7 +1073,7 @@ export default function IssueQueuePage() {
             </table>
           </div>
           <div style={{ padding: '8px 14px', fontSize: 11, color: 'var(--t3)' }}>
-            Send the issued build materials to the vendor, then count returned built units into the pool (instalments OK). Production requests the finish parts — they appear above as a <strong style={{ color: 'var(--yellow)' }}>FINISH</strong> request; issue those, then units are stickered at Ext Inwarding.
+            Issue the build materials, send them to the vendor, then <strong style={{ color: 'var(--yellow)' }}>Receive built cars</strong> back as stock (count, instalments OK) — they land as a job-work GRN on the built-car part. Finishing is then a normal production run that consumes that built-car stock (no separate finish phase, no Ext Inwarding scan).
           </div>
         </div>
       )}

@@ -228,17 +228,10 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
   }
 
   async function handleRequestFinish() {
-    if (!window.confirm(`Request finish parts for ${run.run_no}? This raises a FINISH pull in the store's Issue Queue; the store issues the finish parts, then you sticker the built units at Ext Inwarding.`)) return;
-    setRequestingFinish(true);
-    try {
-      await workerFetch('requestExtFinish', { data: { run_no: run.run_no } }, session);
-      showToast(`Finish requested for ${run.run_no} — the store will issue the finish parts`, 'success');
-      onRunChange(run.run_no);
-    } catch (e) {
-      showToast(e.message || 'Request finish failed', 'error');
-    } finally {
-      setRequestingFinish(false);
-    }
+    // FBU unification Plan 3 (S178): finishing is now a NORMAL production run that consumes the
+    // built-car stock received from the vendor — there is no finish-phase pull / Ext Inwarding
+    // step anymore. This button is retained but inert (full removal is Plan 4 cleanup).
+    showToast('Finishing is now a normal run: once the built cars are received into stock, raise a run that consumes them. No finish-pull needed.', 'success');
   }
 
   const receiptTone = receipt ? (RECEIPT_TONES[receipt.status] || RECEIPT_TONES.Contested) : null;
