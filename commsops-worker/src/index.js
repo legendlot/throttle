@@ -6,6 +6,7 @@ const { recordConsent } = require('./consent.js');
 const { send } = require('./send.js');
 const { handleResendWebhook, handleUnsubscribe } = require('./webhooks.js');
 const CAMP = require('./campaigns.js');
+const J = require('./journeys.js');
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -93,10 +94,10 @@ async function handleGet(url, auth, env) {
     }
 
     // ── M7: journeys ──
-    case 'getJourneys': { const J = require('./journeys.js');
-      return ok(await J.listJourneys(env)); }
-    case 'getJourney': { const J = require('./journeys.js');
-      return ok(await J.getJourney(env, url.searchParams.get('id'))); }
+    case 'getJourneys':
+      return ok(await J.listJourneys(env));
+    case 'getJourney':
+      return ok(await J.getJourney(env, url.searchParams.get('id')));
     default:
       return err(`unknown_action:${action}`, 404);
   }
@@ -266,12 +267,12 @@ async function handlePost(body, auth, env) {
 
     // ── M7: journeys ──
     case 'saveJourney': { if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
-      const J = require('./journeys.js'); const r = await J.saveJourney(env, body, auth.userId);
+      const r = await J.saveJourney(env, body, auth.userId);
       return r.ok ? ok(r) : err(r.error, 400); }
-    case 'compileJourney': { const J = require('./journeys.js');
-      return ok(await J.compile(env, body.definition)); }
+    case 'compileJourney':
+      return ok(await J.compile(env, body.definition));
     case 'setJourneyStatus': { if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
-      const J = require('./journeys.js'); const r = await J.setJourneyStatus(env, body.id, body.status);
+      const r = await J.setJourneyStatus(env, body.id, body.status);
       return r.ok ? ok(r) : err(r.error, 400); }
 
     default:
@@ -346,11 +347,16 @@ export default {
     }
   },
 
-  // Broadcast fan-out consumer (M6). max_batch_size=1 → one chunk per invocation.
+  // Queue consumer — dispatch by message kind (enrol vs campaign fan-out).
   async queue(batch, env) {
     for (const msg of batch.messages) {
       try {
-        await CAMP.processQueueMessage(env, msg.body);
+        const b = msg.body || {};
+        if (b.kind === 'enrol') {
+          await J.enrol(env, { journeyId: b.journeyId, profileId: b.profileId, eventId: b.eventId });
+        } else {
+          await CAMP.processQueueMessage(env, b);   // campaign fan-out (default, back-compat)
+        }
         msg.ack();
       } catch (e) {
         msg.retry();

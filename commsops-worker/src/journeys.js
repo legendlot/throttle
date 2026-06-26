@@ -94,4 +94,47 @@ async function setJourneyStatus(env, id, status) {
   return { ok: true };
 }
 
-module.exports = { listJourneys, getJourney, compile, saveJourney, setJourneyStatus };
+// enrol(env, {journeyId, profileId, eventId?}) — respects re-enrolment policy,
+// creates the enrolment row pinned to active_version, starts the Workflow instance.
+async function enrol(env, { journeyId, profileId, eventId }) {
+  const jr = await A.sbComms(`/rest/v1/journeys?id=eq.${A.enc(journeyId)}&select=*&limit=1`, env);
+  const j = jr.ok && jr.data?.[0];
+  if (!j || j.status !== 'active' || !j.active_version) return { ok: false, error: 'journey_not_active' };
+
+  // re-enrolment policy
+  if (j.reenrolment === 'once_while_active' || j.reenrolment === 'once_ever') {
+    const statusFilter = j.reenrolment === 'once_ever' ? '' : '&status=eq.active';
+    const ex = await A.sbComms(
+      `/rest/v1/enrolments?journey_id=eq.${A.enc(journeyId)}&profile_id=eq.${A.enc(profileId)}${statusFilter}&select=id&limit=1`, env);
+    if (ex.ok && ex.data?.length) return { ok: true, skipped: 'reenrolment_policy' };
+  } else if (j.reenrolment === 'cooldown' && j.reenrol_cooldown_hours) {
+    const since = new Date(Date.now() - j.reenrol_cooldown_hours * 3600e3).toISOString();
+    const ex = await A.sbComms(
+      `/rest/v1/enrolments?journey_id=eq.${A.enc(journeyId)}&profile_id=eq.${A.enc(profileId)}&enrolled_at=gte.${A.enc(since)}&select=id&limit=1`, env);
+    if (ex.ok && ex.data?.length) return { ok: true, skipped: 'cooldown' };
+  }
+
+  const ins = await A.sbComms('/rest/v1/enrolments', env, {
+    method: 'POST', headers: { Prefer: 'return=representation' },
+    body: JSON.stringify({ journey_id: journeyId, journey_version: j.active_version, profile_id: profileId,
+      status: 'active', context: { trigger_event_id: eventId || null, enrolled_at: new Date().toISOString() } }),
+  });
+  const enrolment = ins.data?.[0];
+  if (!enrolment?.id) return { ok: false, error: 'enrolment_insert_failed' };
+
+  // start the durable Workflow — instance id = enrolment id (unique → idempotent against double-fan-out)
+  try {
+    await env.JOURNEY_WORKFLOW.create({ id: enrolment.id,
+      params: { enrolmentId: enrolment.id, journeyId, journeyVersion: j.active_version, profileId } });
+  } catch (e) {
+    // create throws on duplicate id (already started) → benign; otherwise mark failed
+    if (!String(e?.message || '').toLowerCase().includes('already')) {
+      await A.sbComms(`/rest/v1/enrolments?id=eq.${A.enc(enrolment.id)}`, env,
+        { method: 'PATCH', body: JSON.stringify({ status: 'failed', ended_at: new Date().toISOString() }) });
+      return { ok: false, error: 'workflow_start_failed:' + (e?.message || '') };
+    }
+  }
+  return { ok: true, enrolment_id: enrolment.id };
+}
+
+module.exports = { listJourneys, getJourney, compile, saveJourney, setJourneyStatus, enrol };
