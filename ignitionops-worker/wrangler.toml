@@ -7,6 +7,12 @@ workers_dev = true
 SUPABASE_URL = "https://jkxcnjabmrkteanzoofj.supabase.co"
 CSOPS_URL = "https://csops.afshaan.workers.dev"
 
+# Daily UGC Meta ad-metrics pull (Batch C2, S177) — ~07:50 IST. Per-ad-id only
+# (scoped to meta_ad_id on UGC deals), never an account-level sweep (that's Odo).
+[triggers]
+crons = ["20 2 * * *"]
+
 # Secrets set via `wrangler secret put` — never stored in this file:
 # SUPABASE_ANON_KEY
 # SUPABASE_SERVICE_ROLE_KEY
+# META_SYSTEM_USER_TOKEN  (same permanent System User token as odoops; arms C2)

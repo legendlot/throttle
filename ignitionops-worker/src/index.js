@@ -1806,6 +1806,80 @@ async function upsertMonthlyTarget(body, auth, env) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// UGC META AD AUTO-PULL (Reann Batch C2, S177) — PER-AD-ID ONLY
+// ────────────────────────────────────────────────────────────────────────────
+// Pulls ONE Meta ad's insights per UGC deal's meta_ad_id. NEVER an account-level
+// sweep (act_<id>/insights) — that's Odo's job. Reuses META_SYSTEM_USER_TOKEN.
+const META_API_VER = 'v21.0';
+const META_MAX_ADS_PER_RUN = 40;   // subrequest budget; cron drains the rest next day
+
+async function metaAdInsights(env, adId) {
+  const url = `https://graph.facebook.com/${META_API_VER}/${encodeURIComponent(adId)}/insights`
+    + `?fields=spend,impressions,clicks,ctr,frequency,actions,action_values`
+    + `&action_attribution_windows=${encodeURIComponent(JSON.stringify(['7d_click']))}`
+    + `&date_preset=maximum&access_token=${env.META_SYSTEM_USER_TOKEN}`;
+  const res = await fetch(url).catch(() => null);
+  if (!res || !res.ok) return null;
+  const j = await res.json().catch(() => null);
+  const d = j && j.data && j.data[0];
+  const num = v => Number(v) || 0;
+  if (!d) return { spend: 0, impressions: 0, ctr: 0, frequency: 0, purchases: 0, revenue: 0 };
+  const PURCH = new Set(['omni_purchase', 'purchase']);
+  const purch = (d.actions || []).find(a => PURCH.has(a.action_type));
+  const purchVal = (d.action_values || []).find(a => PURCH.has(a.action_type));
+  return {
+    spend: num(d.spend), impressions: num(d.impressions),
+    ctr: num(d.ctr), frequency: num(d.frequency),
+    purchases: purch ? Math.round(num(purch.value)) : 0,
+    revenue: purchVal ? num(purchVal.value) : 0,
+  };
+}
+
+async function applyMetaMetrics(env, engagementId, m) {
+  await sb(`/rest/v1/engagements?id=eq.${engagementId}`, env, {
+    method: 'PATCH', prefer: 'return=minimal',
+    body: JSON.stringify({
+      ad_spend: m.spend, conversions_value: m.revenue, purchases: m.purchases,
+      impressions: m.impressions, ctr: m.ctr, frequency: m.frequency,
+      meta_synced_at: nowIso(), updated_at: nowIso(),
+    }),
+  });
+}
+
+// Daily cron: refresh active UGC deals that carry a meta_ad_id (oldest-synced first).
+async function syncUgcMetaMetrics(env) {
+  if (!env.META_SYSTEM_USER_TOKEN) return { skipped: 'meta_not_configured' };
+  const r = await sb(
+    `/rest/v1/engagements?engagement_type=eq.ugc&meta_ad_id=not.is.null&stage=not.in.(retired,dropped)&select=id,meta_ad_id&order=meta_synced_at.asc.nullsfirst&limit=${META_MAX_ADS_PER_RUN}`,
+    env,
+  );
+  const rows = (r.ok ? r.data || [] : []).filter(e => e.meta_ad_id && String(e.meta_ad_id).trim());
+  let updated = 0, failed = 0;
+  for (const e of rows) {
+    const m = await metaAdInsights(env, String(e.meta_ad_id).trim());
+    if (!m) { failed++; continue; }
+    await applyMetaMetrics(env, e.id, m);
+    updated++;
+  }
+  return { scanned: rows.length, updated, failed };
+}
+
+// On-demand single-deal refresh (button on the UGC detail card).
+async function refreshUgcMetrics(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!body.engagement_id) return err('engagement_id required', 400);
+  if (!env.META_SYSTEM_USER_TOKEN) return err('meta_not_configured', 503);
+  const er = await sb(`/rest/v1/engagements?id=eq.${body.engagement_id}&select=id,meta_ad_id&limit=1`, env);
+  const e = er.data?.[0];
+  if (!e) return err('not_found', 404);
+  if (!e.meta_ad_id || !String(e.meta_ad_id).trim()) return err('no_meta_ad_id', 422);
+  const m = await metaAdInsights(env, String(e.meta_ad_id).trim());
+  if (!m) return err('meta_fetch_failed', 502);
+  await applyMetaMetrics(env, e.id, m);
+  return ok({ metrics: m, meta_synced_at: nowIso() });
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // CONNECTS — Pitstop→Ignition transferred conversations (S177)
 // ────────────────────────────────────────────────────────────────────────────
 // Pitstop owns the IG/WhatsApp/email channels + stores the conversation. The CS
@@ -2052,6 +2126,7 @@ const POST_ACTIONS = {
   setEngagementProducts,
   deleteEngagement,
   generateUgcBrief,
+  refreshUgcMetrics,
   advanceStage,
   closeEngagement,
   setRating,
@@ -2120,5 +2195,15 @@ export default {
     if (request.method === 'GET')  return handleGet(url, request, env);
     if (request.method === 'POST') return handlePost(request, env);
     return err('method_not_allowed', 405);
+  },
+
+  // Daily cron (wrangler.toml [triggers]) — UGC Meta ad-metrics pull (Batch C2, S177).
+  // Per-ad-id only; inert (no-op) until META_SYSTEM_USER_TOKEN is set.
+  async scheduled(_event, env, ctx) {
+    if (!env.META_SYSTEM_USER_TOKEN) return;
+    ctx.waitUntil(syncUgcMetaMetrics(env).then(
+      r => console.log('[ugc-meta] cron', JSON.stringify(r)),
+      e => console.error('[ugc-meta] cron error', e),
+    ));
   },
 };
