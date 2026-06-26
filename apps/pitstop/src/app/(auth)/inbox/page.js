@@ -134,6 +134,7 @@ export default function InboxPage() {
       if (sort !== 'recent') p.sort = sort;
       const d = await csopsGet('getMessagingThreads', p, session);
       setThreads(d?.threads || []);
+      setErr(null);   // self-heal: a transient poll/auth blip must not leave a sticky banner (S177)
     } catch (e) { setErr(e.message); }
     finally { setLoadingList(false); }
   }, [session, channel, assignTab, stateFilter, tagFilter, priorityFilter, agentFilter, sort]);
@@ -164,6 +165,7 @@ export default function InboxPage() {
       } else {
         setConvo(d);
       }
+      setErr(null);   // self-heal on successful thread load (S177)
     } catch (e) { setErr(e.message); }
     finally { setLoadingConvo(false); }
   }, [session]);
@@ -629,10 +631,11 @@ export default function InboxPage() {
             </div>
           ) : (
             <>
-              {/* Header */}
+              {/* Header — wraps so the action cluster drops below the title on a
+                  narrow/zoomed pane instead of overflowing + clipping (Pruthvi, S177). */}
               <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', display: 'flex',
-                alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', rowGap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: '1 1 200px' }}>
                   <Avatar t={thread} />
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--t1)', whiteSpace: 'nowrap',
@@ -652,7 +655,8 @@ export default function InboxPage() {
                     )}
                   </div>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+                  justifyContent: 'flex-end', minWidth: 0 }}>
                   {/* Assign / claim (S162-A) */}
                   {canManage && (
                     <AssignControl
