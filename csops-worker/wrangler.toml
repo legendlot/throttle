@@ -6,6 +6,15 @@ workers_dev = true
 [vars]
 SUPABASE_URL = "https://jkxcnjabmrkteanzoofj.supabase.co"
 
+# Inbound email poll (Pitstop email channel, S175) — scheduled() polls carecrew@
+# via the Gmail API every 2 min. Inert (no-op) until the GMAIL_SA_* secrets are set.
+[triggers]
+crons = ["*/2 * * * *"]
+
 # Secrets set via `wrangler secret put` — never stored in this file:
 # SUPABASE_ANON_KEY
 # SUPABASE_SERVICE_ROLE_KEY
+# GMAIL_SA_CLIENT_EMAIL   (service-account email, domain-wide-delegated to carecrew@)
+# GMAIL_SA_PRIVATE_KEY    (service-account private key, PEM)
+# INGEST_TOKEN            (commsops /ingest + /send service-to-service token)
+# Optional vars (have code fallbacks): COMMSOPS_URL, GMAIL_MAILBOX
