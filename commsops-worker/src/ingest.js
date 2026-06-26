@@ -70,7 +70,24 @@ async function ingest(env, payload) {
   // 3. derive attributes (only on first occurrence, not on dedup replays)
   if (!deduped) await deriveAttributes(env, profileId, name, { ...properties, occurred_at });
 
-  // 4. (M7) fire journey triggers here.
+  // 4. (M7) fire journey triggers — match ACTIVE event-triggered journeys on this
+  //    event name, enqueue an enrol per match (Queue keeps ingest fast + under the
+  //    subrequest limit). First occurrence only (skip on dedup replays).
+  if (!deduped) {
+    try {
+      const jr = await A.sbComms('/rest/v1/journeys?status=eq.active&select=id,trigger', env);
+      const journeys = (jr.ok && jr.data) || [];
+      for (const j of journeys) {
+        const t = j.trigger || {};
+        if (t.type !== 'event' || t.name !== name) continue;
+        // optional simple property filter: trigger.filter = {prop: value} (all must match)
+        const f = t.filter;
+        if (f && typeof f === 'object' &&
+            !Object.entries(f).every(([k, v]) => String((properties || {})[k]) === String(v))) continue;
+        await env.BROADCAST_QUEUE.send({ kind: 'enrol', journeyId: j.id, profileId, eventId });
+      }
+    } catch (e) { /* triggers are best-effort; never fail the ingest write on a trigger error */ }
+  }
 
   return { ok: true, profile_id: profileId, event_id: eventId, deduped };
 }
