@@ -79,6 +79,8 @@ export default function InboxPage() {
   const [search, setSearch] = useState('');                 // debounced → server query
   const [allTags, setAllTags] = useState([]);
   const [threads, setThreads] = useState([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [stats, setStats] = useState({
     instagram: { total: 0, awaiting: 0, mine: 0, unassigned: 0 },
     messenger: { total: 0, awaiting: 0, mine: 0, unassigned: 0 },
@@ -151,10 +153,35 @@ export default function InboxPage() {
       if (search) p.q = search;   // phone/name search (S178, Pruthvi) — server-side
       const d = await csopsGet('getMessagingThreads', p, session);
       setThreads(d?.threads || []);
+      setHasMore(d?.has_more || false);
       setErr(null);   // self-heal: a transient poll/auth blip must not leave a sticky banner (S177)
     } catch (e) { setErr(e.message); }
     finally { setLoadingList(false); }
   }, [session, channel, assignTab, stateFilter, tagFilter, priorityFilter, agentFilter, sort, ignitionScope, search]);
+
+  const loadMore = useCallback(async () => {
+    if (!session || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const p = { offset: String(threads.length) };
+      if (channel !== 'all') p.channel = channel;
+      if (ignitionScope) {
+        p.scope = 'ignition';
+      } else {
+        if (assignTab !== 'all') p.tab = assignTab;
+        if (stateFilter !== 'active') p.state = stateFilter;
+      }
+      if (tagFilter) p.tag = tagFilter;
+      if (priorityFilter) p.priority = priorityFilter;
+      if (agentFilter) p.agent = agentFilter;
+      if (sort !== 'recent') p.sort = sort;
+      if (search) p.q = search;
+      const d = await csopsGet('getMessagingThreads', p, session);
+      setThreads(prev => [...prev, ...(d?.threads || [])]);
+      setHasMore(d?.has_more || false);
+    } catch (e) { setErr(e.message); }
+    finally { setLoadingMore(false); }
+  }, [session, threads.length, channel, assignTab, stateFilter, tagFilter, priorityFilter, agentFilter, sort, ignitionScope, search, loadingMore]);
 
   // Debounce the search box → server query (S178)
   useEffect(() => { const id = setTimeout(() => setSearch(searchInput.trim()), 350); return () => clearTimeout(id); }, [searchInput]);
@@ -697,6 +724,14 @@ export default function InboxPage() {
                 </div>
               );
             })}
+            {hasMore && (
+              <div style={{ padding: '10px 16px', borderTop: '1px solid var(--border)', textAlign: 'center' }}>
+                <button className={btnGhost} onClick={loadMore} disabled={loadingMore}
+                  style={{ fontSize: 12, width: '100%' }}>
+                  {loadingMore ? 'Loading…' : 'Load more conversations'}
+                </button>
+              </div>
+            )}
           </div>
           </div>{/* end contents wrapper */}
         </div>

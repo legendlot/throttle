@@ -4429,7 +4429,8 @@ function escapeHtml(s) { return String(s || '').replace(/&/g, '&amp;').replace(/
 async function getMessagingThreads(params, auth, env) {
   const channel = params.get('channel');
   const tab = params.get('tab');              // mine | unassigned | all (assignment axis, S162)
-  const limit = Math.min(Number(params.get('limit')) || 60, 300);
+  const limit = Math.min(Number(params.get('limit')) || 200, 300);
+  const offset = Math.max(0, Number(params.get('offset')) || 0);
   // Sort axis (S164, Pruthvi): recent activity (default) | oldest-first | priority high→low.
   const sort = params.get('sort') || 'recent';
   const ORDERS = {
@@ -4438,7 +4439,7 @@ async function getMessagingThreads(params, auth, env) {
     priority: 'priority_rank.asc,last_message_at.desc.nullslast',
   };
   const orderClause = ORDERS[sort] || ORDERS.recent;
-  let q = `/rest/v1/cs_wa_threads?select=*&order=${orderClause}&limit=${limit}`;
+  let q = `/rest/v1/cs_wa_threads?select=*&order=${orderClause}&limit=${limit}&offset=${offset}`;
   // Ignition handoff scope (S177): threads transferred to the Influencer team leave
   // the CS inbox entirely. Default = exclude them; scope=ignition = ONLY them (a
   // read-only oversight view for CS leads, since Pitstop still owns the channel).
@@ -4515,7 +4516,7 @@ async function getMessagingThreads(params, auth, env) {
       tags: tagsByThread[t.id] || [],
     };
   });
-  return ok({ threads: out });
+  return ok({ threads: out, has_more: threads.length === limit });
 }
 
 // Header-tile stats. Per-channel total conversations + "awaiting reply" (last
