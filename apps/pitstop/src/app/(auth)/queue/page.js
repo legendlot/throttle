@@ -26,6 +26,8 @@ const TABS = [
 
 const PLATFORMS = ['website', 'amazon', 'cred', 'blinkit', 'instamart', 'marketplace', 'offline', 'zepto', 'swiggy'];
 
+const PAGE_SIZE = 50;
+
 const TH = {
   textAlign: 'left', padding: '10px 14px', fontFamily: 'var(--f-display)', fontSize: 9.5,
   fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--t3)',
@@ -92,6 +94,11 @@ export default function QueuePage() {
   const [catalogCategories, setCatalogCategories] = useState([]);
   const [agents, setAgents] = useState([]);
   const [allTags, setAllTags] = useState([]);
+  const [page, setPage] = useState(0);       // 0-based page index
+  const [hasNext, setHasNext] = useState(false);
+
+  // Reset to the first page whenever the tab / any filter / dept changes.
+  useEffect(() => { setPage(0); }, [activeTab, dispositionFilter, categoryFilter, platformFilter, agentFilter, stageFilter, tagFilter, searchQ, deptSlug]);
 
   const { focusedIdx, setFocusedIdx } = useListNav(
     tickets.length,
@@ -149,7 +156,7 @@ export default function QueuePage() {
     if (!session) return;
     let alive = true;
     setLoading(true);
-    const params = { tab: activeTab };
+    const params = { tab: activeTab, limit: PAGE_SIZE, offset: page * PAGE_SIZE };
     if (dispositionFilter) params.disposition = dispositionFilter;
     if (categoryFilter)    params.category    = categoryFilter;
     if (platformFilter)    params.platform    = platformFilter;
@@ -160,11 +167,17 @@ export default function QueuePage() {
     if (perms?.cs_ticket_admin) params.department = deptSlug || 'all';
 
     csopsGet('getTickets', params, session)
-      .then(d => { if (alive) { setTickets(d?.tickets || []); setError(null); } })
+      .then(d => {
+        if (!alive) return;
+        const rows = d?.tickets || [];
+        setTickets(rows);
+        setHasNext(rows.length === PAGE_SIZE);   // a full page implies more may follow
+        setError(null);
+      })
       .catch(e => { if (alive) setError(e.message); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [session, activeTab, dispositionFilter, categoryFilter, platformFilter, agentFilter, stageFilter, tagFilter, searchQ, deptSlug, perms?.cs_ticket_admin]);
+  }, [session, activeTab, dispositionFilter, categoryFilter, platformFilter, agentFilter, stageFilter, tagFilter, searchQ, deptSlug, perms?.cs_ticket_admin, page]);
 
   function submitSearch(e) { e.preventDefault(); setParam('q', searchInput.trim()); }
 
@@ -257,7 +270,7 @@ export default function QueuePage() {
 
       {loading ? (
         <Spinner />
-      ) : tickets.length === 0 ? (
+      ) : (tickets.length === 0 && page === 0) ? (
         <EmptyState icon={<Icon name="list" size={28} />} title="No tickets match" message="Adjust filters or open a new ticket." />
       ) : (
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
@@ -268,6 +281,9 @@ export default function QueuePage() {
               <th style={{ ...TH }}>Age</th>
             </tr></thead>
             <tbody>
+              {tickets.length === 0 && (
+                <tr><td colSpan={7} style={{ padding: 28, textAlign: 'center', color: 'var(--t4)' }}>No tickets on this page.</td></tr>
+              )}
               {tickets.map((t, i) => (
                 <tr key={t.id}
                   style={{ borderTop: '1px solid var(--border)', cursor: 'pointer',
@@ -308,11 +324,34 @@ export default function QueuePage() {
           <div style={{ padding: '9px 14px', background: 'var(--surface-2)', borderTop: '1px solid var(--border)',
             display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontFamily: 'var(--f-mono)',
             fontSize: 11, color: 'var(--t4)' }}>
-            <span>{fmt(tickets.length)} ticket{tickets.length === 1 ? '' : 's'}</span>
-            <span>↑↓ navigate · ↵ open · / search</span>
+            <span>
+              {tickets.length > 0
+                ? `${page * PAGE_SIZE + 1}–${page * PAGE_SIZE + tickets.length}`
+                : '0 tickets'}
+              {(page > 0 || hasNext) && <span style={{ color: 'var(--t4)' }}> · page {page + 1}</span>}
+            </span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <span>↑↓ navigate · ↵ open · / search</span>
+              <span style={{ display: 'flex', gap: 6 }}>
+                <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0} style={pageBtn(page === 0)}>‹ Prev</button>
+                <button onClick={() => setPage(p => p + 1)} disabled={!hasNext} style={pageBtn(!hasNext)}>Next ›</button>
+              </span>
+            </span>
           </div>
         </div>
       )}
     </div>
   );
+}
+
+function pageBtn(disabled) {
+  return {
+    padding: '4px 10px', borderRadius: 5,
+    background: disabled ? 'transparent' : 'var(--surface-1)',
+    border: '1px solid var(--border)',
+    color: disabled ? 'var(--t4)' : 'var(--t1)',
+    cursor: disabled ? 'default' : 'pointer',
+    fontFamily: 'var(--f-mono)', fontSize: 11,
+    opacity: disabled ? 0.5 : 1,
+  };
 }

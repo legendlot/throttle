@@ -15,6 +15,8 @@ const TABS = [
   { id: 'all',        label: 'All Calls' },
   { id: 'my',         label: 'My Calls' },
   { id: 'unassigned', label: 'Unassigned' },
+  { id: 'open',       label: 'Open' },        // call-linked tickets still open
+  { id: 'closed',     label: 'Closed' },      // call-linked tickets resolved
   { id: 'missed',     label: 'Missed' },
 ];
 

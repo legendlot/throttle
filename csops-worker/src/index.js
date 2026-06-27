@@ -2658,10 +2658,16 @@ async function getCalls(params, auth, env) {
   if (!deptFilter) return err('Unknown department slug', 404);
   { const c = buildDeptFilter(deptFilter); if (c) filters.push(c); }
 
+  // Open/Closed tabs distinguish active vs resolved CALL-LINKED tickets — they
+  // require a linked ticket (inner join below) and filter on its closed_at.
+  const ticketState = (tab === 'open' || tab === 'closed') ? tab : null;
+
   // tab presets
   if (tab === 'my')          filters.push(`agent_user_id=eq.${auth.userId}`);
   else if (tab === 'unassigned') filters.push(`agent_user_id=is.null`, `ticket_id=is.null`);
   else if (tab === 'missed') filters.push(`status=eq.missed`, `called_back_at=is.null`);
+  else if (ticketState === 'open')   filters.push(`ticket.closed_at=is.null`);
+  else if (ticketState === 'closed') filters.push(`ticket.closed_at=not.is.null`);
 
   if (direction) filters.push(`direction=eq.${encodeURIComponent(direction)}`);
   if (status)    filters.push(`status=eq.${encodeURIComponent(status)}`);
@@ -2680,7 +2686,10 @@ async function getCalls(params, auth, env) {
   }
 
   const select = 'id,myop_account_id,cs_department_id,call_session_id,direction,did,customer_phone,customer_name,agent_user_id,agent_name,status,duration_seconds,recording_filename,recording_url,started_at,ended_at,ticket_id,called_back_at,created_at';
-  const path = `/rest/v1/cs_calls?select=${select},ticket:ticket_id(ticket_no)&${filters.join('&')}&order=created_at.desc&limit=${limit}&offset=${offset}`;
+  // Open/Closed tabs inner-join the ticket so a call with no ticket is excluded
+  // and the closed_at filter on the embed can take effect.
+  const ticketEmbed = ticketState ? 'ticket:ticket_id!inner(ticket_no,closed_at)' : 'ticket:ticket_id(ticket_no)';
+  const path = `/rest/v1/cs_calls?select=${select},${ticketEmbed}&${filters.join('&')}&order=created_at.desc&limit=${limit}&offset=${offset}`;
   const r = await sb(path, env);
   if (!r.ok) return err(`Failed to fetch calls: ${JSON.stringify(r.data)}`, r.status);
   return ok({ calls: r.data || [], offset, limit });
@@ -2960,15 +2969,46 @@ function biteSpeedApiBase(env) {
 }
 
 // Pull the live Chatwoot conversation messages for a WA thread.
+// Chatwoot's messages endpoint returns only the most recent page (~the latest
+// messages). To show full scrollback we page BACKWARDS via ?before=<oldest id>:
+// each call returns messages strictly older than that id, so we walk to the start
+// of the conversation. Bounded by MAX_PAGES to respect the 50-subrequest Worker
+// limit (this fn runs inside a single getWaConversation request).
 async function chatwootGetMessages(thread, env) {
-  const url = `${biteSpeedApiBase(env)}/api/v1/accounts/${encodeURIComponent(thread.provider_account_id)}/conversations/${encodeURIComponent(thread.provider_thread_ref)}/messages`;
-  let r;
-  try { r = await fetch(url, { headers: { 'api_access_token': env.BITESPEED_API_TOKEN } }); }
-  catch (e) { return { ok: false, status: 502, error: e.message }; }
-  if (!r.ok) { const t = await r.text().catch(() => ''); return { ok: false, status: r.status, error: t.slice(0, 200) }; }
-  const d = await r.json().catch(() => ({}));
-  const raw = Array.isArray(d?.payload) ? d.payload : (Array.isArray(d) ? d : []);
-  return { ok: true, raw };
+  const base = `${biteSpeedApiBase(env)}/api/v1/accounts/${encodeURIComponent(thread.provider_account_id)}/conversations/${encodeURIComponent(thread.provider_thread_ref)}/messages`;
+  const MAX_PAGES = 6;
+  const all = [];
+  const seen = new Set();
+  let before = null;
+
+  for (let i = 0; i < MAX_PAGES; i++) {
+    const url = before ? `${base}?before=${encodeURIComponent(before)}` : base;
+    let r;
+    try { r = await fetch(url, { headers: { 'api_access_token': env.BITESPEED_API_TOKEN } }); }
+    catch (e) { return all.length ? { ok: true, raw: all } : { ok: false, status: 502, error: e.message }; }
+    if (!r.ok) {
+      if (all.length) break;   // keep whatever we already pulled
+      const t = await r.text().catch(() => ''); return { ok: false, status: r.status, error: t.slice(0, 200) };
+    }
+    const d = await r.json().catch(() => ({}));
+    const batch = Array.isArray(d?.payload) ? d.payload : (Array.isArray(d) ? d : []);
+    if (!batch.length) break;  // reached the start of the conversation
+
+    let added = 0, minId = null;
+    for (const m of batch) {
+      const id = m?.id != null ? String(m.id) : null;
+      if (id && seen.has(id)) continue;
+      if (id) seen.add(id);
+      all.push(m);
+      added++;
+      const n = Number(m?.id);
+      if (Number.isFinite(n) && (minId == null || n < minId)) minId = n;
+    }
+    // No progress (no new rows or oldest id didn't move back) → stop.
+    if (!added || minId == null || minId === before) break;
+    before = minId;
+  }
+  return { ok: true, raw: all };
 }
 
 // Map a Chatwoot message → the shape the Pitstop inbox Bubble renders.
