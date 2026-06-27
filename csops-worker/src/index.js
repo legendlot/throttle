@@ -3377,6 +3377,26 @@ function attachmentKindFromChatwoot(fileType) {
   }
 }
 
+// BiteSpeed/Chatwoot inbox id — the hard channel discriminator. Present on 100%
+// of genuine BiteSpeed payloads (mirrored at conversation.inbox_id); channel_type
+// is never sent. Known inboxes (confirmed from captured payloads, S182):
+//   7625 "WA Support" · 7682 "WA Marketing"  → WhatsApp (BiteSpeed IS our WA provider — KEEP)
+//   8001 "Email"                              → carecrew@ — duplicate of the native Gmail channel (S178)
+//   8114 "FB/IG Dms"                          → duplicate of native Meta DM capture (S161)
+//   7721 "L.O.T Web"                          → website chat widget — KEEP until native ingestion is built
+function bitespeedInboxId(body) {
+  const id = body?.inbox?.id ?? body?.conversation?.inbox_id ?? body?.conversation?.inbox?.id ?? null;
+  return id != null ? String(id) : null;
+}
+
+// Off-ramp (S182): silently drop the BiteSpeed inboxes that now have a native
+// Pitstop channel, so Email + FB/IG stop landing in the CS inbox as duplicates.
+// We still 200-ack every webhook (no retry storm, no signal to BiteSpeed that we
+// are off-ramping). Denylist, not allowlist: WhatsApp (7625/7682) + the web widget
+// (7721) + any other inbox keep flowing. Add the web widget here once native web
+// ingestion ships and BiteSpeed's copy becomes a duplicate too.
+const BITESPEED_DROP_INBOX_IDS = new Set(['8001', '8114']);
+
 // Chatwoot inbox.channel_type (Ruby class name) → our channel enum.
 // BiteSpeed omits channel_type but sends inbox.name — fall back to it.
 function chatwootChannelFromPayload(body) {
@@ -3412,6 +3432,13 @@ async function handleBiteSpeedWebhook(request, env) {
   const convId = body?.conversation?.id || body?.id || '?';
   const phone = extractPhoneFromChatwoot(body);
   console.log(`[bitespeed] ${event} conv=${convId}${phone ? ' phone=' + phone : ''}`);
+
+  // Off-ramp (S182): drop inboxes that now have a native Pitstop channel (Email,
+  // FB/IG) so they stop duplicating into the CS inbox. Ack 200 + persist nothing.
+  const inboxId = bitespeedInboxId(body);
+  if (inboxId && BITESPEED_DROP_INBOX_IDS.has(inboxId)) {
+    return json({ ok: true, dropped: `inbox_${inboxId}` });
+  }
 
   // Always 200 quickly per Chatwoot best practice — process inline since
   // payloads are small + we're already on a Cloudflare Worker (cold start fine).
@@ -3647,7 +3674,6 @@ async function biteSpeedMessageCreated(body, env) {
       sent_by_name: body?.sender?.name || null,
       received_at: direction === 'inbound'  ? ts : null,
       sent_at:     direction === 'outbound' ? ts : null,
-      raw_meta: body,   // TEMP capture (S178) — diagnose BiteSpeed channel mixing (WA vs email/IG); revert once the WhatsApp discriminator is confirmed
     }),
   });
   if (!ins.ok) {
