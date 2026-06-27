@@ -3,6 +3,20 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.4.0] - 2026-06-27
+### Changed
+- The Inbox: added email as a fourth channel throughout (lead, channel tabs).
+  Documented the email composer header fields, To and Subject (pre-filled,
+  editable) plus the + Cc / Bcc expander, comma-separated addresses. WhatsApp
+  note now states the full chat history scrolls back, not just recent messages.
+- The Queue: documented Prev / Next pagination (50 per tab; resets to page 1
+  when the tab, a filter or the search changes).
+- Calls: added the Open and Closed tabs (calls whose linked ticket is still
+  being worked or has been resolved) to the tab list.
+- Working a Ticket: new "Switching between Replacement and Refund" section, the
+  reversible disposition switch any agent can make before the resolution starts,
+  with the in-motion lock callout.
+
 ## [1.3.0] - 2026-06-25
 ### Changed
 - The Inbox: WhatsApp is now two-way. Agents reply to WhatsApp from Pitstop;
