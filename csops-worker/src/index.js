@@ -3345,6 +3345,17 @@ async function biteSpeedFindOrCreateThread(payload, env) {
   const accountId = (payload?.account?.id ?? payload?.conversation?.account_id ?? payload?.inbox?.account_id ?? null);
   const accountIdStr = accountId != null ? String(accountId) : null;
   const channel = chatwootChannelFromPayload(payload);
+
+  // Drop non-WhatsApp inboxes at source — BiteSpeed mirrors email + IG/FB through
+  // the same webhook endpoint. Allowlist: 7625 WA Support + 7682 WA Marketing.
+  // Inboxes 8001 (Email) and 8114 (FB/IG Dms) are handled by native Gmail + Meta paths.
+  const inboxId = String(payload?.inbox?.id ?? '');
+  const WA_INBOX_IDS = new Set(['7625', '7682']);
+  if (inboxId && !WA_INBOX_IDS.has(inboxId)) {
+    console.log(`[bitespeed] skip non-WA inbox=${inboxId} (${payload?.inbox?.name ?? ''})`);
+    return { thread: null, reason: 'non_wa_inbox_skip' };
+  }
+
   if (!phoneRaw && !convId) return { thread: null, reason: 'no_phone_or_conv_id' };
 
   const phone = phoneRaw ? toE164(phoneRaw) : null;
@@ -3547,7 +3558,6 @@ async function biteSpeedMessageCreated(body, env) {
       sent_by_name: body?.sender?.name || null,
       received_at: direction === 'inbound'  ? ts : null,
       sent_at:     direction === 'outbound' ? ts : null,
-      raw_meta: body,   // TEMP capture (S178) — diagnose BiteSpeed channel mixing (WA vs email/IG); revert once the WhatsApp discriminator is confirmed
     }),
   });
   if (!ins.ok) {
