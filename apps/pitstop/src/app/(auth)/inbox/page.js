@@ -13,7 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useAuth } from '@throttle/auth';
 import {
-  Instagram, Facebook, MessageCircle, Mail, Send, Clock, ExternalLink, Link2,
+  Instagram, Facebook, MessageCircle, Mail, Globe, Send, Clock, ExternalLink, Link2,
   FileText, Smile, Lock, Bold, Italic, StickyNote, UserPlus, X, Paperclip, Plus, Search,
   CheckCircle2, RotateCcw, Tag, ChevronLeft, ChevronRight,
 } from 'lucide-react';
@@ -33,6 +33,8 @@ const CHANNELS = {
   whatsapp:  { label: 'WhatsApp',  color: '#25D366', Glyph: MessageCircle, sendable: true, hasWindow: true },
   // Email (carecrew@, S175) — two-way via Gmail; no 24h customer window (always sendable).
   email:     { label: 'Email',     color: '#7C5CFC', Glyph: Mail, sendable: true, hasWindow: false },
+  // Web (L.O.T Web widget via BiteSpeed, S182) — Chatwoot transport like WA, but no 24h window.
+  web:       { label: 'Web',       color: '#F59E0B', Glyph: Globe, sendable: true, hasWindow: false },
 };
 const chanOf = (c) => CHANNELS[c] || { label: c || 'DM', color: 'var(--t3)', Glyph: MessageCircle, sendable: false };
 
@@ -84,6 +86,7 @@ export default function InboxPage() {
     messenger: { total: 0, awaiting: 0, mine: 0, unassigned: 0 },
     whatsapp:  { total: 0, awaiting: null, mine: 0, unassigned: 0 },
     email:     { total: 0, awaiting: null, mine: 0, unassigned: 0 },
+    web:       { total: 0, awaiting: null, mine: 0, unassigned: 0 },
   });
   const [agents, setAgents] = useState([]);
   const [canned, setCanned] = useState([]);
@@ -173,7 +176,7 @@ export default function InboxPage() {
       const d = await csopsGet('getMessagingThread', { thread_id: id }, session);
       // WhatsApp: BiteSpeed's webhook only mirrors our outbound side, so pull the
       // live two-way conversation (+ real 24h window) from Chatwoot on demand (C2-B).
-      if (d?.thread?.channel === 'whatsapp') {
+      if (d?.thread?.channel === 'whatsapp' || d?.thread?.channel === 'web') {
         try {
           const live = await csopsGet('getWaConversation', { thread_id: id }, session);
           setConvo({ ...d, messages: live.messages || [],
@@ -256,13 +259,13 @@ export default function InboxPage() {
   // is a read-only BiteSpeed mirror so its awaiting is not tracked here.
   const totalAwaiting = (stats.instagram.awaiting || 0) + (stats.messenger.awaiting || 0);
   const allTotal = useMemo(
-    () => (stats.instagram.total || 0) + (stats.messenger.total || 0) + (stats.whatsapp.total || 0) + (stats.email?.total || 0),
+    () => (stats.instagram.total || 0) + (stats.messenger.total || 0) + (stats.whatsapp.total || 0) + (stats.email?.total || 0) + (stats.web?.total || 0),
     [stats],
   );
 
   // Assignment-tab counts, scoped to the channel currently in view.
   const scoped = useMemo(() => {
-    const ch = channel === 'all' ? ['instagram', 'messenger', 'whatsapp', 'email'] : [channel];
+    const ch = channel === 'all' ? ['instagram', 'messenger', 'whatsapp', 'email', 'web'] : [channel];
     const sum = (k) => ch.reduce((a, c) => a + (stats[c]?.[k] || 0), 0);
     return { all: sum('total'), mine: sum('mine'), unassigned: sum('unassigned') };
   }, [stats, channel]);
@@ -273,6 +276,7 @@ export default function InboxPage() {
     { id: 'messenger', label: 'Messenger', count: stats.messenger.total },
     { id: 'whatsapp', label: 'WhatsApp', count: stats.whatsapp.total },
     { id: 'email', label: 'Email', count: stats.email?.total || 0 },
+    { id: 'web', label: 'Web', count: stats.web?.total || 0 },
   ];
 
   const assignTabs = [
@@ -362,8 +366,8 @@ export default function InboxPage() {
     try {
       if (mode === 'note') {
         await csopsPost('addThreadNote', { thread_id: convo.thread.id, text: t }, session);
-      } else if (convo.thread.channel === 'whatsapp') {
-        await csopsPost('sendWaReply', { thread_id: convo.thread.id, text: t }, session);   // C2-B BiteSpeed tunnel
+      } else if (convo.thread.channel === 'whatsapp' || convo.thread.channel === 'web') {
+        await csopsPost('sendWaReply', { thread_id: convo.thread.id, text: t }, session);   // C2-B BiteSpeed tunnel (WA + Web)
       } else if (convo.thread.channel === 'email') {
         if (!emailTo.trim()) { setErr('Add at least one To recipient.'); setSending(false); return; }
         await csopsPost('sendEmailReply', {
@@ -528,7 +532,7 @@ export default function InboxPage() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, height: '100%', minHeight: 420 }}>
       {/* Header tiles — per-channel volume + awaiting-reply. Click to filter. */}
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-        {['instagram', 'messenger', 'whatsapp', 'email'].map(k => (
+        {['instagram', 'messenger', 'whatsapp', 'email', 'web'].map(k => (
           <ChannelTile key={k} chKey={k} stat={stats[k]} active={channel === k}
             onClick={() => setChannel(c => (c === k ? 'all' : k))} />
         ))}

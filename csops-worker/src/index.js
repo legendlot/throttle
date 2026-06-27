@@ -3172,18 +3172,22 @@ async function sendWaReply(body, auth, env) {
   const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=*&limit=1`, env);
   const thread = tRes.data?.[0];
   if (!thread) return err('Thread not found', 404);
-  if ((thread.channel || 'whatsapp') !== 'whatsapp') return err('Not a WhatsApp thread — use sendMetaMessage', 422);
+  // Both WhatsApp and Web are Chatwoot conversations on BiteSpeed — same send path.
+  const wchan = thread.channel || 'whatsapp';
+  if (wchan !== 'whatsapp' && wchan !== 'web') return err('Not a WhatsApp/Web thread — use sendMetaMessage', 422);
   if (!thread.provider_account_id || !thread.provider_thread_ref) {
     return err('Thread has no BiteSpeed conversation reference yet', 422);
   }
 
-  // Meta utility-message-first rule (RULE-PITSTOP-013): free-text only inside the 24h
-  // window, derived LIVE from the latest inbound (the local column is dead — one-way
-  // webhook). Outside it, a pre-approved template is required (fast-follow, not v1).
-  const live = await loadWaLive(thread, env);
-  if (!live.ok) return err(`Couldn't verify the customer window with BiteSpeed (${live.status}): ${live.error}`, 502);
-  if (!live.window.open) {
-    return err('Outside the 24h customer window — free-text replies are blocked until the customer messages again (templates coming soon)', 422);
+  // Meta utility-message-first rule (RULE-PITSTOP-013): WhatsApp allows free-text only
+  // inside the 24h window, derived LIVE from the latest inbound (the local column is
+  // dead — one-way webhook). Web chat has NO such 24h restriction, so skip the gate.
+  if (wchan === 'whatsapp') {
+    const live = await loadWaLive(thread, env);
+    if (!live.ok) return err(`Couldn't verify the customer window with BiteSpeed (${live.status}): ${live.error}`, 502);
+    if (!live.window.open) {
+      return err('Outside the 24h customer window — free-text replies are blocked until the customer messages again (templates coming soon)', 422);
+    }
   }
 
   // Send through Chatwoot's Application API into the existing conversation. Chatwoot
@@ -3380,26 +3384,35 @@ function attachmentKindFromChatwoot(fileType) {
 // BiteSpeed/Chatwoot inbox id — the hard channel discriminator. Present on 100%
 // of genuine BiteSpeed payloads (mirrored at conversation.inbox_id); channel_type
 // is never sent. Known inboxes (confirmed from captured payloads, S182):
-//   7625 "WA Support" · 7682 "WA Marketing"  → WhatsApp (BiteSpeed IS our WA provider — KEEP)
-//   8001 "Email"                              → carecrew@ — duplicate of the native Gmail channel (S178)
-//   8114 "FB/IG Dms"                          → duplicate of native Meta DM capture (S161)
-//   7721 "L.O.T Web"                          → website chat widget — KEEP until native ingestion is built
+//   7625 "WA Support"    → WhatsApp CS (BiteSpeed IS our WA provider — KEEP)
+//   7682 "WA Marketing"  → outbound campaign blasts — DROP (S182, not CS; Relay owns marcomms)
+//   8001 "Email"         → carecrew@ — duplicate of the native Gmail channel (S178) — DROP
+//   8114 "FB/IG Dms"     → duplicate of native Meta DM capture (S161) — DROP
+//   7721 "L.O.T Web"     → website chat widget → channel='web' (its own Pitstop section, S182)
 function bitespeedInboxId(body) {
   const id = body?.inbox?.id ?? body?.conversation?.inbox_id ?? body?.conversation?.inbox?.id ?? null;
   return id != null ? String(id) : null;
 }
 
-// Off-ramp (S182): silently drop the BiteSpeed inboxes that now have a native
-// Pitstop channel, so Email + FB/IG stop landing in the CS inbox as duplicates.
-// We still 200-ack every webhook (no retry storm, no signal to BiteSpeed that we
-// are off-ramping). Denylist, not allowlist: WhatsApp (7625/7682) + the web widget
-// (7721) + any other inbox keep flowing. Add the web widget here once native web
-// ingestion ships and BiteSpeed's copy becomes a duplicate too.
-const BITESPEED_DROP_INBOX_IDS = new Set(['8001', '8114']);
+// Off-ramp (S182): silently drop the BiteSpeed inboxes that don't belong in the CS
+// inbox — Email + FB/IG (duplicate native channels) and WA Marketing (outbound
+// campaign blasts; CS has nothing to do with marcomms, Relay owns that). We still
+// 200-ack every webhook (no retry storm, no signal to BiteSpeed we're off-ramping).
+// Denylist: WA Support (7625) + the web widget (7721) + any other inbox keep flowing.
+const BITESPEED_DROP_INBOX_IDS = new Set(['8001', '8114', '7682']);
+
+// Explicit BiteSpeed inbox-id → our channel enum (authoritative; channel_type is never
+// sent and inbox.name is a soft label). 7721 "L.O.T Web" → 'web' (its own inbox section,
+// pulled from BiteSpeed like WhatsApp). Unmapped kept inboxes fall through to name/default.
+const BITESPEED_INBOX_CHANNEL = { '7625': 'whatsapp', '7721': 'web' };
 
 // Chatwoot inbox.channel_type (Ruby class name) → our channel enum.
 // BiteSpeed omits channel_type but sends inbox.name — fall back to it.
 function chatwootChannelFromPayload(body) {
+  // Authoritative: explicit inbox-id → channel map (e.g. 7721 "L.O.T Web" → web).
+  const inboxId = bitespeedInboxId(body);
+  if (inboxId && BITESPEED_INBOX_CHANNEL[inboxId]) return BITESPEED_INBOX_CHANNEL[inboxId];
+
   const ct = (
     body?.inbox?.channel_type ||
     body?.conversation?.inbox?.channel_type ||
@@ -4554,6 +4567,7 @@ async function getMessagingStats(params, auth, env) {
     messenger: { total: 0, awaiting: 0, mine: 0, unassigned: 0 },
     whatsapp:  { total: 0, awaiting: null, mine: 0, unassigned: 0 },
     email:     { total: 0, awaiting: null, mine: 0, unassigned: 0 },
+    web:       { total: 0, awaiting: null, mine: 0, unassigned: 0 },
   };
   // Two-way channels: small volume → fetch threads + last-message direction.
   // Exclude Ignition-transferred threads (S177) — they're off the CS inbox.
@@ -4589,6 +4603,10 @@ async function getMessagingStats(params, auth, env) {
   stats.email.total = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.email&ignition_connect=is.false&select=id`, env);
   stats.email.mine = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.email&ignition_connect=is.false&assigned_agent_id=eq.${auth.userId}&select=id`, env);
   stats.email.unassigned = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.email&ignition_connect=is.false&assigned_agent_id=is.null&select=id`, env);
+  // Web (L.O.T Web widget via BiteSpeed, S182): exact counts only (read-mostly mirror).
+  stats.web.total = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.web&ignition_connect=is.false&select=id`, env);
+  stats.web.mine = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.web&ignition_connect=is.false&assigned_agent_id=eq.${auth.userId}&select=id`, env);
+  stats.web.unassigned = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.web&ignition_connect=is.false&assigned_agent_id=is.null&select=id`, env);
   return ok({ stats });
 }
 
@@ -4995,7 +5013,7 @@ async function bridgeSendReply(body, env) {
     viaIgnitionBridge: true,
   };
   const channel = thread.channel || 'whatsapp';
-  if (channel === 'whatsapp') return sendWaReply({ thread_id, text }, synthAuth, env);
+  if (channel === 'whatsapp' || channel === 'web') return sendWaReply({ thread_id, text }, synthAuth, env);
   if (channel === 'instagram' || channel === 'messenger') return sendMetaMessage({ thread_id, text }, synthAuth, env);
   if (channel === 'email') return sendEmailReply({ thread_id, text, html }, synthAuth, env);
   return err(`Unsupported channel: ${channel}`, 422);
