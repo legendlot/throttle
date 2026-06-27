@@ -3377,7 +3377,8 @@ function attachmentKindFromChatwoot(fileType) {
   }
 }
 
-// Chatwoot inbox.channel_type (Ruby class name) → our channel enum
+// Chatwoot inbox.channel_type (Ruby class name) → our channel enum.
+// BiteSpeed omits channel_type but sends inbox.name — fall back to it.
 function chatwootChannelFromPayload(body) {
   const ct = (
     body?.inbox?.channel_type ||
@@ -3387,6 +3388,17 @@ function chatwootChannelFromPayload(body) {
   if (ct.includes('instagram')) return 'instagram';
   if (ct.includes('messenger') || ct.includes('facebook')) return 'messenger';
   if (ct.includes('email')) return 'email';
+  if (ct) return 'whatsapp';
+
+  // channel_type absent — use inbox.name (BiteSpeed sends this, not channel_type)
+  const name = (
+    body?.inbox?.name ||
+    body?.conversation?.inbox?.name ||
+    ''
+  ).toLowerCase();
+  if (name.includes('ig') || name.includes('instagram')) return 'instagram';
+  if (name.includes('fb') || name.includes('facebook') || name.includes('messenger')) return 'messenger';
+  if (name.includes('email')) return 'email';
   return 'whatsapp';
 }
 
