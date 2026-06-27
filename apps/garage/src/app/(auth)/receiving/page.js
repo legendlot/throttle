@@ -69,6 +69,11 @@ export default function ReceivingPage() {
   const [pos, setPOs]                     = useState([]);
   const [listLoading, setListLoading]     = useState(true);
   const [showNewForm, setShowNewForm]     = useState(false);
+  // Active-shipments filters (Piyush 2026-06-26): search + format / status / source
+  const [fltText,   setFltText]           = useState('');
+  const [fltFormat, setFltFormat]         = useState('all');
+  const [fltStatus, setFltStatus]         = useState('all');
+  const [fltSource, setFltSource]         = useState('all');
   // New shipment form fields
   const [newSup,    setNewSup]            = useState('');
   const [newPO,     setNewPO]             = useState('');
@@ -674,6 +679,25 @@ export default function ReceivingPage() {
 
   // ── RENDER: list view ─────────────────────────────────────────────────────────
   if (view === 'list') {
+    // Active-shipments filtering (Piyush 2026-06-26). Source/Status options derived
+    // from the loaded rows; search matches Shipment ID, Supplier (vendor) and PO ref.
+    const norm        = v => (v == null ? '' : String(v)).toLowerCase();
+    const sourceOpts  = [...new Set(shipments.map(s => s.origin).filter(Boolean))].sort();
+    const statusOpts  = [...new Set(shipments.map(s => s.status).filter(Boolean))].sort();
+    const q           = fltText.trim().toLowerCase();
+    const filteredShipments = shipments.filter(s => {
+      if (fltFormat !== 'all') {
+        const isFbuRow = (s.receive_format || '') === 'fbu';
+        if (fltFormat === 'fbu'   && !isFbuRow) return false;
+        if (fltFormat === 'parts' &&  isFbuRow) return false;
+      }
+      if (fltStatus !== 'all' && (s.status || '') !== fltStatus) return false;
+      if (fltSource !== 'all' && (s.origin || '') !== fltSource) return false;
+      if (q && !(norm(s.shipment_id).includes(q) || norm(s.supplier).includes(q) || norm(s.po_reference).includes(q))) return false;
+      return true;
+    });
+    const fltActive = !!q || fltFormat !== 'all' || fltStatus !== 'all' || fltSource !== 'all';
+
     return (
       <div style={{ padding: '16px 24px', color: 'var(--t1)', display: 'flex', flexDirection: 'column' }}>
         <div style={{ marginBottom: 16 }}>
@@ -760,6 +784,42 @@ export default function ReceivingPage() {
             </div>
           )}
 
+          {/* Filters (Piyush 2026-06-26) — search + format / status / source */}
+          {shipments.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', padding: '10px 16px', borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
+              <input
+                style={{ ...inp, width: 'auto', flex: '1 1 200px', minWidth: 180 }}
+                value={fltText}
+                onChange={e => setFltText(e.target.value)}
+                placeholder="Search ID / supplier / PO…"
+              />
+              <select style={sel} value={fltFormat} onChange={e => setFltFormat(e.target.value)}>
+                <option value="all">All formats</option>
+                <option value="parts">Parts / CKD</option>
+                <option value="fbu">FBU</option>
+              </select>
+              <select style={sel} value={fltStatus} onChange={e => setFltStatus(e.target.value)}>
+                <option value="all">All statuses</option>
+                {statusOpts.map(st => <option key={st} value={st}>{st}</option>)}
+              </select>
+              <select style={sel} value={fltSource} onChange={e => setFltSource(e.target.value)}>
+                <option value="all">All sources</option>
+                {sourceOpts.map(sc => <option key={sc} value={sc}>{sc}</option>)}
+              </select>
+              {fltActive && (
+                <button
+                  style={{ ...btnSec, padding: '6px 12px' }}
+                  onClick={() => { setFltText(''); setFltFormat('all'); setFltStatus('all'); setFltSource('all'); }}
+                >
+                  Clear
+                </button>
+              )}
+              <span style={{ marginLeft: 'auto', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)', whiteSpace: 'nowrap' }}>
+                {filteredShipments.length} of {shipments.length}
+              </span>
+            </div>
+          )}
+
           {/* Shipments table */}
           {listLoading && !shipments.length ? (
             <div style={{ padding: 32, textAlign: 'center' }}><Spinner /></div>
@@ -781,7 +841,9 @@ export default function ReceivingPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {shipments.map((s, i) => {
+                  {filteredShipments.length === 0 ? (
+                    <tr><td colSpan={8} style={{ ...td, textAlign: 'center', color: 'var(--t3)' }}>No shipments match the filters</td></tr>
+                  ) : filteredShipments.map((s, i) => {
                     const progress = s.parts_total > 0
                       ? `${s.parts_grn_raised || 0}/${s.parts_total} GRN'd`
                       : `${s.marks_received || 0}/${s.marks_total || 0} boxes`;
