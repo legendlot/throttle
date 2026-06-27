@@ -342,6 +342,9 @@ const INFLUENCER_TYPES = ['nano', 'micro', 'macro', 'brand', 'store'];
 function influencerScopeFilters(url) {
   const tab = (url.searchParams.get('tab') || 'master').toLowerCase();
   const category = url.searchParams.get('category');
+  const niche = url.searchParams.get('niche');
+  const ageRange = url.searchParams.get('age_range');
+  const gender = url.searchParams.get('gender');
   const location = url.searchParams.get('location');
   const rating = url.searchParams.get('rating');
   const search = (url.searchParams.get('search') || '').trim();
@@ -355,6 +358,9 @@ function influencerScopeFilters(url) {
   if (location) filters.push(`location=ilike.*${encodeURIComponent(location)}*`);
   if (rating)   filters.push(`quality_rating=eq.${encodeURIComponent(rating)}`);
   if (category) filters.push(`categories=cs.{${encodeURIComponent(category)}}`);
+  if (niche)    filters.push(`audience_niches=cs.{${encodeURIComponent(niche)}}`);
+  if (ageRange) filters.push(`age_range=eq.${encodeURIComponent(ageRange)}`);
+  if (gender)   filters.push(`gender_majority=eq.${encodeURIComponent(gender)}`);
   if (reachMin && Number.isFinite(Number(reachMin))) filters.push(`reach=gte.${Number(reachMin)}`);
   if (reachMax && Number.isFinite(Number(reachMax))) filters.push(`reach=lt.${Number(reachMax)}`);
   if (search) {
@@ -1175,6 +1181,12 @@ async function getCatalogs(url, auth, env) {
     `/rest/v1/product_master?select=name,sku&order=name`,
     env,
   ).catch(() => ({ data: [] }));
+  // Managed category options (both axes) — admin-extendable via addCategoryOption.
+  const catOptsRes = await sb(
+    `/rest/v1/category_options?active=is.true&select=axis,label,sort_order&order=axis,sort_order,label`,
+    env,
+  ).catch(() => ({ data: [] }));
+  const catOpts = catOptsRes.data || [];
   return ok({
     influencer_types: ['nano','micro','macro','brand','store'],
     deal_types: ['paid','barter','affiliate','paid_plus_affiliate'],
@@ -1186,6 +1198,12 @@ async function getCatalogs(url, auth, env) {
     quality_ratings: ['green','yellow','red','unrated'],
     directed_to: ['website','amazon','flipkart'],
     products: productsRes.data || [],
+    category_options: {
+      format: catOpts.filter(o => o.axis === 'format').map(o => o.label),
+      niche:  catOpts.filter(o => o.axis === 'niche').map(o => o.label),
+    },
+    age_ranges: AGE_RANGES,
+    gender_majorities: GENDER_MAJORITIES,
   });
 }
 
@@ -1240,7 +1258,12 @@ const INFLUENCER_FIELDS = [
   'contact_number','address','email','contact_poc_type','contact_poc_name',
   'first_invite_sent_at','list_status','quality_rating','rating_notes',
   'onboarded','onboarded_at',
+  // Profile enrichment (Reann Batch B #7/#8): audience-niche axis + demographics.
+  'audience_niches','age_range','gender_majority',
 ];
+
+const AGE_RANGES = ['13-17','18-24','25-34','35-44','45-54','55-64','65+'];
+const GENDER_MAJORITIES = ['male','female','balanced'];
 
 const ENGAGEMENT_FIELDS = [
   'engagement_type','campaign_id','product_code','product_variant',
@@ -1300,6 +1323,29 @@ async function rollupEngagementProducts(env, engagement_id) {
       updated_at: nowIso(),
     }),
   });
+}
+
+// Add a managed category option on either axis (Reann Batch B #7 "add more").
+// Case-insensitive dedupe — returns the existing row if the label already exists.
+async function addCategoryOption(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  const axis = String(body.axis || '').trim();
+  const label = String(body.label || '').trim();
+  if (axis !== 'format' && axis !== 'niche') return err('invalid_axis', 400);
+  if (!label) return err('label_required', 400);
+
+  const existing = await sb(
+    `/rest/v1/category_options?axis=eq.${axis}&label=ilike.${encodeURIComponent(label)}&select=id,axis,label&limit=1`,
+    env,
+  );
+  if (existing.ok && existing.data?.[0]) return ok(existing.data[0]);
+
+  const r = await sb(`/rest/v1/category_options`, env, {
+    method: 'POST',
+    body: JSON.stringify([{ axis, label, created_by: auth.userId }]),
+  });
+  if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  return ok(r.data?.[0] || { axis, label });
 }
 
 async function createInfluencer(body, auth, env) {
@@ -2143,6 +2189,7 @@ const POST_ACTIONS = {
   createInfluencer,
   updateInfluencer,
   deleteInfluencer,
+  addCategoryOption,
   createEngagement,
   updateEngagement,
   setEngagementProducts,

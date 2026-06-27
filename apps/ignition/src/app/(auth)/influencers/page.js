@@ -31,6 +31,8 @@ const SORTS = [
   { id: 'reach',  label: 'Reach (high → low)' },
 ];
 
+const GENDER_LABELS = { male: 'Male-majority', female: 'Female-majority', balanced: 'Balanced' };
+
 const PAGE = 100;
 
 function fmtReach(n) {
@@ -49,6 +51,9 @@ export default function InfluencersPage() {
   const [rating, setRating] = useState('');
   const [reach, setReach] = useState('');
   const [location, setLocation] = useState('');
+  const [niche, setNiche] = useState('');
+  const [ageRange, setAgeRange] = useState('');
+  const [gender, setGender] = useState('');
   const [sort, setSort] = useState('recent');
   const [search, setSearch] = useState('');
   const [rows, setRows] = useState([]);
@@ -56,6 +61,7 @@ export default function InfluencersPage() {
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [locations, setLocations] = useState([]);
+  const [catalogs, setCatalogs] = useState(null);
   const [modal, setModal] = useState(null);     // 'influencer' | 'deal' | null
   const [menuOpen, setMenuOpen] = useState(false);
   const { focusedIdx, setFocusedIdx } = useListNav(rows.length, (i) => {
@@ -68,6 +74,9 @@ export default function InfluencersPage() {
     if (rating) p.rating = rating;
     if (search) p.search = search;
     if (location) p.location = location;
+    if (niche) p.niche = niche;
+    if (ageRange) p.age_range = ageRange;
+    if (gender) p.gender = gender;
     const b = REACH_BUCKETS.find(x => x.id === reach);
     if (b?.min != null) p.reach_min = b.min;
     if (b?.max != null) p.reach_max = b.max;
@@ -84,20 +93,26 @@ export default function InfluencersPage() {
       .then(r => setRows(r.influencers || []))
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, type, rating, reach, location, sort, search, session]);
+  }, [tab, type, rating, reach, location, niche, ageRange, gender, sort, search, session]);
 
   useEffect(() => {
     if (!session) return;
     ignitionopsGet('getInfluencerCounts', scopeParams(), session)
       .then(setCounts).catch(() => setCounts(null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, rating, reach, location, search, session]);
+  }, [tab, rating, reach, location, niche, ageRange, gender, search, session]);
 
   // Location options for the filter dropdown — fetched once.
   useEffect(() => {
     if (!session) return;
     ignitionopsGet('getLocations', {}, session)
       .then(r => setLocations(r.locations || [])).catch(() => setLocations([]));
+  }, [session]);
+
+  // Catalogs — niche options for the filter dropdown.
+  useEffect(() => {
+    if (!session) return;
+    ignitionopsGet('getCatalogs', {}, session).then(setCatalogs).catch(() => setCatalogs(null));
   }, [session]);
 
   function loadMore() {
@@ -213,6 +228,18 @@ export default function InfluencersPage() {
         <select value={location} onChange={e => setLocation(e.target.value)} style={inputStyle(170)}>
           <option value="">All locations</option>
           {locations.map(l => <option key={l} value={l}>{l}</option>)}
+        </select>
+        <select value={niche} onChange={e => setNiche(e.target.value)} style={inputStyle(160)}>
+          <option value="">All niches</option>
+          {(catalogs?.category_options?.niche || []).map(n => <option key={n} value={n}>{n}</option>)}
+        </select>
+        <select value={ageRange} onChange={e => setAgeRange(e.target.value)} style={inputStyle(130)}>
+          <option value="">All ages</option>
+          {(catalogs?.age_ranges || []).map(a => <option key={a} value={a}>{a}</option>)}
+        </select>
+        <select value={gender} onChange={e => setGender(e.target.value)} style={inputStyle(150)}>
+          <option value="">All genders</option>
+          {(catalogs?.gender_majorities || []).map(g => <option key={g} value={g}>{GENDER_LABELS[g] || g}</option>)}
         </select>
         <select value={sort} onChange={e => setSort(e.target.value)} style={inputStyle(180)}>
           {SORTS.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}

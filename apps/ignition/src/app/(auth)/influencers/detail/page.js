@@ -22,6 +22,7 @@ export default function InfluencerDetailPage() {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({});
+  const [catalogs, setCatalogs] = useState(null);
 
   function reload() {
     if (!session || (!id && !code)) return;
@@ -29,6 +30,28 @@ export default function InfluencerDetailPage() {
     ignitionopsGet('getInfluencer', params, session).then(setData).catch(e => setErr(e.message));
   }
   useEffect(reload, [id, code, session]);
+
+  // Category-option lists + demographic enums for the edit pickers.
+  useEffect(() => {
+    if (!session) return;
+    ignitionopsGet('getCatalogs', {}, session).then(setCatalogs).catch(() => setCatalogs(null));
+  }, [session]);
+
+  // "Add more" on either category axis — persists + extends the in-memory list.
+  async function addCatOption(axis, label) {
+    try {
+      const opt = await ignitionopsPost('addCategoryOption', { axis, label }, session);
+      const lbl = opt?.label || label;
+      setCatalogs(c => {
+        if (!c) return c;
+        const key = axis === 'niche' ? 'niche' : 'format';
+        const cur = c.category_options?.[key] || [];
+        if (cur.some(x => x.toLowerCase() === lbl.toLowerCase())) return c;
+        return { ...c, category_options: { ...c.category_options, [key]: [...cur, lbl] } };
+      });
+      return lbl;
+    } catch (e) { toast(e.message, 'error'); return null; }
+  }
 
   async function setRating(rating) {
     try {
@@ -65,7 +88,9 @@ export default function InfluencerDetailPage() {
       channel_name: i.channel_name || '', person_name: i.person_name || '',
       channel_link: i.channel_link || '',
       channel_platforms: i.channel_platforms || (i.channel_platform ? [i.channel_platform] : []),
-      influencer_type: i.influencer_type || '', categories: (i.categories || []).join(', '),
+      influencer_type: i.influencer_type || '', categories: i.categories || [],
+      audience_niches: i.audience_niches || [],
+      age_range: i.age_range || '', gender_majority: i.gender_majority || '',
       reach: i.reach ?? '', follower_count: i.follower_count ?? '',
       audience: i.audience || '', location: i.location || '',
       contact_poc_type: i.contact_poc_type || '', contact_poc_name: i.contact_poc_name || '',
@@ -86,7 +111,10 @@ export default function InfluencerDetailPage() {
         channel_link: form.channel_link.trim() || null,
         channel_platforms: form.channel_platforms,   // worker derives channel_platform from [0]
         influencer_type: form.influencer_type || null,
-        categories: form.categories.split(',').map(s => s.trim()).filter(Boolean),
+        categories: form.categories || [],
+        audience_niches: form.audience_niches || [],
+        age_range: form.age_range || null,
+        gender_majority: form.gender_majority || null,
         reach: (form.reach === '' || isNaN(rn)) ? null : Math.round(rn),
         follower_count: (form.follower_count === '' || isNaN(fc)) ? null : Math.round(fc),
         audience: form.audience.trim() || null,
@@ -163,10 +191,13 @@ export default function InfluencerDetailPage() {
                   </div>
                 </Field>
                 <Field label="Type"><select style={editInput} value={form.influencer_type} onChange={e => setF('influencer_type', e.target.value)}><option value="">—</option>{['nano', 'micro', 'macro', 'brand', 'store'].map(o => <option key={o} value={o}>{o}</option>)}</select></Field>
-                <Field label="Categories"><input style={editInput} value={form.categories} onChange={e => setF('categories', e.target.value)} placeholder="comma, separated" /></Field>
+                <Field label="Content tags"><TagPicker options={catalogs?.category_options?.format || []} value={form.categories || []} onChange={v => setF('categories', v)} onAdd={lbl => addCatOption('format', lbl)} /></Field>
+                <Field label="Audience niche"><TagPicker options={catalogs?.category_options?.niche || []} value={form.audience_niches || []} onChange={v => setF('audience_niches', v)} onAdd={lbl => addCatOption('niche', lbl)} /></Field>
                 <Field label="Reach"><input style={editInput} type="number" value={form.reach} onChange={e => setF('reach', e.target.value)} /></Field>
                 <Field label="Follower count"><input style={editInput} type="number" value={form.follower_count} onChange={e => setF('follower_count', e.target.value)} /></Field>
-                <Field label="Audience"><input style={editInput} value={form.audience} onChange={e => setF('audience', e.target.value)} /></Field>
+                <Field label="Audience notes"><input style={editInput} value={form.audience} onChange={e => setF('audience', e.target.value)} placeholder="free-form notes" /></Field>
+                <Field label="Audience age"><select style={editInput} value={form.age_range} onChange={e => setF('age_range', e.target.value)}><option value="">—</option>{(catalogs?.age_ranges || []).map(o => <option key={o} value={o}>{o}</option>)}</select></Field>
+                <Field label="Gender majority"><select style={editInput} value={form.gender_majority} onChange={e => setF('gender_majority', e.target.value)}><option value="">—</option>{(catalogs?.gender_majorities || []).map(o => <option key={o} value={o}>{GENDER_LABELS[o] || o}</option>)}</select></Field>
                 <Field label="Location"><input style={editInput} value={form.location} onChange={e => setF('location', e.target.value)} /></Field>
               </>
             ) : (
@@ -174,10 +205,13 @@ export default function InfluencerDetailPage() {
                 <KV label="Channel link" value={inf.channel_link ? <a href={inf.channel_link} target="_blank" rel="noreferrer" style={{ color: '#FF6B00' }}>{inf.channel_link}</a> : '—'} />
                 <KV label="Platforms" value={(inf.channel_platforms?.length ? inf.channel_platforms.join(', ') : inf.channel_platform) || '—'} />
                 <KV label="Type" value={inf.influencer_type || '—'} />
-                <KV label="Categories" value={(inf.categories || []).join(', ') || '—'} />
+                <KV label="Content tags" value={(inf.categories || []).join(', ') || '—'} />
+                <KV label="Audience niche" value={(inf.audience_niches || []).join(', ') || '—'} />
                 <KV label="Reach" value={inf.reach?.toLocaleString() || '—'} />
                 <KV label="Followers" value={inf.follower_count?.toLocaleString() || '—'} />
-                <KV label="Audience" value={inf.audience || '—'} />
+                <KV label="Audience age" value={inf.age_range || '—'} />
+                <KV label="Gender" value={inf.gender_majority ? (GENDER_LABELS[inf.gender_majority] || inf.gender_majority) : '—'} />
+                <KV label="Audience notes" value={inf.audience || '—'} />
                 <KV label="Location" value={inf.location || '—'} />
                 <KV label="Onboarded" value={
                   inf.onboarded === true ? `Yes${inf.onboarded_at ? ` · ${inf.onboarded_at}` : ''}`
@@ -521,6 +555,41 @@ function Field({ label, children }) {
     <div style={{ display: 'flex', gap: 8, padding: '4px 0', alignItems: 'center' }}>
       <span style={{ width: 140, color: 'var(--text-3)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</span>
       <span style={{ flex: 1 }}>{children}</span>
+    </div>
+  );
+}
+
+const GENDER_LABELS = { male: 'Male-majority', female: 'Female-majority', balanced: 'Balanced' };
+
+// Multi-select chip picker for a category axis, with an inline "add" that persists
+// a new option via onAdd (returns the saved label) and selects it.
+function TagPicker({ options, value, onChange, onAdd }) {
+  const [adding, setAdding] = useState('');
+  const sel = value || [];
+  const toggle = (o) => onChange(sel.includes(o) ? sel.filter(x => x !== o) : [...sel, o]);
+  // include any already-selected legacy values not in the managed list
+  const all = [...options];
+  sel.forEach(v => { if (!all.includes(v)) all.push(v); });
+  async function commitAdd() {
+    const label = adding.trim();
+    if (!label) return;
+    const lbl = await onAdd(label);
+    if (lbl && !sel.includes(lbl)) onChange([...sel, lbl]);
+    setAdding('');
+  }
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+      {all.map(o => {
+        const on = sel.includes(o);
+        return (
+          <button type="button" key={o} onClick={() => toggle(o)}
+            style={{ padding: '4px 10px', cursor: 'pointer', background: on ? 'rgba(255,107,0,0.12)' : 'var(--surface-2)', color: on ? '#FF6B00' : 'var(--text-2)', border: `1px solid ${on ? '#FF6B00' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>{o}</button>
+        );
+      })}
+      <input value={adding} onChange={e => setAdding(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commitAdd(); } }}
+        onBlur={commitAdd} placeholder="+ add"
+        style={{ ...editInput, width: 80, padding: '4px 8px' }} />
     </div>
   );
 }
