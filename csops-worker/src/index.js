@@ -535,6 +535,7 @@ async function handlePost(action, body, auth, env, request) {
   switch (action) {
     case 'createTicket':     return createTicket(body, auth, env);
     case 'updateTicket':     return updateTicket(body, auth, env);
+    case 'switchResolution': return switchResolution(body, auth, env);
     case 'advanceStage':     return advanceStage(body, auth, env, request);
     case 'assignAgent':      return assignAgent(body, auth, env);
     case 'addNote':          return addNote(body, auth, env);
@@ -1877,6 +1878,46 @@ async function updateTicket(body, auth, env) {
   );
 
   return ok({ updated: cleanPatch });
+}
+
+// Switch a ticket's resolution path between Replacement and Refund (Pruthvi #bugs
+// S181). Any cs_ticket_manage agent may switch — but ONLY while the ticket is still
+// pre-resolution (in a SHARED_STAGE). Once a refund is initiated/completed or a
+// replacement is dispatched (a BRANCH_STAGE), or the ticket is closed/side-exited,
+// the resolution is in motion and the switch is blocked (cancel + reopen instead).
+// Replacement and Refund share the same SHARED_STAGES, so the stage is preserved;
+// only the disposition (+ recomputed SLA due_at) changes.
+async function switchResolution(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { ticket_id, to_disposition, reason } = body;
+  const SWITCHABLE = new Set(['replacement', 'refund']);
+  if (!ticket_id || !SWITCHABLE.has(to_disposition)) {
+    return err('ticket_id and to_disposition (replacement|refund) required', 422);
+  }
+  const tRes = await sb(`/rest/v1/cs_tickets?id=eq.${encodeURIComponent(ticket_id)}&select=*&limit=1`, env);
+  const t = tRes.data?.[0];
+  if (!t) return err('Ticket not found', 404);
+  if (!SWITCHABLE.has(t.disposition)) {
+    return err(`Only a Replacement or Refund ticket can be switched (this one is ${t.disposition || 'unset'}).`, 422);
+  }
+  if (t.disposition === to_disposition) return ok({ switched: false, disposition: t.disposition });
+  // Pre-resolution gate — the stage must still be in the shared flow.
+  if (!SHARED_STAGES.includes(t.stage)) {
+    return err(`Can't switch — this ${t.disposition} is already in motion (stage: ${t.stage}). Cancel and reopen the ticket if it must change.`, 409);
+  }
+
+  const createdMs = new Date(t.created_at).getTime();
+  const due_at = new Date((Number.isFinite(createdMs) ? createdMs : Date.now()) + (SLA_DAYS[to_disposition] ?? 7) * 24 * 60 * 60 * 1000).toISOString();
+
+  const upd = await sb(`/rest/v1/cs_tickets?id=eq.${encodeURIComponent(ticket_id)}`, env, {
+    method: 'PATCH',
+    body: JSON.stringify({ disposition: to_disposition, due_at }),
+  });
+  if (!upd.ok) return err(`Switch failed: ${JSON.stringify(upd.data)}`, upd.status);
+
+  await insertHistory(ticket_id, 'disposition', t.disposition, to_disposition,
+    reason ? String(reason).slice(0, 200) : 'switched resolution path', auth, env);
+  return ok({ switched: true, disposition: to_disposition, due_at });
 }
 
 async function advanceStage(body, auth, env, request) {

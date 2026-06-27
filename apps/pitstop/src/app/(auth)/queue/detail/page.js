@@ -184,10 +184,33 @@ function DetailHeader({ ticket: t, onRefresh, session, stages, perms }) {
 
   const [advancing, setAdvancing] = useState(false);
   const [dispositionBusy, setDispositionBusy] = useState(false);
+  const [switchBusy, setSwitchBusy] = useState(false);
 
   // Disposition triage lock: only admin can change once past intake/awaiting_evidence
   const isAdmin = !!(perms?.cs_ticket_admin);
   const triageLocked = !TRIAGE_STAGES.has(t.stage) && !isAdmin;
+
+  // Replacement ↔ Refund quick-switch (Pruthvi #bugs S181). Any cs_ticket_manage
+  // agent may switch — but only while pre-resolution (stage still in SHARED, before
+  // a refund is initiated/completed or a replacement is dispatched). Worker enforces.
+  const canManage = !!(perms?.cs_ticket_manage);
+  const switchTarget = t.disposition === 'replacement' ? 'refund'
+    : t.disposition === 'refund' ? 'replacement' : null;
+  const canSwitchResolution = canManage && !!switchTarget && SHARED.includes(t.stage) && !t.closed_at;
+
+  async function handleSwitchResolution() {
+    if (!switchTarget) return;
+    const reason = window.prompt(
+      `Switch this ticket from ${DISPOSITION_LABELS[t.disposition]} to ${DISPOSITION_LABELS[switchTarget]}?\n\nOptional reason (saved to the ticket history):`, '');
+    if (reason === null) return;   // cancelled
+    setSwitchBusy(true);
+    try {
+      await csopsPost('switchResolution', { ticket_id: t.id, to_disposition: switchTarget, reason: reason || undefined }, session);
+      onRefresh();
+    } catch (err) {
+      showToast('Failed to switch: ' + (err.message || 'unknown error'), 'error');
+    } finally { setSwitchBusy(false); }
+  }
 
   async function handleDispositionChange(e) {
     const newDisp = e.target.value;
@@ -283,6 +306,25 @@ function DetailHeader({ ticket: t, onRefresh, session, stages, perms }) {
         </div>
 
         <DispositionBadge disposition={t.disposition} />
+
+        {canSwitchResolution && (
+          <button
+            onClick={handleSwitchResolution}
+            disabled={switchBusy}
+            title={`Switch this ticket to ${DISPOSITION_LABELS[switchTarget]}`}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 5,
+              cursor: switchBusy ? 'default' : 'pointer',
+              fontSize: 11, fontWeight: 700, padding: '5px 10px',
+              borderRadius: 'var(--radius-md)', border: '1px solid var(--border)',
+              background: 'var(--surface-2)', color: 'var(--t1)',
+              fontFamily: 'var(--font-mono)', letterSpacing: '0.05em', textTransform: 'uppercase',
+              opacity: switchBusy ? 0.6 : 1,
+            }}
+          >
+            ⇄ {DISPOSITION_LABELS[switchTarget]}
+          </button>
+        )}
 
         {overdue && (
           <span style={{
