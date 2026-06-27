@@ -3549,8 +3549,16 @@ async function biteSpeedConversationUpserted(body, env) {
 
 async function biteSpeedMessageCreated(body, env) {
   // Chatwoot wraps the message at the top level for message_created.
-  const messageType = body?.message_type;   // 0=in 1=out 2=activity 3=template
-  if (messageType === 2 || messageType === 'activity') {
+  // Chatwoot sends message_type as EITHER an int (0=in,1=out,2=activity,3=template)
+  // OR a string ("incoming"/"outgoing"/"activity"/"template"). Normalise BOTH —
+  // Number("incoming") is NaN, so the old `Number(mt)===0` test silently mislabelled
+  // every string-typed inbound message as outbound (it rendered on the agent's side).
+  const messageType = body?.message_type;
+  const mtStr = String(messageType).toLowerCase();
+  const isActivity = messageType === 2 || mtStr === '2' || mtStr === 'activity';
+  const isIncoming = messageType === 0 || mtStr === '0' || mtStr === 'incoming';
+  const isTemplate = messageType === 3 || mtStr === '3' || mtStr === 'template';
+  if (isActivity) {
     return json({ ok: true, skipped: 'activity_message' });
   }
   if (body?.private === true) {
@@ -3574,9 +3582,8 @@ async function biteSpeedMessageCreated(body, env) {
     if (existing.data?.[0]) return json({ ok: true, deduped: true });
   }
 
-  // Resolve direction
-  const directionNum = Number(messageType);
-  const direction = directionNum === 0 ? 'inbound' : 'outbound';
+  // Resolve direction (string- and int-safe; see message_type note above)
+  const direction = isIncoming ? 'inbound' : 'outbound';
 
   // Map kind from content + attachments
   const attachments = Array.isArray(body?.attachments) ? body.attachments : [];
@@ -3589,7 +3596,7 @@ async function biteSpeedMessageCreated(body, env) {
     mediaFilename = a?.file_name || a?.file_type || null;
     mediaMime     = a?.file_content_type || null;
     mediaSize     = a?.file_size || null;
-  } else if (directionNum === 3) {
+  } else if (isTemplate) {
     kind = 'template';
   }
 
@@ -3615,7 +3622,7 @@ async function biteSpeedMessageCreated(body, env) {
 
   // Template name extraction (Chatwoot stores it in content_attributes for template msgs)
   let templateName = null;
-  if (directionNum === 3) {
+  if (isTemplate) {
     templateName = body?.content_attributes?.template_name
       || body?.content_attributes?.template?.name
       || null;
