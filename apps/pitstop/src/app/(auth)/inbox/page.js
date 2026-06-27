@@ -96,6 +96,13 @@ export default function InboxPage() {
   const [loadingConvo, setLoadingConvo] = useState(false);
   const [text, setText] = useState('');
   const [mode, setMode] = useState('reply');          // reply | note (S162-B/C)
+  // Email composer fields — To/Cc/Bcc/Subject (Pruthvi #bugs S181). Prefilled from
+  // the selected email thread; Cc/Bcc hidden until the agent expands them.
+  const [emailTo, setEmailTo] = useState('');
+  const [emailCc, setEmailCc] = useState('');
+  const [emailBcc, setEmailBcc] = useState('');
+  const [emailSubject, setEmailSubject] = useState('');
+  const [showCcBcc, setShowCcBcc] = useState(false);
   const [sending, setSending] = useState(false);
   const [err, setErr] = useState(null);
   const [linkOpen, setLinkOpen] = useState(false);
@@ -234,6 +241,17 @@ export default function InboxPage() {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [convo?.messages?.length, selectedId]);
 
+  // Prefill the email composer fields when an email thread is opened — To = the
+  // customer, Subject = the thread subject (Re:-prefixed). Cleared/reset per thread.
+  useEffect(() => {
+    const t = convo?.thread;
+    if (t?.channel !== 'email') return;
+    setEmailTo(t.external_user_id || '');
+    const subj = (t.subject || '').trim();
+    setEmailSubject(subj ? (/^re:/i.test(subj) ? subj : `Re: ${subj}`) : '');
+    setEmailCc(''); setEmailBcc(''); setShowCcBcc(false);
+  }, [convo?.thread?.id, convo?.thread?.channel]);
+
   // "Awaiting reply" is only meaningful for the two-way channels (IG/FB) — WhatsApp
   // is a read-only BiteSpeed mirror so its awaiting is not tracked here.
   const totalAwaiting = (stats.instagram.awaiting || 0) + (stats.messenger.awaiting || 0);
@@ -347,7 +365,12 @@ export default function InboxPage() {
       } else if (convo.thread.channel === 'whatsapp') {
         await csopsPost('sendWaReply', { thread_id: convo.thread.id, text: t }, session);   // C2-B BiteSpeed tunnel
       } else if (convo.thread.channel === 'email') {
-        await csopsPost('sendEmailReply', { thread_id: convo.thread.id, text: t }, session); // Gmail-native, in-thread (S175)
+        if (!emailTo.trim()) { setErr('Add at least one To recipient.'); setSending(false); return; }
+        await csopsPost('sendEmailReply', {
+          thread_id: convo.thread.id, text: t,
+          to: emailTo, cc: emailCc || undefined, bcc: emailBcc || undefined,
+          subject: emailSubject || undefined,
+        }, session); // Gmail-native, in-thread (S175); To/Cc/Bcc/Subject S181
       } else {
         await csopsPost('sendMetaMessage', { thread_id: convo.thread.id, text: t }, session);
       }
@@ -488,6 +511,7 @@ export default function InboxPage() {
   // inside the 24h customer window (worker enforces; template send is a fast-follow).
   // No outbound attachments on WA in v1 (Chatwoot media send is a later add).
   const isWa = thread?.channel === 'whatsapp';
+  const isEmail = thread?.channel === 'email';
   const waReplyBlocked = isWa && !noteMode && !windowOpen;
   const canAttach = ['instagram', 'messenger'].includes(thread?.channel);   // Graph URL-attachment path only
   const slashActive = !noteMode && text.startsWith('/');           // "/" quick-access to canned
@@ -814,6 +838,26 @@ export default function InboxPage() {
                     </div>
                   )}
 
+                  {/* Email headers — To / Cc / Bcc / Subject (S181). Reply mode only. */}
+                  {isEmail && !noteMode && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginBottom: 8 }}>
+                      <EmailField label="To" value={emailTo} onChange={setEmailTo} disabled={!canManage} placeholder="customer@example.com" />
+                      {showCcBcc ? (
+                        <>
+                          <EmailField label="Cc"  value={emailCc}  onChange={setEmailCc}  disabled={!canManage} placeholder="comma-separated" />
+                          <EmailField label="Bcc" value={emailBcc} onChange={setEmailBcc} disabled={!canManage} placeholder="comma-separated" />
+                        </>
+                      ) : (
+                        <button type="button" onClick={() => setShowCcBcc(true)} disabled={!canManage}
+                          style={{ alignSelf: 'flex-start', background: 'transparent', border: 'none', cursor: canManage ? 'pointer' : 'default',
+                            color: 'var(--accent)', fontSize: 11, fontWeight: 600, padding: '1px 2px' }}>
+                          + Cc / Bcc
+                        </button>
+                      )}
+                      <EmailField label="Subject" value={emailSubject} onChange={setEmailSubject} disabled={!canManage} placeholder="Subject" />
+                    </div>
+                  )}
+
                   {/* Toolbar */}
                   <div style={{ display: 'flex', gap: 4, marginBottom: 6, position: 'relative', alignItems: 'center' }}>
                     <ToolBtn title="Emoji" onClick={() => { setShowEmoji(v => !v); setShowCanned(false); }} disabled={!canManage}><Smile size={15} /></ToolBtn>
@@ -943,6 +987,18 @@ function ToolBtn({ children, title, onClick, disabled, active }) {
         border: `1px solid ${active ? 'var(--warn-fg)' : 'var(--border)'}`, borderRadius: 'var(--radius-sm)',
         background: active ? 'var(--warn-bg)' : 'var(--surface)',
         color: disabled ? 'var(--t4)' : active ? 'var(--warn-fg)' : 'var(--t2)', opacity: disabled ? 0.5 : 1 }}>{children}</button>
+  );
+}
+// One labelled email-header input row (To / Cc / Bcc / Subject) — S181.
+function EmailField({ label, value, onChange, disabled, placeholder }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <span style={{ width: 52, flexShrink: 0, fontSize: 10.5, fontWeight: 600, textTransform: 'uppercase',
+        letterSpacing: '0.06em', color: 'var(--t3)', textAlign: 'right' }}>{label}</span>
+      <input value={value} onChange={e => onChange(e.target.value)} disabled={disabled} placeholder={placeholder}
+        style={{ flex: 1, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
+          padding: '5px 9px', color: 'var(--t1)', fontSize: 12.5, fontFamily: 'var(--f-ui)', outline: 'none' }} />
+    </div>
   );
 }
 // Anchored popover. The transparent fixed backdrop catches any outside click and

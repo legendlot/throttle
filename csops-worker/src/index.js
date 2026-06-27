@@ -4230,7 +4230,7 @@ async function syncGmailNow(body, auth, env) {
 // ── Reply — Gmail-native send, in-thread, mirrored to Relay -------------------
 async function sendEmailReply(body, auth, env) {
   const g = require('cs_ticket_manage', auth); if (g) return g;
-  const { thread_id, text, html } = body;
+  const { thread_id, text, html, cc, bcc, subject: subjectOverride } = body;
   if (!thread_id || (!text && !html)) return err('thread_id and text (or html) required');
 
   const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=*&limit=1`, env);
@@ -4238,9 +4238,25 @@ async function sendEmailReply(body, auth, env) {
   if (!thread || thread.channel !== 'email') return err('Email thread not found', 404);
   if (!thread.external_user_id) return err('Thread has no recipient address', 422);
 
+  // Recipients: To defaults to the thread's customer; the agent may override To and
+  // add Cc/Bcc (Pruthvi #bugs S181). parseAddrList accepts an array OR a
+  // comma/semicolon-separated string, validates "x@y", dedups (case-insensitive).
+  const toList  = parseAddrList(body.to, [thread.external_user_id]);
+  const ccList  = parseAddrList(cc);
+  const bccList = parseAddrList(bcc);
+  if (!toList.length) return err('At least one valid To recipient is required', 422);
+  for (const addr of [...body.to != null ? toList : [], ...ccList, ...bccList]) {
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(addr)) return err(`Invalid email address: ${addr}`, 422);
+  }
+
   // Hard-suppression guard (bounce/complaint) — surface to the agent, don't send.
-  const sup = await emailSuppressed(env, thread.external_user_id);
-  if (sup.suppressed) return err(`Recipient is suppressed (${sup.reason}) — do not email. Reach out another way.`, 409);
+  // Check every To recipient (override may point somewhere new); Cc/Bcc are not
+  // gated (an agent CC'ing a colleague/vendor shouldn't be blocked by a customer
+  // suppression).
+  for (const addr of toList) {
+    const sup = await emailSuppressed(env, addr);
+    if (sup.suppressed) return err(`Recipient ${addr} is suppressed (${sup.reason}) — do not email. Reach out another way.`, 409);
+  }
 
   // Threading headers from the latest inbound message on this thread.
   const lastIn = await sb(
@@ -4249,20 +4265,32 @@ async function sendEmailReply(body, auth, env) {
   const inReplyTo = lastMeta.rfc_message_id || null;
   const references = [lastMeta.references, lastMeta.rfc_message_id].filter(Boolean).join(' ') || null;
 
-  const subjectRaw = thread.subject || lastMeta.subject || '(no subject)';
-  const subject = /^re:/i.test(subjectRaw) ? subjectRaw : `Re: ${subjectRaw}`;
+  // Subject: an explicit override is used verbatim (agent's intent); otherwise the
+  // thread/last-inbound subject, prefixed Re: if not already.
+  let subject;
+  if (subjectOverride != null && String(subjectOverride).trim()) {
+    subject = String(subjectOverride).trim();
+  } else {
+    const subjectRaw = thread.subject || lastMeta.subject || '(no subject)';
+    subject = /^re:/i.test(subjectRaw) ? subjectRaw : `Re: ${subjectRaw}`;
+  }
   const senderName = auth.fullName || auth.name || auth.email || 'LOT Care';
   const textBody = text || stripHtml(html);
   const htmlBody = html || `<p>${escapeHtml(text).replace(/\n/g, '<br>')}</p>`;
 
-  // Build the RFC822 message (multipart/alternative).
+  // Build the RFC822 message (multipart/alternative). Gmail honours a Bcc header on
+  // a raw send (delivers to those recipients, strips the header from the stored msg).
   const boundary = `b_${crypto.randomUUID().replace(/-/g, '')}`;
   const headerLines = [
-    `To: ${thread.external_user_id}`,
+    `To: ${toList.join(', ')}`,
+  ];
+  if (ccList.length)  headerLines.push(`Cc: ${ccList.join(', ')}`);
+  if (bccList.length) headerLines.push(`Bcc: ${bccList.join(', ')}`);
+  headerLines.push(
     `From: LOT Care <${gmailMailbox(env)}>`,
     `Subject: ${subject}`,
     'MIME-Version: 1.0',
-  ];
+  );
   if (inReplyTo)  headerLines.push(`In-Reply-To: ${inReplyTo}`);
   if (references) headerLines.push(`References: ${references}`);
   headerLines.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
@@ -4285,7 +4313,10 @@ async function sendEmailReply(body, auth, env) {
       thread_id: thread.id, channel: 'email', direction: 'outbound', kind: 'text',
       body: textBody, body_html: htmlBody, provider_message_id: sentId, status: 'sent',
       sent_by_user_id: auth.userId, sent_by_name: senderName, sent_at: new Date().toISOString(),
-      raw_meta: { gmail_message_id: sentId, in_reply_to: inReplyTo, subject },
+      raw_meta: {
+        gmail_message_id: sentId, in_reply_to: inReplyTo, subject,
+        to: toList, ...(ccList.length ? { cc: ccList } : {}), ...(bccList.length ? { bcc: bccList } : {}),
+      },
     }),
   });
 
@@ -4308,6 +4339,23 @@ async function sendEmailReply(body, auth, env) {
 
   const ticketId = auth.viaIgnitionBridge ? null : await assignLinkedTicketToReplier(thread.id, auth, env);
   return ok({ sent: true, message_id: sentId, auto_claimed: !thread.assigned_agent_id && !auth.viaIgnitionBridge, ticket_assigned: ticketId });
+}
+
+// Normalize an address input (array OR comma/semicolon-separated string) → a
+// deduped (case-insensitive) trimmed list. `fallback` is used when the input is
+// empty/absent. Validation of the "x@y" shape is done by the caller.
+function parseAddrList(input, fallback = []) {
+  if (input == null || input === '') return [...fallback];
+  const arr = Array.isArray(input) ? input : String(input).split(/[,;]/);
+  const out = [], seen = new Set();
+  for (const raw of arr) {
+    const a = String(raw || '').trim();
+    if (!a) continue;
+    const k = a.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k); out.push(a);
+  }
+  return out.length ? out : [...fallback];
 }
 
 function stripHtml(h) { return String(h || '').replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(); }
