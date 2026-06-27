@@ -1,6 +1,6 @@
 # Ignition — Reann Batch B theme ② · Coupon + attribution + goodies pricing design
 
-> Design spec · 2026-06-28 (Session 181)
+> Design spec · 2026-06-28 (Session 182)
 > Status: approved (decisions locked in chat), pre-implementation
 > Systems touched: Ignition (ignitionops + apps/ignition), `ignition` schema, Shopify custom app
 > Source: Reann's Ignition messages — B `1782426076.945029` (#1, #9) + A `1782392242.217249` (#8, #9)
@@ -199,7 +199,7 @@ introduce `ignition_coupon_manage` — flag for Afshaan; default reuses `ignitio
 - Auto-negotiation or auto-% logic — the % is entered by the team per engagement.
 - WhatsApp/email delivery of the code (that's theme ① — Relay).
 
-## Open questions — RESOLVED (Afshaan, S181)
+## Open questions — RESOLVED (Afshaan, S182)
 1. Paused/vault UGC — commission accrues while parked? → **No.** Commission accrues only while the
    engagement is in `live` (active window); paused/vault sets `affiliate_active_to`.
 2. Tighter perm for issuing/retiring live Shopify codes? → **No — reuse `ignition_manage`.**
