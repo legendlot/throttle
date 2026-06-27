@@ -149,6 +149,9 @@ export default function InfluencerDetailPage() {
           {inf.channel_name || inf.person_name || '(no name)'}
         </h1>
         <RatingBadge rating={inf.quality_rating} />
+        {inf.do_not_ship && (
+          <span title={inf.do_not_ship_reason || 'Do not ship'} style={{ fontSize: 11, color: 'var(--state-error-fg)', border: '1px solid var(--state-error-fg)', borderRadius: 'var(--radius-sm)', padding: '3px 8px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Do not ship</span>
+        )}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
           {['green','yellow','red','unrated'].map(r => (
             <button key={r} onClick={() => setRating(r)} style={ratingBtn}>{r}</button>

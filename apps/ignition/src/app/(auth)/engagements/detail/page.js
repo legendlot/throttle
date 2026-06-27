@@ -149,7 +149,11 @@ export default function EngagementDetailPage() {
           <KV label="Shipping" value={`₹${Number(e.shipping_cost || 0).toLocaleString()}`} />
           <KV label="Return" value={`₹${Number(e.return_cost || 0).toLocaleString()}`} />
           <KV label="Ad spend" value={`₹${Number(e.ad_spend || 0).toLocaleString()}`} />
-          <KV label="CPM" value={e.cpm != null ? `₹${Number(e.cpm).toFixed(2)}` : '—'} />
+          <KV label="CPM" value={e.cpm != null
+            ? <span style={{ color: Number(e.cpm) > 100 ? 'var(--state-error-fg)' : 'var(--text-1)', fontWeight: Number(e.cpm) > 100 ? 700 : 400 }}>
+                ₹{Number(e.cpm).toFixed(2)}{Number(e.cpm) > 100 ? ' ⚠ high' : ''}
+              </span>
+            : '—'} />
           <KV label="TOTAL" value={<strong style={{ color: '#FF6B00' }}>₹{Number(e.total_cost || 0).toLocaleString()}</strong>} />
         </Card>
 
@@ -174,6 +178,8 @@ export default function EngagementDetailPage() {
           session={session}
           onSaved={reload}
         />
+
+        <ComplianceCard e={e} canManage={canManage} session={session} onSaved={reload} />
       </div>
 
       <CodesCard engagementId={e.id} canManage={canManage} session={session} />
@@ -471,6 +477,65 @@ function CodesCard({ engagementId, canManage, session }) {
     </Card>
   );
 }
+
+// Post-live compliance checklist (B12) + gifted-but-never-posted flag (B14).
+function ComplianceCard({ e, canManage, session, onSaved }) {
+  const { showToast: toast } = useToast();
+  const [busy, setBusy] = useState(false);
+  const postLive = ['live', 'completed'].includes(e.stage);
+  const checks = [
+    ['compliance_caption_link', 'Link in caption'],
+    ['compliance_coupon_verbal', 'Coupon mentioned verbally'],
+    ['compliance_car_motion', 'Car in motion 15–20s'],
+  ];
+  async function toggle(key, val) {
+    setBusy(true);
+    try { await ignitionopsPost('updateEngagement', { engagement_id: e.id, [key]: val }, session); onSaved?.(); }
+    catch (err) { toast(err.message, 'error'); } finally { setBusy(false); }
+  }
+  async function flagGifted(val) {
+    if (val && !window.confirm('Mark as gifted-but-never-posted? This flags the creator do-not-ship.')) return;
+    setBusy(true);
+    try { await ignitionopsPost('markGiftedNoPost', { engagement_id: e.id, value: val }, session); toast(val ? 'Flagged' : 'Cleared', 'success'); onSaved?.(); }
+    catch (err) { toast(err.message, 'error'); } finally { setBusy(false); }
+  }
+  const anyFalse = checks.some(([k]) => e[k] === false);
+  const allTrue = checks.every(([k]) => e[k] === true);
+  return (
+    <Card title="Compliance & flags">
+      {postLive ? (
+        <>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>
+            {checks.map(([k, label]) => (
+              <label key={k} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, cursor: canManage ? 'pointer' : 'default' }}>
+                <input type="checkbox" disabled={!canManage || busy} checked={e[k] === true} onChange={ev => toggle(k, ev.target.checked)} />
+                <span style={{ color: 'var(--text-2)' }}>{label}</span>
+              </label>
+            ))}
+          </div>
+          {allTrue ? <span style={okPill}>Compliant ✓</span>
+            : anyFalse ? <span style={badPill}>Non-compliant — request correction</span>
+            : <span style={{ color: 'var(--text-3)', fontSize: 12 }}>Not reviewed yet</span>}
+        </>
+      ) : (
+        <div style={{ color: 'var(--text-3)', fontSize: 13 }}>Checklist appears once the deal is live.</div>
+      )}
+      <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+        {e.gifted_no_post ? (
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={badPill}>Gifted · never posted</span>
+            <span style={{ fontSize: 12, color: 'var(--text-3)' }}>creator set do-not-ship</span>
+            {canManage && <button onClick={() => flagGifted(false)} disabled={busy} style={miniBtn}>Clear</button>}
+          </div>
+        ) : (
+          canManage && <button onClick={() => flagGifted(true)} disabled={busy} style={miniBtn}>Flag &ldquo;gifted, never posted&rdquo;</button>
+        )}
+      </div>
+    </Card>
+  );
+}
+const okPill = { display: 'inline-block', fontSize: 11, color: '#27c93f', border: '1px solid #27c93f', borderRadius: 'var(--radius-sm)', padding: '3px 8px', textTransform: 'uppercase', letterSpacing: '0.04em' };
+const badPill = { display: 'inline-block', fontSize: 11, color: 'var(--state-error-fg)', border: '1px solid var(--state-error-fg)', borderRadius: 'var(--radius-sm)', padding: '3px 8px', textTransform: 'uppercase', letterSpacing: '0.04em' };
 
 function CodeRow({ c, canManage, onRetire, onSync, big }) {
   const retired = c.status === 'retired';

@@ -1,7 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { Modal } from '@throttle/ui';
-import { STAGE_LABELS, allowedTransitions } from '../lib/stages.js';
+import { STAGE_LABELS, allowedTransitions, HAPPY_PATH } from '../lib/stages.js';
 
 const fieldStyle = {
   width: '100%', marginTop: 6, padding: '8px 10px',
@@ -39,6 +39,11 @@ export default function AdvanceModal({ open, engagement, onClose, onAdvance }) {
   const needsRating    = isCompleted && !isRated;
   // #7 — only prompt for an order id when one isn't already on the deal.
   const needsOrderId   = isShipped && !existingOrder;
+
+  // B11 — soft skip-stage warning (transitions are free by design; this only nudges).
+  const _fromIdx = HAPPY_PATH.indexOf(engagement.stage);
+  const _toIdx   = HAPPY_PATH.indexOf(target);
+  const skipped  = (_fromIdx >= 0 && _toIdx > _fromIdx + 1) ? HAPPY_PATH.slice(_fromIdx + 1, _toIdx) : [];
 
   const missingVideo   = needsVideoLink && !(videoLink.trim() || existingLink);
   const missingRevised = isDelayed && !revisedDate;
@@ -104,6 +109,13 @@ export default function AdvanceModal({ open, engagement, onClose, onAdvance }) {
             {options.map(s => <option key={s} value={s}>{STAGE_LABELS[s]}</option>)}
           </select>
         </div>
+
+        {/* B11 — soft nudge when skipping happy-path stages (still allowed) */}
+        {skipped.length > 0 && (
+          <div style={{ fontSize: 12, color: '#fbbf24', background: 'rgba(251,191,36,0.08)', border: '1px solid #fbbf24', borderRadius: 'var(--radius-sm)', padding: '8px 10px' }}>
+            ⚠ Skipping {skipped.map(s => STAGE_LABELS[s] || s).join(', ')}. You can still advance if that&apos;s intended.
+          </div>
+        )}
 
         {/* #4 — going live requires a video link */}
         {needsVideoLink && (

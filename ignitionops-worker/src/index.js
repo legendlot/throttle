@@ -1268,7 +1268,9 @@ const GENDER_MAJORITIES = ['male','female','balanced'];
 const ENGAGEMENT_FIELDS = [
   'engagement_type','campaign_id','product_code','product_variant',
   'deal_type','payment_terms','payment_amount','affiliate_pct','commission_amount',
-  'ad_spend','goodies_cost','shipping_cost','return_cost','cpm',
+  'ad_spend','goodies_cost','shipping_cost','return_cost',
+  // cpm is worker-computed (recomputeCpm), not a manual field (theme ④ B13).
+  'compliance_caption_link','compliance_coupon_verbal','compliance_car_motion',
   'expected_post_date','post_date','delivered_date','video_link','utm_link',
   'utm_source','utm_medium','utm_campaign',
   'views','likes','comments','shares','impressions','sessions','orders',
@@ -1431,6 +1433,18 @@ async function createEngagement(body, auth, env) {
 }
 
 // Replace the full product-line set for a deal, then roll up (#4).
+// CPM auto-calc (theme ④ B13): cost-per-1000-views off the GENERATED total_cost
+// (payment+commission+ad_spend+goodies+shipping+return). Worker-owned, not manual.
+async function recomputeCpm(env, engagementId) {
+  const r = await sb(`/rest/v1/engagements?id=eq.${engagementId}&select=views,total_cost&limit=1`, env);
+  const e = r.data?.[0]; if (!e) return;
+  const views = Number(e.views) || 0;
+  const cpm = views > 0 ? Math.round((Number(e.total_cost || 0) / views) * 1000 * 100) / 100 : null;
+  await sb(`/rest/v1/engagements?id=eq.${engagementId}`, env, {
+    method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ cpm }),
+  });
+}
+
 async function setEngagementProducts(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
   if (!body.engagement_id) return err('engagement_id required', 400);
@@ -1440,6 +1454,7 @@ async function setEngagementProducts(body, auth, env) {
   });
   if (body.products.length) await insertEngagementProducts(env, body.engagement_id, body.products);
   await rollupEngagementProducts(env, body.engagement_id);
+  await recomputeCpm(env, body.engagement_id);   // goodies changed → cost changed
   const lr = await sb(`/rest/v1/engagement_products?engagement_id=eq.${body.engagement_id}&select=*&order=sort_order.asc`, env);
   return ok({ products: lr.data || [] });
 }
@@ -1475,7 +1490,44 @@ async function updateEngagement(body, auth, env) {
     body: JSON.stringify(patch),
   });
   if (!r.ok) return err(`db_error: ${JSON.stringify(r.data)}`, 400);
+  await recomputeCpm(env, body.engagement_id);   // views/costs may have changed (B13)
   return ok(r.data?.[0]);
+}
+
+// Gifted-but-never-posted (theme ④ B14) — distinct from ghosted. Flags the deal +
+// marks the influencer do-not-ship. Goodies value rolls into "unrecovered" (getQualityFlags).
+async function markGiftedNoPost(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!body.engagement_id) return err('engagement_id required', 400);
+  const val = body.value !== false;   // default true
+  const er = await sb(`/rest/v1/engagements?id=eq.${body.engagement_id}&select=influencer_id&limit=1`, env);
+  if (!er.ok || !er.data?.[0]) return err('not_found', 404);
+  await sb(`/rest/v1/engagements?id=eq.${body.engagement_id}`, env, {
+    method: 'PATCH', prefer: 'return=minimal',
+    body: JSON.stringify({ gifted_no_post: val, gifted_no_post_at: val ? nowIso() : null, updated_at: nowIso() }),
+  });
+  // Set do-not-ship when flagging; don't auto-clear (another deal may still warrant it).
+  if (val && er.data[0].influencer_id) {
+    await sb(`/rest/v1/influencers?id=eq.${er.data[0].influencer_id}`, env, {
+      method: 'PATCH', prefer: 'return=minimal',
+      body: JSON.stringify({ do_not_ship: true, do_not_ship_reason: 'gifted, never posted', updated_at: nowIso() }),
+    });
+  }
+  return ok({ gifted_no_post: val });
+}
+
+// Dashboard quality/lifecycle surfacing (theme ④ B6/B12/B14).
+async function getQualityFlags(url, auth, env) {
+  const re = await sb(`/rest/v1/rpc/reengage_list`, env, { method: 'POST', body: JSON.stringify({ p_days: 60 }) });
+  const gp = await sb(`/rest/v1/engagements?gifted_no_post=eq.true&select=goodies_cost`, env);
+  const nc = await sb(`/rest/v1/engagements?stage=in.(live,completed)&or=(compliance_caption_link.is.false,compliance_coupon_verbal.is.false,compliance_car_motion.is.false)&select=id`, env);
+  const gifted = gp.data || [];
+  return ok({
+    reengage: re.data || [],
+    unrecovered_value: gifted.reduce((s, e) => s + Number(e.goodies_cost || 0), 0),
+    gifted_no_post_count: gifted.length,
+    noncompliant_count: (nc.data || []).length,
+  });
 }
 
 async function advanceStage(body, auth, env) {
@@ -2476,6 +2528,7 @@ const GET_ACTIONS = {
   getCouponsForEngagement,
   getProductPrice,
   getInfluencerAttribution,
+  getQualityFlags,
 };
 
 const POST_ACTIONS = {
@@ -2499,6 +2552,7 @@ const POST_ACTIONS = {
   retireCoupon,
   syncCouponRedemptions,
   refreshProductPrices,
+  markGiftedNoPost,
   openPitstopTicket,
   createCampaign,
   updateCampaign,

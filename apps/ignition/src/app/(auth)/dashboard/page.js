@@ -17,6 +17,7 @@ export default function DashboardPage() {
   const [kpis, setKpis] = useState(null);
   const [overdue, setOverdue] = useState(null);
   const [monthRow, setMonthRow] = useState(undefined); // undefined=loading, null=no target
+  const [quality, setQuality] = useState(null);
   const [err, setErr] = useState(null);
   const [flagging, setFlagging] = useState(false);
 
@@ -25,6 +26,7 @@ export default function DashboardPage() {
     ignitionopsGet('getKpis', {}, session).then(setKpis).catch(e => setErr(e.message));
     ignitionopsGet('getOverdueEngagements', { days: OVERDUE_DAYS }, session)
       .then(r => setOverdue(r.overdue || [])).catch(() => setOverdue([]));
+    ignitionopsGet('getQualityFlags', {}, session).then(setQuality).catch(() => setQuality(null));
     const cm = new Date().toISOString().slice(0, 7);
     ignitionopsGet('getMonthlyTargets', {}, session)
       .then(r => setMonthRow((r.months || []).find(m => m.month === cm) || null))
@@ -122,6 +124,40 @@ export default function DashboardPage() {
               ))}
             </tbody>
           </table>
+        </section>
+      )}
+
+      {quality && (quality.reengage?.length > 0 || quality.gifted_no_post_count > 0 || quality.noncompliant_count > 0) && (
+        <section style={{ marginTop: 24, maxWidth: 1100 }}>
+          <div style={{ fontFamily: 'var(--font-cond)', fontSize: 14, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--text-2)', marginBottom: 10 }}>Lifecycle &amp; quality</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12, marginBottom: quality.reengage?.length ? 16 : 0 }}>
+            <KpiCard label="Re-engage (Green, 60d+)" value={quality.reengage?.length ?? 0} accent={quality.reengage?.length ? '#FF6B00' : undefined} />
+            <KpiCard label="Non-compliant" value={quality.noncompliant_count ?? 0} accent={quality.noncompliant_count ? '#ff7070' : undefined} />
+            <KpiCard label="Gifted · no post" value={quality.gifted_no_post_count ?? 0} accent={quality.gifted_no_post_count ? '#ff7070' : undefined} />
+            <KpiCard label="Unrecovered" value={`₹${Number(quality.unrecovered_value || 0).toLocaleString('en-IN')}`} />
+          </div>
+          {quality.reengage?.length > 0 && (
+            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+              <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)', fontFamily: 'var(--font-cond)', fontSize: 13, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--text-2)' }}>
+                Re-engage these creators
+              </div>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead><tr style={{ background: 'var(--surface-2)', textAlign: 'left' }}>
+                  <th style={th}>Code</th><th style={th}>Creator</th><th style={th}>Last closed</th><th style={th}>Days since</th>
+                </tr></thead>
+                <tbody>
+                  {quality.reengage.map(r => (
+                    <tr key={r.influencer_id} onClick={() => router.push(`/influencers/detail/?id=${r.influencer_id}`)} style={{ borderTop: '1px solid var(--border)', cursor: 'pointer' }}>
+                      <td style={td}><span style={{ color: '#FF6B00', fontWeight: 600 }}>{r.influencer_code}</span></td>
+                      <td style={td}>{r.channel_name || r.person_name || '—'}</td>
+                      <td style={td}>{r.last_closed_at ? new Date(r.last_closed_at).toLocaleDateString() : '—'}</td>
+                      <td style={{ ...td, color: 'var(--text-2)' }}>{r.days_since}d</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </section>
       )}
     </div>
