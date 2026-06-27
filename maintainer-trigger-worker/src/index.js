@@ -42,6 +42,19 @@ const DROP_SUBTYPES = new Set([
   'channel_topic', 'channel_purpose', 'channel_name', 'channel_archive', 'channel_unarchive',
 ]);
 
+// SELF-TRIGGER GUARD (added 2026-06-27, cost fix). The Maintainer posts its own #bugs/
+// #system-updates replies as "Afshaan (Sent using Claude)" — a USER-token post, so the event
+// carries NO bot_id/app_id and slipped past the checks below. Each reply then fired a fresh run
+// (the feedback loop that inflated run count + clean sweeps and burned credits). Bug reports come
+// FROM THE TEAM, never from the founder, so we drop any message authored by Afshaan or the Claude
+// app user in these channels. The hourly cron still backstops anything genuinely founder-initiated.
+const SELF_AUTHORS = new Set([
+  'U090FJP8NTX', // Afshaan — the identity the Maintainer's "Sent using Claude" replies post as
+  'U0B97JZDN6S', // Claude app user — the "Sent using Claude" attribution
+]);
+// Belt-and-suspenders: the attribution mentions the Claude app user in the rendered text.
+const CLAUDE_ATTRIBUTION = 'U0B97JZDN6S';
+
 const WINDOW_MS = 5 * 60 * 1000;   // burst collection window: collect for 5 min, then fire once
 const LEASE_MS  = 30 * 60 * 1000;  // single-flight safety lease — auto-release if /done never comes
 
@@ -83,6 +96,8 @@ export default {
         WATCH.has(e.channel) &&
         !e.bot_id &&                          // drop bot posts (incl. the Maintainer's own replies)
         !e.app_id &&
+        !SELF_AUTHORS.has(e.user) &&          // drop the Maintainer's own "Sent using Claude" replies (user-token posts) — the self-trigger loop
+        !(e.text || '').includes(CLAUDE_ATTRIBUTION) &&
         !DROP_SUBTYPES.has(e.subtype || '');  // keep plain + file_share + thread replies
       if (relevant) ctx.waitUntil(coordinator(env).fetch('https://do/notify', { method: 'POST' }));
     }
