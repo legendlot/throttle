@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ignitionopsGet } from '../lib/ignitionopsFetch.js';
 
 // Multi-row product picker (#4). Each row = product (dropdown from getCatalogs,
@@ -17,6 +17,10 @@ export function emptyLine() {
 export default function ProductLinesEditor({ value, onChange, session }) {
   const lines = value && value.length ? value : [emptyLine()];
   const [catalog, setCatalog] = useState([]);
+  // Keep a fresh handle on the current lines + onChange so the async price-fill
+  // (theme ②, B#9) merges into the latest state rather than a stale closure.
+  const linesRef = useRef(lines); linesRef.current = lines;
+  const onChangeRef = useRef(onChange); onChangeRef.current = onChange;
 
   useEffect(() => {
     if (!session) return;
@@ -28,6 +32,21 @@ export default function ProductLinesEditor({ value, onChange, session }) {
   function setRow(i, patch) {
     const next = lines.map((l, idx) => (idx === i ? { ...l, ...patch } : l));
     onChange(next);
+  }
+
+  // When a product is picked from the catalogue, auto-fill goodies cost from the
+  // cached Shopify variant price (A#8/B#9 — the order is ₹0 on a 100%-off code, so
+  // cost must come from list price). Overwrites only the goodies field; silent on miss.
+  async function onProductPick(i, name) {
+    setRow(i, { product_code: name });
+    const match = catalog.find(p => p.name === name);
+    if (!match?.sku || !session) return;
+    try {
+      const r = await ignitionopsGet('getProductPrice', { sku: match.sku }, session);
+      const price = r?.price?.price;
+      if (price == null) return;
+      onChangeRef.current(linesRef.current.map((l, idx) => (idx === i ? { ...l, goodies_cost: price } : l)));
+    } catch { /* leave goodies as manual */ }
   }
   function addRow() { onChange([...lines, emptyLine()]); }
   function removeRow(i) {
@@ -44,7 +63,7 @@ export default function ProductLinesEditor({ value, onChange, session }) {
             <input
               list="ign-product-list"
               value={l.product_code}
-              onChange={e => setRow(i, { product_code: e.target.value })}
+              onChange={e => onProductPick(i, e.target.value)}
               placeholder="e.g. Brutus"
               style={inp}
             />

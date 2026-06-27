@@ -1484,7 +1484,7 @@ async function advanceStage(body, auth, env) {
   if (!body.to_stage) return err('to_stage required', 400);
 
   const cur = await sb(
-    `/rest/v1/engagements?id=eq.${body.engagement_id}&select=stage,video_link,shipping_order_id,influencer_id,engagement_type,live_at,tracking_url&limit=1`, env,
+    `/rest/v1/engagements?id=eq.${body.engagement_id}&select=stage,video_link,shipping_order_id,influencer_id,engagement_type,live_at,tracking_url,affiliate_active_from&limit=1`, env,
   );
   if (!cur.ok || !cur.data?.[0]) return err('not_found', 404);
   const from = cur.data[0].stage;
@@ -1536,6 +1536,16 @@ async function advanceStage(body, auth, env) {
   const patch = { stage: body.to_stage, updated_at: nowIso() };
   // Stamp live_at on first go-live (drives UGC "days active"). Don't overwrite.
   if (body.to_stage === 'live' && !cur.data[0].live_at) patch.live_at = nowIso();
+  // Affiliate commission window (theme ②): opens when the video goes live, closes when
+  // it leaves live (paused/vault/completed/…). Re-entering live re-opens it. Revenue
+  // still attributes after close; only commission stops (couponInWindow check).
+  const _today = nowIso().slice(0, 10);
+  if (body.to_stage === 'live') {
+    if (!cur.data[0].affiliate_active_from) patch.affiliate_active_from = _today;
+    patch.affiliate_active_to = null;
+  } else if (from === 'live') {
+    patch.affiliate_active_to = _today;
+  }
   if (TERMINAL.has(body.to_stage)) {
     patch.closed_at = nowIso();
     patch.closed_reason = body.closed_reason
@@ -1628,6 +1638,286 @@ async function assignDiscountCode(body, auth, env) {
   });
   if (!r.ok) return err('db_error', 400);
   return ok(r.data?.[0]);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Coupon + attribution + goodies pricing (Reann Batch B theme ②)
+// Spec: docs/superpowers/specs/2026-06-28-ignition-reann-batch-b-coupon-attribution-design.md
+// ─────────────────────────────────────────────────────────────────────────────
+
+const COUPON_SYNC_MAX = 6;   // active codes per "sync all" pass (50-subrequest budget; cron drains over days)
+
+const shopifyConfigured = (env) => !!(env.SHOPIFY_STORE_DOMAIN && env.SHOPIFY_CLIENT_ID && env.SHOPIFY_CLIENT_SECRET);
+
+// Generic Shopify Admin GraphQL call, one token-refresh retry on 401. Never throws.
+async function shopifyGraphql(env, query, variables) {
+  if (!shopifyConfigured(env)) return { ok: false, configured: false, error: 'shopify_not_configured' };
+  const run = (token) => fetch(`https://${env.SHOPIFY_STORE_DOMAIN}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': token },
+    body: JSON.stringify({ query, variables }),
+  });
+  let token = await getShopifyToken(env);
+  if (!token) return { ok: false, configured: true, error: 'shopify_auth_failed' };
+  let res = await run(token).catch(() => null);
+  if (res && res.status === 401) { token = await getShopifyToken(env, true); if (token) res = await run(token).catch(() => null); }
+  if (!res || !res.ok) return { ok: false, configured: true, error: `shopify_${res ? res.status : 'network'}` };
+  const data = await res.json().catch(() => null);
+  if (data?.errors?.length) return { ok: false, configured: true, error: data.errors[0]?.message, errors: data.errors };
+  return { ok: true, configured: true, data: data?.data };
+}
+
+const isScopeError = (msg) => /access|scope|permission|not approved|requires merchant/i.test(String(msg || ''));
+
+// Create a basic code discount. pct is a percentage (100, 10…). Returns { gid } or { error }.
+async function shopifyCreateDiscount(env, { code, pct, singleUse }) {
+  const mutation = `mutation($d: DiscountCodeBasicInput!){ discountCodeBasicCreate(basicCodeDiscount:$d){ codeDiscountNode{ id } userErrors{ field message code } } }`;
+  const d = {
+    title: code, code, startsAt: nowIso(),
+    customerSelection: { all: true },
+    customerGets: { value: { percentage: Math.min(Math.max(Number(pct) || 0, 0), 100) / 100 }, items: { all: true } },
+    appliesOncePerCustomer: !!singleUse,
+    ...(singleUse ? { usageLimit: 1 } : {}),
+  };
+  const r = await shopifyGraphql(env, mutation, { d });
+  if (!r.ok) return { error: r.error, scope_missing: isScopeError(r.error) };
+  const ue = r.data?.discountCodeBasicCreate?.userErrors || [];
+  if (ue.length) return { error: ue[0].message, scope_missing: isScopeError(ue[0].message) };
+  return { gid: r.data?.discountCodeBasicCreate?.codeDiscountNode?.id || null };
+}
+
+async function shopifyDeactivateDiscount(env, gid) {
+  if (!gid) return { ok: true };
+  const mutation = `mutation($id: ID!){ discountCodeDeactivate(id:$id){ codeDiscountNode{ id } userErrors{ field message } } }`;
+  const r = await shopifyGraphql(env, mutation, { id: gid });
+  if (!r.ok) return { ok: false, error: r.error };
+  const ue = r.data?.discountCodeDeactivate?.userErrors || [];
+  if (ue.length) return { ok: false, error: ue[0].message };
+  return { ok: true };
+}
+
+// Orders that used a code (paginated, capped). Returns [{order_id,name,date,gross,refunded}].
+async function shopifyOrdersForCode(env, code, sinceDate, maxPages = 3) {
+  const q = `discount_code:${code}` + (sinceDate ? ` created_at:>=${sinceDate}` : '');
+  const query = `query($q:String!,$cursor:String){ orders(first:50, after:$cursor, query:$q, sortKey:CREATED_AT){ edges{ cursor node{ id name createdAt totalPriceSet{ shopMoney{ amount } } totalRefundedSet{ shopMoney{ amount } } } } pageInfo{ hasNextPage } } }`;
+  const out = []; let cursor = null;
+  for (let p = 0; p < maxPages; p++) {
+    const r = await shopifyGraphql(env, query, { q, cursor });
+    if (!r.ok) return { ok: false, error: r.error, orders: out };
+    const conn = r.data?.orders;
+    for (const e of (conn?.edges || [])) {
+      const n = e.node;
+      out.push({
+        order_id: n.id, name: n.name, date: n.createdAt,
+        gross: Number(n.totalPriceSet?.shopMoney?.amount || 0),
+        refunded: Number(n.totalRefundedSet?.shopMoney?.amount || 0),
+      });
+      cursor = e.cursor;
+    }
+    if (!conn?.pageInfo?.hasNextPage) break;
+  }
+  return { ok: true, orders: out };
+}
+
+// A vanity code base from the creator's name/handle: "REANNLOT".
+function couponBase(inf) {
+  const raw = inf?.person_name || inf?.channel_name || inf?.influencer_code || 'CREATOR';
+  return (String(raw).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12) || 'CREATOR') + 'LOT';
+}
+async function mintCouponCode(env, inf) {
+  const base = couponBase(inf);
+  const r = await sb(`/rest/v1/coupon_codes?code=like.${encodeURIComponent(base)}*&select=code`, env);
+  const taken = new Set((r.ok ? r.data || [] : []).map(x => x.code));
+  let code = base, n = 1;
+  while (taken.has(code)) { n += 1; code = `${base}${n}`; }
+  return code;
+}
+
+// Is an order's date inside the engagement's commission window? from required (window
+// not open until live); to is exclusive (commission stops the day it leaves live).
+function couponInWindow(orderDateIso, from, to) {
+  if (!from) return false;
+  const d = String(orderDateIso || '').slice(0, 10);
+  if (!d || d < from) return false;
+  if (to && d >= to) return false;
+  return true;
+}
+
+async function issueCoupon(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  const kind = body.kind === 'gift' ? 'gift' : 'affiliate';
+  if (!body.engagement_id) return err('engagement_id required', 400);
+  const er = await sb(`/rest/v1/engagements?id=eq.${body.engagement_id}&select=id,influencer_id,influencer:influencer_id(person_name,channel_name,influencer_code)&limit=1`, env);
+  if (!er.ok || !er.data?.[0]) return err('engagement_not_found', 404);
+  const eng = er.data[0];
+  const pct = kind === 'gift' ? 100 : (body.discount_pct != null ? Number(body.discount_pct) : NaN);
+  if (kind === 'affiliate' && (isNaN(pct) || pct <= 0 || pct > 100)) return err('discount_pct (1-100) required for affiliate', 400);
+  const code = body.code
+    ? String(body.code).toUpperCase().replace(/[^A-Z0-9]/g, '')
+    : await mintCouponCode(env, eng.influencer || {});
+  if (!code) return err('could_not_mint_code', 500);
+
+  // Create on Shopify — gated on write_discounts; graceful pending_shopify if unavailable.
+  const sh = await shopifyCreateDiscount(env, { code, pct, singleUse: kind === 'gift' });
+  const gid = sh.gid || null;
+  const status = gid ? 'active' : 'pending_shopify';
+
+  const ins = await sb(`/rest/v1/coupon_codes`, env, {
+    method: 'POST',
+    body: JSON.stringify([{
+      code, kind, engagement_id: eng.id, influencer_id: eng.influencer_id,
+      discount_pct: pct, shopify_discount_gid: gid, status,
+      usage_limit: kind === 'gift' ? 1 : null, created_by: auth.userId,
+    }]),
+  });
+  if (!ins.ok) return err(`db_error: ${JSON.stringify(ins.data)}`, 400);
+  return ok({ coupon: ins.data?.[0], shopify: gid ? 'created' : 'pending', note: gid ? null : (sh.error || 'shopify_unavailable') });
+}
+
+async function retireCoupon(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!body.coupon_code_id) return err('coupon_code_id required', 400);
+  const cr = await sb(`/rest/v1/coupon_codes?id=eq.${body.coupon_code_id}&select=shopify_discount_gid&limit=1`, env);
+  if (!cr.ok || !cr.data?.[0]) return err('not_found', 404);
+  const deact = await shopifyDeactivateDiscount(env, cr.data[0].shopify_discount_gid);
+  await sb(`/rest/v1/coupon_codes?id=eq.${body.coupon_code_id}`, env, {
+    method: 'PATCH', prefer: 'return=minimal',
+    body: JSON.stringify({ status: 'retired', retired_at: nowIso() }),
+  });
+  return ok({ retired: true, shopify_deactivated: deact.ok, shopify_note: deact.error || null });
+}
+
+// Reconcile one code's redemptions off Shopify; recompute its rollups (refund-aware).
+async function syncOneCoupon(env, coupon, maxPages) {
+  let win = { from: null, to: null, rate: 0 };
+  if (coupon.engagement_id) {
+    const e = await sb(`/rest/v1/engagements?id=eq.${coupon.engagement_id}&select=affiliate_active_from,affiliate_active_to,commission_rate&limit=1`, env);
+    const row = e.data?.[0] || {};
+    win = { from: row.affiliate_active_from || null, to: row.affiliate_active_to || null, rate: Number(row.commission_rate) || 0 };
+  }
+  const since = coupon.last_synced_at ? String(coupon.last_synced_at).slice(0, 10) : null;
+  const ord = await shopifyOrdersForCode(env, coupon.code, since, maxPages);
+  const rows = (ord.orders || []).map(o => {
+    const net = Math.max(0, o.gross - o.refunded);
+    const eligible = coupon.kind === 'affiliate' && couponInWindow(o.date, win.from, win.to);
+    return {
+      coupon_code_id: coupon.id, shopify_order_id: o.order_id, shopify_order_name: o.name,
+      order_date: o.date, gross_value: o.gross, net_value: net,
+      refunded: o.gross > 0 && o.refunded >= o.gross,
+      commission_eligible: eligible, commission_amount: eligible ? net * (win.rate / 100) : 0,
+      synced_at: nowIso(),
+    };
+  });
+  if (rows.length) {
+    await sb(`/rest/v1/coupon_redemptions?on_conflict=coupon_code_id,shopify_order_id`, env, {
+      method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal', body: JSON.stringify(rows),
+    });
+  }
+  const all = await sb(`/rest/v1/coupon_redemptions?coupon_code_id=eq.${coupon.id}&select=gross_value,net_value,commission_amount`, env);
+  const reds = all.data || [];
+  const sum = (k) => reds.reduce((s, r) => s + Number(r[k] || 0), 0);
+  await sb(`/rest/v1/coupon_codes?id=eq.${coupon.id}`, env, {
+    method: 'PATCH', prefer: 'return=minimal',
+    body: JSON.stringify({
+      redemptions: reds.length, attributed_revenue: sum('gross_value'),
+      attributed_revenue_net: sum('net_value'), commission_accrued: sum('commission_amount'),
+      last_synced_at: nowIso(),
+    }),
+  });
+  return { ok: ord.ok, count: rows.length, error: ord.error };
+}
+
+// Roll an engagement's AFFILIATE coupons up onto conversions_value + commission_earned.
+// Gift codes are excluded (never count as affiliate revenue).
+async function recomputeEngagementAttribution(env, engagementId) {
+  if (!engagementId) return;
+  const cs = await sb(`/rest/v1/coupon_codes?engagement_id=eq.${engagementId}&kind=eq.affiliate&select=attributed_revenue_net,commission_accrued`, env);
+  const rows = cs.data || [];
+  await sb(`/rest/v1/engagements?id=eq.${engagementId}`, env, {
+    method: 'PATCH', prefer: 'return=minimal',
+    body: JSON.stringify({
+      conversions_value: rows.reduce((s, r) => s + Number(r.attributed_revenue_net || 0), 0),
+      commission_earned: rows.reduce((s, r) => s + Number(r.commission_accrued || 0), 0),
+      updated_at: nowIso(),
+    }),
+  });
+}
+
+async function syncCouponRedemptions(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!shopifyConfigured(env)) return err('shopify_not_configured', 503);
+  let coupons;
+  if (body.coupon_code_id) {
+    const r = await sb(`/rest/v1/coupon_codes?id=eq.${body.coupon_code_id}&select=*&limit=1`, env);
+    coupons = r.data || [];
+  } else {
+    const r = await sb(`/rest/v1/coupon_codes?status=eq.active&select=*&order=last_synced_at.asc.nullsfirst&limit=${COUPON_SYNC_MAX}`, env);
+    coupons = r.data || [];
+  }
+  const maxPages = body.coupon_code_id ? 10 : 3;
+  const touched = new Set();
+  let synced = 0;
+  for (const c of coupons) {
+    const res = await syncOneCoupon(env, c, maxPages);
+    if (res.ok) synced += 1;
+    if (c.engagement_id) touched.add(c.engagement_id);
+  }
+  for (const eid of touched) await recomputeEngagementAttribution(env, eid);
+  return ok({ coupons: coupons.length, synced });
+}
+
+// Cache Shopify variant prices into ignition.product_prices (goodies auto-fill, Half B).
+async function refreshProductPrices(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!shopifyConfigured(env)) return err('shopify_not_configured', 503);
+  const query = `query($cursor:String){ productVariants(first:100, after:$cursor){ edges{ cursor node{ sku price product{ title } } } pageInfo{ hasNextPage } } }`;
+  const seen = []; let cursor = null;
+  for (let p = 0; p < 8; p++) {
+    const r = await shopifyGraphql(env, query, { cursor });
+    if (!r.ok) return err(r.error || 'shopify_error', 502);
+    const conn = r.data?.productVariants;
+    for (const e of (conn?.edges || [])) {
+      const n = e.node; cursor = e.cursor;
+      const sku = (n.sku || '').trim();
+      if (!sku) continue;
+      seen.push({ sku, title: n.product?.title || null, price: Number(n.price) || 0, currency: 'INR', synced_at: nowIso() });
+    }
+    if (!conn?.pageInfo?.hasNextPage) break;
+  }
+  for (let i = 0; i < seen.length; i += 200) {
+    await sb(`/rest/v1/product_prices?on_conflict=sku`, env, {
+      method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal', body: JSON.stringify(seen.slice(i, i + 200)),
+    });
+  }
+  return ok({ upserted: seen.length });
+}
+
+async function getProductPrice(url, auth, env) {
+  const sku = (url.searchParams.get('sku') || '').trim();
+  if (!sku) return err('sku required', 400);
+  const r = await sb(`/rest/v1/product_prices?sku=eq.${encodeURIComponent(sku)}&select=sku,title,price,currency,synced_at&limit=1`, env);
+  return ok({ price: r.data?.[0] || null });
+}
+
+async function getCouponsForEngagement(url, auth, env) {
+  const eid = url.searchParams.get('engagement_id');
+  if (!eid) return err('engagement_id required', 400);
+  const r = await sb(`/rest/v1/coupon_codes?engagement_id=eq.${eid}&select=*&order=created_at.desc`, env);
+  return ok({ coupons: r.data || [] });
+}
+
+// "How much business has this creator driven" = Σ across their affiliate codes.
+async function getInfluencerAttribution(url, auth, env) {
+  const iid = url.searchParams.get('influencer_id');
+  if (!iid) return err('influencer_id required', 400);
+  const r = await sb(`/rest/v1/coupon_codes?influencer_id=eq.${iid}&kind=eq.affiliate&select=attributed_revenue_net,commission_accrued,redemptions`, env);
+  const rows = r.data || [];
+  return ok({
+    net_revenue: rows.reduce((s, x) => s + Number(x.attributed_revenue_net || 0), 0),
+    commission: rows.reduce((s, x) => s + Number(x.commission_accrued || 0), 0),
+    redemptions: rows.reduce((s, x) => s + Number(x.redemptions || 0), 0),
+    codes: rows.length,
+  });
 }
 
 // Sibling-worker call: open a Pitstop ticket for a damaged shipment.
@@ -2183,6 +2473,9 @@ const GET_ACTIONS = {
   getConnect,
   getIgnitionUsers,
   getUgcPipeline,
+  getCouponsForEngagement,
+  getProductPrice,
+  getInfluencerAttribution,
 };
 
 const POST_ACTIONS = {
@@ -2202,6 +2495,10 @@ const POST_ACTIONS = {
   addNote,
   addAttachment,
   assignDiscountCode,
+  issueCoupon,
+  retireCoupon,
+  syncCouponRedemptions,
+  refreshProductPrices,
   openPitstopTicket,
   createCampaign,
   updateCampaign,

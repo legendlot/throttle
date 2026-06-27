@@ -199,8 +199,9 @@ introduce `ignition_coupon_manage` — flag for Afshaan; default reuses `ignitio
 - Auto-negotiation or auto-% logic — the % is entered by the team per engagement.
 - WhatsApp/email delivery of the code (that's theme ① — Relay).
 
-## Open questions
-1. Paused/vault UGC — commission accrues or not while parked? (default: **not**).
-2. Tighter perm (`ignition_coupon_manage`) for issuing/retiring live Shopify codes, or reuse
-   `ignition_manage`? (default: reuse).
-3. `commission_cap` per engagement to bound leakage — include in v1 or defer? (default: defer).
+## Open questions — RESOLVED (Afshaan, S181)
+1. Paused/vault UGC — commission accrues while parked? → **No.** Commission accrues only while the
+   engagement is in `live` (active window); paused/vault sets `affiliate_active_to`.
+2. Tighter perm for issuing/retiring live Shopify codes? → **No — reuse `ignition_manage`.**
+3. `commission_cap` per engagement to bound leakage? → **Deferred** (not in v1). Tracked as a BACKLOG
+   follow-up to revisit once leakage is observed in practice.

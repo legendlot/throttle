@@ -247,6 +247,8 @@ export default function InfluencerDetailPage() {
               <div style={{ whiteSpace: 'pre-wrap', color: 'var(--text-2)' }}>{inf.rating_notes}</div>
             </Card>
           )}
+
+          <AttributionCard inf={inf} session={session} />
         </div>
 
         <div style={{ flex: '3 1 460px', minWidth: 320, display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -289,6 +291,26 @@ export default function InfluencerDetailPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+// Business driven (theme ②) — Σ net attributed revenue + commission across all this
+// creator's affiliate codes. The "how much has this creator sent us" number.
+function AttributionCard({ inf, session }) {
+  const [att, setAtt] = useState(null);
+  useEffect(() => {
+    if (!session || !inf?.id) return;
+    ignitionopsGet('getInfluencerAttribution', { influencer_id: inf.id }, session)
+      .then(setAtt).catch(() => setAtt(null));
+  }, [inf?.id, session]);
+  if (!att || (att.codes || 0) === 0) return null;
+  return (
+    <Card title="Business driven">
+      <KV label="Net revenue" value={<strong style={{ color: '#FF6B00' }}>₹{Number(att.net_revenue || 0).toLocaleString()}</strong>} />
+      <KV label="Redemptions" value={(att.redemptions || 0).toLocaleString()} />
+      <KV label="Commission" value={`₹${Number(att.commission || 0).toLocaleString()}`} />
+      <KV label="Affiliate codes" value={att.codes || 0} />
+    </Card>
   );
 }
 
