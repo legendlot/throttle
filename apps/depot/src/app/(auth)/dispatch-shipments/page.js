@@ -148,6 +148,7 @@ export default function DispatchShipmentsPage() {
   const [expandedBoxes,  setExpandedBoxes]  = useState(new Set());
   const [boxUnitsCache,  setBoxUnitsCache]  = useState({});
   const [addBoxCount,    setAddBoxCount]    = useState(1);
+  const [addBoxCapacity, setAddBoxCapacity] = useState(''); // max units/carton; '' = unlimited
 
   // Tracking & delivery editor (Snorkel↔Depot fulfilment). Seeded per shipment;
   // committed together via updateShipmentTracking.
@@ -370,14 +371,16 @@ export default function DispatchShipmentsPage() {
     });
   }
 
-  async function addBoxes(shipmentId, count) {
+  async function addBoxes(shipmentId, count, capacity) {
     const n = Math.max(1, parseInt(count, 10) || 1);
+    const cap = (capacity != null && parseInt(capacity, 10) > 0) ? parseInt(capacity, 10) : null;
     try {
-      const res = await workerFetch('createBoxes', { shipment_id: shipmentId, count: n }, session);
+      const res = await workerFetch('createBoxes', { shipment_id: shipmentId, count: n, capacity: cap }, session);
       const r = res?.data || res;
       const created = r?.created ?? n;
-      showToast(`${created} box${created !== 1 ? 'es' : ''} added`, 'success');
+      showToast(`${created} box${created !== 1 ? 'es' : ''} added${cap ? ` · max ${cap}/box` : ''}`, 'success');
       setAddBoxCount(1);
+      setAddBoxCapacity('');
       await refreshDetail();
     } catch (e) {
       showToast(e.message || 'Failed', 'error');
@@ -1207,10 +1210,17 @@ export default function DispatchShipmentsPage() {
                         type="number" min={1}
                         value={addBoxCount}
                         onChange={e => setAddBoxCount(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                        className="num"
-                        style={{ ...inputStyle, width: 60, textAlign: 'right', padding: '5px 8px', fontSize: 12.5 }}
+                        className="num" title="How many boxes to open"
+                        style={{ ...inputStyle, width: 56, textAlign: 'right', padding: '5px 8px', fontSize: 12.5 }}
                       />
-                      <button onClick={() => addBoxes(detailShipment.id, addBoxCount)}
+                      <input
+                        type="number" min={1}
+                        value={addBoxCapacity}
+                        onChange={e => setAddBoxCapacity(e.target.value)}
+                        className="num" placeholder="cap" title="Max units per box (blank = unlimited)"
+                        style={{ ...inputStyle, width: 64, textAlign: 'right', padding: '5px 8px', fontSize: 12.5 }}
+                      />
+                      <button onClick={() => addBoxes(detailShipment.id, addBoxCount, addBoxCapacity)}
                         style={{ ...btnGhost, padding: '6px 11px', fontSize: 12 }}>
                         <Icon name="plus" size={13} /> Add Boxes
                       </button>
@@ -1236,7 +1246,7 @@ export default function DispatchShipmentsPage() {
                               <Icon name="chevD" size={12} />
                             </span>
                             <span className="num" style={{ fontSize: 12, fontWeight: 700, color: 'var(--yellow)' }}>{box.box_ref || `Box ${box.id}`}</span>
-                            <span className="num" style={{ fontSize: 11.5, color: 'var(--t2)' }}>{fmt(box.unit_count)} units</span>
+                            <span className="num" style={{ fontSize: 11.5, color: 'var(--t2)' }}>{fmt(box.unit_count)}{box.capacity ? ` / ${box.capacity}` : ''} units</span>
                             <BoxStatusBadge status={box.status} />
                             <div style={{ flex: 1 }} />
                             {isPacked && (
