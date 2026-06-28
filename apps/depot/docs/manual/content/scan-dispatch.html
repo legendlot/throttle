@@ -30,8 +30,8 @@
     <tr>
       <td><strong>Pack</strong> (PACK)</td>
       <td>Pick the shipment, then each unit&rsquo;s box label into it.</td>
-      <td>Builds the physical shipment box. The dropdown lists all open shipments, so you can pack ahead.</td>
-      <td>A unit that does not belong to that shipment&rsquo;s channel or stage.</td>
+      <td>Builds the physical shipment box. The dropdown lists all open shipments, so you can pack ahead. If the box has a capacity set, it fills to that number then closes and moves you to the next box.</td>
+      <td>A unit that does not belong to that shipment&rsquo;s channel or stage, or a box that is already full.</td>
     </tr>
     <tr>
       <td><strong>Dispatch Out</strong> (DOUT)</td>
@@ -46,10 +46,10 @@
       <td>A unit not currently held at Dispatch In or Allocated. A unit still on the production side does not need releasing here.</td>
     </tr>
     <tr>
-      <td><strong>Restock</strong> (RESTOCK)</td>
-      <td>Pick a reason, then the unit&rsquo;s code.</td>
-      <td>Returns an unused unit to sellable stock (for example one pulled from an over-packed box).</td>
-      <td>A unit that has been out to a customer. That is a return, not a restock.</td>
+      <td><strong>Restock / Remove</strong> (RESTOCK)</td>
+      <td>Pick a reason, then the unit&rsquo;s box label.</td>
+      <td>Pulls a unit back out of the outbound flow and into dispatch holding, ready to allocate and pack again. Use it to remove a unit from a box you decided not to send, or to take back a dispatched unit when the order is cancelled.</td>
+      <td>A unit that has been out to a customer (that is a return); a unit still on the production side; one not yet at Allocate.</td>
     </tr>
     <tr>
       <td><strong>Stock Audit</strong> (STOCK_AUDIT)</td>
@@ -79,10 +79,17 @@
   <p>Nobody should walk into the dispatch area, grab a unit and start repacking it. Production&rsquo;s repack-in step rejects any dispatch-held unit that was not released here first. Scanning it out at Repack Release is the signed hand-over.</p>
 </div>
 
-<h2 class="sec">Restock, unused units only</h2>
+<h2 class="sec">Restock / Remove &mdash; pull a unit back into dispatch</h2>
+<p>Restock is the scan-out station. Scanning a unit&rsquo;s box label here takes it out of wherever it was in the outbound flow and puts it back into <strong>dispatch holding</strong> &mdash; the same place a unit sits right after Dispatch In &mdash; so it can be allocated and packed again. Because removal is a real scan, the count is always honest: a unit can&rsquo;t be &ldquo;taken out&rdquo; on paper while it&rsquo;s still in the carton, or left in while someone says they pulled it.</p>
+<ul>
+  <li>If the unit was <strong>packed into a box</strong>, it comes out of that box, the box&rsquo;s count drops by one (a closed box reopens so you can keep loading), and the shipment&rsquo;s packed total drops too.</li>
+  <li>If the unit was <strong>allocated</strong> but not yet packed, it simply drops its channel and returns to holding.</li>
+  <li>If the unit was already <strong>dispatched out</strong> and the order was cancelled, scanning it here brings it back into holding as a fresh re-inward.</li>
+</ul>
+<p>It only works from Allocate onwards; a unit still with production (not yet Dispatch In) is &ldquo;not in dispatch yet&rdquo; and is refused. Its paired remote comes back with it.</p>
 <div class="callout warn">
   <div class="c-title">&#9888; A courier-touched return never goes through Restock</div>
-  <p>If a unit has been out to a customer and come back, it is a return, not a restock. It belongs in the Returns process, which decides whether it is re-dispatched, repaired or written off. Restock is only for unused units that never left.</p>
+  <p>If a unit has been out to a customer and come back damaged or for inspection, it is a return, not a restock. It belongs in the Returns process, which decides whether it is re-dispatched, repaired or written off. Restock is for pulling good units back out of the dispatch flow, not for handling returns.</p>
 </div>
 
 <h2 class="sec">Stock Audit, the soft station</h2>

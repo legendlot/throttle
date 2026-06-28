@@ -1,8 +1,8 @@
-<p class="lead">Unit Restock returns finished units that have already left the store back into sellable stock, so they can be dispatched again. When an order is cancelled, inventory comes back unsold, or a sample is returned, you paste the unit codes here and Depot puts each one back on the shelf, ready to re-pack and re-send.</p>
+<p class="lead">Unit Restock pulls units back out of the dispatch flow and into dispatch holding, so they can be allocated and sent again. When an order is cancelled, inventory comes back unsold, or a sample is returned, you paste the unit codes here and Depot returns each one to holding, ready to re-pack and re-send. It is the desk, paste-a-list version of the scanner&rsquo;s Restock / Remove station.</p>
 
 <div class="glance">
-  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Putting shipped units back into stock.</div></div>
-  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: returns units to stock.</div></div>
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Pulling units back into dispatch holding.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Action: returns units to dispatch.</div></div>
   <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role op">Operator</span> <span class="role sup">Supervisor</span> <span class="role adm">Admin</span></div></div>
   <div class="g-cell"><div class="g-lbl">Tabs</div><div class="g-val">Bulk Restock and Report.</div></div>
 </div>
@@ -11,14 +11,16 @@
 <ol class="steps">
   <li><span class="s-title">Pick a reason.</span> Orders Cancelled, Unsold Inventory, Sample Return or Other. For <strong>Other</strong> a short note is required.</li>
   <li><span class="s-title">Paste the unit codes.</span> One per line, or comma or space separated. Duplicates are removed automatically. Up to 300 in one batch.</li>
-  <li><span class="s-title">Restock.</span> Confirm the count. Each unit is flipped back to QC Pass and any remote paired with a car comes back with it.</li>
+  <li><span class="s-title">Restock.</span> Confirm the count. Each unit is returned to dispatch holding (ready to allocate and pack again) and any remote paired with a car comes back with it.</li>
   <li><span class="s-title">Read the result.</span> A table lists every code as <strong style="color:#1a8f43">restocked</strong> (with the status it came from, plus the paired remote if there was one) or <strong style="color:#c01f1f">skipped</strong> (with the reason).</li>
 </ol>
 
 <h2 class="sec">Why a unit might be skipped</h2>
 <div class="anatomy">
   <div class="a-row"><div class="a-key">Unknown</div><div class="a-val">The code isn&rsquo;t recognised, usually a typo. Check it and try again.</div></div>
-  <div class="a-row"><div class="a-key">Already in stock</div><div class="a-val">The unit is already back on the shelf, so there is nothing to do.</div></div>
+  <div class="a-row"><div class="a-key">Already in dispatch / stock</div><div class="a-val">The unit is already in holding or back in stock, so there is nothing to do.</div></div>
+  <div class="a-row"><div class="a-key">In a box</div><div class="a-val">The unit is packed into a box. Removing it has to reverse the box and shipment counts, so do it at the scanner <strong>Restock</strong> station, not from a pasted list.</div></div>
+  <div class="a-row"><div class="a-key">Not in dispatch yet</div><div class="a-val">The unit is still with production (not yet handed over to dispatch). It can&rsquo;t be restocked into dispatch holding.</div></div>
   <div class="a-row"><div class="a-key">Use the returns or repair flow</div><div class="a-val">The unit is in a state that restock won&rsquo;t touch (for example a return being inspected, or in repair). Handle it through Returns instead.</div></div>
 </div>
 
@@ -26,8 +28,8 @@
 <p>The <strong>Report</strong> tab is a read-only history of every restock. Filter by reason and date range, search by unit code, and see totals broken down by reason and by sales channel. <strong>CSV</strong> exports whatever the current filter shows.</p>
 
 <div class="callout warn">
-  <div class="c-title">&#9888; Restock clears the unit&rsquo;s packing</div>
-  <p>Restocking puts a unit back to a fresh, sellable state and removes it from any box it was packed in, so it must be packed again before it goes out. This is the desk equivalent of the scanner&rsquo;s restock station and has the same effect, just done from a pasted list rather than scanning unit by unit.</p>
+  <div class="c-title">&#9888; Restock returns the unit to dispatch holding</div>
+  <p>Restocking takes a unit out of its channel allocation and back into dispatch holding, so it must be allocated and packed again before it goes out. This is the desk equivalent of the scanner&rsquo;s Restock / Remove station. Units already packed into a box are the one exception &mdash; remove those at the scanner, where the box and shipment counts can be reversed properly.</p>
 </div>
 
 <div class="callout note">
