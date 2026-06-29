@@ -2,7 +2,7 @@
 
 > Design spec. Session S185 (2026-06-29). Author: Afshaan + Claude.
 > Backlog: NEW — Odo on-site funnel depth. Phase 1 of a provider-agnostic checkout-funnel domain.
-> Decided in brainstorming: **provider-agnostic, Razorpay adapter now, Shopflo later**; **Phase 1 = payment funnel** (Razorpay Payments API, pull). Phase 2 (abandoned-cart webhook + recovery) is a separate spec.
+> Decided in brainstorming: **provider-agnostic, Razorpay adapter now, Shopflo later**; **Phase 1 = payment funnel** ingested **both ways — a real-time payment webhook AND the Payments API for historical backfill + reconciliation** (they share one `stg_payments` table; idempotent upsert dedupes). Phase 2 (abandoned-cart webhook + recovery) is a separate spec but reuses this webhook-receiver infra.
 
 ## Problem
 
@@ -35,21 +35,30 @@ money-leak diagnostics.
   out of scope; the funnel's checkout section is payment-attempt-onward.
 - Razorpay standard API keys are **full-access** (no read-only scoping); we use them for GET only.
 
-## Approach (provider-agnostic, pull-based)
+## Approach (provider-agnostic; webhook + API, dual ingestion)
 
-A new **`razorpay_payments`** adapter on a new `is_sale=false` synthetic channel
-("Razorpay Payments"), polling the Payments API on the existing cron, staging normalized payment
-rows into a **provider-keyed** table. A rollup RPC reads staging directly (volume is low — same
-precedent as `stg_orders`/`f_order_rollup`, no materialized fact). A new `/funnel` section renders the
-payment funnel + failure breakdown + a tri-source reconciliation. Shopflo later = a second adapter
-writing the same table; the RPC + UI are unchanged.
+Two ingestion paths writing **one provider-keyed `stg_payments` table**:
+1. **Webhook (real-time)** — a `POST /webhook/razorpay` route on odoops (HMAC-verified with
+   `RAZORPAY_WEBHOOK_SECRET`) receives `payment.captured`/`failed`/`authorized`/`pending` events and
+   upserts each payment. Gives live freshness and stands up the receiver infra Phase 2 reuses for
+   abandoned carts.
+2. **API pull (history + completeness)** — a `razorpay_payments` adapter on a new `is_sale=false`
+   synthetic channel ("Razorpay Payments") polls the Payments API on the existing cron, **backfilling
+   history** the webhook can't (webhooks only deliver forward from setup) and **reconciling** any
+   missed deliveries (re-pull a window).
+
+Both upsert on `(provider, provider_payment_id)`, so whichever path sees a payment first wins and the
+other dedupes/refreshes it (status advances created→captured cleanly). A rollup RPC reads staging
+directly (volume is low — same precedent as `stg_orders`/`f_order_rollup`, no materialized fact). A
+new `/funnel` section renders the payment funnel + failure breakdown + a tri-source reconciliation.
+Shopflo later = a second adapter + webhook handler writing the same table; the RPC + UI are unchanged.
 
 ## Data flow
 ```
-Razorpay Payments API (pull, windowed, cron)
-  → stg_payments (provider × payment_id, normalized status/method/error/amount)
-  → f_payment_funnel(from,to,provider?)  [reads staging directly]
-  → getPaymentFunnel → /funnel "Checkout & payment" section
+Razorpay payment webhook (push, real-time) ─┐
+                                            ├─→ stg_payments (provider × payment_id; upsert dedupes)
+Razorpay Payments API (pull, cron, backfill)┘        → f_payment_funnel(from,to,provider?)  [reads staging directly]
+                                                     → getPaymentFunnel → /funnel "Checkout & payment" section
 reconciliation: traffic_fact (GA4 purchases) ⟷ stg_orders (Shopify orders, incl. COD) ⟷ stg_payments (captured)
 ```
 
@@ -89,6 +98,13 @@ Reads `stg_payments` over `[from,to]` (by `created_at` IST day), returns ONE row
 volumes are small.)
 
 ## Worker (`odoops-worker/src/index.js`)
+- **`POST /webhook/razorpay` route** — matched by **path, BEFORE the JWT auth block** (webhooks carry
+  no JWT). Read the **raw body**, verify `X-Razorpay-Signature` = `HMAC-SHA256(rawBody,
+  RAZORPAY_WEBHOOK_SECRET)` (constant-time compare) → 401 on mismatch. On valid `payment.*` events,
+  normalize `payload.payment.entity` → upsert one `stg_payments` row (same mapping as the API path;
+  `channel_id` = the synthetic Razorpay channel; `run_id` null). Return 200 fast (Razorpay retries on
+  non-2xx). Ignore non-payment event types (Phase 2 adds `*.cart.*`). Generic enough that Shopflo's
+  webhook later adds a `POST /webhook/shopflo` sibling.
 - **`getRazorpayToken`-style Basic auth header** = `Basic base64(KEY_ID:KEY_SECRET)` from secrets
   `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET`.
 - **`razorpay_payments` adapter** — `fetch` pulls `GET /v1/payments?from={unix}&to={unix}&count=100&skip=N`
@@ -104,8 +120,9 @@ volumes are small.)
   the funnel). Shape: `{ funnel, recon:{ ga4_purchases, shopify_orders, shopify_cod, razorpay_captured } }`.
 - **Diagnostic `razorpayProbe`** (`canConnector`-gated) — fetch 1 page of recent payments, return
   count + sampled fields (confirm field names + that Live keys work) before relying on staging.
-- **Secrets:** `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` (Basic auth). No `wrangler.toml` change
-  (rides the existing `ConnectorWorkflow`).
+- **Secrets:** `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` (Basic auth, API pull) + `RAZORPAY_WEBHOOK_SECRET`
+  (HMAC, webhook verify). No `wrangler.toml` change (rides the existing `ConnectorWorkflow`; the
+  webhook route is just a path branch).
 - **Channel/config seed (SQL, not migration):** `dispatch_channels` synthetic `is_sale=false`
   "Razorpay Payments" + `connector_config` (`adapter_kind='razorpay_payments'`, `config={backfill_start}`,
   enabled once secrets are set).
@@ -139,22 +156,32 @@ New **"Checkout & payment"** card below the GA4 funnel (one `getPaymentFunnel` f
   UI provider label. `f_payment_funnel` already filters by provider. No schema/UI rebuild.
 
 ## Out of scope (Phase 2 / later specs)
-Abandoned-cart webhook receiver + recovery list (Relay tie-in); intra-checkout micro-steps
-(dashboard-only); settlement/fees; Shopflo adapter (until migration); refunds analytics beyond the
-status enum.
+Abandoned-cart **event handling + recovery list + Relay tie-in** (Phase 2 reuses the Phase-1
+`/webhook/razorpay` receiver, adding the `*.cart.*` event branch + an `abandoned_carts` table + UI);
+intra-checkout micro-steps (dashboard-only); settlement/fees; Shopflo adapter + webhook (until
+migration); refunds analytics beyond the status enum.
 
 ## Migrations
 - `odo_payment_funnel_v1` — `stg_payments` + RLS/grants/indexes + `f_payment_funnel`.
 - Synthetic channel + connector_config seeded via SQL.
 
 ## Dependency (access — user provisions)
-- **Razorpay Live API keys** (`key_id` + `key_secret`) → set as odoops secrets `RAZORPAY_KEY_ID` /
-  `RAZORPAY_KEY_SECRET`. Required before live pull/verify. (No webhook needed for Phase 1.)
+- **Razorpay Live API keys** (`key_id` + `key_secret`) → secrets `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET`
+  (reuse the existing Live key — do NOT regenerate, it breaks the current integration). Needed for the
+  API backfill/reconciliation.
+- **Webhook secret** → secret `RAZORPAY_WEBHOOK_SECRET`. Then **after the `/webhook/razorpay` route is
+  deployed**, create a NEW Razorpay webhook (in addition to the existing one) pointing at
+  `https://odoops.afshaan.workers.dev/webhook/razorpay` with the same secret, events
+  `payment.authorized` / `payment.captured` / `payment.failed` / `payment.pending`. (Don't create it
+  before the route exists — it would 404.)
 
 ## Verification
 1. `razorpayProbe` confirms Live keys work + field names; backfill_start within data history.
-2. After a refresh: `stg_payments` populated; `f_payment_funnel` returns sane attempts/captured/failed
-   with a believable success rate; `by_failure_reason`/`by_method` populated.
-3. Reconciliation: `razorpay_captured + shopify_cod ≈ shopify_orders` for a clean month; GA4 purchases
+2. After an API refresh: `stg_payments` populated; `f_payment_funnel` returns sane
+   attempts/captured/failed with a believable success rate; `by_failure_reason`/`by_method` populated.
+3. **Webhook:** Razorpay dashboard "Send test webhook" (or a live payment) hits `/webhook/razorpay` →
+   signature verifies → a `stg_payments` row appears/updates; a bad signature → 401 (check Razorpay's
+   webhook delivery log shows 2xx). Confirm an event already pulled by the API dedupes (no duplicate row).
+4. Reconciliation: `razorpay_captured + shopify_cod ≈ shopify_orders` for a clean month; GA4 purchases
    in the same ballpark (~within its known over-count).
-4. `/funnel` renders the payment section + reconciliation; failure breakdown shows real reasons.
+5. `/funnel` renders the payment section + reconciliation; failure breakdown shows real reasons.
