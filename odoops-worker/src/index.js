@@ -1365,7 +1365,68 @@ const amazonAdsProductAdapter = {
   },
 };
 
-const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter, amazon_spapi: amazonAdapter, amazon_ads: amazonAdsAdapter, amazon_ads_product: amazonAdsProductAdapter, meta_ads: metaAdsAdapter, google_ads: googleAdsAdapter, ga4: ga4Adapter, uniware: uniwareAdapter };
+// ── Razorpay payments → payment funnel (S185) ────────────────────────────────
+// Provider-agnostic payment staging: this API adapter (backfill + reconciliation) and the
+// /webhook/razorpay route (real-time) both upsert into sales.stg_payments on
+// (provider, provider_payment_id). f_payment_funnel reads staging directly (no fact recompute).
+const RAZORPAY_CHANNEL_ID = '00000000-0000-4000-a000-0000000000a8';
+const RZP_TRAIL_S = 7 * 86400;   // steady-state: always re-pull the trailing 7 days (status changes)
+function mapRazorpayPayment(p, channelId) {
+  return {
+    channel_id: channelId, provider: 'razorpay',
+    provider_payment_id: p.id, order_ref: p.order_id || null,
+    status: p.status || null, method: p.method || null,
+    error_code: p.error_code || null,
+    error_reason: p.error_reason || p.error_description || null,
+    amount: (Number(p.amount) || 0) / 100, currency: p.currency || 'INR',
+    created_at: p.created_at ? new Date(Number(p.created_at) * 1000).toISOString() : null,
+    raw: p,
+  };
+}
+async function verifyRazorpaySig(rawBody, signature, secret) {
+  if (!signature || !secret) return false;
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(rawBody));
+  const hex = [...new Uint8Array(sig)].map(b => b.toString(16).padStart(2, '0')).join('');
+  if (hex.length !== signature.length) return false;
+  let diff = 0; for (let i = 0; i < hex.length; i++) diff |= hex.charCodeAt(i) ^ signature.charCodeAt(i);
+  return diff === 0;
+}
+const razorpayPaymentsAdapter = {
+  kind: 'razorpay_payments', stgTable: 'stg_payments',
+  datesOf() { return []; },   // stage-only — f_payment_funnel reads staging directly
+  async fetch({ env, channelId, cursor, config, budget }) {
+    if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET) throw new Error('Razorpay not configured (set RAZORPAY_KEY_ID/RAZORPAY_KEY_SECRET)');
+    const cfg = config || {};
+    const H = { Authorization: 'Basic ' + btoa(`${env.RAZORPAY_KEY_ID}:${env.RAZORPAY_KEY_SECRET}`) };
+    const winS = (cfg.window_days || 7) * 86400;
+    const nowS = Math.floor(Date.now() / 1000);
+    let startS = Math.floor(Date.parse(cursor || cfg.backfill_start || new Date((nowS - RZP_TRAIL_S) * 1000).toISOString()) / 1000);
+    if (!Number.isFinite(startS)) startS = nowS - RZP_TRAIL_S;
+    const trailStartS = nowS - RZP_TRAIL_S;
+    if (startS > trailStartS) startS = trailStartS;        // caught up → re-pull trailing 7d for status changes
+    const endS = Math.min(startS + winS, nowS);
+    let subreqs = 0, skip = 0; const rows = [];
+    while (subreqs < budget - 2) {
+      const r = await fetch(`https://api.razorpay.com/v1/payments?from=${startS}&to=${endS}&count=100&skip=${skip}`, { headers: H }); subreqs++;
+      if (!r.ok) throw new Error(`Razorpay payments ${r.status}: ${(await r.text().catch(() => '')).slice(0, 160)}`);
+      const j = await r.json().catch(() => ({}));
+      const items = j.items || [];
+      for (const p of items) rows.push(mapRazorpayPayment(p, channelId));
+      if (items.length < 100) break;
+      skip += 100;
+    }
+    const cursorAfter = new Date(endS * 1000).toISOString();
+    return { rows, cursorAfter, subreqs, partial: endS < nowS };   // partial while still backfilling forward
+  },
+  async stage(rows, runId, channelId) {
+    if (!rows.length) return;
+    const body = rows.map(r => ({ run_id: runId, ...r }));
+    await sbInsertChunked('/rest/v1/stg_payments?on_conflict=provider,provider_payment_id', body, 'return=minimal,resolution=merge-duplicates');
+  },
+};
+
+const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter, amazon_spapi: amazonAdapter, amazon_ads: amazonAdsAdapter, amazon_ads_product: amazonAdsProductAdapter, meta_ads: metaAdsAdapter, google_ads: googleAdsAdapter, ga4: ga4Adapter, uniware: uniwareAdapter, razorpay_payments: razorpayPaymentsAdapter };
 
 // minimal RFC-4180-ish CSV parser (handles quoted fields, commas, newlines)
 function parseCSV(text) {
@@ -1656,6 +1717,23 @@ export default {
 
     const url = new URL(request.url);
     const action = url.searchParams.get('action');
+
+    // ── Razorpay payment webhook (S185) — no JWT; verified by HMAC signature ──
+    if (request.method === 'POST' && url.pathname === '/webhook/razorpay') {
+      const raw = await request.text();
+      const okSig = await verifyRazorpaySig(raw, request.headers.get('X-Razorpay-Signature') || '', env.RAZORPAY_WEBHOOK_SECRET || '');
+      if (!okSig) return new Response('invalid signature', { status: 401 });
+      let body = {}; try { body = JSON.parse(raw); } catch { /* ignore */ }
+      if (String(body.event || '').startsWith('payment.')) {
+        const p = body.payload?.payment?.entity;
+        if (p && p.id) {
+          try { await sbInsertChunked('/rest/v1/stg_payments?on_conflict=provider,provider_payment_id', [{ run_id: null, ...mapRazorpayPayment(p, RAZORPAY_CHANNEL_ID) }], 'return=minimal,resolution=merge-duplicates'); }
+          catch (_) { /* 200 anyway — Razorpay retries are fine; the API pull reconciles */ }
+        }
+      }
+      return new Response('ok', { status: 200 });   // 200 fast; non-payment events ignored
+    }
+
     const auth = await verifyJWT(request.headers.get('Authorization'));
     const userId = auth?.userId || null;
     const P = auth?.permissions || {};
@@ -1768,6 +1846,17 @@ export default {
             const r = await rpcSales('f_mkt_product_rollup', { p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO(), p_platform: qp('platform') || null });
             if (!r.ok) return err('Ad-product rollup failed: ' + JSON.stringify(r.data), 502);
             return ok({ rows: r.data || [] });
+          }
+
+          case 'getPaymentFunnel': {   // S185 — checkout payment funnel + tri-source reconciliation
+            if (!canView(P)) return err('No permission', 403);
+            const from = qp('from') || todayISO(), to = qp('to') || todayISO();
+            const [fr, rc] = await Promise.all([
+              rpcSales('f_payment_funnel', { p_from: from, p_to: to, p_provider: qp('provider') || 'razorpay' }),
+              rpcSales('f_payment_recon', { p_from: from, p_to: to }),
+            ]);
+            if (!fr.ok) return err('Payment funnel failed: ' + JSON.stringify(fr.data), 502);
+            return ok({ funnel: (fr.data && fr.data[0]) || {}, recon: (rc.ok && rc.data && rc.data[0]) || {} });
           }
 
           case 'getTraffic': {
@@ -1943,6 +2032,17 @@ export default {
             let sample = [], count = 0, keys = [];
             if (rep.url) { const dl = await fetch(rep.url); const text = await new Response(dl.body.pipeThrough(new DecompressionStream('gzip'))).text(); let arr = []; try { arr = JSON.parse(text); } catch {} count = (arr || []).length; sample = (arr || []).slice(0, 3); keys = sample[0] ? Object.keys(sample[0]) : []; }
             return ok({ status: st, count, keys, sample });
+          }
+          case 'razorpayProbe': {   // diagnostic (S185): confirm Live keys work + payment field names
+            if (!canConnector(P)) return err('No permission', 403);
+            if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET) return err('Razorpay not configured', 400);
+            const days = Math.min(Number(qp('days')) || 7, 90);
+            const nowS = Math.floor(Date.now() / 1000), fromS = nowS - days * 86400;
+            const r = await fetch(`https://api.razorpay.com/v1/payments?from=${fromS}&to=${nowS}&count=10`, { headers: { Authorization: 'Basic ' + btoa(`${env.RAZORPAY_KEY_ID}:${env.RAZORPAY_KEY_SECRET}`) } });
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok) return err(`Razorpay ${r.status}: ${JSON.stringify(j).slice(0, 200)}`, 502);
+            const items = j.items || [];
+            return ok({ count: j.count ?? items.length, keys: items[0] ? Object.keys(items[0]) : [], statuses: [...new Set(items.map(p => p.status))], methods: [...new Set(items.map(p => p.method))], sample: items.slice(0, 2).map(p => ({ id: p.id, status: p.status, method: p.method, amount: p.amount, error_reason: p.error_reason })) });
           }
           default: return err('Unknown action: ' + action, 400);
         }
