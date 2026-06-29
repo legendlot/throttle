@@ -12,6 +12,12 @@ const roasOf = (r) => (Number(r.spend) > 0 ? Number(r.conv_value || 0) / Number(
 // Colour ROAS by the Ad Engine's gates: >=4 graduate (green), <2 kill (red), between = iterate.
 const roasTone = (v) => (v >= 4 ? 'var(--green)' : v > 0 && v < 2 ? 'var(--red)' : 'var(--t1)');
 const GROUP_LABEL = { platform: 'Platform', campaign: 'Campaign', adset: 'Ad set', ad: 'Ad' };
+const PLAT_COLOR = { meta: '#4C63F0', google: '#E8A33D', amazon: '#FF9900', ga4: '#E8643D' };
+const PlatChip = ({ p }) => (
+  <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, padding: '2px 7px', borderRadius: 5,
+    background: (PLAT_COLOR[p] || 'var(--t3)') + '22', color: PLAT_COLOR[p] || 'var(--t2)',
+    border: `1px solid ${(PLAT_COLOR[p] || 'var(--t3)')}44` }}>{p || '—'}</span>
+);
 
 export default function MarketingPage() {
   const { session } = useAuth();
@@ -106,6 +112,7 @@ export default function MarketingPage() {
             <table className="so-table" style={{ marginTop: 8 }}>
               <thead><tr>
                 <SortHeader k="name" label={GROUP_LABEL[group]} sort={sort} />
+                {group !== 'platform' && <SortHeader k="platform" label="Platform" sort={sort} />}
                 <SortHeader k="spend" label="Spend" sort={sort} numeric />
                 <SortHeader k="roas" label="ROAS" sort={sort} numeric />
                 <SortHeader k="impressions" label="Impressions" sort={sort} numeric />
@@ -114,9 +121,10 @@ export default function MarketingPage() {
                 <SortHeader k="conv_value" label="Conv. value" sort={sort} numeric />
               </tr></thead>
               <tbody>
-                {sort.sorted.length === 0 && <tr><td colSpan={7} style={{ color: 'var(--t3)', padding: 14 }}>{adMode ? 'No ad-level data yet — the engine pulls the last ~14 days on the next Meta refresh.' : 'No spend in this range yet — connector may still be backfilling.'}</td></tr>}
+                {sort.sorted.length === 0 && <tr><td colSpan={group === 'platform' ? 7 : 8} style={{ color: 'var(--t3)', padding: 14 }}>{adMode ? 'No ad-level data yet — the engine pulls the last ~14 days on the next Meta refresh.' : 'No spend in this range yet — connector may still be backfilling.'}</td></tr>}
                 {sort.sorted.map((r, i) => { const rv = roasOf(r); return (<tr key={i}>
                   <td>{(adMode ? r.label : r.grp) || '—'}</td>
+                  {group !== 'platform' && <td><PlatChip p={r.platform} /></td>}
                   <td className="so-num">{inr(r.spend)}</td>
                   <td className="so-num" style={{ color: roasTone(rv), fontWeight: 500 }}>{rv ? rv.toFixed(2) + '×' : '—'}</td>
                   <td className="so-num">{fmtInt(r.impressions)}</td>
