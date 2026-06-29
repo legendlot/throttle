@@ -911,6 +911,9 @@ const amazonAdsAdapter = {
     let startStr = (cursor || cfg.backfill_start || amzAdsDay(nowMs - AMZ_ADS_WINDOW_MS)).slice(0, 10);
     const trailingStart = amzAdsDay(nowMs - AMZ_ADS_WINDOW_MS);
     if (startStr > trailingStart) startStr = trailingStart;
+    // SB/SD reports retain only ~60-65 days (SP is longer) — clamp the backfill floor so a far-back
+    // backfill_start doesn't 400 on retention; 55d stays safely inside as the edge advances daily.
+    if (!isSP) { const sbsdFloor = amzAdsDay(nowMs - 55 * 86400000); if (startStr < sbsdFloor) startStr = sbsdFloor; }
     const startMs = Date.parse(startStr + 'T00:00:00Z') || nowMs;
     const endStr = amzAdsDay(Math.min(startMs + AMZ_ADS_WINDOW_MS, nowMs));
     const rid = await createAdsReport(host, H, adProduct, reportTypeId, startStr, endStr, ['campaign'], cols); subreqs++;
