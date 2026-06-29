@@ -1480,7 +1480,44 @@ const razorpayPaymentsAdapter = {
   },
 };
 
-const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter, amazon_spapi: amazonAdapter, amazon_ads: amazonAdsAdapter, amazon_ads_product: amazonAdsProductAdapter, meta_ads: metaAdsAdapter, google_ads: googleAdsAdapter, ga4: ga4Adapter, uniware: uniwareAdapter, razorpay_payments: razorpayPaymentsAdapter };
+// ── Meta entity status (campaign/adset/ad effective_status) → mkt_entity_status (S185) ──
+// Powers the Live/Paused marker on the Marketing tables. Pulls the MANAGEMENT API (separate from the
+// insights our metrics come from), filtered to non-archived entities, upserts current status. Stage-only.
+const metaStatusAdapter = {
+  kind: 'meta_status', stgTable: 'mkt_entity_status',
+  datesOf() { return []; },
+  async fetch({ env, config, budget }) {
+    if (!env.META_SYSTEM_USER_TOKEN) throw new Error('Meta not configured (set META_SYSTEM_USER_TOKEN)');
+    const accounts = (config && config.accounts) || [];
+    if (!accounts.length) throw new Error('meta_status config.accounts empty');
+    const filt = encodeURIComponent(JSON.stringify([{ field: 'effective_status', operator: 'IN', value: ['ACTIVE', 'PAUSED', 'CAMPAIGN_PAUSED', 'ADSET_PAUSED', 'IN_PROCESS', 'WITH_ISSUES', 'PENDING_REVIEW'] }]));
+    const levels = [['campaigns', 'campaign', 5], ['adsets', 'adset', 5], ['ads', 'ad', 10]];   // [edge, level, maxPages]
+    const rows = []; let subreqs = 0;
+    for (const acct of accounts) {
+      for (const [edge, level, maxPages] of levels) {
+        let url = `https://graph.facebook.com/${META_API_VER}/act_${acct}/${edge}?fields=id,name,effective_status&filtering=${filt}&limit=500&access_token=${env.META_SYSTEM_USER_TOKEN}`;
+        let pages = 0;
+        while (url && subreqs < budget - 2 && pages < maxPages) {
+          const res = await fetch(url); subreqs++; pages++;
+          const j = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(`Meta ${res.status} ${edge} act_${acct}: ${JSON.stringify(j).slice(0, 160)}`);
+          for (const e of (j.data || [])) rows.push({ platform: 'meta', level, entity_id: String(e.id), status: e.effective_status || null, is_live: e.effective_status === 'ACTIVE', name: e.name || null });
+          url = j.paging && j.paging.next ? j.paging.next : null;
+        }
+      }
+    }
+    return { rows, cursorAfter: null, subreqs, partial: false };
+  },
+  async stage(rows) {
+    if (!rows.length) return;
+    const seen = new Map();
+    for (const r of rows) seen.set(r.level + '|' + r.entity_id, r);   // dedupe before upsert (PG 21000)
+    const body = [...seen.values()].map(r => ({ ...r, updated_at: nowISO() }));
+    await sbInsertChunked('/rest/v1/mkt_entity_status?on_conflict=platform,level,entity_id', body, 'return=minimal,resolution=merge-duplicates');
+  },
+};
+
+const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter, amazon_spapi: amazonAdapter, amazon_ads: amazonAdsAdapter, amazon_ads_product: amazonAdsProductAdapter, meta_ads: metaAdsAdapter, meta_status: metaStatusAdapter, google_ads: googleAdsAdapter, ga4: ga4Adapter, uniware: uniwareAdapter, razorpay_payments: razorpayPaymentsAdapter };
 
 // minimal RFC-4180-ish CSV parser (handles quoted fields, commas, newlines)
 function parseCSV(text) {
