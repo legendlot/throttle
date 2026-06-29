@@ -829,12 +829,12 @@ async function getAmazonAdsToken(env) {
 const AMZ_ADS_WINDOW_MS = 30 * 24 * 3600 * 1000;            // ≤30-day report windows
 const AMZ_ADS_COLUMNS = ['date', 'campaignId', 'campaignName', 'impressions', 'clicks', 'cost', 'purchases14d', 'sales14d'];
 const amzAdsDay = ms => new Date(ms).toISOString().slice(0, 10);
-async function createAdsReport(host, H, adProduct, reportTypeId, startDate, endDate) {
+async function createAdsReport(host, H, adProduct, reportTypeId, startDate, endDate, groupBy = ['campaign'], columns = AMZ_ADS_COLUMNS) {
   const cr = await fetch(`${host}/reporting/reports`, {
     method: 'POST', headers: H,
     body: JSON.stringify({
       name: `odo-${reportTypeId}-${startDate}-${endDate}`, startDate, endDate,
-      configuration: { adProduct, groupBy: ['campaign'], columns: AMZ_ADS_COLUMNS, reportTypeId, timeUnit: 'DAILY', format: 'GZIP_JSON' },
+      configuration: { adProduct, groupBy, columns, reportTypeId, timeUnit: 'DAILY', format: 'GZIP_JSON' },
     }),
   });
   if (!cr.ok) throw new Error(`Amazon Ads createReport ${cr.status}: ${(await cr.text().catch(() => '')).slice(0, 200)}`);
@@ -1263,7 +1263,97 @@ const uniwareAdapter = {
   },
 };
 
-const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter, amazon_spapi: amazonAdapter, amazon_ads: amazonAdsAdapter, meta_ads: metaAdsAdapter, google_ads: googleAdsAdapter, ga4: ga4Adapter, uniware: uniwareAdapter };
+// ── Amazon Ads — advertised-product (SP) report → product-grain mkt_product_fact (S185) ──
+// Mirrors amazonAdsAdapter's create→poll→walk state machine; differs only in report type (groupBy
+// 'advertiser'), columns (advertised SKU/ASIN), staging table, and recompute RPC. Intentionally a
+// separate adapter (not a refactor of amazonAdsAdapter) to keep zero blast-radius on the live
+// campaign connector — both ride the generic ConnectorWorkflow, each with its own instance.
+const AMZ_ADS_PRODUCT_COLUMNS = ['date', 'campaignId', 'campaignName', 'advertisedSku', 'advertisedAsin', 'impressions', 'clicks', 'cost', 'purchases14d', 'sales14d'];
+const amazonAdsProductAdapter = {
+  kind: 'amazon_ads_product', stgTable: 'stg_amazon_ads_product',
+  datesOf(rows) { return [...new Set(rows.map(r => r.the_date))].sort(); },
+  async fetch({ env, channelId, cursor, config }) {
+    const cfg = config || {};
+    const host = cfg.region_host || 'https://advertising-api-eu.amazon.com';
+    const adProduct = cfg.ad_product || 'SPONSORED_PRODUCTS';
+    const reportTypeId = 'spAdvertisedProduct';
+    const groupBy = ['advertiser'];
+    const token = await getAmazonAdsToken(env);
+    let subreqs = 1;
+
+    let profileId = cfg.profile_id;
+    if (!profileId) {
+      const pr = await fetch(`${host}/v2/profiles`, { headers: { 'Amazon-Advertising-API-ClientId': env.AMAZON_ADS_CLIENT_ID, Authorization: `Bearer ${token}` } }); subreqs++;
+      if (!pr.ok) throw new Error(`Amazon Ads /v2/profiles ${pr.status}: ${(await pr.text().catch(() => '')).slice(0, 160)}`);
+      const profiles = await pr.json();
+      const pick = (profiles || []).find(p => p.countryCode === 'IN') || (profiles || [])[0];
+      if (!pick) throw new Error('Amazon Ads: no profiles on this login (no Ads account linked?)');
+      profileId = String(pick.profileId);
+      await patchConnectorConfig(channelId, cfg, { profile_id: profileId }); cfg.profile_id = profileId;
+    }
+    const H = { 'Amazon-Advertising-API-ClientId': env.AMAZON_ADS_CLIENT_ID, 'Amazon-Advertising-API-Scope': profileId, Authorization: `Bearer ${token}`, 'Content-Type': 'application/vnd.createasyncreportrequest.v3+json' };
+    const nowMs = Date.now();
+
+    // ── pending report → poll ──
+    if (cfg.pending_report_id) {
+      const pr = await fetch(`${host}/reporting/reports/${cfg.pending_report_id}`, { headers: H }); subreqs++;
+      if (!pr.ok) throw new Error(`Amazon Ads getReport ${pr.status}: ${(await pr.text().catch(() => '')).slice(0, 160)}`);
+      const rep = await pr.json();
+      const st = (rep.status || '').toUpperCase();
+      if (st === 'PENDING' || st === 'PROCESSING') return { rows: [], cursorAfter: null, subreqs, partial: true };
+      if (st !== 'COMPLETED') { await patchConnectorConfig(channelId, cfg, { pending_report_id: null, pending_through: null }); throw new Error(`Amazon Ads report ${st}: ${(rep.failureReason || '').slice(0, 120)}`); }
+      let rows = [];
+      if (rep.url) {
+        const dl = await fetch(rep.url); subreqs++;
+        if (!dl.ok) throw new Error('Amazon Ads doc download ' + dl.status);
+        const text = await new Response(dl.body.pipeThrough(new DecompressionStream('gzip'))).text();
+        let arr = []; try { arr = JSON.parse(text); } catch { arr = []; }
+        rows = (Array.isArray(arr) ? arr : []).map(d => ({
+          channel_id: channelId, ad_account_id: profileId, campaign_id: String(d.campaignId ?? ''),
+          campaign_name: d.campaignName || null, advertised_sku: d.advertisedSku || null, advertised_asin: d.advertisedAsin || null,
+          the_date: d.date,
+          spend: num(d.cost), impressions: num(d.impressions), clicks: num(d.clicks),
+          conversions: num(d.purchases14d), conv_value: num(d.sales14d), raw: d,
+        })).filter(r => r.the_date);
+      }
+      const windowEnd = cfg.pending_through;
+      const endMs = Date.parse((windowEnd || '') + 'T00:00:00Z') || 0;
+      let partial = false, next = { pending_report_id: null, pending_through: null };
+      if (endMs && endMs < nowMs - 36_000_000) {
+        const nextStart = amzAdsDay(endMs + 86400000);
+        const nextEnd = amzAdsDay(Math.min(endMs + AMZ_ADS_WINDOW_MS, nowMs));
+        try { const rid = await createAdsReport(host, H, adProduct, reportTypeId, nextStart, nextEnd, groupBy, AMZ_ADS_PRODUCT_COLUMNS); subreqs++; next = { pending_report_id: rid, pending_through: nextEnd }; partial = true; }
+        catch (_) { /* leave cleared — next tick re-creates from the advanced cursor */ }
+      }
+      await patchConnectorConfig(channelId, cfg, next);
+      return { rows, cursorAfter: windowEnd, subreqs, partial };
+    }
+
+    // ── no pending → create the next window (trailing-30d floor for steady state) ──
+    let startStr = (cursor || cfg.backfill_start || amzAdsDay(nowMs - AMZ_ADS_WINDOW_MS)).slice(0, 10);
+    const trailingStart = amzAdsDay(nowMs - AMZ_ADS_WINDOW_MS);
+    if (startStr > trailingStart) startStr = trailingStart;
+    const startMs = Date.parse(startStr + 'T00:00:00Z') || nowMs;
+    const endStr = amzAdsDay(Math.min(startMs + AMZ_ADS_WINDOW_MS, nowMs));
+    const rid = await createAdsReport(host, H, adProduct, reportTypeId, startStr, endStr, groupBy, AMZ_ADS_PRODUCT_COLUMNS); subreqs++;
+    await patchConnectorConfig(channelId, cfg, { pending_report_id: rid, pending_through: endStr });
+    return { rows: [], cursorAfter: null, subreqs, partial: true };
+  },
+  async stage(rows, runId, channelId) {
+    if (!rows.length) return;
+    const from = rows.reduce((m, x) => x.the_date < m ? x.the_date : m, rows[0].the_date);
+    const to   = rows.reduce((m, x) => x.the_date > m ? x.the_date : m, rows[0].the_date);
+    await sbSales(`/rest/v1/stg_amazon_ads_product?channel_id=eq.${channelId}&the_date=gte.${from}&the_date=lte.${to}`, { method: 'DELETE', prefer: 'return=minimal' });
+    const body = rows.map(r => ({ run_id: runId, channel_id: channelId, ad_account_id: r.ad_account_id, campaign_id: r.campaign_id, campaign_name: r.campaign_name, advertised_sku: r.advertised_sku, advertised_asin: r.advertised_asin, the_date: r.the_date, spend: r.spend, impressions: Math.round(r.impressions), clicks: Math.round(r.clicks), conversions: r.conversions, conv_value: r.conv_value, raw: r.raw }));
+    await sbInsertChunked('/rest/v1/stg_amazon_ads_product', body, 'return=minimal');
+  },
+  async recompute({ channelId, dates, runId }) {
+    const f = await rpcSales('recompute_amzn_ads_product', { p_channel: channelId, p_dates: dates, p_run_id: runId });
+    return { mapped: 0, unmapped: 0, factsUpserted: (f.ok ? Number(f.data) : 0) };
+  },
+};
+
+const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter, amazon_spapi: amazonAdapter, amazon_ads: amazonAdsAdapter, amazon_ads_product: amazonAdsProductAdapter, meta_ads: metaAdsAdapter, google_ads: googleAdsAdapter, ga4: ga4Adapter, uniware: uniwareAdapter };
 
 // minimal RFC-4180-ish CSV parser (handles quoted fields, commas, newlines)
 function parseCSV(text) {
@@ -1661,6 +1751,13 @@ export default {
             return ok({ rows: r.data || [] });
           }
 
+          case 'getAdProduct': {   // S185 — product-grain Amazon ad metrics for the /amazon sellers table
+            if (!canView(P)) return err('No permission', 403);
+            const r = await rpcSales('f_mkt_product_rollup', { p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO(), p_platform: qp('platform') || null });
+            if (!r.ok) return err('Ad-product rollup failed: ' + JSON.stringify(r.data), 502);
+            return ok({ rows: r.data || [] });
+          }
+
           case 'getTraffic': {
             const r = await rpcSales('f_traffic_rollup', { p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO(), p_group: qp('group') || 'src' });
             if (!r.ok) return err('Traffic rollup failed: ' + JSON.stringify(r.data), 502);
@@ -1814,6 +1911,26 @@ export default {
               start += 100;
             }
             return ok({ days, total_records: total, channels_sampled: counts, note: 'LEGEND_OF_TOYS = website (source SHOPIFY) — excluded from ingestion' });
+          }
+          case 'adProductProbe': {  // diagnostic (S185): create OR poll an advertised-product report; confirm columns
+            if (!canConnector(P)) return err('No permission', 403);
+            const host = 'https://advertising-api-eu.amazon.com';
+            const profileId = '202246193452230';
+            let token; try { token = await getAmazonAdsToken(env); } catch (e) { return err(String(e?.message || e), 400); }
+            const H = { 'Amazon-Advertising-API-ClientId': env.AMAZON_ADS_CLIENT_ID, 'Amazon-Advertising-API-Scope': profileId, Authorization: `Bearer ${token}`, 'Content-Type': 'application/vnd.createasyncreportrequest.v3+json' };
+            const rid = qp('report_id');
+            if (!rid) {
+              const end = amzAdsDay(Date.now() - 2 * 86400000), start = amzAdsDay(Date.now() - 5 * 86400000);
+              try { const id = await createAdsReport(host, H, 'SPONSORED_PRODUCTS', 'spAdvertisedProduct', start, end, ['advertiser'], AMZ_ADS_PRODUCT_COLUMNS); return ok({ created: id, start, end, note: 'poll again: &action=adProductProbe&report_id=' + id }); }
+              catch (e) { return err(String(e?.message || e), 502); }
+            }
+            const pr = await fetch(`${host}/reporting/reports/${rid}`, { headers: H });
+            const rep = await pr.json().catch(() => ({}));
+            const st = (rep.status || '').toUpperCase();
+            if (st !== 'COMPLETED') return ok({ status: st, failureReason: rep.failureReason || null });
+            let sample = [], count = 0, keys = [];
+            if (rep.url) { const dl = await fetch(rep.url); const text = await new Response(dl.body.pipeThrough(new DecompressionStream('gzip'))).text(); let arr = []; try { arr = JSON.parse(text); } catch {} count = (arr || []).length; sample = (arr || []).slice(0, 3); keys = sample[0] ? Object.keys(sample[0]) : []; }
+            return ok({ status: st, count, keys, sample });
           }
           default: return err('Unknown action: ' + action, 400);
         }
