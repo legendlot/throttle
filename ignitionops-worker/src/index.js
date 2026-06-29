@@ -1178,7 +1178,7 @@ async function getLocations(url, auth, env) {
 async function getCatalogs(url, auth, env) {
   // Static enums + product list from store schema.
   const productsRes = await sbStore(
-    `/rest/v1/product_master?select=name,sku&order=name`,
+    `/rest/v1/product_master?select=name:product,sku&order=product`,
     env,
   ).catch(() => ({ data: [] }));
   // Managed category options (both axes) — admin-extendable via addCategoryOption.

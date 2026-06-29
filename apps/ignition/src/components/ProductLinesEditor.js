@@ -25,7 +25,7 @@ export default function ProductLinesEditor({ value, onChange, session }) {
   useEffect(() => {
     if (!session) return;
     ignitionopsGet('getCatalogs', {}, session)
-      .then(r => setCatalog(r.products || []))
+      .then(r => setCatalog(Array.isArray(r?.products) ? r.products : []))
       .catch(() => setCatalog([]));
   }, [session]);
 
