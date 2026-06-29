@@ -138,7 +138,7 @@ export default function FunnelPage() {
           {(() => {
             const f = (pay && pay.funnel) || {}, rc = (pay && pay.recon) || {};
             const attempts = Number(f.attempts || 0), captured = Number(f.captured || 0), failed = Number(f.failed || 0);
-            const sr = Number(f.success_rate || 0), capAmt = Number(f.captured_amount || 0);
+            const sr = Number(f.success_rate || 0), capAmt = Number(f.captured_amount || 0), cod = Number(f.cod_orders || 0);
             const byMethod = f.by_method || {}, byReason = f.by_failure_reason || {};
             const methods = Object.entries(byMethod).sort((a, b) => (Number(b[1].attempts) || 0) - (Number(a[1].attempts) || 0));
             const reasons = Object.entries(byReason).sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, 8);
@@ -155,13 +155,14 @@ export default function FunnelPage() {
               <div className="so-card">
                 <div className="so-kpi-lbl" style={{ marginBottom: 12 }}>Checkout &amp; payment · <span style={{ color: 'var(--t3)' }}>Razorpay</span></div>
                 {!pay ? <div style={{ padding: 20, textAlign: 'center' }}><Spinner /></div>
-                  : attempts === 0 ? <div style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12, padding: '8px 0' }}>No payment data in this range yet — connector backfilling / webhook warming up.</div>
+                  : (attempts === 0 && cod === 0) ? <div style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12, padding: '8px 0' }}>No payment data in this range yet — connector backfilling / webhook warming up.</div>
                     : (
                       <>
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
-                          {stat('Attempts', numfmt(attempts))}
+                          {stat('Prepaid attempts', numfmt(attempts))}
                           {stat('Captured', numfmt(captured), `${sr.toFixed(1)}% success`, 'var(--green)')}
                           {stat('Failed', numfmt(failed), failed ? `${(100 * failed / Math.max(attempts, 1)).toFixed(1)}% of attempts` : null, '#EC6A5E')}
+                          {stat('COD orders', numfmt(cod), 'captured on delivery', 'var(--t2)')}
                           {stat('Captured value', inr(capAmt))}
                         </div>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(260px,1fr))', gap: 18 }}>
