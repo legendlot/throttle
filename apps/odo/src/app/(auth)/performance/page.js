@@ -4,7 +4,7 @@ import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
 import { salesGet, inr, fmtInt, rangePresets, priorPeriod } from '../../../lib/api.js';
 import { aggOrders } from '../../../lib/segregation.js';
-import { Kpi, SettledBadge, RangePicker, SegmentedToggle } from '../../../components/kit.js';
+import { Kpi, SettledBadge, RangePicker, SegmentedToggle, useTableSort, SortHeader } from '../../../components/kit.js';
 import { familyOf, FAMILIES, SUBCHANNEL_PALETTE } from '../../../lib/families.js';
 import StackedTrendChart from '../../../components/StackedTrendChart.js';
 
@@ -62,6 +62,7 @@ export default function PerformancePage() {
     const fam = FAMILIES[familyOf(c.name)];
     return { key: c.id, label: c.name, color: fam?.color || SUBCHANNEL_PALETTE[i % SUBCHANNEL_PALETTE.length] };
   }), [chRows]);
+  const sort = useTableSort(chRows, { initialKey: 'grossAll' });
 
   return (
     <div className="so-page">
@@ -105,15 +106,15 @@ export default function PerformancePage() {
             <div style={{ overflowX: 'auto' }}>
               <table className="so-table" style={{ marginTop: 8 }}>
                 <thead><tr>
-                  <th>Channel</th><th className="so-num">Orders</th><th className="so-num">Gross</th>
-                  <th className="so-num">Net (excl. canc.)</th><th className="so-num">Discounts</th>
-                  <th className="so-num">GST</th><th className="so-num">Cancellations</th><th className="so-num">Returns</th>
+                  <SortHeader k="name" label="Channel" sort={sort} /><SortHeader k="totalOrders" label="Orders" sort={sort} numeric /><SortHeader k="grossAll" label="Gross" sort={sort} numeric />
+                  <SortHeader k="netCancel" label="Net (excl. canc.)" sort={sort} numeric /><SortHeader k="discount" label="Discounts" sort={sort} numeric />
+                  <SortHeader k="tax" label="GST" sort={sort} numeric /><SortHeader k="cancelledValue" label="Cancellations" sort={sort} numeric /><SortHeader k="returnsValue" label="Returns" sort={sort} numeric />
                 </tr></thead>
                 <tbody>
-                  {chRows.length === 0 && <tr><td colSpan={8} style={{ color: 'var(--t3)', padding: 14 }}>
+                  {sort.sorted.length === 0 && <tr><td colSpan={8} style={{ color: 'var(--t3)', padding: 14 }}>
                     No order-grain data in this range yet — Website (Shopify) backfills first; Amazon / GT-MT join as those connectors are extended.
                   </td></tr>}
-                  {chRows.map(c => (
+                  {sort.sorted.map(c => (
                     <tr key={c.id}>
                       <td>{c.name}</td>
                       <td className="so-num">{fmtInt(c.totalOrders)}</td>

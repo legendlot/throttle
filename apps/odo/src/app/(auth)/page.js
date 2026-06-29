@@ -4,7 +4,7 @@ import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
 import { salesGet, inr, fmtInt, istToday, istDaysAgo, downloadCsv, rangePresets, priorPeriod } from '../../lib/api.js';
 import StackedTrendChart from '../../components/StackedTrendChart.js';
-import { Kpi, Delta, RangePicker, SegmentedToggle } from '../../components/kit.js';
+import { Kpi, Delta, RangePicker, SegmentedToggle, useTableSort, SortHeader } from '../../components/kit.js';
 import ChannelFilter from '../../components/ChannelFilter.js';
 // Channel families — single source of truth (shared with the Channels section). Aliased so the
 // existing chart/chip code keeps its names.
@@ -171,6 +171,7 @@ export default function Dashboard() {
     }
     return Object.values(agg).sort((a, b) => b.gross - a.gross);
   }, [rows, group, chName, codeToProduct]);
+  const tblSort = useTableSort(table, { initialKey: 'gross' });
 
   const orderedChannels = useMemo(() => [...channels].sort((a, b) =>
     (GROUP_ORDER.indexOf(channelGroup(a.name)) - GROUP_ORDER.indexOf(channelGroup(b.name))) || a.name.localeCompare(b.name)
@@ -339,12 +340,12 @@ export default function Dashboard() {
           ) : (
             <table className="so-table">
               <thead><tr>
-                <th>{group === 'date' ? 'Day' : group === 'channel' ? 'Channel' : group === 'product' ? 'Product' : 'Variant'}</th>
-                <th className="so-num">Units</th>
-                <th className="so-num">Gross ₹</th>
+                <SortHeader k="label" label={group === 'date' ? 'Day' : group === 'channel' ? 'Channel' : group === 'product' ? 'Product' : 'Variant'} sort={tblSort} />
+                <SortHeader k="units" label="Units" sort={tblSort} numeric />
+                <SortHeader k="gross" label="Gross ₹" sort={tblSort} numeric />
               </tr></thead>
               <tbody>
-                {table.map(r => (
+                {tblSort.sorted.map(r => (
                   <tr key={r.key}>
                     <td style={{ color: 'var(--t1)' }}>{r.label}</td>
                     <td className="so-num">{fmtInt(r.units)}</td>

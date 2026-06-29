@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
 import { salesGet, fmtInt, inr, rangePresets } from '../../../lib/api.js';
-import { RangePicker } from '../../../components/kit.js';
+import { RangePicker, useTableSort, SortHeader } from '../../../components/kit.js';
 
 const numfmt = n => Number(n || 0).toLocaleString('en-IN');
 const pctOf = (n, d) => (d > 0 ? (n / d * 100) : 0);
@@ -77,7 +77,7 @@ export default function FunnelPage() {
     { key: 'purchases', label: 'Purchase',  value: purchases, color: '#34D27B' },
   ];
 
-  const topRows = [...(rows || [])].sort((a, b) => Number(b.sessions || 0) - Number(a.sessions || 0));
+  const srcSort = useTableSort(rows, { initialKey: 'sessions', valueOf: (r, k) => k === 'conv' ? (Number(r.sessions) > 0 ? Number(r.purchases) / Number(r.sessions) : 0) : k === 'src_group' ? (r.src_group || '') : r[k] });
 
   return (
     <div className="so-page">
@@ -114,12 +114,12 @@ export default function FunnelPage() {
             <div className="so-kpi-lbl" style={{ padding: '16px 18px 0' }}>By traffic source</div>
             <table className="so-table" style={{ marginTop: 8 }}>
               <thead><tr>
-                <th>Source</th><th className="so-num">Sessions</th><th className="so-num">Add to cart</th>
-                <th className="so-num">Checkouts</th><th className="so-num">Purchases</th><th className="so-num">Conv. rate</th>
+                <SortHeader k="src_group" label="Source" sort={srcSort} /><SortHeader k="sessions" label="Sessions" sort={srcSort} numeric /><SortHeader k="add_to_carts" label="Add to cart" sort={srcSort} numeric />
+                <SortHeader k="checkouts" label="Checkouts" sort={srcSort} numeric /><SortHeader k="purchases" label="Purchases" sort={srcSort} numeric /><SortHeader k="conv" label="Conv. rate" sort={srcSort} numeric />
               </tr></thead>
               <tbody>
-                {topRows.length === 0 && <tr><td colSpan={6} style={{ color: 'var(--t3)', padding: 14 }}>No traffic in this range yet — connector may still be backfilling.</td></tr>}
-                {topRows.map((r, i) => {
+                {srcSort.sorted.length === 0 && <tr><td colSpan={6} style={{ color: 'var(--t3)', padding: 14 }}>No traffic in this range yet — connector may still be backfilling.</td></tr>}
+                {srcSort.sorted.map((r, i) => {
                   const s = Number(r.sessions || 0), pu = Number(r.purchases || 0);
                   return (<tr key={i}>
                     <td>{r.src_group || '—'}</td>

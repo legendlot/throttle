@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
 import { salesGet, inr, fmtInt, rangePresets, priorPeriod } from '../../../lib/api.js';
-import { Kpi, RangePicker, SegmentedToggle } from '../../../components/kit.js';
+import { Kpi, RangePicker, SegmentedToggle, useTableSort, SortHeader } from '../../../components/kit.js';
 import PerfTrendChart from '../../../components/PerfTrendChart.js';
 
 const sumBy = (rows, k) => (rows || []).reduce((a, r) => a + Number(r[k] || 0), 0);
@@ -20,6 +20,7 @@ export default function MarketingPage() {
   const [to, setTo] = useState(mtd.to);
   const [group, setGroup] = useState('platform');
   const [rows, setRows] = useState(null);        // table rows for the active grouping
+  const sort = useTableSort(rows, { initialKey: 'spend', valueOf: (r, k) => k === 'roas' ? roasOf(r) : k === 'name' ? (r.label ?? r.grp ?? '') : r[k] });
   const [kpiRows, setKpiRows] = useState([]);     // always platform-level → stable KPIs across groupings
   const [mktDaily, setMktDaily] = useState([]);   // marketing by day (chart)
   const [salesRows, setSalesRows] = useState([]); // sales by variant (revenue + total)
@@ -104,13 +105,17 @@ export default function MarketingPage() {
             </div>
             <table className="so-table" style={{ marginTop: 8 }}>
               <thead><tr>
-                <th>{GROUP_LABEL[group]}</th>
-                <th className="so-num">Spend</th><th className="so-num">ROAS</th><th className="so-num">Impressions</th>
-                <th className="so-num">Clicks</th><th className="so-num">Conversions</th><th className="so-num">Conv. value</th>
+                <SortHeader k="name" label={GROUP_LABEL[group]} sort={sort} />
+                <SortHeader k="spend" label="Spend" sort={sort} numeric />
+                <SortHeader k="roas" label="ROAS" sort={sort} numeric />
+                <SortHeader k="impressions" label="Impressions" sort={sort} numeric />
+                <SortHeader k="clicks" label="Clicks" sort={sort} numeric />
+                <SortHeader k="conversions" label="Conversions" sort={sort} numeric />
+                <SortHeader k="conv_value" label="Conv. value" sort={sort} numeric />
               </tr></thead>
               <tbody>
-                {rows.length === 0 && <tr><td colSpan={7} style={{ color: 'var(--t3)', padding: 14 }}>{adMode ? 'No ad-level data yet — the engine pulls the last ~14 days on the next Meta refresh.' : 'No spend in this range yet — connector may still be backfilling.'}</td></tr>}
-                {rows.map((r, i) => { const rv = roasOf(r); return (<tr key={i}>
+                {sort.sorted.length === 0 && <tr><td colSpan={7} style={{ color: 'var(--t3)', padding: 14 }}>{adMode ? 'No ad-level data yet — the engine pulls the last ~14 days on the next Meta refresh.' : 'No spend in this range yet — connector may still be backfilling.'}</td></tr>}
+                {sort.sorted.map((r, i) => { const rv = roasOf(r); return (<tr key={i}>
                   <td>{(adMode ? r.label : r.grp) || '—'}</td>
                   <td className="so-num">{inr(r.spend)}</td>
                   <td className="so-num" style={{ color: roasTone(rv), fontWeight: 500 }}>{rv ? rv.toFixed(2) + '×' : '—'}</td>

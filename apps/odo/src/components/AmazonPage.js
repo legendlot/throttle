@@ -10,7 +10,7 @@ import { Spinner } from '@throttle/ui';
 import { salesGet, inr, fmtInt, rangePresets, priorPeriod } from '../lib/api.js';
 import { familyOf, SUBCHANNEL_PALETTE } from '../lib/families.js';
 import { aggOrders } from '../lib/segregation.js';
-import { Kpi, SettledBadge, RangePicker, SegmentedToggle } from './kit.js';
+import { Kpi, SettledBadge, RangePicker, SegmentedToggle, useTableSort, SortHeader } from './kit.js';
 import StackedTrendChart from './StackedTrendChart.js';
 
 const AMZ = '#4C63F0';
@@ -103,6 +103,18 @@ export default function AmazonPage() {
     }
     return by;
   }, [d, grp, c2p]);
+  const sellerSort = useTableSort(sellers.arr, { initialKey: 'gross', valueOf: (v, k) => {
+    const a = adByKey[v.code] || { spend: 0, adSales: 0 };
+    if (k === 'label') return v.label;
+    if (k === 'asp') return v.units ? v.gross / v.units : 0;
+    if (k === 'spend') return a.spend;
+    if (k === 'adSales') return a.adSales;
+    if (k === 'roas') return a.spend > 0 ? a.adSales / a.spend : 0;
+    if (k === 'acos') return a.adSales > 0 ? a.spend / a.adSales : 0;
+    if (k === 'tacos') return v.gross > 0 ? a.spend / v.gross : 0;
+    if (k === 'organic') return v.gross > 0 ? (v.gross - a.adSales) / v.gross : 0;
+    return v[k];
+  } });
 
   const spend = Number(ad.spend) || 0, clicks = Number(ad.clicks) || 0, impr = Number(ad.impressions) || 0, convs = Number(ad.conversions) || 0, attr = Number(ad.conv_value) || 0;
   const pSpend = Number(adP.spend) || 0, pAttr = Number(adP.conv_value) || 0;
@@ -238,13 +250,13 @@ export default function AmazonPage() {
               <div style={{ overflowX: 'auto' }}>
                 <table className="so-table">
                   <thead><tr>
-                    <th>{grp === 'product' ? 'Model' : 'SKU'}</th>
-                    <th className="so-num">Units</th><th className="so-num">Gross</th><th className="so-num">ASP</th>
-                    <th className="so-num">Spend</th><th className="so-num">Ad Sales</th>
-                    <th className="so-num">ROAS</th><th className="so-num">ACOS</th><th className="so-num">TACOS</th><th className="so-num">Organic%</th>
+                    <SortHeader k="label" label={grp === 'product' ? 'Model' : 'SKU'} sort={sellerSort} />
+                    <SortHeader k="units" label="Units" sort={sellerSort} numeric /><SortHeader k="gross" label="Gross" sort={sellerSort} numeric /><SortHeader k="asp" label="ASP" sort={sellerSort} numeric />
+                    <SortHeader k="spend" label="Spend" sort={sellerSort} numeric /><SortHeader k="adSales" label="Ad Sales" sort={sellerSort} numeric />
+                    <SortHeader k="roas" label="ROAS" sort={sellerSort} numeric /><SortHeader k="acos" label="ACOS" sort={sellerSort} numeric /><SortHeader k="tacos" label="TACOS" sort={sellerSort} numeric /><SortHeader k="organic" label="Organic%" sort={sellerSort} numeric />
                   </tr></thead>
                   <tbody>
-                    {sellers.arr.map(v => {
+                    {sellerSort.sorted.map(v => {
                       const a = adByKey[v.code] || { spend: 0, adSales: 0 };
                       const sp = a.spend, ads = a.adSales, has = sp > 0;
                       const roas = has ? ads / sp : 0;

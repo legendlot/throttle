@@ -2,9 +2,46 @@
 // Shared dashboard primitives — the single vocabulary for KPI tiles, deltas, sparklines,
 // range selection and segmented toggles. Every page (cockpit, Performance, Marketing, Funnel,
 // Channels) renders these, so the controls + tiles look and behave identically everywhere.
+import { useState } from 'react';
 import { rangePresets, istToday } from '../lib/api.js';
 
 const PRESETS = rangePresets();
+
+// ── sortable tables ───────────────────────────────────────────────────────
+// useTableSort: click-to-sort any data table. valueOf(row,key) lets a table sort by a COMPUTED
+// column (e.g. ROAS = conv_value/spend) instead of a raw field. Numeric values sort numerically,
+// everything else alphabetically (numeric-aware). Pair with <SortHeader> for clickable headers.
+export function useTableSort(rows, { initialKey = null, initialDir = 'desc', valueOf } = {}) {
+  const [sortKey, setSortKey] = useState(initialKey);
+  const [sortDir, setSortDir] = useState(initialDir);
+  const toggle = (k) => {
+    if (k === sortKey) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(k); setSortDir('desc'); }
+  };
+  const get = valueOf || ((row, k) => row[k]);
+  let sorted = rows || [];
+  if (sortKey) {
+    sorted = [...sorted].sort((a, b) => {
+      const av = get(a, sortKey), bv = get(b, sortKey);
+      const an = Number(av), bn = Number(bv);
+      const numeric = av != null && av !== '' && bv != null && bv !== '' && !Number.isNaN(an) && !Number.isNaN(bn);
+      const cmp = numeric ? an - bn : String(av ?? '').localeCompare(String(bv ?? ''), undefined, { numeric: true });
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+  }
+  return { sorted, sortKey, sortDir, toggle };
+}
+
+// Clickable column header. k = sort key; numeric → right-align (so-num). Shows ▲/▼ on the active column.
+export function SortHeader({ k, label, sort, numeric, style }) {
+  const active = sort.sortKey === k;
+  return (
+    <th className={numeric ? 'so-num' : undefined} onClick={() => sort.toggle(k)}
+      style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', ...style }} title="Click to sort">
+      {label}<span style={{ marginLeft: 3, fontSize: 9, opacity: active ? 0.9 : 0.3 }}>{active ? (sort.sortDir === 'asc' ? '▲' : '▼') : '↕'}</span>
+    </th>
+  );
+}
 
 // ── period-over-period delta ──────────────────────────────────────────────
 // Pass now/prev (preferred) OR a precomputed pct. tone:'pos' colours up=green/down=red;
