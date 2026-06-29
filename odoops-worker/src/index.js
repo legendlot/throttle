@@ -938,7 +938,7 @@ const amazonAdsAdapter = {
 const META_API_VER = 'v21.0';
 const metaAdsAdapter = {
   kind: 'meta_ads', stgTable: 'stg_meta',
-  datesOf(rows) { return [...new Set(rows.map(r => r.the_date))].sort(); },
+  datesOf(rows, fetched) { const ad = (fetched && fetched.adRows) || []; return [...new Set([...rows, ...ad].map(r => r.the_date))].sort(); },
   async fetch({ env, channelId, cursor, budget, config }) {
     if (!env.META_SYSTEM_USER_TOKEN) throw new Error('Meta not configured (set META_SYSTEM_USER_TOKEN)');
     const accounts = (config && config.accounts) || [];
@@ -984,19 +984,69 @@ const metaAdsAdapter = {
     // so steady-state runs keep refreshing only the most-recent window.
     const cursorAfter = (mode === 'steady') ? backfillStart : winStart;
     if (mode !== 'steady') partial = partial || (winStart > backfillStart);
-    return { rows, cursorAfter, subreqs, partial };
+
+    // ── Ad-level (level=ad) — BEST-EFFORT recent window for creative-level ROAS (→ mkt_fact_ad).
+    // Decoupled from the campaign cursor/backfill above: fixed last-~14d window, re-pulled every
+    // run (self-healing), uses only LEFTOVER subrequest budget, and NEVER sets `partial` or throws,
+    // so it can never disturb the campaign ingestion the business depends on.
+    const adRows = [];
+    try {
+      const adStart = addDays(today, -13);
+      for (const acct of accounts) {
+        let aurl = `https://graph.facebook.com/${META_API_VER}/act_${acct}/insights`
+          + `?level=ad&time_increment=1`
+          + `&fields=campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,spend,impressions,clicks,actions,action_values`
+          + `&time_range=${encodeURIComponent(JSON.stringify({ since: adStart, until: today }))}`
+          + `&limit=300&access_token=${env.META_SYSTEM_USER_TOKEN}`;
+        while (aurl) {
+          if (subreqs >= budget) break;                 // out of budget → stop (no partial; next run re-pulls)
+          const res = await fetch(aurl).catch(() => null); subreqs++;
+          if (!res || !res.ok) break;                   // give up on ad-level for this acct; keep campaign data
+          const j = await res.json();
+          for (const d of (j.data || [])) {
+            const purch = (d.actions || []).find(a => a.action_type === 'omni_purchase' || a.action_type === 'purchase');
+            const purchVal = (d.action_values || []).find(a => a.action_type === 'omni_purchase' || a.action_type === 'purchase');
+            adRows.push({
+              channel_id: channelId, ad_account_id: acct, campaign_id: d.campaign_id, campaign_name: d.campaign_name || null,
+              adset_id: d.adset_id, adset_name: d.adset_name || null, ad_id: d.ad_id, ad_name: d.ad_name || null, the_date: d.date_start,
+              spend: num(d.spend), impressions: num(d.impressions), clicks: num(d.clicks),
+              conversions: purch ? num(purch.value) : 0, conv_value: purchVal ? num(purchVal.value) : 0, raw: d,
+            });
+          }
+          aurl = (j.paging && j.paging.next) || null;
+        }
+      }
+    } catch { /* best-effort; campaign rows already captured above */ }
+
+    return { rows, adRows, cursorAfter, subreqs, partial };
   },
-  async stage(rows, runId, channelId) {
-    if (!rows.length) return;
-    const body = rows.map(r => ({
-      run_id: runId, channel_id: channelId, ad_account_id: r.ad_account_id, campaign_id: r.campaign_id,
-      campaign_name: r.campaign_name, the_date: r.the_date, spend: r.spend, impressions: Math.round(r.impressions),
-      clicks: Math.round(r.clicks), conversions: r.conversions, conv_value: r.conv_value, raw: r.raw,
-    }));
-    await sbInsertChunked('/rest/v1/stg_meta?on_conflict=channel_id,ad_account_id,campaign_id,the_date', body, 'return=minimal,resolution=merge-duplicates');
+  async stage(rows, runId, channelId, fetched) {
+    if (rows.length) {
+      const body = rows.map(r => ({
+        run_id: runId, channel_id: channelId, ad_account_id: r.ad_account_id, campaign_id: r.campaign_id,
+        campaign_name: r.campaign_name, the_date: r.the_date, spend: r.spend, impressions: Math.round(r.impressions),
+        clicks: Math.round(r.clicks), conversions: r.conversions, conv_value: r.conv_value, raw: r.raw,
+      }));
+      await sbInsertChunked('/rest/v1/stg_meta?on_conflict=channel_id,ad_account_id,campaign_id,the_date', body, 'return=minimal,resolution=merge-duplicates');
+    }
+    // Ad-level → stg_meta_ad (best-effort: must never break the campaign staging above).
+    const adRows = (fetched && fetched.adRows) || [];
+    if (adRows.length) {
+      try {
+        const adBody = adRows.map(r => ({
+          run_id: runId, channel_id: channelId, ad_account_id: r.ad_account_id, campaign_id: r.campaign_id, campaign_name: r.campaign_name,
+          adset_id: r.adset_id, adset_name: r.adset_name, ad_id: r.ad_id, ad_name: r.ad_name, the_date: r.the_date,
+          spend: r.spend, impressions: Math.round(r.impressions), clicks: Math.round(r.clicks),
+          conversions: r.conversions, conv_value: r.conv_value, raw: r.raw,
+        }));
+        await sbInsertChunked('/rest/v1/stg_meta_ad?on_conflict=channel_id,ad_account_id,ad_id,the_date', adBody, 'return=minimal,resolution=merge-duplicates');
+      } catch { /* ad-level staging is best-effort */ }
+    }
   },
   async recompute({ channelId, dates, runId }) {
     const f = await rpcSales('recompute_mkt', { p_channel: channelId, p_dates: dates, p_run_id: runId });
+    // Ad-level fact refresh (best-effort; rpcSales never throws, a non-ok is simply ignored).
+    await rpcSales('recompute_mkt_ad', { p_channel: channelId, p_dates: dates, p_run_id: runId });
     return { mapped: 0, unmapped: 0, factsUpserted: (f.ok ? Number(f.data) : 0) };
   },
 };
@@ -1842,6 +1892,13 @@ export default {
           case 'getMarketing': {
             const r = await rpcSales('f_mkt_rollup', { p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO(), p_group: qp('group') || 'platform' });
             if (!r.ok) return err('Marketing rollup failed: ' + JSON.stringify(r.data), 502);
+            return ok({ rows: r.data || [] });
+          }
+
+          case 'getAdMetrics': {   // 2026-06-29 — ad-level (creative) ROAS for the LOT Ad Engine (Meta)
+            if (!canView(P)) return err('No permission', 403);
+            const r = await rpcSales('f_mkt_ad_rollup', { p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO(), p_group: qp('group') || 'ad' });
+            if (!r.ok) return err('Ad-metrics rollup failed: ' + JSON.stringify(r.data), 502);
             return ok({ rows: r.data || [] });
           }
 
