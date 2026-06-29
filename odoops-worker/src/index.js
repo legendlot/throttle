@@ -1490,12 +1490,15 @@ const metaStatusAdapter = {
     if (!env.META_SYSTEM_USER_TOKEN) throw new Error('Meta not configured (set META_SYSTEM_USER_TOKEN)');
     const accounts = (config && config.accounts) || [];
     if (!accounts.length) throw new Error('meta_status config.accounts empty');
-    const filt = encodeURIComponent(JSON.stringify([{ field: 'effective_status', operator: 'IN', value: ['ACTIVE', 'PAUSED', 'CAMPAIGN_PAUSED', 'ADSET_PAUSED', 'IN_PROCESS', 'WITH_ISSUES', 'PENDING_REVIEW'] }]));
-    const levels = [['campaigns', 'campaign', 5], ['adsets', 'adset', 5], ['ads', 'ad', 10]];   // [edge, level, maxPages]
+    const BASE_ST = ['ACTIVE', 'PAUSED', 'CAMPAIGN_PAUSED', 'ADSET_PAUSED', 'IN_PROCESS', 'WITH_ISSUES', 'PENDING_REVIEW'];
+    // Campaigns are few → also pull ARCHIVED so the full-history campaign table gets a marker on every
+    // row; ads/adsets are numerous → keep them non-archived to bound volume (recent rows match anyway).
+    const filtFor = (lvl) => encodeURIComponent(JSON.stringify([{ field: 'effective_status', operator: 'IN', value: lvl === 'campaign' ? [...BASE_ST, 'ARCHIVED'] : BASE_ST }]));
+    const levels = [['campaigns', 'campaign', 8], ['adsets', 'adset', 5], ['ads', 'ad', 10]];   // [edge, level, maxPages]
     const rows = []; let subreqs = 0;
     for (const acct of accounts) {
       for (const [edge, level, maxPages] of levels) {
-        let url = `https://graph.facebook.com/${META_API_VER}/act_${acct}/${edge}?fields=id,name,effective_status&filtering=${filt}&limit=500&access_token=${env.META_SYSTEM_USER_TOKEN}`;
+        let url = `https://graph.facebook.com/${META_API_VER}/act_${acct}/${edge}?fields=id,name,effective_status&filtering=${filtFor(level)}&limit=500&access_token=${env.META_SYSTEM_USER_TOKEN}`;
         let pages = 0;
         while (url && subreqs < budget - 2 && pages < maxPages) {
           const res = await fetch(url); subreqs++; pages++;
