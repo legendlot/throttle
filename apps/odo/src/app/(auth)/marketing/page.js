@@ -8,6 +8,10 @@ import PerfTrendChart from '../../../components/PerfTrendChart.js';
 
 const sumBy = (rows, k) => (rows || []).reduce((a, r) => a + Number(r[k] || 0), 0);
 const grossOf = (rows) => (rows || []).reduce((a, r) => a + Number(r.gross_value ?? r.gross ?? 0), 0);
+const roasOf = (r) => (Number(r.spend) > 0 ? Number(r.conv_value || 0) / Number(r.spend) : 0);
+// Colour ROAS by the Ad Engine's gates: >=4 graduate (green), <2 kill (red), between = iterate.
+const roasTone = (v) => (v >= 4 ? 'var(--green)' : v > 0 && v < 2 ? 'var(--red)' : 'var(--t1)');
+const GROUP_LABEL = { platform: 'Platform', campaign: 'Campaign', adset: 'Ad set', ad: 'Ad' };
 
 export default function MarketingPage() {
   const { session } = useAuth();
@@ -15,39 +19,47 @@ export default function MarketingPage() {
   const [from, setFrom] = useState(mtd.from);
   const [to, setTo] = useState(mtd.to);
   const [group, setGroup] = useState('platform');
-  const [rows, setRows] = useState(null);        // marketing by platform/campaign (table)
+  const [rows, setRows] = useState(null);        // table rows for the active grouping
+  const [kpiRows, setKpiRows] = useState([]);     // always platform-level → stable KPIs across groupings
   const [mktDaily, setMktDaily] = useState([]);   // marketing by day (chart)
   const [salesRows, setSalesRows] = useState([]); // sales by variant (revenue + total)
   const [trafDaily, setTrafDaily] = useState([]); // traffic by day (chart)
   const [prevAgg, setPrevAgg] = useState(null);   // prior-period { spend, gross, clicks, convs }
   const [err, setErr] = useState('');
 
+  // ad-set / ad come from the ad-level fact (getAdMetrics → f_mkt_ad_rollup, Meta only); platform /
+  // campaign come from the all-platform marketing rollup. KPIs always use the all-platform set.
+  const adMode = group === 'adset' || group === 'ad';
+
   useEffect(() => {
     if (!session) return;
     setRows(null); setErr('');
     const pp = priorPeriod(from, to);
     Promise.all([
-      salesGet('getMarketing', { from, to, group }, session),
+      adMode ? salesGet('getAdMetrics', { from, to, group }, session)
+             : salesGet('getMarketing', { from, to, group }, session),
       salesGet('getMarketing', { from, to, group: 'date' }, session),
       salesGet('getSales', { from, to, group: 'variant' }, session),
       salesGet('getTraffic', { from, to, group: 'date' }, session),
       salesGet('getMarketing', { from: pp.from, to: pp.to, group: 'platform' }, session),
       salesGet('getSales', { from: pp.from, to: pp.to, group: 'variant' }, session),
-    ]).then(([mt, md, s, tr, pm, ps]) => {
-      setRows(mt?.rows || []);
+      salesGet('getMarketing', { from, to, group: 'platform' }, session), // KPI base (all-platform)
+    ]).then(([tbl, md, s, tr, pm, ps, kp]) => {
+      setRows(tbl?.rows || []);
       setMktDaily(md?.rows || []);
       setSalesRows(s?.rows || []);
       setTrafDaily(tr?.rows || []);
+      setKpiRows(kp?.rows || []);
       setPrevAgg({
         spend: sumBy(pm?.rows, 'spend'), gross: grossOf(ps?.rows),
         clicks: sumBy(pm?.rows, 'clicks'), convs: sumBy(pm?.rows, 'conversions'),
       });
     }).catch(e => setErr(e.message || String(e)));
-  }, [session, from, to, group]);
+  }, [session, from, to, group, adMode]);
 
-  const spend = sumBy(rows, 'spend');
-  const clicks = sumBy(rows, 'clicks');
-  const convs = sumBy(rows, 'conversions');
+  const spend = sumBy(kpiRows, 'spend');
+  const clicks = sumBy(kpiRows, 'clicks');
+  const convs = sumBy(kpiRows, 'conversions');
   const salesGross = grossOf(salesRows);
   const roas = spend > 0 ? salesGross / spend : 0;
   const pv = prevAgg || {};
@@ -70,7 +82,7 @@ export default function MarketingPage() {
   return (
     <div className="so-page">
       <RangePicker from={from} to={to} onChange={({ from, to }) => { setFrom(from); setTo(to); }}
-        right={<SegmentedToggle options={[['platform', 'By platform'], ['campaign', 'By campaign']]} value={group} onChange={setGroup} size="sm" />} />
+        right={<SegmentedToggle options={[['platform', 'By platform'], ['campaign', 'By campaign'], ['adset', 'By ad set'], ['ad', 'By ad']]} value={group} onChange={setGroup} size="sm" />} />
 
       {err && <div className="so-card" style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12 }}>{err}</div>}
       {!rows ? <div style={{ padding: 60, textAlign: 'center' }}><Spinner /></div> : (
@@ -86,23 +98,27 @@ export default function MarketingPage() {
           <PerfTrendChart data={series} />
 
           <div className="so-card" style={{ padding: 0, overflow: 'hidden' }}>
-            <div className="so-kpi-lbl" style={{ padding: '16px 18px 0' }}>{group === 'campaign' ? 'Campaigns' : 'Platforms'} · spend & performance</div>
+            <div className="so-kpi-lbl" style={{ padding: '16px 18px 0' }}>
+              {GROUP_LABEL[group]}s · spend & performance
+              {adMode && <span style={{ color: 'var(--t3)', fontWeight: 400 }}> · Meta, last ~14d · ROAS = Meta-attributed</span>}
+            </div>
             <table className="so-table" style={{ marginTop: 8 }}>
               <thead><tr>
-                <th>{group === 'campaign' ? 'Campaign' : 'Platform'}</th>
-                <th className="so-num">Spend</th><th className="so-num">Impressions</th>
+                <th>{GROUP_LABEL[group]}</th>
+                <th className="so-num">Spend</th><th className="so-num">ROAS</th><th className="so-num">Impressions</th>
                 <th className="so-num">Clicks</th><th className="so-num">Conversions</th><th className="so-num">Conv. value</th>
               </tr></thead>
               <tbody>
-                {rows.length === 0 && <tr><td colSpan={6} style={{ color: 'var(--t3)', padding: 14 }}>No spend in this range yet — connector may still be backfilling.</td></tr>}
-                {rows.map((r, i) => (<tr key={i}>
-                  <td>{r.grp || '—'}</td>
+                {rows.length === 0 && <tr><td colSpan={7} style={{ color: 'var(--t3)', padding: 14 }}>{adMode ? 'No ad-level data yet — the engine pulls the last ~14 days on the next Meta refresh.' : 'No spend in this range yet — connector may still be backfilling.'}</td></tr>}
+                {rows.map((r, i) => { const rv = roasOf(r); return (<tr key={i}>
+                  <td>{(adMode ? r.label : r.grp) || '—'}</td>
                   <td className="so-num">{inr(r.spend)}</td>
+                  <td className="so-num" style={{ color: roasTone(rv), fontWeight: 500 }}>{rv ? rv.toFixed(2) + '×' : '—'}</td>
                   <td className="so-num">{fmtInt(r.impressions)}</td>
                   <td className="so-num">{fmtInt(r.clicks)}</td>
                   <td className="so-num">{fmtInt(r.conversions)}</td>
                   <td className="so-num">{inr(r.conv_value)}</td>
-                </tr>))}
+                </tr>); })}
               </tbody>
             </table>
           </div>
