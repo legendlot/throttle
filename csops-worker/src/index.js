@@ -4277,10 +4277,24 @@ async function ingestInboundEmail(env, p) {
   });
   if (ing.ok && ing.data?.profile_id) profileId = ing.data.profile_id;
 
-  // 2. Find-or-create the thread (keyed on Gmail threadId).
+  // 2. Find the thread. Primary key = Gmail threadId — true reply chains group here.
   const found = await sb(
     `/rest/v1/cs_wa_threads?channel=eq.email&provider_thread_ref=eq.${encodeURIComponent(p.gmail_thread_id)}&select=*&limit=1`, env);
   let thread = found.data?.[0];
+
+  // Customer-window grouping (Pruthvi S185): a customer often sends a NEW email (not a
+  // reply) about the same issue → a different Gmail threadId. Fold it into the customer's
+  // existing ACTIVE email conversation if that had activity within the last 7 days, so
+  // agents see one thread instead of many. Replies still target the customer's latest
+  // inbound Gmail thread (see sendEmailReply), so outbound still lands correctly. Outside
+  // the 7-day window, or no active thread → a fresh conversation.
+  if (!thread && p.from_email) {
+    const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const recent = await sb(
+      `/rest/v1/cs_wa_threads?channel=eq.email&ignition_connect=is.false&external_user_id=eq.${encodeURIComponent(p.from_email)}&thread_state=in.(open,snoozed)&last_message_at=gte.${encodeURIComponent(since)}&order=last_message_at.desc&select=*&limit=1`, env);
+    thread = recent.data?.[0] || null;
+  }
+
   if (!thread) {
     const ins = await sb(`/rest/v1/cs_wa_threads`, env, {
       method: 'POST',
@@ -4412,8 +4426,12 @@ async function sendEmailReply(body, auth, env) {
     `--${boundary}\r\nContent-Type: text/html; charset="UTF-8"\r\n\r\n${htmlBody}\r\n\r\n` +
     `--${boundary}--`;
 
+  // Send into the customer's LATEST inbound Gmail thread (not necessarily the thread's
+  // original ref) so a reply lands in their most recent email — required now that a
+  // conversation may group multiple Gmail threads via customer-window grouping (S185).
+  // The In-Reply-To/References above (from the same latest inbound) keep RFC threading aligned.
   const send = await gmailFetch(env, `/messages/send`, {
-    method: 'POST', body: JSON.stringify({ raw: b64urlEncodeUtf8(raw), threadId: thread.provider_thread_ref }),
+    method: 'POST', body: JSON.stringify({ raw: b64urlEncodeUtf8(raw), threadId: lastMeta.gmail_thread_id || thread.provider_thread_ref }),
   });
   if (!send.ok) return err(`Gmail send failed: ${JSON.stringify(send.data)?.slice(0, 200)}`, send.status || 502);
   const sentId = send.data?.id || null;
