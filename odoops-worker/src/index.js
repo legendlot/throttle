@@ -1333,6 +1333,11 @@ const amazonAdsProductAdapter = {
     let startStr = (cursor || cfg.backfill_start || amzAdsDay(nowMs - AMZ_ADS_WINDOW_MS)).slice(0, 10);
     const trailingStart = amzAdsDay(nowMs - AMZ_ADS_WINDOW_MS);
     if (startStr > trailingStart) startStr = trailingStart;
+    // spAdvertisedProduct retains only ~95 days — Amazon 400s on any older startDate. Clamp the
+    // backfill floor (there is no advertised-product data older than this anyway). 90d is safely
+    // inside the ~95d window even as the retention edge advances daily.
+    const retentionStart = amzAdsDay(nowMs - 90 * 86400000);
+    if (startStr < retentionStart) startStr = retentionStart;
     const startMs = Date.parse(startStr + 'T00:00:00Z') || nowMs;
     const endStr = amzAdsDay(Math.min(startMs + AMZ_ADS_WINDOW_MS, nowMs));
     const rid = await createAdsReport(host, H, adProduct, reportTypeId, startStr, endStr, groupBy, AMZ_ADS_PRODUCT_COLUMNS); subreqs++;
