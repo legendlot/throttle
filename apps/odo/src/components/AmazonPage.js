@@ -68,7 +68,7 @@ export default function AmazonPage() {
   useEffect(() => {
     if (!session || amzCh === null) return;
     setD(null); setErr('');
-    if (!idsKey) { setD({ seg: [], segPrev: [], mkt: [], mktPrev: [], ret: [], geo: [], salesVar: [] }); return; }
+    if (!idsKey) { setD({ seg: [], segPrev: [], mkt: [], mktPrev: [], ret: [], geo: [], salesVar: [], adProd: [] }); return; }
     const pp = priorPeriod(from, to);
     Promise.all([
       salesGet('getSegregation', { from, to, channel_id: idsKey }, session),
@@ -78,8 +78,9 @@ export default function AmazonPage() {
       salesGet('getAmazonReturns', { from, to, group: 'overall' }, session),
       salesGet('getAmazonGeo', { from, to }, session),
       salesGet('getSales', { from, to, group: 'variant', channel_id: idsKey }, session),
-    ]).then(([seg, segPrev, mkt, mktPrev, ret, geo, sv]) => {
-      setD({ seg: seg?.rows || [], segPrev: segPrev?.rows || [], mkt: mkt?.rows || [], mktPrev: mktPrev?.rows || [], ret: ret?.rows || [], geo: geo?.rows || [], salesVar: sv?.rows || [] });
+      salesGet('getAdProduct', { from, to }, session),
+    ]).then(([seg, segPrev, mkt, mktPrev, ret, geo, sv, adp]) => {
+      setD({ seg: seg?.rows || [], segPrev: segPrev?.rows || [], mkt: mkt?.rows || [], mktPrev: mktPrev?.rows || [], ret: ret?.rows || [], geo: geo?.rows || [], salesVar: sv?.rows || [], adProd: adp?.rows || [] });
     }).catch(e => setErr(e.message || String(e)));
   }, [session, amzCh, idsKey, from, to]);
 
@@ -89,6 +90,19 @@ export default function AmazonPage() {
   const adP = useMemo(() => (d?.mktPrev || []).find(r => /amazon/i.test(r.grp || '')) || {}, [d]);
   const ret = useMemo(() => aggReturns(d?.ret), [d]);
   const sellers = useMemo(() => topByCode(d?.salesVar, grp, c2p), [d, grp, c2p]);
+  // ad metrics per sellers-key (SKU mode → product_code; Model mode → product family via c2p).
+  // The '' unmapped-residual bucket from f_mkt_product_rollup is skipped (falsy code).
+  const adByKey = useMemo(() => {
+    const by = {};
+    for (const r of (d?.adProd || [])) {
+      const code = r.product_code; if (!code) continue;
+      const key = grp === 'product' ? (c2p[code] || code) : code;
+      (by[key] = by[key] || { spend: 0, adSales: 0, clicks: 0, impr: 0 });
+      by[key].spend += Number(r.spend) || 0; by[key].adSales += Number(r.conv_value) || 0;
+      by[key].clicks += Number(r.clicks) || 0; by[key].impr += Number(r.impressions) || 0;
+    }
+    return by;
+  }, [d, grp, c2p]);
 
   const spend = Number(ad.spend) || 0, clicks = Number(ad.clicks) || 0, impr = Number(ad.impressions) || 0, convs = Number(ad.conversions) || 0, attr = Number(ad.conv_value) || 0;
   const pSpend = Number(adP.spend) || 0, pAttr = Number(adP.conv_value) || 0;
@@ -223,16 +237,35 @@ export default function AmazonPage() {
             ) : (
               <div style={{ overflowX: 'auto' }}>
                 <table className="so-table">
-                  <thead><tr><th>{grp === 'product' ? 'Model' : 'SKU'}</th><th className="so-num">Units</th><th className="so-num">Gross</th><th className="so-num">ASP</th></tr></thead>
+                  <thead><tr>
+                    <th>{grp === 'product' ? 'Model' : 'SKU'}</th>
+                    <th className="so-num">Units</th><th className="so-num">Gross</th><th className="so-num">ASP</th>
+                    <th className="so-num">Spend</th><th className="so-num">Ad Sales</th>
+                    <th className="so-num">ROAS</th><th className="so-num">ACOS</th><th className="so-num">TACOS</th><th className="so-num">Organic%</th>
+                  </tr></thead>
                   <tbody>
-                    {sellers.arr.map(v => (
-                      <tr key={v.code}>
-                        <td>{v.label}</td>
-                        <td className="so-num">{fmtInt(v.units)}</td>
-                        <td className="so-num">{inr(v.gross)}</td>
-                        <td className="so-num">{inr(v.units ? v.gross / v.units : 0)}</td>
-                      </tr>
-                    ))}
+                    {sellers.arr.map(v => {
+                      const a = adByKey[v.code] || { spend: 0, adSales: 0 };
+                      const sp = a.spend, ads = a.adSales, has = sp > 0;
+                      const roas = has ? ads / sp : 0;
+                      const acos = ads > 0 ? (sp / ads) * 100 : 0;
+                      const tacos = v.gross > 0 ? (sp / v.gross) * 100 : 0;
+                      const organicPct = v.gross > 0 ? ((v.gross - ads) / v.gross) * 100 : 0;
+                      return (
+                        <tr key={v.code}>
+                          <td>{v.label}</td>
+                          <td className="so-num">{fmtInt(v.units)}</td>
+                          <td className="so-num">{inr(v.gross)}</td>
+                          <td className="so-num">{inr(v.units ? v.gross / v.units : 0)}</td>
+                          <td className="so-num">{has ? inr(sp) : '—'}</td>
+                          <td className="so-num">{has ? inr(ads) : '—'}</td>
+                          <td className="so-num">{has ? roas.toFixed(2) + '×' : '—'}</td>
+                          <td className="so-num">{has ? acos.toFixed(1) + '%' : '—'}</td>
+                          <td className="so-num">{has ? tacos.toFixed(1) + '%' : '—'}</td>
+                          <td className="so-num">{has ? organicPct.toFixed(0) + '%' : '—'}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
