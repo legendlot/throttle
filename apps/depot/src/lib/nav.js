@@ -1,7 +1,7 @@
 import {
   Gauge, Send, Network, FileText, PackageCheck,
   Undo2, RefreshCw, ArrowLeftRight, BarChart3,
-  LayoutGrid, Truck, GitBranch, ScanLine, ClipboardList, Users, Tag, ClipboardCheck, BookOpen, Inbox,
+  LayoutGrid, Truck, GitBranch, ScanLine, ClipboardList, Users, Tag, ClipboardCheck, BookOpen, Inbox, Barcode,
 } from 'lucide-react';
 
 /* ════════════════════════════════════════════════════════════
@@ -21,6 +21,7 @@ import {
 export const NAV_PRIMARY = [
   { id: 'overview', label: 'Overview', icon: Gauge, route: '/dashboard' },
   { id: 'reports',  label: 'Reports',  icon: BarChart3, route: '/reports' },
+  { id: 'products', label: 'Products', icon: Barcode, route: '/products' },
   {
     id: 'outbound', label: 'Outbound', icon: Send,
     children: [
