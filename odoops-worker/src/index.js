@@ -2057,6 +2057,64 @@ export default {
               shipTotals: { principal: ship.reduce((s, e) => s + e.principal, 0), tax: ship.reduce((s, e) => s + e.tax, 0), promo: ship.reduce((s, e) => s + e.promo, 0) },
               sampleShipment: ship[0] || null, sampleRefund: ref[0] || null });
           }
+          case 'salesTrafficProbe': {  // diagnostic (S185): SP-API Sales & Traffic report = the 3P Amazon funnel (sessions→units per ASIN)
+            if (!canConnector(P)) return err('No permission', 403);
+            let token; try { token = await getAmazonToken(env); } catch (e) { return err(String(e?.message || e), 400); }
+            const host = qp('host') || 'https://sellingpartnerapi-eu.amazon.com';
+            const mkt = qp('mkt') || 'A21TJRUUN4KGV';   // India
+            const H = { Authorization: `Bearer ${token}`, 'x-amz-access-token': token, 'Content-Type': 'application/json' };
+            const rid = qp('report_id');
+            if (!rid) {
+              const day = qp('day') || new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10);
+              const body = { reportType: 'GET_SALES_AND_TRAFFIC_REPORT', marketplaceIds: [mkt], dataStartTime: day + 'T00:00:00Z', dataEndTime: day + 'T23:59:59Z', reportOptions: { dateGranularity: 'DAY', asinGranularity: 'CHILD' } };
+              const cr = await fetch(`${host}/reports/2021-06-30/reports`, { method: 'POST', headers: H, body: JSON.stringify(body) });
+              const cj = await cr.json().catch(() => ({}));
+              if (!cr.ok) return err(`createReport ${cr.status}: ${JSON.stringify(cj).slice(0, 240)}`, cr.status);
+              return ok({ created: cj.reportId, day, note: 'poll again: &action=salesTrafficProbe&report_id=' + cj.reportId });
+            }
+            const pr = await fetch(`${host}/reports/2021-06-30/reports/${rid}`, { headers: H });
+            const rep = await pr.json().catch(() => ({}));
+            if (rep.processingStatus !== 'DONE' || !rep.reportDocumentId) return ok({ processingStatus: rep.processingStatus, errors: rep.errors });
+            const dr = await fetch(`${host}/reports/2021-06-30/documents/${rep.reportDocumentId}`, { headers: H });
+            const doc = await dr.json().catch(() => ({}));
+            let text = ''; try { text = await fetchAmazonDoc(doc); } catch (e) { return ok({ docError: String(e?.message || e) }); }
+            let j = {}; try { j = JSON.parse(text); } catch { /* not json */ }
+            const byDate = j.salesAndTrafficByDate || [], byAsin = j.salesAndTrafficByAsin || [];
+            return ok({ topKeys: Object.keys(j), byDateCount: byDate.length, byAsinCount: byAsin.length, sampleByDate: byDate[0] || null, sampleByAsin: byAsin[0] || null });
+          }
+          case 'dspGateProbe': {  // diagnostic (S185): does the CURRENT Ads token already reach Amazon DSP? (200 = yes; 401/403 = needs entitlement)
+            if (!canConnector(P)) return err('No permission', 403);
+            let token; try { token = await getAmazonAdsToken(env); } catch (e) { return err(String(e?.message || e), 400); }
+            const host = 'https://advertising-api-eu.amazon.com';
+            const profileId = qp('profile') || '202246193452230';
+            const H = { 'Amazon-Advertising-API-ClientId': env.AMAZON_ADS_CLIENT_ID, 'Amazon-Advertising-API-Scope': profileId, Authorization: `Bearer ${token}` };
+            const out = {};
+            for (const [k, path] of Object.entries({ dsp_advertisers: '/dsp/advertisers?count=10', dsp_v3_reports: '/dsp/reports' })) {
+              try { const r = await fetch(`${host}${path}`, { headers: H }); out[k] = { status: r.status, body: (await r.text().catch(() => '')).slice(0, 240) }; }
+              catch (e) { out[k] = { error: String(e?.message || e) }; }
+            }
+            return ok({ profileId, note: '200 = DSP reachable now; 401/403 = needs entitlement', ...out });
+          }
+          case 'searchTermProbe': {  // diagnostic (S185): Ads API search-term report (Nikhil P2 — keyword winners/leaks)
+            if (!canConnector(P)) return err('No permission', 403);
+            const host = 'https://advertising-api-eu.amazon.com', profileId = qp('profile') || '202246193452230';
+            let token; try { token = await getAmazonAdsToken(env); } catch (e) { return err(String(e?.message || e), 400); }
+            const H = { 'Amazon-Advertising-API-ClientId': env.AMAZON_ADS_CLIENT_ID, 'Amazon-Advertising-API-Scope': profileId, Authorization: `Bearer ${token}`, 'Content-Type': 'application/vnd.createasyncreportrequest.v3+json' };
+            const rid = qp('report_id');
+            if (!rid) {
+              const end = amzAdsDay(Date.now() - 2 * 86400000), start = amzAdsDay(Date.now() - 5 * 86400000);
+              const cols = ['date', 'campaignId', 'adGroupId', 'keyword', 'searchTerm', 'matchType', 'impressions', 'clicks', 'cost', 'purchases14d', 'sales14d'];
+              try { const id = await createAdsReport(host, H, 'SPONSORED_PRODUCTS', 'spSearchTerm', start, end, ['searchTerm'], cols); return ok({ created: id, note: 'poll: &action=searchTermProbe&report_id=' + id }); }
+              catch (e) { return err(String(e?.message || e), 502); }
+            }
+            const pr = await fetch(`${host}/reporting/reports/${rid}`, { headers: H });
+            const rep = await pr.json().catch(() => ({}));
+            const st = (rep.status || '').toUpperCase();
+            if (st !== 'COMPLETED') return ok({ status: st, failureReason: rep.failureReason || null });
+            let sample = [], count = 0, keys = [];
+            if (rep.url) { const dl = await fetch(rep.url); const text = await new Response(dl.body.pipeThrough(new DecompressionStream('gzip'))).text(); let arr = []; try { arr = JSON.parse(text); } catch { } count = arr.length; sample = arr.slice(0, 3); keys = sample[0] ? Object.keys(sample[0]) : []; }
+            return ok({ status: st, count, keys, sample });
+          }
           case 'uniwareProbe': {  // diagnostic: auth + which channels are flowing (last N days, default 14)
             if (!canConnector(P)) return err('No permission', 403);
             let token;
