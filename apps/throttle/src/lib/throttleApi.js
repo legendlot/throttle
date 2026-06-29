@@ -145,8 +145,8 @@ export async function fetchRequests(session, usersById = {}) {
     const ids = data.map(r => r.id);
     let prodByReq = {};
     try {
-      const { data: rp } = await supabaseBrand.from('request_products').select('request_id,product_name').in('request_id', ids);
-      (rp || []).forEach(p => { (prodByReq[p.request_id] = prodByReq[p.request_id] || []).push(String(p.product_name).toUpperCase()); });
+      const { data: rp } = await supabaseBrand.from('request_products').select('request_id,product_code').in('request_id', ids);
+      (rp || []).forEach(p => { (prodByReq[p.request_id] = prodByReq[p.request_id] || []).push(String(p.product_code).toUpperCase()); });
     } catch (_) {}
     return data.map(r => {
       const u = usersById[r.requester_id];
