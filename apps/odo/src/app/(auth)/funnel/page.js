@@ -52,14 +52,18 @@ export default function FunnelPage() {
   const [from, setFrom] = useState(mtd.from);
   const [to, setTo] = useState(mtd.to);
   const [rows, setRows] = useState(null);
+  const [pay, setPay] = useState(null);   // { funnel, recon } — checkout payment funnel (Razorpay)
   const [err, setErr] = useState('');
 
   useEffect(() => {
     if (!session) return;
-    setRows(null); setErr('');
+    setRows(null); setPay(null); setErr('');
     salesGet('getTraffic', { from, to }, session)
       .then(t => setRows(t?.rows || []))
       .catch(e => setErr(e.message || String(e)));
+    salesGet('getPaymentFunnel', { from, to }, session)
+      .then(p => setPay(p || {}))
+      .catch(() => setPay({}));   // soft — payment section just shows empty if it fails
   }, [session, from, to]);
 
   const sum = k => (rows || []).reduce((a, r) => a + Number(r[k] || 0), 0);
@@ -129,6 +133,83 @@ export default function FunnelPage() {
               </tbody>
             </table>
           </div>
+
+          {/* ── Checkout & payment funnel (Razorpay) ── */}
+          {(() => {
+            const f = (pay && pay.funnel) || {}, rc = (pay && pay.recon) || {};
+            const attempts = Number(f.attempts || 0), captured = Number(f.captured || 0), failed = Number(f.failed || 0);
+            const sr = Number(f.success_rate || 0), capAmt = Number(f.captured_amount || 0);
+            const byMethod = f.by_method || {}, byReason = f.by_failure_reason || {};
+            const methods = Object.entries(byMethod).sort((a, b) => (Number(b[1].attempts) || 0) - (Number(a[1].attempts) || 0));
+            const reasons = Object.entries(byReason).sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, 8);
+            const maxM = Math.max(...methods.map(m => Number(m[1].attempts) || 0), 1);
+            const maxR = Math.max(...reasons.map(r => Number(r[1]) || 0), 1);
+            const stat = (lbl, val, sub, color) => (
+              <div className="so-card" style={{ flex: 1, minWidth: 120, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <div className="so-kpi-lbl">{lbl}</div>
+                <span className="so-kpi-val" style={{ fontSize: 22, color: color || 'var(--t1)' }}>{val}</span>
+                {sub ? <span className="so-sub" style={{ fontSize: 11 }}>{sub}</span> : null}
+              </div>
+            );
+            return (
+              <div className="so-card">
+                <div className="so-kpi-lbl" style={{ marginBottom: 12 }}>Checkout &amp; payment · <span style={{ color: 'var(--t3)' }}>Razorpay</span></div>
+                {!pay ? <div style={{ padding: 20, textAlign: 'center' }}><Spinner /></div>
+                  : attempts === 0 ? <div style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12, padding: '8px 0' }}>No payment data in this range yet — connector backfilling / webhook warming up.</div>
+                    : (
+                      <>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
+                          {stat('Attempts', numfmt(attempts))}
+                          {stat('Captured', numfmt(captured), `${sr.toFixed(1)}% success`, 'var(--green)')}
+                          {stat('Failed', numfmt(failed), failed ? `${(100 * failed / Math.max(attempts, 1)).toFixed(1)}% of attempts` : null, '#EC6A5E')}
+                          {stat('Captured value', inr(capAmt))}
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(260px,1fr))', gap: 18 }}>
+                          <div>
+                            <div className="so-sub" style={{ marginBottom: 8 }}>Why payments fail</div>
+                            {reasons.length === 0 ? <div style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 11 }}>No failures in range.</div>
+                              : reasons.map(([reason, c]) => (
+                                <div key={reason} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
+                                  <div style={{ width: 130, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{reason}</div>
+                                  <div style={{ flex: 1, height: 13, background: 'var(--surface2)', borderRadius: 3, overflow: 'hidden' }}>
+                                    <div style={{ width: `${(Number(c) / maxR) * 100}%`, height: '100%', background: '#EC6A5E', opacity: 0.8 }} />
+                                  </div>
+                                  <div style={{ width: 40, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: 11 }}>{numfmt(c)}</div>
+                                </div>
+                              ))}
+                          </div>
+                          <div>
+                            <div className="so-sub" style={{ marginBottom: 8 }}>By payment method (captured / attempts)</div>
+                            {methods.map(([m, o]) => {
+                              const a = Number(o.attempts) || 0, cap = Number(o.captured) || 0;
+                              return (
+                                <div key={m} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
+                                  <div style={{ width: 90, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)' }}>{m}</div>
+                                  <div style={{ flex: 1, height: 13, background: 'var(--surface2)', borderRadius: 3, overflow: 'hidden' }}>
+                                    <div style={{ width: `${(a / maxM) * 100}%`, height: '100%', background: '#F2CD1A', opacity: 0.85 }} />
+                                  </div>
+                                  <div style={{ width: 72, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: 11 }}>{numfmt(cap)}/{numfmt(a)}</div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                        <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--surface2)' }}>
+                          <div className="so-sub" style={{ marginBottom: 8 }}>Reconciliation · {from} → {to}</div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t2)' }}>
+                            <span>GA4 purchases <b style={{ color: 'var(--t1)' }}>{numfmt(rc.ga4_purchases)}</b></span>
+                            <span style={{ color: 'var(--t3)' }}>·</span>
+                            <span>Shopify orders <b style={{ color: 'var(--t1)' }}>{numfmt(rc.shopify_orders)}</b></span>
+                            <span style={{ color: 'var(--t3)' }}>·</span>
+                            <span>Razorpay captured <b style={{ color: 'var(--t1)' }}>{numfmt(rc.razorpay_captured)}</b> <span style={{ color: 'var(--t3)' }}>({inr(rc.razorpay_captured_amount)})</span></span>
+                          </div>
+                          <div className="so-sub" style={{ fontSize: 10.5, marginTop: 6 }}>Prepaid captures come from Razorpay; COD orders have no online capture (they appear in Shopify orders, not here). GA4 typically over-counts slightly.</div>
+                        </div>
+                      </>
+                    )}
+              </div>
+            );
+          })()}
         </>
       )}
     </div>
