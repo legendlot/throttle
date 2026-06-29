@@ -828,6 +828,8 @@ async function getAmazonAdsToken(env) {
 }
 const AMZ_ADS_WINDOW_MS = 30 * 24 * 3600 * 1000;            // ≤30-day report windows
 const AMZ_ADS_COLUMNS = ['date', 'campaignId', 'campaignName', 'impressions', 'clicks', 'cost', 'purchases14d', 'sales14d'];
+// SB/SD v3 campaign reports use plain purchases/sales (not the SP 14d-suffixed columns).
+const AMZ_ADS_COLUMNS_SBSD = ['date', 'campaignId', 'campaignName', 'impressions', 'clicks', 'cost', 'purchases', 'sales'];
 const amzAdsDay = ms => new Date(ms).toISOString().slice(0, 10);
 async function createAdsReport(host, H, adProduct, reportTypeId, startDate, endDate, groupBy = ['campaign'], columns = AMZ_ADS_COLUMNS) {
   const cr = await fetch(`${host}/reporting/reports`, {
@@ -850,6 +852,8 @@ const amazonAdsAdapter = {
     const host = cfg.region_host || 'https://advertising-api-eu.amazon.com';
     const adProduct = cfg.ad_product || 'SPONSORED_PRODUCTS';
     const reportTypeId = adProduct === 'SPONSORED_BRANDS' ? 'sbCampaigns' : (adProduct === 'SPONSORED_DISPLAY' ? 'sdCampaigns' : 'spCampaigns');
+    const isSP = adProduct === 'SPONSORED_PRODUCTS';
+    const cols = isSP ? AMZ_ADS_COLUMNS : AMZ_ADS_COLUMNS_SBSD;
     const token = await getAmazonAdsToken(env);
     let subreqs = 1;
 
@@ -885,7 +889,7 @@ const amazonAdsAdapter = {
           channel_id: channelId, ad_account_id: profileId, campaign_id: String(d.campaignId ?? ''),
           campaign_name: d.campaignName || null, the_date: d.date,
           spend: num(d.cost), impressions: num(d.impressions), clicks: num(d.clicks),
-          conversions: num(d.purchases14d), conv_value: num(d.sales14d), raw: d,
+          conversions: num(isSP ? d.purchases14d : d.purchases), conv_value: num(isSP ? d.sales14d : d.sales), raw: d,
         })).filter(r => r.the_date);
       }
       const windowEnd = cfg.pending_through;
@@ -895,7 +899,7 @@ const amazonAdsAdapter = {
       if (endMs && endMs < nowMs - 36_000_000) {
         const nextStart = amzAdsDay(endMs + 86400000);
         const nextEnd = amzAdsDay(Math.min(endMs + AMZ_ADS_WINDOW_MS, nowMs));
-        try { const rid = await createAdsReport(host, H, adProduct, reportTypeId, nextStart, nextEnd); subreqs++; next = { pending_report_id: rid, pending_through: nextEnd }; partial = true; }
+        try { const rid = await createAdsReport(host, H, adProduct, reportTypeId, nextStart, nextEnd, ['campaign'], cols); subreqs++; next = { pending_report_id: rid, pending_through: nextEnd }; partial = true; }
         catch (_) { /* leave cleared — next tick re-creates from the advanced cursor */ }
       }
       await patchConnectorConfig(channelId, cfg, next);
@@ -909,7 +913,7 @@ const amazonAdsAdapter = {
     if (startStr > trailingStart) startStr = trailingStart;
     const startMs = Date.parse(startStr + 'T00:00:00Z') || nowMs;
     const endStr = amzAdsDay(Math.min(startMs + AMZ_ADS_WINDOW_MS, nowMs));
-    const rid = await createAdsReport(host, H, adProduct, reportTypeId, startStr, endStr); subreqs++;
+    const rid = await createAdsReport(host, H, adProduct, reportTypeId, startStr, endStr, ['campaign'], cols); subreqs++;
     await patchConnectorConfig(channelId, cfg, { pending_report_id: rid, pending_through: endStr });
     return { rows: [], cursorAfter: null, subreqs, partial: true };
   },
