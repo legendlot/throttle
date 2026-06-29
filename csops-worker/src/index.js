@@ -3469,7 +3469,9 @@ async function handleBiteSpeedWebhook(request, env) {
 }
 
 // Find-or-create the WA thread for a Chatwoot-sourced conversation. Idempotent.
-async function biteSpeedFindOrCreateThread(payload, env) {
+// `create:false` makes it find-only (returns {thread:null} instead of inserting) — used
+// by conversation lifecycle events, which must NOT spawn message-less phantom threads.
+async function biteSpeedFindOrCreateThread(payload, env, { create = true } = {}) {
   const conv = payload?.conversation || (payload?.event === 'conversation_created' ? payload : null) || payload;
   const convId = conv?.id ?? payload?.id ?? null;
   const phoneRaw = extractPhoneFromChatwoot(payload);
@@ -3525,6 +3527,9 @@ async function biteSpeedFindOrCreateThread(payload, env) {
   }
 
 
+  // Find-only mode (conversation lifecycle events): no existing thread → don't create.
+  if (!create) return { thread: null, reason: 'not_found_no_create' };
+
   // No existing thread — create one
   const ins = await sb(`/rest/v1/cs_wa_threads`, env, {
     method: 'POST',
@@ -3576,10 +3581,14 @@ async function maybeBackfillPhoneAndLinkTickets(thread, payload, env) {
 }
 
 async function biteSpeedConversationUpserted(body, env) {
-  let { thread } = await biteSpeedFindOrCreateThread(body, env);
-  if (!thread) return json({ ok: true, skipped: 'no_phone_or_conv_id' });
+  // FIND-ONLY (S185): conversation lifecycle events (created/updated/status_changed) carry
+  // no customer message, so creating a thread here spawned ~84 message-less "phantom" threads
+  // per day (empty, often null provider_account_id → un-backfillable) that cluttered the inbox
+  // + inflated unassigned counts. Threads are now created ONLY by a real message_created. We
+  // still bump an EXISTING thread's sort timestamp; if no thread exists yet, do nothing.
+  let { thread } = await biteSpeedFindOrCreateThread(body, env, { create: false });
+  if (!thread) return json({ ok: true, skipped: 'no_thread_conv_event' });
   thread = await maybeBackfillPhoneAndLinkTickets(thread, body, env);
-  // Bump last_message_at on any conv update so the thread sorts to the top of lists
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, {
     method: 'PATCH',
     body: JSON.stringify({ last_message_at: new Date().toISOString() }),
@@ -3698,6 +3707,10 @@ async function biteSpeedMessageCreated(body, env) {
   const threadPatch = { last_message_at: ts };
   if (direction === 'inbound') {
     threadPatch.customer_window_until = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    // Reopen a closed/snoozed thread when the customer messages again (standard helpdesk
+    // behaviour). Also makes the empty-phantom cleanup safe — any real message resurfaces
+    // a previously-closed thread into the active inbox. (S185)
+    if (thread.thread_state && thread.thread_state !== 'open') threadPatch.thread_state = 'open';
   }
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, {
     method: 'PATCH',
