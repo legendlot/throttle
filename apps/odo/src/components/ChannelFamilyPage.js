@@ -5,7 +5,7 @@ import { Spinner } from '@throttle/ui';
 import { salesGet, inr, fmtInt, rangePresets, priorPeriod, istToday } from '../lib/api.js';
 import { FAMILIES, familyOf, SUBCHANNEL_PALETTE } from '../lib/families.js';
 import { aggOrders } from '../lib/segregation.js';
-import { Kpi, SettledBadge, RangePicker, SegmentedToggle } from './kit.js';
+import { Kpi, SettledBadge, RangePicker, SegmentedToggle, useTableSort, SortHeader } from './kit.js';
 import StackedTrendChart from './StackedTrendChart.js';
 
 // gross/units totals + per-channel + per-variant from f_sales_rollup (group=variant) rows.
@@ -86,6 +86,19 @@ export default function ChannelFamilyPage({ familyKey }) {
     const o = segCh[c.channel_id] || null;
     return { id: c.channel_id, name: c.name, gross: s.gross, units: s.units, o };
   }).filter(r => r.gross > 0 || r.units > 0 || r.o).sort((a, b) => b.gross - a.gross), [famChannels, salesA, segCh]);
+  const chSort = useTableSort(chRows, { initialKey: 'grossAll', valueOf: (c, k) => {
+    const o = c.o || {};
+    if (k === 'name') return c.name;
+    if (k === 'grossAll') return o.grossAll ?? c.gross;
+    if (k === 'orders') return o.totalOrders || 0;
+    if (k === 'netCancel') return o.netCancel || 0;
+    if (k === 'discount') return o.discount || 0;
+    if (k === 'tax') return o.tax || 0;
+    if (k === 'cancelledValue') return o.cancelledValue || 0;
+    if (k === 'returnsValue') return o.returnsValue || 0;
+    if (k === 'asp') return c.units ? c.gross / c.units : 0;
+    return c[k];
+  } });
 
   // top variants within the family
   const topVar = useMemo(() => {
@@ -182,12 +195,12 @@ export default function ChannelFamilyPage({ familyKey }) {
               {hasOrderGrain ? (
                 <table className="so-table" style={{ marginTop: 10 }}>
                   <thead><tr>
-                    <th>Channel</th><th className="so-num">Orders</th><th className="so-num">Gross</th>
-                    <th className="so-num">Net (excl. canc.)</th><th className="so-num">Discounts</th>
-                    <th className="so-num">GST</th><th className="so-num">Cancellations</th><th className="so-num">Returns</th>
+                    <SortHeader k="name" label="Channel" sort={chSort} /><SortHeader k="orders" label="Orders" sort={chSort} numeric /><SortHeader k="grossAll" label="Gross" sort={chSort} numeric />
+                    <SortHeader k="netCancel" label="Net (excl. canc.)" sort={chSort} numeric /><SortHeader k="discount" label="Discounts" sort={chSort} numeric />
+                    <SortHeader k="tax" label="GST" sort={chSort} numeric /><SortHeader k="cancelledValue" label="Cancellations" sort={chSort} numeric /><SortHeader k="returnsValue" label="Returns" sort={chSort} numeric />
                   </tr></thead>
                   <tbody>
-                    {chRows.map(c => (
+                    {chSort.sorted.map(c => (
                       <tr key={c.id}>
                         <td>{c.name}</td>
                         <td className="so-num">{c.o ? fmtInt(c.o.totalOrders) : '—'}</td>
@@ -204,10 +217,10 @@ export default function ChannelFamilyPage({ familyKey }) {
               ) : (
                 <table className="so-table" style={{ marginTop: 10 }}>
                   <thead><tr>
-                    <th>Channel</th><th className="so-num">Gross</th><th className="so-num">Units</th><th className="so-num">ASP</th>
+                    <SortHeader k="name" label="Channel" sort={chSort} /><SortHeader k="gross" label="Gross" sort={chSort} numeric /><SortHeader k="units" label="Units" sort={chSort} numeric /><SortHeader k="asp" label="ASP" sort={chSort} numeric />
                   </tr></thead>
                   <tbody>
-                    {chRows.map(c => (
+                    {chSort.sorted.map(c => (
                       <tr key={c.id}>
                         <td>{c.name}</td>
                         <td className="so-num">{inr(c.gross)}</td>
