@@ -1421,7 +1421,11 @@ const razorpayPaymentsAdapter = {
   },
   async stage(rows, runId, channelId) {
     if (!rows.length) return;
-    const body = rows.map(r => ({ run_id: runId, ...r }));
+    // Dedupe by provider_payment_id within the batch — Razorpay skip-pagination can return the same
+    // payment twice, and ON CONFLICT can't update one conflict key twice in a single statement (PG 21000).
+    const seen = new Map();
+    for (const r of rows) if (r.provider_payment_id) seen.set(r.provider_payment_id, r);
+    const body = [...seen.values()].map(r => ({ run_id: runId, ...r }));
     await sbInsertChunked('/rest/v1/stg_payments?on_conflict=provider,provider_payment_id', body, 'return=minimal,resolution=merge-duplicates');
   },
 };
