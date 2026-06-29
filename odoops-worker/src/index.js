@@ -1863,6 +1863,12 @@ export default {
             return ok({ funnel: (fr.data && fr.data[0]) || {}, recon: (rc.ok && rc.data && rc.data[0]) || {} });
           }
 
+          case 'searchUsers': {   // S185 — searchable LOT-user directory for the access-control grant dropdown
+            if (!canSuperAdmin(P)) return err('No permission', 403);
+            const r = await sbStore('/rest/v1/rpc/search_lot_users', { method: 'POST', body: JSON.stringify({ p_q: qp('q') || '' }) });
+            return r.ok ? ok({ rows: r.data || [] }) : err('User search failed: ' + JSON.stringify(r.data), 502);
+          }
+
           case 'getTraffic': {
             const r = await rpcSales('f_traffic_rollup', { p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO(), p_group: qp('group') || 'src' });
             if (!r.ok) return err('Traffic rollup failed: ' + JSON.stringify(r.data), 502);
