@@ -4571,7 +4571,7 @@ async function getMessagingStats(params, auth, env) {
   };
   // Two-way channels: small volume → fetch threads + last-message direction.
   // Exclude Ignition-transferred threads (S177) — they're off the CS inbox.
-  const twRes = await sb(`/rest/v1/cs_wa_threads?channel=in.(instagram,messenger)&ignition_connect=is.false&select=id,channel,assigned_agent_id&limit=1000`, env);
+  const twRes = await sb(`/rest/v1/cs_wa_threads?channel=in.(instagram,messenger)&ignition_connect=is.false&thread_state=in.(open,snoozed)&select=id,channel,assigned_agent_id&limit=1000`, env);
   const tw = twRes.data || [];
   const chById = {};
   for (const t of tw) {
@@ -4594,19 +4594,25 @@ async function getMessagingStats(params, auth, env) {
       if (dir === 'inbound' && stats[chById[tid]]) stats[chById[tid]].awaiting += 1;
     }
   }
+  // Header tiles count the ACTIVE work-queue (open+snoozed) so they MATCH the default
+  // inbox list, which filters state=active (getMessagingThreads). Without this, a CLOSED
+  // unassigned thread inflated the "unassigned" tile but never appeared in the list →
+  // "count says N, Unassigned tab shows none" (Pruthvi, S184, email channel). Closed
+  // conversations are reachable via the Closed/All state filter, not the work-queue tiles.
+  const ACTIVE = `&thread_state=in.(open,snoozed)`;
   // WhatsApp: exact counts only (read-only mirror — awaiting tracked in BiteSpeed).
   // All counts exclude Ignition-transferred threads (S177).
-  stats.whatsapp.total = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.whatsapp&ignition_connect=is.false&select=id`, env);
-  stats.whatsapp.mine = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.whatsapp&ignition_connect=is.false&assigned_agent_id=eq.${auth.userId}&select=id`, env);
-  stats.whatsapp.unassigned = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.whatsapp&ignition_connect=is.false&assigned_agent_id=is.null&select=id`, env);
+  stats.whatsapp.total = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.whatsapp&ignition_connect=is.false${ACTIVE}&select=id`, env);
+  stats.whatsapp.mine = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.whatsapp&ignition_connect=is.false&assigned_agent_id=eq.${auth.userId}${ACTIVE}&select=id`, env);
+  stats.whatsapp.unassigned = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.whatsapp&ignition_connect=is.false&assigned_agent_id=is.null${ACTIVE}&select=id`, env);
   // Email: exact counts (volume may grow → cheap counts, no per-thread awaiting v1).
-  stats.email.total = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.email&ignition_connect=is.false&select=id`, env);
-  stats.email.mine = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.email&ignition_connect=is.false&assigned_agent_id=eq.${auth.userId}&select=id`, env);
-  stats.email.unassigned = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.email&ignition_connect=is.false&assigned_agent_id=is.null&select=id`, env);
+  stats.email.total = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.email&ignition_connect=is.false${ACTIVE}&select=id`, env);
+  stats.email.mine = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.email&ignition_connect=is.false&assigned_agent_id=eq.${auth.userId}${ACTIVE}&select=id`, env);
+  stats.email.unassigned = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.email&ignition_connect=is.false&assigned_agent_id=is.null${ACTIVE}&select=id`, env);
   // Web (L.O.T Web widget via BiteSpeed, S182): exact counts only (read-mostly mirror).
-  stats.web.total = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.web&ignition_connect=is.false&select=id`, env);
-  stats.web.mine = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.web&ignition_connect=is.false&assigned_agent_id=eq.${auth.userId}&select=id`, env);
-  stats.web.unassigned = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.web&ignition_connect=is.false&assigned_agent_id=is.null&select=id`, env);
+  stats.web.total = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.web&ignition_connect=is.false${ACTIVE}&select=id`, env);
+  stats.web.mine = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.web&ignition_connect=is.false&assigned_agent_id=eq.${auth.userId}${ACTIVE}&select=id`, env);
+  stats.web.unassigned = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.web&ignition_connect=is.false&assigned_agent_id=is.null${ACTIVE}&select=id`, env);
   return ok({ stats });
 }
 
