@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useAuth } from '@throttle/auth';
-import { Spinner, useToast } from '@throttle/ui';
+import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { salesGet, salesPost } from '../../../lib/api.js';
 
 const PERM_KEYS = [
@@ -20,6 +20,7 @@ export default function AdminPage() {
   const [boot, setBoot] = useState(null);
   const [tab, setTab] = useState('access');
   const [grant, setGrant] = useState({ email: '', role_key: '' });
+  const [userOpts, setUserOpts] = useState([]);   // searchable LOT-people directory for the grant dropdown
   const [editRole, setEditRole] = useState(null);   // { role_key, label, permissions }
   const [drrDays, setDrrDays] = useState('');
 
@@ -33,7 +34,13 @@ export default function AdminPage() {
   const roles = boot.roles || [];
   const users = boot.accessUsers || [];
 
-  const doGrant = () => salesPost('grantAccess', grant, session).then(() => { toast?.showToast?.('Access granted', 'success'); setGrant({ email: '', role_key: '' }); load(); }).catch(e => toast?.showToast?.(e.message, 'error'));
+  const searchUsers = (q) => {
+    if (!q || q.trim().length < 2) { setUserOpts([]); return; }
+    salesGet('searchUsers', { q: q.trim() }, session)
+      .then(r => setUserOpts((r?.rows || []).map(u => ({ value: u.email, label: u.full_name, hint: u.email }))))
+      .catch(() => setUserOpts([]));
+  };
+  const doGrant = () => salesPost('grantAccess', grant, session).then(() => { toast?.showToast?.('Access granted', 'success'); setGrant({ email: '', role_key: '' }); setUserOpts([]); load(); }).catch(e => toast?.showToast?.(e.message, 'error'));
   const toggleUser = (u) => {
     if (u.active && !window.confirm(`Disable ${u.full_name}? They lose all Odo access until re-enabled.`)) return;
     salesPost('setUserActive', { user_id: u.user_id, active: !u.active }, session).then(load).catch(e => toast?.showToast?.(e.message, 'error'));
@@ -61,9 +68,9 @@ export default function AdminPage() {
         <>
           {isSuper && (
             <div className="so-card" style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 5, flex: 1, minWidth: 220 }}>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 10, textTransform: 'uppercase', color: 'var(--t3)' }}>Grant access — email</span>
-                <input className="so-input" placeholder="person@legendoftoys.com" value={grant.email} onChange={e => setGrant(g => ({ ...g, email: e.target.value }))} />
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 5, flex: 1, minWidth: 260 }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 10, textTransform: 'uppercase', color: 'var(--t3)' }}>Grant access — search person</span>
+                <Combobox value={grant.email} options={userOpts} onQueryChange={searchUsers} onChange={(val) => setGrant(g => ({ ...g, email: val }))} placeholder="Type a name or email…" portal />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                 <span style={{ fontFamily: 'var(--mono)', fontSize: 10, textTransform: 'uppercase', color: 'var(--t3)' }}>Role</span>
