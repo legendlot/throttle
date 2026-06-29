@@ -1203,7 +1203,10 @@ function ChannelTile({ chKey, stat, active, onClick }) {
         <span style={{ fontSize: 10.5, fontWeight: 500, color: subTone, whiteSpace: 'nowrap',
           overflow: 'hidden', textOverflow: 'ellipsis' }}>{subText}</span>
       </div>
-      <span className="num" style={{ fontWeight: 700, fontSize: 18, color: 'var(--t1)', lineHeight: 1, marginLeft: 'auto' }}>{stat?.total || 0}</span>
+      <div style={{ marginLeft: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: 1.1 }}>
+        <span className="num" style={{ fontWeight: 700, fontSize: 18, color: 'var(--t1)', lineHeight: 1 }}>{stat?.total || 0}</span>
+        <span className="num" style={{ fontSize: 9.5, fontWeight: 500, color: 'var(--t3)' }}>{stat?.closed || 0} closed</span>
+      </div>
     </button>
   );
 }

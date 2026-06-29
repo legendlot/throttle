@@ -4576,11 +4576,11 @@ async function getMessagingThreads(params, auth, env) {
 // BiteSpeed mirror (replies happen there) so it gets an exact total only.
 async function getMessagingStats(params, auth, env) {
   const stats = {
-    instagram: { total: 0, awaiting: 0, mine: 0, unassigned: 0 },
-    messenger: { total: 0, awaiting: 0, mine: 0, unassigned: 0 },
-    whatsapp:  { total: 0, awaiting: null, mine: 0, unassigned: 0 },
-    email:     { total: 0, awaiting: null, mine: 0, unassigned: 0 },
-    web:       { total: 0, awaiting: null, mine: 0, unassigned: 0 },
+    instagram: { total: 0, awaiting: 0, mine: 0, unassigned: 0, closed: 0 },
+    messenger: { total: 0, awaiting: 0, mine: 0, unassigned: 0, closed: 0 },
+    whatsapp:  { total: 0, awaiting: null, mine: 0, unassigned: 0, closed: 0 },
+    email:     { total: 0, awaiting: null, mine: 0, unassigned: 0, closed: 0 },
+    web:       { total: 0, awaiting: null, mine: 0, unassigned: 0, closed: 0 },
   };
   // Two-way channels: small volume → fetch threads + last-message direction.
   // Exclude Ignition-transferred threads (S177) — they're off the CS inbox.
@@ -4626,6 +4626,12 @@ async function getMessagingStats(params, auth, env) {
   stats.web.total = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.web&ignition_connect=is.false${ACTIVE}&select=id`, env);
   stats.web.mine = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.web&ignition_connect=is.false&assigned_agent_id=eq.${auth.userId}${ACTIVE}&select=id`, env);
   stats.web.unassigned = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.web&ignition_connect=is.false&assigned_agent_id=is.null${ACTIVE}&select=id`, env);
+  // Closed (resolved) count per channel — shown on each channel tile so the team has
+  // quick visibility into resolved volume per channel (Pruthvi, S185). Excludes
+  // Ignition-transferred threads, consistent with the active counts above.
+  for (const ch of ['instagram', 'messenger', 'whatsapp', 'email', 'web']) {
+    stats[ch].closed = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.${ch}&ignition_connect=is.false&thread_state=eq.closed&select=id`, env);
+  }
   return ok({ stats });
 }
 
