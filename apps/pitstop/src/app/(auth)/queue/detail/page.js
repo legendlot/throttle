@@ -754,6 +754,7 @@ function WorkArea({ ticket: t, dispatch, repairRun, session, perms, onRefresh, s
           <>
             <PanelGrid>
               <PanelField label="Repair run" value={t.repair_run_id ? `#${t.repair_run_id}` : '—'} mono />
+              <PanelField label="Repair order ID" value={t.repair_order_id || '—'} mono />
               <PanelField label="Run status" value={repairRun?.status || '—'} />
               <PanelField label="Repair AWB" value={t.replacement_awb || '—'} mono />
               <PanelField label="Dispatched" value={t.stage === 'repair_dispatched' || t.stage === 'closed' ? new Date(t.stage_changed_at).toLocaleDateString() : '—'} />
@@ -868,7 +869,7 @@ function EditPanelModal({ ticket, field, session, onClose, onSaved }) {
                   ? ['replacement_order_id','replacement_awb','replacement_unit_upc','replacement_cost_inr']
                   : ticket.disposition === 'refund'
                   ? ['refund_amount_inr','refund_reference']
-                  : ['repair_run_id'],
+                  : ['repair_run_id','repair_order_id'],
   };
   const fields = sectionFields[field] || [];
   const numericFields = new Set(['return_cost_inr','replacement_cost_inr','refund_amount_inr','repair_run_id']);
