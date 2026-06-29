@@ -18,6 +18,11 @@ const PlatChip = ({ p }) => (
     background: (PLAT_COLOR[p] || 'var(--t3)') + '22', color: PLAT_COLOR[p] || 'var(--t2)',
     border: `1px solid ${(PLAT_COLOR[p] || 'var(--t3)')}44` }}>{p || '—'}</span>
 );
+// Live/Paused marker — green = ACTIVE, grey = paused/other. null (no status synced yet) → no dot.
+const StatusDot = ({ live }) => live == null ? null : (
+  <span title={live ? 'Live' : 'Paused'} style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
+    marginRight: 7, verticalAlign: 'middle', background: live ? 'var(--green)' : 'var(--t3)' }} />
+);
 
 export default function MarketingPage() {
   const { session } = useAuth();
@@ -108,6 +113,7 @@ export default function MarketingPage() {
             <div className="so-kpi-lbl" style={{ padding: '16px 18px 0' }}>
               {GROUP_LABEL[group]}s · spend & performance
               {adMode && <span style={{ color: 'var(--t3)', fontWeight: 400 }}> · Meta, last ~14d · ROAS = Meta-attributed</span>}
+              {group !== 'platform' && <span style={{ color: 'var(--t3)', fontWeight: 400 }}> · <span style={{ color: 'var(--green)' }}>●</span> live <span style={{ color: 'var(--t3)' }}>●</span> paused</span>}
             </div>
             <table className="so-table" style={{ marginTop: 8 }}>
               <thead><tr>
@@ -123,7 +129,7 @@ export default function MarketingPage() {
               <tbody>
                 {sort.sorted.length === 0 && <tr><td colSpan={group === 'platform' ? 7 : 8} style={{ color: 'var(--t3)', padding: 14 }}>{adMode ? 'No ad-level data yet — the engine pulls the last ~14 days on the next Meta refresh.' : 'No spend in this range yet — connector may still be backfilling.'}</td></tr>}
                 {sort.sorted.map((r, i) => { const rv = roasOf(r); return (<tr key={i}>
-                  <td>{(adMode ? r.label : r.grp) || '—'}</td>
+                  <td><StatusDot live={r.is_live} />{(adMode ? r.label : r.grp) || '—'}</td>
                   {group !== 'platform' && <td><PlatChip p={r.platform} /></td>}
                   <td className="so-num">{inr(r.spend)}</td>
                   <td className="so-num" style={{ color: roasTone(rv), fontWeight: 500 }}>{rv ? rv.toFixed(2) + '×' : '—'}</td>
