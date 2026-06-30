@@ -86,9 +86,9 @@ function DailyTrend({ rows, changes = [] }) {
     <ResponsiveContainer width="100%" height={240}>
       <AreaChart data={data} margin={{ top: 8, right: 14, left: 0, bottom: 0 }}>
         <defs><linearGradient id="cr-grad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C_GREEN} stopOpacity={0.32} /><stop offset="100%" stopColor={C_GREEN} stopOpacity={0.04} /></linearGradient></defs>
-        <CartesianGrid strokeDasharray="4 4" stroke={C_GRID} vertical={false} />
-        <XAxis dataKey="date" tickFormatter={mmdd} tick={{ fill: C_T3, fontSize: 11, fontFamily: 'var(--mono)' }} axisLine={{ stroke: C_GRID }} tickLine={false} minTickGap={28} />
-        <YAxis tickFormatter={v => `${v}%`} tick={{ fill: C_T3, fontSize: 11, fontFamily: 'var(--mono)' }} axisLine={false} tickLine={false} width={44} />
+        <CartesianGrid strokeDasharray="4 4" stroke={C_GRID} strokeOpacity={0.85} vertical={false} />
+        <XAxis dataKey="date" tickFormatter={mmdd} tick={{ fill: C_T2, fontSize: 11, fontFamily: 'var(--mono)' }} axisLine={{ stroke: C_GRID }} tickLine={{ stroke: C_GRID }} minTickGap={28} />
+        <YAxis tickFormatter={v => `${v}%`} tick={{ fill: C_T2, fontSize: 11, fontFamily: 'var(--mono)' }} axisLine={false} tickLine={false} width={44} />
         <Tooltip content={<TT />} cursor={{ stroke: '#FFFFFF', strokeOpacity: 0.3, strokeWidth: 1 }} />
         <ReferenceLine y={avg} stroke={C_T3} strokeDasharray="5 5" label={{ value: `avg ${avg.toFixed(2)}%`, position: 'right', fill: C_T3, fontSize: 10, fontFamily: 'var(--mono)' }} />
         {markedDates.map(dt => <ReferenceLine key={dt} x={dt} stroke={C_ACCENT} strokeDasharray="3 3" strokeOpacity={0.5} />)}
