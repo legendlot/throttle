@@ -65,7 +65,18 @@ export function NewRequestModal({ open, onClose, editing }) {
   const toggleArr = (k, v) => setForm(f => ({ ...f, [k]: f[k].includes(v) ? f[k].filter(x => x !== v) : [...f[k], v] }));
   const t = type ? (REQ_TYPES[type] || { label: String(type).replace(/_/g, ' '), icon: 'box' }) : null;
   const scoped = type && PRODUCT_SCOPED[type];
-  const canContinue = step === 0 ? !!type : step === 1 ? (form.title.trim() && form.deadline && (!scoped || form.products.length)) : true;
+  // What's still required to leave the current step (drives both the hint + the
+  // "you clicked Continue but nothing happened" toast — never silently no-op).
+  const missing = step === 0
+    ? (type ? [] : ['a request type'])
+    : step === 1
+      ? [!form.title.trim() && 'a title', !form.deadline && 'a "Needed by" date', (scoped && !form.products.length) && 'at least one product'].filter(Boolean)
+      : [];
+  const canContinue = missing.length === 0;
+  function goNext() {
+    if (canContinue) { setStep(s => s + 1); return; }
+    window.dispatchEvent(new CustomEvent('throttle:toast', { detail: { msg: 'Add ' + missing.join(', ') + ' to continue.', tone: 'bad', icon: 'alert' } }));
+  }
 
   const STEPS = ['Type', 'Details', 'Review'];
   const label = { fontFamily: 'var(--font-display)', fontSize: 10, fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--t3)', display: 'block', marginBottom: 8 };
@@ -225,8 +236,13 @@ export function NewRequestModal({ open, onClose, editing }) {
           {step > (isEdit ? 1 : 0) && step < 3 && (
             <button onClick={() => setStep(s => s - 1)} className="t-btn" style={{ padding: '9px 14px', borderRadius: 'var(--r-sm)', background: 'transparent', border: '1px solid var(--border-2)', color: 'var(--t2)', cursor: 'pointer', fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 11.5, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Back</button>
           )}
+          {step < 2 && !canContinue && missing.length > 0 && (
+            <span style={{ fontSize: 12, color: 'var(--t3)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <Icon name="alert" size={13} style={{ color: 'var(--yellow)' }} />Add {missing.join(', ')}
+            </span>
+          )}
           <span style={{ marginLeft: 'auto' }} />
-          {step < 2 && <PrimaryBtn icon="chevronRight" onClick={() => canContinue && setStep(s => s + 1)}>Continue</PrimaryBtn>}
+          {step < 2 && <PrimaryBtn icon="chevronRight" onClick={goNext}>Continue</PrimaryBtn>}
           {step === 2 && <PrimaryBtn icon="check" onClick={submit}>{busy ? (isEdit ? 'Saving…' : 'Filing…') : (isEdit ? 'Save changes' : 'Submit request')}</PrimaryBtn>}
           {step === 3 && <PrimaryBtn icon="check" onClick={onClose}>Done</PrimaryBtn>}
         </div>
