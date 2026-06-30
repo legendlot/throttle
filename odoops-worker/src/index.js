@@ -1464,10 +1464,22 @@ const uniwareAggAdapter = {
       if (!fullyScanned) { cursorAfter = uniISO(winStart); partial = true; break; }   // out of budget mid-scan → resume here next run
       if (!codes.length) { winStart = winEnd; continue; }                              // no member orders → skip forward
 
-      // ── Window fully scanned → get member orders (UPDATED-ascending, budget-bounded). ──
+      // ── Window fully scanned → drain member orders. Uniware's `updated` is SECOND-resolution and
+      // bulk operations stamp many orders at one exact second; when such a same-second pile exceeds a
+      // run's get-budget, a time-based cursor can't step over it. So SKIP orders already staged, then
+      // get the rest: each run drains a fresh slice of the pile (staging is idempotent), and once the
+      // whole window is staged we advance by winEnd — no dependence on the cursor clearing the second.
       codes.sort((a, b) => a.updated - b.updated);
+      const allIds = uniq(codes.map(c => c.code));
+      const already = new Set();
+      if (allIds.length) {
+        const sr = await sbSales(`/rest/v1/stg_uniware?source_order_id=in.${inList(allIds)}&select=source_order_id`); subreqs++;
+        if (sr.ok) for (const x of sr.data) already.add(x.source_order_id);
+      }
+      const toGet = codes.filter(c => !already.has(c.code));
+      if (!toGet.length) { cursorAfter = uniISO(winEnd); partial = winEnd < now; break; }   // every member already staged → step the window
       let drained = true, lastGot = winStart;
-      for (const c of codes) {
+      for (const c of toGet) {
         if (subreqs >= budget - 1) { drained = false; break; }
         const gr = await fetch(`${base}/services/rest/v1/oms/saleorder/get`, { method: 'POST', headers: H, body: JSON.stringify({ code: c.code }) }); subreqs++;
         const gj = await gr.json().catch(() => ({}));
@@ -1477,8 +1489,10 @@ const uniwareAggAdapter = {
         m.order._channel_id = c.channel_id; orderRows.push(m.order); addByChannel(c.channel_id, m.order.sale_date);
         if (c.updated > lastGot) lastGot = c.updated;
       }
-      if (drained) { cursorAfter = uniISO(winEnd); partial = winEnd < now; }            // whole window done
-      else { cursorAfter = uniISO(lastGot > winStart ? lastGot : winStart + 1); partial = true; }   // resume past last gotten (≥+1ms → never pins)
+      // Drained this slice → if it advanced the watermark, resume there; else hold the window so the
+      // next run skips the now-staged slice and gets the remainder (the same-second-pile drain path).
+      if (drained) { cursorAfter = uniISO(winEnd); partial = winEnd < now; }
+      else { cursorAfter = uniISO(lastGot > winStart ? lastGot : winStart); partial = true; }
       break;
     }
 
