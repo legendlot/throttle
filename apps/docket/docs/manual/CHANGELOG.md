@@ -3,6 +3,15 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.3.0] - 2026-06-30
+### Added
+- The Tasks List chapter gained a **List view and Board view (Kanban)** section: the
+  view switch on the control bar, that Board shows tasks as cards in columns (Status
+  by default, switchable to Owner / Team / Program via Group by), drag a card between
+  columns to change that field, only editable cards drag, top-level cards only with
+  Abandoned left off, and that the Grid / Archive done / Select / density controls are
+  list-view only. Notes that Board view also works inside a Program view.
+
 ## [1.2.0] - 2026-06-18
 ### Added
 - The Tasks List chapter now covers two S153 features. **Updating many tasks at
