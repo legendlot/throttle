@@ -1356,81 +1356,146 @@ function uniMapOrder(so) {
   };
   return { lines, order };
 }
+// LEGACY per-channel `uniware` adapter — RETIRED (S187). Uniware does NOT honour the
+// saleOrder/search `channel` value as a server-side filter (it returns ALL channels), so a
+// per-channel pull paged the whole all-channels result and exhausted the 50-subreq budget
+// before the per-order gets, freezing the cursor (CRED stuck at 2026-04-22, Flipkart 2026-04-27).
+// Replaced by ONE `uniware_agg` aggregator (below). This stub stays registered so a stray manual
+// refresh / an in-flight member ConnectorWorkflow at deploy time ends cleanly instead of crashing
+// on an unknown adapter. Member rows keep adapter_kind='uniware' purely as the map/fact-target
+// source; the cron producer skips them. Spec 2026-07-01-odo-uniware-channel-agnostic-aggregator.
 const uniwareAdapter = {
   kind: 'uniware', stgTable: 'stg_uniware', sourceKind: 'uniware',
+  async fetch() { return { rows: [], orderRows: [], cursorAfter: null, subreqs: 0, partial: false }; },
+  async stage() { /* fed by uniware_agg */ },
+};
+
+// ── Uniware AGGREGATOR (S187) — pull all-channels once, fan out to member channels ──
+// One connector owns the Uniware pull + a single cursor. It pulls each UPDATED window ONCE (no
+// channel filter, since Uniware ignores it), keeps only orders whose channel is in the member
+// allow-list (the connector_config rows still tagged adapter_kind='uniware', each carrying
+// config.uniware_channel), fetches their details, and stages each to the CORRECT member channel_id.
+// This kills the per-channel budget-starvation AND the 3× redundant all-channels paging.
+const UNI_AGG_WINDOW_DAYS = 7;     // default UPDATED window; adaptively shrinks if too dense to scan
+const UNI_AGG_MIN_WINDOW_MS = 24 * 3600 * 1000;   // shrink floor (1 day)
+const uniwareAggAdapter = {
+  kind: 'uniware_agg', stgTable: 'stg_uniware', sourceKind: 'uniware',
+  // Build { UNIWARE_CHANNEL_UPPER → odo channel_id } from the member connector rows.
+  async memberMap() {
+    const mr = await sbSales('/rest/v1/connector_config?adapter_kind=eq.uniware&select=channel_id,config');
+    const map = {};
+    for (const m of (mr.ok ? mr.data : [])) {
+      const u = String((m.config && m.config.uniware_channel) || '').toUpperCase();
+      if (u) map[u] = m.channel_id;
+    }
+    return map;
+  },
   async fetch({ env, cursor, config, budget }) {
     const cfg = config || {};
-    const uchan = cfg.uniware_channel;
-    if (!uchan) throw new Error('uniware config missing uniware_channel');
     const base = `https://${env.UNIWARE_TENANT}.unicommerce.com`;
+    const map = await this.memberMap();
+    if (!Object.keys(map).length) throw new Error('uniware_agg: no member channels (need connector_config adapter_kind=uniware with config.uniware_channel)');
     const token = await getUniwareToken(env);
     const H = { Authorization: `bearer ${token}`, 'Content-Type': 'application/json' };
-    const winMs = (cfg.window_days || UNI_WINDOW_DAYS_DEFAULT) * 24 * 3600 * 1000;
-    const maxGets = Math.min(cfg.max_gets || UNI_MAX_GETS_DEFAULT, Math.max(1, budget - 6));
-    const MAX_WINDOWS = cfg.max_windows || 25;   // empty windows to skip-scan per run (cheap search-only)
     const PAGE = 100;
+    const baseWinMs = (cfg.window_days || UNI_AGG_WINDOW_DAYS) * 24 * 3600 * 1000;
+    const MAX_WINDOWS = cfg.max_windows || 25;   // empty windows to skip-scan per run (search-only)
     const now = Date.now();
     let winStart = uniMs(cursor || cfg.backfill_start || BACKFILL_START);
     let subreqs = 1; // token
-    const rows = [], orderRows = [];
+    const rows = [], orderRows = [], byChannel = {};
     let cursorAfter = uniISO(winStart), partial = false, scanned = 0;
 
-    // Walk forward in ≤14-day windows. EMPTY windows are skipped cheaply within this run (one search
-    // each) — so backfilling from a far-back cursor through order-less history doesn't crawl one window
-    // per cron tick. Stop at the FIRST window that has target orders, process it (bounded gets), and
-    // resume next run. Budget-guarded so we never approach the 50-subrequest cap.
+    const addByChannel = (chId, date) => { (byChannel[chId] = byChannel[chId] || new Set()).add(date); };
+
     while (true) {
       if (winStart >= now) { cursorAfter = uniISO(now); partial = false; break; }                 // caught up to live
-      // Stop scanning when out of windows or low on budget. We do NOT reserve maxGets here — empty
-      // windows cost only a search, so skipping must be free to use most of the budget; gets are
-      // separately bounded below by the remaining budget when a data window is found.
-      if (scanned >= MAX_WINDOWS || subreqs >= budget - 3) { cursorAfter = uniISO(winStart); partial = true; break; }
-      const winEnd = Math.min(winStart + winMs, now);
-      // page this window's target-channel order codes (UPDATED)
-      const codes = []; let start = 0;
-      while (subreqs < budget - 3) {
-        const r = await fetch(`${base}/services/rest/v1/oms/saleOrder/search`, { method: 'POST', headers: H, body: JSON.stringify({ channel: uchan, fromDate: uniISO(winStart), toDate: uniISO(winEnd), dateType: 'UPDATED', searchOptions: { displayStart: start, displayLength: PAGE } }) }); subreqs++;
-        const j = await r.json().catch(() => ({}));
-        if (!j.successful) throw new Error('Uniware search: ' + JSON.stringify(j.errors || j).slice(0, 160));
-        const els = j.elements || [];
-        // Type-guard: the search `channel` filter is a channel-NAME match and an UNRECOGNISED value
-        // silently returns ALL channels — keep only elements whose result channel matches the target.
-        for (const e of els) {
-          if (String(e.channel || '').toUpperCase() === uchan.toUpperCase()) codes.push({ code: e.code, updated: Number(e.updated) || Number(e.created) || winEnd });
+      if (scanned >= MAX_WINDOWS || subreqs >= budget - 4) { cursorAfter = uniISO(winStart); partial = true; break; }
+
+      // ── Scan the window FULLY, shrinking (halve, floor 1 day) if too dense to page within budget.
+      // Guarantees a fully-covered window so the cursor can advance by winEnd; volume-proof.
+      let winMs = baseWinMs, winEnd, codes = null, fullyScanned = false;
+      while (true) {
+        winEnd = Math.min(winStart + winMs, now);
+        const collected = []; let start = 0, ok = true, overflow = false;
+        const scanCap = budget - 4 - 6;   // leave ≥6 subreqs for gets after scanning
+        while (true) {
+          if (subreqs >= budget - 4) { ok = false; break; }                 // hard budget guard
+          const r = await fetch(`${base}/services/rest/v1/oms/saleOrder/search`, { method: 'POST', headers: H, body: JSON.stringify({ fromDate: uniISO(winStart), toDate: uniISO(winEnd), dateType: 'UPDATED', searchOptions: { displayStart: start, displayLength: PAGE } }) }); subreqs++;
+          const j = await r.json().catch(() => ({}));
+          if (!j.successful) throw new Error('Uniware search: ' + JSON.stringify(j.errors || j).slice(0, 160));
+          const els = j.elements || [];
+          for (const e of els) {
+            const ch = String(e.channel || '').toUpperCase();
+            if (map[ch]) collected.push({ code: e.code, channel_id: map[ch], updated: Number(e.updated) || Number(e.created) || winEnd });
+          }
+          if (els.length < PAGE) { ok = true; break; }                      // last page → fully scanned
+          start += PAGE;
+          if (start / PAGE >= scanCap) { overflow = true; break; }          // too many pages for one step
         }
-        if (els.length < PAGE) break;
-        start += PAGE;
+        if (overflow && winMs > UNI_AGG_MIN_WINDOW_MS && subreqs < budget - 8) {
+          winMs = Math.max(UNI_AGG_MIN_WINDOW_MS, Math.floor(winMs / 2));   // shrink + retry same winStart
+          continue;
+        }
+        fullyScanned = ok && !overflow;
+        codes = collected;
+        break;
       }
       scanned++;
-      if (!codes.length) { winStart = winEnd; continue; }   // empty window → skip forward, keep scanning
-      // window has data → get each (bounded), then stop and resume next run
+      if (!fullyScanned) { cursorAfter = uniISO(winStart); partial = true; break; }   // ran out of budget scanning → resume here
+      if (!codes.length) { winStart = winEnd; continue; }                              // no member orders → skip forward
+
+      // ── Window fully scanned → get member orders (UPDATED-ascending, budget-bounded). ──
       codes.sort((a, b) => a.updated - b.updated);
-      let processed = 0, lastUpdated = winStart, drained = true;
+      let drained = true, lastGot = winStart;
       for (const c of codes) {
-        if (processed >= maxGets || subreqs >= budget - 1) { drained = false; break; }
-        const gr = await fetch(`${base}/services/rest/v1/oms/saleorder/get`, { method: 'POST', headers: H, body: JSON.stringify({ code: c.code }) }); subreqs++; processed++;
+        if (subreqs >= budget - 1) { drained = false; break; }
+        const gr = await fetch(`${base}/services/rest/v1/oms/saleorder/get`, { method: 'POST', headers: H, body: JSON.stringify({ code: c.code }) }); subreqs++;
         const gj = await gr.json().catch(() => ({}));
         const so = gj.saleOrderDTO; if (!so) continue;
-        const m = uniMapOrder(so); rows.push(...m.lines); orderRows.push(m.order);
-        if (c.updated > lastUpdated) lastUpdated = c.updated;
+        const m = uniMapOrder(so);
+        for (const ln of m.lines) { ln._channel_id = c.channel_id; rows.push(ln); addByChannel(c.channel_id, ln.sale_date); }
+        m.order._channel_id = c.channel_id; orderRows.push(m.order); addByChannel(c.channel_id, m.order.sale_date);
+        if (c.updated > lastGot) lastGot = c.updated;
       }
-      if (drained) { cursorAfter = uniISO(winEnd); partial = winEnd < now; }   // window done; more history if < now
-      else { cursorAfter = uniISO(lastUpdated); partial = true; }              // window not drained → resume mid-window
+      if (drained) { cursorAfter = uniISO(winEnd); partial = winEnd < now; }            // whole window done
+      else { cursorAfter = uniISO(lastGot > winStart ? lastGot : winStart + 1); partial = true; }   // resume past last gotten (≥+1ms → never pins)
       break;
     }
-    return { rows, orderRows, cursorAfter, subreqs, partial };
+
+    const byChannelArr = {}; for (const k in byChannel) byChannelArr[k] = [...byChannel[k]];
+    return { rows, orderRows, cursorAfter, subreqs, partial, byChannel: byChannelArr };
   },
-  async stage(rows, runId, channelId, fetched) {
-    if (rows.length) {
-      const body = rows.map(r => ({
-        run_id: runId, channel_id: channelId, source_order_id: r.source_order_id, source_line_id: r.source_line_id,
+  // Fan out staging by each row's resolved member channel_id.
+  async stage(rows, runId, _aggChannelId, fetched) {
+    const byCh = {};
+    for (const r of rows) (byCh[r._channel_id] = byCh[r._channel_id] || []).push(r);
+    for (const [chId, rs] of Object.entries(byCh)) {
+      const body = rs.map(r => ({
+        run_id: runId, channel_id: chId, source_order_id: r.source_order_id, source_line_id: r.source_line_id,
         occurred_at: r.occurred_at, sale_date: r.sale_date, channel_sku: r.channel_sku, title: r.title,
         qty: Math.round(r.qty), gross_value: r.gross_value, discount_value: r.discount_value || 0, tax_value: r.tax_value || 0,
         row_type: r.row_type || 'sale', order_status: r.order_status, is_cancelled: r.is_cancelled, raw: r.raw,
       }));
       await sbInsertChunked('/rest/v1/stg_uniware?on_conflict=source_line_id', body, 'return=minimal,resolution=merge-duplicates');
     }
-    await stageOrders((fetched && fetched.orderRows) || [], runId, channelId);
+    const ordByCh = {};
+    for (const o of ((fetched && fetched.orderRows) || [])) (ordByCh[o._channel_id] = ordByCh[o._channel_id] || []).push(o);
+    for (const [chId, os] of Object.entries(ordByCh)) await stageOrders(os, runId, chId);
+  },
+  // recompute_facts + sku resolution PER member channel (executeRun passes `fetched`).
+  async recompute({ runId, fetched }) {
+    const byChannel = (fetched && fetched.byChannel) || {};
+    let mapped = 0, unmapped = 0, factsUpserted = 0;
+    for (const [chId, dates] of Object.entries(byChannel)) {
+      if (!dates.length) continue;
+      const r = await resolveSkus(chId, dates, 'stg_uniware', null);
+      const f = await rpcSales('recompute_facts', { p_channel: chId, p_dates: dates, p_run_id: runId });
+      mapped += r.mapped; unmapped += r.unmapped; factsUpserted += (f.ok ? Number(f.data) : 0);
+      // Stamp the member connector so the Connectors page shows it Active + fresh.
+      await sbSales(`/rest/v1/connector_config?channel_id=eq.${chId}`, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ last_ok_at: nowISO(), last_error: null }) });
+    }
+    return { mapped, unmapped, factsUpserted };
   },
 };
 
@@ -1770,7 +1835,7 @@ async function adsAutoPause(env) {
   } catch (e) { console.error('adsAutoPause failed:', e?.message || e); }
 }
 
-const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter, amazon_spapi: amazonAdapter, amazon_ads: amazonAdsAdapter, amazon_ads_product: amazonAdsProductAdapter, meta_ads: metaAdsAdapter, meta_status: metaStatusAdapter, google_ads: googleAdsAdapter, ga4: ga4Adapter, uniware: uniwareAdapter, razorpay_payments: razorpayPaymentsAdapter };
+const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter, amazon_spapi: amazonAdapter, amazon_ads: amazonAdsAdapter, amazon_ads_product: amazonAdsProductAdapter, meta_ads: metaAdsAdapter, meta_status: metaStatusAdapter, google_ads: googleAdsAdapter, ga4: ga4Adapter, uniware: uniwareAdapter, uniware_agg: uniwareAggAdapter, razorpay_payments: razorpayPaymentsAdapter };
 
 // minimal RFC-4180-ish CSV parser (handles quoted fields, commas, newlines)
 function parseCSV(text) {
@@ -1922,7 +1987,7 @@ async function executeRun(cfg, runId, env, { budget = CRON_BUDGET, cursorOverrid
     let res = { mapped: 0, unmapped: 0, factsUpserted: 0 };
     if (dates.length) {
       res = adapter.recompute
-        ? await adapter.recompute({ channelId: cfg.channel_id, dates, runId })
+        ? await adapter.recompute({ channelId: cfg.channel_id, dates, runId, fetched })
         : await mapAndUpsert(cfg.channel_id, dates, runId, adapter.stgTable, cfg.started_by);
     }
     await finishRun(runId, { status: partial ? 'partial' : 'ok', rows_fetched: rows.length, rows_mapped: res.mapped, rows_unmapped: res.unmapped, facts_upserted: res.factsUpserted, subrequests_used: subreqs, cursor_after: cursorAfter });
@@ -2085,8 +2150,11 @@ export default {
       // that left daily sell-out connectors stale since S166/S168 — see the Workflows design spec).
       // startConnectorWf is single-flight (skips a connector already in flight), so the producer
       // just asks for each enabled connector.
-      const r = await sbSales('/rest/v1/connector_config?enabled=eq.true&select=channel_id');
+      const r = await sbSales('/rest/v1/connector_config?enabled=eq.true&select=channel_id,adapter_kind');
       for (const cfg of (r.ok ? r.data : [])) {
+        // Member channels (adapter_kind='uniware') are fed by the uniware_agg aggregator, not run
+        // independently — skip them so we don't re-spawn the retired per-channel pull (S187).
+        if (cfg.adapter_kind === 'uniware') continue;
         try { await startConnectorWf(env, cfg.channel_id, 'cron', null); }
         catch (e) { console.error('odoops producer: failed to start', cfg.channel_id, e?.message || e); }
       }
