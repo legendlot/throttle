@@ -2770,6 +2770,7 @@ export default {
                   object_story_spec: { page_id: ad.page_id, link_data: {
                     image_hash: imageHash, link: ad.link, message: ad.primary_text || '', name: ad.headline || '',
                     call_to_action: { type: ad.cta || 'SHOP_NOW', value: { link: ad.link } } } },
+                  url_tags: ad.url_tags || undefined,   // UTM string Meta appends to the click (+ resolves {{macros}})
                 });
                 const res = await metaPost(env, `act_${acct}/ads`, { name: ad.name || 'LOT ad', adset_id: d.adset_id, creative: { creative_id: cre.id }, status: 'PAUSED' });
                 await managedUpsert({ entity_type: 'ad', meta_id: res.id, parent_id: d.adset_id, plan_id: d.plan_id, channel_id: plan.channel_id, ad_account_id: acct, name: ad.name || null, daily_budget_inr: 0, status: 'paused' });
