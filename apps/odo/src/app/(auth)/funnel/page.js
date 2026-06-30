@@ -4,6 +4,7 @@ import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
 import { salesGet, fmtInt, inr, rangePresets } from '../../../lib/api.js';
 import { RangePicker, SegmentedToggle, useTableSort, SortHeader } from '../../../components/kit.js';
+import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine } from 'recharts';
 
 const numfmt = n => Number(n || 0).toLocaleString('en-IN');
 const pctOf = (n, d) => (d > 0 ? (n / d * 100) : 0);
@@ -46,40 +47,54 @@ function Funnel({ steps }) {
   );
 }
 
-// Daily conversion-rate trend over the snapshot history — the shape of when conversion moved.
-// The input-stream annotations (website changes, stock in/out) overlay this chart in later phases.
+// Daily conversion-rate trend (Recharts — axes + hover tooltip, consistent with the app's other
+// charts). Website-change events overlay as reference lines; the tooltip shows the exact CR%, the
+// day's funnel counts, and any change that shipped that day.
+const C_GRID = '#33343D', C_T2 = '#A4A6AE', C_T3 = '#6E6F79', C_SURFACE2 = '#26272E', C_GREEN = '#34D27B', C_ACCENT = '#F2CD1A';
+const mmdd = d => (d ? String(d).slice(5) : '');
 function DailyTrend({ rows, changes = [] }) {
   if (!rows || rows.length < 2) return <div className="so-sub" style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)', padding: '20px 0' }}>Not enough days in this range yet — widen it.</div>;
-  const W = 1000, H = 210, pad = 30;
-  const vals = rows.map(r => Number(r.purchase_cr) || 0);
-  const max = Math.max(...vals, 0.1);
-  const x = i => pad + (i / (rows.length - 1)) * (W - pad * 2);
-  const y = v => H - pad - (v / max) * (H - pad * 2);
-  const line = rows.map((r, i) => `${x(i)},${y(vals[i])}`).join(' ');
-  const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
-  const idxByDate = {}; rows.forEach((r, i) => { idxByDate[r.the_date] = i; });
+  const data = rows.map(r => ({ date: r.the_date, cr: Number(r.purchase_cr) || 0, sessions: Number(r.sessions) || 0, atc: Number(r.add_to_carts) || 0, checkout: Number(r.checkouts) || 0, purchases: Number(r.purchases) || 0 }));
+  const avg = data.reduce((a, b) => a + b.cr, 0) / data.length;
+  const byDate = {}; (changes || []).forEach(c => { (byDate[c.the_date] = byDate[c.the_date] || []).push(c); });
+  const TT = ({ active, payload, label }) => {
+    if (!active || !payload || !payload.length) return null;
+    const d = payload[0].payload, chg = byDate[label] || [];
+    const row = (k, v, color) => (
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 14, marginBottom: 2 }}>
+        <span style={{ color: C_T2 }}>{k}</span><span style={{ color: color || '#F2F3F0' }}>{v}</span>
+      </div>
+    );
+    return (
+      <div style={{ background: C_SURFACE2, border: `1px solid ${C_GRID}`, borderRadius: 8, padding: '9px 11px', fontFamily: 'var(--mono)', fontSize: 11.5, minWidth: 168, boxShadow: '0 8px 24px rgba(0,0,0,0.45)' }}>
+        <div style={{ color: C_T2, marginBottom: 5, fontSize: 10.5 }}>{label}</div>
+        {row('Conv. rate', `${d.cr.toFixed(2)}%`, C_GREEN)}
+        {row('Sessions', d.sessions.toLocaleString('en-IN'))}
+        {row('Add to cart', d.atc.toLocaleString('en-IN'))}
+        {row('Checkout', d.checkout.toLocaleString('en-IN'))}
+        {row('Purchases', d.purchases.toLocaleString('en-IN'))}
+        {chg.map(c => (
+          <div key={c.id} style={{ display: 'flex', gap: 6, marginTop: 5, paddingTop: 5, borderTop: `1px solid ${C_GRID}`, color: C_ACCENT, maxWidth: 230 }}>
+            <span>▸</span><span style={{ color: '#F2F3F0', whiteSpace: 'normal' }}>{c.title}{c.result && c.result !== 'pending' ? ` · ${c.result}` : ''}</span>
+          </div>
+        ))}
+      </div>
+    );
+  };
+  const markedDates = Object.keys(byDate);
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={210} preserveAspectRatio="none" style={{ display: 'block' }}>
-      {[0.25, 0.5, 0.75, 1].map(f => <line key={f} x1={pad} x2={W - pad} y1={y(max * f)} y2={y(max * f)} stroke="var(--surface2)" strokeWidth="1" />)}
-      <line x1={pad} x2={W - pad} y1={y(avg)} y2={y(avg)} stroke="var(--t3)" strokeWidth="1" strokeDasharray="5,5" />
-      <polygon points={`${pad},${H - pad} ${line} ${W - pad},${H - pad}`} fill="var(--green)" fillOpacity="0.08" />
-      <polyline points={line} fill="none" stroke="var(--green)" strokeWidth="2" vectorEffect="non-scaling-stroke" />
-      {/* website-change markers — when a change shipped, on the conversion timeline */}
-      {(changes || []).map((c, k) => {
-        const i = idxByDate[c.the_date]; if (i == null) return null;
-        const cx = x(i);
-        return (
-          <g key={c.id || k}>
-            <line x1={cx} x2={cx} y1={pad - 8} y2={H - pad} stroke="var(--accent)" strokeWidth="1" strokeDasharray="3,3" opacity="0.55" />
-            <circle cx={cx} cy={pad - 8} r="4" fill="var(--accent)">
-              <title>{c.the_date} · {c.title}{c.hypothesis ? ` — ${c.hypothesis}` : ''}{c.result && c.result !== 'pending' ? ` (${c.result})` : ''}</title>
-            </circle>
-          </g>
-        );
-      })}
-      <text x={pad} y={y(max) - 4} fill="var(--t3)" fontSize="11" fontFamily="var(--mono)">{max.toFixed(2)}%</text>
-      <text x={W - pad} y={y(avg) - 4} fill="var(--t3)" fontSize="11" fontFamily="var(--mono)" textAnchor="end">avg {avg.toFixed(2)}%</text>
-    </svg>
+    <ResponsiveContainer width="100%" height={240}>
+      <AreaChart data={data} margin={{ top: 8, right: 14, left: 0, bottom: 0 }}>
+        <defs><linearGradient id="cr-grad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C_GREEN} stopOpacity={0.32} /><stop offset="100%" stopColor={C_GREEN} stopOpacity={0.04} /></linearGradient></defs>
+        <CartesianGrid strokeDasharray="4 4" stroke={C_GRID} vertical={false} />
+        <XAxis dataKey="date" tickFormatter={mmdd} tick={{ fill: C_T3, fontSize: 11, fontFamily: 'var(--mono)' }} axisLine={{ stroke: C_GRID }} tickLine={false} minTickGap={28} />
+        <YAxis tickFormatter={v => `${v}%`} tick={{ fill: C_T3, fontSize: 11, fontFamily: 'var(--mono)' }} axisLine={false} tickLine={false} width={44} />
+        <Tooltip content={<TT />} cursor={{ stroke: '#FFFFFF', strokeOpacity: 0.3, strokeWidth: 1 }} />
+        <ReferenceLine y={avg} stroke={C_T3} strokeDasharray="5 5" label={{ value: `avg ${avg.toFixed(2)}%`, position: 'right', fill: C_T3, fontSize: 10, fontFamily: 'var(--mono)' }} />
+        {markedDates.map(dt => <ReferenceLine key={dt} x={dt} stroke={C_ACCENT} strokeDasharray="3 3" strokeOpacity={0.5} />)}
+        <Area type="monotone" dataKey="cr" stroke={C_GREEN} strokeWidth={2} fill="url(#cr-grad)" dot={false} activeDot={{ r: 4, fill: C_GREEN }} />
+      </AreaChart>
+    </ResponsiveContainer>
   );
 }
 
