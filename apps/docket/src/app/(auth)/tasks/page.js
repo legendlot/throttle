@@ -6,7 +6,7 @@ import { Spinner, useToast } from '@throttle/ui';
 import {
   Search, X, Plus, Check, Ban, ListFilter, Layers, List, Rows3, Inbox,
   ChevronRight, ChevronDown, Calendar, AlertTriangle, Link2, MessageSquare,
-  Lock, Settings2, LayoutDashboard, ListChecks, Archive, CheckSquare, Users, Flag, Tag,
+  Lock, Settings2, LayoutDashboard, ListChecks, Archive, CheckSquare, Users, Flag, Tag, Columns3,
 } from 'lucide-react';
 import { docketopsGet, docketopsPost } from '../../../lib/docketopsFetch.js';
 import { StatusBadge } from '../../../components/StatusBadge.js';
@@ -15,6 +15,7 @@ import { DatePicker } from '../../../components/DatePicker.js';
 import { TaskDrawer } from '../../../components/TaskDrawer.js';
 import { SpaceSettings } from '../../../components/SpaceSettings.js';
 import { Avatar, AvatarRow, Popover, AnchoredPopover, OptionList, firstName, personColor, deadlineState, relDeadline, fmtShortDate } from '../../../components/primitives.js';
+import { KanbanBoard } from '../../../components/KanbanBoard.js';
 import { STATUSES, STATUS_MAP, SETTABLE_STATUSES, PRIORITIES, effectiveDeadline } from '../../../lib/tasks.js';
 import { useHotkey } from '../../../lib/hotkeys.js';
 import { useChrome } from '../../../lib/chrome.js';
@@ -64,6 +65,7 @@ export default function TasksPage() {
   const [groupBy, setGroupBy] = useState('none');
   const [density, setDensity] = useState('roomy');
   const [archiveDone, setArchiveDone] = useState(false); // per-person view pref (sticky)
+  const [viewMode, setViewMode] = useState('list'); // 'list' | 'board' (Kanban) — sticky per-person
 
   const [q, setQ] = useState('');
   const [filterOpen, setFilterOpen] = useState(false);
@@ -87,10 +89,12 @@ export default function TasksPage() {
     try {
       const d = localStorage.getItem('docket.density'); if (d) setDensity(d);
       const a = localStorage.getItem('docket.archiveDone'); if (a != null) setArchiveDone(a === '1');
+      const v = localStorage.getItem('docket.viewMode'); if (v === 'list' || v === 'board') setViewMode(v);
     } catch { /* ignore */ }
   }, []);
   function chooseDensity(d) { setDensity(d); try { localStorage.setItem('docket.density', d); } catch { /* ignore */ } }
   function toggleArchiveDone() { setArchiveDone(v => { const n = !v; try { localStorage.setItem('docket.archiveDone', n ? '1' : '0'); } catch { /* ignore */ } return n; }); }
+  function chooseView(v) { setViewMode(v); try { localStorage.setItem('docket.viewMode', v); } catch { /* ignore */ } }
 
   const empMap = useMemo(() => Object.fromEntries(employees.map(e => [e.id, e.full_name])), [employees]);
   const deptMap = useMemo(() => Object.fromEntries(departments.map(d => [d.id, d.name])), [departments]);
@@ -257,6 +261,13 @@ export default function TasksPage() {
   const mineOwner = useMemo(() => mineMatched.filter(t => t._relation === 'owner').sort(sortFn), [mineMatched, sortFn]);
   const mineCollab = useMemo(() => mineMatched.filter(t => t._relation !== 'owner').sort(sortFn), [mineMatched, sortFn]);
 
+  // Board (Kanban) view: top-level, non-abandoned tasks (incl. ones still "needs setup" —
+  // there is no separate Grid tray on the board). Columns follow the group-by axis,
+  // defaulting to Status. Independent of the list-only "Archive done" toggle.
+  const boardMode = viewMode === 'board' && !mineMode;
+  const kanbanAxis = groupBy === 'none' ? 'status' : groupBy;
+  const kanbanRows = useMemo(() => topLevel.filter(t => t.status !== 'abandoned').sort(sortFn), [topLevel, sortFn]);
+
   // ---- bulk selection (works in Grid + board + my-tasks; only editable tasks are selectable) ----
   const selectableIds = useMemo(() => {
     const pool = mineMode ? [...mineOwner, ...mineCollab] : [...gridRows, ...boardRows];
@@ -401,26 +412,36 @@ export default function TasksPage() {
                 teamOpts, empOpts, programOpts, activeFilterCount, clearFilters }} />
           )}
         </div>
-        <button className={'tool' + (selectMode ? ' on' : '')} onClick={() => setSelectMode(m => { if (m) clearSelection(); return !m; })}
-          title="Select multiple tasks to update them in bulk">
-          <CheckSquare className="ic" /> Select
-        </button>
-        {selectMode && selectableIds.length > 0 && (
+        {!boardMode && (
+          <button className={'tool' + (selectMode ? ' on' : '')} onClick={() => setSelectMode(m => { if (m) clearSelection(); return !m; })}
+            title="Select multiple tasks to update them in bulk">
+            <CheckSquare className="ic" /> Select
+          </button>
+        )}
+        {!boardMode && selectMode && selectableIds.length > 0 && (
           <button className="tool" onClick={toggleSelectAll}>
             <span className={'sel-box' + (allSelected ? ' on' : '')}>{allSelected && <Check size={11} />}</span>
             {allSelected ? 'Clear all' : 'Select all'}{selected.size > 0 && <span className="badge">{selected.size}</span>}
           </button>
         )}
-        {!mineMode && (
+        {!mineMode && !boardMode && (
           <button className={'tool' + (archiveDone ? ' on' : '')} onClick={toggleArchiveDone}
             title={archiveDone ? 'Done tasks are archived — click to show them on the board' : 'Archive done tasks into a collapsed section'}>
             <Archive className="ic" /> {archiveDone ? 'Done archived' : 'Archive done'}
           </button>
         )}
-        <div className="seg">
-          <button className={density === 'compact' ? 'on' : ''} title="Compact" onClick={() => chooseDensity('compact')}><List /></button>
-          <button className={density === 'roomy' ? 'on' : ''} title="Roomy" onClick={() => chooseDensity('roomy')}><Rows3 /></button>
-        </div>
+        {!mineMode && (
+          <div className="seg" title="View">
+            <button className={viewMode === 'list' ? 'on' : ''} title="List view" onClick={() => chooseView('list')}><ListChecks /></button>
+            <button className={viewMode === 'board' ? 'on' : ''} title="Board view (Kanban)" onClick={() => chooseView('board')}><Columns3 /></button>
+          </div>
+        )}
+        {!boardMode && (
+          <div className="seg">
+            <button className={density === 'compact' ? 'on' : ''} title="Compact" onClick={() => chooseDensity('compact')}><List /></button>
+            <button className={density === 'roomy' ? 'on' : ''} title="Roomy" onClick={() => chooseDensity('roomy')}><Rows3 /></button>
+          </div>
+        )}
       </div>
 
       {loading && tasks.length === 0 ? <Spinner /> : (
@@ -440,6 +461,9 @@ export default function TasksPage() {
           </div>
         ) : (
           <div style={{ opacity: loading ? 0.5 : 1, pointerEvents: loading ? 'none' : 'auto', transition: 'opacity var(--base) var(--ease)' }}>
+            {boardMode ? (
+              <KanbanBoard rows={kanbanRows} axis={kanbanAxis} ctx={rowCtx} />
+            ) : (<>
             <GridZone rows={gridRows} ctx={rowCtx} />
 
             {boardRows.length > 0 && (
@@ -481,11 +505,12 @@ export default function TasksPage() {
             )}
 
             <ArchivedZone rows={archivedRows} ctx={rowCtx} />
+            </>)}
           </div>
         )
       )}
 
-      {selectMode && selected.size > 0 && (
+      {!boardMode && selectMode && selected.size > 0 && (
         <BulkBar count={selected.size} onClear={clearSelection} onApply={applyBulk}
           ownerOpts={ownerCellOpts} prioOpts={prioOpts} programOpts={programCellOpts} />
       )}

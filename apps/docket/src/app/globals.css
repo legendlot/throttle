@@ -895,3 +895,37 @@ button { cursor: pointer; background: none; border: none; }
 .bulk-bar .bb-clear:hover { color: var(--text-1); background: var(--surface-3); }
 /* bulk-bar popovers open UPWARD (the bar is pinned to the bottom) */
 .bb-pop { top: auto; bottom: calc(100% + 8px); left: 0; }
+
+/* ---------------- Kanban (board view) ---------------- */
+.kanban-scroll { overflow-x: auto; margin: 0 -2px; padding: 4px 2px 12px; }
+.kanban-scroll::-webkit-scrollbar { height: 8px; }
+.kanban-scroll::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 4px; }
+.kanban { display: flex; align-items: flex-start; gap: 12px; min-height: 200px; }
+.kan-col { flex: 0 0 290px; width: 290px; background: var(--bg-sunken, var(--surface)); border: 1px solid var(--border); border-radius: var(--r-md); display: flex; flex-direction: column; max-height: calc(100vh - 220px); transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease); }
+.kan-col.over { border-color: var(--accent-line); background: var(--accent-soft); }
+.kan-col-head { display: flex; align-items: center; gap: 8px; padding: 11px 13px; border-bottom: 1px solid var(--border); position: sticky; top: 0; }
+.kan-dot { width: 9px; height: 9px; border-radius: 3px; flex-shrink: 0; }
+.kan-col-label { font-family: var(--f-display); font-weight: 600; font-size: 12px; letter-spacing: .05em; text-transform: uppercase; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kan-col-count { margin-left: auto; font-family: var(--f-mono); font-size: 11px; color: var(--text-4); background: var(--surface-2); border-radius: var(--r-full); padding: 1px 8px; flex-shrink: 0; }
+.kan-col-body { display: flex; flex-direction: column; gap: 9px; padding: 10px; overflow-y: auto; min-height: 60px; }
+.kan-col-body::-webkit-scrollbar { width: 7px; }
+.kan-col-body::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 4px; }
+.kan-empty { text-align: center; color: var(--text-4); font-size: 12px; padding: 14px 0; border: 1px dashed var(--border-2); border-radius: var(--r-sm); }
+.kan-col.over .kan-empty { color: var(--accent); border-color: var(--accent-line); }
+
+.kan-card { display: flex; flex-direction: column; gap: 8px; background: var(--surface); border: 1px solid var(--border-2); border-radius: var(--r-md); padding: 11px 12px; cursor: pointer; transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease), transform var(--fast) var(--ease); }
+.kan-card:hover { border-color: var(--border-strong); box-shadow: 0 4px 14px -6px rgba(0,0,0,0.5); }
+.kan-card.locked { cursor: pointer; opacity: .82; }
+.kan-card.dragging { opacity: .45; border-color: var(--accent-line); }
+.kan-card[draggable="true"]:active { cursor: grabbing; }
+.kan-card-top { display: flex; align-items: center; gap: 8px; }
+.kan-id { font-family: var(--f-mono); font-size: 10.5px; color: var(--text-4); letter-spacing: .03em; }
+.kan-card-title { font-size: 13.5px; line-height: 1.35; color: var(--text-1); font-weight: 500; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.kan-card-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.kan-card-tags .chip { font-size: 11px; padding: 2px 7px; max-width: 100%; }
+.kan-card-foot { display: flex; align-items: center; gap: 7px; margin-top: 1px; }
+.kan-noowner { font-size: 11.5px; color: var(--text-placeholder); font-style: italic; }
+.kan-foot-right { margin-left: auto; display: inline-flex; align-items: center; gap: 9px; }
+.kan-foot-right .deadline { font-size: 11.5px; }
+.kan-m { display: inline-flex; align-items: center; gap: 3px; font-family: var(--f-mono); font-size: 11px; color: var(--text-4); }
+.kan-m svg { color: var(--text-4); }
