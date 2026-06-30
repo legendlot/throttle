@@ -70,6 +70,18 @@ export default function CampaignsPage() {
     try { const fresh = await garageFetch('getCampaign', { id: c.id }, session); if (fresh?.id) setC(fromRow(fresh)); load(); }
     catch { /* non-fatal */ }
   }
+  // While a broadcast is fanning out, poll so the detail auto-flips draft→sending→sent
+  // without the operator hitting refresh (the Queue drains over a minute or two).
+  useEffect(() => {
+    if (view !== 'form' || c.status !== 'sending' || !c.id) return undefined;
+    const t = setInterval(async () => {
+      try {
+        const fresh = await garageFetch('getCampaign', { id: c.id }, session);
+        if (fresh?.id) { setC(fromRow(fresh)); if (fresh.status !== 'sending') load(); }
+      } catch { /* non-fatal */ }
+    }, 4000);
+    return () => clearInterval(t);
+  }, [view, c.status, c.id, session, load]);
   function set(k, v) { setC((p) => ({ ...p, [k]: v })); }
 
   const isDraft = c.status === 'draft';
