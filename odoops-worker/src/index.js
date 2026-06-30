@@ -1412,37 +1412,45 @@ const uniwareAggAdapter = {
       if (winStart >= now) { cursorAfter = uniISO(now); partial = false; break; }                 // caught up to live
       if (scanned >= MAX_WINDOWS || subreqs >= budget - 4) { cursorAfter = uniISO(winStart); partial = true; break; }
 
-      // ── Scan the window FULLY, shrinking (halve, floor 1 day) if too dense to page within budget.
-      // Guarantees a fully-covered window so the cursor can advance by winEnd; volume-proof.
-      let winMs = baseWinMs, winEnd, codes = null, fullyScanned = false;
+      // ── Scan the window FULLY (collect member order codes). Density is read CHEAPLY from page 1's
+      // `totalRecords`, so when a window is too dense to page within budget we shrink it (halve, floor
+      // 1 day) at the cost of ONE search — not a full over-scan. A fully-covered window lets the cursor
+      // advance by winEnd. Volume-proof: at the 1-day floor an (essentially impossible) still-too-dense
+      // window scans what it can and advances anyway, so the walk never stalls.
+      let winMs = baseWinMs, winEnd, codes = [], fullyScanned = false, denseFloor = false;
+      const collect = (els, wEnd) => { for (const e of (els || [])) { const ch = String(e.channel || '').toUpperCase(); if (map[ch]) codes.push({ code: e.code, channel_id: map[ch], updated: Number(e.updated) || Number(e.created) || wEnd }); } };
+      const doSearch = async (wEnd, displayStart) => {
+        const r = await fetch(`${base}/services/rest/v1/oms/saleOrder/search`, { method: 'POST', headers: H, body: JSON.stringify({ fromDate: uniISO(winStart), toDate: uniISO(wEnd), dateType: 'UPDATED', searchOptions: { displayStart, displayLength: PAGE } }) }); subreqs++;
+        const j = await r.json().catch(() => ({}));
+        if (!j.successful) throw new Error('Uniware search: ' + JSON.stringify(j.errors || j).slice(0, 160));
+        return j;
+      };
       while (true) {
+        if (subreqs >= budget - 6) { fullyScanned = false; break; }          // no budget to even probe → resume next run
         winEnd = Math.min(winStart + winMs, now);
-        const collected = []; let start = 0, ok = true, overflow = false;
-        const scanCap = budget - 4 - 6;   // leave ≥6 subreqs for gets after scanning
-        while (true) {
-          if (subreqs >= budget - 4) { ok = false; break; }                 // hard budget guard
-          const r = await fetch(`${base}/services/rest/v1/oms/saleOrder/search`, { method: 'POST', headers: H, body: JSON.stringify({ fromDate: uniISO(winStart), toDate: uniISO(winEnd), dateType: 'UPDATED', searchOptions: { displayStart: start, displayLength: PAGE } }) }); subreqs++;
-          const j = await r.json().catch(() => ({}));
-          if (!j.successful) throw new Error('Uniware search: ' + JSON.stringify(j.errors || j).slice(0, 160));
-          const els = j.elements || [];
-          for (const e of els) {
-            const ch = String(e.channel || '').toUpperCase();
-            if (map[ch]) collected.push({ code: e.code, channel_id: map[ch], updated: Number(e.updated) || Number(e.created) || winEnd });
-          }
-          if (els.length < PAGE) { ok = true; break; }                      // last page → fully scanned
-          start += PAGE;
-          if (start / PAGE >= scanCap) { overflow = true; break; }          // too many pages for one step
-        }
-        if (overflow && winMs > UNI_AGG_MIN_WINDOW_MS && subreqs < budget - 8) {
-          winMs = Math.max(UNI_AGG_MIN_WINDOW_MS, Math.floor(winMs / 2));   // shrink + retry same winStart
+        const j0 = await doSearch(winEnd, 0);                                 // page 1 → density (totalRecords)
+        const total = Number(j0.totalRecords) || (j0.elements || []).length;
+        const pagesNeeded = Math.ceil(total / PAGE);
+        const scanBudget = Math.max(1, budget - subreqs - 6);                 // pages still affordable (keep ≥6 for gets)
+        if (pagesNeeded > scanBudget && winMs > UNI_AGG_MIN_WINDOW_MS) {
+          winMs = Math.max(UNI_AGG_MIN_WINDOW_MS, Math.floor(winMs / 2));     // too dense → shrink + retry (only 1 search spent)
           continue;
         }
-        fullyScanned = ok && !overflow;
-        codes = collected;
+        codes = []; collect(j0.elements, winEnd);
+        let start = PAGE, done = (j0.elements || []).length < PAGE || total <= PAGE;
+        while (!done && subreqs < budget - 6) {
+          const j = await doSearch(winEnd, start);
+          collect(j.elements, winEnd);
+          start += PAGE;
+          if ((j.elements || []).length < PAGE || start >= total) done = true;
+        }
+        denseFloor = pagesNeeded > scanBudget && !done;                       // 1-day window still over budget (extreme)
+        fullyScanned = done || denseFloor;                                    // denseFloor → accept partial + advance (never stall)
+        if (denseFloor) console.warn(`uniware_agg: dense window ${uniISO(winStart)}..${uniISO(winEnd)} (${total} orders) scanned partial — advancing`);
         break;
       }
       scanned++;
-      if (!fullyScanned) { cursorAfter = uniISO(winStart); partial = true; break; }   // ran out of budget scanning → resume here
+      if (!fullyScanned) { cursorAfter = uniISO(winStart); partial = true; break; }   // out of budget mid-scan → resume here next run
       if (!codes.length) { winStart = winEnd; continue; }                              // no member orders → skip forward
 
       // ── Window fully scanned → get member orders (UPDATED-ascending, budget-bounded). ──
