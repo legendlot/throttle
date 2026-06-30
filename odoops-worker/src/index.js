@@ -2565,10 +2565,12 @@ export default {
             if (!d.plan_id) return err('plan_id required');
             try {
               const out = await adsGuardedWrite({ userId, action: 'metaCreateCampaign', planId: d.plan_id, request: d, fn: async () => {
+                const ex = await sbSales(`/rest/v1/ads_managed?entity_type=eq.campaign&plan_id=eq.${d.plan_id}&status=neq.deleted&select=meta_id&limit=1`);
+                if (ex.ok && ex.data[0]) return { entity_type: 'campaign', entity_id: ex.data[0].meta_id, meta_response: { reused: true } };  // resumable
                 const plan = await adsLoadPlan(d.plan_id, 'approved');
                 const acct = await metaAdAccount(plan.ad_account_id);
                 const name = d.name || plan.plan?.campaign?.name || `LOT | PROSPECT | ${plan.product || 'Batch'}`;
-                const res = await metaPost(env, `act_${acct}/campaigns`, { name, objective: 'OUTCOME_SALES', buying_type: 'AUCTION', special_ad_categories: '[]', status: 'PAUSED' });
+                const res = await metaPost(env, `act_${acct}/campaigns`, { name, objective: 'OUTCOME_SALES', buying_type: 'AUCTION', special_ad_categories: '[]', is_adset_budget_sharing_enabled: 'false', status: 'PAUSED' });
                 await managedUpsert({ entity_type: 'campaign', meta_id: res.id, parent_id: null, plan_id: d.plan_id, channel_id: plan.channel_id, ad_account_id: acct, name, daily_budget_inr: 0, status: 'paused' });
                 return { entity_type: 'campaign', entity_id: res.id, meta_response: res };
               }});
@@ -2584,12 +2586,17 @@ export default {
             if (budgetInr <= 0) return err('adset.daily_budget_inr must be > 0', 422);
             try {
               const out = await adsGuardedWrite({ userId, action: 'metaCreateAdSet', planId: d.plan_id, request: d, fn: async () => {
+                if (a.name) {
+                  const exA = await sbSales(`/rest/v1/ads_managed?entity_type=eq.adset&plan_id=eq.${d.plan_id}&name=eq.${encodeURIComponent(a.name)}&status=neq.deleted&select=meta_id&limit=1`);
+                  if (exA.ok && exA.data[0]) return { entity_type: 'adset', entity_id: exA.data[0].meta_id, meta_response: { reused: true } };  // resumable
+                }
                 const plan = await adsLoadPlan(d.plan_id, 'approved');
                 const acct = await metaAdAccount(plan.ad_account_id);
                 const targeting = a.targeting || { geo_locations: { countries: ['IN'] } };   // all-India broad default
                 const res = await metaPost(env, `act_${acct}/adsets`, {
                   name: a.name || `${plan.product || 'Batch'} — adset`, campaign_id: d.campaign_id,
                   daily_budget: inrToMinor(budgetInr), billing_event: 'IMPRESSIONS', optimization_goal: 'OFFSITE_CONVERSIONS',
+                  bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
                   promoted_object: { pixel_id: a.pixel_id, custom_event_type: 'PURCHASE' }, targeting, status: 'PAUSED',
                 });
                 await managedUpsert({ entity_type: 'adset', meta_id: res.id, parent_id: d.campaign_id, plan_id: d.plan_id, channel_id: plan.channel_id, ad_account_id: acct, name: a.name || null, daily_budget_inr: budgetInr, status: 'paused' });
@@ -2608,6 +2615,10 @@ export default {
             const redacted = { ...d, ad: { ...ad, image_base64: ad.image_base64 ? `[${ad.image_base64.length} chars]` : undefined } };
             try {
               const out = await adsGuardedWrite({ userId, action: 'metaCreateAd', planId: d.plan_id, request: redacted, fn: async () => {
+                if (ad.name) {
+                  const exD = await sbSales(`/rest/v1/ads_managed?entity_type=eq.ad&plan_id=eq.${d.plan_id}&name=eq.${encodeURIComponent(ad.name)}&status=neq.deleted&select=meta_id&limit=1`);
+                  if (exD.ok && exD.data[0]) return { entity_type: 'ad', entity_id: exD.data[0].meta_id, meta_response: { ad_id: exD.data[0].meta_id, creative_id: null, image_hash: null, reused: true } };  // resumable
+                }
                 const plan = await adsLoadPlan(d.plan_id, 'approved');
                 const acct = await metaAdAccount(plan.ad_account_id);
                 let imageHash = ad.image_hash;
@@ -2632,14 +2643,15 @@ export default {
           case 'metaSetStatus': {   // activate (ceiling-checked for adsets) or pause (free)
             if (!canAdsWrite(P)) return err('No permission', 403);
             const et = d.entity_type, mid = d.meta_id, status = String(d.status || '').toUpperCase();
-            if (!['adset', 'ad'].includes(et)) return err("entity_type must be 'adset' or 'ad'", 422);
+            if (!['campaign', 'adset', 'ad'].includes(et)) return err("entity_type must be 'campaign', 'adset' or 'ad'", 422);
             if (!mid) return err('meta_id required', 422);
             if (!['ACTIVE', 'PAUSED'].includes(status)) return err('status must be ACTIVE or PAUSED', 422);
             try {
               const out = await adsGuardedWrite({ userId, action: 'metaSetStatus', planId: d.plan_id || null, request: d, fn: async () => {
                 const m = await managedGet(et, mid);
                 let delta = 0;
-                if (status === 'ACTIVE' && et === 'adset') { const budget = m ? num(m.daily_budget_inr) : 0; await assertCeiling(budget); delta = budget; }
+                // Only an adset commits budget, and only when flipping paused→active (idempotent re-activate adds nothing).
+                if (status === 'ACTIVE' && et === 'adset' && (!m || m.status !== 'active')) { const budget = m ? num(m.daily_budget_inr) : 0; await assertCeiling(budget); delta = budget; }
                 const res = await metaPost(env, `${mid}`, { status });
                 if (m) await managedPatch(et, mid, { status: status === 'ACTIVE' ? 'active' : 'paused' });
                 return { entity_type: et, entity_id: mid, meta_response: res, daily_delta_inr: delta };
