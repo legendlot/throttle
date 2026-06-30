@@ -45,6 +45,8 @@ const canMapping         = p => !!p.sales_mapping_manage || !!p.salesops_admin;
 const canConnector       = p => !!p.sales_connector_manage || !!p.salesops_admin;
 const canAdmin           = p => !!p.salesops_admin;
 const canSuperAdmin      = p => !!p.salesops_super_admin;
+const canAdsWrite        = p => !!p.sales_ads_write       || !!p.salesops_admin;   // Phase 2: create/manage Meta ads
+const canAdsApprove      = p => !!p.sales_ads_approve     || !!p.salesops_admin;   // approve a launch plan (spend gate)
 
 // ── DB helpers ─────────────────────────────────────────────────
 // service-role: secret sent as BOTH apikey and Authorization (sb_secret keys are not JWTs).
@@ -1520,6 +1522,142 @@ const metaStatusAdapter = {
   },
 };
 
+// ════════════════════════════════════════════════════════════════════════════
+// Phase 2 — Meta WRITE (the LOT Ad Engine's "hands"). Create + manage ads via the
+// Marketing API behind hard guardrails. Invariants enforced HERE, not by convention:
+//   • Master kill-switch: nothing writes unless settings.ads_write_enabled = 'true'.
+//   • Approved-plan gate: a launch can only run from an ads_plan in status 'approved'.
+//   • Hard daily ceiling: any spend-raising call checks committed+delta ≤ ads_max_daily_spend_inr.
+//   • Audit: every write call appends an ads_ledger row (who/what/payload/Meta response).
+//   • Auto-pause is FREE (only lowers spend); auto-SCALE is gated to canAdsApprove.
+// See migration 0010 + strategy/meta-automation-spec.md.
+// ════════════════════════════════════════════════════════════════════════════
+async function adsSetting(key, fallback = null) {
+  const r = await sbSales(`/rest/v1/settings?key=eq.${encodeURIComponent(key)}&select=value&limit=1`);
+  return (r.ok && r.data[0]) ? r.data[0].value : fallback;
+}
+const adsWriteEnabled = async () => String(await adsSetting('ads_write_enabled', 'false')) === 'true';
+const adsCeilingInr   = async () => num(await adsSetting('ads_max_daily_spend_inr', '0'));
+const inrToMinor = inr => Math.round(num(inr) * 100);   // INR is a 2-decimal currency on Meta → paise
+
+// Append-only audit. Best-effort: an audit-write failure must not mask the real result.
+async function ledgerWrite(row) {
+  try {
+    const r = await sbSales('/rest/v1/ads_ledger', { method: 'POST', prefer: 'return=representation',
+      body: JSON.stringify({ created_at: nowISO(), ...row }) });
+    return (r.ok && Array.isArray(r.data) && r.data[0]) ? r.data[0].id : null;
+  } catch { return null; }
+}
+async function managedUpsert(row) {
+  await sbSales('/rest/v1/ads_managed?on_conflict=entity_type,meta_id', { method: 'POST',
+    prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify({ ...row, updated_at: nowISO() }) });
+}
+async function managedGet(entityType, metaId) {
+  const r = await sbSales(`/rest/v1/ads_managed?entity_type=eq.${entityType}&meta_id=eq.${encodeURIComponent(metaId)}&select=*&limit=1`);
+  return (r.ok && r.data[0]) ? r.data[0] : null;
+}
+// PATCH (not upsert) for status/budget changes — a merge-duplicates upsert would reset the
+// row's other columns (parent_id, daily_budget_inr…) to defaults. Partial update only.
+async function managedPatch(entityType, metaId, patch) {
+  await sbSales(`/rest/v1/ads_managed?entity_type=eq.${entityType}&meta_id=eq.${encodeURIComponent(metaId)}`,
+    { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ ...patch, updated_at: nowISO() }) });
+}
+
+// Current committed daily budget across ACTIVE engine adsets (the ceiling base).
+async function adsCommittedDailyInr() { const r = await rpcSales('f_ads_committed_daily', {}); return r.ok ? num(r.data) : 0; }
+// Throws (→ surfaced as a 4xx) if committing addDailyInr more would breach the hard ceiling.
+// replaceCurrentInr nets out an existing adset's budget when CHANGING (not adding) a budget.
+async function assertCeiling(addDailyInr, replaceCurrentInr = 0) {
+  const ceiling = await adsCeilingInr();
+  if (!ceiling || ceiling <= 0) throw new Error('ads_max_daily_spend_inr is unset — refusing to commit spend');
+  const committed = await adsCommittedDailyInr();
+  const after = committed - num(replaceCurrentInr) + num(addDailyInr);
+  if (after > ceiling) throw new Error(`Daily ceiling breach: ₹${committed} committed + ₹${addDailyInr} → ₹${after} > ceiling ₹${ceiling}`);
+  return { ceiling, committed, after };
+}
+
+// Graph API. Writes = POST form-encoded (token in body); reads = GET (token in query).
+async function metaPost(env, path, params) {
+  if (!env.META_SYSTEM_USER_TOKEN) throw new Error('Meta not configured (set META_SYSTEM_USER_TOKEN)');
+  const form = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) { if (v === undefined || v === null) continue; form.set(k, (typeof v === 'object') ? JSON.stringify(v) : String(v)); }
+  form.set('access_token', env.META_SYSTEM_USER_TOKEN);
+  const res = await fetch(`https://graph.facebook.com/${META_API_VER}/${path}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: form.toString() });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`Meta ${res.status} POST ${path}: ${JSON.stringify(j.error || j).slice(0, 240)}`);
+  return j;
+}
+async function metaGet(env, path, qs = '') {
+  if (!env.META_SYSTEM_USER_TOKEN) throw new Error('Meta not configured (set META_SYSTEM_USER_TOKEN)');
+  const res = await fetch(`https://graph.facebook.com/${META_API_VER}/${path}?${qs}${qs ? '&' : ''}access_token=${env.META_SYSTEM_USER_TOKEN}`);
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`Meta ${res.status} GET ${path}: ${JSON.stringify(j.error || j).slice(0, 240)}`);
+  return j;
+}
+
+// The Meta ad account id (act_<id>) the engine operates on — read from the meta_ads connector config.
+async function metaAdAccount(planAcct) {
+  if (planAcct) return String(planAcct);
+  const r = await sbSales(`/rest/v1/connector_config?adapter_kind=eq.meta_ads&select=config&limit=1`);
+  const accts = (r.ok && r.data[0]?.config?.accounts) || [];
+  if (!accts.length) throw new Error('No Meta ad account configured (connector_config.config.accounts is empty)');
+  return String(accts[0]);
+}
+async function adsLoadPlan(planId, requireStatus = null) {
+  const r = await sbSales(`/rest/v1/ads_plan?id=eq.${planId}&select=*&limit=1`);
+  const plan = (r.ok && r.data[0]) ? r.data[0] : null;
+  if (!plan) throw new Error(`Plan ${planId} not found`);
+  if (requireStatus && plan.status !== requireStatus) throw new Error(`Plan ${planId} is '${plan.status}', need '${requireStatus}'`);
+  return plan;
+}
+
+// Wraps a Meta write: enforce the kill-switch, run fn (does the Graph calls + ceiling checks),
+// then audit success/failure. fn returns { entity_type, entity_id, meta_response, daily_delta_inr }.
+async function adsGuardedWrite({ userId, action, planId = null, request, fn }) {
+  if (!(await adsWriteEnabled())) {
+    await ledgerWrite({ actor_user_id: userId, action, plan_id: planId, request, status: 'blocked', error: 'ads_write_enabled is false' });
+    throw new Error('Ad-engine WRITE is disabled (settings.ads_write_enabled = false). Flip it on, then retry.');
+  }
+  try {
+    const out = await fn();
+    await ledgerWrite({ actor_user_id: userId, action, plan_id: planId, daily_delta_inr: out.daily_delta_inr || 0,
+      entity_type: out.entity_type || null, entity_id: out.entity_id || null, request, meta_response: out.meta_response || null, status: 'ok' });
+    return out;
+  } catch (e) {
+    await ledgerWrite({ actor_user_id: userId, action, plan_id: planId, request, status: 'error', error: String(e?.message || e) });
+    throw e;
+  }
+}
+
+// Cron: pause engine-managed ADS whose lifetime spend ≥ kill gate AND ROAS < floor. Auto-pause
+// only LOWERS spend → no approval needed (gated only by the master kill-switch). Best-effort:
+// never throws into the cron. Reads creative-grain perf from the Phase-1 f_mkt_ad_rollup.
+async function adsAutoPause(env) {
+  try {
+    if (!(await adsWriteEnabled())) return;
+    const killRoas  = num(await adsSetting('ads_kill_roas', '2'));
+    const killAfter = num(await adsSetting('ads_kill_after_inr', '6500'));
+    const mr = await sbSales('/rest/v1/ads_managed?entity_type=eq.ad&status=eq.active&select=meta_id,plan_id');
+    const ads = mr.ok ? mr.data : [];
+    if (!ads.length) return;
+    const roll = await rpcSales('f_mkt_ad_rollup', { p_from: '2025-04-01', p_to: todayISO(), p_group: 'ad' });
+    const perf = {}; for (const r of (roll.ok ? roll.data : [])) perf[r.ad_id] = r;
+    for (const a of ads) {
+      const p = perf[a.meta_id]; if (!p) continue;
+      const spend = num(p.spend), roas = spend > 0 ? num(p.conv_value) / spend : 0;
+      if (spend >= killAfter && roas < killRoas) {
+        try {
+          await metaPost(env, `${a.meta_id}`, { status: 'PAUSED' });
+          await managedPatch('ad', a.meta_id, { status: 'paused' });
+          await ledgerWrite({ actor_user_id: null, action: 'autoPauseAd', plan_id: a.plan_id, entity_type: 'ad', entity_id: a.meta_id, status: 'ok',
+            meta_response: { reason: `ROAS ${roas.toFixed(2)} < ${killRoas} after ₹${spend.toFixed(0)} ≥ ₹${killAfter}` } });
+        } catch (e) { await ledgerWrite({ actor_user_id: null, action: 'autoPauseAd', plan_id: a.plan_id, entity_type: 'ad', entity_id: a.meta_id, status: 'error', error: String(e?.message || e) }); }
+      }
+    }
+  } catch (e) { console.error('adsAutoPause failed:', e?.message || e); }
+}
+
 const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter, amazon_spapi: amazonAdapter, amazon_ads: amazonAdsAdapter, amazon_ads_product: amazonAdsProductAdapter, meta_ads: metaAdsAdapter, meta_status: metaStatusAdapter, google_ads: googleAdsAdapter, ga4: ga4Adapter, uniware: uniwareAdapter, razorpay_payments: razorpayPaymentsAdapter };
 
 // minimal RFC-4180-ish CSV parser (handles quoted fields, commas, newlines)
@@ -1802,6 +1940,9 @@ export default {
         catch (e) { console.error('odoops producer: failed to start', cfg.channel_id, e?.message || e); }
       }
     } catch (e) { console.error('odoops cron (producer) failed:', e?.message || e); }
+    // Phase 2: auto-pause engine ads past the kill gate (free — only lowers spend; no-op while
+    // ads_write_enabled is false). Self-contained + best-effort; never disturbs the producer above.
+    try { await adsAutoPause(env); } catch (e) { console.error('odoops cron (auto-pause) failed:', e?.message || e); }
   },
 
   async fetch(request, env, ctx) {
@@ -1940,6 +2081,46 @@ export default {
             const r = await rpcSales('f_mkt_ad_rollup', { p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO(), p_group: qp('group') || 'ad' });
             if (!r.ok) return err('Ad-metrics rollup failed: ' + JSON.stringify(r.data), 502);
             return ok({ rows: r.data || [] });
+          }
+
+          // ── Phase 2 (Ad Engine WRITE) — reads ──
+          case 'adsGetPlans': {
+            if (!canView(P)) return err('No permission', 403);
+            const st = qp('status');
+            const r = await sbSales(`/rest/v1/ads_plan?select=*${st ? `&status=eq.${encodeURIComponent(st)}` : ''}&order=created_at.desc&limit=50`);
+            if (!r.ok) return err('Plans read failed: ' + JSON.stringify(r.data), 502);
+            return ok({ rows: r.data || [] });
+          }
+          case 'adsGetLedger': {
+            if (!canView(P)) return err('No permission', 403);
+            const r = await sbSales(`/rest/v1/ads_ledger?select=*&order=created_at.desc&limit=${Math.min(Number(qp('limit')) || 100, 500)}`);
+            if (!r.ok) return err('Ledger read failed: ' + JSON.stringify(r.data), 502);
+            return ok({ rows: r.data || [] });
+          }
+          case 'adsGetManaged': {
+            if (!canView(P)) return err('No permission', 403);
+            const r = await sbSales(`/rest/v1/ads_managed?select=*&order=created_at.desc&limit=500`);
+            if (!r.ok) return err('Managed read failed: ' + JSON.stringify(r.data), 502);
+            const committed = await adsCommittedDailyInr();
+            return ok({ rows: r.data || [], committed_daily_inr: committed, ceiling_inr: await adsCeilingInr(), write_enabled: await adsWriteEnabled() });
+          }
+          case 'metaWriteProbe': {   // diagnostic: self-discover Page/Pixel ids + confirm ads_management scope (NO writes)
+            if (!canAdsWrite(P)) return err('No permission', 403);
+            const acct = await metaAdAccount(qp('account')).catch(e => { throw e; });
+            const probe = {};
+            const sub = async (key, fn) => { try { probe[key] = { ok: true, data: await fn() }; } catch (e) { probe[key] = { ok: false, error: String(e?.message || e) }; } };
+            await sub('me',          () => metaGet(env, 'me', 'fields=id,name'));
+            await sub('ad_account',  () => metaGet(env, `act_${acct}`, 'fields=id,name,account_status,currency,timezone_name,disable_reason'));
+            await sub('pixels',      () => metaGet(env, `act_${acct}/adspixels`, 'fields=id,name,last_fired_time'));
+            await sub('pages',       () => metaGet(env, 'me/accounts', 'fields=id,name,tasks&limit=50'));
+            await sub('token',       () => metaGet(env, 'debug_token', `input_token=${env.META_SYSTEM_USER_TOKEN}`));
+            const scopes = probe.token?.data?.data?.scopes || [];
+            return ok({
+              ad_account_id: acct, probe,
+              scopes, has_ads_management: scopes.includes('ads_management'),
+              write_enabled: await adsWriteEnabled(), ceiling_inr: await adsCeilingInr(),
+              hint: 'Pixel id → probe.pixels.data[].id · Page id → probe.pages.data[].id · ads_management must be true to launch.',
+            });
           }
 
           case 'getAdProduct': {   // S185 — product-grain Amazon ad metrics for the /amazon sellers table
@@ -2346,6 +2527,145 @@ export default {
             if (!g.ok) return err('Grant failed: ' + JSON.stringify(g.data), 502);
             return ok({ user_id: resolvedId, email: d.email, role_key: d.role_key });
           }
+
+          // ════════ Phase 2 — Ad Engine WRITE (gated; see migration 0010) ════════
+          case 'adsSavePlan': {   // draft/update a launch plan (the engine's "brain" submits this)
+            if (!canAdsWrite(P)) return err('No permission', 403);
+            const planRow = {
+              product: d.product || null, batch: d.batch || null,
+              channel_id: d.channel_id || null, ad_account_id: d.ad_account_id || null,
+              daily_budget_total_inr: num(d.daily_budget_total_inr),
+              plan: d.plan || {}, notes: d.notes || null, updated_at: nowISO(),
+            };
+            let r;
+            if (d.plan_id) {
+              r = await sbSales(`/rest/v1/ads_plan?id=eq.${d.plan_id}&status=eq.draft`, { method: 'PATCH', prefer: 'return=representation', body: JSON.stringify(planRow) });
+              if (r.ok && (!Array.isArray(r.data) || !r.data[0])) return err('Plan not found or not editable (only a draft can be edited)', 409);
+            } else {
+              r = await sbSales('/rest/v1/ads_plan', { method: 'POST', prefer: 'return=representation', body: JSON.stringify({ ...planRow, status: 'draft', created_by: userId }) });
+            }
+            if (!r.ok) return err('Plan save failed: ' + JSON.stringify(r.data), 502);
+            return ok(Array.isArray(r.data) ? r.data[0] : r.data);
+          }
+          case 'adsApprovePlan': {   // Afshaan's spend gate — only an approved plan can launch
+            if (!canAdsApprove(P)) return err('No permission', 403);
+            if (!d.plan_id) return err('plan_id required');
+            const planR = await sbSales(`/rest/v1/ads_plan?id=eq.${d.plan_id}&select=*&limit=1`);
+            const plan = planR.ok && planR.data[0] ? planR.data[0] : null;
+            if (!plan) return err('Plan not found', 404);
+            if (plan.status !== 'draft') return err(`Plan is '${plan.status}', only a draft can be approved`, 409);
+            const ceiling = await adsCeilingInr();
+            if (ceiling > 0 && num(plan.daily_budget_total_inr) > ceiling) return err(`Plan daily total ₹${plan.daily_budget_total_inr} exceeds ceiling ₹${ceiling}`, 409);
+            const r = await sbSales(`/rest/v1/ads_plan?id=eq.${d.plan_id}`, { method: 'PATCH', prefer: 'return=representation', body: JSON.stringify({ status: 'approved', approved_by: userId, approved_at: nowISO(), updated_at: nowISO() }) });
+            if (!r.ok) return err('Approve failed: ' + JSON.stringify(r.data), 502);
+            return ok(Array.isArray(r.data) ? r.data[0] : r.data);
+          }
+          case 'metaCreateCampaign': {   // creates PAUSED (no budget at campaign level in ABO)
+            if (!canAdsWrite(P)) return err('No permission', 403);
+            if (!d.plan_id) return err('plan_id required');
+            try {
+              const out = await adsGuardedWrite({ userId, action: 'metaCreateCampaign', planId: d.plan_id, request: d, fn: async () => {
+                const plan = await adsLoadPlan(d.plan_id, 'approved');
+                const acct = await metaAdAccount(plan.ad_account_id);
+                const name = d.name || plan.plan?.campaign?.name || `LOT | PROSPECT | ${plan.product || 'Batch'}`;
+                const res = await metaPost(env, `act_${acct}/campaigns`, { name, objective: 'OUTCOME_SALES', buying_type: 'AUCTION', special_ad_categories: '[]', status: 'PAUSED' });
+                await managedUpsert({ entity_type: 'campaign', meta_id: res.id, parent_id: null, plan_id: d.plan_id, channel_id: plan.channel_id, ad_account_id: acct, name, daily_budget_inr: 0, status: 'paused' });
+                return { entity_type: 'campaign', entity_id: res.id, meta_response: res };
+              }});
+              return ok({ campaign_id: out.entity_id });
+            } catch (e) { return err(String(e?.message || e), 422); }
+          }
+          case 'metaCreateAdSet': {   // creates PAUSED; daily budget committed only on activation
+            if (!canAdsWrite(P)) return err('No permission', 403);
+            if (!d.plan_id || !d.campaign_id) return err('plan_id and campaign_id required');
+            const a = d.adset || {};
+            if (!a.pixel_id) return err('adset.pixel_id required (purchase optimization)', 422);
+            const budgetInr = num(a.daily_budget_inr);
+            if (budgetInr <= 0) return err('adset.daily_budget_inr must be > 0', 422);
+            try {
+              const out = await adsGuardedWrite({ userId, action: 'metaCreateAdSet', planId: d.plan_id, request: d, fn: async () => {
+                const plan = await adsLoadPlan(d.plan_id, 'approved');
+                const acct = await metaAdAccount(plan.ad_account_id);
+                const targeting = a.targeting || { geo_locations: { countries: ['IN'] } };   // all-India broad default
+                const res = await metaPost(env, `act_${acct}/adsets`, {
+                  name: a.name || `${plan.product || 'Batch'} — adset`, campaign_id: d.campaign_id,
+                  daily_budget: inrToMinor(budgetInr), billing_event: 'IMPRESSIONS', optimization_goal: 'OFFSITE_CONVERSIONS',
+                  promoted_object: { pixel_id: a.pixel_id, custom_event_type: 'PURCHASE' }, targeting, status: 'PAUSED',
+                });
+                await managedUpsert({ entity_type: 'adset', meta_id: res.id, parent_id: d.campaign_id, plan_id: d.plan_id, channel_id: plan.channel_id, ad_account_id: acct, name: a.name || null, daily_budget_inr: budgetInr, status: 'paused' });
+                return { entity_type: 'adset', entity_id: res.id, meta_response: res };
+              }});
+              return ok({ adset_id: out.entity_id, daily_budget_inr: budgetInr, status: 'PAUSED' });
+            } catch (e) { return err(String(e?.message || e), 422); }
+          }
+          case 'metaCreateAd': {   // upload image → adcreative → ad (all PAUSED)
+            if (!canAdsWrite(P)) return err('No permission', 403);
+            if (!d.plan_id || !d.adset_id) return err('plan_id and adset_id required');
+            const ad = d.ad || {};
+            if (!ad.page_id) return err('ad.page_id required', 422);
+            if (!ad.link) return err('ad.link required', 422);
+            if (!ad.image_base64 && !ad.image_hash) return err('ad.image_base64 or ad.image_hash required', 422);
+            const redacted = { ...d, ad: { ...ad, image_base64: ad.image_base64 ? `[${ad.image_base64.length} chars]` : undefined } };
+            try {
+              const out = await adsGuardedWrite({ userId, action: 'metaCreateAd', planId: d.plan_id, request: redacted, fn: async () => {
+                const plan = await adsLoadPlan(d.plan_id, 'approved');
+                const acct = await metaAdAccount(plan.ad_account_id);
+                let imageHash = ad.image_hash;
+                if (!imageHash) {
+                  const up = await metaPost(env, `act_${acct}/adimages`, { bytes: ad.image_base64 });
+                  imageHash = Object.values(up.images || {})[0]?.hash;
+                  if (!imageHash) throw new Error('adimages upload returned no hash: ' + JSON.stringify(up).slice(0, 160));
+                }
+                const cre = await metaPost(env, `act_${acct}/adcreatives`, {
+                  name: ad.name ? `${ad.name} — creative` : 'LOT creative',
+                  object_story_spec: { page_id: ad.page_id, link_data: {
+                    image_hash: imageHash, link: ad.link, message: ad.primary_text || '', name: ad.headline || '',
+                    call_to_action: { type: ad.cta || 'SHOP_NOW', value: { link: ad.link } } } },
+                });
+                const res = await metaPost(env, `act_${acct}/ads`, { name: ad.name || 'LOT ad', adset_id: d.adset_id, creative: { creative_id: cre.id }, status: 'PAUSED' });
+                await managedUpsert({ entity_type: 'ad', meta_id: res.id, parent_id: d.adset_id, plan_id: d.plan_id, channel_id: plan.channel_id, ad_account_id: acct, name: ad.name || null, daily_budget_inr: 0, status: 'paused' });
+                return { entity_type: 'ad', entity_id: res.id, meta_response: { ad_id: res.id, creative_id: cre.id, image_hash: imageHash } };
+              }});
+              return ok({ ad_id: out.entity_id, creative_id: out.meta_response.creative_id, image_hash: out.meta_response.image_hash });
+            } catch (e) { return err(String(e?.message || e), 422); }
+          }
+          case 'metaSetStatus': {   // activate (ceiling-checked for adsets) or pause (free)
+            if (!canAdsWrite(P)) return err('No permission', 403);
+            const et = d.entity_type, mid = d.meta_id, status = String(d.status || '').toUpperCase();
+            if (!['adset', 'ad'].includes(et)) return err("entity_type must be 'adset' or 'ad'", 422);
+            if (!mid) return err('meta_id required', 422);
+            if (!['ACTIVE', 'PAUSED'].includes(status)) return err('status must be ACTIVE or PAUSED', 422);
+            try {
+              const out = await adsGuardedWrite({ userId, action: 'metaSetStatus', planId: d.plan_id || null, request: d, fn: async () => {
+                const m = await managedGet(et, mid);
+                let delta = 0;
+                if (status === 'ACTIVE' && et === 'adset') { const budget = m ? num(m.daily_budget_inr) : 0; await assertCeiling(budget); delta = budget; }
+                const res = await metaPost(env, `${mid}`, { status });
+                if (m) await managedPatch(et, mid, { status: status === 'ACTIVE' ? 'active' : 'paused' });
+                return { entity_type: et, entity_id: mid, meta_response: res, daily_delta_inr: delta };
+              }});
+              return ok({ entity_type: et, meta_id: mid, status });
+            } catch (e) { return err(String(e?.message || e), 422); }
+          }
+          case 'metaSetAdSetBudget': {   // scale up = gated to approvers; scale down = free
+            if (!canAdsWrite(P)) return err('No permission', 403);
+            const adsetId = d.adset_id, newInr = num(d.daily_budget_inr);
+            if (!adsetId) return err('adset_id required', 422);
+            if (newInr <= 0) return err('daily_budget_inr must be > 0', 422);
+            try {
+              const m = await managedGet('adset', adsetId);
+              const curInr = m ? num(m.daily_budget_inr) : 0;
+              if (newInr > curInr && !canAdsApprove(P)) return err('Budget increase requires approval (auto-scale is gated)', 403);
+              const out = await adsGuardedWrite({ userId, action: 'metaSetAdSetBudget', planId: m?.plan_id || null, request: d, fn: async () => {
+                if (m && m.status === 'active') await assertCeiling(newInr, curInr);
+                const res = await metaPost(env, `${adsetId}`, { daily_budget: inrToMinor(newInr) });
+                await managedPatch('adset', adsetId, { daily_budget_inr: newInr });
+                return { entity_type: 'adset', entity_id: adsetId, meta_response: res, daily_delta_inr: newInr - curInr };
+              }});
+              return ok({ adset_id: adsetId, daily_budget_inr: newInr });
+            } catch (e) { return err(String(e?.message || e), 422); }
+          }
+
           default: return err('Unknown action: ' + act, 400);
         }
       }
