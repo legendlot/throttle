@@ -13,6 +13,7 @@ async function getSettings(env) {
   _settingsCache = (r.ok && r.data?.[0]) || {
     frequency_cap_per_day: 3, frequency_cap_window_hours: 24,
     quiet_hours_start: 21, quiet_hours_end: 9,
+    test_mode: true, test_mode_allow: ['@legendoftoys.com'],  // fail-safe: lock on if settings unreadable
   };
   _settingsAt = Date.now();
   return _settingsCache;
@@ -28,8 +29,29 @@ function inQuietHours(start, end) {
   return start > end ? (h >= start || h < end) : (h >= start && h < end);
 }
 
+// Test-mode allowlist match: '@domain' = suffix match, else exact email. Case-insensitive.
+function testModeAllows(to, allow) {
+  const addr = (to || '').toLowerCase().trim();
+  if (!addr) return false;
+  const list = Array.isArray(allow) ? allow : [];
+  return list.some((pat) => {
+    const p = String(pat || '').toLowerCase().trim();
+    if (!p) return false;
+    return p[0] === '@' ? addr.endsWith(p) : addr === p;
+  });
+}
+
 // runGate(env, {profileId, channel, purpose, to}) → {pass, reason}
 async function runGate(env, { profileId, channel, purpose, to }) {
+  const settings = await getSettings(env);
+
+  // 0. TEST MODE — global send lock, ahead of everything. Default ON (fail-safe).
+  // Until a super-admin disables it, NO send (any channel, any purpose, incl. test
+  // sends + transactional) reaches an address off the allowlist. The crown-jewel guard
+  // against ever emailing a real customer before sign-off.
+  if (settings.test_mode !== false && !testModeAllows(to, settings.test_mode_allow))
+    return { pass: false, reason: 'test_mode_blocked' };
+
   // 1. suppression — overrides everything
   if (to) {
     const sup = await A.sbComms(
@@ -43,7 +65,7 @@ async function runGate(env, { profileId, channel, purpose, to }) {
     const state = profileId ? await latestConsent(env, profileId, channel, 'marketing') : 'unknown';
     if (state !== 'opted_in') return { pass: false, reason: 'no_consent' };
 
-    const s = await getSettings(env);
+    const s = settings;
     // 3. frequency cap (marketing sends within window)
     if (profileId) {
       const since = new Date(Date.now() - Number(s.frequency_cap_window_hours || 24) * 3600 * 1000).toISOString();

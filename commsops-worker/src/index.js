@@ -138,9 +138,12 @@ async function handlePost(body, auth, env) {
       if (!A.canSuperAdmin(auth.permissions)) return err('forbidden', 403);
       const allowed = ['approval_required_marketing', 'approval_audience_threshold',
         'frequency_cap_per_day', 'frequency_cap_window_hours', 'quiet_hours_start',
-        'quiet_hours_end', 'attribution_window_days'];
+        'quiet_hours_end', 'attribution_window_days', 'test_mode', 'test_mode_allow'];
       const patch = { updated_at: nowIso() };
       for (const k of allowed) if (k in body) patch[k] = body[k];
+      // Disabling test mode = unlocking real-customer sends. Make it a deliberate,
+      // explicit act: only when the caller affirms it AND only ever to a boolean.
+      if ('test_mode' in patch) patch.test_mode = (patch.test_mode === true);
       const r = await A.sbComms('/rest/v1/settings?id=eq.1', env, {
         method: 'PATCH', body: JSON.stringify(patch),
       });
