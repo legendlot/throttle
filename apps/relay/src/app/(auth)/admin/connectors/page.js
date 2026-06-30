@@ -15,6 +15,8 @@ export default function ConnectorsPage() {
   const [loading, setLoading] = useState(true);
   const [shopBusy, setShopBusy] = useState(false);
   const [shopResult, setShopResult] = useState(null);
+  const [whBusy, setWhBusy] = useState(false);
+  const [whResult, setWhResult] = useState(null);
 
   async function shopifyBackfill(mode) {
     if (mode === 'full' && !window.confirm('Import ALL Shopify customers into Relay?\n\nProfiles + consent only — no emails are sent (Test Mode is the separate lock). Runs in the background.')) return;
@@ -26,6 +28,21 @@ export default function ConnectorsPage() {
       else { showToast(`Sample imported: ${d.profiles} profiles, ${d.consent} consent rows`, 'success'); setShopResult(d); }
     } catch (e) { showToast(e.message || 'Shopify sync failed', 'error'); setShopResult({ error: e.message }); }
     finally { setShopBusy(false); }
+  }
+
+  // Live-sync webhook management (M4) — idempotent register + read-back of subscriptions.
+  async function shopifyWebhooks(action) {
+    setWhBusy(true); setWhResult(null);
+    try {
+      const r = await workerFetch(action, {}, session);
+      const d = r?.data;
+      setWhResult(d);
+      if (action === 'shopifyRegisterWebhooks') {
+        const c = d?.created?.length || 0, s = d?.skipped?.length || 0, e = d?.errors?.length || 0;
+        showToast(`Webhooks: ${c} created, ${s} already present${e ? `, ${e} errors` : ''}`, e ? 'error' : 'success');
+      }
+    } catch (e) { showToast(e.message || 'Webhook action failed', 'error'); setWhResult({ error: e.message }); }
+    finally { setWhBusy(false); }
   }
 
   const load = useCallback(async () => {
@@ -72,6 +89,23 @@ export default function ConnectorsPage() {
             )}
             {shopResult?.full && <div style={{ marginTop: 10, fontSize: 13 }}>Full sync running in the background — refresh contacts in a few minutes.</div>}
             {shopResult?.error && <div style={{ marginTop: 10, fontSize: 13, color: 'var(--signal-red, #DE2A2A)' }}>Error: {shopResult.error}</div>}
+
+            <div style={{ borderTop: '1px solid var(--border, #333)', margin: '18px 0 14px' }} />
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Live sync — webhooks</div>
+            <div style={{ fontSize: 13, color: 'var(--text-3)', marginBottom: 12 }}>
+              Registers Shopify webhooks (customers · orders · checkouts) so the substrate stays current and the
+              abandoned-cart journey gets its <span className="mono">checkout_started</span> trigger. Idempotent — re-run anytime.
+            </div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <Btn kind="primary" onClick={() => shopifyWebhooks('shopifyRegisterWebhooks')} disabled={whBusy}>Register webhooks</Btn>
+              <Btn onClick={() => shopifyWebhooks('shopifyListWebhooks')} disabled={whBusy}>Check registered</Btn>
+            </div>
+            {whBusy && <div style={{ marginTop: 10, color: 'var(--text-3)', fontSize: 13 }}><Spinner /> working…</div>}
+            {whResult?.error && <div style={{ marginTop: 10, fontSize: 13, color: 'var(--signal-red, #DE2A2A)' }}>Error: {whResult.error}</div>}
+            {whResult && !whResult.error && (
+              <pre style={{ marginTop: 10, fontSize: 12, background: 'var(--surface-2, #1c1c1c)', padding: 12, borderRadius: 8, overflowX: 'auto' }}>
+{JSON.stringify(whResult, null, 2)}</pre>
+            )}
           </div>
         </Panel>
       )}
