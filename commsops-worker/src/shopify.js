@@ -99,6 +99,125 @@ function mapCustomer(n) {
     city: n.defaultAddress?.city || null, locale: null, attributes: attrs, consent };
 }
 
+// ── webhook (REST JSON) mappers ──────────────────────────────────────────────
+// Shopify webhook payloads are REST-shaped (snake_case) — distinct from the
+// GraphQL camelCase nodes mapCustomer consumes. These produce the SAME internal
+// mapped shape so they reuse comms.shopify_apply_customers / the /ingest seam.
+
+// customers/create + customers/update → the mapCustomer internal shape.
+function mapCustomerRest(c) {
+  const idents = [];
+  if (c.email) idents.push({ type: 'email', value: String(c.email).toLowerCase().trim(), is_verified: true });
+  const phone = normalizePhone(c.phone || c.default_address?.phone);
+  if (phone) idents.push({ type: 'phone', value: phone, is_verified: true });
+  const cid = c.id != null ? String(c.id) : null;
+  if (cid) idents.push({ type: 'shopify_customer_id', value: cid, is_verified: true });
+
+  const first = (c.first_name || '').trim();
+  const full = [first, (c.last_name || '').trim()].filter(Boolean).join(' ');
+  const tags = typeof c.tags === 'string'
+    ? c.tags.split(',').map((s) => s.trim()).filter(Boolean)
+    : (Array.isArray(c.tags) ? c.tags : []);
+  const attrs = {
+    lifetime_orders: Number(c.orders_count || 0),
+    total_spent: c.total_spent != null ? Number(c.total_spent) : 0,
+    accepts_email_marketing: mktState(c.email_marketing_consent?.state) === 'opted_in',
+    accepts_sms_marketing: mktState(c.sms_marketing_consent?.state) === 'opted_in',
+    shopify_created_at: c.created_at || null,
+  };
+  if (full) attrs.full_name = full;
+  if (tags.length) attrs.tags = tags;
+
+  const consent = [];
+  if (c.email) {
+    consent.push({ channel: 'email', purpose: 'marketing', state: mktState(c.email_marketing_consent?.state),
+      source: 'shopify_webhook', captured_at: c.email_marketing_consent?.consent_updated_at || null });
+    consent.push({ channel: 'email', purpose: 'transactional', state: 'opted_in',
+      source: 'shopify_webhook', captured_at: c.created_at || null });
+  }
+  if (phone) {
+    consent.push({ channel: 'whatsapp', purpose: 'marketing', state: mktState(c.sms_marketing_consent?.state),
+      source: 'shopify_webhook', captured_at: c.sms_marketing_consent?.consent_updated_at || null });
+  }
+  return { identifiers: idents, display_name: first || full || null,
+    city: c.default_address?.city || null, locale: null, attributes: attrs, consent };
+}
+
+// Identifiers from an order/checkout contact block (weaker is_verified than a
+// customer record — these come off the transaction, not the customer profile).
+function identsFromContact({ email, phone, customer } = {}) {
+  const out = [];
+  const em = email || customer?.email;
+  if (em) out.push({ type: 'email', value: String(em).toLowerCase().trim(), is_verified: false });
+  const ph = normalizePhone(phone || customer?.phone || customer?.default_address?.phone);
+  if (ph) out.push({ type: 'phone', value: ph, is_verified: false });
+  const cid = customer?.id != null ? String(customer.id) : null;
+  if (cid) out.push({ type: 'shopify_customer_id', value: cid, is_verified: true });
+  return out;
+}
+
+// orders/* topic → comms event name. order_placed bumps lifetime in deriveAttributes;
+// orders/paid is intentionally NOT subscribed (would double-count order_placed).
+const ORDER_TOPIC_EVENT = {
+  'orders/create': 'order_placed',
+  'orders/fulfilled': 'order_fulfilled',
+  'orders/cancelled': 'order_cancelled',
+};
+
+function mapOrderEvent(o, name) {
+  const identifiers = identsFromContact(o);
+  if (!identifiers.length) return null;
+  const oid = o.id != null ? String(o.id) : null;
+  const total = o.total_price != null ? Number(o.total_price) : null;
+  const props = {
+    shopify_order_id: oid,
+    order_number: o.order_number || o.name || null,
+    total, total_price: total,
+    currency: o.currency || o.currency_code || null,
+    financial_status: o.financial_status || null,
+    fulfillment_status: o.fulfillment_status || null,
+    line_item_count: Array.isArray(o.line_items) ? o.line_items.length : null,
+  };
+  const occurred = (name === 'order_cancelled' ? o.cancelled_at : o.created_at) || new Date().toISOString();
+  return { identifiers, name, occurred_at: occurred, properties: props, source: 'shopify_webhook',
+    idempotency_key: `shopify:${name}:${oid}:${o.updated_at || o.created_at || ''}` };
+}
+
+// checkouts/create + checkouts/update → checkout_started (the abandoned-cart trigger).
+// Keyed on the checkout TOKEN so repeated updates AND a Web-Pixel checkout_started
+// for the same checkout dedup against each other (the pixel sends the same token).
+function mapCheckoutEvent(co) {
+  const identifiers = identsFromContact(co);
+  if (!identifiers.length) return null;
+  const tok = co.token || co.cart_token || (co.id != null ? String(co.id) : null);
+  const props = {
+    checkout_id: co.id != null ? String(co.id) : null,
+    checkout_token: tok,
+    checkout_url: co.abandoned_checkout_url || null,
+    total: co.total_price != null ? Number(co.total_price) : null,
+    currency: co.currency || null,
+    line_item_count: Array.isArray(co.line_items) ? co.line_items.length : null,
+  };
+  return { identifiers, name: 'checkout_started', occurred_at: co.created_at || new Date().toISOString(),
+    properties: props, source: 'shopify_webhook', idempotency_key: `shopify:checkout_started:${tok}` };
+}
+
+// HMAC-SHA256 verify of a Shopify webhook: base64(HMAC(rawBody, app secret)) vs
+// the X-Shopify-Hmac-Sha256 header. Constant-time compare. Secret = the app's
+// client/API secret (commsops SHOPIFY_WEBHOOK_SECRET).
+async function verifyWebhookHmac(secret, rawBody, headerB64) {
+  if (!secret || !headerB64) return false;
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const mac = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(rawBody));
+  const bytes = new Uint8Array(mac);
+  let bin = ''; for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  const expected = btoa(bin);
+  if (expected.length !== headerB64.length) return false;
+  let diff = 0; for (let i = 0; i < expected.length; i++) diff |= expected.charCodeAt(i) ^ headerB64.charCodeAt(i);
+  return diff === 0;
+}
+
 // ── fetch + apply ───────────────────────────────────────────────────────────
 const CUSTOMERS_QUERY = `
 query($first:Int!,$after:String){
@@ -121,14 +240,55 @@ async function fetchCustomerPage(env, { first = 100, after = null }) {
     hasNext: !!conn.pageInfo?.hasNextPage, cursor: conn.pageInfo?.endCursor || null };
 }
 
-async function applyNodes(env, nodes) {
-  const mapped = nodes.map(mapCustomer).filter((m) => m.identifiers.length > 0);
-  if (!mapped.length) return { profiles: 0, consent: 0, skipped: nodes.length };
+// Apply already-mapped customer objects (from GraphQL nodes OR REST webhooks) in
+// one DB call — keeps both the backfill and customers/* webhooks under the subreq cap.
+async function applyMapped(env, mapped) {
+  const valid = (mapped || []).filter((m) => m && Array.isArray(m.identifiers) && m.identifiers.length > 0);
+  if (!valid.length) return { profiles: 0, consent: 0, skipped: (mapped || []).length };
   const r = await A.sbComms('/rest/v1/rpc/shopify_apply_customers', env,
-    { method: 'POST', body: JSON.stringify({ p_customers: mapped }) });
+    { method: 'POST', body: JSON.stringify({ p_customers: valid }) });
   if (!r.ok) throw new Error(`apply_failed:${JSON.stringify(r.data).slice(0, 200)}`);
   const row = Array.isArray(r.data) ? r.data[0] : r.data;
-  return { profiles: Number(row?.profiles_touched || 0), consent: Number(row?.consent_rows || 0), skipped: nodes.length - mapped.length };
+  return { profiles: Number(row?.profiles_touched || 0), consent: Number(row?.consent_rows || 0), skipped: (mapped || []).length - valid.length };
+}
+
+async function applyNodes(env, nodes) {
+  return applyMapped(env, nodes.map(mapCustomer));
+}
+
+// ── webhook registration ──────────────────────────────────────────────────────
+// GraphQL enum topics (uppercase) — runtime delivers the slash form in X-Shopify-Topic.
+const WEBHOOK_TOPICS = [
+  'CUSTOMERS_CREATE', 'CUSTOMERS_UPDATE',
+  'ORDERS_CREATE', 'ORDERS_FULFILLED', 'ORDERS_CANCELLED',
+  'CHECKOUTS_CREATE', 'CHECKOUTS_UPDATE',
+];
+
+async function listWebhooks(env) {
+  const q = `{ webhookSubscriptions(first:100){ edges{ node{ id topic
+    endpoint{ __typename ... on WebhookHttpEndpoint{ callbackUrl } } } } } }`;
+  const d = await shopifyGraphQL(env, q, {});
+  return (d.webhookSubscriptions?.edges || []).map((e) => ({
+    id: e.node.id, topic: e.node.topic, callbackUrl: e.node.endpoint?.callbackUrl || null }));
+}
+
+// Idempotent: create only the topics not already pointed at callbackUrl.
+async function registerWebhooks(env, callbackUrl) {
+  const existing = await listWebhooks(env);
+  const have = new Set(existing.filter((n) => n.callbackUrl === callbackUrl).map((n) => n.topic));
+  const created = [], skipped = [], errors = [];
+  const m = `mutation($topic:WebhookSubscriptionTopic!,$url:URL!){
+    webhookSubscriptionCreate(topic:$topic, webhookSubscription:{callbackUrl:$url, format:JSON}){
+      webhookSubscription{ id } userErrors{ field message } } }`;
+  for (const topic of WEBHOOK_TOPICS) {
+    if (have.has(topic)) { skipped.push(topic); continue; }
+    try {
+      const r = await shopifyGraphQL(env, m, { topic, url: callbackUrl });
+      const ue = r.webhookSubscriptionCreate?.userErrors || [];
+      if (ue.length) errors.push({ topic, errors: ue }); else created.push(topic);
+    } catch (e) { errors.push({ topic, error: e?.message || String(e) }); }
+  }
+  return { callbackUrl, created, skipped, errors };
 }
 
 // Small sample write so we can eyeball the mapping via SQL before the full run.
@@ -146,4 +306,9 @@ async function backfillPage(env, after, pageSize = 40) {
   return { fetched: customers.length, ...res, hasNext, cursor };
 }
 
-module.exports = { mapCustomer, normalizePhone, mktState, gidNum, fetchCustomerPage, applyNodes, backfillSample, backfillPage };
+module.exports = {
+  mapCustomer, normalizePhone, mktState, gidNum, fetchCustomerPage, applyNodes, applyMapped, backfillSample, backfillPage,
+  // M4 webhooks + pixel
+  mapCustomerRest, identsFromContact, mapOrderEvent, mapCheckoutEvent, ORDER_TOPIC_EVENT,
+  verifyWebhookHmac, registerWebhooks, listWebhooks, WEBHOOK_TOPICS,
+};

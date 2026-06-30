@@ -8,6 +8,7 @@ const { handleResendWebhook, handleUnsubscribe } = require('./webhooks.js');
 const CAMP = require('./campaigns.js');
 const J = require('./journeys.js');
 const SHOP = require('./shopify.js');
+const SHOPWH = require('./shopify-webhooks.js');
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -291,6 +292,17 @@ async function handlePost(body, auth, env) {
         return ok(r);   // sample: writes a few + returns counts so we eyeball via SQL
       } catch (e) { return err(e?.message || 'shopify_error', 400); }
     }
+    case 'shopifyRegisterWebhooks': {   // idempotent — create the topics we don't yet have
+      if (!A.canSuperAdmin(auth.permissions)) return err('forbidden', 403);
+      const cb = body.callbackUrl || `${env.PUBLIC_BASE_URL || 'https://commsops.afshaan.workers.dev'}/webhooks/shopify`;
+      try { return ok(await SHOP.registerWebhooks(env, cb)); }
+      catch (e) { return err(e?.message || 'shopify_error', 400); }
+    }
+    case 'shopifyListWebhooks': {        // visibility into registered subscriptions
+      if (!A.canSuperAdmin(auth.permissions)) return err('forbidden', 403);
+      try { return ok(await SHOP.listWebhooks(env)); }
+      catch (e) { return err(e?.message || 'shopify_error', 400); }
+    }
 
     default:
       return err(`unknown_action:${body.action}`, 404);
@@ -346,7 +358,18 @@ export default {
       const r = await handleResendWebhook(env, request);
       return r.ok ? ok(r) : err(r.error, r.status || 400);
     }
-    // Other public endpoints in later milestones: /webhooks/shopify (M4).
+    // Public Shopify webhook (M4) — HMAC-verified (raw body) against SHOPIFY_WEBHOOK_SECRET.
+    // Keeps the substrate current: customers, orders, abandoned checkouts → /ingest.
+    if (url.pathname === '/webhooks/shopify' && request.method === 'POST') {
+      const r = await SHOPWH.handleShopifyWebhook(env, request);
+      return r.ok ? ok(r) : err(r.error, r.status || 400);
+    }
+    // Public storefront Web Pixel (M4) — low-trust PIXEL_TOKEN, add_to_cart / checkout_started
+    // only. The source of checkout_started that fires the abandoned-cart journey.
+    if (url.pathname === '/pixel' && request.method === 'POST') {
+      const r = await SHOPWH.handlePixel(env, request);
+      return r.ok ? ok(r) : err(r.error, r.status || 400);
+    }
 
     const auth = await A.verifyJWT(request.headers.get('Authorization'), env);
     if (!auth) return err('unauthorised', 401);
