@@ -18,14 +18,20 @@ export function useTableSort(rows, { initialKey = null, initialDir = 'desc', val
     if (k === sortKey) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
     else { setSortKey(k); setSortDir('desc'); }
   };
-  const get = valueOf || ((row, k) => row[k]);
-  let sorted = rows || [];
+  // A generic sort util must tolerate ANY cell value — a single exotic/non-primitive
+  // value (e.g. an object whose valueOf coerces with this=null) must never throw inside
+  // render and white-screen the whole app. Coercion is the comparator's job, not the caller's.
+  const g = valueOf || ((row, k) => row?.[k]);
+  const get = (row, k) => { try { return g(row, k); } catch { return null; } };
+  const num = (x) => { try { return Number(x); } catch { return NaN; } };
+  const str = (x) => { if (x == null) return ''; try { return String(x); } catch { return ''; } };
+  let sorted = Array.isArray(rows) ? rows : (rows || []);
   if (sortKey) {
     sorted = [...sorted].sort((a, b) => {
       const av = get(a, sortKey), bv = get(b, sortKey);
-      const an = Number(av), bn = Number(bv);
+      const an = num(av), bn = num(bv);
       const numeric = av != null && av !== '' && bv != null && bv !== '' && !Number.isNaN(an) && !Number.isNaN(bn);
-      const cmp = numeric ? an - bn : String(av ?? '').localeCompare(String(bv ?? ''), undefined, { numeric: true });
+      const cmp = numeric ? an - bn : str(av).localeCompare(str(bv), undefined, { numeric: true });
       return sortDir === 'asc' ? cmp : -cmp;
     });
   }
