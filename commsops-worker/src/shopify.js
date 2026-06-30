@@ -139,7 +139,8 @@ async function backfillSample(env, n = 5) {
 }
 
 // One page of the full phased backfill; caller continues from `cursor` while hasNext.
-async function backfillPage(env, after, pageSize = 100) {
+// pageSize kept modest so the nested-consent query stays under Shopify's 1000-pt cost cap.
+async function backfillPage(env, after, pageSize = 40) {
   const { customers, hasNext, cursor } = await fetchCustomerPage(env, { first: pageSize, after });
   const res = await applyNodes(env, customers);
   return { fetched: customers.length, ...res, hasNext, cursor };

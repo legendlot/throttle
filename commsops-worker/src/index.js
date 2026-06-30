@@ -372,8 +372,11 @@ export default {
         if (b.kind === 'enrol') {
           await J.enrol(env, { journeyId: b.journeyId, profileId: b.profileId, eventId: b.eventId });
         } else if (b.kind === 'shopify_backfill') {
-          const r = await SHOP.backfillPage(env, b.after || null);   // one page; continue while more
-          if (r.hasNext && r.cursor) await env.BROADCAST_QUEUE.send({ kind: 'shopify_backfill', after: r.cursor });
+          try {
+            const r = await SHOP.backfillPage(env, b.after || null);   // one page; continue while more
+            console.log('shopify_backfill', JSON.stringify(r));
+            if (r.hasNext && r.cursor) await env.BROADCAST_QUEUE.send({ kind: 'shopify_backfill', after: r.cursor });
+          } catch (e) { console.log('shopify_backfill_error', e?.message || String(e)); throw e; }
         } else {
           await CAMP.processQueueMessage(env, b);   // campaign fan-out (default, back-compat)
         }
