@@ -687,6 +687,92 @@ async function amazonReturnsPhase(host, H, mkt, cfg, nowMs) {
   }
 }
 
+// ── Amazon settlement report (GET_V2_SETTLEMENT_REPORT_DATA_FLAT_FILE_V2) → fees + true payout ──
+// SCHEDULED reports — Amazon auto-generates one per disbursement (~14d). We LIST DONE reports and
+// download NEW ones (tracked by reportId in config.settlement_seen), not create→poll. Each file's
+// rows go to stg_amazon_settlement; recompute_settlement builds the per-(settlement,date,product)
+// fact (true net payout + fee decomposition). Reconciliation-grade; never breaks the sell-out pipeline.
+const AMZ_SETTLEMENT_REPORT_TYPE = 'GET_V2_SETTLEMENT_REPORT_DATA_FLAT_FILE_V2';
+const AMZ_SETTLEMENT_MAX_PER_TICK = 2;            // download ≤2 new settlements/tick (backfill walks chronologically)
+// Settlement dates come as "yyyy-MM-dd HH:mm:ss UTC" or "dd.MM.yyyy" — normalise to an IST date.
+function parseSettleDate(s) {
+  const v = String(s || '').trim(); if (!v) return null;
+  if (/\dT\d/.test(v) || /UTC/i.test(v)) return istDate(v.replace(' UTC', 'Z').replace(' ', 'T'));
+  if (/^\d{2}\.\d{2}\.\d{4}/.test(v)) { const p = v.slice(0, 10).split('.'); return `${p[2]}-${p[1]}-${p[0]}`; }
+  return v.slice(0, 10);
+}
+function gridToSettlementRows(grid) {
+  if (!grid || grid.length < 2) return [];
+  const header = grid[0].map(h => String(h).trim().toLowerCase());
+  const ix = n => header.indexOf(n);
+  const c = { sid: ix('settlement-id'), dep: ix('deposit-date'), tot: ix('total-amount'),
+    txn: ix('transaction-type'), oid: ix('order-id'), sku: ix('sku'), at: ix('amount-type'),
+    ad: ix('amount-description'), amt: ix('amount'), qty: ix('quantity-purchased'), pd: ix('posted-date') };
+  if (c.sid < 0 || c.amt < 0) return [];                       // unexpected shape → skip safely
+  const rows = [];
+  for (let r = 1; r < grid.length; r++) {
+    const L = grid[r];
+    const sid = String(L[c.sid] ?? '').trim(); if (!sid) continue;
+    const txn = c.txn >= 0 ? String(L[c.txn] ?? '').trim() : '';
+    const oid = c.oid >= 0 ? String(L[c.oid] ?? '').trim() : '';
+    const isHeader = !txn && !oid;                              // settlement summary row (carries total-amount/deposit)
+    rows.push({
+      settlement_id: sid, line_no: r,
+      posted_date: c.pd >= 0 ? parseSettleDate(L[c.pd]) : null,
+      deposit_date: c.dep >= 0 ? parseSettleDate(L[c.dep]) : null,
+      transaction_type: isHeader ? '--settlement--' : (txn || null),
+      order_id: oid || null,
+      sku: c.sku >= 0 ? (String(L[c.sku] ?? '').trim() || null) : null,
+      amount_type: c.at >= 0 ? (String(L[c.at] ?? '').trim() || null) : null,
+      amount_description: c.ad >= 0 ? (String(L[c.ad] ?? '').trim() || null) : null,
+      amount: isHeader && c.tot >= 0 ? num(L[c.tot]) : num(L[c.amt]),
+      quantity: c.qty >= 0 ? Math.round(num(L[c.qty])) : 0,
+      raw: { line: L },
+    });
+  }
+  return rows;
+}
+async function amazonSettlementPhase(host, H, cfg, nowMs) {
+  let subreqs = 0;
+  try {
+    const seen = new Set(cfg.settlement_seen || []);
+    const lr = await fetch(`${host}/reports/2021-06-30/reports?reportTypes=${AMZ_SETTLEMENT_REPORT_TYPE}&processingStatuses=DONE&pageSize=100`, { headers: H }); subreqs++;
+    if (!lr.ok) return { settlements: [], subreqs, configAfter: cfg, error: `listReports ${lr.status}: ${(await lr.text().catch(() => '')).slice(0, 120)}` };
+    const lj = await lr.json().catch(() => ({}));
+    const fresh = (lj.reports || []).filter(r => r.reportDocumentId && !seen.has(r.reportId))
+      .sort((a, b) => String(a.dataEndTime || '').localeCompare(String(b.dataEndTime || '')));   // oldest first
+    const settlements = [], newSeen = [];
+    for (const rep of fresh.slice(0, AMZ_SETTLEMENT_MAX_PER_TICK)) {
+      if (subreqs >= 40) break;
+      const dr = await fetch(`${host}/reports/2021-06-30/documents/${rep.reportDocumentId}`, { headers: H }); subreqs++;
+      if (!dr.ok) continue;                                     // leave unseen → retry next tick
+      const doc = await dr.json().catch(() => ({}));
+      const text = await fetchAmazonDoc(doc); subreqs++;
+      const grid = text.split(/\r?\n/).filter(l => l.length).map(l => l.split('\t'));
+      const rows = gridToSettlementRows(grid);
+      const sid = rows.length ? rows[0].settlement_id : rep.reportId;
+      settlements.push({ settlement_id: sid, report_id: rep.reportId, rows });
+      newSeen.push(rep.reportId);
+    }
+    const configAfter = newSeen.length ? { ...cfg, settlement_seen: [...(cfg.settlement_seen || []), ...newSeen] } : cfg;
+    return { settlements, subreqs, configAfter };
+  } catch (e) {
+    return { settlements: [], subreqs, configAfter: cfg, error: String(e?.message || e) };
+  }
+}
+// Per settlement: idempotent supersede in staging + recompute its fact rows.
+async function stageAmazonSettlement(settlements, runId, channelId) {
+  for (const st of (settlements || [])) {
+    if (!st.rows || !st.rows.length) continue;
+    await sbSales(`/rest/v1/stg_amazon_settlement?settlement_id=eq.${encodeURIComponent(st.settlement_id)}`, { method: 'DELETE', prefer: 'return=minimal' });
+    const body = st.rows.map(r => ({ run_id: runId, channel_id: channelId, settlement_id: r.settlement_id, line_no: r.line_no,
+      posted_date: r.posted_date, deposit_date: r.deposit_date, transaction_type: r.transaction_type, order_id: r.order_id,
+      sku: r.sku, amount_type: r.amount_type, amount_description: r.amount_description, amount: r.amount, quantity: r.quantity, raw: r.raw }));
+    await sbInsertChunked('/rest/v1/stg_amazon_settlement', body, 'return=minimal');
+    await rpcSales('recompute_settlement', { p_settlement_id: st.settlement_id });
+  }
+}
+
 const amazonAdapter = {
   kind: 'amazon_spapi', stgTable: 'stg_amazon', sourceKind: 'amazon',
   async fetch({ env, channelId, cursor, config }) {
@@ -710,9 +796,13 @@ const amazonAdapter = {
     let returns = { rows: [] }, retSub = 0;
     try { const rw = await amazonReturnsPhase(host, H, mkt, configAfter, nowMs); retSub = rw.subreqs; returns = { rows: rw.rows }; configAfter = rw.configAfter; }
     catch (e) { returns = { rows: [], error: String(e?.message || e) }; }
-    // Persist report + finance + returns config in ONE write (avoids clobbering pending ids).
+    // Settlement phase (true payout + fees → margin). Reconciliation-grade; never breaks the pipeline.
+    let settlement = { settlements: [] }, setSub = 0;
+    try { const sw = await amazonSettlementPhase(host, H, configAfter, nowMs); setSub = sw.subreqs; settlement = { settlements: sw.settlements }; configAfter = sw.configAfter; }
+    catch (e) { settlement = { settlements: [], error: String(e?.message || e) }; }
+    // Persist report + finance + returns + settlement config in ONE write (avoids clobbering pending ids).
     await patchConnectorConfig(channelId, cfg, configAfter);
-    return { rows: rep.rows, cursorAfter: rep.cursorAfter, subreqs: rep.subreqs + finSub + retSub, partial: rep.partial, finance, returns };
+    return { rows: rep.rows, cursorAfter: rep.cursorAfter, subreqs: rep.subreqs + finSub + retSub + setSub, partial: rep.partial, finance, returns, settlement };
   },
   async stage(rows, runId, channelId, fetched) {
     if (rows.length) {
@@ -756,6 +846,9 @@ const amazonAdapter = {
     }
     // Reclassify refund return_kind across history (cheap + idempotent) whenever finance or returns moved.
     if (ev.length || retRows.length) await rpcSales('classify_amazon_returns', { p_channel: channelId, p_from: '2024-01-01', p_to: todayISO() });
+    // Settlement → stg_amazon_settlement + recompute_settlement (per new disbursement file).
+    const setts = (fetched && fetched.settlement && fetched.settlement.settlements) || [];
+    if (setts.length) await stageAmazonSettlement(setts, runId, channelId);
   },
   datesOf(rows, fetched) {
     const ds = new Set(distinctDates(rows));
@@ -2141,6 +2234,32 @@ export default {
             return ok({ funnel: (fr.data && fr.data[0]) || {}, recon: (rc.ok && rc.data && rc.data[0]) || {} });
           }
 
+          case 'getSettlement': {   // S186 — Amazon payout & fees (margin lens) for /amazon
+            if (!canView(P)) return err('No permission', 403);
+            const from = qp('from') || todayISO(), to = qp('to') || todayISO();
+            const [byDate, byProd, recon] = await Promise.all([
+              rpcSales('f_settlement_rollup', { p_from: from, p_to: to, p_group: 'date' }),
+              rpcSales('f_settlement_rollup', { p_from: from, p_to: to, p_group: 'product' }),
+              rpcSales('f_settlement_recon', { p_from: from, p_to: to }),
+            ]);
+            if (!byDate.ok) return err('Settlement rollup failed: ' + JSON.stringify(byDate.data), 502);
+            return ok({ by_date: byDate.data || [], by_product: byProd.data || [], recon: recon.ok ? (recon.data || []) : [] });
+          }
+          case 'settlementProbe': {   // diagnostic: does the account expose settlement reports + what's ingested
+            if (!canSuperAdmin(P)) return err('No permission', 403);
+            const ch = await sbSales(`/rest/v1/connector_config?adapter_kind=eq.amazon_spapi&select=channel_id,config&limit=1`);
+            const cfg = (ch.ok && ch.data && ch.data[0] && ch.data[0].config) || {};
+            const host = cfg.region_host || 'https://sellingpartnerapi-eu.amazon.com';
+            const token = await getAmazonToken(env).catch(e => { throw e; });
+            const H = { Authorization: `Bearer ${token}`, 'x-amz-access-token': token, 'Content-Type': 'application/json' };
+            const lr = await fetch(`${host}/reports/2021-06-30/reports?reportTypes=${AMZ_SETTLEMENT_REPORT_TYPE}&processingStatuses=DONE&pageSize=100`, { headers: H });
+            const lj = await lr.json().catch(() => ({}));
+            const reports = (lj.reports || []).map(r => ({ reportId: r.reportId, hasDoc: !!r.reportDocumentId, dataStartTime: r.dataStartTime, dataEndTime: r.dataEndTime }));
+            const seen = (cfg.settlement_seen || []).length;
+            const cnt = await sbSales(`/rest/v1/stg_amazon_settlement?select=settlement_id`).catch(() => ({ data: [] }));
+            const distinctSettlements = new Set((cnt.data || []).map(x => x.settlement_id)).size;
+            return ok({ list_status: lr.status, available_done_reports: reports.length, reports: reports.slice(0, 20), ingested_report_ids: seen, distinct_settlements_staged: distinctSettlements });
+          }
           case 'searchUsers': {   // S185 — searchable LOT-user directory for the access-control grant dropdown
             if (!canSuperAdmin(P)) return err('No permission', 403);
             const r = await sbStore('/rest/v1/rpc/search_lot_users', { method: 'POST', body: JSON.stringify({ p_q: qp('q') || '' }) });
