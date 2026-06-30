@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
 import { salesGet, fmtInt, inr, rangePresets } from '../../../lib/api.js';
-import { RangePicker, useTableSort, SortHeader } from '../../../components/kit.js';
+import { RangePicker, SegmentedToggle, useTableSort, SortHeader } from '../../../components/kit.js';
 
 const numfmt = n => Number(n || 0).toLocaleString('en-IN');
 const pctOf = (n, d) => (d > 0 ? (n / d * 100) : 0);
@@ -46,6 +46,29 @@ function Funnel({ steps }) {
   );
 }
 
+// Daily conversion-rate trend over the snapshot history — the shape of when conversion moved.
+// The input-stream annotations (website changes, stock in/out) overlay this chart in later phases.
+function DailyTrend({ rows }) {
+  if (!rows || rows.length < 2) return <div className="so-sub" style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)', padding: '20px 0' }}>Not enough days in this range yet — widen it.</div>;
+  const W = 1000, H = 210, pad = 30;
+  const vals = rows.map(r => Number(r.purchase_cr) || 0);
+  const max = Math.max(...vals, 0.1);
+  const x = i => pad + (i / (rows.length - 1)) * (W - pad * 2);
+  const y = v => H - pad - (v / max) * (H - pad * 2);
+  const line = rows.map((r, i) => `${x(i)},${y(vals[i])}`).join(' ');
+  const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={210} preserveAspectRatio="none" style={{ display: 'block' }}>
+      {[0.25, 0.5, 0.75, 1].map(f => <line key={f} x1={pad} x2={W - pad} y1={y(max * f)} y2={y(max * f)} stroke="var(--surface2)" strokeWidth="1" />)}
+      <line x1={pad} x2={W - pad} y1={y(avg)} y2={y(avg)} stroke="var(--t3)" strokeWidth="1" strokeDasharray="5,5" />
+      <polygon points={`${pad},${H - pad} ${line} ${W - pad},${H - pad}`} fill="var(--green)" fillOpacity="0.08" />
+      <polyline points={line} fill="none" stroke="var(--green)" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+      <text x={pad} y={y(max) - 4} fill="var(--t3)" fontSize="11" fontFamily="var(--mono)">{max.toFixed(2)}%</text>
+      <text x={W - pad} y={y(avg) - 4} fill="var(--t3)" fontSize="11" fontFamily="var(--mono)" textAnchor="end">avg {avg.toFixed(2)}%</text>
+    </svg>
+  );
+}
+
 export default function FunnelPage() {
   const { session } = useAuth();
   const mtd = rangePresets().find(p => p.key === 'mtd');
@@ -53,17 +76,22 @@ export default function FunnelPage() {
   const [to, setTo] = useState(mtd.to);
   const [rows, setRows] = useState(null);
   const [pay, setPay] = useState(null);   // { funnel, recon } — checkout payment funnel (Razorpay)
+  const [hist, setHist] = useState(null);  // daily conversion-history snapshot rows
+  const [view, setView] = useState('overview');  // overview | history
   const [err, setErr] = useState('');
 
   useEffect(() => {
     if (!session) return;
-    setRows(null); setPay(null); setErr('');
+    setRows(null); setPay(null); setHist(null); setErr('');
     salesGet('getTraffic', { from, to }, session)
       .then(t => setRows(t?.rows || []))
       .catch(e => setErr(e.message || String(e)));
     salesGet('getPaymentFunnel', { from, to }, session)
       .then(p => setPay(p || {}))
       .catch(() => setPay({}));   // soft — payment section just shows empty if it fails
+    salesGet('getConversionHistory', { from, to }, session)
+      .then(h => setHist(h?.rows || []))
+      .catch(() => setHist([]));
   }, [session, from, to]);
 
   const sum = k => (rows || []).reduce((a, r) => a + Number(r[k] || 0), 0);
@@ -78,14 +106,82 @@ export default function FunnelPage() {
   ];
 
   const srcSort = useTableSort(rows, { initialKey: 'sessions', valueOf: (r, k) => k === 'conv' ? (Number(r.sessions) > 0 ? Number(r.purchases) / Number(r.sessions) : 0) : k === 'src_group' ? (r.src_group || '') : r[k] });
+  const histSort = useTableSort(hist, { initialKey: 'the_date', initialDir: 'desc' });
 
   return (
     <div className="so-page">
       <RangePicker from={from} to={to} onChange={({ from, to }) => { setFrom(from); setTo(to); }}
-        right={<span className="so-sub">GA4 · Website</span>} />
+        right={<><SegmentedToggle options={[['overview', 'Overview'], ['history', 'Daily history']]} value={view} onChange={setView} size="sm" /><span className="so-sub" style={{ marginLeft: 10 }}>GA4 · Website</span></>} />
 
       {err && <div className="so-card" style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12 }}>{err}</div>}
-      {!rows ? <div style={{ padding: 60, textAlign: 'center' }}><Spinner /></div> : (
+
+      {view === 'history' ? (
+        !hist ? <div style={{ padding: 60, textAlign: 'center' }}><Spinner /></div> : (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,2.2fr) minmax(220px,1fr)', gap: 14 }}>
+              <div className="so-card">
+                <div className="so-kpi-lbl" style={{ marginBottom: 12 }}>Daily conversion rate · sessions → purchase</div>
+                <DailyTrend rows={hist} />
+              </div>
+              {(() => {
+                const wd = (hist || []).filter(r => Number(r.sessions) > 0);
+                const v = wd.map(r => Number(r.purchase_cr) || 0);
+                const avg = v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0;
+                const best = wd.length ? wd.reduce((m, r) => Number(r.purchase_cr) > Number(m.purchase_cr) ? r : m) : null;
+                const worst = wd.length ? wd.reduce((m, r) => Number(r.purchase_cr) < Number(m.purchase_cr) ? r : m) : null;
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                    <div className="so-card" style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 4 }}>
+                      <div className="so-kpi-lbl">Avg daily conversion</div>
+                      <span className="so-kpi-val" style={{ fontSize: 30, color: 'var(--green)' }}>{avg.toFixed(2)}%</span>
+                      <span className="so-sub" style={{ fontSize: 11 }}>{wd.length} days in range</span>
+                    </div>
+                    <div className="so-card" style={{ flex: 1 }}>
+                      <div className="so-kpi-lbl">Best / worst day</div>
+                      <div style={{ fontFamily: 'var(--mono)', fontSize: 12, marginTop: 6, lineHeight: 1.7 }}>
+                        <div style={{ color: 'var(--green)' }}>▲ {best?.the_date} · {Number(best?.purchase_cr || 0).toFixed(2)}%</div>
+                        <div style={{ color: '#EC6A5E' }}>▼ {worst?.the_date} · {Number(worst?.purchase_cr || 0).toFixed(2)}%</div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+            <div className="so-card" style={{ padding: 0, overflow: 'hidden' }}>
+              <div className="so-kpi-lbl" style={{ padding: '16px 18px 0' }}>Daily funnel</div>
+              <div style={{ overflowX: 'auto' }}>
+                <table className="so-table" style={{ marginTop: 8 }}>
+                  <thead><tr>
+                    <SortHeader k="the_date" label="Date" sort={histSort} />
+                    <SortHeader k="sessions" label="Sessions" sort={histSort} numeric />
+                    <SortHeader k="add_to_carts" label="ATC" sort={histSort} numeric />
+                    <SortHeader k="checkouts" label="Checkout" sort={histSort} numeric />
+                    <SortHeader k="purchases" label="Purchases" sort={histSort} numeric />
+                    <SortHeader k="atc_rate" label="ATC %" sort={histSort} numeric />
+                    <SortHeader k="purchase_cr" label="Conv. rate" sort={histSort} numeric />
+                  </tr></thead>
+                  <tbody>
+                    {histSort.sorted.length === 0 && <tr><td colSpan={7} style={{ color: 'var(--t3)', padding: 14 }}>No snapshot days in this range yet.</td></tr>}
+                    {histSort.sorted.map(r => (
+                      <tr key={r.the_date}>
+                        <td style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>{r.the_date}</td>
+                        <td className="so-num">{numfmt(r.sessions)}</td>
+                        <td className="so-num">{numfmt(r.add_to_carts)}</td>
+                        <td className="so-num">{numfmt(r.checkouts)}</td>
+                        <td className="so-num">{numfmt(r.purchases)}</td>
+                        <td className="so-num">{fmtPct(r.atc_rate)}</td>
+                        <td className="so-num" style={{ color: 'var(--green)' }}>{fmtPct(r.purchase_cr)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div className="so-sub" style={{ fontSize: 10.5, color: 'var(--t3)' }}>Frozen daily snapshot of the GA4 website funnel — recent days refresh as GA4 finalises, older days lock. Annotation streams (website changes · stock in/out) land on this chart next.</div>
+          </>
+        )
+      ) : (
+      !rows ? <div style={{ padding: 60, textAlign: 'center' }}><Spinner /></div> : (
         <>
           {/* funnel viz + headline conversion */}
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,2.2fr) minmax(220px,1fr)', gap: 14 }}>
@@ -212,7 +308,7 @@ export default function FunnelPage() {
             );
           })()}
         </>
-      )}
+      ))}
     </div>
   );
 }

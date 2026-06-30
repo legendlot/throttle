@@ -2055,6 +2055,15 @@ export default {
     // Phase 2: auto-pause engine ads past the kill gate (free — only lowers spend; no-op while
     // ads_write_enabled is false). Self-contained + best-effort; never disturbs the producer above.
     try { await adsAutoPause(env); } catch (e) { console.error('odoops cron (auto-pause) failed:', e?.message || e); }
+    // Daily conversion-funnel snapshot: refresh the trailing window from traffic_fact (GA4 keeps
+    // revising recent days; older days stay frozen at their last value). The audit spine for the
+    // /funnel Conversion-history page. Cheap (one RPC); best-effort.
+    try {
+      const istMs = Date.now() + 5.5 * 3600 * 1000;
+      const to = new Date(istMs).toISOString().slice(0, 10);
+      const from = new Date(istMs - 8 * 86400000).toISOString().slice(0, 10);
+      await rpcSales('recompute_conversion_snapshot', { p_from: from, p_to: to });
+    } catch (e) { console.error('odoops cron (conversion snapshot) failed:', e?.message || e); }
   },
 
   async fetch(request, env, ctx) {
@@ -2263,6 +2272,12 @@ export default {
             ]);
             if (!byDate.ok) return err('Settlement rollup failed: ' + JSON.stringify(byDate.data), 502);
             return ok({ by_date: byDate.data || [], by_product: byProd.data || [], recon: recon.ok ? (recon.data || []) : [] });
+          }
+          case 'getConversionHistory': {   // S186 — daily website funnel (GA4 snapshot) for /funnel history
+            if (!canView(P)) return err('No permission', 403);
+            const r = await rpcSales('f_conversion_history', { p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO() });
+            if (!r.ok) return err('Conversion history failed: ' + JSON.stringify(r.data), 502);
+            return ok({ rows: r.data || [] });
           }
           case 'settlementProbe': {   // diagnostic: does the account expose settlement reports + what's ingested
             if (!canSuperAdmin(P)) return err('No permission', 403);
