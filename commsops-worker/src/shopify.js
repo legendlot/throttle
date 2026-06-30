@@ -3,16 +3,42 @@
 // applied in ONE DB call via comms.shopify_apply_customers (well under the 50-subreq cap).
 const A = require('./auth.js');
 
-const API_VERSION = '2025-01';
+const API_VERSION = '2026-04';
 const adminUrl = (env) => `https://${env.SHOPIFY_STORE_DOMAIN}/admin/api/${env.SHOPIFY_API_VERSION || API_VERSION}/graphql.json`;
 
+// Auth mirrors odoops/csops: a Dev-Dashboard app mints an access token via the
+// client-credentials grant (CLIENT_ID + CLIENT_SECRET). A static SHOPIFY_ACCESS_TOKEN
+// (store custom app, shpat_…) is used directly if present.
+let _tok = null, _tokExp = 0;
+async function getShopifyToken(env, force = false) {
+  if (env.SHOPIFY_ACCESS_TOKEN) return env.SHOPIFY_ACCESS_TOKEN;
+  const now = Date.now();
+  if (!force && _tok && now < _tokExp - 60_000) return _tok;
+  const res = await fetch(`https://${env.SHOPIFY_STORE_DOMAIN}/admin/oauth/access_token`, {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'client_credentials', client_id: env.SHOPIFY_CLIENT_ID, client_secret: env.SHOPIFY_CLIENT_SECRET }),
+  }).catch(() => null);
+  if (!res || !res.ok) { _tok = null; _tokExp = 0; throw new Error(`shopify_auth:${res ? res.status : 'network'}`); }
+  const data = await res.json().catch(() => null);
+  if (!data?.access_token) { _tok = null; _tokExp = 0; throw new Error('shopify_auth:no_token'); }
+  _tok = data.access_token; _tokExp = now + (Number(data.expires_in) || 86399) * 1000;
+  return _tok;
+}
+
 async function shopifyGraphQL(env, query, variables) {
-  if (!env.SHOPIFY_STORE_DOMAIN || !env.SHOPIFY_ADMIN_TOKEN) throw new Error('shopify_not_configured');
-  const res = await fetch(adminUrl(env), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': env.SHOPIFY_ADMIN_TOKEN },
-    body: JSON.stringify({ query, variables: variables || {} }),
-  });
+  if (!env.SHOPIFY_STORE_DOMAIN || (!env.SHOPIFY_ACCESS_TOKEN && (!env.SHOPIFY_CLIENT_ID || !env.SHOPIFY_CLIENT_SECRET)))
+    throw new Error('shopify_not_configured');
+  const run = async (tok) => {
+    const res = await fetch(adminUrl(env), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': tok },
+      body: JSON.stringify({ query, variables: variables || {} }),
+    });
+    return res;
+  };
+  let token = await getShopifyToken(env);
+  let res = await run(token);
+  if (res.status === 401) { token = await getShopifyToken(env, true); res = await run(token); }   // re-mint once
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data.errors) throw new Error(`shopify_graphql:${res.status}:${data.errors ? JSON.stringify(data.errors).slice(0, 300) : 'http'}`);
   return data.data;
