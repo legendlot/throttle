@@ -1310,6 +1310,17 @@ const UNI_WINDOW_DAYS_DEFAULT = 14;
 const UNI_MAX_GETS_DEFAULT = 40;
 const uniMs = (iso) => Date.parse(iso);
 const uniISO = (ms) => new Date(Number(ms)).toISOString();           // → "yyyy-MM-ddTHH:mm:ss.SSSZ" (uniware-accepted)
+// Uniware's saleOrder/search element `updated`/`created` is an epoch in SECONDS (~1.78e9), not ms —
+// reading it raw as ms lands in 1970, so an UPDATED watermark could never advance past a 2026 cursor
+// (the bug that froze the old per-channel pulls). Normalise: seconds→ms (any epoch < 1e12 is seconds),
+// pass ms through, Date.parse an ISO string, else fall back. Used for the aggregator cursor watermark.
+const uniUpdatedMs = (v, fb) => {
+  if (v == null || v === '') return fb;
+  const n = Number(v);
+  if (!Number.isNaN(n)) return (n > 0 && n < 1e12) ? n * 1000 : n;   // epoch seconds → ms
+  const d = Date.parse(v);
+  return Number.isNaN(d) ? fb : d;
+};
 let _uniTok = null, _uniTokExp = 0;
 async function getUniwareToken(env) {
   if (!env.UNIWARE_TENANT || !env.UNIWARE_USERNAME || !env.UNIWARE_PASSWORD)
@@ -1418,7 +1429,7 @@ const uniwareAggAdapter = {
       // advance by winEnd. Volume-proof: at the 1-day floor an (essentially impossible) still-too-dense
       // window scans what it can and advances anyway, so the walk never stalls.
       let winMs = baseWinMs, winEnd, codes = [], fullyScanned = false, denseFloor = false;
-      const collect = (els, wEnd) => { for (const e of (els || [])) { const ch = String(e.channel || '').toUpperCase(); if (map[ch]) codes.push({ code: e.code, channel_id: map[ch], updated: Number(e.updated) || Number(e.created) || wEnd }); } };
+      const collect = (els, wEnd) => { for (const e of (els || [])) { const ch = String(e.channel || '').toUpperCase(); if (map[ch]) codes.push({ code: e.code, channel_id: map[ch], updated: uniUpdatedMs(e.updated != null ? e.updated : e.created, wEnd) }); } };
       const doSearch = async (wEnd, displayStart) => {
         const r = await fetch(`${base}/services/rest/v1/oms/saleOrder/search`, { method: 'POST', headers: H, body: JSON.stringify({ fromDate: uniISO(winStart), toDate: uniISO(wEnd), dateType: 'UPDATED', searchOptions: { displayStart, displayLength: PAGE } }) }); subreqs++;
         const j = await r.json().catch(() => ({}));
