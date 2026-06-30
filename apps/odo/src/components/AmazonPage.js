@@ -68,7 +68,7 @@ export default function AmazonPage() {
   useEffect(() => {
     if (!session || amzCh === null) return;
     setD(null); setErr('');
-    if (!idsKey) { setD({ seg: [], segPrev: [], mkt: [], mktPrev: [], ret: [], geo: [], salesVar: [], adProd: [] }); return; }
+    if (!idsKey) { setD({ seg: [], segPrev: [], mkt: [], mktPrev: [], ret: [], geo: [], salesVar: [], adProd: [], settle: { by_date: [], by_product: [], recon: [] } }); return; }
     const pp = priorPeriod(from, to);
     Promise.all([
       salesGet('getSegregation', { from, to, channel_id: idsKey }, session),
@@ -79,8 +79,9 @@ export default function AmazonPage() {
       salesGet('getAmazonGeo', { from, to }, session),
       salesGet('getSales', { from, to, group: 'variant', channel_id: idsKey }, session),
       salesGet('getAdProduct', { from, to }, session),
-    ]).then(([seg, segPrev, mkt, mktPrev, ret, geo, sv, adp]) => {
-      setD({ seg: seg?.rows || [], segPrev: segPrev?.rows || [], mkt: mkt?.rows || [], mktPrev: mktPrev?.rows || [], ret: ret?.rows || [], geo: geo?.rows || [], salesVar: sv?.rows || [], adProd: adp?.rows || [] });
+      salesGet('getSettlement', { from, to }, session),
+    ]).then(([seg, segPrev, mkt, mktPrev, ret, geo, sv, adp, setl]) => {
+      setD({ seg: seg?.rows || [], segPrev: segPrev?.rows || [], mkt: mkt?.rows || [], mktPrev: mktPrev?.rows || [], ret: ret?.rows || [], geo: geo?.rows || [], salesVar: sv?.rows || [], adProd: adp?.rows || [], settle: { by_date: setl?.by_date || [], by_product: setl?.by_product || [], recon: setl?.recon || [] } });
     }).catch(e => setErr(e.message || String(e)));
   }, [session, amzCh, idsKey, from, to]);
 
@@ -125,6 +126,23 @@ export default function AmazonPage() {
   const ctr = pct1(clicks, impr), cpc = clicks > 0 ? spend / clicks : 0, cvr = pct1(convs, clicks);
   const organic = Math.max(gross - attr, 0), organicPct = pct1(organic, gross);
   const pOrganic = Math.max(pGross - pAttr, 0);
+
+  // Settlement (true payout & fees) — sum the by_date rollup. Fees are negative; take/ad rates vs principal.
+  const settle = useMemo(() => {
+    const a = { principal: 0, promo: 0, tax: 0, advertising: 0, commission: 0, fba: 0, storage: 0, refund: 0, other: 0, fees: 0, net: 0, units: 0 };
+    for (const r of (d?.settle?.by_date || [])) {
+      a.principal += Number(r.principal) || 0; a.promo += Number(r.promo) || 0; a.tax += Number(r.tax_withheld) || 0;
+      a.advertising += Number(r.fee_advertising) || 0; a.commission += Number(r.fee_commission) || 0; a.fba += Number(r.fee_fba) || 0;
+      a.storage += Number(r.fee_storage) || 0; a.refund += Number(r.fee_refund) || 0; a.other += Number(r.fee_other) || 0;
+      a.fees += Number(r.fees_total) || 0; a.net += Number(r.net_amount) || 0; a.units += Number(r.units) || 0;
+    }
+    a.takeRate = a.principal > 0 ? -a.fees / a.principal * 100 : 0;
+    a.adRate = a.principal > 0 ? -a.advertising / a.principal * 100 : 0;
+    a.netRate = a.principal > 0 ? a.net / a.principal * 100 : 0;
+    return a;
+  }, [d]);
+  const settleRecon = d?.settle?.recon || [];
+  const hasSettle = (d?.settle?.by_date || []).length > 0;
 
   // daily trend (gross/units) stacked by Amazon sub-channel (single band today = FBA)
   const trend = useMemo(() => {
@@ -217,6 +235,83 @@ export default function AmazonPage() {
                 })}
                 {ret.unknown.value > 0 && <div className="so-sub" style={{ fontSize: 10.5 }}>Unclassified returns reclassify to RTV as the FBA customer-returns report backfills.</div>}
               </div>
+            )}
+          </div>
+
+          {/* ── Payout & fees (settlement → margin, net of marketplace cost) ── */}
+          <div className="so-card">
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+              <div className="so-kpi-lbl" style={{ margin: 0 }}>Payout &amp; fees · net of marketplace cost</div>
+              <span className="so-sub" style={{ fontSize: 10.5 }}>from Amazon settlement reports · reconciles to deposits</span>
+            </div>
+            {!hasSettle ? (
+              <div className="so-sub" style={{ color: 'var(--t3)', fontFamily: 'var(--mono)', fontSize: 12 }}>
+                No settlements in this range yet. Settlements post per disbursement (~14 days) and backfill over cron ticks — widen the date range or check back.
+              </div>
+            ) : (
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12, marginBottom: 14 }}>
+                  <Kpi lbl="Net payout" val={inr(settle.net)} sub={`${settle.netRate.toFixed(0)}% of revenue`} accent="var(--green)" />
+                  <Kpi lbl="Revenue (ex-tax)" val={inr(settle.principal)} sub={`${fmtInt(settle.units)} units settled`} />
+                  <Kpi lbl="Marketplace fees" val={inr(settle.fees)} sub={`${settle.takeRate.toFixed(1)}% take-rate`} tone="neutral" accent="var(--red)" />
+                  <Kpi lbl="Ad spend" val={inr(settle.advertising)} sub={`${settle.adRate.toFixed(1)}% of revenue · also in Marketing`} tone="neutral" accent="#E0903B" />
+                  <Kpi lbl="Tax (net)" val={inr(settle.tax)} sub="GST coll − TCS/TDS" tone="neutral" />
+                </div>
+                <div className="so-kpi-lbl" style={{ marginBottom: 8, fontSize: 11 }}>Where the revenue goes (% of revenue)</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                  {[
+                    ['Commission & closing', settle.commission, 'var(--red)'],
+                    ['FBA fulfilment', settle.fba, '#EC6A5E'],
+                    ['Storage', settle.storage, '#C7584E'],
+                    ['Refund fees', settle.refund, '#A8483F'],
+                    ['Advertising', settle.advertising, '#E0903B'],
+                    ['Promotions', settle.promo, '#B98BD9'],
+                    ['Tax (net)', settle.tax, 'var(--t3)'],
+                    ['Other', settle.other, 'var(--t3)'],
+                  ].filter(([, v]) => Math.abs(v) >= 1).map(([label, v, color]) => {
+                    const w = settle.principal > 0 ? Math.min(100, Math.abs(v) / settle.principal * 100) : 0;
+                    return (
+                      <div key={label} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', fontFamily: 'var(--mono)', fontSize: 11.5 }}>
+                          <span className="so-dot" style={{ background: color, marginRight: 7 }} />
+                          <span style={{ color: 'var(--t1)', flex: 1 }}>{label}</span>
+                          <span style={{ color: 'var(--t3)', width: 46, textAlign: 'right' }}>{(Math.abs(v) / (settle.principal || 1) * 100).toFixed(1)}%</span>
+                          <span style={{ color: v < 0 ? 'var(--red)' : 'var(--green)', width: 96, textAlign: 'right' }}>{inr(v)}</span>
+                        </div>
+                        <div style={{ height: 6, background: 'var(--surface2,var(--border))', borderRadius: 4, overflow: 'hidden' }}>
+                          <div style={{ width: `${w}%`, height: '100%', background: color }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                {settleRecon.length > 0 && (
+                  <div style={{ marginTop: 16 }}>
+                    <div className="so-kpi-lbl" style={{ marginBottom: 8, fontSize: 11 }}>Settlement reconciliation</div>
+                    <div style={{ overflowX: 'auto' }}>
+                      <table className="so-table">
+                        <thead><tr>
+                          <th>Settlement</th><th>Deposit date</th><th className="so-num">Amazon deposit</th><th className="so-num">Our net</th><th className="so-num">Match</th>
+                        </tr></thead>
+                        <tbody>
+                          {settleRecon.map(r => {
+                            const ok = Math.abs(Number(r.diff)) < 1;
+                            return (
+                              <tr key={r.settlement_id}>
+                                <td style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>{r.settlement_id}</td>
+                                <td>{r.deposit_date || '—'}</td>
+                                <td className="so-num">{inr(Number(r.header_total))}</td>
+                                <td className="so-num">{inr(Number(r.fact_net))}</td>
+                                <td className="so-num" style={{ color: ok ? 'var(--green)' : 'var(--red)' }}>{ok ? '✓' : inr(Number(r.diff))}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </div>
 
