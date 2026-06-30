@@ -2034,6 +2034,45 @@ export class ConnectorWorkflow extends WorkflowEntrypoint {
   }
 }
 
+// ── Conversion-tracking layer (b): website-changes stream (change-log.ndjson) ──
+// PULL, not POST: odoops fetches the canonical change-log from the PRIVATE legendoftoys-website repo
+// via the GitHub Contents API (base64 content) using a read-only fine-grained PAT (GITHUB_WEBSITE_PAT),
+// and upserts ON CONFLICT(id) so edits (result pending→+0.4pp, status shipped→reverted) propagate each
+// tick. The file stays the single source of truth; change_events is a read-replica. Generic `stream`
+// column so stock-events + future streams share the table.
+function ghDecodeBase64(b64) {
+  const bin = atob(String(b64 || '').replace(/\s/g, ''));
+  const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
+  return new TextDecoder('utf-8').decode(bytes);   // UTF-8 so arrows (→ ↑) in hypotheses survive
+}
+async function syncChangeEvents(env) {
+  if (!env.GITHUB_WEBSITE_PAT) return { skipped: 'GITHUB_WEBSITE_PAT not set' };
+  const repo = env.GITHUB_WEBSITE_REPO || 'legendlot/legendoftoys-website';
+  const path = env.GITHUB_CHANGELOG_PATH || 'analytics/change-log.ndjson';
+  const ref = env.GITHUB_WEBSITE_BRANCH || 'main';
+  const r = await fetch(`https://api.github.com/repos/${repo}/contents/${encodeURI(path)}?ref=${encodeURIComponent(ref)}`, {
+    headers: { Authorization: `Bearer ${env.GITHUB_WEBSITE_PAT}`, Accept: 'application/vnd.github+json', 'User-Agent': 'odoops-worker', 'X-GitHub-Api-Version': '2022-11-28' },
+  });
+  if (!r.ok) throw new Error(`GitHub contents ${r.status}: ${(await r.text().catch(() => '')).slice(0, 160)}`);
+  const j = await r.json();
+  const text = j.encoding === 'base64' ? ghDecodeBase64(j.content) : String(j.content || '');
+  const rows = [];
+  for (const line of text.split(/\r?\n/)) {
+    const s = line.trim(); if (!s) continue;
+    let o; try { o = JSON.parse(s); } catch { continue; }
+    if (!o || o._meta || !o.id || !o.date) continue;     // skip the _meta header + invalid lines
+    rows.push({
+      id: String(o.id), stream: o.stream || 'website', the_date: o.date,
+      workstream: o.workstream || null, surface: o.surface || null, title: o.title || null,
+      hypothesis: o.hypothesis || null, change_type: o.change_type || null,
+      files: o.files != null ? JSON.stringify(o.files) : null, metric: o.metric || null,
+      status: o.status || null, result: o.result || null, raw: o, synced_at: new Date().toISOString(),
+    });
+  }
+  if (rows.length) await sbInsertChunked('/rest/v1/change_events?on_conflict=id', rows, 'return=minimal,resolution=merge-duplicates');
+  return { count: rows.length, repo, path };
+}
+
 export default {
   async scheduled(event, env, ctx) {
     SUPABASE_SERVICE_KEY = env.SUPABASE_SERVICE_KEY || '';
@@ -2064,6 +2103,9 @@ export default {
       const from = new Date(istMs - 8 * 86400000).toISOString().slice(0, 10);
       await rpcSales('recompute_conversion_snapshot', { p_from: from, p_to: to });
     } catch (e) { console.error('odoops cron (conversion snapshot) failed:', e?.message || e); }
+    // Website-changes stream: pull change-log.ndjson from the Website repo + upsert change_events
+    // (no-op until GITHUB_WEBSITE_PAT is set). Best-effort; never disturbs the rest of the cron.
+    try { await syncChangeEvents(env); } catch (e) { console.error('odoops cron (change events) failed:', e?.message || e); }
   },
 
   async fetch(request, env, ctx) {
@@ -2278,6 +2320,19 @@ export default {
             const r = await rpcSales('f_conversion_history', { p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO() });
             if (!r.ok) return err('Conversion history failed: ' + JSON.stringify(r.data), 502);
             return ok({ rows: r.data || [] });
+          }
+          case 'getChangeEvents': {   // S186 — website-changes stream (annotations on the conversion timeline)
+            if (!canView(P)) return err('No permission', 403);
+            const from = qp('from') || todayISO(), to = qp('to') || todayISO();
+            const streamF = qp('stream') ? `&stream=eq.${encodeURIComponent(qp('stream'))}` : '';
+            const r = await sbSales(`/rest/v1/change_events?the_date=gte.${from}&the_date=lte.${to}${streamF}&order=the_date.asc&select=*`);
+            if (!r.ok) return err('Change events read failed: ' + JSON.stringify(r.data), 502);
+            return ok({ rows: r.data || [] });
+          }
+          case 'syncChangeEventsNow': {   // manual pull + diagnostic (super-admin)
+            if (!canSuperAdmin(P)) return err('No permission', 403);
+            try { const res = await syncChangeEvents(env); return ok(res); }
+            catch (e) { return err('Change-events sync failed: ' + String(e?.message || e), 502); }
           }
           case 'settlementProbe': {   // diagnostic: does the account expose settlement reports + what's ingested
             if (!canSuperAdmin(P)) return err('No permission', 403);

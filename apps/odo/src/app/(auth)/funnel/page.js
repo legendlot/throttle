@@ -48,7 +48,7 @@ function Funnel({ steps }) {
 
 // Daily conversion-rate trend over the snapshot history — the shape of when conversion moved.
 // The input-stream annotations (website changes, stock in/out) overlay this chart in later phases.
-function DailyTrend({ rows }) {
+function DailyTrend({ rows, changes = [] }) {
   if (!rows || rows.length < 2) return <div className="so-sub" style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)', padding: '20px 0' }}>Not enough days in this range yet — widen it.</div>;
   const W = 1000, H = 210, pad = 30;
   const vals = rows.map(r => Number(r.purchase_cr) || 0);
@@ -57,12 +57,26 @@ function DailyTrend({ rows }) {
   const y = v => H - pad - (v / max) * (H - pad * 2);
   const line = rows.map((r, i) => `${x(i)},${y(vals[i])}`).join(' ');
   const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+  const idxByDate = {}; rows.forEach((r, i) => { idxByDate[r.the_date] = i; });
   return (
     <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={210} preserveAspectRatio="none" style={{ display: 'block' }}>
       {[0.25, 0.5, 0.75, 1].map(f => <line key={f} x1={pad} x2={W - pad} y1={y(max * f)} y2={y(max * f)} stroke="var(--surface2)" strokeWidth="1" />)}
       <line x1={pad} x2={W - pad} y1={y(avg)} y2={y(avg)} stroke="var(--t3)" strokeWidth="1" strokeDasharray="5,5" />
       <polygon points={`${pad},${H - pad} ${line} ${W - pad},${H - pad}`} fill="var(--green)" fillOpacity="0.08" />
       <polyline points={line} fill="none" stroke="var(--green)" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+      {/* website-change markers — when a change shipped, on the conversion timeline */}
+      {(changes || []).map((c, k) => {
+        const i = idxByDate[c.the_date]; if (i == null) return null;
+        const cx = x(i);
+        return (
+          <g key={c.id || k}>
+            <line x1={cx} x2={cx} y1={pad - 8} y2={H - pad} stroke="var(--accent)" strokeWidth="1" strokeDasharray="3,3" opacity="0.55" />
+            <circle cx={cx} cy={pad - 8} r="4" fill="var(--accent)">
+              <title>{c.the_date} · {c.title}{c.hypothesis ? ` — ${c.hypothesis}` : ''}{c.result && c.result !== 'pending' ? ` (${c.result})` : ''}</title>
+            </circle>
+          </g>
+        );
+      })}
       <text x={pad} y={y(max) - 4} fill="var(--t3)" fontSize="11" fontFamily="var(--mono)">{max.toFixed(2)}%</text>
       <text x={W - pad} y={y(avg) - 4} fill="var(--t3)" fontSize="11" fontFamily="var(--mono)" textAnchor="end">avg {avg.toFixed(2)}%</text>
     </svg>
@@ -77,12 +91,13 @@ export default function FunnelPage() {
   const [rows, setRows] = useState(null);
   const [pay, setPay] = useState(null);   // { funnel, recon } — checkout payment funnel (Razorpay)
   const [hist, setHist] = useState(null);  // daily conversion-history snapshot rows
+  const [changes, setChanges] = useState([]);  // website-change events (timeline annotations)
   const [view, setView] = useState('overview');  // overview | history
   const [err, setErr] = useState('');
 
   useEffect(() => {
     if (!session) return;
-    setRows(null); setPay(null); setHist(null); setErr('');
+    setRows(null); setPay(null); setHist(null); setChanges([]); setErr('');
     salesGet('getTraffic', { from, to }, session)
       .then(t => setRows(t?.rows || []))
       .catch(e => setErr(e.message || String(e)));
@@ -92,6 +107,9 @@ export default function FunnelPage() {
     salesGet('getConversionHistory', { from, to }, session)
       .then(h => setHist(h?.rows || []))
       .catch(() => setHist([]));
+    salesGet('getChangeEvents', { from, to }, session)
+      .then(c => setChanges(c?.rows || []))
+      .catch(() => setChanges([]));
   }, [session, from, to]);
 
   const sum = k => (rows || []).reduce((a, r) => a + Number(r[k] || 0), 0);
@@ -120,8 +138,11 @@ export default function FunnelPage() {
           <>
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,2.2fr) minmax(220px,1fr)', gap: 14 }}>
               <div className="so-card">
-                <div className="so-kpi-lbl" style={{ marginBottom: 12 }}>Daily conversion rate · sessions → purchase</div>
-                <DailyTrend rows={hist} />
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+                  <div className="so-kpi-lbl" style={{ margin: 0 }}>Daily conversion rate · sessions → purchase</div>
+                  {changes.length > 0 && <span className="so-sub" style={{ fontSize: 10.5 }}><span className="so-dot" style={{ background: 'var(--accent)', marginRight: 5 }} />{changes.length} website change{changes.length > 1 ? 's' : ''}</span>}
+                </div>
+                <DailyTrend rows={hist} changes={changes} />
               </div>
               {(() => {
                 const wd = (hist || []).filter(r => Number(r.sessions) > 0);
@@ -177,7 +198,29 @@ export default function FunnelPage() {
                 </table>
               </div>
             </div>
-            <div className="so-sub" style={{ fontSize: 10.5, color: 'var(--t3)' }}>Frozen daily snapshot of the GA4 website funnel — recent days refresh as GA4 finalises, older days lock. Annotation streams (website changes · stock in/out) land on this chart next.</div>
+            {changes.length > 0 && (
+              <div className="so-card">
+                <div className="so-kpi-lbl" style={{ marginBottom: 10 }}>Website changes in range · <span style={{ color: 'var(--t3)' }}>what shipped</span></div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+                  {changes.slice().sort((a, b) => (a.the_date < b.the_date ? 1 : -1)).map(c => (
+                    <div key={c.id} style={{ display: 'flex', gap: 12, alignItems: 'baseline', borderBottom: '1px solid var(--surface2)', paddingBottom: 8 }}>
+                      <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--t2)', width: 88, flexShrink: 0 }}>{c.the_date}</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, color: 'var(--t1)' }}>{c.title}
+                          {c.workstream && <span className="so-sub" style={{ marginLeft: 8, fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 0.4 }}>{c.workstream}{c.surface ? ` · ${c.surface}` : ''}</span>}
+                        </div>
+                        {c.hypothesis && <div className="so-sub" style={{ fontSize: 11.5, marginTop: 2 }}>{c.hypothesis}</div>}
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+                        {c.status && <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: c.status === 'reverted' ? '#EC6A5E' : 'var(--t3)' }}>{c.status}</span>}
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: 12, fontWeight: 600, color: c.result && c.result !== 'pending' ? 'var(--green)' : 'var(--t3)' }}>{c.result || '—'}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div className="so-sub" style={{ fontSize: 10.5, color: 'var(--t3)' }}>Frozen daily snapshot of the GA4 website funnel — recent days refresh as GA4 finalises, older days lock. Markers = website changes (pulled from the Website repo&apos;s change-log); stock in/out lands next.</div>
           </>
         )
       ) : (
