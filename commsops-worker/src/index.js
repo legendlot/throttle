@@ -7,6 +7,7 @@ const { send } = require('./send.js');
 const { handleResendWebhook, handleUnsubscribe } = require('./webhooks.js');
 const CAMP = require('./campaigns.js');
 const J = require('./journeys.js');
+const SHOP = require('./shopify.js');
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -278,6 +279,19 @@ async function handlePost(body, auth, env) {
       const r = await J.setJourneyStatus(env, body.id, body.status);
       return r.ok ? ok(r) : err(r.error, 400); }
 
+    // ── M4: Shopify sync ── (PII bulk import — super-admin only)
+    case 'shopifyBackfill': {
+      if (!A.canSuperAdmin(auth.permissions)) return err('forbidden', 403);
+      try {
+        if (body.mode === 'full') {
+          await env.BROADCAST_QUEUE.send({ kind: 'shopify_backfill', after: null });
+          return ok({ started: true });
+        }
+        const r = await SHOP.backfillSample(env, Math.min(Number(body.limit) || 5, 50));
+        return ok(r);   // sample: writes a few + returns counts so we eyeball via SQL
+      } catch (e) { return err(e?.message || 'shopify_error', 400); }
+    }
+
     default:
       return err(`unknown_action:${body.action}`, 404);
   }
@@ -357,6 +371,9 @@ export default {
         const b = msg.body || {};
         if (b.kind === 'enrol') {
           await J.enrol(env, { journeyId: b.journeyId, profileId: b.profileId, eventId: b.eventId });
+        } else if (b.kind === 'shopify_backfill') {
+          const r = await SHOP.backfillPage(env, b.after || null);   // one page; continue while more
+          if (r.hasNext && r.cursor) await env.BROADCAST_QUEUE.send({ kind: 'shopify_backfill', after: r.cursor });
         } else {
           await CAMP.processQueueMessage(env, b);   // campaign fan-out (default, back-compat)
         }
