@@ -694,12 +694,20 @@ async function amazonReturnsPhase(host, H, mkt, cfg, nowMs) {
 // fact (true net payout + fee decomposition). Reconciliation-grade; never breaks the sell-out pipeline.
 const AMZ_SETTLEMENT_REPORT_TYPE = 'GET_V2_SETTLEMENT_REPORT_DATA_FLAT_FILE_V2';
 const AMZ_SETTLEMENT_MAX_PER_TICK = 2;            // download ≤2 new settlements/tick (backfill walks chronologically)
-// Settlement dates come as "yyyy-MM-dd HH:mm:ss UTC" or "dd.MM.yyyy" — normalise to an IST date.
+// Settlement dates come as "dd.MM.yyyy HH:mm:ss UTC" (IN format) OR "yyyy-MM-dd…". Parse the
+// CALENDAR DATE robustly and VALIDATE it — a bad date must return null, never a malformed string
+// (istDate's fallback slices a bad "dd.MM.yyyy" to "31.12.2025" → Postgres 22008 on insert).
 function parseSettleDate(s) {
   const v = String(s || '').trim(); if (!v) return null;
-  if (/\dT\d/.test(v) || /UTC/i.test(v)) return istDate(v.replace(' UTC', 'Z').replace(' ', 'T'));
-  if (/^\d{2}\.\d{2}\.\d{4}/.test(v)) { const p = v.slice(0, 10).split('.'); return `${p[2]}-${p[1]}-${p[0]}`; }
-  return v.slice(0, 10);
+  let iso = null;
+  const dm = v.match(/^(\d{2})\.(\d{2})\.(\d{4})/);            // dd.MM.yyyy (with/without trailing time)
+  if (dm) iso = `${dm[3]}-${dm[2]}-${dm[1]}`;
+  else if (/^\d{4}-\d{2}-\d{2}/.test(v)) iso = v.slice(0, 10); // yyyy-MM-dd[…]
+  else { try { const d = new Date(v.replace(' UTC', 'Z').replace(' ', 'T')); if (!isNaN(d)) iso = d.toISOString().slice(0, 10); } catch {} }
+  if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null;
+  const dt = new Date(iso + 'T00:00:00Z');                    // reject out-of-range (month 13 / day 32 …)
+  if (isNaN(dt.getTime()) || dt.toISOString().slice(0, 10) !== iso) return null;
+  return iso;
 }
 function gridToSettlementRows(grid) {
   if (!grid || grid.length < 2) return [];
@@ -741,7 +749,7 @@ async function amazonSettlementPhase(host, H, cfg, nowMs) {
     const lj = await lr.json().catch(() => ({}));
     const fresh = (lj.reports || []).filter(r => r.reportDocumentId && !seen.has(r.reportId))
       .sort((a, b) => String(a.dataEndTime || '').localeCompare(String(b.dataEndTime || '')));   // oldest first
-    const settlements = [], newSeen = [];
+    const settlements = [];
     for (const rep of fresh.slice(0, AMZ_SETTLEMENT_MAX_PER_TICK)) {
       if (subreqs >= 40) break;
       const dr = await fetch(`${host}/reports/2021-06-30/documents/${rep.reportDocumentId}`, { headers: H }); subreqs++;
@@ -752,24 +760,35 @@ async function amazonSettlementPhase(host, H, cfg, nowMs) {
       const rows = gridToSettlementRows(grid);
       const sid = rows.length ? rows[0].settlement_id : rep.reportId;
       settlements.push({ settlement_id: sid, report_id: rep.reportId, rows });
-      newSeen.push(rep.reportId);
     }
-    const configAfter = newSeen.length ? { ...cfg, settlement_seen: [...(cfg.settlement_seen || []), ...newSeen] } : cfg;
-    return { settlements, subreqs, configAfter };
+    // NB: settlement_seen is marked in stage() AFTER a successful insert+recompute, NOT here — a
+    // staging failure must leave the report unseen so it's retried next tick (no silent data loss).
+    return { settlements, subreqs, configAfter: cfg };
   } catch (e) {
     return { settlements: [], subreqs, configAfter: cfg, error: String(e?.message || e) };
   }
 }
-// Per settlement: idempotent supersede in staging + recompute its fact rows.
+// Per settlement: idempotent supersede in staging + recompute its fact rows. A settlement is marked
+// SEEN only after it succeeds — a failure leaves it unseen so the next tick retries it (no data loss).
 async function stageAmazonSettlement(settlements, runId, channelId) {
+  const ok = [];
   for (const st of (settlements || [])) {
-    if (!st.rows || !st.rows.length) continue;
-    await sbSales(`/rest/v1/stg_amazon_settlement?settlement_id=eq.${encodeURIComponent(st.settlement_id)}`, { method: 'DELETE', prefer: 'return=minimal' });
-    const body = st.rows.map(r => ({ run_id: runId, channel_id: channelId, settlement_id: r.settlement_id, line_no: r.line_no,
-      posted_date: r.posted_date, deposit_date: r.deposit_date, transaction_type: r.transaction_type, order_id: r.order_id,
-      sku: r.sku, amount_type: r.amount_type, amount_description: r.amount_description, amount: r.amount, quantity: r.quantity, raw: r.raw }));
-    await sbInsertChunked('/rest/v1/stg_amazon_settlement', body, 'return=minimal');
-    await rpcSales('recompute_settlement', { p_settlement_id: st.settlement_id });
+    try {
+      if (st.rows && st.rows.length) {
+        await sbSales(`/rest/v1/stg_amazon_settlement?settlement_id=eq.${encodeURIComponent(st.settlement_id)}`, { method: 'DELETE', prefer: 'return=minimal' });
+        const body = st.rows.map(r => ({ run_id: runId, channel_id: channelId, settlement_id: r.settlement_id, line_no: r.line_no,
+          posted_date: r.posted_date, deposit_date: r.deposit_date, transaction_type: r.transaction_type, order_id: r.order_id,
+          sku: r.sku, amount_type: r.amount_type, amount_description: r.amount_description, amount: r.amount, quantity: r.quantity, raw: r.raw }));
+        await sbInsertChunked('/rest/v1/stg_amazon_settlement', body, 'return=minimal');
+        await rpcSales('recompute_settlement', { p_settlement_id: st.settlement_id });
+      }
+      if (st.report_id) ok.push(st.report_id);                 // success (incl. an empty file) → mark seen
+    } catch (_) { /* leave unseen → retried next tick */ }
+  }
+  if (ok.length) {
+    const cur = await sbSales(`/rest/v1/connector_config?channel_id=eq.${channelId}&select=config`);
+    const cfg = (cur.ok && cur.data && cur.data[0] && cur.data[0].config) || {};
+    await patchConnectorConfig(channelId, cfg, { settlement_seen: [...new Set([...(cfg.settlement_seen || []), ...ok])] });
   }
 }
 
