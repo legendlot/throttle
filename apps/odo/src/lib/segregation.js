@@ -43,3 +43,39 @@ export function aggOrders(rows) {
   a.cancelRate = a.totalOrders ? a.cancelledOrders / a.totalOrders * 100 : 0;
   return a;
 }
+
+// Hybrid headline (cockpit). Order-grain (f_order_rollup) is COMPLETE within a channel —
+// it counts an order's whole value regardless of whether each line's SKU is mapped — but only
+// some channels stage order rows (Website, Amazon, Flipkart/uniware, GT/MT). Others (QC quick-
+// commerce — Zepto/Blinkit/Instamart) are product-grain only. Using order-grain wholesale would
+// fix the Amazon/Website sku-map undercount but DROP QC entirely. So per channel: use order-grain
+// where present, else fall back to product-grain gross. Result is complete + never undercounts.
+//   orderRows   = f_order_rollup rows (sale_date × channel)            — getSegregation
+//   productRows = f_sales_rollup rows (variant grain; channel_id, gross_value, units) — getSales
+// Units come from product-grain only (order-grain carries no unit count). QC has no order-level
+// discount/return data, so its net is the flat ex-GST strip (gross / 1.18) — same fallback the
+// rest of the ladder already uses for un-settled channels (S166).
+export function hybridHeadline(orderRows, productRows) {
+  const og = aggOrders(orderRows);
+  const ogChannels = new Set((orderRows || []).map(r => r.channel_id));
+  let fbGross = 0, units = 0;
+  const fbChannels = new Set();
+  for (const r of (productRows || [])) {
+    units += Number(r.units) || 0;
+    if (!ogChannels.has(r.channel_id)) { fbGross += Number(r.gross_value) || 0; fbChannels.add(r.channel_id); }
+  }
+  const fbGst = fbGross - fbGross / (1 + GST_RATE);          // estimated GST on the fallback (QC) gross
+  const grossAll = og.grossAll + fbGross;                    // complete gross (P&L, tax-incl)
+  const netExGst = og.netExGst + fbGross / (1 + GST_RATE);   // complete net revenue (ex-GST)
+  const totalGst = og.tax + fbGst;
+  return {
+    ...og,
+    grossAll, netExGst, units,
+    asp: units ? grossAll / units : 0,
+    // Confidence over the WHOLE headline: only order-grain settlement is ever "confirmed";
+    // the QC fallback GST is always an 18% estimate, so it correctly drags the badge down.
+    settledPct: totalGst > 0 ? Math.min(100, Math.round(og.gstSettled / totalGst * 100)) : null,
+    ogChannelCount: ogChannels.size,
+    fallbackChannelCount: fbChannels.size,
+  };
+}

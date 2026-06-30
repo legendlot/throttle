@@ -4,8 +4,9 @@ import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
 import { salesGet, inr, fmtInt, istToday, istDaysAgo, downloadCsv, rangePresets, priorPeriod } from '../../lib/api.js';
 import StackedTrendChart from '../../components/StackedTrendChart.js';
-import { Kpi, Delta, RangePicker, SegmentedToggle, useTableSort, SortHeader } from '../../components/kit.js';
+import { Kpi, Delta, RangePicker, SegmentedToggle, SettledBadge, useTableSort, SortHeader } from '../../components/kit.js';
 import ChannelFilter from '../../components/ChannelFilter.js';
+import { hybridHeadline } from '../../lib/segregation.js';
 // Channel families — single source of truth (shared with the Channels section). Aliased so the
 // existing chart/chip code keeps its names.
 import { FAMILIES as GROUP_META, FAMILY_ORDER as GROUP_ORDER, familyOf as channelGroup } from '../../lib/families.js';
@@ -48,6 +49,8 @@ export default function Dashboard() {
   const [codeToProduct, setCodeToProduct] = useState({});
   const [rows, setRows] = useState([]);
   const [prevRows, setPrevRows] = useState([]);
+  const [segRows, setSegRows] = useState([]);        // order-grain (f_order_rollup) — headline only
+  const [segPrevRows, setSegPrevRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
 
@@ -75,7 +78,13 @@ export default function Dashboard() {
     Promise.all([
       salesGet('getSales', { from, to, group: 'variant', channel_id: chArg }, session),
       salesGet('getSales', { from: pp.from, to: pp.to, group: 'variant', channel_id: chArg }, session),
-    ]).then(([cur, prev]) => { setRows(cur?.rows || []); setPrevRows(prev?.rows || []); })
+      // order-grain (complete, sku-map-independent) — drives the hybrid headline totals only
+      salesGet('getSegregation', { from, to, channel_id: chArg }, session),
+      salesGet('getSegregation', { from: pp.from, to: pp.to, channel_id: chArg }, session),
+    ]).then(([cur, prev, seg, segPrev]) => {
+      setRows(cur?.rows || []); setPrevRows(prev?.rows || []);
+      setSegRows(seg?.rows || []); setSegPrevRows(segPrev?.rows || []);
+    })
       .catch(e => setErr(e.message || 'Failed to load'))
       .finally(() => setLoading(false));
   }, [session, from, to, sel]);
@@ -99,6 +108,22 @@ export default function Dashboard() {
     const ds = Object.keys(cur.day).sort();
     return { ds, gross: ds.map(d => cur.day[d].gross), units: ds.map(d => cur.day[d].units), asp: ds.map(d => cur.day[d].units ? cur.day[d].gross / cur.day[d].units : 0) };
   }, [cur]);
+
+  // ── hybrid headline: order-grain where a channel has it (complete, sku-map-independent),
+  // product-grain gross as fallback for channels without it (QC). Drives the headline TOTALS only;
+  // the mix below (channel board, variants, movers, trend, drill) stays product-grain. ──
+  const head = useMemo(() => hybridHeadline(segRows, rows), [segRows, rows]);
+  const headPrev = useMemo(() => hybridHeadline(segPrevRows, prevRows), [segPrevRows, prevRows]);
+  const headDaily = useMemo(() => {
+    const byO = {}, byP = {};
+    for (const r of segRows) (byO[r.sale_date] = byO[r.sale_date] || []).push(r);
+    for (const r of rows) (byP[r.sale_date] = byP[r.sale_date] || []).push(r);
+    const ds = [...new Set([...Object.keys(byO), ...Object.keys(byP)])].sort();
+    return {
+      net: ds.map(d => hybridHeadline(byO[d] || [], byP[d] || []).netExGst),
+      gross: ds.map(d => hybridHeadline(byO[d] || [], byP[d] || []).grossAll),
+    };
+  }, [segRows, rows]);
 
   const trend = useMemo(() => {
     const dv = {};
@@ -203,12 +228,13 @@ export default function Dashboard() {
         {/* KPI hero row */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 14 }}>
           {[
-            { lbl: 'Gross sales', val: inr(cur.gross), d: pct(cur.gross, prev.gross), spark: daySeries.gross, color: 'var(--accent)' },
-            { lbl: 'Units sold', val: fmtInt(cur.units), d: pct(cur.units, prev.units), spark: daySeries.units, color: 'var(--blue)' },
-            { lbl: 'Avg selling price', val: inr(curAsp), d: pct(curAsp, prevAsp), spark: daySeries.asp, color: 'var(--green)' },
+            { lbl: 'Net revenue (ex-GST)', val: inr(head.netExGst), d: pct(head.netExGst, headPrev.netExGst), spark: headDaily.net, color: 'var(--accent)', sub: 'after disc · returns · GST', badge: <SettledBadge pct={head.settledPct} /> },
+            { lbl: 'Gross sales', val: inr(head.grossAll), d: pct(head.grossAll, headPrev.grossAll), spark: headDaily.gross, color: 'var(--blue)', sub: 'tax-incl · all channels' },
+            { lbl: 'Units sold', val: fmtInt(head.units), d: pct(head.units, headPrev.units), spark: daySeries.units, color: 'var(--green)' },
+            { lbl: 'Avg selling price', val: inr(curAsp), d: pct(curAsp, prevAsp), spark: daySeries.asp, color: 'var(--t2)' },
             { lbl: 'Active channels', val: fmtInt(activeChannels), d: pct(activeChannels, prevActive), spark: null, color: 'var(--t2)' },
           ].map((k, i) => (
-            <Kpi key={i} lbl={k.lbl} val={k.val} pct={k.d} spark={k.spark} sparkColor={k.color} deltaNote={`vs ${ppLabel}`} />
+            <Kpi key={i} lbl={k.lbl} val={k.val} pct={k.d} sub={k.sub} badge={k.badge} spark={k.spark} sparkColor={k.color} deltaNote={`vs ${ppLabel}`} />
           ))}
         </div>
 
