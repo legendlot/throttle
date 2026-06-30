@@ -2111,7 +2111,15 @@ export class ConnectorWorkflow extends WorkflowEntrypoint {
     SUPABASE_SERVICE_KEY = this.env.SUPABASE_SERVICE_KEY || '';
     _channels = null;
     const { channelId, trigger = 'cron', cursorOverride = null } = event.payload || {};
-    for (let i = 0; i < MAX_WINDOWS; i++) {
+    // Per-connector window cap (default MAX_WINDOWS). A deep one-time backfill — e.g. the Uniware
+    // aggregator walking ~70 daily windows — can set config.wf_max_windows higher so one instance
+    // finishes in a single pass instead of resuming across many cron ticks. Read once (durable step).
+    const maxW = await step.do('window-cap', async () => {
+      SUPABASE_SERVICE_KEY = this.env.SUPABASE_SERVICE_KEY || '';
+      const c0 = await loadConnectorCfg(channelId);
+      return Math.min(Number(c0?.config?.wf_max_windows) || MAX_WINDOWS, 500);
+    });
+    for (let i = 0; i < maxW; i++) {
       const res = await step.do(
         `window-${i}`,
         { retries: { limit: 3, delay: '30 seconds', backoff: 'exponential' }, timeout: '5 minutes' },
