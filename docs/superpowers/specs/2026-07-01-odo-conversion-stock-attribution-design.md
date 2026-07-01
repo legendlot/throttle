@@ -38,8 +38,11 @@ keeps full history; stock markers begin the day the snapshot step goes live. Doc
 
 ### Grain
 **Variant/SKU level** (SKU = product-variant-colour, matches `sales_fact.product_code`). SKU →
-`product_code` via the existing Website `sku_map` (`channel_id` = the Shopify channel). Unmapped SKUs
-are still captured (keyed by `sku` + `product_title`) so nothing is lost.
+`product_code` via the existing Website `sku_map` (`channel_id` = the Shopify channel). The daily
+snapshot captures **all** variants (audit), but stock **events fire only for MAPPED catalog SKUs**
+(`product_code` set) — verified live 2026-07-01: 204 variants pulled, only 71 are real catalog SKUs;
+the rest is internal noise (e.g. "Creator Shipment" creator-seeding, retired variants) that would
+otherwise clutter the driver panel. Once a SKU is added to `sku_map`, its future flips emit.
 
 ### Data model
 - **`sales.inventory_snapshot`** (new) — grain `(the_date, sku)`. Cols: `the_date date`, `sku text`,
