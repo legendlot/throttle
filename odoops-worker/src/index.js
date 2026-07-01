@@ -2539,6 +2539,12 @@ export default {
             const channels = {}; for (const f of famResults) channels[f.key] = f.rows;
             return ok({ months, master, channels, families: famResults.map(f => ({ key: f.key, label: f.label })) });
           }
+          case 'getPnlByProduct': {   // S189 — per-product P&L (through GM), all channels
+            if (!canView(P)) return err('No permission', 403);
+            const r = await rpcSales('f_pnl_by_product', { p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO() });
+            if (!r.ok) return err('Product P&L failed: ' + JSON.stringify(r.data), 502);
+            return ok({ rows: r.data || [] });
+          }
           case 'getProductCosts': {   // S189 — active SKUs + latest standard COGS (for the /pnl cost editor)
             if (!canView(P)) return err('No permission', 403);
             const [pm, pc] = await Promise.all([

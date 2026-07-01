@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
 import { salesGet, salesPost, istToday } from '../../../lib/api.js';
-import { RangePicker, SegmentedToggle } from '../../../components/kit.js';
+import { RangePicker, SegmentedToggle, useTableSort, SortHeader } from '../../../components/kit.js';
 
 // P&L waterfall lines. kind: src=data-sourced · manual=editable · sub=computed subtotal. neg=subtracted.
 const LINES = [
@@ -120,6 +120,7 @@ export default function PnlPage() {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [data, setData] = useState(null);
+  const [prod, setProd] = useState(null);
   const [costs, setCosts] = useState(null);
   const [showCosts, setShowCosts] = useState(false);
   const [mode, setMode] = useState('abs');   // abs (₹) | pct (% of NMV)
@@ -129,7 +130,11 @@ export default function PnlPage() {
     const t = istToday(); const [y, m] = t.split('-').map(Number);
     setFrom(new Date(Date.UTC(y, m - 1 - 5, 1)).toISOString().slice(0, 10)); setTo(t);
   }, []);
-  const load = () => { if (from && to) salesGet('getPnl', { from, to }, session).then(d => setData(d || {})).catch(e => setErr(e.message || String(e))); };
+  const load = () => {
+    if (!from || !to) return;
+    salesGet('getPnl', { from, to }, session).then(d => setData(d || {})).catch(e => setErr(e.message || String(e)));
+    salesGet('getPnlByProduct', { from, to }, session).then(r => setProd(r?.rows || [])).catch(() => setProd([]));
+  };
   useEffect(() => { if (session && from && to) { setData(null); setErr(''); load(); } }, [session, from, to]);
   useEffect(() => { if (session && isAdmin && showCosts && !costs) salesGet('getProductCosts', {}, session).then(r => setCosts(r?.rows || [])).catch(() => setCosts([])); }, [session, isAdmin, showCosts, costs]);
 
@@ -141,6 +146,14 @@ export default function PnlPage() {
 
   const months = data?.months || [];
   const AMZ_AUTO = new Set(['rto', 'logistics', 'platform_fee']);
+  const pctMode = mode === 'pct';
+  const prodRows = (prod || []).map(r => {
+    const gmv = +r.gmv || 0, ret = +r.returns_val || 0, tax = +r.taxes || 0, cogs = +r.cogs || 0, units = +r.units || 0;
+    const nmv = gmv - ret - tax, gm = nmv - cogs;
+    return { product: r.product, units, gmv, nmv, cogs, gm, gm_pct: nmv ? 100 * gm / nmv : 0, costed: cogs > 0 };
+  });
+  const prodSort = useTableSort(prodRows, { initialKey: 'gm' });
+  const pcell = (v, nmv) => pctMode ? (nmv ? `${(100 * v / nmv).toFixed(1)}%` : '—') : rs(v);
 
   return (
     <div className="so-page">
@@ -166,6 +179,37 @@ export default function PnlPage() {
               autoLines={f.key === 'amazon' ? AMZ_AUTO : new Set()}
               session={session} isAdmin={isAdmin} onSaved={load} mode={mode} defaultOpen={false} />
           ))}
+
+          <div className="so-card" style={{ padding: 0, overflow: 'hidden' }}>
+            <div className="so-kpi-lbl" style={{ padding: '16px 18px 0' }}>By product <span className="so-sub" style={{ fontSize: 10.5, textTransform: 'none', letterSpacing: 0 }}>· margin through GM · all channels · {pctMode ? '% of NMV' : '₹'} for the range</span></div>
+            <div style={{ overflowX: 'auto' }}>
+              <table className="so-table" style={{ marginTop: 8, minWidth: 620 }}>
+                <thead><tr>
+                  <SortHeader k="product" label="Product" sort={prodSort} />
+                  <SortHeader k="units" label="Units" sort={prodSort} numeric />
+                  <SortHeader k="gmv" label="GMV" sort={prodSort} numeric />
+                  <SortHeader k="nmv" label="NMV" sort={prodSort} numeric />
+                  <SortHeader k="cogs" label="COGS" sort={prodSort} numeric />
+                  <SortHeader k="gm" label="GM" sort={prodSort} numeric />
+                  <SortHeader k="gm_pct" label="GM %" sort={prodSort} numeric />
+                </tr></thead>
+                <tbody>
+                  {prodSort.sorted.length === 0 && <tr><td colSpan={7} style={{ color: 'var(--t3)', padding: 14 }}>No product sales in this range.</td></tr>}
+                  {prodSort.sorted.map(r => (
+                    <tr key={r.product}>
+                      <td style={{ whiteSpace: 'nowrap' }}>{r.product}{!r.costed && <span className="so-sub" title="No standard cost set — GM overstated" style={{ marginLeft: 6, fontSize: 10, color: '#EC6A5E' }}>no cost</span>}</td>
+                      <td className="so-num">{rs(r.units)}</td>
+                      <td className="so-num">{pcell(r.gmv, r.nmv)}</td>
+                      <td className="so-num">{pcell(r.nmv, r.nmv)}</td>
+                      <td className="so-num">{pcell(r.cogs, r.nmv)}</td>
+                      <td className="so-num">{pcell(r.gm, r.nmv)}</td>
+                      <td className="so-num" style={{ color: r.gm_pct < 0 ? '#EC6A5E' : 'var(--green)', fontWeight: 600 }}>{r.gm_pct.toFixed(1)}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
 
           {isAdmin && (
             <div className="so-card">
