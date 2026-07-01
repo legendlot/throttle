@@ -23,10 +23,22 @@ class JourneyWorkflow extends WorkflowEntrypoint {
     });
     if (!def?.entry || !def?.steps) { await this.#end(env, step, enrolmentId, 'failed', null); return; }
 
-    const enrolledAt = await step.do('load-enrolment', async () => {
+    const enr = await step.do('load-enrolment', async () => {
       const r = await A.sbComms(`/rest/v1/enrolments?id=eq.${A.enc(enrolmentId)}&select=enrolled_at,context&limit=1`, env);
       if (!r.ok) throw new Error('load_enrolment_failed:' + JSON.stringify(r.data));
-      return r.data?.[0]?.enrolled_at || null;
+      const row = r.data?.[0] || {};
+      return { enrolledAt: row.enrolled_at || null, triggerEventId: row.context?.trigger_event_id || null };
+    });
+    const enrolledAt = enr.enrolledAt;
+
+    // Load the trigger event's properties once, so send steps can bind event vars
+    // (e.g. the abandoned-cart template's {checkout_url}). No trigger / no event → {},
+    // and event-sourced template vars fall back to their declared default.
+    const triggerProps = await step.do('load-trigger', async () => {
+      if (!enr.triggerEventId) return {};
+      const r = await A.sbComms(`/rest/v1/events?id=eq.${A.enc(enr.triggerEventId)}&select=properties&limit=1`, env);
+      if (!r.ok) throw new Error('load_trigger_failed:' + JSON.stringify(r.data));
+      return r.data?.[0]?.properties || {};
     });
 
     let cur = def.entry;
@@ -43,7 +55,7 @@ class JourneyWorkflow extends WorkflowEntrypoint {
         await this.#logStep(env, step, enrolmentId, cur, s.type, { branch });
         cur = branch ? s.if_true : s.if_false;
       } else if (s.type === 'send') {
-        const res = await step.do(cur, async () => this.#doSend(env, s, profileId, enrolmentId, cur));
+        const res = await step.do(cur, async () => this.#doSend(env, s, profileId, enrolmentId, cur, triggerProps));
         await this.#logStep(env, step, enrolmentId, cur, s.type, res);
         cur = s.next;
       } else if (s.type === 'exit') {
@@ -61,7 +73,7 @@ class JourneyWorkflow extends WorkflowEntrypoint {
   // send() does NOT auto-resolve `to` from the profile (it loads the profile only for template
   // rendering; the adapter + gate use opts.to verbatim). So we resolve the profile's primary email
   // identifier here and pass it as `to`. No email → skip WITHOUT calling send().
-  async #doSend(env, s, profileId, enrolmentId, stepId) {
+  async #doSend(env, s, profileId, enrolmentId, stepId, triggerProps) {
     const channel = s.channel || 'email';
     const idr = await A.sbComms(
       `/rest/v1/identifiers?profile_id=eq.${A.enc(profileId)}&type=eq.email&select=value&order=last_seen.desc&limit=1`, env);
@@ -70,7 +82,7 @@ class JourneyWorkflow extends WorkflowEntrypoint {
     if (!to) return { status: 'skipped', reason: 'no_email_identifier' };
     return send(env, {
       channel, purpose: s.purpose || 'marketing', profileId, to,
-      templateId: s.templateId, constants: s.constants || {},
+      templateId: s.templateId, constants: s.constants || {}, eventContext: triggerProps || {},
       source: `journey:${enrolmentId}`, dedupKey: `journey:${enrolmentId}:${stepId}`,
     });
   }
