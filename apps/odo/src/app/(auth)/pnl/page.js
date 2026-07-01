@@ -140,7 +140,7 @@ export default function PnlPage() {
   const costedCount = (costs || []).filter(c => c.cogs_inr != null).length;
 
   const months = data?.months || [];
-  const AMZ_AUTO = new Set(['logistics', 'platform_fee']);
+  const AMZ_AUTO = new Set(['rto', 'logistics', 'platform_fee']);
 
   return (
     <div className="so-page">
@@ -162,7 +162,7 @@ export default function PnlPage() {
           {(data.families || []).map(f => (
             <PnlTable key={f.key} title={f.label} subtitle={mode === 'pct' ? '% of NMV' : '₹ monthly'} rows={(data.channels || {})[f.key] || []} months={months}
               lines={CHANNEL_LINES} channelKey={f.key}
-              editable={f.key === 'amazon' ? new Set(['rto']) : new Set(['rto', 'logistics', 'platform_fee'])}
+              editable={f.key === 'amazon' ? new Set() : new Set(['rto', 'logistics', 'platform_fee'])}
               autoLines={f.key === 'amazon' ? AMZ_AUTO : new Set()}
               session={session} isAdmin={isAdmin} onSaved={load} mode={mode} defaultOpen={false} />
           ))}
