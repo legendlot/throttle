@@ -8,7 +8,7 @@ import React, { useState, useEffect } from 'react';
 import { Icon } from '@/components/throttle/Icon';
 import { Avatar, ProductTag } from '@/components/throttle/ui';
 import { STAGES, PRIORITY, DTYPE, stageByVal, teamById, taskTag } from '@/lib/throttleData';
-import { fetchTaskActivity, fetchTaskAttachments, fetchTaskBrief, postComment, relAge, setTaskOwner, selfAssignOwner, abandonTask, submitForReview } from '@/lib/throttleApi';
+import { fetchTaskActivity, fetchTaskAttachments, fetchTaskBrief, postComment, relAge, setTaskOwner, selfAssignOwner, addCollaborator, abandonTask, submitForReview } from '@/lib/throttleApi';
 
 const toast = (msg, tone = 'ok', icon) => window.dispatchEvent(new CustomEvent('throttle:toast', { detail: { msg, tone, icon: icon || (tone === 'bad' ? 'alert' : 'check') } }));
 
@@ -109,6 +109,21 @@ export function TaskDrawer({ task, onClose, onMove, session, members = [], role,
       onChanged?.(task.id);
     } catch (e) {
       toast('Could not set owner: ' + (e.message || 'not allowed'), 'bad');
+    }
+    setBusy(false);
+  }
+
+  async function addCollab(userId) {
+    if (!userId || busy) return;
+    if (!session) { toast('Sign in to add a collaborator', 'bad'); return; }
+    setBusy(true);
+    try {
+      await addCollaborator(session, task.id, userId);
+      const m = members.find(x => x.id === userId);
+      toast(`Added ${m ? m.name.split(' ')[0] : 'collaborator'}`);
+      onChanged?.(task.id);
+    } catch (e) {
+      toast('Could not add collaborator: ' + (e.message || 'error'), 'bad');
     }
     setBusy(false);
   }
@@ -216,6 +231,25 @@ export function TaskDrawer({ task, onClose, onMove, session, members = [], role,
               )}
               {!isClosed && !canManage && !hasOwner && (
                 <button onClick={assignSelf} disabled={busy} className="t-chip" style={{ marginTop: 7 }}>Assign to me</button>
+              )}
+            </div>
+          </div>
+
+          {/* Collaborators — add contributors from the Board/Sprint drawer (mirrors the side panel) */}
+          <div style={{ marginBottom: 18 }}>
+            <div className="eyebrow" style={{ padding: 0, marginBottom: 6 }}>Collaborators</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 13, color: task.collabs > 0 ? 'var(--t2)' : 'var(--t4)' }}>
+                {task.collabs > 0 ? `${task.collabs} added` : 'None'}
+              </span>
+              {!isClosed && members.filter(m => m.id !== task.ownerId).length > 0 && (
+                <select value="" disabled={busy}
+                  onChange={e => addCollab(e.target.value)}
+                  style={{ background: 'var(--bg-2)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-sm)',
+                    padding: '6px 8px', color: 'var(--t1)', fontFamily: 'var(--font-ui)', fontSize: 12.5, outline: 'none', cursor: 'pointer' }}>
+                  <option value="">Add collaborator…</option>
+                  {members.filter(m => m.id !== task.ownerId).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
               )}
             </div>
           </div>
