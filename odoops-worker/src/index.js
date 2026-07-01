@@ -2494,6 +2494,32 @@ export default {
             if (!r.ok) return err('Change events read failed: ' + JSON.stringify(r.data), 502);
             return ok({ rows: r.data || [] });
           }
+          case 'getPnl': {   // S189 — monthly P&L waterfall (base lines; subtotals derived client-side)
+            if (!canView(P)) return err('No permission', 403);
+            const r = await rpcSales('f_pnl', { p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO() });
+            if (!r.ok) return err('P&L failed: ' + JSON.stringify(r.data), 502);
+            return ok({ rows: r.data || [] });
+          }
+          case 'getProductCosts': {   // S189 — active SKUs + latest standard COGS (for the /pnl cost editor)
+            if (!canView(P)) return err('No permission', 403);
+            const [pm, pc] = await Promise.all([
+              sbPublic('/rest/v1/product_master?is_active=eq.true&component_type=neq.remote&select=product_code,product,model,color&order=product.asc,model.asc,color.asc'),
+              sbSales('/rest/v1/product_cost?select=product_code,cogs_inr,effective_from&order=effective_from.desc'),
+            ]);
+            const latest = {};
+            for (const r of (pc.ok ? pc.data : [])) if (!(r.product_code in latest)) latest[r.product_code] = r;   // desc → first is latest
+            const rows = (pm.ok ? pm.data : []).map(p => ({ ...p, cogs_inr: latest[p.product_code]?.cogs_inr ?? null, effective_from: latest[p.product_code]?.effective_from ?? null }));
+            return ok({ rows });
+          }
+          case 'getPnlManual': {   // S189 — manual P&L lines in range (for the /pnl editable cells)
+            if (!canView(P)) return err('No permission', 403);
+            let q = '/rest/v1/pnl_manual?select=month,line_key,amount_inr,note&order=month.asc';
+            if (qp('from')) q += `&month=gte.${qp('from')}`;
+            if (qp('to')) q += `&month=lte.${qp('to')}`;
+            const r = await sbSales(q);
+            if (!r.ok) return err('Read failed: ' + JSON.stringify(r.data), 502);
+            return ok({ rows: r.data || [] });
+          }
           case 'getConversionDrivers': {   // S189 — attribution: notable CR days + nearby driver events (layer d)
             if (!canView(P)) return err('No permission', 403);
             const from = qp('from') || todayISO(), to = qp('to') || todayISO();
@@ -2832,6 +2858,29 @@ export default {
             const r = await sbSales('/rest/v1/settings?on_conflict=key', { method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify({ key: 'drr_window_days', value: String(days), updated_at: nowISO(), updated_by: userId }) });
             if (!r.ok) return err('Save failed: ' + JSON.stringify(r.data), 502);
             return ok({ drr_window_days: days });
+          }
+          case 'setProductCost': {   // S189 — upsert a per-SKU standard COGS (effective-dated)
+            if (!canAdmin(P)) return err('No permission', 403);
+            const code = String(d.product_code || '').trim();
+            const cost = Number(d.cogs_inr);
+            if (!code) return err('product_code required');
+            if (!Number.isFinite(cost) || cost < 0) return err('cogs_inr must be ≥ 0');
+            const eff = d.effective_from || todayISO();
+            const r = await sbSales('/rest/v1/product_cost?on_conflict=product_code,effective_from', { method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify({ product_code: code, effective_from: eff, cogs_inr: cost, note: d.note || null, updated_by: userId, updated_at: nowISO() }) });
+            if (!r.ok) return err('Save failed: ' + JSON.stringify(r.data), 502);
+            return ok({ product_code: code, cogs_inr: cost, effective_from: eff });
+          }
+          case 'setPnlManual': {   // S189 — upsert a manual P&L line for a month
+            if (!canAdmin(P)) return err('No permission', 403);
+            const MANUAL_KEYS = ['rto', 'logistics', 'platform_fee', 'brand_marketing', 'sga'];
+            const month = String(d.month || '').slice(0, 7);
+            if (!/^\d{4}-\d{2}$/.test(month)) return err('month must be YYYY-MM');
+            if (!MANUAL_KEYS.includes(d.line_key)) return err('invalid line_key');
+            const amt = Number(d.amount_inr);
+            if (!Number.isFinite(amt)) return err('amount_inr must be a number');
+            const r = await sbSales('/rest/v1/pnl_manual?on_conflict=month,line_key', { method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify({ month: month + '-01', line_key: d.line_key, amount_inr: amt, note: d.note || null, updated_by: userId, updated_at: nowISO() }) });
+            if (!r.ok) return err('Save failed: ' + JSON.stringify(r.data), 502);
+            return ok({ month: month + '-01', line_key: d.line_key, amount_inr: amt });
           }
           case 'createSkuMap':
           case 'updateSkuMap': {
