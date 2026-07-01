@@ -1,6 +1,6 @@
 import {
   Users, Network, Briefcase, Building2, BarChart3, Settings, UserPlus,
-  Star, Activity, ShieldCheck, UserCog, ClipboardCheck, BookOpen,
+  Star, Activity, ShieldCheck, UserCog, ClipboardCheck, BookOpen, Factory,
 } from 'lucide-react';
 
 export const NAV_GROUPS = [
@@ -38,6 +38,7 @@ export const NAV_GROUPS = [
       { id: 'perm-roles', label: 'Roles & Permissions', route: '/admin/roles',    icon: ShieldCheck, requires: 'podium_admin' },
       { id: 'perm-users', label: 'Users',               route: '/admin/users',    icon: UserCog,     requires: 'podium_admin' },
       { id: 'settings',   label: 'Settings',            route: '/admin/settings', icon: Settings,    requires: 'podium_admin' },
+      { id: 'factory-cost', label: 'Factory Cost',      route: '/admin/factory-cost', icon: Factory, requires: 'podium_comp' },
     ],
   },
 ];
