@@ -69,6 +69,7 @@ const PERM_DEFS = [
     { key: 'reports',            label: 'View & Download Reports',         type: 'bool' },
     { key: 'reports_finance',    label: 'Finance / Cost Reports',          type: 'bool' },
     { key: 'reports_compliance', label: 'Compliance Reports (sensitive)',  type: 'bool' },
+    { key: 'factory_cost_view',  label: 'Factory Cost & Productivity (Redline — leadership)', type: 'bool' },
   ] },
   { group: 'Users', items: [
     { key: 'users_view',   label: 'View Users Tab',       type: 'bool' },
