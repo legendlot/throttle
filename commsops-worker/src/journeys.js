@@ -26,7 +26,7 @@ async function compile(env, definition) {
   const targets = (s) => [s.next, s.if_true, s.if_false].filter(Boolean);
   for (const id of ids) {
     const s = steps[id];
-    if (['load-definition', 'load-enrolment', 'load-trigger', 'boot'].includes(id) || /^(log:|end:)/.test(id))
+    if (['load-definition', 'load-enrolment', 'load-trigger', 'load-journey-name', 'boot'].includes(id) || /^(log:|end:)/.test(id))
       errors.push(`reserved_step_id:${id}`);
     if (!['wait', 'condition', 'send', 'exit'].includes(s.type)) errors.push(`bad_type:${id}:${s.type}`);
     for (const t of targets(s)) if (!steps[t]) errors.push(`dangling_target:${id}->${t}`);

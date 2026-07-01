@@ -72,6 +72,7 @@ async function processQueueMessage(env, body) {
     await send(env, {
       channel: camp.channel, purpose: camp.purpose, profileId: rec.profile_id, to: rec.address,
       templateId: camp.template_id, constants: camp.vars || {},
+      tracking: { campaign: camp.name },
       source: `campaign:${campaignId}`, dedupKey: `campaign:${campaignId}:${rec.profile_id}`,
     });
   }

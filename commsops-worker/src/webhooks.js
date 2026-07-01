@@ -50,14 +50,22 @@ async function handleResendWebhook(env, request) {
         { method: 'PATCH', body: JSON.stringify(patch) });
     }
     // emit engagement event onto the profile's stream
-    if (msg?.profile_id && u.engagement_event) {
+    // link_clicked carries the clicked URL + channel; its idempotency key includes the
+    // url + timestamp so distinct link-clicks are recorded (not collapsed one-per-message),
+    // while exact webhook retries still dedupe. A clicked webhook with no link → skip.
+    const isClick = u.engagement_event === 'link_clicked';
+    if (msg?.profile_id && u.engagement_event && !(isClick && !u.clicked_url)) {
+      const props = { provider_message_id: u.provider_message_id, message_id: msg.id };
+      if (isClick) { props.url = u.clicked_url; props.channel = msg.channel; }
+      const idem = isClick
+        ? `resend:clicked:${u.provider_message_id}:${u.clicked_url}:${u.at}`
+        : `resend:${payload.type}:${u.provider_message_id}`;
       await A.sbComms('/rest/v1/events', env, {
         method: 'POST',
         body: JSON.stringify({
           profile_id: msg.profile_id, name: u.engagement_event,
           occurred_at: u.at, source: 'resend_webhook',
-          properties: { provider_message_id: u.provider_message_id },
-          idempotency_key: `resend:${payload.type}:${u.provider_message_id}`,
+          properties: props, idempotency_key: idem,
         }),
         headers: { Prefer: 'resolution=ignore-duplicates' },
       });

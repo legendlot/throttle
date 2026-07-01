@@ -45,7 +45,7 @@ const STATUS_MAP = {
 const EVENT_MAP = {
   'email.delivered': 'email_delivered',
   'email.opened': 'email_opened',
-  'email.clicked': 'email_clicked',
+  'email.clicked': 'link_clicked',   // channel-agnostic click primitive (SMS/WA reuse it via the Phase-B redirect)
   'email.bounced': 'email_bounced',
   'email.complained': 'opted_out',
 };
@@ -62,6 +62,7 @@ function parseStatusWebhook(payload) {
     reason: type === 'email.bounced' ? 'hard_bounce'
           : type === 'email.complained' ? 'complaint' : null,
     to: payload?.data?.to?.[0] || null,
+    clicked_url: type === 'email.clicked' ? (payload?.data?.click?.link || null) : null,
   }];
 }
 

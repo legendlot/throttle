@@ -41,6 +41,13 @@ class JourneyWorkflow extends WorkflowEntrypoint {
       return r.data?.[0]?.properties || {};
     });
 
+    // Journey name → utm_campaign on marketing sends (GA4/Odo attribution).
+    const journeyName = await step.do('load-journey-name', async () => {
+      const r = await A.sbComms(`/rest/v1/journeys?id=eq.${A.enc(journeyId)}&select=name&limit=1`, env);
+      if (!r.ok) throw new Error('load_journey_name_failed:' + JSON.stringify(r.data));
+      return r.data?.[0]?.name || null;
+    });
+
     let cur = def.entry;
     for (let i = 0; i < MAX_TRANSITIONS; i++) {
       const s = def.steps[cur];
@@ -55,7 +62,7 @@ class JourneyWorkflow extends WorkflowEntrypoint {
         await this.#logStep(env, step, enrolmentId, cur, s.type, { branch });
         cur = branch ? s.if_true : s.if_false;
       } else if (s.type === 'send') {
-        const res = await step.do(cur, async () => this.#doSend(env, s, profileId, enrolmentId, cur, triggerProps));
+        const res = await step.do(cur, async () => this.#doSend(env, s, profileId, enrolmentId, cur, triggerProps, journeyName));
         await this.#logStep(env, step, enrolmentId, cur, s.type, res);
         cur = s.next;
       } else if (s.type === 'exit') {
@@ -73,7 +80,7 @@ class JourneyWorkflow extends WorkflowEntrypoint {
   // send() does NOT auto-resolve `to` from the profile (it loads the profile only for template
   // rendering; the adapter + gate use opts.to verbatim). So we resolve the profile's primary email
   // identifier here and pass it as `to`. No email → skip WITHOUT calling send().
-  async #doSend(env, s, profileId, enrolmentId, stepId, triggerProps) {
+  async #doSend(env, s, profileId, enrolmentId, stepId, triggerProps, journeyName) {
     const channel = s.channel || 'email';
     const idr = await A.sbComms(
       `/rest/v1/identifiers?profile_id=eq.${A.enc(profileId)}&type=eq.email&select=value&order=last_seen.desc&limit=1`, env);
@@ -83,6 +90,7 @@ class JourneyWorkflow extends WorkflowEntrypoint {
     return send(env, {
       channel, purpose: s.purpose || 'marketing', profileId, to,
       templateId: s.templateId, constants: s.constants || {}, eventContext: triggerProps || {},
+      tracking: { campaign: journeyName },
       source: `journey:${enrolmentId}`, dedupKey: `journey:${enrolmentId}:${stepId}`,
     });
   }

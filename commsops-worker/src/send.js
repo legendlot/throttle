@@ -3,6 +3,7 @@
 // (never a silent drop). Exposed to internal callers; Pitstop re-points here at WA cutover.
 const A = require('./auth.js');
 const { renderEmail } = require('./render.js');
+const { tagLinks } = require('./tracking.js');
 const { runGate } = require('./gate.js');
 const emailAdapter = require('./adapters/email.js');
 
@@ -95,6 +96,18 @@ async function send(env, opts) {
       profile, event: opts.eventContext, constants: opts.constants,
       recipient: opts.recipient, system: sys,
     });
+    // UTM-tag LOT-owned links on MARKETING sends → GA4 attributes the landing session
+    // → Odo /funnel by-source. Transactional/utility left untouched (keeps attribution clean).
+    if (purpose === 'marketing') {
+      const utm = {
+        utm_source: 'relay', utm_medium: channel,
+        utm_campaign: opts.tracking?.campaign,
+        utm_content: opts.tracking?.content ?? template.name,
+      };
+      const skip = sys.unsubscribe_url ? [sys.unsubscribe_url] : [];
+      body.html = tagLinks(body.html, { params: utm, skip, mode: 'html' });
+      body.text = tagLinks(body.text, { params: utm, skip, mode: 'text' });
+    }
     const fromName = sender.metadata?.from_name || 'Legend of Toys';
     rendered = { ...body, to, from: `${fromName} <${sender.address}>`, unsubscribe_url: sys.unsubscribe_url };
   } catch (e) {
