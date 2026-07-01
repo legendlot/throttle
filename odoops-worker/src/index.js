@@ -166,6 +166,22 @@ async function getChannels() {
 }
 async function channelName(id) { return (await getChannels()).find(c => c.id === id)?.name || null; }
 
+// ── P&L channel families (mirror apps/odo/src/lib/families.js) + ad-platform attribution ──
+const PNL_FAMILIES = [
+  { key: 'website',  label: 'Website',          match: /website|shopify|web/i,                   ads: ['meta', 'google'] },
+  { key: 'amazon',   label: 'Amazon',           match: /amazon/i,                                ads: ['amazon'] },
+  { key: 'flipkart', label: 'Flipkart',         match: /flipkart/i,                              ads: [] },
+  { key: 'quickcom', label: 'Quick-comm',       match: /blinkit|zepto|instamart|swiggy|quick/i,  ads: [] },
+  { key: 'gtmt',     label: 'GT / MT',          match: /^(gt|mt)$|general trade|modern trade/i,  ads: [] },
+  { key: 'longtail', label: 'Long-tail',        match: /cred|firstcry|peeko/i,                   ads: [] },
+  { key: 'other',    label: 'Other / Internal', match: null,                                     ads: [] },
+];
+function pnlFamilyOf(name) {
+  const n = name || '';
+  for (const f of PNL_FAMILIES) { if (f.key === 'other') continue; if (f.match.test(n)) return f.key; }
+  return 'other';
+}
+
 // ============================================================
 // ADAPTERS — each implements fetch() + stage(); registered by adapter_kind.
 // fetch({ env, channelId, channelName, cursor, windowTo, budget })
@@ -2494,11 +2510,34 @@ export default {
             if (!r.ok) return err('Change events read failed: ' + JSON.stringify(r.data), 502);
             return ok({ rows: r.data || [] });
           }
-          case 'getPnl': {   // S189 — monthly P&L waterfall (base lines; subtotals derived client-side)
+          case 'getPnl': {   // S189 — channel-wise P&L: master (all channels) + per-channel-family tables
             if (!canView(P)) return err('No permission', 403);
-            const r = await rpcSales('f_pnl', { p_from: qp('from') || todayISO(), p_to: qp('to') || todayISO() });
-            if (!r.ok) return err('P&L failed: ' + JSON.stringify(r.data), 502);
-            return ok({ rows: r.data || [] });
+            const from = qp('from') || todayISO(), to = qp('to') || todayISO();
+            const chans = await getChannels();   // is_sale channels {id,name}
+            const byFam = {};
+            for (const c of chans) { const k = pnlFamilyOf(c.name); (byFam[k] = byFam[k] || []).push(c.id); }
+            const fams = PNL_FAMILIES.filter(f => (byFam[f.key] || []).length);
+            const famResults = await Promise.all(fams.map(f =>
+              rpcSales('f_pnl', { p_from: from, p_to: to, p_channels: byFam[f.key], p_ad_platforms: f.ads, p_channel_key: f.key })
+                .then(r => ({ key: f.key, label: f.label, rows: (r.ok ? (r.data || []) : []) }))));
+            const [companyR, sgaR] = await Promise.all([
+              rpcSales('f_pnl', { p_from: from, p_to: to, p_channels: [], p_ad_platforms: [], p_channel_key: 'all' }),   // company-level manual (brand)
+              rpcSales('f_pnl_sga', { p_from: from, p_to: to }),                                                          // SG&A seam (Podium later)
+            ]);
+            const company = companyR.ok ? (companyR.data || []) : [];
+            const sga = {}; for (const r of (sgaR.ok ? (sgaR.data || []) : [])) sga[r.month] = Number(r.sga) || 0;
+            const brand = {}; for (const r of company) brand[r.month] = Number(r.brand_marketing) || 0;
+            const monthsSet = new Set(); famResults.forEach(f => f.rows.forEach(r => monthsSet.add(r.month))); company.forEach(r => monthsSet.add(r.month));
+            const months = [...monthsSet].sort();
+            const SUM = ['gmv', 'rto', 'refund', 'taxes', 'cogs', 'logistics', 'platform_fee', 'cac'];
+            const master = months.map(m => {
+              const row = { month: m }; for (const L of SUM) row[L] = 0;
+              for (const f of famResults) { const fr = f.rows.find(x => x.month === m); if (fr) for (const L of SUM) row[L] += Number(fr[L]) || 0; }
+              row.brand_marketing = brand[m] || 0; row.sga = sga[m] || 0;
+              return row;
+            });
+            const channels = {}; for (const f of famResults) channels[f.key] = f.rows;
+            return ok({ months, master, channels, families: famResults.map(f => ({ key: f.key, label: f.label })) });
           }
           case 'getProductCosts': {   // S189 — active SKUs + latest standard COGS (for the /pnl cost editor)
             if (!canView(P)) return err('No permission', 403);
@@ -2870,17 +2909,20 @@ export default {
             if (!r.ok) return err('Save failed: ' + JSON.stringify(r.data), 502);
             return ok({ product_code: code, cogs_inr: cost, effective_from: eff });
           }
-          case 'setPnlManual': {   // S189 — upsert a manual P&L line for a month
+          case 'setPnlManual': {   // S189 — upsert a manual P&L line for a month × channel
             if (!canAdmin(P)) return err('No permission', 403);
             const MANUAL_KEYS = ['rto', 'logistics', 'platform_fee', 'brand_marketing', 'sga'];
+            const FAM_KEYS = ['all', 'website', 'amazon', 'flipkart', 'quickcom', 'gtmt', 'longtail', 'other'];
             const month = String(d.month || '').slice(0, 7);
+            const chKey = d.channel_key || 'all';
             if (!/^\d{4}-\d{2}$/.test(month)) return err('month must be YYYY-MM');
             if (!MANUAL_KEYS.includes(d.line_key)) return err('invalid line_key');
+            if (!FAM_KEYS.includes(chKey)) return err('invalid channel_key');
             const amt = Number(d.amount_inr);
             if (!Number.isFinite(amt)) return err('amount_inr must be a number');
-            const r = await sbSales('/rest/v1/pnl_manual?on_conflict=month,line_key', { method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify({ month: month + '-01', line_key: d.line_key, amount_inr: amt, note: d.note || null, updated_by: userId, updated_at: nowISO() }) });
+            const r = await sbSales('/rest/v1/pnl_manual?on_conflict=month,channel_key,line_key', { method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify({ month: month + '-01', channel_key: chKey, line_key: d.line_key, amount_inr: amt, note: d.note || null, updated_by: userId, updated_at: nowISO() }) });
             if (!r.ok) return err('Save failed: ' + JSON.stringify(r.data), 502);
-            return ok({ month: month + '-01', line_key: d.line_key, amount_inr: amt });
+            return ok({ month: month + '-01', channel_key: chKey, line_key: d.line_key, amount_inr: amt });
           }
           case 'createSkuMap':
           case 'updateSkuMap': {

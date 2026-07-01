@@ -1,12 +1,11 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
 import { salesGet, salesPost, istToday } from '../../../lib/api.js';
 import { RangePicker } from '../../../components/kit.js';
 
-// P&L waterfall rows. kind: src = data-sourced base line · manual = editable manual line ·
-// sub = computed subtotal. neg = subtracted from the running subtotal.
+// P&L waterfall lines. kind: src=data-sourced · manual=editable · sub=computed subtotal. neg=subtracted.
 const LINES = [
   { key: 'gmv',             label: 'GMV',            kind: 'src' },
   { key: 'rto',             label: 'RTO',            kind: 'manual', neg: true },
@@ -24,124 +23,139 @@ const LINES = [
   { key: 'sga',             label: 'SG&A',           kind: 'manual', neg: true },
   { key: 'ebitda',          label: 'EBITDA',         kind: 'sub' },
 ];
-const MANUAL_KEYS = new Set(['rto', 'logistics', 'platform_fee', 'brand_marketing', 'sga']);
+const CHANNEL_LINES = LINES.slice(0, LINES.findIndex(l => l.key === 'cm2') + 1);   // channels roll up to CM2
 
 const rs = n => Math.round(Number(n) || 0).toLocaleString('en-IN');
 const monLabel = m => { const d = new Date(m + 'T00:00:00Z'); return d.toLocaleString('en-US', { month: 'short', year: '2-digit', timeZone: 'UTC' }); };
-// derive the 5 subtotals for one month's base-line object
 function withSubtotals(r) {
-  const v = { ...r };
+  const n = k => Number(r[k]) || 0;
+  const v = { month: r.month, gmv: n('gmv'), rto: n('rto'), refund: n('refund'), taxes: n('taxes'), cogs: n('cogs'), logistics: n('logistics'), platform_fee: n('platform_fee'), cac: n('cac'), brand_marketing: n('brand_marketing'), sga: n('sga') };
   v.nmv = v.gmv - v.rto - v.refund - v.taxes;
-  v.gm  = v.nmv - v.cogs;
+  v.gm = v.nmv - v.cogs;
   v.cm1 = v.gm - v.logistics - v.platform_fee;
   v.cm2 = v.cm1 - v.cac;
   v.ebitda = v.cm2 - v.brand_marketing - v.sga;
   return v;
 }
 
+// One P&L table (master or a channel). editable = Set of manual line keys the user can edit here;
+// autoLines = manual keys shown but auto-sourced (e.g. Amazon fees from settlement) → read-only.
+function PnlTable({ title, subtitle, rows, months, lines, channelKey, editable, autoLines, session, isAdmin, onSaved, defaultOpen = true }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const [edit, setEdit] = useState(null);   // {month,key}
+  const [val, setVal] = useState('');
+  const cols = months.map(m => withSubtotals(rows.find(r => r.month === m) || { month: m }));
+  const total = {}; for (const L of lines) total[L.key] = cols.reduce((a, c) => a + (Number(c[L.key]) || 0), 0);
+  const SUB_BG = 'color-mix(in srgb, var(--accent) 8%, transparent)';
+  const save = async (m, key) => {
+    setEdit(null);
+    try { await salesPost('setPnlManual', { month: m.slice(0, 7), channel_key: channelKey, line_key: key, amount_inr: Math.round(Number(val) || 0) }, session); onSaved(); }
+    catch (e) { /* surfaced by parent reload */ }
+  };
+  return (
+    <div className="so-card" style={{ padding: 0, overflow: 'hidden' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 18px', cursor: 'pointer' }} onClick={() => setOpen(o => !o)}>
+        <div className="so-kpi-lbl" style={{ margin: 0 }}>{title}{subtitle ? <span className="so-sub" style={{ fontSize: 10.5, textTransform: 'none', letterSpacing: 0 }}> · {subtitle}</span> : null}</div>
+        <span className="so-sub" style={{ fontSize: 12 }}>{open ? '▲' : '▼'}</span>
+      </div>
+      {open && (
+        <div style={{ overflowX: 'auto' }}>
+          <table className="so-table" style={{ minWidth: 620 }}>
+            <thead><tr>
+              <th style={{ position: 'sticky', left: 0, background: 'var(--surface)', zIndex: 1 }}>Line</th>
+              {months.map(m => <th key={m} className="so-num">{monLabel(m)}</th>)}
+              <th className="so-num" style={{ borderLeft: '1px solid var(--border)' }}>Total</th>
+            </tr></thead>
+            <tbody>
+              {lines.map(L => {
+                const isSub = L.kind === 'sub';
+                const isAuto = autoLines && autoLines.has(L.key);
+                const canEdit = isAdmin && L.kind === 'manual' && editable && editable.has(L.key) && !isAuto;
+                return (
+                  <tr key={L.key} style={isSub ? { background: SUB_BG, fontWeight: 700 } : undefined}>
+                    <td style={{ position: 'sticky', left: 0, zIndex: 1, background: isSub ? 'var(--surface2)' : 'var(--surface)', fontWeight: isSub ? 700 : 400, color: isSub ? 'var(--t1)' : 'var(--t2)', whiteSpace: 'nowrap' }}>
+                      {L.neg && !isSub ? <span style={{ color: 'var(--t3)' }}>− </span> : null}{L.label}
+                      {isAuto ? <span className="so-sub" style={{ marginLeft: 5, fontSize: 9 }}>auto</span> : null}
+                    </td>
+                    {cols.map((c, i) => {
+                      const v = Number(c[L.key]) || 0, m = months[i];
+                      const editing = canEdit && edit && edit.month === m && edit.key === L.key;
+                      const color = isSub ? (v < 0 ? '#EC6A5E' : 'var(--green)') : 'var(--t1)';
+                      return (
+                        <td key={m} className="so-num" style={{ color, cursor: canEdit ? 'pointer' : 'default' }}
+                          onClick={canEdit && !editing ? () => { setEdit({ month: m, key: L.key }); setVal(String(Math.round(v))); } : undefined}>
+                          {editing ? (
+                            <input autoFocus className="so-input" style={{ width: 92, padding: '2px 6px', fontSize: 12, textAlign: 'right' }}
+                              value={val} onChange={e => setVal(e.target.value)}
+                              onKeyDown={e => { if (e.key === 'Enter') save(m, L.key); if (e.key === 'Escape') setEdit(null); }}
+                              onBlur={() => save(m, L.key)} />
+                          ) : (v === 0 && !isSub ? <span style={{ color: 'var(--t3)' }}>{canEdit ? '—' : '0'}</span> : rs(v))}
+                        </td>
+                      );
+                    })}
+                    <td className="so-num" style={{ borderLeft: '1px solid var(--border)', fontWeight: isSub ? 700 : 400, color: isSub ? (total[L.key] < 0 ? '#EC6A5E' : 'var(--green)') : 'var(--t1)' }}>{rs(total[L.key])}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function PnlPage() {
   const { session, perms } = useAuth();
   const isAdmin = !!(perms && perms.salesops_admin);
-  // default: trailing 6 months → first of month, 5 months back
-  const def = useMemo(() => {
-    const t = istToday(); const [y, m] = t.split('-').map(Number);
-    const from = new Date(Date.UTC(y, m - 1 - 5, 1)).toISOString().slice(0, 10);
-    return { from, to: t };
-  }, []);
-  const [from, setFrom] = useState(def.from);
-  const [to, setTo] = useState(def.to);
-  const [rows, setRows] = useState(null);
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [data, setData] = useState(null);
   const [costs, setCosts] = useState(null);
-  const [err, setErr] = useState('');
-  const [edit, setEdit] = useState(null);   // { month, key } currently editing
-  const [editVal, setEditVal] = useState('');
   const [showCosts, setShowCosts] = useState(false);
+  const [err, setErr] = useState('');
 
-  const load = () => {
-    salesGet('getPnl', { from, to }, session).then(r => setRows(r?.rows || [])).catch(e => setErr(e.message || String(e)));
-  };
-  useEffect(() => { if (!session) return; setRows(null); setErr(''); load(); }, [session, from, to]);
+  useEffect(() => {   // default: trailing 6 months (first-of-month 5 back → today)
+    const t = istToday(); const [y, m] = t.split('-').map(Number);
+    setFrom(new Date(Date.UTC(y, m - 1 - 5, 1)).toISOString().slice(0, 10)); setTo(t);
+  }, []);
+  const load = () => { if (from && to) salesGet('getPnl', { from, to }, session).then(d => setData(d || {})).catch(e => setErr(e.message || String(e))); };
+  useEffect(() => { if (session && from && to) { setData(null); setErr(''); load(); } }, [session, from, to]);
   useEffect(() => { if (session && isAdmin && showCosts && !costs) salesGet('getProductCosts', {}, session).then(r => setCosts(r?.rows || [])).catch(() => setCosts([])); }, [session, isAdmin, showCosts, costs]);
 
-  const cols = useMemo(() => (rows || []).map(withSubtotals), [rows]);
-  const total = useMemo(() => {
-    const t = {}; for (const L of LINES) t[L.key] = 0;
-    for (const c of cols) for (const L of LINES) t[L.key] += Number(c[L.key]) || 0;
-    return t;
-  }, [cols]);
-  const months = (rows || []).map(r => r.month);
+  const saveCost = async (product_code, v) => {
+    try { await salesPost('setProductCost', { product_code, cogs_inr: Math.round(Number(v) || 0) }, session); setCosts(cs => (cs || []).map(c => c.product_code === product_code ? { ...c, cogs_inr: Math.round(Number(v) || 0) } : c)); load(); }
+    catch (e) { setErr('Save failed: ' + (e.message || e)); }
+  };
   const costedCount = (costs || []).filter(c => c.cogs_inr != null).length;
 
-  const saveManual = async (month, key, val) => {
-    const amount = Math.round(Number(val) || 0);
-    setEdit(null);
-    try { await salesPost('setPnlManual', { month: month.slice(0, 7), line_key: key, amount_inr: amount }, session); load(); }
-    catch (e) { setErr('Save failed: ' + (e.message || e)); }
-  };
-  const saveCost = async (product_code, val) => {
-    const cogs_inr = Math.round(Number(val) || 0);
-    try { await salesPost('setProductCost', { product_code, cogs_inr }, session); setCosts(cs => (cs || []).map(c => c.product_code === product_code ? { ...c, cogs_inr } : c)); load(); }
-    catch (e) { setErr('Save failed: ' + (e.message || e)); }
-  };
-
-  const SUB_BG = 'color-mix(in srgb, var(--accent) 8%, transparent)';
+  const months = data?.months || [];
+  const AMZ_AUTO = new Set(['logistics', 'platform_fee']);
 
   return (
     <div className="so-page">
       <RangePicker from={from} to={to} onChange={({ from, to }) => { setFrom(from); setTo(to); }}
-        right={<span className="so-sub">Monthly · all Odo channels</span>} />
-
+        right={<span className="so-sub">Monthly · master + per channel</span>} />
       {err && <div className="so-card" style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12 }}>{err}</div>}
 
-      {!rows ? <div style={{ padding: 60, textAlign: 'center' }}><Spinner /></div> : (
+      {!data ? <div style={{ padding: 60, textAlign: 'center' }}><Spinner /></div> : (
         <>
-          <div className="so-card" style={{ padding: 0, overflow: 'hidden' }}>
-            <div className="so-kpi-lbl" style={{ padding: '16px 18px 0' }}>Profit &amp; loss <span className="so-sub" style={{ fontSize: 10.5, textTransform: 'none', letterSpacing: 0 }}>· ₹, monthly{isAdmin ? ' · click a manual line cell to edit' : ''}</span></div>
-            <div style={{ overflowX: 'auto' }}>
-              <table className="so-table" style={{ marginTop: 8, minWidth: 640 }}>
-                <thead><tr>
-                  <th style={{ position: 'sticky', left: 0, background: 'var(--surface)', zIndex: 1 }}>Line</th>
-                  {months.map(m => <th key={m} className="so-num">{monLabel(m)}</th>)}
-                  <th className="so-num" style={{ borderLeft: '1px solid var(--border)' }}>Total</th>
-                </tr></thead>
-                <tbody>
-                  {LINES.map(L => {
-                    const isSub = L.kind === 'sub';
-                    const editable = isAdmin && L.kind === 'manual';
-                    return (
-                      <tr key={L.key} style={isSub ? { background: SUB_BG, fontWeight: 700 } : undefined}>
-                        <td style={{ position: 'sticky', left: 0, zIndex: 1, background: isSub ? 'var(--surface2)' : 'var(--surface)', fontWeight: isSub ? 700 : 400, color: isSub ? 'var(--t1)' : 'var(--t2)' }}>
-                          {L.neg && !isSub ? <span style={{ color: 'var(--t3)' }}>− </span> : null}{L.label}
-                        </td>
-                        {cols.map((c, i) => {
-                          const val = Number(c[L.key]) || 0;
-                          const m = months[i];
-                          const editing = editable && edit && edit.month === m && edit.key === L.key;
-                          const color = isSub ? (val < 0 ? '#EC6A5E' : 'var(--green)') : 'var(--t1)';
-                          return (
-                            <td key={m} className="so-num" style={{ color, cursor: editable ? 'pointer' : 'default' }}
-                              onClick={editable && !editing ? () => { setEdit({ month: m, key: L.key }); setEditVal(String(Math.round(val))); } : undefined}>
-                              {editing ? (
-                                <input autoFocus className="so-input" style={{ width: 96, padding: '2px 6px', fontSize: 12, textAlign: 'right' }}
-                                  value={editVal} onChange={e => setEditVal(e.target.value)}
-                                  onKeyDown={e => { if (e.key === 'Enter') saveManual(m, L.key, editVal); if (e.key === 'Escape') setEdit(null); }}
-                                  onBlur={() => saveManual(m, L.key, editVal)} />
-                              ) : (val === 0 && !isSub ? <span style={{ color: 'var(--t3)' }}>{editable ? '—' : '0'}</span> : rs(val))}
-                            </td>
-                          );
-                        })}
-                        <td className="so-num" style={{ borderLeft: '1px solid var(--border)', fontWeight: isSub ? 700 : 400, color: isSub ? (total[L.key] < 0 ? '#EC6A5E' : 'var(--green)') : 'var(--t1)' }}>{rs(total[L.key])}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          <PnlTable title="Company P&amp;L" subtitle="all Odo channels · ₹ monthly" rows={data.master || []} months={months}
+            lines={LINES} channelKey="all" editable={new Set(['brand_marketing', 'sga'])} autoLines={new Set()}
+            session={session} isAdmin={isAdmin} onSaved={load} />
 
           <div className="so-sub" style={{ fontSize: 10.5, color: 'var(--t3)' }}>
-            Sourced from Odo-captured channels (Website · Amazon · quick-comm · GT/MT · marketplace where connected) — totals trail a full-company view until every channel + tax feed lands. RTO · Logistics · Platform Fee · Brand Marketing · SG&A are manual (0 until entered). CAC = performance ad spend (Meta + Amazon + Google). COGS = units × standard cost. Fast-follow: Amazon platform-fee + RTO auto-feeds, per-channel split.
+            GMV = booked value (tax-incl, net of discounts) · COGS = units × standard cost · CAC = performance ad spend. <b style={{ color: 'var(--t2)' }}>Amazon Platform Fee + Logistics auto-feed from settlement</b> (lag a few weeks); other channels are manual until their connectors land (Delhivery for D2C, marketplace reports). RTO / Logistics / Platform Fee here are channel rollups — edit them in the channel tables below. Brand Marketing = manual; SG&A wired to Podium salaries (0 until live). Numbers cover Odo-captured channels only.
           </div>
+
+          <div className="so-kpi-lbl" style={{ marginTop: 4 }}>By channel <span className="so-sub" style={{ fontSize: 10.5, textTransform: 'none', letterSpacing: 0 }}>· rolls up to CM2 (company overheads sit at company level)</span></div>
+          {(data.families || []).map(f => (
+            <PnlTable key={f.key} title={f.label} subtitle="₹ monthly" rows={(data.channels || {})[f.key] || []} months={months}
+              lines={CHANNEL_LINES} channelKey={f.key}
+              editable={f.key === 'amazon' ? new Set(['rto']) : new Set(['rto', 'logistics', 'platform_fee'])}
+              autoLines={f.key === 'amazon' ? AMZ_AUTO : new Set()}
+              session={session} isAdmin={isAdmin} onSaved={load} defaultOpen={false} />
+          ))}
 
           {isAdmin && (
             <div className="so-card">
