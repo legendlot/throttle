@@ -11,7 +11,16 @@ const PRESETS = rangePresets();
 // useTableSort: click-to-sort any data table. valueOf(row,key) lets a table sort by a COMPUTED
 // column (e.g. ROAS = conv_value/spend) instead of a raw field. Numeric values sort numerically,
 // everything else alphabetically (numeric-aware). Pair with <SortHeader> for clickable headers.
-export function useTableSort(rows, { initialKey = null, initialDir = 'desc', valueOf } = {}) {
+export function useTableSort(rows, opts = {}) {
+  const { initialKey = null, initialDir = 'desc' } = opts;
+  // Read `valueOf` ONLY when the caller actually passed it. Destructuring `{ valueOf }` off the
+  // options object walks the prototype chain and picks up `Object.prototype.valueOf` (a function)
+  // whenever no accessor was supplied — so `g` below became Object.prototype.valueOf, `get()` threw
+  // (this=undefined), the try/catch swallowed it to null, every comparison returned 0, and the
+  // stable sort silently preserved input order in BOTH directions (the arrow flipped, rows never
+  // moved). hasOwnProperty avoids the inherited value entirely. (S189 — was a silent no-op on every
+  // table without a custom valueOf: cockpit, Performance, Funnel daily history.)
+  const valueOf = Object.prototype.hasOwnProperty.call(opts, 'valueOf') ? opts.valueOf : null;
   const [sortKey, setSortKey] = useState(initialKey);
   const [sortDir, setSortDir] = useState(initialDir);
   const toggle = (k) => {
