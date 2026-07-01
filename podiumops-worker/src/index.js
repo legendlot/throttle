@@ -1670,6 +1670,128 @@ async function getAppraisals(url, auth, env) {
 // DISPATCH
 // ────────────────────────────────────────────────────────────────────────────
 
+// ────────────────────────────────────────────────────────────────────────────
+// FACTORY COST MODULE (compensation-tier) — source of truth for the cost engine.
+// Salaries live ONLY here + are rendered ONLY in the Podium admin UI. The Redline
+// cost views read aggregates from Postgres RPCs, never these raw rows.
+// ────────────────────────────────────────────────────────────────────────────
+// requireComp(auth) (defined above) returns an err Response for non-comp users, else null.
+
+// public-schema read (operators live in public). Service-role, no schema profile.
+async function sbPublicGet(path, env) {
+  const res = await fetch(`${env.SUPABASE_URL}${path}`, {
+    headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` },
+  });
+  const text = await res.text(); let data;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  return { ok: res.ok, status: res.status, data };
+}
+
+async function getFactoryWorkforce(url, auth, env) {
+  { const _g = requireComp(auth); if (_g) return _g; }
+  const ops   = (await sbPublicGet(`/rest/v1/operators?select=id,employee_id,name,department,status&status=eq.active&order=department,name`, env)).data || [];
+  const wf    = (await sb(`/rest/v1/factory_workforce?select=*`, env)).data || [];
+  const pay   = (await sb(`/rest/v1/factory_pay?select=operator_id,effective_from,monthly_ctc&order=effective_from.desc`, env)).data || [];
+  const ranks = (await sb(`/rest/v1/factory_ranks?select=*&order=sort_order`, env)).data || [];
+  const wfBy = {}; for (const w of (wf || [])) wfBy[w.operator_id] = w;
+  const curPay = {}; for (const p of (pay || [])) if (!curPay[p.operator_id]) curPay[p.operator_id] = p; // latest
+  const rows = (Array.isArray(ops) ? ops : []).map(o => ({
+    id: o.id, employee_id: o.employee_id, name: o.name, department: o.department, status: o.status,
+    factory: wfBy[o.id] || null,
+    current_ctc: curPay[o.id]?.monthly_ctc ?? null,
+    current_ctc_from: curPay[o.id]?.effective_from ?? null,
+  }));
+  return ok({ operators: rows, ranks: ranks || [] });
+}
+
+async function getFactoryCostInputs(url, auth, env) {
+  { const _g = requireComp(auth); if (_g) return _g; }
+  const r     = await sb(`/rest/v1/factory_cost_inputs?select=*&order=kind,label,effective_from.desc`, env);
+  const rates = await sb(`/rest/v1/factory_ot_rates?select=*&order=effective_from.desc`, env);
+  return ok({ cost_inputs: r.data || [], ot_rates: rates.data || [] });
+}
+
+async function setFactoryWorkforce(body, auth, env) {
+  { const _g = requireComp(auth); if (_g) return _g; }
+  const d = body.data || body;
+  if (!d.operator_id) return err('operator_id required');
+  const row = {
+    operator_id: d.operator_id,
+    rank_id: d.rank_id || null,
+    employment_type: d.employment_type === 'contract' ? 'contract' : 'in_house',
+    active: d.active !== false,
+    updated_at: new Date().toISOString(),
+  };
+  const r = await sb(`/rest/v1/factory_workforce?on_conflict=operator_id`, env, {
+    method: 'POST', body: JSON.stringify(row),
+    headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
+  });
+  if (!r.ok) return err('workforce upsert failed: ' + JSON.stringify(r.data));
+  return ok(Array.isArray(r.data) ? r.data[0] : r.data);
+}
+
+async function setFactoryPay(body, auth, env) {
+  { const _g = requireComp(auth); if (_g) return _g; }
+  const d = body.data || body;
+  if (!d.operator_id || d.monthly_ctc == null || !d.effective_from) return err('operator_id, monthly_ctc, effective_from required');
+  const r = await sb(`/rest/v1/factory_pay`, env, {
+    method: 'POST',
+    body: JSON.stringify({ operator_id: d.operator_id, effective_from: d.effective_from, monthly_ctc: Number(d.monthly_ctc), note: d.note || null, created_by: auth.userId || null }),
+  });
+  if (!r.ok) return err('pay insert failed: ' + JSON.stringify(r.data));
+  return ok(Array.isArray(r.data) ? r.data[0] : r.data);
+}
+
+async function bulkUploadFactoryPay(body, auth, env) {
+  { const _g = requireComp(auth); if (_g) return _g; }
+  const d = body.data || body;
+  const rows = Array.isArray(d.rows) ? d.rows : [];
+  if (!rows.length) return err('rows required');
+  const ops = (await sbPublicGet(`/rest/v1/operators?select=id,employee_id,name`, env)).data || [];
+  const byEmp = {}, byName = {};
+  for (const o of (Array.isArray(ops) ? ops : [])) {
+    if (o.employee_id) byEmp[String(o.employee_id).trim().toLowerCase()] = o.id;
+    if (o.name) byName[String(o.name).trim().toLowerCase()] = o.id;
+  }
+  const eff = d.effective_from || (new Date().toISOString().slice(0, 8) + '01');
+  const payRows = [], wfRows = [], unmatched = []; let matched = 0;
+  for (const r of rows) {
+    const opId = byEmp[String(r.employee_id || '').trim().toLowerCase()] || byName[String(r.name || '').trim().toLowerCase()] || null;
+    if (!opId || r.monthly_ctc == null || isNaN(Number(r.monthly_ctc))) { unmatched.push(r); continue; }
+    matched++;
+    payRows.push({ operator_id: opId, effective_from: r.effective_from || eff, monthly_ctc: Number(r.monthly_ctc), note: 'bulk upload', created_by: auth.userId || null });
+    wfRows.push({ operator_id: opId, employment_type: r.employment_type === 'contract' ? 'contract' : 'in_house', active: true, updated_at: new Date().toISOString() });
+  }
+  if (wfRows.length) await sb(`/rest/v1/factory_workforce?on_conflict=operator_id`, env, { method: 'POST', body: JSON.stringify(wfRows), headers: { Prefer: 'resolution=merge-duplicates,return=minimal' } });
+  if (payRows.length) { const pr = await sb(`/rest/v1/factory_pay`, env, { method: 'POST', body: JSON.stringify(payRows), prefer: 'return=minimal' }); if (!pr.ok) return err('pay bulk insert failed: ' + JSON.stringify(pr.data)); }
+  return ok({ inserted: payRows.length, matched, unmatched });
+}
+
+async function setFactoryCostInput(body, auth, env) {
+  { const _g = requireComp(auth); if (_g) return _g; }
+  const d = body.data || body;
+  const KINDS = ['rent', 'electricity', 'other', 'admin', 'security'];
+  if (!KINDS.includes(d.kind) || !d.label || d.monthly_amount == null || !d.effective_from) return err('kind(valid), label, monthly_amount, effective_from required');
+  const r = await sb(`/rest/v1/factory_cost_inputs`, env, {
+    method: 'POST',
+    body: JSON.stringify({ kind: d.kind, label: d.label, effective_from: d.effective_from, monthly_amount: Number(d.monthly_amount), is_estimated: !!d.is_estimated, note: d.note || null, created_by: auth.userId || null }),
+  });
+  if (!r.ok) return err('cost input insert failed: ' + JSON.stringify(r.data));
+  return ok(Array.isArray(r.data) ? r.data[0] : r.data);
+}
+
+async function setFactoryOtRates(body, auth, env) {
+  { const _g = requireComp(auth); if (_g) return _g; }
+  const d = body.data || body;
+  if (d.in_house_per_hour == null || d.contract_per_hour == null || !d.effective_from) return err('in_house_per_hour, contract_per_hour, effective_from required');
+  const r = await sb(`/rest/v1/factory_ot_rates`, env, {
+    method: 'POST',
+    body: JSON.stringify({ effective_from: d.effective_from, in_house_per_hour: Number(d.in_house_per_hour), contract_per_hour: Number(d.contract_per_hour) }),
+  });
+  if (!r.ok) return err('ot rate insert failed: ' + JSON.stringify(r.data));
+  return ok(Array.isArray(r.data) ? r.data[0] : r.data);
+}
+
 const GET_ACTIONS = {
   getMe, getSettings,
   getEmployees, getEmployee,
@@ -1688,6 +1810,8 @@ const GET_ACTIONS = {
   // Appraisal engine
   getAppraisalConfig, getMyAppraisals, getAppraisal, getTeamAppraisals,
   getAppraisals, getAppraisalCycles, getAppraisalCycle, getEnrollmentPreview,
+  // Factory cost module (compensation-tier)
+  getFactoryWorkforce, getFactoryCostInputs,
 };
 
 const POST_ACTIONS = {
@@ -1710,6 +1834,8 @@ const POST_ACTIONS = {
   createAppraisalCycle, setCycleStatus, enrollAppraisalCycle,
   submitSelfReview, submitManagerReview, acknowledgeAppraisal,
   finalizeAppraisal, shareAppraisal, applyIncrement,
+  // Factory cost module (compensation-tier)
+  setFactoryWorkforce, setFactoryPay, bulkUploadFactoryPay, setFactoryCostInput, setFactoryOtRates,
 };
 
 // Self-only baseline (RULE-PODIUM-006): actions reachable WITHOUT podium_view.
@@ -1721,11 +1847,15 @@ const SELF_SERVE_GET = new Set([
   'getEmployee', 'getMyPerformance', 'getAccomplishments', 'getObservations', 'getOneOnOnes',
   // Appraisal participation — relationship-scoped inside each handler, not podium_view-gated.
   'getAppraisalConfig', 'getMyAppraisals', 'getAppraisal', 'getTeamAppraisals',
+  // Factory cost — self-gated by requireComp (a comp-only role need not hold podium_view).
+  'getFactoryWorkforce', 'getFactoryCostInputs',
 ]);
 const SELF_SERVE_POST = new Set([
   'createAccomplishment', 'updateAccomplishment', 'deleteAccomplishment',
   // Appraisal participation (self-review / manager-review / acknowledge).
   'submitSelfReview', 'submitManagerReview', 'acknowledgeAppraisal',
+  // Factory cost — self-gated by requireComp (a comp-only role need not hold podium_view).
+  'setFactoryWorkforce', 'setFactoryPay', 'bulkUploadFactoryPay', 'setFactoryCostInput', 'setFactoryOtRates',
 ]);
 
 async function handleGet(url, request, env) {
