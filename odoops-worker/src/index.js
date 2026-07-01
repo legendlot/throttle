@@ -2179,6 +2179,59 @@ async function syncChangeEvents(env) {
   return { count: rows.length, repo, path };
 }
 
+// ── Stock in/out stream (S189 — conversion-tracking layer c) ──────
+// Snapshot native Shopify inventory (variant grain) daily → diff vs each SKU's prior snapshot →
+// emit sales.change_events (stream='stock'). "Purchasable" (buyable on the site today) = ACTIVE
+// product AND (untracked OR inventoryPolicy CONTINUE OR qty>0). Shopify has NO historical
+// inventory API → forward-only (no backfill); the CR spine keeps history, stock markers start now.
+async function syncInventorySnapshot(env) {
+  if (!env.SHOPIFY_STORE_DOMAIN || !env.SHOPIFY_CLIENT_ID || !env.SHOPIFY_CLIENT_SECRET) return { skipped: 'Shopify not configured' };
+  const ver = env.SHOPIFY_API_VERSION || SHOPIFY_API_VERSION_DEFAULT;
+  // Website channel + its sku_map (channel_sku → product_code), so stock events key on product_code.
+  const cc = await sbSales('/rest/v1/connector_config?adapter_kind=eq.shopify&select=channel_id&limit=1');
+  const webId = (cc.ok && cc.data[0]) ? cc.data[0].channel_id : null;
+  const skuMap = new Map();
+  if (webId) {
+    const mm = await sbSales(`/rest/v1/sku_map?channel_id=eq.${webId}&select=channel_sku,product_code`);
+    for (const r of (mm.ok ? mm.data : [])) skuMap.set(String(r.channel_sku), r.product_code);
+  }
+  const gql = `query($after:String){ productVariants(first:250, after:$after){ pageInfo{ hasNextPage endCursor } nodes{ sku inventoryQuantity inventoryPolicy inventoryItem{ tracked } product{ title status } } } }`;
+  let token = await getShopifyToken(env);
+  if (!token) throw new Error('Shopify auth failed (client credentials)');
+  const today = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+  const bySku = new Map(); let after = null, hasNext = true, pages = 0;
+  while (hasNext && pages < 8) {
+    pages++;
+    const run = (tok) => fetch(`https://${env.SHOPIFY_STORE_DOMAIN}/admin/api/${ver}/graphql.json`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': tok },
+      body: JSON.stringify({ query: gql, variables: { after } }),
+    });
+    let res = await run(token).catch(() => null);
+    if (res && res.status === 401) { token = await getShopifyToken(env, true); if (!token) throw new Error('Shopify auth lost'); res = await run(token).catch(() => null); }
+    if (!res || !res.ok) throw new Error(`Shopify inventory ${res ? res.status : 'network'}`);
+    const data = await res.json().catch(() => null);
+    if (data?.errors?.length) throw new Error('Shopify GQL: ' + data.errors[0].message);
+    const conn = data?.data?.productVariants;
+    for (const v of (conn?.nodes || [])) {
+      const sku = v.sku && String(v.sku).trim();
+      if (!sku) continue;   // can't key an inventory row without a SKU
+      const active = (v.product?.status || '').toUpperCase() === 'ACTIVE';
+      const tracked = v.inventoryItem?.tracked !== false;      // treat unknown as tracked
+      const policy = (v.inventoryPolicy || '').toUpperCase();
+      const qty = num(v.inventoryQuantity);
+      const purchasable = active && (!tracked || policy === 'CONTINUE' || qty > 0);
+      bySku.set(sku, { the_date: today, sku, product_code: skuMap.get(sku) || null,
+        product_title: v.product?.title || null, available_qty: Math.round(qty), purchasable,
+        captured_at: new Date().toISOString() });   // last variant wins if a SKU repeats (rare)
+    }
+    hasNext = conn?.pageInfo?.hasNextPage; after = conn?.pageInfo?.endCursor;
+  }
+  const rows = [...bySku.values()];
+  if (rows.length) await sbInsertChunked('/rest/v1/inventory_snapshot?on_conflict=the_date,sku', rows, 'return=minimal,resolution=merge-duplicates');
+  const rc = await rpcSales('recompute_stock_events', { p_date: today });
+  return { date: today, variants: rows.length, mapped: rows.filter(r => r.product_code).length, flips: (rc.ok ? rc.data : null) };
+}
+
 export default {
   async scheduled(event, env, ctx) {
     SUPABASE_SERVICE_KEY = env.SUPABASE_SERVICE_KEY || '';
@@ -2215,6 +2268,9 @@ export default {
     // Website-changes stream: pull change-log.ndjson from the Website repo + upsert change_events
     // (no-op until GITHUB_WEBSITE_PAT is set). Best-effort; never disturbs the rest of the cron.
     try { await syncChangeEvents(env); } catch (e) { console.error('odoops cron (change events) failed:', e?.message || e); }
+    // Stock in/out stream (layer c): snapshot native Shopify inventory + diff → stock change_events.
+    // Best-effort; never disturbs the rest of the cron.
+    try { await syncInventorySnapshot(env); } catch (e) { console.error('odoops cron (inventory snapshot) failed:', e?.message || e); }
   },
 
   async fetch(request, env, ctx) {
@@ -2437,6 +2493,26 @@ export default {
             const r = await sbSales(`/rest/v1/change_events?the_date=gte.${from}&the_date=lte.${to}${streamF}&order=the_date.asc&select=*`);
             if (!r.ok) return err('Change events read failed: ' + JSON.stringify(r.data), 502);
             return ok({ rows: r.data || [] });
+          }
+          case 'getConversionDrivers': {   // S189 — attribution: notable CR days + nearby driver events (layer d)
+            if (!canView(P)) return err('No permission', 403);
+            const from = qp('from') || todayISO(), to = qp('to') || todayISO();
+            const s = await sbSales('/rest/v1/settings?key=in.(cr_notable_pct,cr_driver_window_days,cr_impact_window_days)&select=key,value');
+            const sm = {}; for (const r of (s.ok ? s.data : [])) sm[r.key] = Number(r.value);
+            const notable = Number.isFinite(sm.cr_notable_pct) ? sm.cr_notable_pct : 15;
+            const win = Number.isFinite(sm.cr_driver_window_days) ? sm.cr_driver_window_days : 2;
+            const imp = Number.isFinite(sm.cr_impact_window_days) ? sm.cr_impact_window_days : 3;
+            const [d, lib] = await Promise.all([
+              rpcSales('f_conversion_drivers', { p_from: from, p_to: to, p_notable_pct: notable, p_window: win, p_impact: imp }),
+              rpcSales('f_event_impacts', { p_from: from, p_to: to, p_impact: imp }),
+            ]);
+            if (!d.ok) return err('Conversion drivers failed: ' + JSON.stringify(d.data), 502);
+            return ok({ days: d.data || [], library: (lib.ok ? lib.data : []), settings: { notable_pct: notable, window_days: win, impact_days: imp } });
+          }
+          case 'syncInventorySnapshotNow': {   // manual snapshot + diff (super-admin) — layer c test trigger
+            if (!canSuperAdmin(P)) return err('No permission', 403);
+            try { const res = await syncInventorySnapshot(env); return ok(res); }
+            catch (e) { return err('Inventory snapshot failed: ' + String(e?.message || e), 502); }
           }
           case 'syncChangeEventsNow': {   // manual pull + diagnostic (super-admin)
             if (!canSuperAdmin(P)) return err('No permission', 403);

@@ -66,7 +66,8 @@ function Funnel({ steps }) {
 // Daily conversion-rate trend (Recharts — axes + hover tooltip, consistent with the app's other
 // charts). Website-change events overlay as reference lines; the tooltip shows the exact CR%, the
 // day's funnel counts, and any change that shipped that day.
-const C_GRID = '#33343D', C_T2 = '#A4A6AE', C_T3 = '#6E6F79', C_SURFACE2 = '#26272E', C_GREEN = '#34D27B', C_ACCENT = '#F2CD1A';
+const C_GRID = '#33343D', C_T2 = '#A4A6AE', C_T3 = '#6E6F79', C_SURFACE2 = '#26272E', C_GREEN = '#34D27B', C_ACCENT = '#F2CD1A', C_STOCK = '#2DA8F0', C_RED = '#EC6A5E';
+const streamColor = s => (s === 'stock' ? C_STOCK : C_ACCENT);
 const mmdd = d => (d ? String(d).slice(5) : '');
 function DailyTrend({ rows, changes = [] }) {
   if (!rows || rows.length < 2) return <div className="so-sub" style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)', padding: '20px 0' }}>Not enough days in this range yet — widen it.</div>;
@@ -90,8 +91,8 @@ function DailyTrend({ rows, changes = [] }) {
         {row('Checkout', d.checkout.toLocaleString('en-IN'))}
         {row('Purchases', d.purchases.toLocaleString('en-IN'))}
         {chg.map(c => (
-          <div key={c.id} style={{ display: 'flex', gap: 6, marginTop: 5, paddingTop: 5, borderTop: `1px solid ${C_GRID}`, color: C_ACCENT, maxWidth: 230 }}>
-            <span>▸</span><span style={{ color: '#F2F3F0', whiteSpace: 'normal' }}>{c.title}{c.result && c.result !== 'pending' ? ` · ${c.result}` : ''}</span>
+          <div key={c.id} style={{ display: 'flex', gap: 6, marginTop: 5, paddingTop: 5, borderTop: `1px solid ${C_GRID}`, color: streamColor(c.stream), maxWidth: 230 }}>
+            <span>{c.stream === 'stock' ? '■' : '▸'}</span><span style={{ color: '#F2F3F0', whiteSpace: 'normal' }}>{c.title}{c.result && c.result !== 'pending' ? ` · ${c.result}` : ''}</span>
           </div>
         ))}
       </div>
@@ -107,10 +108,86 @@ function DailyTrend({ rows, changes = [] }) {
         <YAxis tickFormatter={v => `${v}%`} tick={{ fill: C_T2, fontSize: 11, fontFamily: 'var(--mono)' }} axisLine={false} tickLine={false} width={44} />
         <Tooltip content={<TT />} cursor={{ stroke: '#FFFFFF', strokeOpacity: 0.3, strokeWidth: 1 }} />
         <ReferenceLine y={avg} stroke={C_T3} strokeDasharray="5 5" label={{ value: `avg ${avg.toFixed(2)}%`, position: 'right', fill: C_T3, fontSize: 10, fontFamily: 'var(--mono)' }} />
-        {markedDates.map(dt => <ReferenceLine key={dt} x={dt} stroke={C_ACCENT} strokeDasharray="3 3" strokeOpacity={0.5} />)}
+        {markedDates.map(dt => {
+          const hasWeb = (byDate[dt] || []).some(c => (c.stream || 'website') !== 'stock');
+          return <ReferenceLine key={dt} x={dt} stroke={hasWeb ? C_ACCENT : C_STOCK} strokeDasharray="3 3" strokeOpacity={0.5} />;
+        })}
         <Area type="monotone" dataKey="cr" stroke={C_GREEN} strokeWidth={2} fill="url(#cr-grad)" dot={false} activeDot={{ r: 4, fill: C_GREEN }} />
       </AreaChart>
     </ResponsiveContainer>
+  );
+}
+
+// Attribution / driver panel (layer d): notable CR days with their nearby driver events (each
+// carrying a measured before/after CR effect), plus a "driver library" of every event by impact.
+// Heuristic time-proximity — correlation, not proof (labeled). streamDot colours website vs stock.
+const STREAM_C = { website: 'var(--accent)', stock: '#2DA8F0' };
+const streamDot = s => <span className="so-dot" style={{ background: STREAM_C[s] || 'var(--t3)', marginRight: 6, flexShrink: 0 }} />;
+const fmtPP = v => (v == null ? '—' : `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)}pp`);
+const gapLabel = g => (g === 0 ? 'same day' : g > 0 ? `+${g}d` : `${g}d`);
+function DriversPanel({ drivers }) {
+  const [tab, setTab] = useState('byday');   // byday | library
+  if (!drivers) return null;
+  const days = drivers.days || [], library = drivers.library || [], st = drivers.settings || {};
+  // group the flat (day × event) rows by date
+  const byDay = [];
+  const seen = {};
+  for (const r of days) {
+    let g = seen[r.the_date];
+    if (!g) { g = seen[r.the_date] = { date: r.the_date, cr: r.cr, dev: r.deviation_pct, events: [] }; byDay.push(g); }
+    if (r.event_id) g.events.push(r);
+  }
+  const impC = v => (v == null ? 'var(--t3)' : v > 0 ? 'var(--green)' : v < 0 ? '#EC6A5E' : 'var(--t3)');
+  return (
+    <div className="so-card">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
+        <div className="so-kpi-lbl" style={{ margin: 0 }}>Likely drivers <span className="so-sub" style={{ fontSize: 10.5, textTransform: 'none', letterSpacing: 0 }}>· why conversion moved (±{st.window_days ?? 2}d · correlation, not proof)</span></div>
+        <SegmentedToggle options={[['byday', 'By day'], ['library', 'Driver library']]} value={tab} onChange={setTab} size="sm" />
+      </div>
+      {tab === 'byday' ? (
+        byDay.length === 0 ? <div className="so-sub" style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>No notable conversion moves in this range (CR stayed within ±{st.notable_pct ?? 15}% of its 7-day average).</div> : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {byDay.map(d => (
+              <div key={d.date} style={{ borderBottom: '1px solid var(--surface2)', paddingBottom: 9 }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t1)', width: 88, flexShrink: 0 }}>{d.date}</span>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 12.5, color: 'var(--green)' }}>{fmtPct(d.cr)}</span>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, fontWeight: 600, color: d.dev >= 0 ? 'var(--green)' : '#EC6A5E' }}>{d.dev >= 0 ? '▲' : '▼'} {Math.abs(d.dev).toFixed(0)}% vs 7-day avg</span>
+                </div>
+                {d.events.length === 0
+                  ? <div className="so-sub" style={{ fontSize: 11, marginTop: 3, marginLeft: 98 }}>no known driver near this day</div>
+                  : (
+                    <div style={{ marginTop: 5, marginLeft: 98, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      {d.events.map(e => (
+                        <div key={e.event_id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          {streamDot(e.event_stream)}
+                          <span style={{ fontSize: 12.5, color: 'var(--t1)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.event_title}</span>
+                          <span className="so-sub" style={{ fontFamily: 'var(--mono)', fontSize: 10.5, flexShrink: 0 }}>{gapLabel(e.day_gap)}</span>
+                          <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, fontWeight: 600, width: 66, textAlign: 'right', flexShrink: 0, color: impC(e.impact_pp) }}>{fmtPP(e.impact_pp)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+              </div>
+            ))}
+          </div>
+        )
+      ) : (
+        library.length === 0 ? <div className="so-sub" style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)' }}>No events in this range yet.</div> : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div className="so-sub" style={{ fontSize: 10.5, marginBottom: 2 }}>Every event by its measured {st.impact_days ?? 3}-day before/after CR effect.</div>
+            {library.map(e => (
+              <div key={e.event_id} style={{ display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid var(--surface2)', paddingBottom: 6 }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t2)', width: 80, flexShrink: 0 }}>{e.the_date}</span>
+                {streamDot(e.stream)}
+                <span style={{ fontSize: 12.5, color: 'var(--t1)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.title}{e.result && e.result !== 'pending' ? <span className="so-sub" style={{ marginLeft: 8, fontSize: 10.5 }}>{e.result}</span> : null}</span>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, fontWeight: 600, width: 66, textAlign: 'right', flexShrink: 0, color: impC(e.impact_pp) }}>{fmtPP(e.impact_pp)}</span>
+              </div>
+            ))}
+          </div>
+        )
+      )}
+    </div>
   );
 }
 
@@ -122,13 +199,14 @@ export default function FunnelPage() {
   const [rows, setRows] = useState(null);
   const [pay, setPay] = useState(null);   // { funnel, recon } — checkout payment funnel (Razorpay)
   const [hist, setHist] = useState(null);  // daily conversion-history snapshot rows
-  const [changes, setChanges] = useState([]);  // website-change events (timeline annotations)
+  const [changes, setChanges] = useState([]);  // change events (website + stock) — timeline annotations
+  const [drivers, setDrivers] = useState(null);  // { days, library, settings } — attribution (layer d)
   const [view, setView] = useState('overview');  // overview | history
   const [err, setErr] = useState('');
 
   useEffect(() => {
     if (!session) return;
-    setRows(null); setPay(null); setHist(null); setChanges([]); setErr('');
+    setRows(null); setPay(null); setHist(null); setChanges([]); setDrivers(null); setErr('');
     salesGet('getTraffic', { from, to }, session)
       .then(t => setRows(t?.rows || []))
       .catch(e => setErr(e.message || String(e)));
@@ -141,6 +219,9 @@ export default function FunnelPage() {
     salesGet('getChangeEvents', { from, to }, session)
       .then(c => setChanges(c?.rows || []))
       .catch(() => setChanges([]));
+    salesGet('getConversionDrivers', { from, to }, session)
+      .then(d => setDrivers(d || { days: [], library: [], settings: {} }))
+      .catch(() => setDrivers({ days: [], library: [], settings: {} }));
   }, [session, from, to]);
 
   const sum = k => (rows || []).reduce((a, r) => a + Number(r[k] || 0), 0);
@@ -236,16 +317,17 @@ export default function FunnelPage() {
                 </table>
               </div>
             </div>
+            <DriversPanel drivers={drivers} />
             {changes.length > 0 && (
               <div className="so-card">
-                <div className="so-kpi-lbl" style={{ marginBottom: 10 }}>Website changes in range · <span style={{ color: 'var(--t3)' }}>what shipped</span></div>
+                <div className="so-kpi-lbl" style={{ marginBottom: 10 }}>Changes &amp; events in range · <span style={{ color: 'var(--t3)' }}>what shipped / stock moves</span></div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
                   {changes.slice().sort((a, b) => (a.the_date < b.the_date ? 1 : -1)).map(c => (
                     <div key={c.id} style={{ display: 'flex', gap: 12, alignItems: 'baseline', borderBottom: '1px solid var(--surface2)', paddingBottom: 8 }}>
                       <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--t2)', width: 88, flexShrink: 0 }}>{c.the_date}</span>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 13, color: 'var(--t1)' }}>{c.title}
-                          {c.workstream && <span className="so-sub" style={{ marginLeft: 8, fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 0.4 }}>{c.workstream}{c.surface ? ` · ${c.surface}` : ''}</span>}
+                        <div style={{ fontSize: 13, color: 'var(--t1)', display: 'flex', alignItems: 'center' }}>{streamDot(c.stream)}<span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.title}</span>
+                          {c.workstream && c.workstream !== 'stock' && <span className="so-sub" style={{ marginLeft: 8, fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 0.4, flexShrink: 0 }}>{c.workstream}{c.surface ? ` · ${c.surface}` : ''}</span>}
                         </div>
                         {c.hypothesis && <div className="so-sub" style={{ fontSize: 11.5, marginTop: 2 }}>{c.hypothesis}</div>}
                       </div>
@@ -258,7 +340,7 @@ export default function FunnelPage() {
                 </div>
               </div>
             )}
-            <div className="so-sub" style={{ fontSize: 10.5, color: 'var(--t3)' }}>Frozen daily snapshot of the GA4 website funnel — recent days refresh as GA4 finalises, older days lock. Markers = website changes (pulled from the Website repo&apos;s change-log); stock in/out lands next.</div>
+            <div className="so-sub" style={{ fontSize: 10.5, color: 'var(--t3)' }}>Frozen daily snapshot of the GA4 website funnel — recent days refresh as GA4 finalises, older days lock. Markers: <span style={{ color: 'var(--accent)' }}>▸ website changes</span> (from the Website repo change-log) · <span style={{ color: '#2DA8F0' }}>■ stock in/out</span> (native Shopify inventory, forward-only). Likely drivers are heuristic time-proximity — correlation, not proof.</div>
           </>
         )
       ) : (
