@@ -5,7 +5,7 @@ import {
   ArrowLeftRight,
   Undo2, ScanLine, Edit3, Wrench,
   CalendarClock, LayoutGrid, ClipboardList, QrCode, Printer,
-  BookOpen, History,
+  BookOpen, History, Coins,
 } from 'lucide-react';
 
 /* ════════════════════════════════════════════════════════════
@@ -54,6 +54,14 @@ export const NAV_PRIMARY = [
     children: [
       { id: 'prod-history', label: 'Production History', route: '/production-history', icon: History },
       { id: 'reporting',    label: 'Reporting',          route: '/reporting',          icon: BarChart3 },
+    ],
+  },
+  {
+    id: 'costs', label: 'Costs', icon: Coins, perm: 'factory_cost_view',
+    children: [
+      { id: 'costs-daily',   label: 'Daily Cost',    route: '/costs',              icon: Coins },
+      { id: 'costs-monthly', label: 'Monthly Cost',  route: '/costs/monthly',      icon: BarChart3 },
+      { id: 'productivity',  label: 'Productivity',  route: '/costs/productivity', icon: Users },
     ],
   },
   {
