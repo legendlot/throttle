@@ -10,6 +10,22 @@ const numfmt = n => Number(n || 0).toLocaleString('en-IN');
 const pctOf = (n, d) => (d > 0 ? (n / d * 100) : 0);
 const fmtPct = n => `${+Number(n || 0).toFixed(2)}%`;   // up to 2 decimals, no trailing zeros
 
+// Per-cell day-over-day ticker: ▲/▼ (+ % change) of this column vs the PREVIOUS DAY's value.
+// Green = above yesterday, red = below, grey dash = unchanged. `prev` is the prior day's cell
+// value (null on the first day / when the prior day isn't in range → renders nothing).
+function Tick({ now, prev }) {
+  if (prev == null || prev === '') return null;
+  const n = Number(now) || 0, p = Number(prev) || 0;
+  if (n === p) return <span style={{ marginLeft: 6, fontFamily: 'var(--mono)', fontSize: 9.5, color: 'var(--t3)' }}>–</span>;
+  const up = n > p;
+  const pct = p !== 0 ? Math.abs((n - p) / p * 100) : 100;
+  return (
+    <span style={{ marginLeft: 6, fontFamily: 'var(--mono)', fontSize: 9.5, color: up ? 'var(--green)' : '#EC6A5E', whiteSpace: 'nowrap' }}>
+      {up ? '▲' : '▼'}{pct >= 0.5 ? ` ${pct.toFixed(pct < 10 ? 1 : 0)}%` : ''}
+    </span>
+  );
+}
+
 // Stepped conversion funnel: each stage's bar is sized to its share of Sessions, with the
 // step-to-step conversion rate called out between stages. The drop-off is the story.
 function Funnel({ steps }) {
@@ -140,6 +156,10 @@ export default function FunnelPage() {
 
   const srcSort = useTableSort(rows, { initialKey: 'sessions', valueOf: (r, k) => k === 'conv' ? (Number(r.sessions) > 0 ? Number(r.purchases) / Number(r.sessions) : 0) : k === 'src_group' ? (r.src_group || '') : r[k] });
   const histSort = useTableSort(hist, { initialKey: 'the_date', initialDir: 'desc' });
+  // Previous-DAY lookup for the daily-funnel tickers — keyed by date (chronological), so the
+  // ▲/▼ always compares to the day before regardless of how the table is currently sorted.
+  const prevByDate = {};
+  { const chron = [...(hist || [])].sort((a, b) => (a.the_date < b.the_date ? -1 : 1)); chron.forEach((r, i) => { if (i > 0) prevByDate[r.the_date] = chron[i - 1]; }); }
 
   return (
     <div className="so-page">
@@ -184,7 +204,7 @@ export default function FunnelPage() {
               })()}
             </div>
             <div className="so-card" style={{ padding: 0, overflow: 'hidden' }}>
-              <div className="so-kpi-lbl" style={{ padding: '16px 18px 0' }}>Daily funnel</div>
+              <div className="so-kpi-lbl" style={{ padding: '16px 18px 0' }}>Daily funnel <span className="so-sub" style={{ fontSize: 10, textTransform: 'none', letterSpacing: 0 }}>· <span style={{ color: 'var(--green)' }}>▲</span>/<span style={{ color: '#EC6A5E' }}>▼</span> vs previous day</span></div>
               <div style={{ overflowX: 'auto' }}>
                 <table className="so-table" style={{ marginTop: 8 }}>
                   <thead><tr>
@@ -198,17 +218,20 @@ export default function FunnelPage() {
                   </tr></thead>
                   <tbody>
                     {histSort.sorted.length === 0 && <tr><td colSpan={7} style={{ color: 'var(--t3)', padding: 14 }}>No snapshot days in this range yet.</td></tr>}
-                    {histSort.sorted.map(r => (
+                    {histSort.sorted.map(r => {
+                      const prev = prevByDate[r.the_date];
+                      return (
                       <tr key={r.the_date}>
                         <td style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>{r.the_date}</td>
-                        <td className="so-num">{numfmt(r.sessions)}</td>
-                        <td className="so-num">{numfmt(r.add_to_carts)}</td>
-                        <td className="so-num">{numfmt(r.checkouts)}</td>
-                        <td className="so-num">{numfmt(r.purchases)}</td>
-                        <td className="so-num">{fmtPct(r.atc_rate)}</td>
-                        <td className="so-num" style={{ color: 'var(--green)' }}>{fmtPct(r.purchase_cr)}</td>
+                        <td className="so-num">{numfmt(r.sessions)}<Tick now={r.sessions} prev={prev?.sessions} /></td>
+                        <td className="so-num">{numfmt(r.add_to_carts)}<Tick now={r.add_to_carts} prev={prev?.add_to_carts} /></td>
+                        <td className="so-num">{numfmt(r.checkouts)}<Tick now={r.checkouts} prev={prev?.checkouts} /></td>
+                        <td className="so-num">{numfmt(r.purchases)}<Tick now={r.purchases} prev={prev?.purchases} /></td>
+                        <td className="so-num">{fmtPct(r.atc_rate)}<Tick now={r.atc_rate} prev={prev?.atc_rate} /></td>
+                        <td className="so-num" style={{ color: 'var(--green)' }}>{fmtPct(r.purchase_cr)}<Tick now={r.purchase_cr} prev={prev?.purchase_cr} /></td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
