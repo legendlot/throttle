@@ -141,8 +141,13 @@ export function SegmentedToggle({ options, value, onChange, size = 'md' }) {
 // onChange({ from, to, preset }). `right` renders extra controls flush-right on the same row.
 export function RangePicker({ from, to, onChange, right }) {
   const activePreset = PRESETS.find(p => p.from === from && p.to === to)?.key || '';
+  // Sticky filter bar: pins to the top of the scrolling area (.so-scroll) so the range controls
+  // stay reachable while the page scrolls. top:-26px cancels .so-scroll's 26px top padding so the
+  // bar pins FLUSH under the app header (top:0 would pin at the padding edge, leaving a 26px gap
+  // where cards peek through). Opaque --bg + bottom border so content scrolls under a clean edge;
+  // z-index above cards but below portal popovers (.so-pop = 40).
   return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
+    <div style={{ position: 'sticky', top: -26, zIndex: 30, background: 'var(--bg)', borderBottom: '1px solid var(--border)', padding: '10px 0', display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
       <div className="so-seg">
         {PRESETS.map(p => (
           <button key={p.key} className={activePreset === p.key ? 'on' : ''}

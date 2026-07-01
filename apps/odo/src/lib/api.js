@@ -35,13 +35,19 @@ export function rangePresets() {
   const pad = n => String(n).padStart(2, '0');
   const mtd = `${y}-${pad(m + 1)}-01`;
   const fy = `${m >= 3 ? y : y - 1}-04-01`;
+  // Last calendar month (full 1st→last day of the previous month, IST).
+  const lmY = m === 0 ? y - 1 : y, lmM = m === 0 ? 11 : m - 1;   // 0-indexed prev month
+  const lmFrom = `${lmY}-${pad(lmM + 1)}-01`;
+  const lmLast = new Date(Date.UTC(lmY, lmM + 1, 0)).getUTCDate();   // day 0 of next month = last day
+  const lmTo = `${lmY}-${pad(lmM + 1)}-${pad(lmLast)}`;
   return [
-    { key: 'today', label: 'Today', from: to, to },
-    { key: '7d',    label: '7D',    from: istDaysAgo(6),  to },
-    { key: '30d',   label: '30D',   from: istDaysAgo(29), to },
-    { key: '90d',   label: '90D',   from: istDaysAgo(89), to },
-    { key: 'mtd',   label: 'MTD',   from: mtd, to },
-    { key: 'fy',    label: 'FY',    from: fy,  to },
+    { key: 'today', label: 'Today',   from: to, to },
+    { key: '7d',    label: '7D',      from: istDaysAgo(6),  to },
+    { key: '30d',   label: '30D',     from: istDaysAgo(29), to },
+    { key: '90d',   label: '90D',     from: istDaysAgo(89), to },
+    { key: 'mtd',   label: 'MTD',     from: mtd, to },
+    { key: 'lm',    label: 'Last mo', from: lmFrom, to: lmTo },
+    { key: 'fy',    label: 'FY',      from: fy,  to },
   ];
 }
 
