@@ -7,13 +7,15 @@ import { LayoutDashboard, Receipt, Store, Boxes, Megaphone, Filter, GitMerge, Pl
 import { FAMILY_ORDER, FAMILIES } from '../../lib/families.js';
 
 const CHANNEL_CHILDREN = FAMILY_ORDER.map(k => ({ route: `/channels/${k}`, label: FAMILIES[k].label }));
+const PRODUCT_CHILDREN = [{ route: '/products/drr', label: 'DRR' }, { route: '/products/pnl', label: 'P&L' }];
+const PNL_CHILDREN = [{ route: '/pnl/overall', label: 'Overall' }, ...FAMILY_ORDER.map(k => ({ route: `/pnl/${k}`, label: FAMILIES[k].label }))];
 
 const NAV = [
   { route: '/',            label: 'Dashboard',   icon: LayoutDashboard, perm: 'sales_view' },
   { route: '/performance', label: 'Performance', icon: Receipt,         perm: 'sales_view' },
-  { group: 'channels',     label: 'Channels',    icon: Store,           perm: 'sales_view', children: CHANNEL_CHILDREN },
-  { route: '/products',    label: 'Products',    icon: Boxes,           perm: 'sales_view' },
-  { route: '/pnl',         label: 'P&L',         icon: Landmark,        perm: 'sales_view' },
+  { group: 'channels',     base: '/channels',    label: 'Channels',    icon: Store,     perm: 'sales_view', children: CHANNEL_CHILDREN },
+  { group: 'products',     base: '/products',    label: 'Products',    icon: Boxes,     perm: 'sales_view', children: PRODUCT_CHILDREN },
+  { group: 'pnl',          base: '/pnl',         label: 'P&L',         icon: Landmark,  perm: 'sales_view', children: PNL_CHILDREN },
   { route: '/marketing',   label: 'Marketing',   icon: Megaphone,       perm: 'sales_view' },
   { route: '/funnel',      label: 'Funnel',      icon: Filter,          perm: 'sales_view' },
   { route: '/mapping',     label: 'Mapping',     icon: GitMerge,        perm: 'sales_view' },
@@ -30,16 +32,14 @@ function Shell({ children }) {
   const { user, perms, signOut, loading } = useAuth();
   const pathname = usePathname();
   const router = useRouter();
-  const [chOpen, setChOpen] = useState(false);
+  const [openGroups, setOpenGroups] = useState({});
   if (loading && !user) return <Spinner />;
   const P = perms || {};
   const can = (item) => !!P[item.perm] || !!P.salesops_admin || (item.adminAlt && !!P[item.adminAlt]);
   const items = NAV.filter(can);
   const active = (route) => route === '/' ? pathname === '/' : (pathname === route || pathname.startsWith(route + '/'));
-  const channelsActive = pathname.startsWith('/channels');
-  const channelsExpanded = chOpen || channelsActive;
-  const title = NAV.flatMap(n => n.group ? n.children : [n]).find(n => active(n.route))?.label
-    || (channelsActive ? 'Channels' : 'Odo');
+  const title = NAV.flatMap(n => n.children ? n.children : [n]).find(n => active(n.route))?.label
+    || NAV.find(n => n.children && pathname.startsWith(n.base))?.label || 'Odo';
 
   return (
     <div className="so-app">
@@ -51,14 +51,16 @@ function Shell({ children }) {
         <nav style={{ flex: 1, padding: '10px 0', overflowY: 'auto' }}>
           {items.map(it => {
             const Icon = it.icon;
-            if (it.group === 'channels') {
+            if (it.children) {
+              const gActive = pathname.startsWith(it.base);
+              const expanded = openGroups[it.group] ?? gActive;   // auto-open the active group
               return (
-                <div key="channels">
-                  <div className={`so-nav${channelsActive ? ' active' : ''}`} onClick={() => setChOpen(o => !o)} style={{ justifyContent: 'space-between' }}>
+                <div key={it.group}>
+                  <div className={`so-nav${gActive ? ' active' : ''}`} onClick={() => setOpenGroups(g => ({ ...g, [it.group]: !(g[it.group] ?? gActive) }))} style={{ justifyContent: 'space-between' }}>
                     <span style={{ display: 'flex', alignItems: 'center', gap: 11 }}><Icon size={16} /> {it.label}</span>
-                    {channelsExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                    {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                   </div>
-                  {channelsExpanded && it.children.map(c => (
+                  {expanded && it.children.map(c => (
                     <div key={c.route} className={`so-nav${active(c.route) ? ' active' : ''}`}
                       onClick={() => router.push(c.route)}
                       style={{ paddingLeft: 39, fontSize: 12.5 }}>
