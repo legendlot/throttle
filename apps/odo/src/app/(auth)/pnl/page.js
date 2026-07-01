@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
 import { salesGet, salesPost, istToday } from '../../../lib/api.js';
-import { RangePicker } from '../../../components/kit.js';
+import { RangePicker, SegmentedToggle } from '../../../components/kit.js';
 
 // P&L waterfall lines. kind: src=data-sourced · manual=editable · sub=computed subtotal. neg=subtracted.
 const LINES = [
@@ -40,12 +40,21 @@ function withSubtotals(r) {
 
 // One P&L table (master or a channel). editable = Set of manual line keys the user can edit here;
 // autoLines = manual keys shown but auto-sourced (e.g. Amazon fees from settlement) → read-only.
-function PnlTable({ title, subtitle, rows, months, lines, channelKey, editable, autoLines, session, isAdmin, onSaved, defaultOpen = true }) {
+function PnlTable({ title, subtitle, rows, months, lines, channelKey, editable, autoLines, session, isAdmin, onSaved, mode = 'abs', defaultOpen = true }) {
   const [open, setOpen] = useState(defaultOpen);
   const [edit, setEdit] = useState(null);   // {month,key}
   const [val, setVal] = useState('');
   const cols = months.map(m => withSubtotals(rows.find(r => r.month === m) || { month: m }));
   const total = {}; for (const L of lines) total[L.key] = cols.reduce((a, c) => a + (Number(c[L.key]) || 0), 0);
+  const pct = mode === 'pct';
+  const nmvByCol = cols.map(c => Number(c.nmv) || 0);            // % base = each month's NMV
+  const totalNmv = nmvByCol.reduce((a, b) => a + b, 0);
+  const cellText = (v, base, isSub, canEdit) => {
+    if (pct) return base ? `${(100 * v / base).toFixed(1)}%` : '—';
+    if (v === 0 && !isSub) return canEdit ? '—' : '0';
+    return rs(v);
+  };
+  const isMuted = (v, base, isSub) => (pct ? !base : (v === 0 && !isSub));
   const SUB_BG = 'color-mix(in srgb, var(--accent) 8%, transparent)';
   const save = async (m, key) => {
     setEdit(null);
@@ -70,7 +79,7 @@ function PnlTable({ title, subtitle, rows, months, lines, channelKey, editable, 
               {lines.map(L => {
                 const isSub = L.kind === 'sub';
                 const isAuto = autoLines && autoLines.has(L.key);
-                const canEdit = isAdmin && L.kind === 'manual' && editable && editable.has(L.key) && !isAuto;
+                const canEdit = !pct && isAdmin && L.kind === 'manual' && editable && editable.has(L.key) && !isAuto;
                 return (
                   <tr key={L.key} style={isSub ? { background: SUB_BG, fontWeight: 700 } : undefined}>
                     <td style={{ position: 'sticky', left: 0, zIndex: 1, background: isSub ? 'var(--surface2)' : 'var(--surface)', fontWeight: isSub ? 700 : 400, color: isSub ? 'var(--t1)' : 'var(--t2)', whiteSpace: 'nowrap' }}>
@@ -89,11 +98,11 @@ function PnlTable({ title, subtitle, rows, months, lines, channelKey, editable, 
                               value={val} onChange={e => setVal(e.target.value)}
                               onKeyDown={e => { if (e.key === 'Enter') save(m, L.key); if (e.key === 'Escape') setEdit(null); }}
                               onBlur={() => save(m, L.key)} />
-                          ) : (v === 0 && !isSub ? <span style={{ color: 'var(--t3)' }}>{canEdit ? '—' : '0'}</span> : rs(v))}
+                          ) : (isMuted(v, nmvByCol[i], isSub) ? <span style={{ color: 'var(--t3)' }}>{cellText(v, nmvByCol[i], isSub, canEdit)}</span> : cellText(v, nmvByCol[i], isSub, canEdit))}
                         </td>
                       );
                     })}
-                    <td className="so-num" style={{ borderLeft: '1px solid var(--border)', fontWeight: isSub ? 700 : 400, color: isSub ? (total[L.key] < 0 ? '#EC6A5E' : 'var(--green)') : 'var(--t1)' }}>{rs(total[L.key])}</td>
+                    <td className="so-num" style={{ borderLeft: '1px solid var(--border)', fontWeight: isSub ? 700 : 400, color: isSub ? (total[L.key] < 0 ? '#EC6A5E' : 'var(--green)') : 'var(--t1)' }}>{cellText(total[L.key], totalNmv, isSub, false)}</td>
                   </tr>
                 );
               })}
@@ -113,6 +122,7 @@ export default function PnlPage() {
   const [data, setData] = useState(null);
   const [costs, setCosts] = useState(null);
   const [showCosts, setShowCosts] = useState(false);
+  const [mode, setMode] = useState('abs');   // abs (₹) | pct (% of NMV)
   const [err, setErr] = useState('');
 
   useEffect(() => {   // default: trailing 6 months (first-of-month 5 back → today)
@@ -135,14 +145,14 @@ export default function PnlPage() {
   return (
     <div className="so-page">
       <RangePicker from={from} to={to} onChange={({ from, to }) => { setFrom(from); setTo(to); }}
-        right={<span className="so-sub">Monthly · master + per channel</span>} />
+        right={<><SegmentedToggle options={[['abs', '₹'], ['pct', '% of NMV']]} value={mode} onChange={setMode} size="sm" /><span className="so-sub" style={{ marginLeft: 10 }}>Monthly · master + per channel</span></>} />
       {err && <div className="so-card" style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12 }}>{err}</div>}
 
       {!data ? <div style={{ padding: 60, textAlign: 'center' }}><Spinner /></div> : (
         <>
-          <PnlTable title="Company P&amp;L" subtitle="all Odo channels · ₹ monthly" rows={data.master || []} months={months}
+          <PnlTable title="Company P&amp;L" subtitle={mode === 'pct' ? 'all Odo channels · % of NMV' : 'all Odo channels · ₹ monthly'} rows={data.master || []} months={months}
             lines={LINES} channelKey="all" editable={new Set(['brand_marketing', 'sga'])} autoLines={new Set()}
-            session={session} isAdmin={isAdmin} onSaved={load} />
+            session={session} isAdmin={isAdmin} onSaved={load} mode={mode} />
 
           <div className="so-sub" style={{ fontSize: 10.5, color: 'var(--t3)' }}>
             GMV = booked value (tax-incl, net of discounts) · COGS = units × standard cost · CAC = performance ad spend. <b style={{ color: 'var(--t2)' }}>Amazon Platform Fee + Logistics auto-feed from settlement</b> (lag a few weeks); other channels are manual until their connectors land (Delhivery for D2C, marketplace reports). RTO / Logistics / Platform Fee here are channel rollups — edit them in the channel tables below. Brand Marketing = manual; SG&A wired to Podium salaries (0 until live). Numbers cover Odo-captured channels only.
@@ -150,11 +160,11 @@ export default function PnlPage() {
 
           <div className="so-kpi-lbl" style={{ marginTop: 4 }}>By channel <span className="so-sub" style={{ fontSize: 10.5, textTransform: 'none', letterSpacing: 0 }}>· rolls up to CM2 (company overheads sit at company level)</span></div>
           {(data.families || []).map(f => (
-            <PnlTable key={f.key} title={f.label} subtitle="₹ monthly" rows={(data.channels || {})[f.key] || []} months={months}
+            <PnlTable key={f.key} title={f.label} subtitle={mode === 'pct' ? '% of NMV' : '₹ monthly'} rows={(data.channels || {})[f.key] || []} months={months}
               lines={CHANNEL_LINES} channelKey={f.key}
               editable={f.key === 'amazon' ? new Set(['rto']) : new Set(['rto', 'logistics', 'platform_fee'])}
               autoLines={f.key === 'amazon' ? AMZ_AUTO : new Set()}
-              session={session} isAdmin={isAdmin} onSaved={load} defaultOpen={false} />
+              session={session} isAdmin={isAdmin} onSaved={load} mode={mode} defaultOpen={false} />
           ))}
 
           {isAdmin && (
