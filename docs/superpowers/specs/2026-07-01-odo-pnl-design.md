@@ -56,6 +56,14 @@ from `sales_fact`; CAC from `mkt_fact`. Set-based (no per-row loops).
   (→ `setProductCost`, effective today). Non-admins see read-only.
 - A **cost-coverage note** — % of GMV whose SKUs have a cost entered (so COGS completeness is visible).
 
+## v2 (S189, same session) — channel-wise + real fee/COGS feeds
+- **Master + per-channel tables:** `f_pnl` gained `(p_channels uuid[], p_ad_platforms text[], p_channel_key)`; worker `getPnl` fans out per channel family (`PNL_FAMILIES` mirrors `families.js`) and builds master = Σ families + company Brand/SG&A. Channel tables roll up to **CM2** (overheads are company-level).
+- **Amazon auto-feeds** from `settlement_fact` (fees stored negative → negated): Platform Fee = −(commission+other+refund), Logistics = −(fba+storage); `fee_advertising` excluded (it's in CAC). Payout-dated (lags sale ~weeks).
+- **CAC attribution:** amazon→Amazon, meta+google→Website, others 0 (heuristic; refine with a channel↔ad-account map later).
+- **`pnl_manual` channel dimension:** PK `(month, channel_key, line_key)`; `channel_key='all'` = company-level (Brand/SG&A), else a family key. Admin inline-edits per channel; Amazon Platform Fee/Logistics render `auto` (read-only).
+- **SG&A→Podium seam:** `f_pnl_sga` returns manual `all` SG&A unless `sales.settings 'pnl_sga_source'='podium'`, then `f_podium_salary_run(month)` (STUB=0; body to sum `podium.compensation_events`⋈`employees` ex-`factory_workforce`, /12).
+- **COGS seeded** from the costing sheet's Total COGS (all-in), family-applied to every SKU: 28 families / 119 SKUs, 99.6% of units costed. Effective `2025-04-01`. Migration `odo_pnl_channel_v2`.
+
 ## Deferred / follow-ups
 Per-channel P&L; Amazon auto-feeds (Platform Fee ← `settlement_fact`, RTO ← returns classification);
 Logistics/Brand/SG&A auto-feeds; OOS-lost-sales; derived BOM costing; effective-dated cost history UI
