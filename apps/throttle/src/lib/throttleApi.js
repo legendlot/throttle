@@ -310,6 +310,19 @@ export async function submitForReview(session, taskId, link, label) {
 export async function addTaskToSprint(session, taskId, sprintId) {
   return workerFetch('addTaskToSprint', { task_id: taskId, sprint_id: sprintId }, session.access_token);
 }
+// Start-of-week Thursday (the current Thu→Wed sprint week), 'YYYY-MM-DD'.
+// The worker's createSprint hard-requires a Thursday start_date.
+export function currentSprintThursday(d = new Date()) {
+  const dt = new Date(d);
+  const back = (dt.getDay() - 4 + 7) % 7; // days since the most recent Thursday
+  dt.setDate(dt.getDate() - back);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+}
+// Creates the current week's sprint (status 'active', auto-named by the worker).
+// Used by the planner when no active/planned sprint exists yet.
+export async function createSprint(session, startDate, name) {
+  return workerFetch('createSprint', { start_date: startDate || currentSprintThursday(), name }, session.access_token);
+}
 // ── assignment / abandon ─────────────────────────────────────────
 // NB worker routes by URL ?action=assignTask; the sub-action travels as body.action
 // (workerFetch's `{ action, ...body }` spread lets our body.action win — see workerFetch.js).

@@ -16,7 +16,7 @@ import { Card, Pill, Avatar, ProductTag, PrimaryBtn, SectionHead, TONE } from '@
 import { TaskDrawer } from '@/components/throttle/TaskDrawer';
 import { toast } from '@/components/throttle/ToastHost';
 import { SPRINTS, CAPACITY, PLAN_BACKLOG, DTYPE, PRIORITY, teamById, TEAM } from '@/lib/throttleData';
-import { fetchSprints, fetchDashboardStats, fetchTeamWorkload, fetchUsers, fetchTasks, addTaskToSprint, moveTaskStage } from '@/lib/throttleApi';
+import { fetchSprints, fetchDashboardStats, fetchTeamWorkload, fetchUsers, fetchTasks, addTaskToSprint, createSprint, moveTaskStage } from '@/lib/throttleApi';
 
 function PlanCard({ task, where, onStage, onOpen }) {
   const pr = PRIORITY[task.priority] || PRIORITY.medium;
@@ -73,14 +73,29 @@ function SprintPlanner({ onClose, sprint, backlog, usersById, members = [], role
   const commit = async () => {
     if (!staged.length) { toast('Drag tasks in before committing.', 'warn', 'alert'); return; }
     if (!canPlan) { toast('Only leads and admins can plan sprints.', 'bad', 'alert'); return; }
-    if (!sprint?.id || !session) { toast(`Sprint planned · ${staged.length} task${staged.length === 1 ? '' : 's'}`, 'ok', 'check'); onClose(); return; }
+    // Seed/non-live mode has no session — keep the demo toast.
+    if (!session) { toast(`Sprint planned · ${staged.length} task${staged.length === 1 ? '' : 's'}`, 'ok', 'check'); onClose(); return; }
     setBusy(true);
+    // No active/planned sprint exists (all closed) → start this week's sprint first,
+    // otherwise the committed tasks have nowhere to land (silently lost before this fix).
+    let sprintId = sprint?.id;
+    if (!sprintId) {
+      try {
+        const res = await createSprint(session);
+        sprintId = res?.sprint?.id;
+      } catch (e) {
+        setBusy(false);
+        toast('Could not start a sprint: ' + (e.message || 'error'), 'bad', 'alert');
+        return;
+      }
+      if (!sprintId) { setBusy(false); toast('Could not start a sprint — try again.', 'bad', 'alert'); return; }
+    }
     let ok = 0, fail = 0;
     for (const id of staged) {
-      try { await addTaskToSprint(session, id, sprint.id); ok++; } catch (_) { fail++; }
+      try { await addTaskToSprint(session, id, sprintId); ok++; } catch (_) { fail++; }
     }
     setBusy(false);
-    toast(fail ? `Committed ${ok}, ${fail} failed` : `Sprint ${sprint.shortId || ''} planned · ${ok} task${ok === 1 ? '' : 's'} committed`, fail ? 'warn' : 'ok', fail ? 'alert' : 'check');
+    toast(fail ? `Committed ${ok}, ${fail} failed` : `Sprint ${sprint?.shortId || ''} planned · ${ok} task${ok === 1 ? '' : 's'} committed`, fail ? 'warn' : 'ok', fail ? 'alert' : 'check');
     onCommitted && onCommitted();
     onClose();
   };
