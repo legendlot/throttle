@@ -263,10 +263,16 @@ function allowedTransitions(stage) {
 // ── Util ────────────────────────────────────────────────────────────────────
 
 function pickPatch(body, allowed) {
-  if (!body || typeof body.patch !== 'object') return {};
+  if (!body) return {};
+  // Accept BOTH shapes: an explicit { patch: {...} } wrapper (updateCampaign) OR
+  // fields sent flat on the body (updateEngagement performance/compliance, ugc,
+  // updateInfluencer identity/archive). Explicit patch wins when present. (S191 —
+  // fixes the "no_patch" error Reann hit adding performance stats + ticking the
+  // compliance boxes: those callers send fields flat, but this only read body.patch.)
+  const src = (body.patch && typeof body.patch === 'object') ? body.patch : body;
   const patch = {};
   for (const k of allowed) {
-    if (k in body.patch) patch[k] = body.patch[k];
+    if (k in src) patch[k] = src[k];
   }
   return patch;
 }

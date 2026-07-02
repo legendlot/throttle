@@ -22,6 +22,7 @@ export default function NewEngagementPage() {
     payment_terms: 'on_release',
     payment_amount: 0,
     directed_to: 'website',
+    expected_post_date: '',
     poc_user_id: null,
     poc_name: null,
   });
@@ -40,12 +41,14 @@ export default function NewEngagementPage() {
     setBusy(true);
     try {
       const products = linesToPayload(lines);
-      const res = await ignitionopsPost('createEngagement', {
+      const payload = {
         influencer_id: selected.id,
         ...form,
         payment_amount: Number(form.payment_amount) || 0,
         ...(products.length ? { products } : {}),
-      }, session);
+      };
+      if (!payload.expected_post_date) delete payload.expected_post_date;
+      const res = await ignitionopsPost('createEngagement', payload, session);
       toast(`Created ${res.engagement_no}`, 'success');
       router.push(`/engagements/detail/?id=${res.id}`);
     } catch (e) { toast(e.message, 'error'); }
@@ -128,6 +131,9 @@ export default function NewEngagementPage() {
               <option value="amazon">Amazon</option>
               <option value="flipkart">Flipkart</option>
             </select>
+          </Field>
+          <Field label="Expected post date">
+            <input type="date" value={form.expected_post_date} onChange={e => setField('expected_post_date', e.target.value)} style={inputStyle('100%')} />
           </Field>
           <Field label="POC">
             <PocSelect
