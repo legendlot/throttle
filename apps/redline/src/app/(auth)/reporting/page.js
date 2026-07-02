@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Lock, Download } from 'lucide-react';
 import { useAuth } from '@throttle/auth';
-import { garageFetch } from '@throttle/db';
+import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer,
@@ -97,6 +97,8 @@ export default function ReportingPage() {
   // Anyone with reports, production_view, or users_manage can view.
   const canViewReporting = !!(perms?.reports || perms?.production_view || perms?.users_manage);
   const canViewFinance   = !!perms?.reports_finance;
+  // Attendance & OT (salary) — mirrors the worker's canManageFloor gate on getAttendanceSalary*.
+  const canViewAttendance = !!(perms?.users_manage || perms?.production_view || perms?.procurement_approve || perms?.damage_manage);
 
   const [preset,     setPreset]     = useState('10days');
   const [dateFrom,   setDateFrom]   = useState('');
@@ -112,6 +114,10 @@ export default function ReportingPage() {
   const [taktData,   setTaktData]   = useState(null);
   const [loading,    setLoading]    = useState(false);
   const [taktLoading,setTaktLoading]= useState(false);
+
+  const [attData,    setAttData]    = useState(null);   // salary summary rows (per operator)
+  const [attLoading, setAttLoading] = useState(false);
+  const [attDetailBusy, setAttDetailBusy] = useState(false);
 
   const [prodView,   setProdView]   = useState('product');
   const [defView,    setDefView]    = useState('code');
@@ -181,9 +187,50 @@ export default function ReportingPage() {
     }
   }, [section, taktData, dateFrom, dateTo, session]);
 
+  // ── Attendance & OT (salary) — load per selected range ──
+  useEffect(() => {
+    if (section !== 'attendance' || !dateFrom || !dateTo || !session || !canViewAttendance) return;
+    let cancelled = false;
+    setAttLoading(true);
+    workerFetch('getAttendanceSalaryReport', { data: { start: dateFrom, end: dateTo } }, session)
+      .then(res => { if (!cancelled) setAttData(Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : [])); })
+      .catch(() => { if (!cancelled) setAttData([]); })
+      .finally(() => { if (!cancelled) setAttLoading(false); });
+    return () => { cancelled = true; };
+  }, [section, dateFrom, dateTo, session, canViewAttendance]);
+
   const periodLabel = (dateFrom && dateTo)
     ? `${fmtMonthDay(dateFrom)} – ${fmtMonthDay(dateTo)}`
     : '';
+
+  // ── Attendance & OT CSV downloads ────────────────────────
+  function downloadAttendanceSummary() {
+    const rows = (attData || []).map(r => ({
+      employee_id: r.employee_id, name: r.operator_name, department: r.department, team: r.team,
+      employment_type: r.employment_type, present_days: r.present_days, half_days: r.half_days,
+      payable_days: r.payable_days, sundays_worked: r.sundays_worked, ot_hours: r.ot_hours,
+      ot_minutes: r.ot_minutes, late_minutes: r.late_minutes, absent_days: r.absent_days,
+      first_present: r.first_present || '', last_present: r.last_present || '',
+    }));
+    const ok = downloadCsv(`attendance-ot-summary-${dateFrom}_to_${dateTo}.csv`, rows,
+      ['employee_id','name','department','team','employment_type','present_days','half_days','payable_days','sundays_worked','ot_hours','ot_minutes','late_minutes','absent_days','first_present','last_present']);
+    if (!ok) showToast('No attendance data to download', 'error');
+  }
+  async function downloadAttendanceDetail() {
+    if (attDetailBusy) return;
+    setAttDetailBusy(true);
+    try {
+      const res = await workerFetch('getAttendanceSalaryDetail', { data: { start: dateFrom, end: dateTo } }, session);
+      const rows = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : []);
+      const ok = downloadCsv(`attendance-ot-detail-${dateFrom}_to_${dateTo}.csv`, rows,
+        ['employee_id','operator_name','department','team','date','clock_in_ist','clock_out_ist','open_shift','ot_minutes','late_minutes','day_status','auto_closed']);
+      if (!ok) showToast('No attendance detail to download', 'error');
+    } catch {
+      showToast('Failed to build detail export', 'error');
+    } finally {
+      setAttDetailBusy(false);
+    }
+  }
 
   // ── Production: aggregations ─────────────────────────────
   const prodAggs = useMemo(() => {
@@ -359,6 +406,7 @@ export default function ReportingPage() {
     { id: 'cycle',       label: 'Cycle Time' },
     { id: 'defects',     label: 'Defects' },
     { id: 'throughput',  label: 'Throughput' },
+    ...(canViewAttendance ? [{ id: 'attendance', label: 'Attendance & OT' }] : []),
     { id: 'downloads',   label: 'Downloads' },
   ];
 
@@ -406,7 +454,7 @@ export default function ReportingPage() {
         </div>
       )}
 
-      {loading && section !== 'downloads' && (
+      {loading && section !== 'downloads' && section !== 'attendance' && (
         <div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}><Spinner /></div>
       )}
 
@@ -421,6 +469,16 @@ export default function ReportingPage() {
       )}
       {section === 'throughput' && (
         <ThroughputSection taktAggs={taktAggs} taktLoading={taktLoading} />
+      )}
+      {section === 'attendance' && (
+        <AttendanceSection
+          data={attData}
+          loading={attLoading}
+          onDownloadSummary={downloadAttendanceSummary}
+          onDownloadDetail={downloadAttendanceDetail}
+          detailBusy={attDetailBusy}
+          periodLabel={periodLabel}
+        />
       )}
       {section === 'downloads' && (
         <DownloadsSection
@@ -791,6 +849,85 @@ function ThroughputSection({ taktAggs, taktLoading }) {
 }
 
 // ── Downloads section ────────────────────────────────────────
+// ── Attendance & OT (salary) section ─────────────────────────
+function AttendanceSection({ data, loading, onDownloadSummary, onDownloadDetail, detailBusy, periodLabel }) {
+  const [q, setQ] = useState('');
+  if (loading) {
+    return <div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}><Spinner /></div>;
+  }
+  const rows = data || [];
+  const totals = rows.reduce((a, r) => {
+    a.present += Number(r.present_days) || 0;
+    a.ot      += Number(r.ot_hours) || 0;
+    a.sun     += Number(r.sundays_worked) || 0;
+    return a;
+  }, { present: 0, ot: 0, sun: 0 });
+  const ql = q.trim().toLowerCase();
+  const shown = ql
+    ? rows.filter(r => `${r.employee_id || ''} ${r.operator_name || ''} ${r.department || ''} ${r.team || ''}`.toLowerCase().includes(ql))
+    : rows;
+
+  return (
+    <>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 16 }}>
+        <KpiTile label="Operators"      value={fmt(rows.length)}      tone="brand" />
+        <KpiTile label="Present-days"   value={fmt(totals.present)} />
+        <KpiTile label="OT hours"       value={totals.ot.toFixed(1)}  tone="ok" />
+        <KpiTile label="Sundays worked" value={fmt(totals.sun)} />
+      </div>
+
+      <Panel title={`Attendance & OT — for salary${periodLabel ? ` · ${periodLabel}` : ''}`} icon="arrowDown" pad={18} style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 12, color: 'var(--t3)', lineHeight: 1.6, marginBottom: 12 }}>
+          Per-operator attendance and overtime for the selected range. <b>Payable days</b> = present days − ½ × half-days;
+          Sundays are pure-OT days. Download the <b>summary</b> for the salary sheet, or the <b>day-by-day detail</b> (with
+          IST check-in / check-out times) to audit it.
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: 10 }}>
+          <DownloadCard title="Summary (per operator)" sub="Days present, payable days, OT hours, late, absent" onClick={onDownloadSummary} />
+          <DownloadCard title={detailBusy ? 'Building…' : 'Detailed (per day)'} sub="Every day with IST check-in / check-out times + OT" onClick={onDownloadDetail} />
+        </div>
+      </Panel>
+
+      <div style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center' }}>
+        <input type="text" placeholder="Filter operator / ID / department…" value={q} onChange={e => setQ(e.target.value)} style={{ ...dateInputStyle, minWidth: 260 }} />
+        <div style={{ flex: 1 }} />
+        <span className="num" style={{ fontSize: 11.5, color: 'var(--t3)' }}>{fmt(shown.length)} shown</span>
+      </div>
+
+      <Panel pad={0}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                {['Employee ID','Name','Dept','Team','Present','Half','Payable','Sun','OT hrs','Late (min)','Absent'].map(h => <th key={h} style={thStyle}>{h}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {shown.length === 0 ? (
+                <tr><td colSpan={11} style={{ ...tdStyle, textAlign: 'center', color: 'var(--t3)', padding: '28px 0' }}>No attendance in this period</td></tr>
+              ) : shown.map((r, i) => (
+                <tr key={r.employee_id || i}>
+                  <td style={tdStyle}><span className="num" style={{ fontSize: 11.5 }}>{r.employee_id || '—'}</span></td>
+                  <td style={{ ...tdStyle, fontWeight: 600 }}>{r.operator_name || '—'}</td>
+                  <td style={tdStyle}>{r.department || '—'}</td>
+                  <td style={tdStyle}>{r.team || '—'}</td>
+                  <td style={numTd}>{fmt(r.present_days)}</td>
+                  <td style={{ ...numTd, color: Number(r.half_days) ? 'var(--warn-fg)' : 'var(--t3)' }}>{fmt(r.half_days)}</td>
+                  <td style={{ ...numTd, fontWeight: 700 }}>{r.payable_days}</td>
+                  <td style={{ ...numTd, color: Number(r.sundays_worked) ? 'var(--yellow)' : 'var(--t3)' }}>{fmt(r.sundays_worked)}</td>
+                  <td style={{ ...numTd, color: Number(r.ot_hours) ? 'var(--ok-fg)' : 'var(--t3)' }}>{r.ot_hours}</td>
+                  <td style={{ ...numTd, color: Number(r.late_minutes) ? 'var(--warn-fg)' : 'var(--t3)' }}>{fmt(r.late_minutes)}</td>
+                  <td style={{ ...numTd, color: Number(r.absent_days) ? 'var(--bad-fg)' : 'var(--t3)' }}>{fmt(r.absent_days)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+    </>
+  );
+}
+
 function DownloadsSection({ downloadQc, downloadPva, downloadDefects, downloadModule, canViewFinance, periodLabel }) {
   return (
     <>
