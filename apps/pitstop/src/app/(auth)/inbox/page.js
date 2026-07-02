@@ -1245,23 +1245,32 @@ function ThreadRow({ t, active, myId, onClick, noBorder }) {
   const lm = t.last_message;
   const preview = lm ? (lm.body || (lm.kind && lm.kind !== 'text' ? `[${lm.kind}]` : '')) : '';
   const mine = t.assigned_agent_id && t.assigned_agent_id === myId;
+  // Unread / needs-attention: the customer's last message is unanswered (S191, Pruthvi).
+  // There's no per-agent read state, so "unread" = last message is inbound on a thread
+  // that isn't Done. Signals it three ways — a filled dot, a bolder name, a darker
+  // preview — plus a faint tint when the row isn't the active selection.
+  const unread = !!lm && lm.direction === 'inbound' && t.thread_state !== 'closed';
   return (
     <button onClick={onClick} style={{ width: '100%', textAlign: 'left', cursor: 'pointer',
       display: 'flex', gap: 10, padding: '11px 13px', border: 'none',
       borderBottom: noBorder ? 'none' : '1px solid var(--border)',
-      background: active ? 'var(--surface-2)' : 'transparent',
-      borderLeft: `2px solid ${active ? ch.color : 'transparent'}` }}>
+      background: active ? 'var(--surface-2)' : (unread ? 'var(--surface-2, rgba(255,255,255,0.03))' : 'transparent'),
+      borderLeft: `2px solid ${active ? ch.color : (unread ? ch.color : 'transparent')}` }}>
       <Avatar t={t} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
-          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--t1)', whiteSpace: 'nowrap',
-            overflow: 'hidden', textOverflow: 'ellipsis' }}>{displayName(t)}</span>
-          <span className="num" style={{ fontSize: 10, color: 'var(--t4)', flexShrink: 0 }}>{relTime(t.last_message_at)}</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+            {unread && <span title="New customer message" style={{ width: 7, height: 7, borderRadius: '50%',
+              background: ch.color, flexShrink: 0, boxShadow: `0 0 0 2px ${ch.color}33` }} />}
+            <span style={{ fontSize: 13, fontWeight: unread ? 800 : 600, color: 'var(--t1)', whiteSpace: 'nowrap',
+              overflow: 'hidden', textOverflow: 'ellipsis' }}>{displayName(t)}</span>
+          </span>
+          <span className="num" style={{ fontSize: 10, color: unread ? 'var(--t2)' : 'var(--t4)', flexShrink: 0 }}>{relTime(t.last_message_at)}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
           {lm?.direction === 'outbound' && <span style={{ fontSize: 10.5, color: 'var(--t4)' }}>You:</span>}
-          <span style={{ fontSize: 12, color: 'var(--t3)', whiteSpace: 'nowrap', overflow: 'hidden',
-            textOverflow: 'ellipsis', flex: 1 }}>{preview || '—'}</span>
+          <span style={{ fontSize: 12, color: unread ? 'var(--t1)' : 'var(--t3)', fontWeight: unread ? 600 : 400,
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>{preview || '—'}</span>
         </div>
         <div style={{ display: 'flex', gap: 5, marginTop: 4, flexWrap: 'wrap' }}>
           {t.priority && t.priority !== 'normal' && (
