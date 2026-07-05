@@ -841,18 +841,38 @@ const amazonAdapter = {
   },
   async stage(rows, runId, channelId, fetched) {
     if (rows.length) {
-      const from = rows.reduce((m, x) => x.sale_date < m ? x.sale_date : m, rows[0].sale_date);
-      const to   = rows.reduce((m, x) => x.sale_date > m ? x.sale_date : m, rows[0].sale_date);
-      // stg_amazon has no stable source line id (flat file) → supersede by date range, like the gsheet adapter.
-      await sbSales(`/rest/v1/stg_amazon?channel_id=eq.${channelId}&sale_date=gte.${from}&sale_date=lte.${to}`, { method: 'DELETE', prefer: 'return=minimal' });
-      const body = rows.map(r => ({
-        run_id: runId, channel_id: channelId, source_order_id: r.source_order_id || null, sale_date: r.sale_date,
-        channel_sku: r.channel_sku, title: r.title, qty: Math.round(r.qty), gross_value: r.gross_value,
-        discount_value: r.discount_value || 0, tax_value: r.tax_value || 0, row_type: 'sale',
-        order_status: r.order_status || null, is_cancelled: !!r.is_cancelled,
-        ship_state: r.ship_state || null, ship_city: r.ship_city || null, raw: r.raw,
+      // UPSERT by (channel_id, source_order_id, channel_sku) — NOT supersede-by-date. The old
+      // delete-by-day + insert was only safe when a report window carried a WHOLE day of orders.
+      // Once the backfill caught up to real-time, each window shrank to an intra-day sliver, so
+      // every tick deleted the day and reinserted only its few orders → sales_fact under-counted
+      // Amazon for weeks (S192). The all-orders flat file is order-item grain → aggregate lines by
+      // (order, sku) first (a payload can't carry two rows sharing the on_conflict key), then upsert.
+      // Idempotent under re-pull, in both wide backfill windows and steady-state slivers.
+      const bySku = {};
+      for (const r of rows) {
+        const oid = r.source_order_id || null;
+        const k = `${oid || ''}|${r.channel_sku}`;
+        const a = (bySku[k] = bySku[k] || {
+          source_order_id: oid, channel_sku: r.channel_sku, sale_date: r.sale_date, title: r.title || null,
+          qty: 0, gross_value: 0, discount_value: 0, tax_value: 0,
+          order_status: r.order_status || null, is_cancelled: false,
+          ship_state: r.ship_state || null, ship_city: r.ship_city || null, raw: r.raw,
+        });
+        a.qty += num(r.qty); a.gross_value += num(r.gross_value);
+        a.discount_value += num(r.discount_value || 0); a.tax_value += num(r.tax_value || 0);
+        if (r.is_cancelled) a.is_cancelled = true;
+        if (r.sale_date && r.sale_date < a.sale_date) a.sale_date = r.sale_date;
+        if (r.title && !a.title) a.title = r.title;
+        if (r.order_status && !a.order_status) a.order_status = r.order_status;
+      }
+      const body = Object.values(bySku).map(a => ({
+        run_id: runId, channel_id: channelId, source_order_id: a.source_order_id, sale_date: a.sale_date,
+        channel_sku: a.channel_sku, title: a.title, qty: Math.round(a.qty), gross_value: a.gross_value,
+        discount_value: a.discount_value, tax_value: a.tax_value, row_type: 'sale',
+        order_status: a.order_status, is_cancelled: a.is_cancelled,
+        ship_state: a.ship_state, ship_city: a.ship_city, raw: a.raw,
       }));
-      await sbInsertChunked('/rest/v1/stg_amazon', body, 'return=minimal');
+      await sbInsertChunked('/rest/v1/stg_amazon?on_conflict=channel_id,source_order_id,channel_sku', body, 'return=minimal,resolution=merge-duplicates');
       // Order-grain rows (drives f_order_rollup: Total Orders / AOV / cancel rate). The all-orders
       // report is item-grain → aggregate item lines by amazon-order-id. Cancellations from order-status;
       // discount/tax/returns come from the Finances feed (stageAmazonFinance), not this report.
