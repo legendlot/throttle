@@ -183,6 +183,25 @@ newest per employee), `periodMeta(period_key)` (→ type/start/end), `eligibleFo
    confirm `/me` shows own only; confirm a non-comp user sees no Payouts panel.
 5. Knowledge: `systems/podium.md` (new tables + actions), memory, BACKLOG (Phase 2 Odo feed item).
 
+## 10a. Addendum — vendor/bulk rows for contract labour (Option A, built S195)
+
+Contract labour is paid as a **bulk lump sum to a 3rd-party agency** (not per-person, not via
+RazorpayX), yet those workers are recorded individually in Podium (central salary repository +
+org/availability + they count toward SG&A). Decision (Afshaan): keep **all** people-cost in this one
+ledger so Odo SG&A reads a single source (Option A over routing it straight to Odo).
+
+Migration `podium_payouts_vendor_v1`: `employee_id` made **nullable**; added `payee_type`
+(`employee`|`vendor`, default `employee`) + `payee_label` (agency/vendor name); `payout_type` widened
+with `contract_labour`; CHECK `(employee ⇒ employee_id) AND (vendor ⇒ payee_label)`. A bulk agency
+payout is **one vendor row** (`payee_type='vendor'`, `payee_label='<agency>'`, `payout_type='contract_labour'`,
+`employee_id` null). `upsertPayouts` accepts vendor rows (validates `payee_label` instead of
+`employee_id`; vendor + ad-hoc rows are plain inserts, only per-employee periodic rows use the unique
+upsert — so vendor rows never dedup-collide on the null `employee_id`). New read `getBulkPayouts`
+(comp, audited). UI: a **Contract Labour** tab on `/admin/payouts` (`ContractLabourPanel` — agency +
+period + amount + paid_on + note; lists existing with delete). Vendor rows never appear in
+`getMyPayouts`/`getPayouts(employee_id)` (no employee). Individual contract workers remain directory
+records with no per-person payout rows.
+
 ## 11. Phase 2 (separate spec, not now)
 Odo reads Podium payout aggregates (per month, per cost-centre/department) into the **SG&A** line of the
 P&L. Cross-system read like the Snorkel→Odo sales feed; needs the Odo P&L model. Decide accrual (recognise
