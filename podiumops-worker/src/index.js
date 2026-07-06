@@ -462,12 +462,32 @@ async function getJobRole(url, auth, env) {
   return ok({ job_role: projectJobRole(role, auth), kpis: kr.data || [], employees: er.data || [] });
 }
 
-// Compensation — gated on podium_comp. Returns the per-employee event log + the
-// current CTC (latest non-bonus new_ctc; null while the vault is disabled).
+// Append-only audit of CROSS-PERSON salary reads. Self-views of one's own pay are
+// not a leak and are not logged. Best-effort: a failed insert must never block a read.
+async function logCompAccess(auth, action, subjectEmployeeId, subjectLabel, env, detail) {
+  try {
+    await sb(`/rest/v1/comp_access_log`, env, {
+      method: 'POST', prefer: 'return=minimal',
+      body: JSON.stringify([{
+        viewer_user_id: auth.userId,
+        viewer_name: auth.fullName || null,
+        action,
+        subject_employee_id: subjectEmployeeId || null,
+        subject_label: subjectLabel || null,
+        detail: detail || null,
+      }]),
+    });
+  } catch (_e) { /* best-effort audit; never block the read */ }
+}
+
+// Compensation — CROSS-PERSON read, allow-list-gated (canComp = comp_access member).
+// The ONLY path that returns another person's pay. Returns the per-employee event
+// log + current CTC (latest non-bonus new_ctc). Every read is audited.
 async function getCompensation(url, auth, env) {
   const gate = requireComp(auth); if (gate) return gate;
   const employee_id = url.searchParams.get('employee_id');
   if (!employee_id) return err('employee_id required', 400);
+  await logCompAccess(auth, 'getCompensation', employee_id, null, env);
   const r = await sb(
     `/rest/v1/compensation_events?employee_id=eq.${employee_id}&select=*&order=effective_date.desc,created_at.desc`,
     env,
@@ -481,6 +501,23 @@ async function getCompensation(url, auth, env) {
     current_ctc: latestCtc ? Number(latestCtc.new_ctc) : null,
     comp_vault_enabled: !!sr.data?.[0]?.comp_vault_enabled,
   });
+}
+
+// SELF-ONLY comp view. Takes NO employee-id parameter — a caller can structurally
+// only ever see their OWN compensation (resolved from the JWT via callerEmployee).
+// Reachable by the self-only baseline (SELF_SERVE_GET). Self-views are not audited.
+async function getMyCompensation(url, auth, env) {
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  if (!me) return ok({ employee_id: null, events: [], current_ctc: null });
+  const r = await sb(
+    `/rest/v1/compensation_events?employee_id=eq.${me.id}&select=*&order=effective_date.desc,created_at.desc`,
+    env,
+  );
+  if (!r.ok) return err('db_error', 500);
+  const events = r.data || [];
+  const latestCtc = events.find(e => e.event_type !== 'one_time_bonus' && e.new_ctc != null);
+  return ok({ employee_id: me.id, events, current_ctc: latestCtc ? Number(latestCtc.new_ctc) : null });
 }
 
 // Documents — visible to hr/admin, self, or a manager in the chain. Bank/ID docs
@@ -1702,6 +1739,7 @@ async function sbPublicGet(path, env) {
 
 async function getFactoryWorkforce(url, auth, env) {
   { const _g = requireComp(auth); if (_g) return _g; }
+  await logCompAccess(auth, 'getFactoryWorkforce', null, 'all factory operators', env);
   const ops   = (await sbPublicGet(`/rest/v1/operators?select=id,employee_id,name,department,status&status=eq.active&order=department,name`, env)).data || [];
   const wf    = (await sb(`/rest/v1/factory_workforce?select=*`, env)).data || [];
   const pay   = (await sb(`/rest/v1/factory_pay?select=operator_id,effective_from,monthly_ctc&order=effective_from.desc`, env)).data || [];
@@ -1805,19 +1843,65 @@ async function setFactoryOtRates(body, auth, env) {
   return ok(Array.isArray(r.data) ? r.data[0] : r.data);
 }
 
+// ── Salary-access allow-list (super_admin only: exactly Afshaan + Vinay) ──────
+// Controls who is in podium.comp_access, i.e. who can see EVERYONE's salary.
+// Edit-right derives from store.users_profile.role='super_admin', never from
+// comp_access membership, so a super_admin can't lock themselves out.
+async function getCompAccess(url, auth, env) {
+  const gate = requireSuperAdmin(auth); if (gate) return gate;
+  const r = await sb(`/rest/v1/comp_access?select=*&order=added_at.asc`, env);
+  if (!r.ok) return err('db_error', 500);
+  return ok({ members: r.data || [] });
+}
+
+async function addCompAccess(body, auth, env) {
+  const gate = requireSuperAdmin(auth); if (gate) return gate;
+  const d = body.data || body;
+  if (!d.auth_user_id) return err('auth_user_id required', 400);
+  const prof = await sbStore(`/rest/v1/users_profile?id=eq.${encodeURIComponent(d.auth_user_id)}&select=full_name&limit=1`, env);
+  const fullName = (prof.ok && prof.data?.[0]?.full_name) || d.full_name || null;
+  const r = await sb(`/rest/v1/comp_access?on_conflict=auth_user_id`, env, {
+    method: 'POST', prefer: 'return=representation,resolution=merge-duplicates',
+    body: JSON.stringify({ auth_user_id: d.auth_user_id, full_name: fullName, added_by: auth.userId, note: d.note || null }),
+  });
+  if (!r.ok) return err('add_failed: ' + JSON.stringify(r.data), 400);
+  await logCompAccess(auth, 'addCompAccess', null, fullName, env, { added: d.auth_user_id });
+  return ok({ auth_user_id: d.auth_user_id, full_name: fullName });
+}
+
+async function removeCompAccess(body, auth, env) {
+  const gate = requireSuperAdmin(auth); if (gate) return gate;
+  const d = body.data || body;
+  if (!d.auth_user_id) return err('auth_user_id required', 400);
+  const r = await sb(`/rest/v1/comp_access?auth_user_id=eq.${encodeURIComponent(d.auth_user_id)}`, env, { method: 'DELETE', prefer: 'return=minimal' });
+  if (!r.ok) return err('remove_failed', 400);
+  await logCompAccess(auth, 'removeCompAccess', null, d.full_name || null, env, { removed: d.auth_user_id });
+  return ok({ removed: d.auth_user_id });
+}
+
+async function getCompAccessLog(url, auth, env) {
+  const gate = requireSuperAdmin(auth); if (gate) return gate;
+  const limit = Math.min(Number(url.searchParams.get('limit') || 200), 1000);
+  const r = await sb(`/rest/v1/comp_access_log?select=*&order=at.desc&limit=${limit}`, env);
+  if (!r.ok) return err('db_error', 500);
+  return ok({ log: r.data || [] });
+}
+
 const GET_ACTIONS = {
   getMe, getSettings,
   getEmployees, getEmployee,
   getOrgChart, getOrgSnapshots,
   getDepartments,
   getJobRoles, getJobRole,
-  getCompensation,
+  getCompensation, getMyCompensation,
   getDocuments, getDocumentDownloadUrl,
   // Phase 2 — performance capture
   getObservations, getAccomplishments, getOneOnOnes,
   getMyPerformance, getTeamActivity,
   // Permission layer (Podium-managed)
   getPodiumRoles, getPodiumUsers,
+  // Salary-access allow-list (super_admin)
+  getCompAccess, getCompAccessLog,
   // Google Directory sync
   getDirectorySyncPreview,
   // Appraisal engine
@@ -1841,6 +1925,8 @@ const POST_ACTIONS = {
   createOneOnOne, updateOneOnOne, deleteOneOnOne,
   // Permission layer (Podium-managed)
   createPodiumRole, updatePodiumRole, deletePodiumRole, assignPodiumRole,
+  // Salary-access allow-list (super_admin)
+  addCompAccess, removeCompAccess,
   // Google Directory sync
   importDirectoryCandidates,
   // Appraisal engine
@@ -1857,7 +1943,11 @@ const POST_ACTIONS = {
 // reach their OWN profile + wins via /me. Everything else still requires podium_view.
 const SELF_SERVE_GET = new Set([
   'getMe', 'getPodiumRoles',
+  // Salary-access admin — internally super_admin-gated.
+  'getCompAccess', 'getCompAccessLog',
   'getEmployee', 'getMyPerformance', 'getAccomplishments', 'getObservations', 'getOneOnOnes',
+  // Own-salary view — parameter-less, self-scoped by callerEmployee.
+  'getMyCompensation',
   // Appraisal participation — relationship-scoped inside each handler, not podium_view-gated.
   'getAppraisalConfig', 'getMyAppraisals', 'getAppraisal', 'getTeamAppraisals',
   // Factory cost — self-gated by requireComp (a comp-only role need not hold podium_view).
@@ -1865,6 +1955,8 @@ const SELF_SERVE_GET = new Set([
 ]);
 const SELF_SERVE_POST = new Set([
   'createAccomplishment', 'updateAccomplishment', 'deleteAccomplishment',
+  // Salary-access admin — internally super_admin-gated.
+  'addCompAccess', 'removeCompAccess',
   // Appraisal participation (self-review / manager-review / acknowledge).
   'submitSelfReview', 'submitManagerReview', 'acknowledgeAppraisal',
   // Factory cost — self-gated by requireComp (a comp-only role need not hold podium_view).
