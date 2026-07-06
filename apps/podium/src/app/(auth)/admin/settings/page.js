@@ -5,6 +5,7 @@ import { Spinner, useToast } from '@throttle/ui';
 import { Lock, ShieldCheck, ExternalLink, Building2, ClipboardCheck } from 'lucide-react';
 import { podiumopsGet, podiumopsPost } from '../../../../lib/podiumopsFetch.js';
 import { LEGAL_ENTITIES } from '../../../../lib/format.js';
+import CompAccessCard from '../../../../components/CompAccessCard.js';
 
 export default function SettingsPage() {
   const { session, perms } = useAuth();
@@ -38,15 +39,18 @@ export default function SettingsPage() {
       <div style={card}>
         <div style={cardTitle}><Lock size={14} /> Salary Vault</div>
         <p style={p}>
-          When OFF (default for v1), Podium records increment % and one-time bonus amounts only — absolute
-          base-salary / CTC figures are never stored. Turn this ON <strong>only after</strong> the Phase&nbsp;5
-          security hardening (Cloudflare Access SSO in front of the site and worker) is live.
+          When OFF, Podium records increment % and one-time bonus amounts only. When ON, absolute CTC is
+          stored and shown <strong>only</strong> to the salary-access allow-list below (managed by super-admins).
+          Every cross-person salary view is logged.
         </p>
         <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
           <input type="checkbox" checked={!!s.comp_vault_enabled} disabled={busy} onChange={e => save({ comp_vault_enabled: e.target.checked })} />
           <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--t1)' }}>{s.comp_vault_enabled ? 'Enabled — absolute CTC allowed' : 'Disabled — % and bonuses only'}</span>
         </label>
       </div>
+
+      {/* Salary access allow-list (super-admins only; self-hides otherwise) */}
+      <CompAccessCard session={session} />
 
       {/* Appraisals (eligibility persisted; anchors are fixed) */}
       <div style={card}>
@@ -72,9 +76,10 @@ export default function SettingsPage() {
         <div style={cardTitle}><ShieldCheck size={14} /> Permissions</div>
         <p style={p}>
           Podium runs its <strong>own</strong> permission layer (<code className="num">podium_view</code>, <code className="num">podium_hr</code>,
-          <code className="num"> podium_comp</code>, <code className="num">podium_admin</code>) — managed here in Podium, not in Garage. Define
+          <code className="num"> podium_admin</code>) — managed here in Podium, not in Garage. Define
           custom roles on <strong>Permissions</strong>, then assign them to people on <strong>Users</strong>.
-          Anyone with no assigned role gets self-only access.
+          Anyone with no assigned role gets self-only access. <strong>Salary access is separate</strong> — an
+          explicit allow-list controlled by super-admins (above), not a role key.
         </p>
         <div style={{ display: 'flex', gap: 14, marginTop: 6 }}>
           <a href="/admin/roles" style={link}>Permissions <ExternalLink size={13} /></a>

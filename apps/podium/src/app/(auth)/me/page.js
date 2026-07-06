@@ -7,6 +7,7 @@ import { CheckSquare, ClipboardCheck, ChevronRight } from 'lucide-react';
 import { podiumopsGet } from '../../../lib/podiumopsFetch.js';
 import { fmtDate } from '../../../lib/format.js';
 import { ObservationsPanel, WinsPanel, OneOnOnesPanel } from '../../../components/PerformancePanels.js';
+import MyCompensation from '../../../components/MyCompensation.js';
 
 const TABS = [
   { id: 'wins',         label: 'My Wins' },
@@ -38,6 +39,8 @@ export default function MyPerformancePage() {
   return (
     <div style={{ maxWidth: 840 }}>
       <AppraisalsBanner session={session} />
+
+      <MyCompensation />
 
       {open.length > 0 && (
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 11, padding: '13px 16px', marginBottom: 18 }}>
