@@ -12,6 +12,12 @@ import { SegmentedToggle } from '../../../components/kit.js';
 const GATE_INR = 6500;   // the kill-decision spend gate (mirror of settings.ads_kill_after_inr)
 const RECENT_DAYS = 3;
 
+// Shared fixed column widths so every experiment table lines up (auto-layout sized each table to
+// its own content, so columns drifted between experiments). Order = the 11 columns below.
+//    ☐   status variant angle spend buys roas  cpa  ctr verdict actions
+const COLS = [30,  92,   240,  200,  104,  52,  100,  76,  60,   92,   272];
+const TABLE_MIN = COLS.reduce((a, w) => a + w, 0);
+
 const N = (v) => Number(v || 0);
 const CHIP = {
   winning: { dot: '🟢', label: 'Winning', bg: 'var(--green)' },
@@ -50,7 +56,7 @@ function GateBar({ spend }) {
   const pct = Math.min(100, (N(spend) / GATE_INR) * 100);
   const tone = pct >= 100 ? 'var(--red)' : pct >= 70 ? '#E8A33D' : 'var(--accent)';
   return (
-    <div title={`${inr(spend)} / ${inr(GATE_INR)} decision gate`}>
+    <div title={`${inr(spend)} / ${inr(GATE_INR)} decision gate`} style={{ display: 'inline-block', width: 88, textAlign: 'right', verticalAlign: 'middle' }}>
       <div style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>{inr(spend)}</div>
       <div style={{ height: 4, borderRadius: 3, background: 'var(--t3)33', marginTop: 3, overflow: 'hidden' }}>
         <div style={{ width: `${pct}%`, height: '100%', background: tone }} />
@@ -226,7 +232,8 @@ export default function DynoPage() {
 
             {/* Variants table */}
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+              <table style={{ width: '100%', minWidth: TABLE_MIN, borderCollapse: 'collapse', fontSize: 12.5, tableLayout: 'fixed' }}>
+                <colgroup>{COLS.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
                 <thead>
                   <tr style={{ color: 'var(--t2)', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                     <th style={{ padding: '7px 8px', textAlign: 'left', width: 26 }}></th>
@@ -255,7 +262,7 @@ export default function DynoPage() {
                         <td style={{ padding: '8px', maxWidth: 260 }}>
                           <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start' }}>
                             <Thumb url={r.asset_url} />
-                            <div>
+                            <div style={{ minWidth: 0 }}>
                               <div style={{ fontWeight: 600 }}>{r.headline || r.ad_name}</div>
                               <div style={{ color: 'var(--t3)', fontSize: 10.5, fontFamily: 'var(--mono)' }}>{r.ad_name}{r.parent_meta_id ? ' · ↳ iterated' : ''}</div>
                               {r.primary_text && (
@@ -277,7 +284,7 @@ export default function DynoPage() {
                         <td style={{ padding: '8px' }}>{r.verdict ? <Tag tone="var(--t1)">{r.verdict}</Tag> : <span style={{ color: 'var(--t3)' }}>—</span>}</td>
                         <td style={{ padding: '8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                           {canWrite ? (
-                            <div style={{ display: 'inline-flex', gap: 5 }}>
+                            <div style={{ display: 'inline-flex', gap: 4 }}>
                               {paused
                                 ? <BtnMini onClick={() => resume(r)} disabled={isBusy}>Resume</BtnMini>
                                 : <BtnMini onClick={() => pause(r)} disabled={isBusy}>Pause</BtnMini>}
