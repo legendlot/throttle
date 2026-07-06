@@ -137,6 +137,14 @@ async function verifyJWT(authHeader, env) {
     permissions = (prRes.ok && prRes.data?.[0]?.permissions) || {};
   }
 
+  // Salary access is an explicit allow-list (podium.comp_access), decoupled from
+  // admin/hr (RULE-PODIUM-002, amended 2026-07-06). Resolved once per request.
+  const caRes = await sb(
+    `/rest/v1/comp_access?auth_user_id=eq.${user.id}&select=auth_user_id&limit=1`,
+    env,
+  );
+  const compAccess = !!(caRes.ok && caRes.data?.[0]);
+
   return {
     userId: user.id,
     email: user.email,
@@ -144,6 +152,8 @@ async function verifyJWT(authHeader, env) {
     podiumRole,
     fullName: profile.full_name,
     permissions,
+    compAccess,
+    isSuperAdmin: profile.role === 'super_admin',
     bearer: token,
   };
 }
@@ -237,11 +247,14 @@ async function nextEmployeeSeq(env) {
 function hasPerm(auth, perm) { return !!auth?.permissions?.[perm]; }
 function isAdmin(auth) { return hasPerm(auth, 'podium_admin'); }
 function isHr(auth)    { return isAdmin(auth) || hasPerm(auth, 'podium_hr'); }
-function canComp(auth) { return isAdmin(auth) || hasPerm(auth, 'podium_comp'); }
+// Salary access = explicit allow-list membership only (auth.compAccess from verifyJWT).
+// NOT implied by podium_admin/podium_hr. RULE-PODIUM-002 (amended 2026-07-06).
+function canComp(auth) { return auth?.compAccess === true; }
 
 function requireHr(auth)    { return isHr(auth)    ? null : err('Forbidden — requires podium_hr', 403); }
 function requireComp(auth)  { return canComp(auth) ? null : err('Forbidden — requires podium_comp', 403); }
 function requireAdmin(auth) { return isAdmin(auth) ? null : err('Forbidden — requires podium_admin', 403); }
+function requireSuperAdmin(auth) { return auth?.isSuperAdmin ? null : err('Forbidden — requires super_admin', 403); }
 
 // ── Org graph (manager_id chain) — small table, loaded once per request ──────
 
@@ -321,7 +334,7 @@ async function getMe(url, auth, env) {
     permissions: auth.permissions,
     employee_id: me?.id || null,
     settings: sr.data?.[0] || { comp_vault_enabled: false, min_tenure_days: 90 },
-    tier: { admin: isAdmin(auth), hr: isHr(auth), comp: canComp(auth) },
+    tier: { admin: isAdmin(auth), hr: isHr(auth), comp: canComp(auth), super_admin: !!auth.isSuperAdmin },
   });
 }
 
@@ -1041,14 +1054,14 @@ async function getTeamActivity(url, auth, env) {
 // podium_admin; role list is open metadata (no PII).
 // ────────────────────────────────────────────────────────────────────────────
 
-const PODIUM_PERM_KEYS = ['podium_view', 'podium_hr', 'podium_comp', 'podium_admin'];
+const PODIUM_PERM_KEYS = ['podium_view', 'podium_hr', 'podium_admin'];
 
 // Keep only known keys as `true`; any elevated key implies podium_view so an admin
 // can't mint a role that 403s itself at the gate (RULE-PODIUM-001 corollary).
 function normalizePodiumPerms(permissions) {
   const out = {};
   for (const k of PODIUM_PERM_KEYS) if (permissions && permissions[k]) out[k] = true;
-  if (out.podium_hr || out.podium_comp || out.podium_admin) out.podium_view = true;
+  if (out.podium_hr || out.podium_admin) out.podium_view = true;
   return out;
 }
 
