@@ -2468,6 +2468,17 @@ export default {
             const committed = await adsCommittedDailyInr();
             return ok({ rows: r.data || [], committed_daily_inr: committed, ceiling_inr: await adsCeilingInr(), write_enabled: await adsWriteEnabled() });
           }
+          case 'getDynoBoard': {   // Dyno — creative testing-grounds live board (one row per variant + windowed Meta results + computed status)
+            if (!canView(P)) return err('No permission', 403);
+            const recentDays = Math.min(Math.max(Number(qp('recent_days')) || 3, 1), 30);
+            const r = await rpcSales('f_dyno_board', {
+              p_filter: qp('filter') || 'active', p_product: qp('product') || null,
+              p_angle: qp('angle') || null, p_recent_days: recentDays });
+            if (!r.ok) return err('Dyno board failed: ' + JSON.stringify(r.data), 502);
+            return ok({ rows: r.data || [], recent_days: recentDays,
+              committed_daily_inr: await adsCommittedDailyInr(), ceiling_inr: await adsCeilingInr(),
+              write_enabled: await adsWriteEnabled() });
+          }
           case 'metaWriteProbe': {   // diagnostic: self-discover Page/Pixel ids + confirm ads_management scope (NO writes)
             if (!canAdsWrite(P)) return err('No permission', 403);
             const acct = await metaAdAccount(qp('account')).catch(e => { throw e; });
@@ -3069,6 +3080,17 @@ export default {
             const r = await sbSales(`/rest/v1/ads_plan?id=eq.${d.plan_id}`, { method: 'PATCH', prefer: 'return=representation', body: JSON.stringify({ status: 'approved', approved_by: userId, approved_at: nowISO(), updated_at: nowISO() }) });
             if (!r.ok) return err('Approve failed: ' + JSON.stringify(r.data), 502);
             return ok(Array.isArray(r.data) ? r.data[0] : r.data);
+          }
+          case 'adsSetVerdict': {   // Dyno — record a variant verdict + reason (writer; no spend impact)
+            if (!canAdsWrite(P)) return err('No permission', 403);
+            if (!d.meta_id) return err('meta_id required');
+            const VERDICTS = ['winner', 'promising', 'killed', 'inconclusive', 'paused'];
+            if (!VERDICTS.includes(d.verdict)) return err(`verdict must be one of: ${VERDICTS.join(', ')}`);
+            const existing = await managedGet('ad', d.meta_id);
+            if (!existing) return err('Variant (ad) not found', 404);
+            await managedPatch('ad', d.meta_id, { verdict: d.verdict, verdict_reason: d.reason || null });
+            await ledgerWrite({ actor_user_id: userId, action: 'adsSetVerdict', entity_type: 'ad', entity_id: d.meta_id, daily_delta_inr: 0, request: d, status: 'ok' });
+            return ok(await managedGet('ad', d.meta_id));
           }
           case 'metaCreateCampaign': {   // creates PAUSED (no budget at campaign level in ABO)
             if (!canAdsWrite(P)) return err('No permission', 403);
