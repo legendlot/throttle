@@ -371,7 +371,9 @@ function influencerScopeFilters(url) {
   if (reachMax && Number.isFinite(Number(reachMax))) filters.push(`reach=lt.${Number(reachMax)}`);
   if (search) {
     const s = encodeURIComponent(search);
-    filters.push(`or=(channel_name.ilike.*${s}*,person_name.ilike.*${s}*,email.ilike.*${s}*,contact_number.ilike.*${s}*,influencer_code.ilike.*${s}*)`);
+    // channel_link included so a search by the raw IG handle (e.g. "homelyshark")
+    // matches the profile URL even when channel_name is a spaced display name.
+    filters.push(`or=(channel_name.ilike.*${s}*,person_name.ilike.*${s}*,email.ilike.*${s}*,contact_number.ilike.*${s}*,influencer_code.ilike.*${s}*,channel_link.ilike.*${s}*)`);
   }
   return filters;
 }
@@ -497,7 +499,22 @@ async function getEngagements(url, auth, env) {
   if (dateTo)   filters.push(`post_date=lte.${dateTo}`);
   if (search) {
     const s = encodeURIComponent(search);
-    filters.push(`or=(engagement_no.ilike.*${s}*,video_link.ilike.*${s}*,tracking_id.ilike.*${s}*,shipping_order_id.ilike.*${s}*)`);
+    const ors = [
+      `engagement_no.ilike.*${s}*`,
+      `video_link.ilike.*${s}*`,
+      `tracking_id.ilike.*${s}*`,
+      `shipping_order_id.ilike.*${s}*`,
+    ];
+    // Also match by the influencer's name / handle. PostgREST can't filter an
+    // embedded resource inside or=, so pre-resolve matching influencer ids and
+    // fold them into the OR (lets "homelyshark" find its engagement by handle).
+    const infr = await sb(
+      `/rest/v1/influencers?or=(channel_name.ilike.*${s}*,person_name.ilike.*${s}*,influencer_code.ilike.*${s}*,channel_link.ilike.*${s}*)&select=id&limit=200`,
+      env,
+    );
+    const infIds = (infr.ok && Array.isArray(infr.data)) ? infr.data.map(x => x.id) : [];
+    if (infIds.length) ors.push(`influencer_id.in.(${infIds.join(',')})`);
+    filters.push(`or=(${ors.join(',')})`);
   }
 
   const qs = filters.join('&');
