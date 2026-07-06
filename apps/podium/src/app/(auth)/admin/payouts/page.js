@@ -5,6 +5,7 @@ import { Spinner, useToast } from '@throttle/ui';
 import { Wallet, Sparkles } from 'lucide-react';
 import { podiumopsGet, podiumopsPost } from '../../../../lib/podiumopsFetch.js';
 import { fmtINR, monthKey, halfKey, fyStartYear, periodLabel } from '../../../../lib/payouts.js';
+import ContractLabourPanel from '../../../../components/ContractLabourPanel.js';
 
 const FY = fyStartYear();  // current fiscal-year start calendar year
 const MONTHS = Array.from({ length: 12 }, (_, i) => { const m = ((3 + i) % 12) + 1; const y = m >= 4 ? FY : FY + 1; return monthKey(y, m); });
@@ -24,7 +25,7 @@ export default function PayoutsAdminPage() {
   const periodKey = tab === 'variable' ? half : period;
   useEffect(() => {
     setSheet(null); setEdits({});
-    if (!session) return;
+    if (!session || tab === 'contract') return;
     const type = tab === 'adhoc' ? 'other' : tab;
     podiumopsGet('getPayoutPeriodSheet', { period_key: periodKey, payout_type: type }, session)
       .then(setSheet).catch(() => setSheet(false));
@@ -83,12 +84,15 @@ export default function PayoutsAdminPage() {
 
   return (
     <div style={{ maxWidth: 940 }}>
-      <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
-        {['fixed', 'variable', 'adhoc'].map((t) => (
-          <div key={t} className={'pd-tab' + (tab === t ? ' active' : '')} onClick={() => setTab(t)} style={{ textTransform: 'capitalize' }}>{t === 'adhoc' ? 'Ad-hoc' : t}</div>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
+        {['fixed', 'variable', 'adhoc', 'contract'].map((t) => (
+          <div key={t} className={'pd-tab' + (tab === t ? ' active' : '')} onClick={() => setTab(t)} style={{ textTransform: 'capitalize' }}>{t === 'adhoc' ? 'Ad-hoc' : t === 'contract' ? 'Contract Labour' : t}</div>
         ))}
       </div>
 
+      {tab === 'contract' && <ContractLabourPanel session={session} />}
+
+      {tab !== 'contract' && (<>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         {tab === 'variable' ? (
           <select value={half} onChange={(e) => setHalf(e.target.value)} className="pd-input" style={sel}>
@@ -141,6 +145,7 @@ export default function PayoutsAdminPage() {
       )}
 
       <button onClick={save} disabled={busy || sheet === null} style={{ ...btn, marginTop: 14 }}><Wallet size={14} /> Save</button>
+      </>)}
     </div>
   );
 }
