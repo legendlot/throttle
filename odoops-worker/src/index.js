@@ -3188,6 +3188,19 @@ export default {
               return ok({ adset_id: adsetId, daily_budget_inr: newInr });
             } catch (e) { return err(String(e?.message || e), 422); }
           }
+          case 'metaSetName': {   // rename a campaign/adset/ad (no spend impact — free)
+            if (!canAdsWrite(P)) return err('No permission', 403);
+            const et = d.entity_type, mid = d.meta_id, name = String(d.name || '').trim();
+            if (!['campaign', 'adset', 'ad'].includes(et)) return err("entity_type must be 'campaign', 'adset' or 'ad'", 422);
+            if (!mid) return err('meta_id required', 422);
+            if (!name) return err('name required', 422);
+            try {
+              const res = await metaPost(env, `${mid}`, { name });
+              const m = await managedGet(et, mid);
+              if (m) await managedPatch(et, mid, { name });
+              return ok({ entity_type: et, meta_id: mid, name, meta_response: res });
+            } catch (e) { return err(String(e?.message || e), 422); }
+          }
 
           default: return err('Unknown action: ' + act, 400);
         }
