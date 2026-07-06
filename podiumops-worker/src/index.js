@@ -1843,6 +1843,187 @@ async function setFactoryOtRates(body, auth, env) {
   return ok(Array.isArray(r.data) ? r.data[0] : r.data);
 }
 
+// ── Payouts ledger — period + component helpers ──────────────────────────────
+// FY = Apr 1 – Mar 31. Half 1 = Apr–Sep, Half 2 = Oct–Mar. Monthly key 'YYYY-MM';
+// half key 'FYaa-bb-H1|H2' (e.g. 'FY26-27-H1').
+function periodMeta(key) {
+  if (/^\d{4}-\d{2}$/.test(key)) {
+    const [y, m] = key.split('-').map(Number);
+    const end = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10); // last day of month m
+    return { period_type: 'monthly', period_start: `${key}-01`, period_end: end };
+  }
+  const hm = /^FY(\d{2})-(\d{2})-H([12])$/.exec(key);
+  if (hm) {
+    const sy = 2000 + Number(hm[1]);
+    return Number(hm[3]) === 1
+      ? { period_type: 'half_yearly', period_start: `${sy}-04-01`, period_end: `${sy}-09-30` }
+      : { period_type: 'half_yearly', period_start: `${sy}-10-01`, period_end: `${sy + 1}-03-31` };
+  }
+  return { period_type: 'one_time', period_start: null, period_end: null };
+}
+
+// Latest non-bonus CTC components per employee id → { <empId>: componentsJsonb }.
+// Batched (single query, IN filter) — no per-row awaits.
+async function currentComponentsFor(empIds, env) {
+  if (!empIds.length) return {};
+  const r = await sb(
+    `/rest/v1/compensation_events?employee_id=in.(${empIds.join(',')})&event_type=neq.one_time_bonus` +
+    `&select=employee_id,components,effective_date,created_at&order=effective_date.desc,created_at.desc`,
+    env,
+  );
+  const out = {};
+  for (const row of (r.ok ? r.data || [] : [])) if (!out[row.employee_id]) out[row.employee_id] = row.components || {};
+  return out;
+}
+
+// ── Payouts ledger — reads (comp = cross-person + audited; self = own-only) ───
+const PAYOUT_ORDER = 'order=period_start.desc.nullslast,paid_on.desc.nullslast,created_at.desc';
+
+async function getPayouts(url, auth, env) {
+  const gate = requireComp(auth); if (gate) return gate;
+  const employee_id = url.searchParams.get('employee_id');
+  if (!employee_id) return err('employee_id required', 400);
+  await logCompAccess(auth, 'getPayouts', employee_id, null, env);
+  const r = await sb(`/rest/v1/payouts?employee_id=eq.${employee_id}&select=*&${PAYOUT_ORDER}`, env);
+  if (!r.ok) return err('db_error', 500);
+  return ok({ payouts: r.data || [] });
+}
+
+async function getMyPayouts(url, auth, env) {
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  if (!me) return ok({ employee_id: null, payouts: [] });
+  const r = await sb(`/rest/v1/payouts?employee_id=eq.${me.id}&select=*&${PAYOUT_ORDER}`, env);
+  if (!r.ok) return err('db_error', 500);
+  return ok({ employee_id: me.id, payouts: r.data || [] });
+}
+
+// The entry grid: every active employee for a period+type, with a defaulted target
+// (from current CTC components) and any existing row. Comp-gated + audited.
+async function getPayoutPeriodSheet(url, auth, env) {
+  const gate = requireComp(auth); if (gate) return gate;
+  const period_key = url.searchParams.get('period_key');
+  const payout_type = url.searchParams.get('payout_type') || 'fixed';
+  if (!period_key) return err('period_key required', 400);
+  const meta = periodMeta(period_key);
+  await logCompAccess(auth, 'getPayoutPeriodSheet', null, `${payout_type} ${period_key}`, env);
+  const er = await sb(`/rest/v1/employees?status=neq.exited&select=id,employee_code,full_name,department:department_id(name)&order=full_name.asc`, env);
+  const emps = er.ok ? (er.data || []) : [];
+  const comps = await currentComponentsFor(emps.map(e => e.id), env);
+  const xr = await sb(`/rest/v1/payouts?period_key=eq.${encodeURIComponent(period_key)}&payout_type=eq.${payout_type}&select=*`, env);
+  const existing = {}; for (const row of (xr.ok ? xr.data || [] : [])) existing[row.employee_id] = row;
+  const rows = emps.map(e => {
+    const c = comps[e.id] || {};
+    let target = null;
+    if (payout_type === 'fixed') target = c.monthly_fixed ?? null;
+    else if (payout_type === 'variable') {
+      if (meta.period_type === 'monthly') target = c.monthly_variable ?? null;
+      else if (meta.period_type === 'half_yearly') target = c.variable_yearly != null ? Number(c.variable_yearly) / 2 : null;
+    }
+    return {
+      employee_id: e.id, employee_code: e.employee_code, full_name: e.full_name,
+      department: e.department?.name || null, bonus_type: c.bonus_type || null,
+      default_target: target != null ? Number(target) : null,
+      existing: existing[e.id] || null,
+    };
+  });
+  return ok({ period_key, period_type: meta.period_type, payout_type, rows });
+}
+
+// ── Payouts ledger — writes (comp-gated) ─────────────────────────────────────
+async function upsertPayouts(body, auth, env) {
+  const gate = requireComp(auth); if (gate) return gate;
+  const d = body.data || body;
+  const inRows = Array.isArray(d.rows) ? d.rows : [];
+  if (!inRows.length) return err('rows required', 400);
+  const clean = [];
+  for (const r of inRows) {
+    if (!r.employee_id || !r.payout_type || r.amount == null || isNaN(Number(r.amount))) continue;
+    const key = r.period_key || null;
+    const meta = key ? periodMeta(key)
+      : { period_type: r.period_type || 'one_time', period_start: r.period_start || null, period_end: r.period_end || null };
+    clean.push({
+      ...(r.id ? { id: r.id } : {}),
+      employee_id: r.employee_id,
+      payout_type: r.payout_type,
+      period_type: meta.period_type,
+      period_key: key,
+      period_start: meta.period_start,
+      period_end: meta.period_end,
+      target_amount: r.target_amount != null ? Number(r.target_amount) : null,
+      achievement_pct: r.achievement_pct != null ? Number(r.achievement_pct) : null,
+      amount: Number(r.amount),
+      currency: r.currency || 'INR',
+      paid_on: r.paid_on || null,
+      note: r.note || null,
+      source: r.source || 'manual',
+      created_by: auth.userId || null,
+      updated_at: nowIso(),
+    });
+  }
+  if (!clean.length) return err('no valid rows', 400);
+  const periodic = clean.filter(r => r.period_key);
+  const adhoc = clean.filter(r => !r.period_key);
+  let saved = 0;
+  if (periodic.length) {
+    const r = await sb(`/rest/v1/payouts?on_conflict=employee_id,payout_type,period_key`, env, {
+      method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify(periodic),
+    });
+    if (!r.ok) return err('upsert_failed: ' + JSON.stringify(r.data), 400);
+    saved += periodic.length;
+  }
+  if (adhoc.length) {
+    const r = await sb(`/rest/v1/payouts`, env, { method: 'POST', prefer: 'return=minimal', body: JSON.stringify(adhoc) });
+    if (!r.ok) return err('insert_failed: ' + JSON.stringify(r.data), 400);
+    saved += adhoc.length;
+  }
+  await logCompAccess(auth, 'upsertPayouts', null, `${saved} rows`, env);
+  return ok({ saved });
+}
+
+// Auto-create a month's FIXED rows for active staff from current monthly_fixed.
+// Idempotent — skips employees who already have a fixed row for the month.
+async function generateFixedPayouts(body, auth, env) {
+  const gate = requireComp(auth); if (gate) return gate;
+  const d = body.data || body;
+  const period_key = d.period_key;
+  if (!period_key || !/^\d{4}-\d{2}$/.test(period_key)) return err('period_key (YYYY-MM) required', 400);
+  const meta = periodMeta(period_key);
+  const er = await sb(`/rest/v1/employees?status=neq.exited&select=id`, env);
+  const emps = er.ok ? (er.data || []) : [];
+  const comps = await currentComponentsFor(emps.map(e => e.id), env);
+  const xr = await sb(`/rest/v1/payouts?period_key=eq.${encodeURIComponent(period_key)}&payout_type=eq.fixed&select=employee_id`, env);
+  const have = new Set((xr.ok ? xr.data || [] : []).map(r => r.employee_id));
+  const rows = [];
+  for (const e of emps) {
+    if (have.has(e.id)) continue;
+    const mf = comps[e.id]?.monthly_fixed;
+    if (mf == null) continue;
+    rows.push({
+      employee_id: e.id, payout_type: 'fixed', period_type: 'monthly', period_key,
+      period_start: meta.period_start, period_end: meta.period_end,
+      target_amount: Number(mf), amount: Number(mf), currency: 'INR',
+      source: 'fixed_autogen', created_by: auth.userId || null,
+    });
+  }
+  if (rows.length) {
+    const r = await sb(`/rest/v1/payouts`, env, { method: 'POST', prefer: 'return=minimal', body: JSON.stringify(rows) });
+    if (!r.ok) return err('generate_failed: ' + JSON.stringify(r.data), 400);
+  }
+  await logCompAccess(auth, 'generateFixedPayouts', null, `${period_key}: +${rows.length}`, env);
+  return ok({ created: rows.length, skipped: have.size });
+}
+
+async function deletePayout(body, auth, env) {
+  const gate = requireComp(auth); if (gate) return gate;
+  const d = body.data || body;
+  if (!d.id) return err('id required', 400);
+  const r = await sb(`/rest/v1/payouts?id=eq.${encodeURIComponent(d.id)}`, env, { method: 'DELETE', prefer: 'return=minimal' });
+  if (!r.ok) return err('delete_failed', 400);
+  await logCompAccess(auth, 'deletePayout', null, d.id, env);
+  return ok({ deleted: d.id });
+}
+
 // ── Salary-access allow-list (super_admin only: exactly Afshaan + Vinay) ──────
 // Controls who is in podium.comp_access, i.e. who can see EVERYONE's salary.
 // Edit-right derives from store.users_profile.role='super_admin', never from
@@ -1894,6 +2075,7 @@ const GET_ACTIONS = {
   getDepartments,
   getJobRoles, getJobRole,
   getCompensation, getMyCompensation,
+  getPayouts, getMyPayouts, getPayoutPeriodSheet,
   getDocuments, getDocumentDownloadUrl,
   // Phase 2 — performance capture
   getObservations, getAccomplishments, getOneOnOnes,
@@ -1925,6 +2107,8 @@ const POST_ACTIONS = {
   createOneOnOne, updateOneOnOne, deleteOneOnOne,
   // Permission layer (Podium-managed)
   createPodiumRole, updatePodiumRole, deletePodiumRole, assignPodiumRole,
+  // Payouts ledger (comp-gated)
+  upsertPayouts, generateFixedPayouts, deletePayout,
   // Salary-access allow-list (super_admin)
   addCompAccess, removeCompAccess,
   // Google Directory sync
@@ -1947,7 +2131,7 @@ const SELF_SERVE_GET = new Set([
   'getCompAccess', 'getCompAccessLog',
   'getEmployee', 'getMyPerformance', 'getAccomplishments', 'getObservations', 'getOneOnOnes',
   // Own-salary view — parameter-less, self-scoped by callerEmployee.
-  'getMyCompensation',
+  'getMyCompensation', 'getMyPayouts',
   // Appraisal participation — relationship-scoped inside each handler, not podium_view-gated.
   'getAppraisalConfig', 'getMyAppraisals', 'getAppraisal', 'getTeamAppraisals',
   // Factory cost — self-gated by requireComp (a comp-only role need not hold podium_view).
