@@ -1930,6 +1930,18 @@ async function getPayoutPeriodSheet(url, auth, env) {
   return ok({ period_key, period_type: meta.period_type, payout_type, rows });
 }
 
+// Vendor / bulk payouts (e.g. contract-labour agency) — not tied to an employee.
+async function getBulkPayouts(url, auth, env) {
+  const gate = requireComp(auth); if (gate) return gate;
+  const period_key = url.searchParams.get('period_key');
+  await logCompAccess(auth, 'getBulkPayouts', null, period_key || 'all', env);
+  let q = `/rest/v1/payouts?payee_type=eq.vendor&select=*&${PAYOUT_ORDER}`;
+  if (period_key) q += `&period_key=eq.${encodeURIComponent(period_key)}`;
+  const r = await sb(q, env);
+  if (!r.ok) return err('db_error', 500);
+  return ok({ payouts: r.data || [] });
+}
+
 // ── Payouts ledger — writes (comp-gated) ─────────────────────────────────────
 async function upsertPayouts(body, auth, env) {
   const gate = requireComp(auth); if (gate) return gate;
@@ -1938,13 +1950,17 @@ async function upsertPayouts(body, auth, env) {
   if (!inRows.length) return err('rows required', 400);
   const clean = [];
   for (const r of inRows) {
-    if (!r.employee_id || !r.payout_type || r.amount == null || isNaN(Number(r.amount))) continue;
+    const isVendor = r.payee_type === 'vendor';
+    if (!r.payout_type || r.amount == null || isNaN(Number(r.amount))) continue;
+    if (isVendor ? !r.payee_label : !r.employee_id) continue; // vendor needs a label, employee needs an id
     const key = r.period_key || null;
     const meta = key ? periodMeta(key)
       : { period_type: r.period_type || 'one_time', period_start: r.period_start || null, period_end: r.period_end || null };
     clean.push({
       ...(r.id ? { id: r.id } : {}),
-      employee_id: r.employee_id,
+      employee_id: isVendor ? null : r.employee_id,
+      payee_type: isVendor ? 'vendor' : 'employee',
+      payee_label: isVendor ? r.payee_label : null,
       payout_type: r.payout_type,
       period_type: meta.period_type,
       period_key: key,
@@ -1962,8 +1978,10 @@ async function upsertPayouts(body, auth, env) {
     });
   }
   if (!clean.length) return err('no valid rows', 400);
-  const periodic = clean.filter(r => r.period_key);
-  const adhoc = clean.filter(r => !r.period_key);
+  // Only per-EMPLOYEE periodic rows dedup via the unique index. Vendor rows (null
+  // employee_id) + ad-hoc rows are plain inserts (delete+re-add to correct).
+  const periodic = clean.filter(r => r.employee_id && r.period_key);
+  const rest = clean.filter(r => !(r.employee_id && r.period_key));
   let saved = 0;
   if (periodic.length) {
     const r = await sb(`/rest/v1/payouts?on_conflict=employee_id,payout_type,period_key`, env, {
@@ -1972,10 +1990,10 @@ async function upsertPayouts(body, auth, env) {
     if (!r.ok) return err('upsert_failed: ' + JSON.stringify(r.data), 400);
     saved += periodic.length;
   }
-  if (adhoc.length) {
-    const r = await sb(`/rest/v1/payouts`, env, { method: 'POST', prefer: 'return=minimal', body: JSON.stringify(adhoc) });
+  if (rest.length) {
+    const r = await sb(`/rest/v1/payouts`, env, { method: 'POST', prefer: 'return=minimal', body: JSON.stringify(rest) });
     if (!r.ok) return err('insert_failed: ' + JSON.stringify(r.data), 400);
-    saved += adhoc.length;
+    saved += rest.length;
   }
   await logCompAccess(auth, 'upsertPayouts', null, `${saved} rows`, env);
   return ok({ saved });
@@ -2075,7 +2093,7 @@ const GET_ACTIONS = {
   getDepartments,
   getJobRoles, getJobRole,
   getCompensation, getMyCompensation,
-  getPayouts, getMyPayouts, getPayoutPeriodSheet,
+  getPayouts, getMyPayouts, getPayoutPeriodSheet, getBulkPayouts,
   getDocuments, getDocumentDownloadUrl,
   // Phase 2 — performance capture
   getObservations, getAccomplishments, getOneOnOnes,
