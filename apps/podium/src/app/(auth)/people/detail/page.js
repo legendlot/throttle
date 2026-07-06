@@ -9,6 +9,7 @@ import EmployeeForm from '../../../../components/EmployeeForm.js';
 import DocumentUploader from '../../../../components/DocumentUploader.js';
 import StatusBadge from '../../../../components/StatusBadge.js';
 import { ObservationsPanel, WinsPanel, OneOnOnesPanel } from '../../../../components/PerformancePanels.js';
+import PayoutsPanel from '../../../../components/PayoutsPanel.js';
 import { fmtDate, fmtMoney, tenure, labelOf, EMPLOYMENT_TYPES, DOC_TYPES, GENDER_LABELS } from '../../../../lib/format.js';
 
 const TABS = [
@@ -116,6 +117,7 @@ export default function PersonDetailPage() {
 
           {full && <DocumentsCard employeeId={e.id} session={session} canManage={canEdit} />}
           {data.can_see_comp && <CompCard employeeId={e.id} session={session} canManage={!!(perms?.podium_comp || perms?.podium_admin)} />}
+          {data.can_see_comp && <PayoutsPanel employeeId={e.id} session={session} />}
         </div>
         )
       ) : tab === 'observations' ? (
