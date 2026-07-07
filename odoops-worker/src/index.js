@@ -535,6 +535,8 @@ async function createAmazonReport(host, H, mkt, startISO, endISO, reportType = A
 const AMZ_FIN_WINDOW_MS = 5 * 24 * 3600 * 1000;   // posted-date windows
 const AMZ_FIN_MAX_PAGES = 15;                      // per window — financialEvents pages ALL event types, not just ours
 const AMZ_FIN_SUBREQ_BUDGET = 30;                  // finance budget/tick (report uses ~5; total stays <45). Loops windows to drain backfill.
+const AMZ_FIN_TRAILING_MS = 60 * 24 * 3600 * 1000; // always re-sweep the last 60d each tick (refunds/returns post weeks after the sale)
+const AMZ_FIN_MIN_WINDOW_MS = 24 * 3600 * 1000;    // shrink floor — a dense window halves down to 1 day so it can drain under the page cap
 function amzCharge(list, type) { let s = 0; for (const c of (list || [])) if (c.ChargeType === type) s += num(c.ChargeAmount?.CurrencyAmount); return s; }
 function amzPromo(list) { let s = 0; for (const p of (list || [])) s += num(p.PromotionAmount?.CurrencyAmount); return s; }
 // One financialEvents payload → flat finance rows (aggregated by stageAmazonFinance).
@@ -565,32 +567,73 @@ function parseAmazonFinance(fe) {
   }
   return out;
 }
-// Walk posted-date windows forward (oldest→now) within a per-tick subrequest budget, draining
-// each window fully (paging the NextToken). fin_cursor advances only past windows that fully
-// drained, so a page-capped window is retried next tick (idempotent upsert). Returns accumulated
-// events + the furthest fully-drained window end. PostedBefore must be ≥2min ago.
+// Page ONE posted-date window fully (following NextToken), pushing parsed events into `out`.
+// Returns { done, subreqs, reason }: done=true only when the window fully drained. reason
+// 'pagecap' = hit AMZ_FIN_MAX_PAGES (caller should shrink + retry the same start); 'budget' = ran
+// out of the tick's subreq allowance; 'throttled' = 429. A capped window is NOT complete — its
+// cursor must not advance past it (retried next tick; upsert makes the overlap idempotent).
+async function drainFinanceWindow(host, H, startISO, endISO, out, budget) {
+  let nextToken = null, pages = 0, subreqs = 0;
+  do {
+    if (subreqs >= budget) return { done: false, subreqs, reason: 'budget' };
+    const qs = nextToken
+      ? `MaxResultsPerPage=100&NextToken=${encodeURIComponent(nextToken)}`
+      : `MaxResultsPerPage=100&PostedAfter=${encodeURIComponent(startISO)}&PostedBefore=${encodeURIComponent(endISO)}`;
+    const r = await fetch(`${host}/finances/v0/financialEvents?${qs}`, { headers: H }); subreqs++;
+    if (r.status === 429) return { done: false, subreqs, reason: 'throttled' };  // retry the window next tick
+    if (!r.ok) throw new Error(`Amazon finances ${r.status}: ${(await r.text().catch(() => '')).slice(0, 160)}`);
+    const j = await r.json();
+    out.push(...parseAmazonFinance(j.payload?.FinancialEvents || {}));
+    nextToken = j.payload?.NextToken || null; pages++;
+    if (nextToken && pages >= AMZ_FIN_MAX_PAGES) return { done: false, subreqs, reason: 'pagecap' };
+  } while (nextToken);
+  return { done: true, subreqs, reason: 'drained' };
+}
+
+// Drain [fromISO, toISO] into `out`, walking AMZ_FIN_WINDOW_MS windows and HALVING a window (down to
+// AMZ_FIN_MIN_WINDOW_MS) when it can't page within AMZ_FIN_MAX_PAGES — this breaks the dense-window
+// "poison" that wedged fin_cursor at 2025-07 (a 5-day window there needs ≥15 pages, so it never
+// drained and the cursor never advanced). Only a fully-drained window's rows are committed; a
+// re-drained overlap is idempotent (caller upserts). Returns { throughISO (furthest drained end, or
+// null), subreqs, complete (whole range drained within budget) }.
+async function drainFinanceRange(host, H, fromISO, toISO, out, budget) {
+  let cursorMs = Date.parse(fromISO) || 0; const toMs = Date.parse(toISO) || 0;
+  let subreqs = 0, throughISO = null;
+  while (cursorMs < toMs) {
+    if (subreqs >= budget) return { throughISO, subreqs, complete: false };
+    let winMs = AMZ_FIN_WINDOW_MS, drained = false, wEndMs = 0;
+    for (;;) {
+      wEndMs = Math.min(cursorMs + winMs, toMs);
+      const trial = [];
+      const w = await drainFinanceWindow(host, H, new Date(cursorMs).toISOString(), new Date(wEndMs).toISOString(), trial, budget - subreqs);
+      subreqs += w.subreqs;
+      if (w.done) { out.push(...trial); drained = true; break; }
+      if (w.reason !== 'pagecap' || winMs <= AMZ_FIN_MIN_WINDOW_MS || subreqs >= budget) break;  // can't shrink / out of budget
+      winMs = Math.max(AMZ_FIN_MIN_WINDOW_MS, Math.floor(winMs / 2));                             // halve + retry same start
+    }
+    if (!drained) return { throughISO, subreqs, complete: false };
+    throughISO = new Date(wEndMs).toISOString(); cursorMs = wEndMs;
+  }
+  return { throughISO, subreqs, complete: true };
+}
+
+// Two passes, sharing the per-tick budget. (1) TRAILING — always re-sweep the last AMZ_FIN_TRAILING_MS
+// days so recent refunds/returns land promptly (they post weeks after the sale), INDEPENDENT of how far
+// the deep backfill has crawled. (2) BACKFILL — walk fin_cursor forward up to the trailing edge, with
+// adaptive shrink. Only pass 2 advances fin_cursor; pass 1 relies on idempotent upserts. PostedBefore
+// must be ≥2min ago.
 async function fetchAmazonFinance(host, H, cfg, nowMs) {
-  let cursorISO = cfg.fin_cursor || cfg.backfill_start || BACKFILL_START;
   const events = []; let subreqs = 0, advancedTo = null, partial = false;
-  while (subreqs < AMZ_FIN_SUBREQ_BUDGET) {
-    const startMs = Date.parse(cursorISO) || nowMs;
-    if (startMs >= nowMs - 120_000) break;                                 // caught up to ~now
-    const endISO = new Date(Math.min(startMs + AMZ_FIN_WINDOW_MS, nowMs - 120_000)).toISOString();
-    let nextToken = null, pages = 0, windowDone = true;
-    do {
-      const qs = nextToken
-        ? `MaxResultsPerPage=100&NextToken=${encodeURIComponent(nextToken)}`
-        : `MaxResultsPerPage=100&PostedAfter=${encodeURIComponent(cursorISO)}&PostedBefore=${encodeURIComponent(endISO)}`;
-      const r = await fetch(`${host}/finances/v0/financialEvents?${qs}`, { headers: H }); subreqs++;
-      if (r.status === 429) { windowDone = false; break; }                 // throttled → retry window next tick
-      if (!r.ok) throw new Error(`Amazon finances ${r.status}: ${(await r.text().catch(() => '')).slice(0, 160)}`);
-      const j = await r.json();
-      events.push(...parseAmazonFinance(j.payload?.FinancialEvents || {}));
-      nextToken = j.payload?.NextToken || null; pages++;
-      if (nextToken && (pages >= AMZ_FIN_MAX_PAGES || subreqs >= AMZ_FIN_SUBREQ_BUDGET)) { windowDone = false; break; }
-    } while (nextToken);
-    if (!windowDone) { partial = true; break; }                            // window not fully drained → don't advance past it
-    advancedTo = endISO; cursorISO = endISO;                               // fully drained (incl. empty) → advance + continue
+  const endCap = nowMs - 120_000;
+  const trailStartMs = endCap - AMZ_FIN_TRAILING_MS;
+  // Pass 1 — trailing recent sweep (every tick).
+  const t = await drainFinanceRange(host, H, new Date(trailStartMs).toISOString(), new Date(endCap).toISOString(), events, AMZ_FIN_SUBREQ_BUDGET - subreqs);
+  subreqs += t.subreqs; if (!t.complete) partial = true;
+  // Pass 2 — historical backfill from fin_cursor up to the trailing edge (only with leftover budget).
+  const cursorISO = cfg.fin_cursor || cfg.backfill_start || BACKFILL_START;
+  if (subreqs < AMZ_FIN_SUBREQ_BUDGET && (Date.parse(cursorISO) || nowMs) < trailStartMs) {
+    const b = await drainFinanceRange(host, H, cursorISO, new Date(trailStartMs).toISOString(), events, AMZ_FIN_SUBREQ_BUDGET - subreqs);
+    subreqs += b.subreqs; if (b.throughISO) advancedTo = b.throughISO; if (!b.complete) partial = true;
   }
   return { events, finCursorAfter: advancedTo, partial, subreqs };
 }

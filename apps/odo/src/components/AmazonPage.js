@@ -194,6 +194,9 @@ export default function AmazonPage() {
             <Kpi lbl="Total Discounts" val={inr(seg.discount)} sub="discount given" now={seg.discount} prev={segP.discount} tone="neutral" />
             <Kpi lbl="Replacement" val="—" sub="from another Amazon report (later)" tone="neutral" />
           </div>
+          <div className="so-sub" style={{ fontSize: 10.5, color: 'var(--t3)', marginTop: -2 }}>
+            Returns / RTO / RTV come from Amazon&apos;s Finances refund feed, which posts <b>weeks after</b> the sale — so a current-month figure understates and fills in as refunds settle. Older periods are the accurate read.
+          </div>
 
           {/* ── Advertising ── */}
           <div className="so-kpi-lbl" style={{ marginTop: 4 }}>Advertising</div>
