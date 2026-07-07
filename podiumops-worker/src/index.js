@@ -1843,6 +1843,47 @@ async function setFactoryOtRates(body, auth, env) {
   return ok(Array.isArray(r.data) ? r.data[0] : r.data);
 }
 
+// ── Phase 6 — Analytics (aggregate-only; math lives in podium.f_analytics_*) ──
+// Org + Perf are HR/admin surfaces. Comp is allow-list-gated (RULE-PODIUM-002:
+// the allow-list is THE salary gate) and audited — it is a cross-person comp
+// read even though only aggregates are returned.
+
+function clampInt(v, def, min, max) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.min(Math.max(Math.trunc(n), min), max) : def;
+}
+
+async function getAnalyticsOrg(url, auth, env) {
+  if (!isHr(auth)) return err('Forbidden — requires podium_hr', 403);
+  const months = clampInt(url.searchParams.get('months'), 12, 1, 36);
+  const r = await sb(`/rest/v1/rpc/f_analytics_org`, env, {
+    method: 'POST', body: JSON.stringify({ p_months: months }),
+  });
+  if (!r.ok) return err('db_error', 500);
+  return ok(r.data);
+}
+
+async function getAnalyticsComp(url, auth, env) {
+  const gate = requireComp(auth); if (gate) return gate;
+  const months = clampInt(url.searchParams.get('months'), 12, 1, 36);
+  await logCompAccess(auth, 'getAnalyticsComp', null, 'comp aggregates', env, { months });
+  const r = await sb(`/rest/v1/rpc/f_analytics_comp`, env, {
+    method: 'POST', body: JSON.stringify({ p_months: months }),
+  });
+  if (!r.ok) return err('db_error', 500);
+  return ok(r.data);
+}
+
+async function getAnalyticsPerf(url, auth, env) {
+  if (!isHr(auth)) return err('Forbidden — requires podium_hr', 403);
+  const cycles = clampInt(url.searchParams.get('cycles'), 4, 1, 10);
+  const r = await sb(`/rest/v1/rpc/f_analytics_perf`, env, {
+    method: 'POST', body: JSON.stringify({ p_cycles: cycles }),
+  });
+  if (!r.ok) return err('db_error', 500);
+  return ok(r.data);
+}
+
 // ── Payouts ledger — period + component helpers ──────────────────────────────
 // FY = Apr 1 – Mar 31. Half 1 = Apr–Sep, Half 2 = Oct–Mar. Monthly key 'YYYY-MM';
 // half key 'FYaa-bb-H1|H2' (e.g. 'FY26-27-H1').
@@ -2109,6 +2150,8 @@ const GET_ACTIONS = {
   getAppraisals, getAppraisalCycles, getAppraisalCycle, getEnrollmentPreview,
   // Factory cost module (compensation-tier)
   getFactoryWorkforce, getFactoryCostInputs,
+  // Phase 6 — analytics
+  getAnalyticsOrg, getAnalyticsComp, getAnalyticsPerf,
 };
 
 const POST_ACTIONS = {
@@ -2154,6 +2197,8 @@ const SELF_SERVE_GET = new Set([
   'getAppraisalConfig', 'getMyAppraisals', 'getAppraisal', 'getTeamAppraisals',
   // Factory cost — self-gated by requireComp (a comp-only role need not hold podium_view).
   'getFactoryWorkforce', 'getFactoryCostInputs',
+  // Comp analytics — self-gated by requireComp (a comp-only user need not hold podium_view).
+  'getAnalyticsComp',
 ]);
 const SELF_SERVE_POST = new Set([
   'createAccomplishment', 'updateAccomplishment', 'deleteAccomplishment',
