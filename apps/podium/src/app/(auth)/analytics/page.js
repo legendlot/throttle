@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
 import { podiumopsGet } from '../../../lib/podiumopsFetch.js';
@@ -25,15 +25,23 @@ const TT = { contentStyle: { background: 'var(--surface)', border: '1px solid va
 const AXIS = { stroke: 'var(--t4)', fontSize: 11 };
 
 // Self-fetching section: own loading / error / retry, so one failure never blanks the page.
+// Session lives in a ref and the effect keys on the (gated) user id, so hourly
+// TOKEN_REFRESHED session-object churn never refetches; stale data is kept while
+// reloading so a refresh never blanks a rendered section.
 function useSection(action, params, session) {
   const [state, setState] = useState({ data: null, error: null });
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+  // Gate key: null while the passed session is null (e.g. comp gate closed),
+  // flips null → user id when the gate opens or the first session arrives.
+  const userId = session?.user?.id || null;
   const load = useCallback(() => {
-    if (!session) return;
-    setState({ data: null, error: null });
-    podiumopsGet(action, params, session)
+    if (!sessionRef.current) return;
+    setState((s) => ({ data: s.data, error: null }));
+    podiumopsGet(action, params, sessionRef.current)
       .then((data) => setState({ data, error: null }))
-      .catch((e) => setState({ data: null, error: e.message || 'failed' }));
-  }, [session]); // eslint-disable-line react-hooks/exhaustive-deps
+      .catch((e) => setState((s) => ({ data: s.data, error: e.message || 'failed' })));
+  }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps -- action/params are constant per call site
   useEffect(load, [load]);
   return { ...state, retry: load };
 }
@@ -41,7 +49,7 @@ function useSection(action, params, session) {
 function Section({ title, state, children }) {
   return (
     <section style={{ marginBottom: 28 }}>
-      <h2 style={{ font: '600 13px/1 inherit', letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', margin: '0 0 12px' }}>{title}</h2>
+      <h2 style={{ fontFamily: 'var(--font-display)', fontSize: 13, fontWeight: 600, lineHeight: 1, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t3)', margin: '0 0 12px' }}>{title}</h2>
       {state.error ? (
         <div style={{ ...card, color: 'var(--bad-fg, ' + RED + ')' }}>
           Failed to load: {state.error}{' '}
@@ -131,7 +139,7 @@ function CompSection({ d }) {
         <KpiTile label="With comp on file" value={`${t.employees_with_comp ?? 0} / ${(t.employees_with_comp ?? 0) + (t.employees_without_comp ?? 0)}`}
           sub={t.employees_without_comp ? `${t.employees_without_comp} missing` : 'complete'}
           subColor={t.employees_without_comp ? 'var(--warn-fg)' : 'var(--green-bright)'} />
-        <KpiTile label="Latest increment round" value={latestInc ? `${latestInc.avg_increment_pct ?? '—'}%` : '—'}
+        <KpiTile label="Latest increment round" value={latestInc ? (latestInc.avg_increment_pct != null ? `${latestInc.avg_increment_pct}%` : '—') : '—'}
           sub={latestInc ? `${latestInc.count} people · ${latestInc.anchor}` : 'none yet'} />
       </Rail>
       <div style={grid}>
@@ -238,17 +246,18 @@ function PerfSection({ d }) {
 // ── Page ────────────────────────────────────────────────────────────────────
 
 export default function AnalyticsPage() {
-  const { session } = useAuth();
-  const [me, setMe] = useState(null);
-  useEffect(() => {
-    if (!session) return;
-    podiumopsGet('getMe', {}, session).then(setMe).catch(() => setMe({}));
-  }, [session]);
+  // AuthProvider already loads getMe (pingAction="getMe") — brandUser is that payload;
+  // tier = { admin, hr, comp, super_admin } (hr already includes admin server-side).
+  const { session, brandUser } = useAuth();
+  const isHrTier = !!(brandUser?.tier?.hr || brandUser?.tier?.admin);
+  const isComp = !!brandUser?.tier?.comp;
 
-  const org = useSection('getAnalyticsOrg', { months: 12 }, session);
-  const perf = useSection('getAnalyticsPerf', { cycles: 4 }, session);
-  const isComp = !!me?.tier?.comp;
+  const org = useSection('getAnalyticsOrg', { months: 12 }, isHrTier ? session : null);
+  const perf = useSection('getAnalyticsPerf', { cycles: 4 }, isHrTier ? session : null);
   const comp = useSection('getAnalyticsComp', { months: 12 }, isComp ? session : null);
+
+  // Friendly gate for direct-URL visitors without HR/admin access (nav already hides the entry).
+  if (brandUser && !isHrTier) return <Empty text="Analytics needs HR or admin access." />;
 
   return (
     <div>
