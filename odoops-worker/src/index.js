@@ -1109,7 +1109,18 @@ const amazonAdsAdapter = {
     if (!isSP) { const sbsdFloor = amzAdsDay(nowMs - 55 * 86400000); if (startStr < sbsdFloor) startStr = sbsdFloor; }
     const startMs = Date.parse(startStr + 'T00:00:00Z') || nowMs;
     const endStr = amzAdsDay(Math.min(startMs + AMZ_ADS_WINDOW_MS, nowMs));
-    const rid = await createAdsReport(host, H, adProduct, reportTypeId, startStr, endStr, ['campaign'], cols); subreqs++;
+    let rid;
+    try {
+      rid = await createAdsReport(host, H, adProduct, reportTypeId, startStr, endStr, ['campaign'], cols); subreqs++;
+    } catch (e) {
+      // The v3 reporting createReport endpoint is rate-limited and SHARED across the SP/SB/SD ad
+      // connectors, so transient 429 "Throttled" is expected under contention (esp. Sponsored Brands).
+      // Don't hard-error (red status) — retry next tick; the report lands within a tick or two (the run
+      // history confirms it self-heals). Same graceful handling as the queue-next-window createReport
+      // above. Non-throttle errors (retention 400 / auth) still surface.
+      if (/\b429\b|throttl/i.test(String(e?.message || e))) return { rows: [], cursorAfter: null, subreqs, partial: true };
+      throw e;
+    }
     await patchConnectorConfig(channelId, cfg, { pending_report_id: rid, pending_through: endStr });
     return { rows: [], cursorAfter: null, subreqs, partial: true };
   },
