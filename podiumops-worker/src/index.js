@@ -1854,7 +1854,7 @@ function clampInt(v, def, min, max) {
 }
 
 async function getAnalyticsOrg(url, auth, env) {
-  if (!isHr(auth)) return err('Forbidden — requires podium_hr', 403);
+  const gate = requireHr(auth); if (gate) return gate;
   const months = clampInt(url.searchParams.get('months'), 12, 1, 36);
   const r = await sb(`/rest/v1/rpc/f_analytics_org`, env, {
     method: 'POST', body: JSON.stringify({ p_months: months }),
@@ -1875,7 +1875,7 @@ async function getAnalyticsComp(url, auth, env) {
 }
 
 async function getAnalyticsPerf(url, auth, env) {
-  if (!isHr(auth)) return err('Forbidden — requires podium_hr', 403);
+  const gate = requireHr(auth); if (gate) return gate;
   const cycles = clampInt(url.searchParams.get('cycles'), 4, 1, 10);
   const r = await sb(`/rest/v1/rpc/f_analytics_perf`, env, {
     method: 'POST', body: JSON.stringify({ p_cycles: cycles }),
