@@ -6,11 +6,12 @@ import { podiumopsGet } from '../../../lib/podiumopsFetch.js';
 import { KpiTile, card, cardLabel } from '../../../components/ui.js';
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend,
-  ComposedChart, Line, CartesianGrid,
+  ComposedChart, Line, CartesianGrid, LabelList,
 } from 'recharts';
 
 const YELLOW = '#F2CD1A', BLUE = '#9fb0ff', GREEN = '#4ade80',
       ORANGE = '#fb923c', RED = '#ff8a8a';
+const NUM = 'var(--mono, ui-monospace, "SF Mono", monospace)';
 
 const inr = (n) => n == null ? '—'
   : n >= 1e7 ? `₹${(n / 1e7).toFixed(2)}Cr`
@@ -20,9 +21,45 @@ const mLabel = (m) => {
   const [y, mo] = String(m).split('-');
   return new Date(+y, +mo - 1, 1).toLocaleString('en', { month: 'short' }) + ' ' + y.slice(2);
 };
+// Direct-label + tooltip formatters (blank string hides a zero label).
+const cnt  = (v) => (v ? Number(v).toLocaleString('en-IN') : '');
+const inrL = (v) => (v ? inr(v) : '');
+const pct  = (v) => (v == null ? '' : `${v}%`);
 
-const TT = { contentStyle: { background: 'var(--surface)', border: '1px solid var(--t5)', borderRadius: 8, fontSize: 12 } };
-const AXIS = { stroke: 'var(--t4)', fontSize: 11 };
+// ── Chart chrome (shared) ─────────────────────────────────────────────────────
+const AXIS  = { stroke: 'var(--t4)', fontSize: 11, tickLine: false };
+const GRID  = { stroke: 'var(--t5)', strokeDasharray: '3 3', vertical: false };
+const LABEL = { fill: 'var(--t2)', fontSize: 11, fontWeight: 600, fontFamily: NUM };
+const BAR_CURSOR  = { fill: 'rgba(159,176,255,0.10)', radius: 4 };       // soft wash, not the gray slab
+const LINE_CURSOR = { stroke: 'var(--t4)', strokeWidth: 1, strokeDasharray: '4 4' };
+const ACTIVE_BAR  = { stroke: 'rgba(255,255,255,0.35)', strokeWidth: 1 }; // hovered bar lifts via outline
+const legendText  = (value) => <span style={{ color: 'var(--t3)', fontSize: 12 }}>{value}</span>;
+
+// Clean tooltip: value leads (bold, numeric font, primary ink); category is a muted
+// header; each row keyed by a short stroke of the series color (never color-matched text).
+function ChartTip({ active, payload, label, fmt = cnt }) {
+  if (!active || !payload) return null;
+  const rows = payload.filter((p) => p.value != null && p.value !== 0);
+  if (!rows.length) return null;
+  const multi = rows.length > 1;
+  return (
+    <div style={{
+      background: 'var(--surface)', border: '1px solid var(--t5)', borderRadius: 10,
+      padding: '8px 11px', boxShadow: '0 8px 24px rgba(0,0,0,.42)', minWidth: 96,
+    }}>
+      {label != null && label !== '' && (
+        <div style={{ fontSize: 10, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--t4)', marginBottom: 6 }}>{label}</div>
+      )}
+      {rows.map((p, i) => (
+        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '2px 0' }}>
+          <span style={{ width: 11, height: 3, borderRadius: 2, background: p.color || p.stroke || p.fill, flex: '0 0 auto' }} />
+          <span style={{ fontFamily: NUM, fontSize: 13.5, fontWeight: 700, color: 'var(--t1)', lineHeight: 1 }}>{fmt(p.value)}</span>
+          {multi && <span style={{ fontSize: 11, color: 'var(--t4)', marginLeft: 'auto', paddingLeft: 12 }}>{p.name}</span>}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 // Self-fetching section: own loading / error / retry, so one failure never blanks the page.
 // Session lives in a ref and the effect keys on the (gated) user id, so hourly
@@ -91,34 +128,39 @@ function OrgSection({ d }) {
       </Rail>
       <div style={grid}>
         <ChartCard label="Headcount by department" h={Math.max(240, (d.headcount?.by_department?.length || 0) * 26)}>
-          <BarChart data={d.headcount?.by_department || []} layout="vertical" margin={{ left: 8, right: 16 }}>
+          <BarChart data={d.headcount?.by_department || []} layout="vertical" margin={{ top: 4, right: 44, bottom: 4, left: 8 }}>
             <XAxis type="number" {...AXIS} allowDecimals={false} />
             <YAxis type="category" dataKey="department" width={130} {...AXIS} />
-            <Tooltip {...TT} />
-            <Bar dataKey="count" fill={YELLOW} radius={[0, 4, 4, 0]} />
+            <Tooltip content={<ChartTip fmt={cnt} />} cursor={BAR_CURSOR} />
+            <Bar dataKey="count" fill={YELLOW} radius={[0, 4, 4, 0]} activeBar={ACTIVE_BAR}>
+              <LabelList dataKey="count" position="right" formatter={cnt} {...LABEL} />
+            </Bar>
           </BarChart>
         </ChartCard>
         <ChartCard label="Joiners vs exits">
-          <ComposedChart data={je}>
-            <CartesianGrid stroke="var(--t5)" strokeDasharray="3 3" vertical={false} />
+          <ComposedChart data={je} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
+            <CartesianGrid {...GRID} />
             <XAxis dataKey="m" {...AXIS} /><YAxis {...AXIS} allowDecimals={false} />
-            <Tooltip {...TT} /><Legend />
-            <Bar dataKey="joiners" name="Joiners" fill={GREEN} radius={[3, 3, 0, 0]} />
-            <Bar dataKey="exits" name="Exits" fill={RED} radius={[3, 3, 0, 0]} />
+            <Tooltip content={<ChartTip fmt={cnt} />} cursor={BAR_CURSOR} />
+            <Legend formatter={legendText} iconType="circle" iconSize={9} />
+            <Bar dataKey="joiners" name="Joiners" fill={GREEN} radius={[3, 3, 0, 0]} activeBar={ACTIVE_BAR} />
+            <Bar dataKey="exits" name="Exits" fill={RED} radius={[3, 3, 0, 0]} activeBar={ACTIVE_BAR} />
           </ComposedChart>
         </ChartCard>
         <ChartCard label="Tenure distribution">
-          <BarChart data={d.tenure_buckets || []}>
+          <BarChart data={d.tenure_buckets || []} margin={{ top: 18, right: 10, bottom: 4, left: 0 }}>
             <XAxis dataKey="bucket" {...AXIS} /><YAxis {...AXIS} allowDecimals={false} />
-            <Tooltip {...TT} />
-            <Bar dataKey="count" fill={BLUE} radius={[3, 3, 0, 0]} />
+            <Tooltip content={<ChartTip fmt={cnt} />} cursor={BAR_CURSOR} />
+            <Bar dataKey="count" fill={BLUE} radius={[4, 4, 0, 0]} activeBar={ACTIVE_BAR}>
+              <LabelList dataKey="count" position="top" formatter={cnt} {...LABEL} />
+            </Bar>
           </BarChart>
         </ChartCard>
         <ChartCard label="Monthly attrition rate (%)">
-          <ComposedChart data={att}>
-            <CartesianGrid stroke="var(--t5)" strokeDasharray="3 3" vertical={false} />
+          <ComposedChart data={att} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
+            <CartesianGrid {...GRID} />
             <XAxis dataKey="m" {...AXIS} /><YAxis {...AXIS} />
-            <Tooltip {...TT} />
+            <Tooltip content={<ChartTip fmt={pct} />} cursor={LINE_CURSOR} />
             <Line dataKey="rate_pct" name="Attrition %" stroke={ORANGE} strokeWidth={2} dot={false} connectNulls />
           </ComposedChart>
         </ChartCard>
@@ -144,27 +186,32 @@ function CompSection({ d }) {
       </Rail>
       <div style={grid}>
         <ChartCard label="Annual CTC by department" h={Math.max(240, (d.by_department?.length || 0) * 26)}>
-          <BarChart data={d.by_department || []} layout="vertical" margin={{ left: 8, right: 16 }}>
+          <BarChart data={d.by_department || []} layout="vertical" margin={{ top: 4, right: 60, bottom: 4, left: 8 }}>
             <XAxis type="number" {...AXIS} tickFormatter={inr} />
             <YAxis type="category" dataKey="department" width={130} {...AXIS} />
-            <Tooltip {...TT} formatter={(v) => inr(v)} />
-            <Bar dataKey="annual_ctc_total" name="Annual CTC" fill={YELLOW} radius={[0, 4, 4, 0]} />
+            <Tooltip content={<ChartTip fmt={inr} />} cursor={BAR_CURSOR} />
+            <Bar dataKey="annual_ctc_total" name="Annual CTC" fill={YELLOW} radius={[0, 4, 4, 0]} activeBar={ACTIVE_BAR}>
+              <LabelList dataKey="annual_ctc_total" position="right" formatter={inrL} {...LABEL} />
+            </Bar>
           </BarChart>
         </ChartCard>
         <ChartCard label="CTC distribution">
-          <BarChart data={d.distribution || []}>
+          <BarChart data={d.distribution || []} margin={{ top: 18, right: 10, bottom: 4, left: 0 }}>
             <XAxis dataKey="bucket" {...AXIS} /><YAxis {...AXIS} allowDecimals={false} />
-            <Tooltip {...TT} />
-            <Bar dataKey="count" fill={BLUE} radius={[3, 3, 0, 0]} />
+            <Tooltip content={<ChartTip fmt={cnt} />} cursor={BAR_CURSOR} />
+            <Bar dataKey="count" fill={BLUE} radius={[4, 4, 0, 0]} activeBar={ACTIVE_BAR}>
+              <LabelList dataKey="count" position="top" formatter={cnt} {...LABEL} />
+            </Bar>
           </BarChart>
         </ChartCard>
         <ChartCard label="Monthly cost — plan vs actuals (actuals fill in as payouts land)">
-          <ComposedChart data={trend}>
-            <CartesianGrid stroke="var(--t5)" strokeDasharray="3 3" vertical={false} />
+          <ComposedChart data={trend} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
+            <CartesianGrid {...GRID} />
             <XAxis dataKey="m" {...AXIS} /><YAxis {...AXIS} tickFormatter={inr} />
-            <Tooltip {...TT} formatter={(v) => inr(v)} /><Legend />
-            <Bar dataKey="actuals_employee" name="Actuals · payroll" stackId="a" fill={GREEN} />
-            <Bar dataKey="actuals_vendor" name="Actuals · contract labour" stackId="a" fill={ORANGE} />
+            <Tooltip content={<ChartTip fmt={inr} />} cursor={LINE_CURSOR} />
+            <Legend formatter={legendText} iconSize={9} />
+            <Bar dataKey="actuals_employee" name="Actuals · payroll" stackId="a" fill={GREEN} activeBar={ACTIVE_BAR} />
+            <Bar dataKey="actuals_vendor" name="Actuals · contract labour" stackId="a" fill={ORANGE} activeBar={ACTIVE_BAR} />
             <Line dataKey="plan_cost" name="Plan (CTC ÷ 12)" stroke={YELLOW} strokeWidth={2} dot={false} />
           </ComposedChart>
         </ChartCard>
@@ -203,18 +250,21 @@ function PerfSection({ d }) {
       <div style={grid}>
         {cycles.length > 0 && (
           <ChartCard label="Final-rating distribution by cycle">
-            <BarChart data={dist}>
+            <BarChart data={dist} margin={{ top: 18, right: 10, bottom: 4, left: 0 }}>
               <XAxis dataKey="rating" {...AXIS} /><YAxis {...AXIS} allowDecimals={false} />
-              <Tooltip {...TT} /><Legend />
+              <Tooltip content={<ChartTip fmt={cnt} />} cursor={BAR_CURSOR} />
+              <Legend formatter={legendText} iconType="circle" iconSize={9} />
               {cycles.map((c, i) => (
-                <Bar key={c.cycle || c.appraisal_date} dataKey={c.cycle || c.appraisal_date} fill={CYCLE_COLS[i % CYCLE_COLS.length]} radius={[3, 3, 0, 0]} />
+                <Bar key={c.cycle || c.appraisal_date} dataKey={c.cycle || c.appraisal_date} fill={CYCLE_COLS[i % CYCLE_COLS.length]} radius={[4, 4, 0, 0]} activeBar={ACTIVE_BAR}>
+                  {cycles.length === 1 && <LabelList dataKey={c.cycle || c.appraisal_date} position="top" formatter={cnt} {...LABEL} />}
+                </Bar>
               ))}
             </BarChart>
           </ChartCard>
         )}
         {latest && (
           <ChartCard label={`Participation funnel · ${latest.cycle || latest.appraisal_date}`}>
-            <BarChart layout="vertical" margin={{ left: 8, right: 16 }} data={[
+            <BarChart layout="vertical" margin={{ top: 4, right: 40, bottom: 4, left: 8 }} data={[
               { stage: 'Enrolled', n: latest.funnel?.enrolled ?? 0 },
               { stage: 'Self done', n: latest.funnel?.self_submitted ?? 0 },
               { stage: 'Manager done', n: latest.funnel?.manager_submitted ?? 0 },
@@ -223,16 +273,19 @@ function PerfSection({ d }) {
             ]}>
               <XAxis type="number" {...AXIS} allowDecimals={false} />
               <YAxis type="category" dataKey="stage" width={110} {...AXIS} />
-              <Tooltip {...TT} />
-              <Bar dataKey="n" fill={BLUE} radius={[0, 4, 4, 0]} />
+              <Tooltip content={<ChartTip fmt={cnt} />} cursor={BAR_CURSOR} />
+              <Bar dataKey="n" fill={BLUE} radius={[0, 4, 4, 0]} activeBar={ACTIVE_BAR}>
+                <LabelList dataKey="n" position="right" formatter={cnt} {...LABEL} />
+              </Bar>
             </BarChart>
           </ChartCard>
         )}
         <ChartCard label="Performance activity · 12mo">
-          <ComposedChart data={act}>
-            <CartesianGrid stroke="var(--t5)" strokeDasharray="3 3" vertical={false} />
+          <ComposedChart data={act} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
+            <CartesianGrid {...GRID} />
             <XAxis dataKey="m" {...AXIS} /><YAxis {...AXIS} allowDecimals={false} />
-            <Tooltip {...TT} /><Legend />
+            <Tooltip content={<ChartTip fmt={cnt} />} cursor={LINE_CURSOR} />
+            <Legend formatter={legendText} iconSize={9} />
             <Line dataKey="observations" name="Observations" stroke={YELLOW} strokeWidth={2} dot={false} />
             <Line dataKey="wins" name="Wins" stroke={GREEN} strokeWidth={2} dot={false} />
             <Line dataKey="one_on_ones" name="1:1s" stroke={BLUE} strokeWidth={2} dot={false} />
