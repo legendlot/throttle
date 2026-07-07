@@ -158,12 +158,28 @@ function flattenRoster(nested) {
 // Manpower page — 4 tabs: Live View, Attendance, Daily Roster, Performance.
 // Live View keeps the existing read-only floor view (60s auto-refresh).
 // ═══════════════════════════════════════════════════════════════════════════
+const TABS = [
+  { key: 'live',        label: 'Live view',   icon: 'grid' },
+  { key: 'attendance',  label: 'Attendance',  icon: 'clock' },
+  { key: 'roster',      label: 'Daily roster',icon: 'layers' },
+  { key: 'performance', label: 'Performance', icon: 'activity' },
+  { key: 'analytics',   label: 'Manpower analytics', icon: 'gauge' },
+  { key: 'shifts',      label: 'Shifts',      icon: 'clock' },
+];
+
 export default function ManpowerPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
   const [activeTab, setActiveTab] = useState('live');
   // Page-level operators cache, shared by Attendance / Daily Roster / Performance.
   const [allOperators, setAllOperators] = useState([]);
+
+  // Deep-link a tab via ?tab= (e.g. /manpower?tab=attendance). Read once on mount from window.location —
+  // avoids the useSearchParams Suspense requirement and any SSR/hydration mismatch.
+  useEffect(() => {
+    const tab = new URLSearchParams(window.location.search).get('tab');
+    if (tab && TABS.some((t) => t.key === tab)) setActiveTab(tab);
+  }, []);
 
   const canManageFloor = !!(perms?.users_manage || perms?.production_view || perms?.procurement_approve);
 
@@ -190,15 +206,6 @@ export default function ManpowerPage() {
       </Panel>
     );
   }
-
-  const TABS = [
-    { key: 'live',        label: 'Live view',   icon: 'grid' },
-    { key: 'attendance',  label: 'Attendance',  icon: 'clock' },
-    { key: 'roster',      label: 'Daily roster',icon: 'layers' },
-    { key: 'performance', label: 'Performance', icon: 'activity' },
-    { key: 'analytics',   label: 'Manpower analytics', icon: 'gauge' },
-    { key: 'shifts',      label: 'Shifts',      icon: 'clock' },
-  ];
 
   return (
     <div style={{ maxWidth: 1280, margin: '0 auto', color: 'var(--t1)' }}>
