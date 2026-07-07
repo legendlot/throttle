@@ -3,6 +3,13 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.1.0] - 2026-07-07
+### Added
+- New "Analytics" chapter (Performance part, `/analytics`): the HR/admin
+  aggregate analytics page with its three sections (Org & Headcount, Payroll
+  Cost, Performance), the salary allow-list gate on Payroll Cost, and the
+  aggregates-only privacy model.
+
 ## [1.0.0] - 2026-06-06
 ### Added
 - Complete self-serve manual for Podium: 5 parts, 16 chapters (Getting Started,
