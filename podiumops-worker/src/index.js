@@ -1849,6 +1849,7 @@ async function setFactoryOtRates(body, auth, env) {
 // read even though only aggregates are returned.
 
 function clampInt(v, def, min, max) {
+  if (v == null || v === '') return def;
   const n = Number(v);
   return Number.isFinite(n) ? Math.min(Math.max(Math.trunc(n), min), max) : def;
 }
