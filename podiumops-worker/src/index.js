@@ -223,6 +223,43 @@ async function fetchGoogleUsers(env) {
   return out;
 }
 
+// ── RazorpayX Payroll (Opfin) ────────────────────────────────────────────────
+// Auth lives in the JSON body, not a header. Graceful-until-creds: if either
+// secret is absent, callers return razorpayx_not_configured (mirrors Google SA).
+// One RazorpayX org = Fraternitas (white-collar internal payroll); Silverton
+// (blue-collar contract) is NOT on RazorpayX and won't appear here.
+const RZP_PAYROLL_BASE = 'https://payroll.razorpay.com/api/payroll';
+function razorpayxConfigured(env) { return !!(env.RAZORPAYX_PAYROLL_ID && env.RAZORPAYX_PAYROLL_KEY); }
+
+async function razorpayxCall(env, type, subType, data) {
+  const res = await fetch(RZP_PAYROLL_BASE, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      auth: { id: env.RAZORPAYX_PAYROLL_ID, key: env.RAZORPAYX_PAYROLL_KEY },
+      request: { type, 'sub-type': subType },
+      data: data || {},
+    }),
+  });
+  const text = await res.text();
+  let body; try { body = text ? JSON.parse(text) : null; } catch { body = text; }
+  return { ok: res.ok, status: res.status, body };
+}
+
+// Fetch the full RazorpayX employee roster (id + email + name). Array path + id/
+// email/name field names confirmed by the Task-1 probe — adjust the accessors below
+// to the exact response shape if they differ.
+async function fetchRazorpayxEmployees(env) {
+  const r = await razorpayxCall(env, 'employee', 'get-employees', {});
+  if (!r.ok) throw new Error(`razorpayx get-employees ${r.status}: ${JSON.stringify(r.body)?.slice(0, 300)}`);
+  const list = r.body?.employees || r.body?.data?.employees || r.body?.data || [];
+  return (Array.isArray(list) ? list : []).map(e => ({
+    razorpayx_employee_id: String(e.id ?? e.employee_id ?? ''),
+    email: (e.email || e.official_email || '').trim().toLowerCase(),
+    name: e.name || e.full_name || null,
+  })).filter(e => e.razorpayx_employee_id);
+}
+
 // email(lowercased) → auth.users id, via the GoTrue admin API.
 async function authEmailMap(env) {
   const res = await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users?per_page=1000`, {
@@ -1984,6 +2021,99 @@ async function getBulkPayouts(url, auth, env) {
   return ok({ payouts: r.data || [] });
 }
 
+// ── RazorpayX Payroll actuals feed (comp-gated + audited) ────────────────────
+// Map RazorpayX employees ↔ Podium employees by work_email (Fraternitas white-collar).
+// Side-effect: persists newly-resolved razorpayx_employee_id onto the Podium row so
+// later syncs resolve directly. Returns matched + both-sided unmatched for review.
+async function getRazorpayxPayrollMap(url, auth, env) {
+  const gate = requireComp(auth); if (gate) return gate;
+  if (!razorpayxConfigured(env)) return err('razorpayx_not_configured', 400);
+  await logCompAccess(auth, 'getRazorpayxPayrollMap', null, url.searchParams.get('month') || null, env);
+
+  const rzp = await fetchRazorpayxEmployees(env);
+  const rzpByEmail = new Map(rzp.map(e => [e.email, e]));
+
+  const er = await sb(`/rest/v1/employees?status=neq.exited&select=id,employee_code,full_name,work_email,razorpayx_employee_id&order=full_name.asc`, env);
+  if (!er.ok) return err('db_error', 500);
+  const emps = er.data || [];
+
+  const matched = [], unmatchedPodium = [], toPersist = [];
+  const usedRzp = new Set();
+  for (const e of emps) {
+    let rid = e.razorpayx_employee_id || null;
+    if (!rid) {
+      const hit = rzpByEmail.get((e.work_email || '').trim().toLowerCase());
+      if (hit) { rid = hit.razorpayx_employee_id; toPersist.push({ id: e.id, razorpayx_employee_id: rid }); }
+    }
+    if (rid) {
+      usedRzp.add(String(rid));
+      matched.push({ employee_id: e.id, employee_code: e.employee_code, full_name: e.full_name, razorpayx_employee_id: String(rid) });
+    } else {
+      unmatchedPodium.push({ employee_id: e.id, employee_code: e.employee_code, full_name: e.full_name, work_email: e.work_email || null });
+    }
+  }
+  const unmatchedRzp = rzp.filter(r => !usedRzp.has(String(r.razorpayx_employee_id)))
+    .map(r => ({ razorpayx_employee_id: r.razorpayx_employee_id, name: r.name, email: r.email }));
+
+  // Persist newly-resolved ids (batched upsert; best-effort — must not block the map read).
+  if (toPersist.length) {
+    try {
+      await sb(`/rest/v1/employees?on_conflict=id`, env, {
+        method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates',
+        body: JSON.stringify(toPersist),
+      });
+    } catch (_e) { /* mapping persists next run; never block */ }
+  }
+  return ok({ matched, unmatched_podium: unmatchedPodium, unmatched_razorpayx: unmatchedRzp });
+}
+
+// Extract gross monthly earnings from a view-payroll response. Field names confirmed
+// by the Task-1 probe. If gross isn't a single field, reconstruct = net + Σ deductions.
+function parseRazorpayxPayroll(body) {
+  const p = body?.payroll || body?.data || body || {};
+  const num = v => (v == null || isNaN(Number(v))) ? null : Number(v);
+  const gross = num(p.gross_earnings ?? p.gross ?? p.total_earnings);
+  const net   = num(p.net_pay ?? p.net);
+  return {
+    gross,
+    net,
+    paid_on: p.disbursed_on || p.payroll_month || null,
+    source_ref: (p.payroll_id ?? p.id) != null ? String(p.payroll_id ?? p.id) : null,
+  };
+}
+
+// Fetch a CHUNK (≤40) of employees' payroll for a month. The client orchestrates
+// chunking to respect the 50-subrequest limit. Resolves each RazorpayX id back to a
+// Podium employee via the persisted razorpayx_employee_id (one batched DB read).
+async function getRazorpayxPayrollAmounts(url, auth, env) {
+  const gate = requireComp(auth); if (gate) return gate;
+  if (!razorpayxConfigured(env)) return err('razorpayx_not_configured', 400);
+  const month = url.searchParams.get('month');
+  const idsRaw = url.searchParams.get('ids') || '';
+  if (!/^\d{4}-\d{2}$/.test(month || '')) return err('month required (YYYY-MM)', 400);
+  const ids = idsRaw.split(',').map(s => s.trim()).filter(Boolean).slice(0, 40);
+  if (!ids.length) return err('ids required', 400);
+  await logCompAccess(auth, 'getRazorpayxPayrollAmounts', null, `${month} (${ids.length})`, env);
+
+  const inList = ids.map(encodeURIComponent).join(',');
+  const er = await sb(`/rest/v1/employees?razorpayx_employee_id=in.(${inList})&select=id,razorpayx_employee_id`, env);
+  const empByRzp = new Map((er.ok ? er.data || [] : []).map(e => [String(e.razorpayx_employee_id), e.id]));
+
+  const amounts = [];
+  for (const rid of ids) {
+    const r = await razorpayxCall(env, 'payroll', 'view-payroll', { 'employee-id': Number(rid), 'payroll-month': month });
+    if (!r.ok) { amounts.push({ razorpayx_employee_id: rid, employee_id: empByRzp.get(rid) || null, error: `http_${r.status}` }); continue; }
+    const parsed = parseRazorpayxPayroll(r.body);
+    amounts.push({
+      razorpayx_employee_id: rid,
+      employee_id: empByRzp.get(rid) || null,
+      gross: parsed.gross, net: parsed.net,
+      paid_on: parsed.paid_on, source_ref: parsed.source_ref,
+    });
+  }
+  return ok({ month, amounts });
+}
+
 // ── Payouts ledger — writes (comp-gated) ─────────────────────────────────────
 async function upsertPayouts(body, auth, env) {
   const gate = requireComp(auth); if (gate) return gate;
@@ -2039,6 +2169,48 @@ async function upsertPayouts(body, auth, env) {
   }
   await logCompAccess(auth, 'upsertPayouts', null, `${saved} rows`, env);
   return ok({ saved });
+}
+
+// Write confirmed RazorpayX gross amounts into the payouts ledger. One 'fixed' row
+// per employee-month; source='razorpayx' supersedes autogen/manual via the unique
+// index (employee_id,payout_type,period_key). Comp-gated + audited.
+async function applyRazorpayxPayouts(body, auth, env) {
+  const gate = requireComp(auth); if (gate) return gate;
+  const d = body.data || body;
+  const month = d.month;
+  const inRows = Array.isArray(d.rows) ? d.rows : [];
+  if (!/^\d{4}-\d{2}$/.test(month || '')) return err('month required (YYYY-MM)', 400);
+  if (!inRows.length) return err('rows required', 400);
+
+  const meta = periodMeta(month);   // { period_type:'monthly', period_start, period_end }
+  const clean = [];
+  for (const r of inRows) {
+    if (!r.employee_id || r.amount == null || isNaN(Number(r.amount))) continue;
+    clean.push({
+      employee_id: r.employee_id,
+      payee_type: 'employee',
+      payout_type: 'fixed',
+      period_type: meta.period_type,
+      period_key: month,
+      period_start: meta.period_start,
+      period_end: meta.period_end,
+      amount: Number(r.amount),
+      currency: 'INR',
+      paid_on: r.paid_on || null,
+      source: 'razorpayx',
+      source_ref: r.source_ref || null,
+      created_by: auth.userId || null,
+      updated_at: nowIso(),
+    });
+  }
+  if (!clean.length) return err('no valid rows', 400);
+
+  const w = await sb(`/rest/v1/payouts?on_conflict=employee_id,payout_type,period_key`, env, {
+    method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify(clean),
+  });
+  if (!w.ok) return err('upsert_failed: ' + JSON.stringify(w.data), 400);
+  await logCompAccess(auth, 'applyRazorpayxPayouts', null, `${month}: ${clean.length} rows`, env);
+  return ok({ month, saved: clean.length });
 }
 
 // Auto-create a month's FIXED rows for active staff from current monthly_fixed.
@@ -2136,6 +2308,7 @@ const GET_ACTIONS = {
   getJobRoles, getJobRole,
   getCompensation, getMyCompensation,
   getPayouts, getMyPayouts, getPayoutPeriodSheet, getBulkPayouts,
+  getRazorpayxPayrollMap, getRazorpayxPayrollAmounts,
   getDocuments, getDocumentDownloadUrl,
   // Phase 2 — performance capture
   getObservations, getAccomplishments, getOneOnOnes,
@@ -2170,7 +2343,7 @@ const POST_ACTIONS = {
   // Permission layer (Podium-managed)
   createPodiumRole, updatePodiumRole, deletePodiumRole, assignPodiumRole,
   // Payouts ledger (comp-gated)
-  upsertPayouts, generateFixedPayouts, deletePayout,
+  upsertPayouts, generateFixedPayouts, deletePayout, applyRazorpayxPayouts,
   // Salary-access allow-list (super_admin)
   addCompAccess, removeCompAccess,
   // Google Directory sync
@@ -2198,6 +2371,8 @@ const SELF_SERVE_GET = new Set([
   'getAppraisalConfig', 'getMyAppraisals', 'getAppraisal', 'getTeamAppraisals',
   // Factory cost — self-gated by requireComp (a comp-only role need not hold podium_view).
   'getFactoryWorkforce', 'getFactoryCostInputs',
+  // RazorpayX payroll actuals — self-gated by requireComp (comp-only need not hold podium_view).
+  'getRazorpayxPayrollMap', 'getRazorpayxPayrollAmounts',
   // Comp analytics — self-gated by requireComp (a comp-only user need not hold podium_view).
   'getAnalyticsComp',
 ]);
@@ -2209,6 +2384,8 @@ const SELF_SERVE_POST = new Set([
   'submitSelfReview', 'submitManagerReview', 'acknowledgeAppraisal',
   // Factory cost — self-gated by requireComp (a comp-only role need not hold podium_view).
   'setFactoryWorkforce', 'setFactoryPay', 'bulkUploadFactoryPay', 'setFactoryCostInput', 'setFactoryOtRates',
+  // RazorpayX payroll actuals writer — self-gated by requireComp.
+  'applyRazorpayxPayouts',
 ]);
 
 async function handleGet(url, request, env) {
