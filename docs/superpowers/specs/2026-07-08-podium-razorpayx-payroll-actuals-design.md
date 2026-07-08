@@ -1,5 +1,22 @@
 # Podium ← RazorpayX Payroll — actuals feed (design)
 
+> **REVISION (S200, post-probe — this supersedes §3/§5/§6 below where they conflict).**
+> The live probe disproved the assumptions this spec was written on. Actual API reality:
+> (1) **No bulk/list/profile endpoint** — the only working read is per-employee `view-payroll`.
+> (2) The payslip has **no email, no payroll-id, no disbursal date** — only `employee-id`,
+> `employee-name`, `salary`, `additions`, `arrears`, `deductions`, `deductible_benefits.PF`.
+> (3) **Gross = `salary` + Σ`additions` + `arrears`** (there is no single gross field).
+> (4) Employee-ids are **sequential**; the API is **rate-limited** (429 under load).
+> So the shipped design is: enumeration = a **cursored sequential id-scan**
+> (`getRazorpayxPayrollScan`, ≤40 ids/call, client follows `next_start` until a trailing-miss
+> stop / id cap / rate-limit backoff); matching = **RazorpayX `employee-name` → Podium
+> `full_name`** (persisted-id first, else unique normalized-name; unmatched → manual dropdown;
+> id persisted on confirm) — NOT email. Everything else (comp gate, audit, one gross `fixed`
+> row/employee-month superseding via the unique index, Fraternitas-only, `/admin/payouts` modal)
+> is as written. Current truth: [[systems/podium]] + reference/integrations.md.
+
+
+
 > Status: design, awaiting review → writing-plans
 > Date: 2026-07-08 (Session 200)
 > System: Podium (People & Performance OS) · worker `podiumops` · schema `podium`
