@@ -510,9 +510,10 @@ function ScannerPins({ session, showToast }) {
     { key: 'production', label: 'Production' },
     { key: 'store',      label: 'Store' },
     { key: 'dispatch',   label: 'Dispatch' },
+    { key: 'attendance', label: 'Attendance' },
   ];
   const [status, setStatus] = useState({});
-  const [pins, setPins]     = useState({ production: '', store: '', dispatch: '' });
+  const [pins, setPins]     = useState({ production: '', store: '', dispatch: '', attendance: '' });
   const [saving, setSaving] = useState('');
   const [loading, setLoading] = useState(true);
 
@@ -549,7 +550,7 @@ function ScannerPins({ session, showToast }) {
       <div style={panelHeaderStyle}><span>Scanner Department PINs</span></div>
       <div style={panelBodyStyle}>
         <p style={{ color: 'var(--t3)', fontSize: 11, fontFamily: 'var(--mono)', marginTop: 0, marginBottom: 16, lineHeight: 1.5 }}>
-          6-digit PINs that gate the floor scanner&apos;s Production / Store / Dispatch departments.
+          6-digit PINs that gate the floor scanner&apos;s Production / Store / Dispatch / Attendance departments.
           Stored hashed; the current value is never shown. Enter a new PIN to rotate it — it takes effect immediately.
         </p>
         {loading ? <Spinner /> : DEPTS.map(({ key, label }) => {
