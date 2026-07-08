@@ -6,6 +6,7 @@ import { Wallet, Sparkles } from 'lucide-react';
 import { podiumopsGet, podiumopsPost } from '../../../../lib/podiumopsFetch.js';
 import { fmtINR, monthKey, halfKey, fyStartYear, periodLabel } from '../../../../lib/payouts.js';
 import ContractLabourPanel from '../../../../components/ContractLabourPanel.js';
+import RazorpayxSyncModal from '../../../../components/RazorpayxSyncModal.js';
 
 const FY = fyStartYear();  // current fiscal-year start calendar year
 const MONTHS = Array.from({ length: 12 }, (_, i) => { const m = ((3 + i) % 12) + 1; const y = m >= 4 ? FY : FY + 1; return monthKey(y, m); });
@@ -21,6 +22,7 @@ export default function PayoutsAdminPage() {
   const [sheet, setSheet] = useState(null);           // null=loading, false=forbidden
   const [edits, setEdits] = useState({});             // employee_id → {pct, amount, note, type, paid_on}
   const [busy, setBusy] = useState(false);
+  const [rzpSync, setRzpSync] = useState(false);
 
   const periodKey = tab === 'variable' ? half : period;
   useEffect(() => {
@@ -103,7 +105,10 @@ export default function PayoutsAdminPage() {
             {MONTHS.map((k) => <option key={k} value={k}>{periodLabel(k)}</option>)}
           </select>
         )}
-        {tab === 'fixed' && <button onClick={generateFixed} disabled={busy} style={btn}><Sparkles size={13} /> Generate month from CTC</button>}
+        {tab === 'fixed' && <>
+          <button onClick={generateFixed} disabled={busy} style={btn}><Sparkles size={13} /> Generate month from CTC</button>
+          <button onClick={() => setRzpSync(true)} disabled={busy} style={btn}><Wallet size={13} /> Sync from RazorpayX</button>
+        </>}
       </div>
 
       {sheet === null ? <div style={{ marginTop: 16 }}><Spinner /></div> : (
@@ -146,6 +151,14 @@ export default function PayoutsAdminPage() {
 
       <button onClick={save} disabled={busy || sheet === null} style={{ ...btn, marginTop: 14 }}><Wallet size={14} /> Save</button>
       </>)}
+
+      {rzpSync && (
+        <RazorpayxSyncModal
+          session={session} month={period}
+          onClose={() => setRzpSync(false)}
+          onDone={() => { setRzpSync(false); podiumopsGet('getPayoutPeriodSheet', { period_key: period, payout_type: 'fixed' }, session).then(setSheet).catch(() => {}); }}
+        />
+      )}
     </div>
   );
 }
