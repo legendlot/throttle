@@ -2533,6 +2533,12 @@ export default {
               committed_daily_inr: await adsCommittedDailyInr(), ceiling_inr: await adsCeilingInr(),
               write_enabled: await adsWriteEnabled() });
           }
+          case 'getSegmentMap': {   // Dyno Matrix — raw audience_segment → canonical column map (Kidult/Parent/Family/Gifter)
+            if (!canView(P)) return err('No permission', 403);
+            const r = await sbSales('/rest/v1/lab_segment_map?select=raw,canonical');
+            if (!r.ok) return err('Segment map read failed: ' + JSON.stringify(r.data), 502);
+            return ok({ map: r.data || [], segments: ['Kidult', 'Parent', 'Family', 'Gifter'] });
+          }
           case 'metaWriteProbe': {   // diagnostic: self-discover Page/Pixel ids + confirm ads_management scope (NO writes)
             if (!canAdsWrite(P)) return err('No permission', 403);
             const acct = await metaAdAccount(qp('account')).catch(e => { throw e; });

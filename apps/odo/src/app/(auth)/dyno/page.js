@@ -4,6 +4,7 @@ import { useAuth } from '@throttle/auth';
 import { Spinner } from '@throttle/ui';
 import { salesGet, salesPost, inr, fmtInt } from '../../../lib/api.js';
 import { SegmentedToggle } from '../../../components/kit.js';
+import { DynoTabs } from './tabs.js';
 
 // Dyno — LOT creative testing grounds. Live board (one row per variant) + controls, all against
 // the same gated Worker actions the Brand engine uses. Monitor-only is fully supported (buttons
@@ -195,6 +196,8 @@ export default function DynoPage() {
           <button className="so-btn ghost" onClick={() => load()} title="Refresh">↻</button>
         </div>
       </div>
+
+      <DynoTabs />
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
         <SegmentedToggle value={filter} onChange={setFilter} options={[
