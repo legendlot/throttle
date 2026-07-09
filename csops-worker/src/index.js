@@ -4604,7 +4604,7 @@ function escapeHtml(s) { return String(s || '').replace(/&/g, '&amp;').replace(/
 async function getMessagingThreads(params, auth, env) {
   const channel = params.get('channel');
   const tab = params.get('tab');              // mine | unassigned | all (assignment axis, S162)
-  const limit = Math.min(Number(params.get('limit')) || 60, 300);
+  const limit = Math.min(Number(params.get('limit')) || 60, 1000);   // cap raised 300→1000 for list "Load more" (S202)
   // Sort axis (S164, Pruthvi): recent activity (default) | oldest-first | priority high→low.
   const sort = params.get('sort') || 'recent';
   const ORDERS = {

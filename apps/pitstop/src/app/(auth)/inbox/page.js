@@ -58,6 +58,7 @@ const relTime = (iso) => {
   if (h < 24) return `${h}h`;
   return `${Math.floor(h / 24)}d`;
 };
+const PAGE = 60;   // conversation-list page size — "Load more" adds one PAGE at a time (S202)
 const BITESPEED_BASE = 'https://chat.bitespeed.co';
 const biteSpeedLink = (t) => (t?.provider_account_id && t?.provider_thread_ref)
   ? `${BITESPEED_BASE}/app/accounts/${t.provider_account_id}/conversations/${t.provider_thread_ref}`
@@ -81,6 +82,7 @@ export default function InboxPage() {
   const [search, setSearch] = useState('');                 // debounced → server query
   const [allTags, setAllTags] = useState([]);
   const [threads, setThreads] = useState([]);
+  const [listLimit, setListLimit] = useState(PAGE);   // conversation-list window; "Load more" grows it (S202)
   const [stats, setStats] = useState({
     instagram: { total: 0, awaiting: 0, mine: 0, unassigned: 0 },
     messenger: { total: 0, awaiting: 0, mine: 0, unassigned: 0 },
@@ -152,12 +154,18 @@ export default function InboxPage() {
       if (agentFilter) p.agent = agentFilter;
       if (sort !== 'recent') p.sort = sort;
       if (search) p.q = search;   // phone/name search (S178, Pruthvi) — server-side
+      p.limit = listLimit;        // grows via "Load more" (S202) — single query keeps the 20s poll append-safe
       const d = await csopsGet('getMessagingThreads', p, session);
       setThreads(d?.threads || []);
       setErr(null);   // self-heal: a transient poll/auth blip must not leave a sticky banner (S177)
     } catch (e) { setErr(e.message); }
     finally { setLoadingList(false); }
-  }, [session, channel, assignTab, stateFilter, tagFilter, priorityFilter, agentFilter, sort, ignitionScope, search]);
+  }, [session, channel, assignTab, stateFilter, tagFilter, priorityFilter, agentFilter, sort, ignitionScope, search, listLimit]);
+
+  // Reset the list window to the first page whenever a filter/channel/search changes
+  // — an old expanded window must not carry into a different view. Setting PAGE when
+  // it's already PAGE is a no-op (React bails), so this only refetches after Load-more.
+  useEffect(() => { setListLimit(PAGE); }, [channel, assignTab, stateFilter, tagFilter, priorityFilter, agentFilter, sort, ignitionScope, search]);
 
   // Debounce the search box → server query (S178)
   useEffect(() => { const id = setTimeout(() => setSearch(searchInput.trim()), 350); return () => clearTimeout(id); }, [searchInput]);
@@ -736,6 +744,15 @@ export default function InboxPage() {
                 </div>
               );
             })}
+            {/* Load more — shown when the window came back full, so older conversations
+                may exist beyond it (S202). Grows the single-query window by one PAGE. */}
+            {!loadingList && threads.length >= listLimit && (
+              <button onClick={() => setListLimit(n => n + PAGE)}
+                style={{ width: '100%', padding: '10px 12px', border: 'none', borderTop: '1px solid var(--border)',
+                  background: 'transparent', color: 'var(--accent)', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                Load older conversations
+              </button>
+            )}
           </div>
           </div>{/* end contents wrapper */}
         </div>
