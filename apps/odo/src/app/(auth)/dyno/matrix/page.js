@@ -49,7 +49,7 @@ function cellStat(variants, win) {
 
 export default function DynoMatrixPage() {
   const { session } = useAuth();
-  const [filter, setFilter] = useState('active');            // Active | All (board filter)
+  const [filter, setFilter] = useState('all');               // All | Active — coverage view defaults to All (show the full explored grid incl. paused/dead/won)
   const [win, setWin] = useState('recent');                  // recent 3d | lifetime
   const [product, setProduct] = useState('all');
   const [data, setData] = useState(null);                    // { rows }
@@ -155,7 +155,7 @@ export default function DynoMatrixPage() {
         <SegmentedToggle value={win} onChange={setWin}
           options={[{ key: 'recent', label: `Recent ${RECENT_DAYS}d` }, { key: 'life', label: 'Lifetime' }]} />
         <SegmentedToggle value={filter} onChange={setFilter}
-          options={[{ key: 'active', label: 'Active' }, { key: 'all', label: 'All' }]} />
+          options={[{ key: 'all', label: 'All' }, { key: 'active', label: 'Active' }]} />
         <Legend />
       </div>
 
