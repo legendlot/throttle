@@ -3972,6 +3972,42 @@ function b64ToBytes(b64) {
   return bytes;
 }
 
+// ── Email attachments (S201) — real MIME attachment parts on the Gmail send, not a
+// URL (unlike the Meta path). Broader allowlist than Meta (agents send invoices,
+// labels, spreadsheets). Caps keep the request under Gmail's 25MB and the Worker's
+// ~128MB memory budget (base64 inflates + is re-encoded for the raw send).
+const EMAIL_ATTACH_MIME = {
+  'application/pdf': 'pdf',
+  'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'application/msword': 'doc',
+  'application/vnd.ms-excel': 'xls',
+  'text/csv': 'csv',
+  'text/plain': 'txt',
+  'application/zip': 'zip',
+};
+const EMAIL_ATTACH_MAX_PER_FILE = 10 * 1024 * 1024;   // 10MB per file
+const EMAIL_ATTACH_MAX_TOTAL    = 15 * 1024 * 1024;   // 15MB total (Gmail hard cap 25MB; kept low for Worker memory)
+const EMAIL_ATTACH_MAX_COUNT    = 10;                 // subrequest-budget guard (one upload each)
+
+// bytes -> standard base64 (NOT base64url), CRLF-wrapped at 76 cols per RFC 2045.
+function bytesToB64Wrapped(bytes) {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/(.{76})/g, '$1\r\n');
+}
+// A Content-Disposition-safe filename: strip CR/LF/quotes/backslash; RFC 2047
+// encoded-word for any non-ASCII so mail clients render it correctly.
+function mimeFilename(name) {
+  const clean = String(name || 'attachment').replace(/[\r\n"\\]/g, '_').slice(0, 200);
+  if (/^[\x20-\x7E]+$/.test(clean)) return clean;
+  const bytes = new TextEncoder().encode(clean);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return `=?UTF-8?B?${btoa(bin)}?=`;
+}
+
 async function sendMetaAttachment(body, auth, env) {
   const g = require('cs_ticket_manage', auth); if (g) return g;
   const { thread_id, mime_type, data_base64, filename, caption } = body;
@@ -4357,7 +4393,27 @@ async function syncGmailNow(body, auth, env) {
 async function sendEmailReply(body, auth, env) {
   const g = require('cs_ticket_manage', auth); if (g) return g;
   const { thread_id, text, html, cc, bcc, subject: subjectOverride } = body;
-  if (!thread_id || (!text && !html)) return err('thread_id and text (or html) required');
+
+  // Attachments (S201) — optional array of { mime_type, data_base64, filename }.
+  // Validate + decode up front so a bad file fails before we send anything.
+  const attIn = Array.isArray(body.attachments) ? body.attachments : [];
+  if (attIn.length > EMAIL_ATTACH_MAX_COUNT) return err(`Too many attachments (max ${EMAIL_ATTACH_MAX_COUNT})`, 413);
+  const atts = [];
+  let attTotal = 0;
+  for (const a of attIn) {
+    const mt = a?.mime_type;
+    const ext = EMAIL_ATTACH_MIME[mt];
+    if (!ext) return err(`Unsupported attachment type: ${mt || '(none)'}`, 415);
+    let bytes;
+    try { bytes = b64ToBytes(a.data_base64); } catch { return err('Invalid attachment data'); }
+    if (!bytes.length) return err(`Empty attachment: ${a.filename || mt}`);
+    if (bytes.length > EMAIL_ATTACH_MAX_PER_FILE) return err(`Attachment too large: ${a.filename || mt} (max 10MB per file)`, 413);
+    attTotal += bytes.length;
+    if (attTotal > EMAIL_ATTACH_MAX_TOTAL) return err('Attachments too large (max 15MB total)', 413);
+    atts.push({ bytes, mime: mt, ext, filename: a.filename || `attachment.${ext}` });
+  }
+
+  if (!thread_id || (!text && !html && !atts.length)) return err('thread_id and text, html, or an attachment required');
 
   const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=*&limit=1`, env);
   const thread = tRes.data?.[0];
@@ -4404,9 +4460,11 @@ async function sendEmailReply(body, auth, env) {
   const textBody = text || stripHtml(html);
   const htmlBody = html || `<p>${escapeHtml(text).replace(/\n/g, '<br>')}</p>`;
 
-  // Build the RFC822 message (multipart/alternative). Gmail honours a Bcc header on
-  // a raw send (delivers to those recipients, strips the header from the stored msg).
-  const boundary = `b_${crypto.randomUUID().replace(/-/g, '')}`;
+  // Build the RFC822 message. Gmail honours a Bcc header on a raw send (delivers to
+  // those recipients, strips the header from the stored msg). The body is always a
+  // multipart/alternative (text + html); with attachments it's nested inside a
+  // multipart/mixed alongside one attachment part per file (S201).
+  const altB = `alt_${crypto.randomUUID().replace(/-/g, '')}`;
   const headerLines = [
     `To: ${toList.join(', ')}`,
   ];
@@ -4419,12 +4477,33 @@ async function sendEmailReply(body, auth, env) {
   );
   if (inReplyTo)  headerLines.push(`In-Reply-To: ${inReplyTo}`);
   if (references) headerLines.push(`References: ${references}`);
-  headerLines.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
-  const raw =
-    headerLines.join('\r\n') + '\r\n\r\n' +
-    `--${boundary}\r\nContent-Type: text/plain; charset="UTF-8"\r\n\r\n${textBody}\r\n\r\n` +
-    `--${boundary}\r\nContent-Type: text/html; charset="UTF-8"\r\n\r\n${htmlBody}\r\n\r\n` +
-    `--${boundary}--`;
+
+  const altBody =
+    `--${altB}\r\nContent-Type: text/plain; charset="UTF-8"\r\n\r\n${textBody}\r\n\r\n` +
+    `--${altB}\r\nContent-Type: text/html; charset="UTF-8"\r\n\r\n${htmlBody}\r\n\r\n` +
+    `--${altB}--`;
+
+  let raw;
+  if (atts.length) {
+    const mixB = `mix_${crypto.randomUUID().replace(/-/g, '')}`;
+    headerLines.push(`Content-Type: multipart/mixed; boundary="${mixB}"`);
+    const attParts = atts.map(a =>
+      `--${mixB}\r\n` +
+      `Content-Type: ${a.mime}; name="${mimeFilename(a.filename)}"\r\n` +
+      `Content-Disposition: attachment; filename="${mimeFilename(a.filename)}"\r\n` +
+      `Content-Transfer-Encoding: base64\r\n\r\n` +
+      `${bytesToB64Wrapped(a.bytes)}\r\n`
+    ).join('');
+    raw =
+      headerLines.join('\r\n') + '\r\n\r\n' +
+      `--${mixB}\r\nContent-Type: multipart/alternative; boundary="${altB}"\r\n\r\n` +
+      altBody + '\r\n' +
+      attParts +
+      `--${mixB}--`;
+  } else {
+    headerLines.push(`Content-Type: multipart/alternative; boundary="${altB}"`);
+    raw = headerLines.join('\r\n') + '\r\n\r\n' + altBody;
+  }
 
   // Send into the customer's LATEST inbound Gmail thread (not necessarily the thread's
   // original ref) so a reply lands in their most recent email — required now that a
@@ -4436,16 +4515,42 @@ async function sendEmailReply(body, auth, env) {
   if (!send.ok) return err(`Gmail send failed: ${JSON.stringify(send.data)?.slice(0, 200)}`, send.status || 502);
   const sentId = send.data?.id || null;
 
+  // The customer already has the real attachments (inline in the sent email). Host a
+  // copy of each on the public bucket so the sent bubble can show/download them too
+  // (best-effort — a failed upload just leaves that attachment with a null url).
+  const attMeta = [];
+  for (const a of atts) {
+    let url = null;
+    try {
+      const path = `${thread.id}/${crypto.randomUUID()}.${a.ext}`;
+      const up = await fetch(`${env.SUPABASE_URL}/storage/v1/object/cs-inbox-media/${path}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, 'Content-Type': a.mime, 'x-upsert': 'true' },
+        body: a.bytes,
+      });
+      if (up.ok) url = `${env.SUPABASE_URL}/storage/v1/object/public/cs-inbox-media/${path}`;
+      else console.error('[email] attachment upload failed', up.status);
+    } catch (e) { console.error('[email] attachment upload error', String(e?.message || e)); }
+    attMeta.push({ filename: a.filename, mime: a.mime, size: a.bytes.length, url });
+  }
+  const primary = attMeta.find(m => m.mime.startsWith('image/') && m.url) || attMeta.find(m => m.url) || attMeta[0];
+  const kind = atts.length ? (atts.length === 1 && atts[0].mime.startsWith('image/') ? 'image' : 'document') : 'text';
+
   // Record the outbound message (idempotent on the Gmail message id).
   await sb(`/rest/v1/cs_wa_messages`, env, {
     method: 'POST',
     body: JSON.stringify({
-      thread_id: thread.id, channel: 'email', direction: 'outbound', kind: 'text',
+      thread_id: thread.id, channel: 'email', direction: 'outbound', kind,
       body: textBody, body_html: htmlBody, provider_message_id: sentId, status: 'sent',
       sent_by_user_id: auth.userId, sent_by_name: senderName, sent_at: new Date().toISOString(),
+      ...(attMeta.length ? {
+        media_url: primary?.url || null, media_filename: primary?.filename || null,
+        media_mime_type: primary?.mime || null, media_size_bytes: primary?.size || null,
+      } : {}),
       raw_meta: {
         gmail_message_id: sentId, in_reply_to: inReplyTo, subject,
         to: toList, ...(ccList.length ? { cc: ccList } : {}), ...(bccList.length ? { bcc: bccList } : {}),
+        ...(attMeta.length ? { attachments: attMeta } : {}),
       },
     }),
   });
@@ -4468,7 +4573,7 @@ async function sendEmailReply(body, auth, env) {
   });
 
   const ticketId = auth.viaIgnitionBridge ? null : await assignLinkedTicketToReplier(thread.id, auth, env);
-  return ok({ sent: true, message_id: sentId, auto_claimed: !thread.assigned_agent_id && !auth.viaIgnitionBridge, ticket_assigned: ticketId });
+  return ok({ sent: true, message_id: sentId, attachments: attMeta.length, auto_claimed: !thread.assigned_agent_id && !auth.viaIgnitionBridge, ticket_assigned: ticketId });
 }
 
 // Normalize an address input (array OR comma/semicolon-separated string) → a

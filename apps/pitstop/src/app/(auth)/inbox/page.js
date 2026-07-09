@@ -113,7 +113,7 @@ export default function InboxPage() {
   const [showEmoji, setShowEmoji] = useState(false);
   const [showCanned, setShowCanned] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
-  const [pendingFile, setPendingFile] = useState(null);   // { name, mime, size, dataUrl } (S162-C)
+  const [pendingFiles, setPendingFiles] = useState([]);   // [{ name, mime, size, dataUrl }] — 1 for Meta, N for email (S162-C · S201)
   const [selectedIds, setSelectedIds] = useState(() => new Set());  // bulk-select thread ids (S164)
   const [bulkAgent, setBulkAgent] = useState('');         // target of the bulk assign action
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -234,7 +234,7 @@ export default function InboxPage() {
     if (!selectedId) { setConvo(null); return undefined; }
     setLoadingConvo(true);
     loadConvo(selectedId);
-    setMode('reply'); setShowEmoji(false); setShowCanned(false); setAssignOpen(false); setPendingFile(null);
+    setMode('reply'); setShowEmoji(false); setShowCanned(false); setAssignOpen(false); setPendingFiles([]);
     const iv = setInterval(() => loadConvo(selectedId), 15000);
     return () => clearInterval(iv);
   }, [selectedId, loadConvo]);
@@ -330,55 +330,87 @@ export default function InboxPage() {
     finally { setSavingCanned(false); }
   }
 
-  const ATTACH_MIMES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'application/pdf'];
+  // Meta = images + PDF, single file (Graph URL-attachment path). Email = broader set
+  // + multiple files, real MIME parts (S201). accept string is chosen per channel below.
+  const META_ATTACH_MIMES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'application/pdf'];
+  const EMAIL_ATTACH_MIMES = [...META_ATTACH_MIMES,
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/msword', 'application/vnd.ms-excel', 'text/csv', 'text/plain', 'application/zip'];
   function onPickFile(e) {
-    const f = e.target.files?.[0];
+    const files = Array.from(e.target.files || []);
     e.target.value = '';
-    if (!f) return;
-    if (!ATTACH_MIMES.includes(f.type)) { setErr('Only images (PNG/JPG/WEBP/GIF) or PDF can be attached.'); return; }
-    if (f.size > 8 * 1024 * 1024) { setErr('File too large — max 8MB.'); return; }
-    setErr(null);
-    const reader = new FileReader();
-    reader.onload = () => setPendingFile({ name: f.name, mime: f.type, size: f.size, dataUrl: reader.result });
-    reader.readAsDataURL(f);
+    if (!files.length) return;
+    const emailCh = convo?.thread?.channel === 'email';
+    const allow = emailCh ? EMAIL_ATTACH_MIMES : META_ATTACH_MIMES;
+    const picked = [];
+    for (const f of files) {
+      if (!allow.includes(f.type)) { setErr(`Can't attach ${f.name} — unsupported file type.`); return; }
+      if (f.size > 10 * 1024 * 1024) { setErr(`${f.name} is too large — max 10MB per file.`); return; }
+      picked.push(f);
+      if (!emailCh) break;   // Meta takes a single file
+    }
+    const readOne = (f) => new Promise(res => {
+      const r = new FileReader();
+      r.onload = () => res({ name: f.name, mime: f.type, size: f.size, dataUrl: r.result });
+      r.readAsDataURL(f);
+    });
+    Promise.all(picked.map(readOne)).then(fs => {
+      setPendingFiles(prev => {
+        const next = emailCh ? [...prev, ...fs] : fs;
+        if (emailCh && next.reduce((s, x) => s + x.size, 0) > 15 * 1024 * 1024) {
+          setErr('Attachments too large — max 15MB total.'); return prev;
+        }
+        setErr(null); return next;
+      });
+    });
   }
 
   async function send() {
     if (sending || !convo?.thread) return;
     const t = text.trim();
-    // Attachment send (reply mode only) — caption = whatever's in the box.
-    if (mode === 'reply' && pendingFile) {
-      if (!['instagram', 'messenger'].includes(convo?.thread?.channel)) { setErr('Attachments are only supported on Instagram/Messenger — send text only.'); return; }
+    const chNow = convo.thread.channel;
+    const hasFiles = pendingFiles.length > 0;
+    // Meta attachment send (reply mode, single file) — caption = whatever's in the box.
+    if (mode === 'reply' && hasFiles && (chNow === 'instagram' || chNow === 'messenger')) {
       setSending(true); setErr(null);
+      const f = pendingFiles[0];
       try {
         await csopsPost('sendMetaAttachment', {
-          thread_id: convo.thread.id, mime_type: pendingFile.mime,
-          data_base64: pendingFile.dataUrl, filename: pendingFile.name, caption: t || null,
+          thread_id: convo.thread.id, mime_type: f.mime,
+          data_base64: f.dataUrl, filename: f.name, caption: t || null,
         }, session);
-        setText(''); setPendingFile(null); setShowEmoji(false); setShowCanned(false);
+        setText(''); setPendingFiles([]); setShowEmoji(false); setShowCanned(false);
         await loadConvo(selectedId); loadThreads(); loadStats();
       } catch (e) { setErr(e.message); }
       finally { setSending(false); }
       return;
     }
-    if (!t) return;
+    // Attachments outside email/Meta reply mode aren't supported.
+    if (mode === 'reply' && hasFiles && chNow !== 'email') {
+      setErr('Attachments are only supported on Email, Instagram and Messenger.'); return;
+    }
+    // Email may send attachments with no body text; every other path needs text.
+    if (!t && !(mode === 'reply' && chNow === 'email' && hasFiles)) return;
     setSending(true); setErr(null);
     try {
       if (mode === 'note') {
         await csopsPost('addThreadNote', { thread_id: convo.thread.id, text: t }, session);
-      } else if (convo.thread.channel === 'whatsapp' || convo.thread.channel === 'web') {
+      } else if (chNow === 'whatsapp' || chNow === 'web') {
         await csopsPost('sendWaReply', { thread_id: convo.thread.id, text: t }, session);   // C2-B BiteSpeed tunnel (WA + Web)
-      } else if (convo.thread.channel === 'email') {
+      } else if (chNow === 'email') {
         if (!emailTo.trim()) { setErr('Add at least one To recipient.'); setSending(false); return; }
         await csopsPost('sendEmailReply', {
           thread_id: convo.thread.id, text: t,
           to: emailTo, cc: emailCc || undefined, bcc: emailBcc || undefined,
           subject: emailSubject || undefined,
-        }, session); // Gmail-native, in-thread (S175); To/Cc/Bcc/Subject S181
+          // Real MIME attachment parts on the Gmail send (S201).
+          attachments: hasFiles ? pendingFiles.map(f => ({ mime_type: f.mime, data_base64: f.dataUrl, filename: f.name })) : undefined,
+        }, session); // Gmail-native, in-thread (S175); To/Cc/Bcc/Subject S181; attachments S201
       } else {
         await csopsPost('sendMetaMessage', { thread_id: convo.thread.id, text: t }, session);
       }
-      setText(''); setShowEmoji(false); setShowCanned(false);
+      setText(''); setPendingFiles([]); setShowEmoji(false); setShowCanned(false);
       await loadConvo(selectedId);
       loadThreads(); loadStats();
     } catch (e) { setErr(e.message); }
@@ -517,7 +549,10 @@ export default function InboxPage() {
   const isWa = thread?.channel === 'whatsapp';
   const isEmail = thread?.channel === 'email';
   const waReplyBlocked = isWa && !noteMode && !windowOpen;
-  const canAttach = ['instagram', 'messenger'].includes(thread?.channel);   // Graph URL-attachment path only
+  const canAttach = ['instagram', 'messenger', 'email'].includes(thread?.channel);   // IG/FB = Graph URL; email = MIME parts (S201)
+  const attachAccept = isEmail
+    ? 'image/png,image/jpeg,image/webp,image/gif,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/msword,application/vnd.ms-excel,text/csv,text/plain,application/zip'
+    : 'image/png,image/jpeg,image/webp,image/gif,application/pdf';
   const slashActive = !noteMode && text.startsWith('/');           // "/" quick-access to canned
   const cannedQuery = (slashActive ? text.slice(1) : cannedSearch).trim().toLowerCase();
   const filteredCanned = cannedQuery
@@ -876,16 +911,16 @@ export default function InboxPage() {
                           <FileText size={15} />
                         </ToolBtn>
                         {canAttach && (
-                          <ToolBtn title="Attach image / PDF" onClick={() => fileRef.current?.click()} disabled={!canManage}>
+                          <ToolBtn title={isEmail ? 'Attach files (images, PDF, docs — up to 15MB total)' : 'Attach image / PDF'} onClick={() => fileRef.current?.click()} disabled={!canManage}>
                             <Paperclip size={15} />
                           </ToolBtn>
                         )}
-                        <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif,application/pdf"
+                        <input ref={fileRef} type="file" accept={attachAccept} multiple={isEmail}
                           onChange={onPickFile} style={{ display: 'none' }} />
                       </>
                     )}
                     <ToolBtn title={noteMode ? 'Switch to reply mode' : 'Private note (internal only)'} active={noteMode}
-                      onClick={() => { setMode(noteMode ? 'reply' : 'note'); if (!noteMode) setPendingFile(null); }}
+                      onClick={() => { setMode(noteMode ? 'reply' : 'note'); if (!noteMode) setPendingFiles([]); }}
                       disabled={!canManage}><StickyNote size={15} /></ToolBtn>
                     {showEmoji && (
                       <Popover onClose={() => setShowEmoji(false)} width="auto" pad={0} hideClose scroll={false}>
@@ -903,20 +938,24 @@ export default function InboxPage() {
                     )}
                   </div>
 
-                  {/* Staged attachment preview (reply mode) */}
-                  {pendingFile && !noteMode && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, padding: '6px 8px',
-                      background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
-                      {pendingFile.mime.startsWith('image/')
-                        ? <img src={pendingFile.dataUrl} alt="" style={{ width: 38, height: 38, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }} />
-                        : <FileText size={22} style={{ color: 'var(--t3)', flexShrink: 0 }} />}
-                      <span style={{ fontSize: 12, color: 'var(--t2)', flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {pendingFile.name} <span style={{ color: 'var(--t4)' }}>· {(pendingFile.size / 1024).toFixed(0)} KB</span>
-                      </span>
-                      <button onClick={() => setPendingFile(null)} title="Remove"
-                        style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'var(--t3)', display: 'grid', placeItems: 'center' }}>
-                        <X size={14} />
-                      </button>
+                  {/* Staged attachment preview (reply mode) — one row per file (S201) */}
+                  {pendingFiles.length > 0 && !noteMode && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginBottom: 6 }}>
+                      {pendingFiles.map((pf, i) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px',
+                          background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
+                          {pf.mime.startsWith('image/')
+                            ? <img src={pf.dataUrl} alt="" style={{ width: 38, height: 38, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }} />
+                            : <FileText size={22} style={{ color: 'var(--t3)', flexShrink: 0 }} />}
+                          <span style={{ fontSize: 12, color: 'var(--t2)', flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {pf.name} <span style={{ color: 'var(--t4)' }}>· {(pf.size / 1024).toFixed(0)} KB</span>
+                          </span>
+                          <button onClick={() => setPendingFiles(prev => prev.filter((_, j) => j !== i))} title="Remove"
+                            style={{ cursor: 'pointer', border: 'none', background: 'transparent', color: 'var(--t3)', display: 'grid', placeItems: 'center' }}>
+                            <X size={14} />
+                          </button>
+                        </div>
+                      ))}
                     </div>
                   )}
 
@@ -935,16 +974,16 @@ export default function InboxPage() {
                       placeholder={!canManage ? 'You need cs_ticket_manage to reply.'
                         : noteMode ? 'Write an internal note for the team…  (Enter to save)'
                         : waReplyBlocked ? 'Waiting on the customer — WhatsApp replies need an open 24h window.'
-                        : pendingFile ? 'Add a caption (optional)…  (Enter to send)'
+                        : pendingFiles.length ? 'Add a message (optional)…  (Enter to send)'
                         : 'Type a reply…  (Enter to send, Shift+Enter for newline)'}
                       disabled={!canManage || sending || waReplyBlocked} rows={2}
                       style={{ ...inputStyle, flex: 1, resize: 'none', fontFamily: 'var(--f-ui)',
                         background: noteMode ? 'var(--surface)' : inputStyle.background }} />
-                    <button onClick={send} disabled={!canManage || sending || waReplyBlocked || (!text.trim() && !pendingFile)}
-                      style={{ ...btnPrimary, opacity: (!canManage || sending || waReplyBlocked || (!text.trim() && !pendingFile)) ? 0.5 : 1,
+                    <button onClick={send} disabled={!canManage || sending || waReplyBlocked || (!text.trim() && !pendingFiles.length)}
+                      style={{ ...btnPrimary, opacity: (!canManage || sending || waReplyBlocked || (!text.trim() && !pendingFiles.length)) ? 0.5 : 1,
                         background: noteMode ? 'var(--warn-fg)' : btnPrimary.background }}>
-                      {noteMode ? <StickyNote size={13} /> : pendingFile ? <Paperclip size={13} /> : <Send size={13} />}
-                      {sending ? 'Sending' : noteMode ? 'Save note' : pendingFile ? 'Send' : 'Send'}
+                      {noteMode ? <StickyNote size={13} /> : pendingFiles.length ? <Paperclip size={13} /> : <Send size={13} />}
+                      {sending ? 'Sending' : noteMode ? 'Save note' : 'Send'}
                     </button>
                   </div>
                 </div>
@@ -1319,6 +1358,8 @@ function Bubble({ m, accent }) {
   // Email HTML — render in a sandboxed iframe (no scripts / no same-origin) so
   // arbitrary customer markup can't run or escape. Wider bubble for readability.
   const emailHtml = m.channel === 'email' && m.body_html ? m.body_html : null;
+  // Email attachments (S201) — list every file as a download chip (multi-file safe).
+  const emailAtts = m.channel === 'email' && Array.isArray(m.raw_meta?.attachments) ? m.raw_meta.attachments : null;
   return (
     <div style={{ display: 'flex', justifyContent: isIn ? 'flex-start' : 'flex-end', marginBottom: 9 }}>
       <div style={{ maxWidth: emailHtml ? '92%' : '74%', padding: '8px 12px', borderRadius: 12,
@@ -1329,7 +1370,18 @@ function Bubble({ m, accent }) {
           <div style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--info-fg)', textTransform: 'uppercase',
             letterSpacing: '0.05em', marginBottom: 4 }}>Template · {m.template_name}</div>
         )}
-        {m.media_url && (m.kind === 'image' ? (
+        {emailAtts ? (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: (m.body || emailHtml) ? 6 : 2 }}>
+            {emailAtts.map((a, i) => {
+              const chip = { display: 'inline-flex', alignItems: 'center', gap: 5, maxWidth: 220,
+                padding: '3px 8px', borderRadius: 999, fontSize: 11, border: '1px solid var(--border)', background: 'var(--surface)' };
+              const label = <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.filename || 'attachment'}</span>;
+              return a.url
+                ? <a key={i} href={a.url} target="_blank" rel="noreferrer" style={{ ...chip, color: 'var(--accent)', textDecoration: 'none' }}><FileText size={11} />{label}</a>
+                : <span key={i} style={{ ...chip, color: 'var(--t3)', opacity: 0.75 }} title="Sent — preview unavailable"><FileText size={11} />{label}</span>;
+            })}
+          </div>
+        ) : m.media_url && (m.kind === 'image' ? (
           <a href={m.media_url} target="_blank" rel="noreferrer" style={{ display: 'block', marginBottom: m.body ? 6 : 2 }}>
             <img src={m.media_url} alt={m.media_filename || 'image'}
               style={{ maxWidth: 240, maxHeight: 240, borderRadius: 8, display: 'block' }} />
