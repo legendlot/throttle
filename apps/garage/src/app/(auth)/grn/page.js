@@ -364,7 +364,7 @@ function BulkGrnPanel({ session, onSuccess }) {
     setGrnDate(todayISO()); setBomLines([]);
   }
 
-  async function submit() {
+  async function submit(force = false) {
     const qty = parseInt(units) || 0;
     if (!product || qty <= 0 || !bomLines.length) {
       showToast('Select product and enter units received', 'error'); return;
@@ -389,7 +389,7 @@ function BulkGrnPanel({ session, onSuccess }) {
     const bagRequests = rows.filter(r => r.bags_of > 0 && r.qty_received > 0);
     setSubmitting(true);
     try {
-      const res = await workerFetch('postGRN', { data: { product, supplier, grn_date: grnDate, po_ref: poRef, lines } }, session);
+      const res = await workerFetch('postGRN', { data: { product, supplier, grn_date: grnDate, po_ref: poRef, lines, force } }, session);
       const grnNo = res.data.grn_no;
       showToast(`GRN ${grnNo} created — ${res.data.lines} lines for ${qty} units`, 'success');
 
@@ -426,7 +426,16 @@ function BulkGrnPanel({ session, onSuccess }) {
       clearForm();
       onSuccess();
     } catch (e) {
-      showToast(e.message || 'GRN submission failed — check connection and retry', 'error');
+      const msg = e.message || 'GRN submission failed — check connection and retry';
+      // Wrong-code guard: worker blocks a receipt onto a superseded/discontinued/finished-car
+      // code with a `GRN_CODE_GUARD:` message. Offer an informed override (re-submit force=true).
+      if (!force && msg.startsWith('GRN_CODE_GUARD:')) {
+        const clean = msg.replace(/^GRN_CODE_GUARD:\s*/, '');
+        setSubmitting(false);
+        if (window.confirm(`Heads up — ${clean}\n\nPost anyway?`)) return submit(true);
+        return;
+      }
+      showToast(msg, 'error');
     } finally {
       setSubmitting(false);
     }
@@ -825,7 +834,7 @@ function PartsGrnPanel({ session, onSuccess }) {
     setLines([{ search: '', partCode: '', partName: '', product: '', qty: '', damaged: '', bagsOf: '' }]);
   }
 
-  async function submit() {
+  async function submit(force = false) {
     if (!grnDate) { showToast('Select a GRN date', 'error'); return; }
     const validRows = lines
       .filter(l => l.partCode.trim() && ((parseInt(l.qty) || 0) > 0 || (parseInt(l.damaged) || 0) > 0))
@@ -846,7 +855,7 @@ function PartsGrnPanel({ session, onSuccess }) {
     setSubmitting(true);
     try {
       const res = await workerFetch('postGRN', {
-        data: { product: headerProduct, supplier, grn_date: grnDate, po_ref: poRef, lines: validLines }
+        data: { product: headerProduct, supplier, grn_date: grnDate, po_ref: poRef, lines: validLines, force }
       }, session);
       const grnNo = res.data.grn_no;
       showToast(`GRN ${grnNo} created — ${res.data.lines} line(s)`, 'success');
@@ -886,7 +895,16 @@ function PartsGrnPanel({ session, onSuccess }) {
       clearForm();
       onSuccess();
     } catch (e) {
-      showToast(e.message || 'GRN submission failed — check connection and retry', 'error');
+      const msg = e.message || 'GRN submission failed — check connection and retry';
+      // Wrong-code guard: worker blocks a receipt onto a superseded/discontinued/finished-car
+      // code with a `GRN_CODE_GUARD:` message. Offer an informed override (re-submit force=true).
+      if (!force && msg.startsWith('GRN_CODE_GUARD:')) {
+        const clean = msg.replace(/^GRN_CODE_GUARD:\s*/, '');
+        setSubmitting(false);
+        if (window.confirm(`Heads up — ${clean}\n\nPost anyway?`)) return submit(true);
+        return;
+      }
+      showToast(msg, 'error');
     } finally {
       setSubmitting(false);
     }

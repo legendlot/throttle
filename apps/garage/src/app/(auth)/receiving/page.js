@@ -641,7 +641,7 @@ export default function ReceivingPage() {
   }
 
   // ── Raise GRN from receiving ──────────────────────────────────────────────────
-  async function raiseGRN() {
+  async function raiseGRN(force = false) {
     if (!shipmentData) return;
     const ids = (shipmentData.lines || [])
       .filter(l => (parseInt(l.qty_counted) || 0) > (parseInt(l.qty_grn) || 0))
@@ -649,12 +649,20 @@ export default function ReceivingPage() {
     if (!ids.length) { showToast('No counted lines ready for GRN', 'error'); return; }
     try {
       const res = await workerFetch('raiseGRNFromReceiving', {
-        data: { shipment_id: currentShipmentId, line_ids: ids }
+        data: { shipment_id: currentShipmentId, line_ids: ids, force }
       }, session);
       showToast(`${res.data.grn_no} raised — ${res.data.lines} lines`, 'success');
       await refreshDetail();
     } catch (e) {
-      showToast(e.message || 'GRN raise failed', 'error');
+      const msg = e.message || 'GRN raise failed';
+      // Wrong-code guard: the worker blocks a receipt landing on a superseded/discontinued
+      // code and returns a `GRN_CODE_GUARD:` message. Offer an informed override.
+      if (!force && msg.startsWith('GRN_CODE_GUARD:')) {
+        const clean = msg.replace(/^GRN_CODE_GUARD:\s*/, '');
+        if (window.confirm(`Heads up — ${clean}\n\nPost anyway?`)) return raiseGRN(true);
+        return;
+      }
+      showToast(msg, 'error');
     }
   }
 
