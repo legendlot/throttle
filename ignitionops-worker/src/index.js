@@ -2013,10 +2013,12 @@ async function openPitstopTicket(body, auth, env) {
   }
   const inf = eng.influencer || {};
 
-  // POST to csops createTicket using the same bearer token
-  const csopsUrl = env.CSOPS_URL || 'https://csops.afshaan.workers.dev';
-  const csopsBody = {
-    action: 'createTicket',
+  // Open the ticket via the token-authed Ignition bridge — NOT the user's JWT.
+  // The influencer-team user has no cs_ticket_manage permission of their own, so
+  // forwarding their bearer to csops createTicket 403s ("missing permission:
+  // cs_ticket_manage"). The bridge runs a synth-auth (cs_ticket_manage) and lands
+  // the ticket Unassigned for CS to triage. Mirrors the Connects bridge (S177).
+  const ticketPayload = {
     intake_channel: 'sheet', // closest existing enum value; future: add 'ignition'
     customer_name: inf.person_name || inf.channel_name || 'Influencer',
     customer_phone: inf.contact_number || null,
@@ -2026,25 +2028,15 @@ async function openPitstopTicket(body, auth, env) {
     issue_description: body.issue_description,
     disposition: body.disposition || 'replacement',
   };
-  if (body.issue_category) csopsBody.issue_category = body.issue_category;
-  if (body.issue_subcategory) csopsBody.issue_subcategory = body.issue_subcategory;
+  if (body.issue_category) ticketPayload.issue_category = body.issue_category;
+  if (body.issue_subcategory) ticketPayload.issue_subcategory = body.issue_subcategory;
 
-  const csopsReq = new Request(csopsUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${auth.bearer}`,
-    },
-    body: JSON.stringify(csopsBody),
+  const br = await csopsBridge(env, 'createTicketFromIgnition', {
+    ticket: ticketPayload,
+    actor: { id: auth.userId, name: auth.fullName || auth.name || null, email: auth.email || null },
   });
-  // Worker-to-worker via the service binding (avoids Cloudflare 1042); fall back to fetch if unbound.
-  const r = env.CSOPS ? await env.CSOPS.fetch(csopsReq) : await fetch(csopsReq);
-  const text = await r.text();
-  let data; try { data = JSON.parse(text); } catch { data = text; }
-  if (!r.ok || !data?.ok) {
-    return err(`csops_error: ${JSON.stringify(data)}`, r.status || 502);
-  }
-  const ticket_no = data.data?.ticket_no;
+  if (!br.ok) return err(`csops_error: ${JSON.stringify(br.raw?.error || br.raw)}`, br.status || 502);
+  const ticket_no = br.data?.ticket_no;
   if (!ticket_no) return err('csops_no_ticket_no', 502);
 
   // Patch the engagement

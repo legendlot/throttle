@@ -4991,6 +4991,7 @@ async function handleIgnitionBridge(request, env) {
     case 'getIgnitionThread':      return bridgeGetThread(body, env);
     case 'sendConnectReply':       return bridgeSendReply(body, env);
     case 'returnConnectToPitstop': return bridgeReturnConnect(body, env);
+    case 'createTicketFromIgnition': return bridgeCreateTicket(body, env);
     default: return err(`Unknown bridge action: ${body.action}`, 404);
   }
 }
@@ -5060,6 +5061,26 @@ async function bridgeSendReply(body, env) {
   if (channel === 'instagram' || channel === 'messenger') return sendMetaMessage({ thread_id, text }, synthAuth, env);
   if (channel === 'email') return sendEmailReply({ thread_id, text, html }, synthAuth, env);
   return err(`Unsupported channel: ${channel}`, 422);
+}
+
+// Open a Pitstop ticket for an Ignition damaged-shipment flag (RULE-IGN-004).
+// Token-authed sibling call, so it runs under a synth-auth (cs_ticket_manage) —
+// the Ignition user has no CS permission of their own. The ticket lands UNASSIGNED
+// (synthAuth.userId = null → createTicket leaves assignee null) so the CS team
+// triages it; the flagging influencer-team member is preserved as created_by_name.
+async function bridgeCreateTicket(body, env) {
+  const t = body.ticket || {};
+  if (!t.customer_name) return err('customer_name required');
+  const synthAuth = {
+    userId: null,                         // → Unassigned queue (no auto-assign to a non-CS user)
+    fullName: body.actor?.name || 'Ignition',
+    name: body.actor?.name || 'Ignition',
+    email: body.actor?.email || null,
+    cs_department_id: null,
+    permissions: { cs_ticket_manage: true },
+    viaIgnitionBridge: true,
+  };
+  return createTicket(t, synthAuth, env);
 }
 
 // Return a transferred connect back to Pitstop CS (reclaim). Clears the
