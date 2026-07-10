@@ -2361,6 +2361,9 @@ export default {
     // Stock in/out stream (layer c): snapshot native Shopify inventory + diff → stock change_events.
     // Best-effort; never disturbs the rest of the cron.
     try { await syncInventorySnapshot(env); } catch (e) { console.error('odoops cron (inventory snapshot) failed:', e?.message || e); }
+    // L142: full-staging unmapped-SKU sweep — keeps the /mapping queue complete for SKUs that
+    // fell outside per-window resolveSkus. One set-based RPC; best-effort.
+    try { await rpcSales('reconcile_unmapped_sku', {}); } catch (e) { console.error('odoops cron (reconcile unmapped) failed:', e?.message || e); }
   },
 
   async fetch(request, env, ctx) {
@@ -3051,6 +3054,14 @@ export default {
             const dates = uniq((dR.ok ? dR.data : []).map(x => x.sale_date));
             const facts = dates.length ? await rpcSales('recompute_facts', { p_channel: u.channel_id, p_dates: dates, p_run_id: null }) : { data: 0 };
             return ok({ id: d.id, resolved: true, dates: dates.length, facts: facts.ok ? Number(facts.data) : 0 });
+          }
+          case 'reconcileUnmapped': {
+            // L142: full-staging sweep — enqueue every unmapped sale SKU into the queue (auto-map
+            // any that now match product_master). Complements per-window resolveSkus; idempotent.
+            if (!canMapping(P)) return err('No permission', 403);
+            const rc = await rpcSales('reconcile_unmapped_sku', {});
+            if (!rc.ok) return err('Reconcile failed: ' + JSON.stringify(rc.data), 502);
+            return ok(rc.data);
           }
           case 'setConnectorEnabled': {
             if (!canConnector(P)) return err('No permission', 403);
