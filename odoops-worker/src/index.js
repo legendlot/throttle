@@ -2347,7 +2347,7 @@ const SHOPIFYQL_SESSIONS = (lookbackDays) =>
 async function shopifyQl(env, ql) {
   if (!env.SHOPIFY_STORE_DOMAIN || !env.SHOPIFY_CLIENT_ID || !env.SHOPIFY_CLIENT_SECRET) throw new Error('Shopify not configured');
   const ver = env.SHOPIFY_API_VERSION || SHOPIFY_API_VERSION_DEFAULT;
-  const gql = `query($q:String!){ shopifyqlQuery(query:$q){ __typename ... on ShopifyqlResponse { tableData { columns { name dataType } rows } parseErrors } } }`;
+  const gql = `query($q:String!){ shopifyqlQuery(query:$q){ tableData { columns { name dataType } rows } parseErrors } }`;
   let token = await getShopifyToken(env);
   if (!token) throw new Error('Shopify auth failed (client credentials)');
   const run = (tok) => fetch(`https://${env.SHOPIFY_STORE_DOMAIN}/admin/api/${ver}/graphql.json`, {
@@ -2359,7 +2359,7 @@ async function shopifyQl(env, ql) {
   if (!res || !res.ok) throw new Error(`ShopifyQL HTTP ${res ? res.status : 'network'}`);
   const data = await res.json().catch(() => null);
   // A missing read_reports scope surfaces as a top-level GraphQL error, not parseErrors.
-  if (data?.errors?.length) throw new Error('ShopifyQL error (likely missing read_reports scope): ' + (data.errors[0].message || 'error'));
+  if (data?.errors?.length) throw new Error('ShopifyQL GraphQL error: ' + (data.errors[0].message || 'error'));
   const q = data?.data?.shopifyqlQuery || {};
   return { columns: q.tableData?.columns || [], rows: q.tableData?.rows || [], parseErrors: q.parseErrors || [] };
 }
