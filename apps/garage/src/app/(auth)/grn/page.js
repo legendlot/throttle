@@ -577,7 +577,7 @@ function BulkGrnPanel({ session, onSuccess }) {
       )}
 
       <div style={{ display: 'flex', gap: 8, marginTop: 14, alignItems: 'center' }}>
-        <button style={btnPri} onClick={submit} disabled={submitting || bomLines.length === 0}>
+        <button style={btnPri} onClick={() => submit()} disabled={submitting || bomLines.length === 0}>
           {submitting ? 'Submitting…' : (bagLineCount > 0 ? `🏷 Submit Bulk GRN & Print ${bagLineCount} Part${bagLineCount === 1 ? '' : 's'}` : 'Submit Bulk GRN')}
         </button>
         <button style={btnSec} onClick={clearForm} disabled={submitting}>Clear</button>
@@ -735,7 +735,7 @@ function FbuGrnPanel({ session, onSuccess }) {
       </div>
 
       <div style={{ display: 'flex', gap: 8 }}>
-        <button style={btnPri} onClick={submit} disabled={submitting}>
+        <button style={btnPri} onClick={() => submit()} disabled={submitting}>
           {submitting ? 'Submitting…' : `Submit ${lines.length > 1 ? `${lines.length} FBU GRNs` : 'FBU GRN'}`}
         </button>
         <button style={btnSec} onClick={clearForm} disabled={submitting}>Clear</button>
@@ -1100,7 +1100,7 @@ function PartsGrnPanel({ session, onSuccess }) {
         const bagLineCount = lines.filter(l => (parseInt(l.bagsOf) || 0) > 0 && (parseInt(l.qty) || 0) > 0).length;
         return (
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <button style={btnPri} onClick={submit} disabled={submitting}>
+            <button style={btnPri} onClick={() => submit()} disabled={submitting}>
               {submitting ? 'Submitting…' : (bagLineCount > 0 ? `🏷 Submit GRN & Print ${bagLineCount} Part${bagLineCount === 1 ? '' : 's'}` : 'Submit GRN')}
             </button>
             <button style={btnSec} onClick={addLine}>+ Add Line</button>

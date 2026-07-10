@@ -1013,7 +1013,7 @@ export default function ReceivingPage() {
           {/* Action bar */}
           <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
             {hasQtyForGRN && (
-              <button style={btnPri} onClick={raiseGRN}>Raise GRN</button>
+              <button style={btnPri} onClick={() => raiseGRN()}>Raise GRN</button>
             )}
             {showBagButtons && (
               <>
