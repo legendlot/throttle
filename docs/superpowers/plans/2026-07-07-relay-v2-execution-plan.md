@@ -37,9 +37,11 @@
 
 **Acceptance:** internal-test data (S187 56-staff broadcast + S178 journey runs) renders correctly; RPC latency <500ms on current volume; zero client-side aggregation over raw message rows; build clean; deployed live.
 
-### M9 — Scheduler + operational hardening
+### M9 — Scheduler + operational hardening — CODE SHIPPED (S206, commsops `2c5801e4`); WIRING PENDING Afshaan (wrangler.toml + SLACK_ALERT_WEBHOOK)
 
 **Goal:** scheduled campaigns actually fire; failures are dead-lettered + alerted; a warm-up send budget exists. This is the milestone that makes unattended operation safe.
+
+**As-built (S206) — everything except the `wrangler.toml`/secret wiring:** migrations `0014_comms_queue_failures` + `0015_comms_send_budget` applied. **Warm-up budget (LIVE):** `settings.daily_send_budget` (null=unlimited) + `send_counters` per-IST-day + atomic `consume_send_budget()` (single INSERT…ON CONFLICT…WHERE, verified `[true,true,false]` at cap=2); `gate.js` consumes it as the FINAL marketing check (never burns a unit on an otherwise-skipped send) → `reason:'budget_exhausted'` skip row; settings UI field (super-admin). Default null = no-op, so live already. **Atomic campaign claim (LIVE):** `startCampaign` conditional PATCH `status=in.(approved,scheduled)→sending` so scheduler + manual "Send now" can't double-fire (`already_claimed`). **cancelSchedule action + campaign scheduled-state UI (LIVE).** **Scheduler + DLQ + alerts (CODE DEPLOYED but DORMANT):** `scheduled()` → `runScheduled` (due-campaign sweep via `startCampaign('scheduler')` + `checkDeliverabilitySpike` — last-100 real sends, alert if >10% failed/bounced or any complaint, ≤1/hr via `settings.last_alert_at`); `queue()` gained a `batch.queue==='commsops-dlq'` branch (writes `queue_failures` + alerts, always acks); `src/alerts.js` `alert()` (fail-open, no-ops if `SLACK_ALERT_WEBHOOK` unset). **These stay inert until: (1) `wrangler.toml` gains `[triggers] crons=["*/5 * * * *"]` + a `commsops-dlq` `[[queues.consumers]]` + `dead_letter_queue="commsops-dlq"` on the broadcast consumer — the explicit-permission edit; (2) `wrangler queues create commsops-dlq`; (3) Afshaan mints a Slack Incoming Webhook → `wrangler secret put SLACK_ALERT_WEBHOOK` (alerts optional — DLQ still records rows without it).** Then redeploy.
 
 **1. Cron + scheduled campaigns:**
 - `wrangler.toml`: add `[triggers] crons = ["*/5 * * * *"]` (**wrangler.toml edit = get explicit permission first — standing rule**).
