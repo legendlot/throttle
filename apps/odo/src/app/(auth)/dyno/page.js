@@ -82,6 +82,20 @@ export default function DynoPage() {
   const [expanded, setExpanded] = useState({});   // meta_id → show copy
   const timer = useRef(null);
 
+  const [decisions, setDecisions] = useState({});   // plan_id → rows
+  const loadDecisions = useCallback(async (planId) => {
+    if (decisions[planId]) return;
+    try { const r = await salesGet('getDecisions', { plan_id: planId }, session); setDecisions(x => ({ ...x, [planId]: r.decisions || [] })); }
+    catch { /* non-fatal */ }
+  }, [decisions, session]);
+  const [angles, setAngles] = useState(null);
+  const [showAngles, setShowAngles] = useState(false);
+  const loadAngles = useCallback(async () => {
+    try { const r = await salesGet('getAngles', {}, session); setAngles(r.angles || []); }
+    catch (er) { setErr(String(er?.message || er)); }
+  }, [session]);
+  useEffect(() => { if (showAngles && angles == null) loadAngles(); }, [showAngles, angles, loadAngles]);
+
   const load = useCallback(async (quiet) => {
     if (!session) return;
     if (!quiet) { setBoard(null); setErr(''); }
@@ -192,6 +206,7 @@ export default function DynoPage() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
         <SegmentedToggle value={filter} onChange={setFilter} options={[
           { key: 'active', label: 'Active' }, { key: 'all', label: 'All' }, { key: 'staged', label: 'Staged' }]} />
+        <button className="so-btn ghost" onClick={() => setShowAngles(s => !s)}>{showAngles ? 'Hide' : 'Angle library'}</button>
         {board?.write_enabled === false && <span style={{ fontSize: 11.5, color: 'var(--red)' }}>⚠ Ad writes are OFF (settings.ads_write_enabled=false)</span>}
         {selIds.length > 0 && canWrite && (
           <button className="so-btn" onClick={bulkPause} style={{ marginLeft: 'auto' }}>Pause selected ({selIds.length})</button>
@@ -199,6 +214,8 @@ export default function DynoPage() {
       </div>
 
       {err && <div style={{ background: 'var(--red)15', border: '1px solid var(--red)55', color: 'var(--red)', padding: '9px 13px', borderRadius: 8, fontSize: 12.5, marginBottom: 14 }}>{err}</div>}
+
+      {showAngles && <AngleLibrary angles={angles} canWrite={canWrite} session={session} onSaved={loadAngles} />}
 
       {groups.length === 0 && <div style={{ color: 'var(--t2)', padding: 30, textAlign: 'center' }}>No {filter === 'staged' ? 'staged experiments' : 'variants'} in this view.</div>}
 
@@ -224,6 +241,7 @@ export default function DynoPage() {
               </div>
               {plan.hypothesis && <div style={{ fontSize: 12, color: 'var(--t2)', marginTop: 5, maxWidth: 900 }}><b style={{ color: 'var(--t1)' }}>Hypothesis:</b> {plan.hypothesis}</div>}
               {plan.plan_verdict_reason && <div style={{ fontSize: 11.5, color: 'var(--t2)', marginTop: 3, maxWidth: 900 }}><b style={{ color: 'var(--t1)' }}>Verdict:</b> {plan.plan_verdict_reason}</div>}
+              <DecisionStrip planId={plan.plan_id} rows={decisions[plan.plan_id]} onOpen={() => loadDecisions(plan.plan_id)} />
             </div>
 
             {/* Variants table */}
@@ -386,5 +404,79 @@ function VerdictModal({ mode, target, session, onClose, onDone }) {
         </div>
       </div>
     </Modal>
+  );
+}
+
+function DecisionStrip({ planId, rows, onOpen }) {
+  const [open, setOpen] = useState(false);
+  const toggle = () => { const n = !open; setOpen(n); if (n) onOpen(); };
+  return (
+    <div style={{ marginTop: 6 }}>
+      <button onClick={toggle} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 11, padding: 0 }}>
+        {open ? 'hide decisions' : 'decisions'}
+      </button>
+      {open && (
+        <div style={{ marginTop: 5, display: 'grid', gap: 3 }}>
+          {!rows && <div style={{ fontSize: 11, color: 'var(--t3)' }}>loading…</div>}
+          {rows && rows.length === 0 && <div style={{ fontSize: 11, color: 'var(--t3)' }}>No decisions logged.</div>}
+          {rows && rows.map(dc => (
+            <div key={dc.id} style={{ fontSize: 11, color: 'var(--t2)' }}>
+              <span style={{ fontFamily: 'var(--mono)', color: 'var(--t1)' }}>{dc.type}</span>
+              {dc.rationale ? ` — ${dc.rationale}` : ''} <span style={{ color: 'var(--t3)' }}>· {new Date(dc.decided_at).toLocaleDateString('en-IN')}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+const ANGLE_STATUS = ['candidate', 'testing', 'proven', 'retired'];
+function AngleLibrary({ angles, canWrite, session, onSaved }) {
+  const [draft, setDraft] = useState(null);   // { slug, name, psychology_pillar, status, hypothesis, evidence }
+  const [busy, setBusy] = useState(false);
+  const [e, setE] = useState('');
+  const blank = { slug: '', name: '', psychology_pillar: '', status: 'candidate', hypothesis: '', evidence: '' };
+  const save = async () => {
+    if (!draft.slug.trim() || !draft.name.trim()) { setE('slug and name required'); return; }
+    setBusy(true); setE('');
+    try { await salesPost('labUpsertAngle', draft, session); setDraft(null); await onSaved(); }
+    catch (er) { setE(String(er?.message || er)); } finally { setBusy(false); }
+  };
+  return (
+    <div className="so-card" style={{ padding: 14, marginBottom: 18 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+        <b style={{ fontFamily: 'var(--cond)', fontSize: 14 }}>Angle library</b>
+        {canWrite && !draft && <button className="so-btn ghost" style={{ marginLeft: 'auto' }} onClick={() => setDraft(blank)}>+ New angle</button>}
+      </div>
+      {angles == null && <Spinner />}
+      {angles && (
+        <div style={{ display: 'grid', gap: 4 }}>
+          {angles.map(a => (
+            <div key={a.slug} style={{ display: 'flex', gap: 10, alignItems: 'baseline', fontSize: 12 }}>
+              <span style={{ fontFamily: 'var(--mono)', color: 'var(--t1)', minWidth: 190 }}>{a.slug}</span>
+              <span style={{ color: 'var(--t2)', flex: 1 }}>{a.name}</span>
+              <Tag tone="var(--t3)">{a.status}</Tag>
+              {canWrite && <button onClick={() => setDraft({ slug: a.slug, name: a.name, psychology_pillar: a.psychology_pillar || '', status: a.status, hypothesis: a.hypothesis || '', evidence: a.evidence || '' })} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 11 }}>edit</button>}
+            </div>
+          ))}
+        </div>
+      )}
+      {draft && (
+        <div style={{ marginTop: 12, display: 'grid', gap: 8, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input value={draft.slug} onChange={ev => setDraft({ ...draft, slug: ev.target.value })} placeholder="slug (e.g. working-machine)" style={{ flex: 1, padding: '7px 9px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--t1)' }} />
+            <input value={draft.name} onChange={ev => setDraft({ ...draft, name: ev.target.value })} placeholder="name" style={{ flex: 1, padding: '7px 9px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--t1)' }} />
+            <select value={draft.status} onChange={ev => setDraft({ ...draft, status: ev.target.value })} style={{ flex: '0 0 130px', padding: '7px 9px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--t1)' }}>{ANGLE_STATUS.map(s => <option key={s} value={s}>{s}</option>)}</select>
+          </div>
+          <input value={draft.psychology_pillar} onChange={ev => setDraft({ ...draft, psychology_pillar: ev.target.value })} placeholder="psychology_pillar (optional)" style={{ padding: '7px 9px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--t1)' }} />
+          <textarea value={draft.hypothesis} onChange={ev => setDraft({ ...draft, hypothesis: ev.target.value })} rows={2} placeholder="hypothesis (optional)" style={{ padding: '7px 9px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--t1)', resize: 'vertical' }} />
+          {e && <div style={{ color: 'var(--red)', fontSize: 12 }}>{e}</div>}
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button className="so-btn ghost" onClick={() => setDraft(null)} disabled={busy}>Cancel</button>
+            <button className="so-btn" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save angle'}</button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
