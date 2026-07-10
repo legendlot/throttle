@@ -666,6 +666,20 @@ export default function ReceivingPage() {
     }
   }
 
+  // ── Re-sync receiving lines from the current BOM (L67 / PATTERN-128) ───────────
+  // Additively pulls any BOM part added/reactivated after this shipment was seeded.
+  async function resyncFromBOM() {
+    if (!currentShipmentId) return;
+    try {
+      const res = await workerFetch('resyncReceivingFromBOM', { data: { shipment_id: currentShipmentId } }, session);
+      const n = res.data?.added || 0;
+      showToast(n ? `Re-synced — ${n} new line${n === 1 ? '' : 's'} added from BOM` : 'Already in sync — no missing BOM parts', 'success');
+      if (n) await refreshDetail();
+    } catch (e) {
+      showToast(e.message || 'Re-sync failed', 'error');
+    }
+  }
+
   // ── Computed detail values ────────────────────────────────────────────────────
   const shipment = shipmentData?.shipment || {};
   const marks    = shipmentData?.marks    || [];
@@ -1020,6 +1034,9 @@ export default function ReceivingPage() {
                 <button style={btnSec} onClick={generateAllBags}>⚙ Gen All Bags</button>
                 <button style={btnSec} onClick={printAllLabels}>🖨 Print All Labels</button>
               </>
+            )}
+            {shipment.po_reference && (
+              <button style={btnSec} onClick={resyncFromBOM} title="Add any BOM part created/reactivated after this shipment was set up">⟳ Re-sync from BOM</button>
             )}
             <button style={btnSec} onClick={() => refreshDetail()}>↻ Refresh</button>
           </div>
