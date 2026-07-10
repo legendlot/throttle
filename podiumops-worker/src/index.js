@@ -1733,6 +1733,10 @@ async function getAppraisal(url, auth, env) {
   if (!isSubject && !isMgr && !hr) return err('forbidden', 403);
   const kr = await sb(`/rest/v1/appraisal_kpi_ratings?appraisal_id=eq.${id}&select=*&order=sort_order.asc`, env);
   const kpis = kr.data || [];
+  // OKR surfacing (read-only, Phase 4): the subject's individual objectives for the OKR
+  // cycle anchored to THIS appraisal's date. The reviewer (subject/chain-mgr/HR) already
+  // has ≥ individual-OKR visibility, so no extra gate. Never weighted into the rating.
+  const okrs = await subjectOkrsForAnchor(a.employee_id, a.cycle?.appraisal_date, env);
   let increment = null;
   if (isSubject || canComp(auth)) {
     const cr = await sb(`/rest/v1/compensation_events?appraisal_id=eq.${id}&select=increment_pct,amount,currency,effective_date,event_type&order=created_at.desc&limit=1`, env);
@@ -1740,13 +1744,14 @@ async function getAppraisal(url, auth, env) {
     if (isSubject && !(a.status === 'shared' || a.status === 'acknowledged')) increment = null;
   }
   if (hr || isMgr) {
-    const out = { ...a, kpis, increment, _role: hr ? 'hr' : 'manager', _can_calibrate: hr, _can_comp: canComp(auth) };
+    const out = { ...a, kpis, okrs, increment, _role: hr ? 'hr' : 'manager', _can_calibrate: hr, _can_comp: canComp(auth) };
     if (!hr) out.calibration_note = null; // HR-internal
     return ok(out);
   }
   // subject
   const out = projectAppraisalForSubject(a);
   out._role = 'subject';
+  out.okrs = okrs;
   out.increment = increment;
   out.kpis = kpis.map(k => ({ id: k.id, kpi_name: k.kpi_name, weight: k.weight, self_rating: k.self_rating, manager_rating: (a.status === 'shared' || a.status === 'acknowledged') ? k.manager_rating : null }));
   return ok(out);
@@ -2289,6 +2294,403 @@ async function getCompAccessLog(url, auth, env) {
   return ok({ log: r.data || [] });
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// PHASE 4 — OKRs (objectives / key results / check-ins)
+// 6-monthly cycles anchored to appraisal dates; company→dept→individual cascade;
+// auto-progress + manual final grade; individual-OKR visibility = self + manager
+// chain + HR (conservative). No new perm key. RULE-PODIUM-009.
+// Spec: docs/superpowers/specs/2026-07-10-podium-okr-engine-design.md
+// ────────────────────────────────────────────────────────────────────────────
+
+// Alignment must point UP: individual→dept/company, dept→company, company→none.
+function okrAlignmentOk(childLevel, parentLevel) {
+  const rank = { company: 0, department: 1, individual: 2 };
+  return rank[parentLevel] < rank[childLevel];
+}
+
+// Can the caller SEE objective row O? company/dept = org-visible; individual = self/chain/HR.
+function canSeeObjectiveRow(hr, me, edges, o) {
+  if (o.level !== 'individual') return true;
+  if (hr) return true;
+  if (!me) return false;
+  return inManagerChain(edges, o.owner_employee_id, me.id); // self OR ancestor manager
+}
+
+// Can the caller author/edit/grade objective row O? (sync — needs precomputed headed-dept set)
+//  company → HR; department → HR OR dept head; individual → HR OR owner OR ancestor manager.
+function objEditableRow(hr, me, edges, headedDeptIds, o) {
+  if (hr) return true;
+  if (!me) return false;
+  if (o.level === 'company') return false;
+  if (o.level === 'department') return !!(o.department_id && headedDeptIds.has(o.department_id));
+  return me.id === o.owner_employee_id || inManagerChain(edges, o.owner_employee_id, me.id);
+}
+
+// Async authorship check for a single objective (POST writers). Fetches the dept head.
+async function canAuthorObjective(auth, edges, obj, env) {
+  if (isHr(auth)) return true;
+  const me = callerEmployee(edges, auth.userId);
+  if (!me) return false;
+  if (obj.level === 'company') return false;
+  if (obj.level === 'department') {
+    if (!obj.department_id) return false;
+    const dr = await sb(`/rest/v1/departments?id=eq.${obj.department_id}&select=head_employee_id&limit=1`, env);
+    return dr.data?.[0]?.head_employee_id === me.id;
+  }
+  if (!obj.owner_employee_id) return false;
+  return me.id === obj.owner_employee_id || inManagerChain(edges, obj.owner_employee_id, me.id);
+}
+
+// Which department ids does this employee head? (for objEditableRow in cycle reads)
+async function headedDeptIdsOf(empId, env) {
+  if (!empId) return new Set();
+  const dr = await sb(`/rest/v1/departments?head_employee_id=eq.${empId}&select=id&limit=200`, env);
+  return new Set((dr.data || []).map(d => d.id));
+}
+
+// ── Reads ─────────────────────────────────────────────────────────────────────
+async function getOkrConfig(url, auth, env) {
+  const r = await sb(`/rest/v1/okr_cycles?select=id,name,anchor_date,period_start,period_end,status&order=anchor_date.desc,created_at.desc&limit=100`, env);
+  const cycles = r.data || [];
+  const hr = isHr(auth);
+  const visible = hr ? cycles : cycles.filter(c => c.status !== 'draft');
+  return ok({ cycles: visible, current: visible[0] || null, can_admin: hr });
+}
+
+async function getOkrCycle(url, auth, env) {
+  const id = url.searchParams.get('id') || url.searchParams.get('cycle_id');
+  if (!id) return err('id required', 400);
+  const r = await sb(`/rest/v1/rpc/f_okr_cycle`, env, { method: 'POST', body: JSON.stringify({ p_cycle_id: id }) });
+  if (!r.ok) return err('load_failed: ' + JSON.stringify(r.data), 400);
+  const doc = r.data;
+  if (!doc || !doc.cycle) return err('not_found', 404);
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const hr = isHr(auth);
+  const headedDeptIds = await headedDeptIdsOf(me?.id, env);
+  const st = doc.cycle.status;
+  const objectives = (doc.objectives || [])
+    .filter(o => canSeeObjectiveRow(hr, me, edges, o))
+    .map(o => {
+      const canEdit = objEditableRow(hr, me, edges, headedDeptIds, o);
+      return { ...o, _can_edit: canEdit, _can_grade: canEdit && (st === 'scoring' || st === 'closed') };
+    });
+  return ok({ cycle: doc.cycle, objectives, can_admin: hr });
+}
+
+async function getObjective(url, auth, env) {
+  const id = url.searchParams.get('id'); if (!id) return err('id required', 400);
+  const or = await sb(`/rest/v1/objectives?id=eq.${id}&select=*,cycle:cycle_id(id,name,status,anchor_date)&limit=1`, env);
+  const obj = or.data?.[0]; if (!obj) return err('not_found', 404);
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const hr = isHr(auth);
+  if (!canSeeObjectiveRow(hr, me, edges, obj)) return err('forbidden', 403);
+  // Scores from the canonical RPC (find this objective in the assembled cycle doc).
+  const cr = await sb(`/rest/v1/rpc/f_okr_cycle`, env, { method: 'POST', body: JSON.stringify({ p_cycle_id: obj.cycle_id }) });
+  const scored = ((cr.ok && cr.data?.objectives) || []).find(o => o.id === id) || null;
+  const krs = scored?.key_results || [];
+  const krIds = krs.map(k => k.id);
+  let checkins = [];
+  if (krIds.length) {
+    const ch = await sb(`/rest/v1/okr_checkins?key_result_id=in.(${krIds.join(',')})&select=*,author:author_employee_id(full_name)&order=created_at.desc&limit=500`, env);
+    checkins = ch.data || [];
+  }
+  const headedDeptIds = await headedDeptIdsOf(me?.id, env);
+  const canEdit = objEditableRow(hr, me, edges, headedDeptIds, obj);
+  const st = obj.cycle?.status;
+  return ok({
+    objective: scored ? { ...scored, cycle: obj.cycle } : obj,
+    checkins,
+    _can_edit: canEdit,
+    _can_grade: canEdit && (st === 'scoring' || st === 'closed'),
+  });
+}
+
+// Read-only OKR surfacing for the appraisal detail: a subject's INDIVIDUAL objectives for
+// the OKR cycle anchored to `anchorDate` (the appraisal date). Returns [] when no cycle.
+async function subjectOkrsForAnchor(employeeId, anchorDate, env) {
+  if (!employeeId || !anchorDate) return [];
+  const c = await sb(`/rest/v1/okr_cycles?anchor_date=eq.${anchorDate}&select=id&order=created_at.desc&limit=1`, env);
+  const cyc = c.data?.[0]; if (!cyc) return [];
+  const doc = await sb(`/rest/v1/rpc/f_okr_cycle`, env, { method: 'POST', body: JSON.stringify({ p_cycle_id: cyc.id }) });
+  const objs = (doc.ok && doc.data?.objectives) || [];
+  return objs
+    .filter(o => o.level === 'individual' && o.owner_employee_id === employeeId)
+    .map(o => ({
+      id: o.id, title: o.title,
+      displayed_score: o.displayed_score, final_score: o.final_score,
+      final_confidence: o.final_confidence, reflection_note: o.reflection_note,
+      key_results: (o.key_results || []).map(k => ({
+        title: k.title, kr_score: k.kr_score, current_value: k.current_value,
+        target_value: k.target_value, unit: k.unit,
+      })),
+    }));
+}
+
+// Latest non-draft cycle (the "current" one everyone works in).
+async function currentOkrCycle(env) {
+  const r = await sb(`/rest/v1/okr_cycles?status=neq.draft&select=id,name,anchor_date,period_start,period_end,status&order=anchor_date.desc,created_at.desc&limit=1`, env);
+  return r.data?.[0] || null;
+}
+
+async function getMyOkrs(url, auth, env) {
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  if (!me) return ok({ employee_id: null, cycle: null, my_objectives: [], surfaced: [] });
+  const cycle = await currentOkrCycle(env);
+  if (!cycle) return ok({ employee_id: me.id, cycle: null, my_objectives: [], surfaced: [] });
+  const doc = await sb(`/rest/v1/rpc/f_okr_cycle`, env, { method: 'POST', body: JSON.stringify({ p_cycle_id: cycle.id }) });
+  const objs = (doc.ok && doc.data?.objectives) || [];
+  const my_objectives = objs.filter(o => o.level === 'individual' && o.owner_employee_id === me.id)
+    .map(o => ({ ...o, _can_edit: true, _can_grade: cycle.status === 'scoring' || cycle.status === 'closed' }));
+  const surfaced = objs.filter(o => o.level === 'company' || o.level === 'department');
+  return ok({ employee_id: me.id, cycle, my_objectives, surfaced });
+}
+
+async function getTeamOkrs(url, auth, env) {
+  const edges = await loadOrgEdges(env);
+  const me = callerEmployee(edges, auth.userId);
+  const hr = isHr(auth);
+  if (!me && !hr) return ok({ cycle: null, objectives: [] });
+  const cycle = await currentOkrCycle(env);
+  if (!cycle) return ok({ cycle: null, objectives: [] });
+  const doc = await sb(`/rest/v1/rpc/f_okr_cycle`, env, { method: 'POST', body: JSON.stringify({ p_cycle_id: cycle.id }) });
+  const objs = (doc.ok && doc.data?.objectives) || [];
+  let scope; // null = all (HR, no filter)
+  if (hr) {
+    const rootId = url.searchParams.get('employee_id');
+    scope = rootId ? descendantsOf(edges, rootId) : null;
+  } else {
+    scope = descendantsOf(edges, me.id);
+  }
+  const team = objs.filter(o => o.level === 'individual' && o.owner_employee_id
+    && (scope === null || scope.has(o.owner_employee_id)));
+  return ok({ cycle, objectives: team });
+}
+
+// ── Cycle admin (HR) ────────────────────────────────────────────────────────
+async function createOkrCycle(body, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const d = body.data || body;
+  if (!d.anchor_date) return err('anchor_date required (an Apr 1 / Oct 1)', 400);
+  const ad = d.anchor_date;
+  const row = {
+    name: d.name || ('OKRs ' + ad),
+    anchor_date: ad,
+    period_start: d.period_start || isoMinusMonths(ad, 6),
+    period_end: d.period_end || isoMinusDays(ad, 1),
+    status: 'draft',
+    created_by: auth.userId,
+  };
+  const r = await sb(`/rest/v1/okr_cycles`, env, { method: 'POST', body: JSON.stringify([row]) });
+  if (!r.ok) return err('create_failed: ' + JSON.stringify(r.data), 400);
+  return ok(r.data?.[0]);
+}
+async function updateOkrCycle(body, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const d = body.data || body;
+  if (!d.cycle_id) return err('cycle_id required', 400);
+  const patch = { updated_at: nowIso() };
+  for (const k of ['name', 'anchor_date', 'period_start', 'period_end']) if (k in d) patch[k] = d[k];
+  const r = await sb(`/rest/v1/okr_cycles?id=eq.${d.cycle_id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+  if (!r.ok) return err('update_failed', 400);
+  return ok(r.data?.[0]);
+}
+async function setOkrCycleStatus(body, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const d = body.data || body;
+  if (!d.cycle_id || !['draft', 'active', 'scoring', 'closed'].includes(d.status)) return err('cycle_id + valid status required', 400);
+  const r = await sb(`/rest/v1/okr_cycles?id=eq.${d.cycle_id}`, env, { method: 'PATCH', body: JSON.stringify({ status: d.status, updated_at: nowIso() }) });
+  if (!r.ok) return err('update_failed', 400);
+  return ok({ cycle_id: d.cycle_id, status: d.status });
+}
+async function deleteOkrCycle(body, auth, env) {
+  const gate = requireHr(auth); if (gate) return gate;
+  const d = body.data || body;
+  if (!d.cycle_id) return err('cycle_id required', 400);
+  if (!d.confirm) {
+    const oc = await sb(`/rest/v1/objectives?cycle_id=eq.${d.cycle_id}&select=id&limit=1`, env);
+    if (oc.data?.length) return err('cycle_has_objectives — pass confirm:true to delete it and all its objectives', 409);
+  }
+  const r = await sb(`/rest/v1/okr_cycles?id=eq.${d.cycle_id}`, env, { method: 'DELETE' });
+  if (!r.ok) return err('delete_failed', 400);
+  return ok({ deleted: d.cycle_id });
+}
+
+// ── Objectives ────────────────────────────────────────────────────────────────
+async function createObjective(body, auth, env) {
+  const d = body.data || body;
+  if (!d.cycle_id || !d.level || !d.title) return err('cycle_id, level, title required', 400);
+  if (!['company', 'department', 'individual'].includes(d.level)) return err('bad level', 400);
+  if (d.level === 'department' && !d.department_id) return err('department_id required for a department objective', 400);
+  if (d.level === 'individual' && !d.owner_employee_id) return err('owner_employee_id required for an individual objective', 400);
+  const edges = await loadOrgEdges(env);
+  if (!(await canAuthorObjective(auth, edges, { level: d.level, department_id: d.department_id, owner_employee_id: d.owner_employee_id }, env))) return err('forbidden', 403);
+  if (d.parent_objective_id) {
+    const pr = await sb(`/rest/v1/objectives?id=eq.${d.parent_objective_id}&select=level,cycle_id&limit=1`, env);
+    const parent = pr.data?.[0];
+    if (!parent) return err('parent objective not found', 400);
+    if (parent.cycle_id !== d.cycle_id) return err('parent objective must be in the same cycle', 400);
+    if (!okrAlignmentOk(d.level, parent.level)) return err('alignment must point up (individual→dept/company, dept→company)', 400);
+  }
+  const row = {
+    cycle_id: d.cycle_id, level: d.level,
+    owner_employee_id: d.owner_employee_id || null,
+    department_id: d.level === 'department' ? d.department_id : null,
+    parent_objective_id: d.parent_objective_id || null,
+    title: d.title, description: d.description || null,
+    sort_order: Number.isFinite(d.sort_order) ? Math.round(d.sort_order) : 0,
+    created_by: auth.userId,
+  };
+  const r = await sb(`/rest/v1/objectives`, env, { method: 'POST', body: JSON.stringify([row]) });
+  if (!r.ok) return err('create_failed: ' + JSON.stringify(r.data), 400);
+  return ok(r.data?.[0]);
+}
+async function updateObjective(body, auth, env) {
+  const d = body.data || body;
+  if (!d.id) return err('id required', 400);
+  const or = await sb(`/rest/v1/objectives?id=eq.${d.id}&select=*&limit=1`, env);
+  const obj = or.data?.[0]; if (!obj) return err('not_found', 404);
+  const edges = await loadOrgEdges(env);
+  if (!(await canAuthorObjective(auth, edges, obj, env))) return err('forbidden', 403);
+  const patch = { updated_at: nowIso() };
+  if ('title' in d) patch.title = d.title;
+  if ('description' in d) patch.description = d.description;
+  if ('status' in d && ['active', 'closed'].includes(d.status)) patch.status = d.status;
+  if ('sort_order' in d) patch.sort_order = Math.round(Number(d.sort_order) || 0);
+  if ('owner_employee_id' in d && obj.level === 'individual') patch.owner_employee_id = d.owner_employee_id;
+  if ('parent_objective_id' in d) {
+    if (d.parent_objective_id) {
+      if (d.parent_objective_id === d.id) return err('objective cannot be its own parent', 400);
+      const pr = await sb(`/rest/v1/objectives?id=eq.${d.parent_objective_id}&select=level,cycle_id&limit=1`, env);
+      const parent = pr.data?.[0];
+      if (!parent || parent.cycle_id !== obj.cycle_id || !okrAlignmentOk(obj.level, parent.level)) return err('invalid parent alignment', 400);
+    }
+    patch.parent_objective_id = d.parent_objective_id || null;
+  }
+  const r = await sb(`/rest/v1/objectives?id=eq.${d.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+  if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
+  return ok(r.data?.[0]);
+}
+async function deleteObjective(body, auth, env) {
+  const d = body.data || body;
+  if (!d.id) return err('id required', 400);
+  const or = await sb(`/rest/v1/objectives?id=eq.${d.id}&select=*&limit=1`, env);
+  const obj = or.data?.[0]; if (!obj) return err('not_found', 404);
+  const edges = await loadOrgEdges(env);
+  if (!(await canAuthorObjective(auth, edges, obj, env))) return err('forbidden', 403);
+  const r = await sb(`/rest/v1/objectives?id=eq.${d.id}`, env, { method: 'DELETE' });
+  if (!r.ok) return err('delete_failed', 400);
+  return ok({ deleted: d.id });
+}
+
+// ── Key results ─────────────────────────────────────────────────────────────
+async function createKeyResult(body, auth, env) {
+  const d = body.data || body;
+  if (!d.objective_id || !d.title || !d.metric_type) return err('objective_id, title, metric_type required', 400);
+  if (!['number', 'percentage', 'currency', 'milestone'].includes(d.metric_type)) return err('bad metric_type', 400);
+  const or = await sb(`/rest/v1/objectives?id=eq.${d.objective_id}&select=*&limit=1`, env);
+  const obj = or.data?.[0]; if (!obj) return err('objective not found', 404);
+  const edges = await loadOrgEdges(env);
+  if (!(await canAuthorObjective(auth, edges, obj, env))) return err('forbidden', 403);
+  const isMilestone = d.metric_type === 'milestone';
+  const start = isMilestone ? 0 : (Number(d.start_value) || 0);
+  const target = isMilestone ? 1 : Number(d.target_value);
+  if (!isMilestone && !Number.isFinite(target)) return err('target_value required', 400);
+  const row = {
+    objective_id: d.objective_id, title: d.title, metric_type: d.metric_type,
+    start_value: start, target_value: target,
+    current_value: (d.current_value != null ? Number(d.current_value) : start),
+    unit: d.unit || null,
+    direction: (d.direction === 'decrease' ? 'decrease' : 'increase'),
+    weight: (d.weight != null && Number(d.weight) > 0 ? Number(d.weight) : 1),
+    sort_order: Number.isFinite(d.sort_order) ? Math.round(d.sort_order) : 0,
+  };
+  const r = await sb(`/rest/v1/key_results`, env, { method: 'POST', body: JSON.stringify([row]) });
+  if (!r.ok) return err('create_failed: ' + JSON.stringify(r.data), 400);
+  return ok(r.data?.[0]);
+}
+async function updateKeyResult(body, auth, env) {
+  const d = body.data || body;
+  if (!d.id) return err('id required', 400);
+  const kr = await sb(`/rest/v1/key_results?id=eq.${d.id}&select=*,objective:objective_id(*)&limit=1`, env);
+  const krRow = kr.data?.[0]; if (!krRow) return err('not_found', 404);
+  const edges = await loadOrgEdges(env);
+  if (!(await canAuthorObjective(auth, edges, krRow.objective, env))) return err('forbidden', 403);
+  const patch = { updated_at: nowIso() };
+  if ('title' in d) patch.title = d.title;
+  if ('unit' in d) patch.unit = d.unit || null;
+  if ('start_value' in d) patch.start_value = Number(d.start_value) || 0;
+  if ('target_value' in d) patch.target_value = Number(d.target_value);
+  if ('direction' in d && ['increase', 'decrease'].includes(d.direction)) patch.direction = d.direction;
+  if ('weight' in d && Number(d.weight) > 0) patch.weight = Number(d.weight);
+  if ('status' in d && ['active', 'closed'].includes(d.status)) patch.status = d.status;
+  if ('sort_order' in d) patch.sort_order = Math.round(Number(d.sort_order) || 0);
+  const r = await sb(`/rest/v1/key_results?id=eq.${d.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+  if (!r.ok) return err('update_failed: ' + JSON.stringify(r.data), 400);
+  return ok(r.data?.[0]);
+}
+async function deleteKeyResult(body, auth, env) {
+  const d = body.data || body;
+  if (!d.id) return err('id required', 400);
+  const kr = await sb(`/rest/v1/key_results?id=eq.${d.id}&select=id,objective:objective_id(*)&limit=1`, env);
+  const krRow = kr.data?.[0]; if (!krRow) return err('not_found', 404);
+  const edges = await loadOrgEdges(env);
+  if (!(await canAuthorObjective(auth, edges, krRow.objective, env))) return err('forbidden', 403);
+  const r = await sb(`/rest/v1/key_results?id=eq.${d.id}`, env, { method: 'DELETE' });
+  if (!r.ok) return err('delete_failed', 400);
+  return ok({ deleted: d.id });
+}
+
+// ── Check-ins + grading ───────────────────────────────────────────────────────
+async function recordCheckin(body, auth, env) {
+  const d = body.data || body;
+  if (!d.key_result_id || d.value == null || !d.confidence) return err('key_result_id, value, confidence required', 400);
+  if (!['on_track', 'at_risk', 'off_track'].includes(d.confidence)) return err('bad confidence', 400);
+  const kr = await sb(`/rest/v1/key_results?id=eq.${d.key_result_id}&select=id,objective:objective_id(*)&limit=1`, env);
+  const krRow = kr.data?.[0]; if (!krRow) return err('key_result not found', 404);
+  const obj = krRow.objective;
+  const cy = await sb(`/rest/v1/okr_cycles?id=eq.${obj.cycle_id}&select=status&limit=1`, env);
+  if (cy.data?.[0]?.status === 'closed') return err('cycle_closed', 409);
+  const edges = await loadOrgEdges(env);
+  if (!(await canAuthorObjective(auth, edges, obj, env))) return err('forbidden', 403);
+  const me = callerEmployee(edges, auth.userId);
+  const value = Number(d.value);
+  if (!Number.isFinite(value)) return err('bad value', 400);
+  const ir = await sb(`/rest/v1/okr_checkins`, env, {
+    method: 'POST',
+    body: JSON.stringify([{ key_result_id: d.key_result_id, author_employee_id: me?.id || null, value, confidence: d.confidence, note: d.note || null }]),
+  });
+  if (!ir.ok) return err('checkin_failed: ' + JSON.stringify(ir.data), 400);
+  // Denormalise the latest value onto the KR (cheap-read mirror; newest check-in is truth).
+  await sb(`/rest/v1/key_results?id=eq.${d.key_result_id}`, env, { method: 'PATCH', body: JSON.stringify({ current_value: value, updated_at: nowIso() }) });
+  return ok(ir.data?.[0]);
+}
+async function gradeObjective(body, auth, env) {
+  const d = body.data || body;
+  if (!d.id) return err('id required', 400);
+  const or = await sb(`/rest/v1/objectives?id=eq.${d.id}&select=*,cycle:cycle_id(status)&limit=1`, env);
+  const obj = or.data?.[0]; if (!obj) return err('not_found', 404);
+  const st = obj.cycle?.status;
+  if (st !== 'scoring' && st !== 'closed') return err('grading allowed only when the cycle is scoring/closed', 409);
+  const edges = await loadOrgEdges(env);
+  if (!(await canAuthorObjective(auth, edges, obj, env))) return err('forbidden', 403);
+  const patch = { updated_at: nowIso() };
+  if (d.final_score != null) {
+    let s = Number(d.final_score); if (!Number.isFinite(s)) return err('bad final_score', 400);
+    patch.final_score = Math.max(0, Math.min(1, s));
+  }
+  if ('final_confidence' in d) {
+    if (d.final_confidence && !['on_track', 'at_risk', 'off_track'].includes(d.final_confidence)) return err('bad final_confidence', 400);
+    patch.final_confidence = d.final_confidence || null;
+  }
+  if ('reflection_note' in d) patch.reflection_note = d.reflection_note || null;
+  const r = await sb(`/rest/v1/objectives?id=eq.${d.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
+  if (!r.ok) return err('grade_failed: ' + JSON.stringify(r.data), 400);
+  return ok(r.data?.[0]);
+}
+
 const GET_ACTIONS = {
   getMe, getSettings,
   getEmployees, getEmployee,
@@ -2315,6 +2717,8 @@ const GET_ACTIONS = {
   getFactoryWorkforce, getFactoryCostInputs,
   // Phase 6 — analytics
   getAnalyticsOrg, getAnalyticsComp, getAnalyticsPerf,
+  // Phase 4 — OKRs
+  getOkrConfig, getOkrCycle, getObjective, getMyOkrs, getTeamOkrs,
 };
 
 const POST_ACTIONS = {
@@ -2343,6 +2747,11 @@ const POST_ACTIONS = {
   finalizeAppraisal, shareAppraisal, applyIncrement,
   // Factory cost module (compensation-tier)
   setFactoryWorkforce, setFactoryPay, bulkUploadFactoryPay, setFactoryCostInput, setFactoryOtRates,
+  // Phase 4 — OKRs
+  createOkrCycle, updateOkrCycle, setOkrCycleStatus, deleteOkrCycle,
+  createObjective, updateObjective, deleteObjective,
+  createKeyResult, updateKeyResult, deleteKeyResult,
+  recordCheckin, gradeObjective,
 };
 
 // Self-only baseline (RULE-PODIUM-006): actions reachable WITHOUT podium_view.
@@ -2364,6 +2773,9 @@ const SELF_SERVE_GET = new Set([
   'getRazorpayxPayrollScan',
   // Comp analytics — self-gated by requireComp (a comp-only user need not hold podium_view).
   'getAnalyticsComp',
+  // OKR participation — relationship-scoped inside each handler, not podium_view-gated.
+  // (getObjective self-scopes via canSeeObjectiveRow; getMyOkrs/getTeamOkrs are chain-scoped.)
+  'getMyOkrs', 'getObjective', 'getTeamOkrs',
 ]);
 const SELF_SERVE_POST = new Set([
   'createAccomplishment', 'updateAccomplishment', 'deleteAccomplishment',
@@ -2375,6 +2787,11 @@ const SELF_SERVE_POST = new Set([
   'setFactoryWorkforce', 'setFactoryPay', 'bulkUploadFactoryPay', 'setFactoryCostInput', 'setFactoryOtRates',
   // RazorpayX payroll actuals writer — self-gated by requireComp.
   'applyRazorpayxPayouts',
+  // OKR participation — each handler is authorship-gated (owner / manager-chain / HR),
+  // so a self-only user can act only on their OWN objectives + KRs + check-ins.
+  'createObjective', 'updateObjective', 'deleteObjective',
+  'createKeyResult', 'updateKeyResult', 'deleteKeyResult',
+  'recordCheckin', 'gradeObjective',
 ]);
 
 async function handleGet(url, request, env) {

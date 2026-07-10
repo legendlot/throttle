@@ -364,7 +364,7 @@ async function runScheduled(env) {
       `/rest/v1/campaigns?status=in.(approved,scheduled)&scheduled_at=lte.${A.enc(nowIso())}&select=id,name`, env);
     for (const c of (due.ok && Array.isArray(due.data) ? due.data : [])) {
       const r = await CAMP.startCampaign(env, c.id, 'scheduler');
-      if (r.ok) await AL.alert(env, `scheduled campaign "${c.name}" fired — ${r.audience} recipients.`);
+      if (r.ok) await AL.alert(env, `📣 *Relay — scheduled campaign fired*\n"${c.name}" → ${r.audience} recipients.`);
       else if (r.error !== 'already_claimed') console.log('scheduler_start_error', c.id, r.error);
     }
   } catch (e) { console.log('scheduler_sweep_error', e?.message || String(e)); }
@@ -390,7 +390,7 @@ async function checkDeliverabilitySpike(env) {
   const rate = failed / rows.length;
   if (rate > 0.10 || complaints > 0) {
     await AL.alert(env,
-      `⚠️ deliverability: ${failed}/${rows.length} of recent email sends failed/bounced (${Math.round(rate * 100)}%)` +
+      `⚠️ *Relay — deliverability alert*\n${failed}/${rows.length} of recent email sends failed/bounced (${Math.round(rate * 100)}%)` +
       `${complaints ? `, ${complaints} spam complaint(s)` : ''}. Check /analytics.`);
     await A.sbComms('/rest/v1/settings?id=eq.1', env,
       { method: 'PATCH', body: JSON.stringify({ last_alert_at: nowIso() }) });
@@ -490,7 +490,7 @@ export default {
         try {
           await A.sbComms('/rest/v1/queue_failures', env, { method: 'POST',
             body: JSON.stringify({ kind: b.kind || 'campaign', body: b, error: 'max_retries_exhausted' }) });
-          await AL.alert(env, `queue message dead-lettered (kind=${b.kind || 'campaign'}) — recorded in queue_failures.`);
+          await AL.alert(env, `🪣 *Relay — queue message dead-lettered* (kind=${b.kind || 'campaign'})\nRecorded in comms.queue_failures for review.`);
         } catch (e) { console.log('dlq_write_error', e?.message || String(e)); }
         msg.ack();   // DLQ is terminal — always ack so it can't loop
       }

@@ -1,17 +1,23 @@
-// M9 — Slack alerting. Best-effort and fail-open: if SLACK_ALERT_WEBHOOK is unset or the
-// POST fails, alert() returns false and never throws, so the worker never fails a send or
-// queue op because alerting is misconfigured. Wire a Slack Incoming Webhook (a new
-// #relay-alerts channel or #system-updates) into the secret to turn it on.
-async function alert(env, text) {
-  if (!env.SLACK_ALERT_WEBHOOK) return false;
+// M9 — Slack alerting. Same convention as throttleops (slackOps/slackTeam): a Slack
+// Incoming Webhook URL in an env secret, POST { text }, fail-open. If SLACK_WEBHOOK_ALERTS
+// is unset, log + return so the worker never fails a send/queue op on a misconfigured alert.
+// Env var follows the throttleops SLACK_WEBHOOK_<CHANNEL> naming → #relay-alerts.
+async function alert(env, message) {
+  if (!env.SLACK_WEBHOOK_ALERTS) {
+    console.log('[Slack:alerts]', message);
+    return false;
+  }
   try {
-    const res = await fetch(env.SLACK_ALERT_WEBHOOK, {
+    await fetch(env.SLACK_WEBHOOK_ALERTS, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: `:satellite_antenna: *Relay* — ${text}` }),
+      body: JSON.stringify({ text: message }),
     });
-    return res.ok;
-  } catch { return false; }
+    return true;
+  } catch (e) {
+    console.error('[Slack:alerts] Failed to send:', e.message);
+    return false;
+  }
 }
 
 module.exports = { alert };
