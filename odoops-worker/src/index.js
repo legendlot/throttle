@@ -2649,6 +2649,21 @@ export default {
             if (!r.ok) return err('Conversion history failed: ' + JSON.stringify(r.data), 502);
             return ok({ rows: r.data || [] });
           }
+          case 'getWebsiteCr': {   // Hybrid net CR — Shopify net orders ÷ GA4 website sessions, per IST day
+            if (!canView(P)) return err('No permission', 403);
+            const istDay = (offsetDays) => new Date(Date.now() + 330 * 60000 - offsetDays * 86400000).toISOString().slice(0, 10);
+            const to = qp('to') || istDay(0);
+            const from = qp('from') || istDay(29);   // default trailing 30 IST days
+            const r = await rpcSales('f_website_cr', { p_from: from, p_to: to });
+            if (!r.ok) return err('Website CR failed: ' + JSON.stringify(r.data), 502);
+            // Recent 3 IST days are provisional — late orders, cancellations, and GA4 session revisions still settle.
+            const provFrom = istDay(2);
+            const rows = (r.data || []).map(x => ({ ...x, provisional: x.the_date >= provFrom }));
+            const tot = rows.reduce((a, x) => { a.sessions += num(x.sessions); a.net += num(x.net_orders); a.gross += num(x.net_gross); return a; }, { sessions: 0, net: 0, gross: 0 });
+            return ok({ rows, from, to, provisional_from: provFrom,
+              summary: { sessions: tot.sessions, net_orders: tot.net, net_gross: tot.gross,
+                cr: tot.sessions > 0 ? Math.round(tot.net / tot.sessions * 10000) / 100 : null } });
+          }
           case 'getChangeEvents': {   // S186 — website-changes stream (annotations on the conversion timeline)
             if (!canView(P)) return err('No permission', 403);
             const from = qp('from') || todayISO(), to = qp('to') || todayISO();
