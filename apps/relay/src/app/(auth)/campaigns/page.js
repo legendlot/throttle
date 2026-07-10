@@ -151,6 +151,13 @@ export default function CampaignsPage() {
     catch (e) { showToast(e.message || 'Reject failed', 'error'); }
     finally { setBusy(false); }
   }
+  async function cancelSchedule() {
+    if (!window.confirm('Cancel the scheduled send? The campaign stays approved and can be sent or re-scheduled.')) return;
+    setBusy(true);
+    try { await workerFetch('cancelSchedule', { id: c.id }, session); showToast('Schedule cleared', 'success'); refresh(); }
+    catch (e) { showToast(e.message || 'Cancel failed', 'error'); }
+    finally { setBusy(false); }
+  }
   async function sendNow() {
     const seg = segments.find((s) => s.id === c.segment_id);
     if (!window.confirm(`INTERNAL TEST GATE — no customer sends are authorized yet.\n\nSend "${c.name}" to audience "${seg?.name || c.segment_id}" now?\n\nThis fans out real emails to everyone reachable in the segment.`)) return;
@@ -256,6 +263,12 @@ export default function CampaignsPage() {
             {(c.status === 'approved' || c.status === 'scheduled') && (
               <>
                 <Badge label="approved" tone="blue" />
+                {c.scheduled_at && new Date(c.scheduled_at) > new Date() && (
+                  <span className="dim" style={{ fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <Clock size={14} /> Scheduled — fires {new Date(c.scheduled_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
+                    {canBuild && <button className="badge-btn" onClick={cancelSchedule} disabled={busy} style={{ marginLeft: 8 }}>cancel schedule</button>}
+                  </span>
+                )}
                 {canSend && <Btn kind="primary" onClick={sendNow} disabled={busy}><Send size={14} /> Send now</Btn>}
               </>
             )}

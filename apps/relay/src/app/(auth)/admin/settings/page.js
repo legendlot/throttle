@@ -21,6 +21,8 @@ const FIELDS = [
     hint: 'Sends resume from this local time.' },
   { key: 'attribution_window_days', label: 'Attribution window (days)', type: 'number',
     hint: 'Conversions within this window after a send are attributed to it.' },
+  { key: 'daily_send_budget', label: 'Daily send budget (marketing)', type: 'number',
+    hint: 'Warm-up throttle — max marketing sends per day (IST). Blank = unlimited. Ramp 500 → 2k → 5k → blank.' },
 ];
 
 export default function SettingsPage() {

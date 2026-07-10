@@ -49,7 +49,16 @@ async function startCampaign(env, id, sentBy) {
   if (!camp.segment_id || !camp.template_id) return { ok: false, error: 'segment_and_template_required' };
 
   const { reachable } = await reachableCount(env, camp.segment_id, camp.channel, camp.purpose);
-  await setStatus(env, id, { status: 'sending', audience_snapshot: reachable, sent_by: sentBy });
+  // Atomic claim (M9): flip approved/scheduled → sending ONLY if still approved/scheduled,
+  // so the M9 scheduler sweep and a concurrent manual "Send now" can't both fan out the same
+  // campaign. sbComms defaults to Prefer: return=representation → an empty array means another
+  // actor already claimed it.
+  const claim = await A.sbComms(
+    `/rest/v1/campaigns?id=eq.${A.enc(id)}&status=in.(approved,scheduled)`, env,
+    { method: 'PATCH', body: JSON.stringify({
+        status: 'sending', audience_snapshot: reachable, sent_by: sentBy, updated_at: nowIso() }) });
+  if (!claim.ok || !Array.isArray(claim.data) || claim.data.length === 0)
+    return { ok: false, error: 'already_claimed' };
   await env.BROADCAST_QUEUE.send({ campaignId: id, after: null });
   return { ok: true, audience: reachable };
 }

@@ -9,6 +9,7 @@ const CAMP = require('./campaigns.js');
 const J = require('./journeys.js');
 const SHOP = require('./shopify.js');
 const SHOPWH = require('./shopify-webhooks.js');
+const AL = require('./alerts.js');
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -174,7 +175,8 @@ async function handlePost(body, auth, env) {
       if (!A.canSuperAdmin(auth.permissions)) return err('forbidden', 403);
       const allowed = ['approval_required_marketing', 'approval_audience_threshold',
         'frequency_cap_per_day', 'frequency_cap_window_hours', 'quiet_hours_start',
-        'quiet_hours_end', 'attribution_window_days', 'test_mode', 'test_mode_allow'];
+        'quiet_hours_end', 'attribution_window_days', 'test_mode', 'test_mode_allow',
+        'daily_send_budget'];
       const patch = { updated_at: nowIso() };
       for (const k of allowed) if (k in body) patch[k] = body[k];
       // Disabling test mode = unlocking real-customer sends. Make it a deliberate,
@@ -303,6 +305,14 @@ async function handlePost(body, auth, env) {
       const r = await CAMP.startCampaign(env, body.id, auth.userId);
       return r.ok ? ok(r) : err(r.error, 400);
     }
+    case 'cancelSchedule': {           // clear a pending schedule (M9); leaves the campaign approved
+      if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
+      if (!body.id) return err('id_required', 400);
+      const r = await A.sbComms(`/rest/v1/campaigns?id=eq.${A.enc(body.id)}&status=in.(approved,scheduled)`, env,
+        { method: 'PATCH', body: JSON.stringify({ scheduled_at: null, status: 'approved', updated_at: nowIso() }) });
+      if (!r.ok || !Array.isArray(r.data) || r.data.length === 0) return err('not_cancellable', 400);
+      return ok({ status: 'approved' });
+    }
 
     // ── M7: journeys ──
     case 'saveJourney': { if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
@@ -340,6 +350,50 @@ async function handlePost(body, auth, env) {
 
     default:
       return err(`unknown_action:${body.action}`, 404);
+  }
+}
+
+// ── Cron body (M9) ────────────────────────────────────────────────────────────
+// 1) fire any approved/scheduled campaign whose scheduled_at is now due (the atomic
+//    claim in startCampaign guards against a concurrent manual send), and
+// 2) watch recent real-send outcomes for a bounce/failure spike, alerting ≤1/hour.
+async function runScheduled(env) {
+  // 1. due scheduled campaigns
+  try {
+    const due = await A.sbComms(
+      `/rest/v1/campaigns?status=in.(approved,scheduled)&scheduled_at=lte.${A.enc(nowIso())}&select=id,name`, env);
+    for (const c of (due.ok && Array.isArray(due.data) ? due.data : [])) {
+      const r = await CAMP.startCampaign(env, c.id, 'scheduler');
+      if (r.ok) await AL.alert(env, `scheduled campaign "${c.name}" fired — ${r.audience} recipients.`);
+      else if (r.error !== 'already_claimed') console.log('scheduler_start_error', c.id, r.error);
+    }
+  } catch (e) { console.log('scheduler_sweep_error', e?.message || String(e)); }
+
+  // 2. deliverability spike watch (≤1 alert/hour via settings.last_alert_at)
+  try { await checkDeliverabilitySpike(env); }
+  catch (e) { console.log('spike_check_error', e?.message || String(e)); }
+}
+
+async function checkDeliverabilitySpike(env) {
+  const s = await A.sbComms('/rest/v1/settings?id=eq.1&select=last_alert_at&limit=1', env);
+  const last = s.ok && s.data?.[0]?.last_alert_at ? new Date(s.data[0].last_alert_at).getTime() : 0;
+  if (Date.now() - last < 3600 * 1000) return;   // rate-limit: once per hour
+
+  // last 100 REAL send outcomes (exclude skipped/suppressed/queued — those aren't deliverability)
+  const r = await A.sbComms(
+    '/rest/v1/messages?channel=eq.email&status=in.(sent,delivered,opened,clicked,bounced,failed)' +
+    '&order=queued_at.desc&limit=100&select=status,provider_status', env);
+  const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+  if (rows.length < 20) return;   // too little signal
+  const complaints = rows.filter((m) => m.provider_status === 'email.complained').length;
+  const failed = rows.filter((m) => m.status === 'failed' || m.status === 'bounced').length;
+  const rate = failed / rows.length;
+  if (rate > 0.10 || complaints > 0) {
+    await AL.alert(env,
+      `⚠️ deliverability: ${failed}/${rows.length} of recent email sends failed/bounced (${Math.round(rate * 100)}%)` +
+      `${complaints ? `, ${complaints} spam complaint(s)` : ''}. Check /analytics.`);
+    await A.sbComms('/rest/v1/settings?id=eq.1', env,
+      { method: 'PATCH', body: JSON.stringify({ last_alert_at: nowIso() }) });
   }
 }
 
@@ -421,8 +475,27 @@ export default {
     }
   },
 
+  // Cron (M9) — every 5 min. Fires due scheduled campaigns + watches deliverability.
+  async scheduled(controller, env, ctx) {
+    ctx.waitUntil(runScheduled(env));
+  },
+
   // Queue consumer — dispatch by message kind (enrol vs campaign fan-out).
+  // The commsops-dlq queue lands here too (max_retries exhausted) — distinguished by
+  // batch.queue — where we durably record the poison message + alert instead of losing it.
   async queue(batch, env) {
+    if (batch.queue === 'commsops-dlq') {
+      for (const msg of batch.messages) {
+        const b = msg.body || {};
+        try {
+          await A.sbComms('/rest/v1/queue_failures', env, { method: 'POST',
+            body: JSON.stringify({ kind: b.kind || 'campaign', body: b, error: 'max_retries_exhausted' }) });
+          await AL.alert(env, `queue message dead-lettered (kind=${b.kind || 'campaign'}) — recorded in queue_failures.`);
+        } catch (e) { console.log('dlq_write_error', e?.message || String(e)); }
+        msg.ack();   // DLQ is terminal — always ack so it can't loop
+      }
+      return;
+    }
     for (const msg of batch.messages) {
       try {
         const b = msg.body || {};

@@ -84,6 +84,14 @@ async function runGate(env, { profileId, channel, purpose, to }) {
   if (channel === 'email' && (!to || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)))
     return { pass: false, reason: 'invalid_address' };
 
+  // 6. warm-up send budget (M9) — marketing only; transactional/utility bypass. Consumed
+  // LAST so a unit is never burned on a send that another check would skip (quiet hours,
+  // invalid address, cap). Atomic per-IST-day via the consume_send_budget() RPC.
+  if (isMarketing) {
+    const b = await A.sbComms('/rest/v1/rpc/consume_send_budget', env, { method: 'POST', body: '{}' });
+    if (!(b.ok && b.data === true)) return { pass: false, reason: 'budget_exhausted' };
+  }
+
   return { pass: true, reason: null };
 }
 
