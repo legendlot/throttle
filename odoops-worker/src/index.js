@@ -2541,6 +2541,19 @@ export default {
             const committed = await adsCommittedDailyInr();
             return ok({ rows: r.data || [], committed_daily_inr: committed, ceiling_inr: await adsCeilingInr(), write_enabled: await adsWriteEnabled() });
           }
+          case 'getAngles': {   // Dyno — the angle library (GET)
+            if (!canView(P)) return err('No permission', 403);
+            const r = await sbSales('/rest/v1/lab_angles?select=*&order=slug.asc');
+            if (!r.ok) return err('Angles read failed: ' + JSON.stringify(r.data), 502);
+            return ok({ angles: r.data || [] });
+          }
+          case 'getDecisions': {   // Dyno — decisions for one experiment, on-demand (GET)
+            if (!canView(P)) return err('No permission', 403);
+            if (!qp('plan_id')) return err('plan_id required', 422);
+            const r = await sbSales(`/rest/v1/lab_decisions?plan_id=eq.${encodeURIComponent(qp('plan_id'))}&select=*&order=decided_at.desc`);
+            if (!r.ok) return err('Decisions read failed: ' + JSON.stringify(r.data), 502);
+            return ok({ decisions: r.data || [] });
+          }
           case 'getDynoBoard': {   // Dyno — creative testing-grounds live board (one row per variant + windowed Meta results + computed status)
             if (!canView(P)) return err('No permission', 403);
             const recentDays = Math.min(Math.max(Number(qp('recent_days')) || 3, 1), 30);
@@ -3236,19 +3249,6 @@ export default {
             if (!r.ok) return err('Angle upsert failed: ' + JSON.stringify(r.data), 502);
             await ledgerWrite({ actor_user_id: userId, action: 'labUpsertAngle', daily_delta_inr: 0, request: d, status: 'ok' });
             return ok(Array.isArray(r.data) ? r.data[0] : r.data);
-          }
-          case 'getAngles': {   // Dyno — the angle library
-            if (!canView(P)) return err('No permission', 403);
-            const r = await sbSales('/rest/v1/lab_angles?select=*&order=slug.asc');
-            if (!r.ok) return err('Angles read failed: ' + JSON.stringify(r.data), 502);
-            return ok({ angles: r.data || [] });
-          }
-          case 'getDecisions': {   // Dyno — decisions for one experiment (on-demand)
-            if (!canView(P)) return err('No permission', 403);
-            if (!qp('plan_id')) return err('plan_id required', 422);
-            const r = await sbSales(`/rest/v1/lab_decisions?plan_id=eq.${encodeURIComponent(qp('plan_id'))}&select=*&order=decided_at.desc`);
-            if (!r.ok) return err('Decisions read failed: ' + JSON.stringify(r.data), 502);
-            return ok({ decisions: r.data || [] });
           }
           case 'metaCreateCampaign': {   // creates PAUSED (no budget at campaign level in ABO)
             if (!canAdsWrite(P)) return err('No permission', 403);
