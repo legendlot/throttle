@@ -37,7 +37,7 @@
 
 **Acceptance:** internal-test data (S187 56-staff broadcast + S178 journey runs) renders correctly; RPC latency <500ms on current volume; zero client-side aggregation over raw message rows; build clean; deployed live.
 
-### M9 — Scheduler + operational hardening — DONE (S206, commsops `bfb18af2`; only the optional SLACK_WEBHOOK_ALERTS secret is Afshaan's to set)
+### M9 — Scheduler + operational hardening — DONE + FULLY VERIFIED LIVE (S206, commsops `b7531e32`; `SLACK_WEBHOOK_ALERTS`→#relay-alerts set, alert path proven end-to-end via a throwaway scheduled-campaign test)
 
 **Goal:** scheduled campaigns actually fire; failures are dead-lettered + alerted; a warm-up send budget exists. This is the milestone that makes unattended operation safe.
 
