@@ -16,6 +16,7 @@ const TONE_STYLES = {
   blue:   { bg: 'rgba(33,60,226,.2)',   fg: '#7b93ff', border: 'rgba(33,60,226,.3)' },
   orange: { bg: 'rgba(255,140,0,.15)',  fg: '#ffaa33', border: 'rgba(255,140,0,.25)' },
   amber:  { bg: 'rgba(245,158,11,.15)', fg: '#fbbf24', border: 'rgba(245,158,11,.3)' },
+  purple: { bg: 'rgba(168,85,247,.14)', fg: '#c084fc', border: 'rgba(168,85,247,.3)' },
   gray:   { bg: 'rgba(80,80,80,.2)',    fg: '#aaa',    border: 'rgba(80,80,80,.3)' },
 };
 
@@ -147,12 +148,15 @@ export default function IssueQueuePage() {
     try {
       await ensureMaterialCache();
       // FEAT-020: getProductionRuns uses status=eq.X (no IN-list support), so call twice and merge.
-      const [submittedRuns, pickingRuns, wos, extIssued, extProgress] = await Promise.all([
+      const [submittedRuns, pickingRuns, wos, extIssued, extProgress, repairRuns] = await Promise.all([
         garageFetch('getProductionRuns', { status: 'Submitted' }, session),
         garageFetch('getProductionRuns', { status: 'Picking' }, session),
         garageFetch('getWorkOrders', {}, session),
         garageFetch('getProductionRuns', { run_type: 'outsourced', status: 'Issued' }, session),
         garageFetch('getProductionRuns', { run_type: 'outsourced', status: 'In Progress' }, session),
+        // L65 — repair-run requests consolidated into the queue, mirroring UDR. Only 'planned'
+        // (awaiting store issuance); 'active' runs are in progress + many sit stale-open (run-closure debt).
+        garageFetch('getRepairRunsDash', { status: 'planned', lines: '1' }, session),
       ]);
       const runs = [ ...(submittedRuns || []), ...(pickingRuns || []) ];
       const extIssuedRuns   = Array.isArray(extIssued)   ? extIssued   : [];
@@ -239,6 +243,36 @@ export default function IssueQueuePage() {
             raw: run,
           });
         }
+      });
+      // L65 — repair-run requests (planned): informational rows, issued by scanning at Issue Repair
+      // (mirrors UDR's non-clickable "scan at Issue UDR" behaviour). No store issuance from this panel.
+      (Array.isArray(repairRuns) ? repairRuns : []).forEach((rr) => {
+        const lines = Array.isArray(rr._lines) ? rr._lines : [];
+        const targetTotal = lines.reduce((a, l) => a + (Number(l.target_car_qty) || 0) + (Number(l.target_remote_qty) || 0), 0);
+        const issued = rr._counts?.total || 0;
+        const productLabel = lines.length === 0 ? '—'
+          : lines.length === 1 ? (lines[0].product || '—')
+          : `${lines.length} products`;
+        const details = lines.length
+          ? lines.map((l) => {
+              const name = [l.product, l.model, l.color].filter(Boolean).join(' ') || '—';
+              const c = Number(l.target_car_qty) || 0, r = Number(l.target_remote_qty) || 0;
+              return `${name}${c || r ? ` (${c}c/${r}r)` : ''}`;
+            }).join('; ')
+          : 'No target lines yet';
+        rows.push({
+          type:      'repair',
+          ref:       rr.run_no,
+          badge:     'REPAIR',
+          badgeTone: 'purple',
+          product:   productLabel,
+          details:   `Repair run — scan units at Issue Repair · ${details}`,
+          units:     targetTotal ? `${issued}/${targetTotal}` : (issued || '—'),
+          run_date:  rr.run_date,
+          submitted: rr.created_at,
+          line_no:   rr.line || '—',
+          raw:       rr,
+        });
       });
       setQueue(rows);
     } catch (e) {
@@ -922,8 +956,8 @@ export default function IssueQueuePage() {
                 {visibleQueue.map((r) => (
                   <tr
                     key={`${r.type}-${r.ref}`}
-                    onClick={() => r.type !== 'udr' && openItem(r)}
-                    style={{ cursor: r.type !== 'udr' ? 'pointer' : 'default' }}
+                    onClick={() => r.type !== 'udr' && r.type !== 'repair' && openItem(r)}
+                    style={{ cursor: r.type !== 'udr' && r.type !== 'repair' ? 'pointer' : 'default' }}
                   >
                     <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: 'var(--yellow)' }}>{r.ref}</td>
                     <td style={tableTdStyle}><StatusBadge label={r.badge} tone={r.badgeTone} /></td>
@@ -972,6 +1006,8 @@ export default function IssueQueuePage() {
                     <td style={{ ...tableTdStyle, textAlign: 'right' }}>
                       {r.type === 'udr'
                         ? <span style={{ fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>scan at Issue UDR</span>
+                        : r.type === 'repair'
+                        ? <span style={{ fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>scan at Issue Repair</span>
                         : <button style={btnPrimary} onClick={(e) => { e.stopPropagation(); openItem(r); }}>ISSUE →</button>}
                     </td>
                   </tr>
