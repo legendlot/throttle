@@ -1852,6 +1852,22 @@ async function managedUpsert(row) {
   await sbSales('/rest/v1/ads_managed?on_conflict=entity_type,meta_id', { method: 'POST',
     prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify({ ...row, updated_at: nowISO() }) });
 }
+// Store one base64 image into the private lab-creatives bucket (best-effort — never throws).
+// Returns the storage path on success, null on failure. Used for Dyno board thumbnails.
+async function storeLabCreative(planId, adId, imageBase64) {
+  try {
+    if (!imageBase64) return null;
+    const bin = Uint8Array.from(atob(imageBase64), c => c.charCodeAt(0));
+    const path = `${planId}/${adId}.png`;
+    const res = await fetch(`${SUPABASE_URL}/storage/v1/object/lab-creatives/${path}`, {
+      method: 'POST',
+      headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+        'Content-Type': 'image/png', 'x-upsert': 'true' },
+      body: bin });
+    if (!res.ok) { console.error('lab-creatives store failed', res.status, (await res.text()).slice(0, 160)); return null; }
+    return path;
+  } catch (e) { console.error('storeLabCreative error:', e?.message || e); return null; }
+}
 async function managedGet(entityType, metaId) {
   const r = await sbSales(`/rest/v1/ads_managed?entity_type=eq.${entityType}&meta_id=eq.${encodeURIComponent(metaId)}&select=*&limit=1`);
   return (r.ok && r.data[0]) ? r.data[0] : null;
@@ -2532,7 +2548,23 @@ export default {
               p_filter: qp('filter') || 'active', p_product: qp('product') || null,
               p_angle: qp('angle') || null, p_recent_days: recentDays });
             if (!r.ok) return err('Dyno board failed: ' + JSON.stringify(r.data), 502);
-            return ok({ rows: r.data || [], recent_days: recentDays,
+            const rows = r.data || [];
+            // Board thumbnails live in the private lab-creatives bucket → bulk-sign all paths in ONE
+            // subrequest so the browser can load them; the 60s poll re-signs before expiry.
+            const paths = [...new Set(rows.map(x => x.asset_url).filter(Boolean))];
+            if (paths.length) {
+              try {
+                const sg = await fetch(`${SUPABASE_URL}/storage/v1/object/sign/lab-creatives`, {
+                  method: 'POST', headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`, 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ expiresIn: 3600, paths }) });
+                if (sg.ok) {
+                  const signed = await sg.json();   // [{ path, signedURL }]
+                  const byPath = {}; for (const s of signed) byPath[s.path] = `${SUPABASE_URL}/storage/v1${s.signedURL}`;
+                  for (const x of rows) if (x.asset_url && byPath[x.asset_url]) x.asset_url = byPath[x.asset_url];
+                }
+              } catch (e) { console.error('lab-creatives sign failed:', e?.message || e); }
+            }
+            return ok({ rows, recent_days: recentDays,
               committed_daily_inr: await adsCommittedDailyInr(), ceiling_inr: await adsCeilingInr(),
               write_enabled: await adsWriteEnabled() });
           }
@@ -3344,7 +3376,10 @@ export default {
                   });
                 }
                 const res = await metaPost(env, `act_${acct}/ads`, { name: ad.name || 'LOT ad', adset_id: d.adset_id, creative: { creative_id: cre.id }, status: 'PAUSED' });
-                await managedUpsert({ entity_type: 'ad', meta_id: res.id, parent_id: d.adset_id, plan_id: d.plan_id, channel_id: plan.channel_id, ad_account_id: acct, name: ad.name || null, daily_budget_inr: 0, status: 'paused', ...dynoMeta });
+                // Best-effort thumbnail: single-image → its bytes; carousel → card 1 (the hook).
+                const thumbB64 = isCarousel ? (ad.cards[0] && ad.cards[0].image_base64) : ad.image_base64;
+                const assetPath = thumbB64 ? await storeLabCreative(d.plan_id, res.id, thumbB64) : null;
+                await managedUpsert({ entity_type: 'ad', meta_id: res.id, parent_id: d.adset_id, plan_id: d.plan_id, channel_id: plan.channel_id, ad_account_id: acct, name: ad.name || null, daily_budget_inr: 0, status: 'paused', ...dynoMeta, asset_url: assetPath });
                 return { entity_type: 'ad', entity_id: res.id, meta_response: { ad_id: res.id, creative_id: cre.id, image_hash: imageHash, cards: isCarousel ? ad.cards.length : null } };
               }});
               return ok({ ad_id: out.entity_id, creative_id: out.meta_response.creative_id, image_hash: out.meta_response.image_hash, cards: out.meta_response.cards });
