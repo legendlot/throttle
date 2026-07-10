@@ -489,7 +489,7 @@ function NewFlushForm(props) {
           <div>
             <span className="eyebrow" style={lblStyle}>Line</span>
             <div style={{ display: 'flex', gap: 5 }}>
-              {['L1', 'L2', 'L3'].map(l => (
+              {['L1', 'L2', 'L3', 'L4', 'L5'].map(l => (
                 <button key={l} type="button" disabled={submitting} onClick={() => setFlushLine(l)}
                   style={{ flex: 1, padding: '8px 0', borderRadius: 'var(--r-sm)', cursor: 'pointer',
                     border: `1px solid ${flushLine === l ? lineColor(l) : 'var(--border-2)'}`,
