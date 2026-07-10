@@ -27,11 +27,28 @@ binding = "BROADCAST_QUEUE"
 
 # max_batch_size=1: each message paginates its own small recipient chunk and
 # self-enqueues the next, so one invocation stays well under the 50-subrequest limit.
+# dead_letter_queue (M9): a message that exhausts max_retries is routed to commsops-dlq
+# instead of being dropped — its consumer records it + alerts.
 [[queues.consumers]]
 queue = "commsops-broadcast"
 max_batch_size = 1
 max_batch_timeout = 5
 max_retries = 3
+dead_letter_queue = "commsops-dlq"
+
+# Dead-letter consumer (M9) — poison enrol/campaign/backfill messages land here; the
+# queue() handler writes a comms.queue_failures row + fires a Slack alert, then acks.
+[[queues.consumers]]
+queue = "commsops-dlq"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 1
+
+# Cron (M9) — every 5 min: fire due scheduled campaigns + watch deliverability. The
+# scheduled() handler runs runScheduled(); the atomic claim in startCampaign guards
+# against a concurrent manual send double-firing.
+[triggers]
+crons = ["*/5 * * * *"]
 
 # Journey engine (M7) — each enrolment is one durable Workflow instance.
 # step.sleep handles multi-day waits with no resource cost; step.do gives
