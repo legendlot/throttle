@@ -1,7 +1,7 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@throttle/auth';
-import { Spinner } from '@throttle/ui';
+import { Spinner, Modal } from '@throttle/ui';
 import { salesGet, salesPost, inr, fmtInt } from '../../../lib/api.js';
 import { SegmentedToggle } from '../../../components/kit.js';
 import { DynoTabs } from './tabs.js';
@@ -29,6 +29,7 @@ const CHIP = {
 };
 const roasTone = (v) => (v == null ? 'var(--t3)' : v >= 4 ? 'var(--green)' : v > 0 && v < 2 ? 'var(--red)' : 'var(--t1)');
 const VERDICTS = ['winner', 'promising', 'killed', 'inconclusive', 'paused'];
+const DECISION_TYPES = ['kill', 'scale', 'graduate', 'iterate', 'pause', 'hold', 'restore-budget'];
 
 function StatusChip({ s }) {
   const c = CHIP[s] || CHIP.early;
@@ -73,6 +74,7 @@ export default function DynoPage() {
   const canApprove = !!P.sales_ads_approve || !!P.salesops_admin;
 
   const [filter, setFilter] = useState('active');
+  const [vModal, setVModal] = useState(null);   // { mode, target }
   const [board, setBoard] = useState(null);       // { rows, committed_daily_inr, ceiling_inr, write_enabled }
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState('');           // meta_id currently mutating
@@ -128,14 +130,7 @@ export default function DynoPage() {
     salesPost('metaSetStatus', { entity_type: 'ad', meta_id: r.meta_id, status: 'PAUSED', plan_id: r.plan_id }, session));
   const resume = (r) => run(r.meta_id, 'Resume', () =>
     salesPost('metaSetStatus', { entity_type: 'ad', meta_id: r.meta_id, status: 'ACTIVE', plan_id: r.plan_id }, session));
-  const kill = async (r) => {
-    if (!confirm(`Kill "${r.ad_name}"? Pauses the ad and records a "killed" verdict.`)) return;
-    const reason = prompt('Why killed? (optional)', r.verdict_reason || '') ?? '';
-    await run(r.meta_id, 'Kill', async () => {
-      await salesPost('metaSetStatus', { entity_type: 'ad', meta_id: r.meta_id, status: 'PAUSED', plan_id: r.plan_id }, session);
-      await salesPost('adsSetVerdict', { meta_id: r.meta_id, verdict: 'killed', reason }, session);
-    });
-  };
+  const kill = (r) => setVModal({ mode: 'variant', target: { ...r, verdict: 'killed', alsoPause: true } });
   const scale = (r) => {
     if (!r.adset_meta_id) { setErr('No ad set on this variant — cannot scale.'); return; }
     const cur = N(r.adset_daily_budget_inr);
@@ -150,13 +145,8 @@ export default function DynoPage() {
     if (!v || !v.trim()) return;
     run(r.meta_id, 'Rename', () => salesPost('metaSetName', { entity_type: 'ad', meta_id: r.meta_id, name: v.trim() }, session));
   };
-  const setVerdict = (r) => {
-    const v = prompt(`Verdict (${VERDICTS.join(' / ')}):`, r.verdict || '');
-    if (!v) return;
-    if (!VERDICTS.includes(v.trim())) { setErr(`Verdict must be one of: ${VERDICTS.join(', ')}`); return; }
-    const reason = prompt('Reason / why:', r.verdict_reason || '') ?? '';
-    run(r.meta_id, 'Set verdict', () => salesPost('adsSetVerdict', { meta_id: r.meta_id, verdict: v.trim(), reason }, session));
-  };
+  const openVerdict = (r) => setVModal({ mode: 'variant', target: r });
+  const openConclude = (plan) => setVModal({ mode: 'plan', target: plan });
 
   const selIds = Object.keys(sel).filter(k => sel[k]);
   const bulkPause = async () => {
@@ -228,6 +218,9 @@ export default function DynoPage() {
                     Approve &amp; Launch
                   </button>
                 )}
+                {canWrite && !staged && (
+                  <button className="so-btn ghost" style={{ marginLeft: 'auto' }} onClick={() => openConclude(plan)}>Conclude</button>
+                )}
               </div>
               {plan.hypothesis && <div style={{ fontSize: 12, color: 'var(--t2)', marginTop: 5, maxWidth: 900 }}><b style={{ color: 'var(--t1)' }}>Hypothesis:</b> {plan.hypothesis}</div>}
               {plan.plan_verdict_reason && <div style={{ fontSize: 11.5, color: 'var(--t2)', marginTop: 3, maxWidth: 900 }}><b style={{ color: 'var(--t1)' }}>Verdict:</b> {plan.plan_verdict_reason}</div>}
@@ -294,7 +287,7 @@ export default function DynoPage() {
                               <BtnMini onClick={() => kill(r)} disabled={isBusy} tone="var(--red)">Kill</BtnMini>
                               <BtnMini onClick={() => scale(r)} disabled={isBusy || !canApprove} title={canApprove ? 'Scale ad-set budget' : 'Scaling needs approver role'}>Scale</BtnMini>
                               <BtnMini onClick={() => rename(r)} disabled={isBusy}>Rename</BtnMini>
-                              <BtnMini onClick={() => setVerdict(r)} disabled={isBusy}>Verdict</BtnMini>
+                              <BtnMini onClick={() => openVerdict(r)} disabled={isBusy}>Verdict</BtnMini>
                             </div>
                           ) : <span style={{ color: 'var(--t3)', fontSize: 11 }}>monitor</span>}
                         </td>
@@ -307,6 +300,12 @@ export default function DynoPage() {
           </div>
         );
       })}
+
+      {vModal && (
+        <VerdictModal mode={vModal.mode} target={vModal.target} session={session}
+          onClose={() => setVModal(null)}
+          onDone={() => { setVModal(null); load(true); }} />
+      )}
     </div>
   );
 }
@@ -330,5 +329,62 @@ function BtnMini({ children, onClick, disabled, tone, title }) {
         background: 'var(--surface)', color: tone || 'var(--t1)', cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.45 : 1 }}>
       {children}
     </button>
+  );
+}
+
+// One modal for both grains. mode='variant' → adsSetVerdict(meta_id) (+ optional pause on kill);
+// mode='plan' → adsSetPlanVerdict(plan_id). Optionally logs a lab_decisions edge.
+function VerdictModal({ mode, target, session, onClose, onDone }) {
+  const [verdict, setVerdict] = useState(target?.verdict || '');
+  const [reason, setReason] = useState(target?.verdict_reason || '');
+  const [decType, setDecType] = useState('');
+  const [decWhy, setDecWhy] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [e, setE] = useState('');
+  const submit = async () => {
+    if (!verdict) { setE('Pick a verdict.'); return; }
+    setBusy(true); setE('');
+    try {
+      if (mode === 'plan') {
+        await salesPost('adsSetPlanVerdict', { plan_id: target.plan_id, verdict, reason }, session);
+      } else {
+        if (target.alsoPause) await salesPost('metaSetStatus', { entity_type: 'ad', meta_id: target.meta_id, status: 'PAUSED', plan_id: target.plan_id }, session);
+        await salesPost('adsSetVerdict', { meta_id: target.meta_id, verdict, reason }, session);
+      }
+      if (decType) await salesPost('labAddDecision', {
+        plan_id: target.plan_id, variant_meta_id: mode === 'variant' ? target.meta_id : null,
+        type: decType, rationale: decWhy }, session);
+      onDone();
+    } catch (err) { setE(String(err?.message || err)); setBusy(false); }
+  };
+  const title = mode === 'plan' ? `Conclude ${target.product} · ${target.batch}` : `Verdict — ${target.ad_name}`;
+  const inputStyle = { width: '100%', marginTop: 4, padding: '7px 9px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--t1)' };
+  return (
+    <Modal open onClose={onClose} title={title}>
+      <div style={{ display: 'grid', gap: 12, minWidth: 340 }}>
+        <label style={{ fontSize: 12, color: 'var(--t2)' }}>Verdict
+          <select value={verdict} onChange={ev => setVerdict(ev.target.value)} style={inputStyle}>
+            <option value="">— choose —</option>{VERDICTS.map(v => <option key={v} value={v}>{v}</option>)}
+          </select>
+        </label>
+        <label style={{ fontSize: 12, color: 'var(--t2)' }}>Reason / why
+          <textarea value={reason} onChange={ev => setReason(ev.target.value)} rows={3} style={{ ...inputStyle, resize: 'vertical' }} />
+        </label>
+        <div style={{ borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+          <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 6 }}>Optionally log a decision (feeds the decision tree)</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <select value={decType} onChange={ev => setDecType(ev.target.value)} style={{ flex: '0 0 150px', padding: '7px 9px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--t1)' }}>
+              <option value="">— no decision —</option>{DECISION_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+            <input value={decWhy} onChange={ev => setDecWhy(ev.target.value)} placeholder="rationale" disabled={!decType} style={{ flex: 1, padding: '7px 9px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--t1)' }} />
+          </div>
+        </div>
+        {e && <div style={{ color: 'var(--red)', fontSize: 12 }}>{e}</div>}
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button className="so-btn ghost" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="so-btn" onClick={submit} disabled={busy}>{busy ? 'Saving…' : 'Save'}</button>
+        </div>
+      </div>
+    </Modal>
   );
 }
