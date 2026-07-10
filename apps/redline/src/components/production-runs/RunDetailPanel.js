@@ -2,6 +2,7 @@
 import { Fragment, useEffect, useState } from 'react';
 import { ConfirmModal, EmptyState, Spinner, useToast } from '@throttle/ui';
 import { garageFetch, workerFetch } from '@throttle/db';
+import { hasPermission } from '@throttle/auth';
 import { ReceiptPanel } from './ReceiptPanel.js';
 
 // Picklist category/type ordering — must match issue-queue/page.js (PICK_CAT_ORDER / PICK_TYPE_ORDER)
@@ -95,6 +96,7 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
   const [cancelling, setCancelling] = useState(false);
   const [completing, setCompleting] = useState(false);
   const [receiptPanelMode, setReceiptPanelMode] = useState(null);
+  const [forceResolving, setForceResolving] = useState(false);
   // Production-requested FINISH pull for two-phase outsourced (ext_v2) runs.
   const [requestingFinish, setRequestingFinish] = useState(false);
 
@@ -161,6 +163,32 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
   const showCancel = ['Draft', 'Submitted'].includes(run.status);
   const showConfirmReceipt = run.status === 'Issued' && !receipt;
   const showReappeal = receipt && receipt.status === 'Contested';
+  // L57 — re-home the admin Force-Resolve escape hatch (was unsurfaced after the old Garage
+  // receipts page was deleted). A Locked receipt has no Re-Appeal path (production is told
+  // "contact admin to force-resolve"), so surface it here for admins (users_manage = the
+  // worker's canManageUsers gate). Reason-only; stock corrections are done separately.
+  const showForceResolve = receipt && receipt.status === 'Locked' && hasPermission(perms, 'users_manage');
+
+  async function handleForceResolve() {
+    if (!receipt) return;
+    const reason = window.prompt(
+      `Force-resolve locked receipt ${receipt.receipt_id}?\n\n` +
+      `This cancels its open short-issue work order and marks the receipt Resolved. ` +
+      `No stock is moved — make any stock correction separately via Stock Adjustments.\n\n` +
+      `Enter a reason:`
+    );
+    if (!reason || !reason.trim()) return;
+    setForceResolving(true);
+    try {
+      await workerFetch('forceResolveReceipt', { data: { receipt_id: receipt.receipt_id, reason: reason.trim() } }, session);
+      showToast(`Receipt ${receipt.receipt_id} force-resolved`, 'success');
+      await load();
+    } catch (e) {
+      showToast(e.message || 'Force-resolve failed', 'error');
+    } finally {
+      setForceResolving(false);
+    }
+  }
   const showMarkComplete = ['Issued', 'In Progress'].includes(run.status);
   // Outsourced (ext_v2) two-phase: production requests the FINISH phase once the vendor
   // returns units. Greyed until the store has inwarded units into the pool (returned_qty > 0).
@@ -256,6 +284,16 @@ export function RunDetailPanel({ runNo, onClose, onRunChange, session, perms }) 
           )}
           {showReappeal && (
             <button style={btnSec} onClick={() => setReceiptPanelMode('reappeal')}>Re-Appeal</button>
+          )}
+          {showForceResolve && (
+            <button
+              style={{ ...btnSec, borderColor: 'rgba(222,42,42,.4)', color: '#ff7070' }}
+              disabled={forceResolving}
+              title="Admin: clear a locked short-issue receipt (cancels its open WO, marks Resolved, no stock movement)"
+              onClick={handleForceResolve}
+            >
+              {forceResolving ? 'Resolving…' : 'Force Resolve (Admin)'}
+            </button>
           )}
           {showRequestFinish && (
             <button
