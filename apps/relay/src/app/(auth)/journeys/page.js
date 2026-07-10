@@ -4,8 +4,10 @@ import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { Plus, ArrowLeft, Check, Play, Pause, AlertTriangle, GitBranch } from 'lucide-react';
-import { PageHead, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
+import { PageHead, Panel, Badge, Btn, EmptyState, Pipeline } from '@/components/ui.js';
 import { fmtDate } from '@/components/format.js';
+
+const STEP_TONE = { wait: 'gray', condition: 'yellow', send: 'blue', exit: 'green' };
 
 const STATUS_TONE = { draft: 'gray', active: 'green', paused: 'yellow', archived: 'gray' };
 const REENROL = [
@@ -84,8 +86,15 @@ export default function JourneysPage() {
   const [j, setJ] = useState(emptyJourney());
   const [busy, setBusy] = useState(false);
   const [compileErrors, setCompileErrors] = useState(null);
+  const [funnel, setFunnel] = useState(null);
 
   const canBuild = !perms || perms.campaign_build;
+
+  const loadFunnel = useCallback(async (id) => {
+    if (!id) { setFunnel(null); return; }
+    try { const f = await garageFetch('getJourneyFunnel', { id }, session); setFunnel(f || null); }
+    catch { /* non-fatal */ }
+  }, [session]);
 
   const load = useCallback(async () => {
     if (!session) return;
@@ -104,13 +113,14 @@ export default function JourneysPage() {
 
   function set(k, v) { setJ((p) => ({ ...p, [k]: v })); }
 
-  function startNew() { setJ(emptyJourney()); setCompileErrors(null); setView('form'); }
+  function startNew() { setJ(emptyJourney()); setCompileErrors(null); setFunnel(null); setView('form'); }
 
   async function open(r) {
-    setCompileErrors(null);
+    setCompileErrors(null); setFunnel(null);
     // seed from the list row first, then refresh with versions
     seed(r, null);
     setView('form');
+    loadFunnel(r.id);
     try {
       const fresh = await garageFetch('getJourney', { id: r.id }, session);
       if (fresh?.id) {
@@ -154,6 +164,7 @@ export default function JourneysPage() {
           || (fresh.versions || [])[0];
         seed(fresh, activeVer?.definition || null);
       }
+      loadFunnel(j.id);
       load();
     } catch { /* non-fatal */ }
   }
@@ -332,6 +343,29 @@ export default function JourneysPage() {
             Triggers only fire while a journey is <strong>active</strong>. Editing republishes a new version; in-flight enrolments finish on their pinned version.
           </div>
         </Panel>
+
+        {j.id && (
+          <Panel title="Funnel" count={funnel?.total_enrolments ?? 0} pad>
+            {!funnel || funnel.total_enrolments === 0 ? (
+              <EmptyState icon="git-branch" title="No enrolments yet" hint="Once profiles enrol, each step's entered count and branch/send/exit results appear here (across all versions)." />
+            ) : (
+              <>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+                  {Object.entries(funnel.enrolments || {}).map(([st, n]) => (
+                    <Badge key={st} label={`${st}: ${n}`} tone={st === 'completed' ? 'green' : st === 'active' ? 'blue' : st === 'exited' ? 'gray' : 'yellow'} dot />
+                  ))}
+                </div>
+                <Pipeline stages={(funnel.steps || []).map((s) => ({ stage: `${s.step_id} · ${s.step_type}`, count: s.entered, tone: STEP_TONE[s.step_type] || 'gray' }))} />
+                <div className="tw-note" style={{ marginBottom: 0, marginTop: 14 }}>
+                  {(funnel.steps || []).map((s) => {
+                    const res = Object.entries(s.results || {}).map(([k, v]) => `${k} ${v}`).join(', ');
+                    return <div key={s.step_id} style={{ marginBottom: 2 }}><strong className="mono">{s.step_id}</strong>: {res || '—'}</div>;
+                  })}
+                </div>
+              </>
+            )}
+          </Panel>
+        )}
 
         <datalist id="journey-event-suggest">{EVENT_SUGGEST.map((a) => <option key={a} value={a} />)}</datalist>
       </div>

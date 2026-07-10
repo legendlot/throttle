@@ -4,8 +4,10 @@ import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { Plus, ArrowLeft, Check, Send, ShieldCheck, X, AlertTriangle, Clock } from 'lucide-react';
-import { PageHead, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
-import { fmtDate } from '@/components/format.js';
+import { PageHead, Panel, Badge, Btn, EmptyState, Kpi } from '@/components/ui.js';
+import { fmtDate, inr } from '@/components/format.js';
+
+const pct = (num, den) => (den ? Math.round((Number(num) / Number(den)) * 1000) / 10 : 0);
 
 const CHANNELS = ['email'];
 const PURPOSES = ['marketing', 'transactional', 'utility'];
@@ -28,6 +30,8 @@ export default function CampaignsPage() {
   const [view, setView] = useState('list');
   const [c, setC] = useState(emptyCampaign());
   const [busy, setBusy] = useState(false);
+  const [stats, setStats] = useState(null);
+  const [attr, setAttr] = useState(null);
 
   const canBuild = !perms || perms.campaign_build;
   const canApprove = !perms || perms.approve;
@@ -58,17 +62,32 @@ export default function CampaignsPage() {
       status: r.status || 'draft', audience_snapshot: r.audience_snapshot ?? null, reject_reason: r.reject_reason || null,
     };
   }
-  function startNew() { setC(emptyCampaign()); setView('form'); }
+  function startNew() { setC(emptyCampaign()); setStats(null); setAttr(null); setView('form'); }
+  // Per-campaign performance (M8) — only meaningful once the campaign has sent.
+  const loadStats = useCallback(async (id, status) => {
+    if (!id || !['sending', 'sent'].includes(status)) { setStats(null); setAttr(null); return; }
+    try {
+      const [st, at] = await Promise.all([
+        garageFetch('getCampaignStats', { id }, session),
+        garageFetch('getCampaignAttribution', { id }, session),
+      ]);
+      setStats(st || null); setAttr(at || null);
+    } catch { /* non-fatal */ }
+  }, [session]);
   async function open(r) {
-    setC(fromRow(r));
+    setC(fromRow(r)); setStats(null); setAttr(null);
     setView('form');
-    try { const fresh = await garageFetch('getCampaign', { id: r.id }, session); if (fresh?.id) setC(fromRow(fresh)); }
-    catch { /* non-fatal */ }
+    try {
+      const fresh = await garageFetch('getCampaign', { id: r.id }, session);
+      if (fresh?.id) { setC(fromRow(fresh)); loadStats(fresh.id, fresh.status); }
+    } catch { /* non-fatal */ }
   }
   async function refresh() {
     if (!c.id) return;
-    try { const fresh = await garageFetch('getCampaign', { id: c.id }, session); if (fresh?.id) setC(fromRow(fresh)); load(); }
-    catch { /* non-fatal */ }
+    try {
+      const fresh = await garageFetch('getCampaign', { id: c.id }, session);
+      if (fresh?.id) { setC(fromRow(fresh)); loadStats(fresh.id, fresh.status); } load();
+    } catch { /* non-fatal */ }
   }
   // While a broadcast is fanning out, poll so the detail auto-flips draft→sending→sent
   // without the operator hitting refresh (the Queue drains over a minute or two).
@@ -77,11 +96,11 @@ export default function CampaignsPage() {
     const t = setInterval(async () => {
       try {
         const fresh = await garageFetch('getCampaign', { id: c.id }, session);
-        if (fresh?.id) { setC(fromRow(fresh)); if (fresh.status !== 'sending') load(); }
+        if (fresh?.id) { setC(fromRow(fresh)); loadStats(fresh.id, fresh.status); if (fresh.status !== 'sending') load(); }
       } catch { /* non-fatal */ }
     }, 4000);
     return () => clearInterval(t);
-  }, [view, c.status, c.id, session, load]);
+  }, [view, c.status, c.id, session, load, loadStats]);
   function set(k, v) { setC((p) => ({ ...p, [k]: v })); }
 
   const isDraft = c.status === 'draft';
@@ -247,6 +266,28 @@ export default function CampaignsPage() {
             Marketing sends above the approval threshold need an approver; below it (or non-marketing) auto-approve on submit. The send gate (suppression → consent → frequency cap → quiet hours) still applies per recipient.
           </div>
         </Panel>
+
+        {stats && (
+          <Panel title="Performance" pad>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12 }}>
+              <Kpi label="Sent" value={stats.sent ?? 0} tone="gray" sub={`${stats.total ?? 0} targeted`} />
+              <Kpi label="Delivered" value={stats.delivered ?? 0} tone="green" sub={`${pct(stats.delivered, stats.sent)}% of sent`} />
+              <Kpi label="Opened" value={stats.opened ?? 0} tone="blue" sub={`${pct(stats.opened, stats.delivered)}% of delivered`} />
+              <Kpi label="Clicked" value={stats.clicked ?? 0} tone="blue" sub={`${pct(stats.clicked, stats.delivered)}% of delivered`} />
+              <Kpi label="Bounced" value={stats.bounced ?? 0} tone={stats.bounced ? 'red' : 'gray'} sub="hard bounces" />
+              <Kpi label="Complaints" value={stats.complained ?? 0} tone={stats.complained ? 'red' : 'gray'} sub="spam reports" />
+              <Kpi label="Unsubscribes" value={stats.unsubscribes ?? 0} tone={stats.unsubscribes ? 'yellow' : 'gray'} sub="opted out after send" />
+              <Kpi label="Skipped" value={(stats.skipped ?? 0) + (stats.suppressed ?? 0)} tone={((stats.skipped ?? 0) + (stats.suppressed ?? 0)) ? 'yellow' : 'gray'} sub="gate-blocked" />
+              {attr && <Kpi label="Attributed orders" value={attr.attributed_orders ?? 0} tone="green" sub={`${inr(attr.attributed_revenue ?? 0)} · ${attr.window_days ?? 7}d window`} />}
+            </div>
+            {stats.skipped_by_reason && Object.keys(stats.skipped_by_reason).length > 0 && (
+              <div className="tw-note" style={{ marginBottom: 0, marginTop: 12 }}>
+                <strong>Skipped by reason:</strong>{' '}
+                {Object.entries(stats.skipped_by_reason).map(([k, v]) => `${k}: ${v}`).join(' · ')}
+              </div>
+            )}
+          </Panel>
+        )}
       </div>
     );
   }
