@@ -3017,7 +3017,10 @@ function biteSpeedApiBase(env) {
 // limit (this fn runs inside a single getWaConversation request).
 async function chatwootGetMessages(thread, env) {
   const base = `${biteSpeedApiBase(env)}/api/v1/accounts/${encodeURIComponent(thread.provider_account_id)}/conversations/${encodeURIComponent(thread.provider_thread_ref)}/messages`;
-  const MAX_PAGES = 6;
+  // 12 pages (~12 subrequests/open) — interim deepening of in-thread scrollback
+  // (Pruthvi #bugs 2026-07-10: history stopped at ~60 msgs). Still well under the
+  // 50-subrequest limit. Full frontend infinite-scroll is the open follow-up.
+  const MAX_PAGES = 12;
   const all = [];
   const seen = new Set();
   let before = null;

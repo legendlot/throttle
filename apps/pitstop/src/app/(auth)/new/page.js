@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { Spinner } from '@throttle/ui';
+import { Spinner, Combobox } from '@throttle/ui';
 import { AlertCircle } from 'lucide-react';
 import { csopsGet, csopsPost } from '../../../lib/csopsFetch.js';
 import { ShopifyPanel } from '../../../components/ShopifyPanel.js';
@@ -373,25 +373,22 @@ function ProductCascade({ form, setForm, catalog }) {
     setForm(s => ({ ...s, product_color: c, product_sku: resolveSku(form.product, form.product_model, c) }));
   }
 
+  // Searchable Combobox per the standing product/part-picker rule (portal so the
+  // dropdown isn't clipped by the Section card). SKU stays a read-only auto-fill.
+  const toOpts = (arr) => arr.map(x => ({ value: x, label: x }));
   return (
     <Row>
       <Field label="Product">
-        <select value={form.product} onChange={e => selProduct(e.target.value)} style={inputStyle}>
-          <option value="">— Select —</option>
-          {products.map(p => <option key={p} value={p}>{p}</option>)}
-        </select>
+        <Combobox value={form.product} options={toOpts(products)} onChange={(v) => selProduct(v)}
+          placeholder="Search product…" inputStyle={inputStyle} allowClear={false} portal />
       </Field>
       <Field label="Model">
-        <select value={form.product_model} onChange={e => selModel(e.target.value)} style={inputStyle} disabled={!form.product}>
-          <option value="">{form.product ? '— Select —' : '—'}</option>
-          {models.map(m => <option key={m} value={m}>{m}</option>)}
-        </select>
+        <Combobox value={form.product_model} options={toOpts(models)} onChange={(v) => selModel(v)}
+          placeholder={form.product ? 'Search model…' : '—'} disabled={!form.product} inputStyle={inputStyle} allowClear={false} portal />
       </Field>
       <Field label="Colour">
-        <select value={form.product_color} onChange={e => selColor(e.target.value)} style={inputStyle} disabled={!form.product_model}>
-          <option value="">{form.product_model ? '— Select —' : '—'}</option>
-          {colors.map(c => <option key={c} value={c}>{c}</option>)}
-        </select>
+        <Combobox value={form.product_color} options={toOpts(colors)} onChange={(v) => selColor(v)}
+          placeholder={form.product_model ? 'Search colour…' : '—'} disabled={!form.product_model} inputStyle={inputStyle} allowClear={false} portal />
       </Field>
       <Field label="SKU">
         <input value={form.product_sku} readOnly style={{ ...inputStyle, opacity: 0.7 }} placeholder="auto" />
