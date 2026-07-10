@@ -77,12 +77,19 @@ function LineCard({ l, crMap }) {
             // (Mrudula 06-15). Other cells unchanged.
             const isInw = f.key === 'inw';
             const rmt = isInw ? crMap[`${l.line}:INW:remote`] : undefined;
+            // "Out" = fresh PKG-OUT (RTE+RTR); show UDR (returns re-dispatched) beneath it
+            // so the floor total distinguishes new production from recovered returns (L64).
+            const isOut = f.key === 'out';
+            const udr = isOut ? (Number(l.udr_count) || 0) : 0;
             return (
               <div key={f.key} style={{ background: 'var(--surface-2)', borderRadius: 'var(--r-sm)', padding: '9px 10px', borderTop: `2px solid ${f.color}` }}>
-                <div className="eyebrow">{f.label}</div>
+                <div className="eyebrow">{f.label}{isOut ? <span style={{ fontSize: 9, fontWeight: 600, color: 'var(--t4)', marginLeft: 4 }}>fresh</span> : null}</div>
                 <div className="num" style={{ fontSize: 17, fontWeight: 700, color: 'var(--t1)', marginTop: 4 }}>{fmt(v)}{isInw ? <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--t4)', marginLeft: 4 }}>car</span> : null}</div>
                 {isInw && (
                   <div className="num" style={{ fontSize: 12, fontWeight: 600, color: 'var(--t3)', marginTop: 2 }}>{fmt(rmt != null ? rmt : 0)}<span style={{ fontSize: 10, fontWeight: 600, color: 'var(--t4)', marginLeft: 4 }}>rmt</span></div>
+                )}
+                {isOut && (
+                  <div className="num" style={{ fontSize: 12, fontWeight: 600, color: udr > 0 ? 'var(--t3)' : 'var(--t4)', marginTop: 2 }}>{udr > 0 ? '+' : ''}{fmt(udr)}<span style={{ fontSize: 10, fontWeight: 600, color: 'var(--t4)', marginLeft: 4 }}>udr</span></div>
                 )}
                 <div style={{ height: 3, borderRadius: 2, background: 'var(--bg-2)', marginTop: 6, overflow: 'hidden' }}>
                   <div style={{ height: '100%', width: `${(v / maxFunnel) * 100}%`, background: f.color, borderRadius: 2 }} />

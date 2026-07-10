@@ -27,6 +27,8 @@ export default function RepairIssuePage() {
   const [busy, setBusy] = useState(false);
   const [scan, setScan] = useState('');
   const [feed, setFeed] = useState([]);
+  const [issued, setIssued] = useState([]);       // "Issued so far" buckets for the selected run (L42)
+  const [issuedCount, setIssuedCount] = useState(0);
   const scanRef = useRef(null);
 
   const loadRuns = useCallback(async () => {
@@ -53,8 +55,19 @@ export default function RepairIssuePage() {
     }
   }, [session, showToast]);
 
+  // "Issued so far" into the selected run (L42) — return_units routed here (issued_at set).
+  const loadIssued = useCallback(async () => {
+    if (!session || !runId) { setIssued([]); setIssuedCount(0); return; }
+    try {
+      const d = await garageFetch('getRepairRunDetail', { run_id: runId }, session);
+      setIssued(Array.isArray(d?.issued_buckets) ? d.issued_buckets : []);
+      setIssuedCount(d?.issued_count || 0);
+    } catch { setIssued([]); setIssuedCount(0); }
+  }, [session, runId]);
+
   useEffect(() => { loadRuns(); }, [loadRuns]);
   useEffect(() => { loadPick(); }, [loadPick]);
+  useEffect(() => { loadIssued(); }, [loadIssued]);
 
   const total = useMemo(() => buckets.reduce((s, b) => s + (b.count || 0), 0), [buckets]);
   const activeRun = useMemo(() => runs.find((r) => r.id === runId) || null, [runs, runId]);
@@ -84,7 +97,7 @@ export default function RepairIssuePage() {
       const res = await workerFetch('issueReturnUnit', { data: { issue_type: 'repair', repair_run_id: runId, scan: v } }, session);
       const r = res.data || res;
       pushFeed(`✓ ${v} → ${activeRun?.run_no || 'run'} (${r.issued})`, true);
-      loadPick();
+      loadPick(); loadIssued();
     } catch (err) {
       pushFeed(`✗ ${v} — ${err.message || 'failed'}`, false);
     } finally {
@@ -103,7 +116,7 @@ export default function RepairIssuePage() {
       const res = await workerFetch('issueReturnUnit', { data: { issue_type: 'repair', repair_run_id: runId, return_unit_ids: ids } }, session);
       const r = res.data || res;
       pushFeed(`✓ Issued ${r.issued} × ${b.product || ''} → ${activeRun?.run_no || 'run'}`, true);
-      loadPick();
+      loadPick(); loadIssued();
     } catch (err) {
       pushFeed(`✗ ${err.message || 'failed'}`, false);
     } finally {
@@ -193,6 +206,42 @@ export default function RepairIssuePage() {
           </div>
         </div>
       </div>
+
+      {/* Issued so far — units already issued into the selected repair run (L42) */}
+      {runId && (
+        <div style={panelStyle}>
+          <div style={panelHeaderStyle}>
+            <span>Issued so far → {activeRun?.run_no || 'run'} {issuedCount > 0 && <span style={{ color: 'var(--t3)', marginLeft: 6, fontSize: 11 }}>({issuedCount})</span>}</span>
+            <button style={btnSecondary} onClick={loadIssued}>↻ Refresh</button>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            {issued.length === 0 ? (
+              <div style={{ padding: 24, textAlign: 'center', color: 'var(--t3)', fontSize: 12 }}>Nothing issued into this run yet.</div>
+            ) : (
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead><tr>
+                  <th style={tableThStyle}>Disp</th>
+                  <th style={tableThStyle}>Product</th>
+                  <th style={tableThStyle}>Model</th>
+                  <th style={tableThStyle}>Colour</th>
+                  <th style={tableThStyle}>Count</th>
+                </tr></thead>
+                <tbody>
+                  {issued.map((b, i) => (
+                    <tr key={`iss|${b.disposition}|${b.product}|${b.model}|${b.color}|${i}`}>
+                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', color: b.disposition === 'CXR' ? '#f2cd1a' : '#7b93ff' }}>{b.disposition}</td>
+                      <td style={{ ...tableTdStyle, fontFamily: 'var(--cond)', fontWeight: 700 }}>{b.product || '—'}</td>
+                      <td style={tableTdStyle}>{b.model || '—'}</td>
+                      <td style={tableTdStyle}>{b.color || '—'}</td>
+                      <td style={{ ...tableTdStyle, fontFamily: 'var(--mono)', fontWeight: 700, color: '#4ade80' }}>{b.count}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

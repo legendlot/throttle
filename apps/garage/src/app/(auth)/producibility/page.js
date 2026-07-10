@@ -84,14 +84,22 @@ function SummaryView({ products, onSelectProduct }) {
   );
 }
 
+const PROD_CATS = [['all', 'All parts'], ['car', 'Car'], ['remote', 'Remote'], ['para', 'Para'], ['packaging', 'Packaging']];
+
 function BreakdownView({ products }) {
   const [selectedProduct, setSelectedProduct] = useState(products[0]?.product || '');
+  // Category filter (Piyush L28): see whether the Car and Remote sub-assemblies are
+  // independently producible, plus Para + Packaging. 'all' = the overall (min of all parts).
+  const [cat, setCat] = useState('all');
   const product = products.find(p => p.product === selectedProduct);
+  // The producible number for the selected category ('all' → overall). null = the row has
+  // no parts in that bucket (e.g. ecom-only product, no retail packaging) → show "—".
+  const catVal = (byCat, overall) => (cat === 'all' ? overall : (byCat?.[cat] ?? null));
 
   return (
     <div>
       {/* Product selector */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 20 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
         {products.map(p => (
           <button
             key={p.product}
@@ -110,30 +118,64 @@ function BreakdownView({ products }) {
 
       {product && (
         <>
+          {/* Category toggle */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
+            {PROD_CATS.map(([v, label]) => (
+              <button key={v} onClick={() => setCat(v)}
+                style={{
+                  padding: '4px 12px', borderRadius: 4, cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                  border: '1px solid var(--border)',
+                  background: cat === v ? 'var(--fg)' : 'transparent',
+                  color:      cat === v ? 'var(--bg)' : 'var(--t2)',
+                }}>
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {/* Per-category producibility tiles (whole product) — car vs remote at a glance */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 20 }}>
+            {[['car', 'Car'], ['remote', 'Remote'], ['para', 'Para'], ['packaging', 'Packaging']].map(([k, label]) => {
+              const n = product.by_category?.[k];
+              const active = cat === k;
+              const col = n == null ? 'var(--t2)' : statusColor(n);
+              return (
+                <div key={k} onClick={() => setCat(active ? 'all' : k)}
+                  style={{ background: 'var(--surface)', border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+                    borderRadius: 6, padding: '12px 14px', borderTop: `3px solid ${col}`, cursor: 'pointer' }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--t2)', letterSpacing: 1, marginBottom: 4 }}>{label.toUpperCase()}</div>
+                  <div style={{ fontSize: 26, fontWeight: 800, color: col, lineHeight: 1 }}>{n == null ? '—' : n.toLocaleString()}</div>
+                  <div style={{ fontSize: 10, color: col, fontWeight: 700, marginTop: 3 }}>{n == null ? 'N/A' : statusLabel(n)}</div>
+                </div>
+              );
+            })}
+          </div>
+
           {/* Variant summary table */}
           {product.has_variants && (
             <div style={{ marginBottom: 24 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--t2)', letterSpacing: 1, marginBottom: 8 }}>
-                VARIANTS
+                VARIANTS {cat !== 'all' && <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>— producible shown for <b>{PROD_CATS.find(c => c[0] === cat)[1]}</b> parts only</span>}
               </div>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                    {['Variant', 'Producible', 'Status', 'Bottleneck Part', 'Stock', 'Per Unit'].map(h => (
+                    {['Variant', 'Producible', 'Status', 'Bottleneck Part (overall)', 'Stock', 'Per Unit'].map(h => (
                       <th key={h} style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, fontSize: 11, color: 'var(--t2)', letterSpacing: 0.5 }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {product.variants.map(v => {
-                    const col = statusColor(v.producible);
+                    const shown = catVal(v.by_category, v.producible);
+                    const col = shown == null ? 'var(--t2)' : statusColor(shown);
                     return (
                       <tr key={v.variant_model} style={{ borderBottom: '1px solid var(--border)' }}>
                         <td style={{ padding: '8px 10px', fontWeight: 600 }}>{v.variant_model}</td>
-                        <td style={{ padding: '8px 10px', fontWeight: 800, color: col, fontFamily: 'monospace' }}>{v.producible.toLocaleString()}</td>
+                        <td style={{ padding: '8px 10px', fontWeight: 800, color: col, fontFamily: 'monospace' }}>{shown == null ? '—' : shown.toLocaleString()}</td>
                         <td style={{ padding: '8px 10px' }}>
-                          <span style={{ background: col + '22', color: col, padding: '2px 8px', borderRadius: 3, fontSize: 11, fontWeight: 700 }}>
-                            {statusLabel(v.producible)}
+                          <span style={{ background: (shown == null ? 'var(--t2)' : col) + '22', color: col, padding: '2px 8px', borderRadius: 3, fontSize: 11, fontWeight: 700 }}>
+                            {shown == null ? 'N/A' : statusLabel(shown)}
                           </span>
                         </td>
                         <td style={{ padding: '8px 10px', fontFamily: 'monospace', fontSize: 12 }}>{v.bottleneck?.part_name || '—'}</td>
