@@ -100,6 +100,40 @@ async function handleGet(url, auth, env) {
       return ok(await J.listJourneys(env));
     case 'getJourney':
       return ok(await J.getJourney(env, url.searchParams.get('id')));
+
+    // ── M8: analytics — thin RPC passthroughs (relay_view already gated blanket-wide
+    //    in fetch() before handleGet). SQL-side aggregation only; no raw rows to client.
+    case 'getSendsOverview': {
+      const days = Number(url.searchParams.get('days')) || 30;
+      const r = await A.sbComms('/rest/v1/rpc/sends_overview', env,
+        { method: 'POST', body: JSON.stringify({ p_days: days }) });
+      return r.ok ? ok(r.data) : err('db_error', 500);
+    }
+    case 'getDeliverabilityHealth': {
+      const days = Number(url.searchParams.get('days')) || 30;
+      const r = await A.sbComms('/rest/v1/rpc/deliverability_health', env,
+        { method: 'POST', body: JSON.stringify({ p_days: days }) });
+      return r.ok ? ok(r.data) : err('db_error', 500);
+    }
+    case 'getCampaignStats': {
+      const id = url.searchParams.get('id'); if (!id) return err('id_required', 400);
+      const r = await A.sbComms('/rest/v1/rpc/campaign_stats', env,
+        { method: 'POST', body: JSON.stringify({ p_campaign_id: id }) });
+      return r.ok ? ok(r.data) : err('db_error', 500);
+    }
+    case 'getCampaignAttribution': {
+      const id = url.searchParams.get('id'); if (!id) return err('id_required', 400);
+      const r = await A.sbComms('/rest/v1/rpc/campaign_attribution', env,
+        { method: 'POST', body: JSON.stringify({ p_campaign_id: id }) });
+      return r.ok ? ok(r.data) : err('db_error', 500);
+    }
+    case 'getJourneyFunnel': {
+      const id = url.searchParams.get('id'); if (!id) return err('id_required', 400);
+      const v = url.searchParams.get('version');
+      const r = await A.sbComms('/rest/v1/rpc/journey_funnel', env,
+        { method: 'POST', body: JSON.stringify({ p_journey_id: id, p_version: v ? Number(v) : null }) });
+      return r.ok ? ok(r.data) : err('db_error', 500);
+    }
     default:
       return err(`unknown_action:${action}`, 404);
   }
