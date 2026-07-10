@@ -322,7 +322,7 @@ export default function DynoPage() {
       {vModal && (
         <VerdictModal mode={vModal.mode} target={vModal.target} session={session}
           onClose={() => setVModal(null)}
-          onDone={() => { setVModal(null); load(true); }} />
+          onDone={() => { const pid = vModal?.target?.plan_id; setVModal(null); if (pid) setDecisions(x => { const n = { ...x }; delete n[pid]; return n; }); load(true); }} />
       )}
     </div>
   );
@@ -353,8 +353,9 @@ function BtnMini({ children, onClick, disabled, tone, title }) {
 // One modal for both grains. mode='variant' → adsSetVerdict(meta_id) (+ optional pause on kill);
 // mode='plan' → adsSetPlanVerdict(plan_id). Optionally logs a lab_decisions edge.
 function VerdictModal({ mode, target, session, onClose, onDone }) {
-  const [verdict, setVerdict] = useState(target?.verdict || '');
-  const [reason, setReason] = useState(target?.verdict_reason || '');
+  // For mode='plan' the target is the experiment (plan_verdict/_reason); for a variant it's the ad row.
+  const [verdict, setVerdict] = useState((mode === 'plan' ? target?.plan_verdict : target?.verdict) || '');
+  const [reason, setReason] = useState((mode === 'plan' ? target?.plan_verdict_reason : target?.verdict_reason) || '');
   const [decType, setDecType] = useState('');
   const [decWhy, setDecWhy] = useState('');
   const [busy, setBusy] = useState(false);
@@ -409,7 +410,9 @@ function VerdictModal({ mode, target, session, onClose, onDone }) {
 
 function DecisionStrip({ planId, rows, onOpen }) {
   const [open, setOpen] = useState(false);
-  const toggle = () => { const n = !open; setOpen(n); if (n) onOpen(); };
+  const toggle = () => setOpen(o => !o);
+  // Fetch when opened, and re-fetch if the cache was invalidated (rows→undefined) after a new decision.
+  useEffect(() => { if (open && rows === undefined) onOpen(); }, [open, rows, onOpen]);
   return (
     <div style={{ marginTop: 6 }}>
       <button onClick={toggle} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 11, padding: 0 }}>

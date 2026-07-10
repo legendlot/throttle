@@ -1857,7 +1857,7 @@ async function managedUpsert(row) {
 async function storeLabCreative(planId, adId, imageBase64) {
   try {
     if (!imageBase64) return null;
-    const bin = Uint8Array.from(atob(imageBase64), c => c.charCodeAt(0));
+    const bin = Uint8Array.from(atob(String(imageBase64).replace(/\s/g, '')), c => c.charCodeAt(0));
     const path = `${planId}/${adId}.png`;
     const res = await fetch(`${SUPABASE_URL}/storage/v1/object/lab-creatives/${path}`, {
       method: 'POST',
@@ -2559,7 +2559,7 @@ export default {
                   body: JSON.stringify({ expiresIn: 3600, paths }) });
                 if (sg.ok) {
                   const signed = await sg.json();   // [{ path, signedURL }]
-                  const byPath = {}; for (const s of signed) byPath[s.path] = `${SUPABASE_URL}/storage/v1${s.signedURL}`;
+                  const byPath = {}; for (const s of signed) if (s.signedURL) byPath[s.path] = `${SUPABASE_URL}/storage/v1${s.signedURL}`;
                   for (const x of rows) if (x.asset_url && byPath[x.asset_url]) x.asset_url = byPath[x.asset_url];
                 }
               } catch (e) { console.error('lab-creatives sign failed:', e?.message || e); }
@@ -3218,6 +3218,7 @@ export default {
               decided_by: userId, decided_at: nowISO() };
             const r = await sbSales('/rest/v1/lab_decisions', { method: 'POST', prefer: 'return=representation', body: JSON.stringify(row) });
             if (!r.ok) return err('Decision write failed: ' + JSON.stringify(r.data), 502);
+            await ledgerWrite({ actor_user_id: userId, action: 'labAddDecision', plan_id: d.plan_id || null, entity_type: 'ad', entity_id: d.variant_meta_id || null, daily_delta_inr: 0, request: d, status: 'ok' });
             return ok(Array.isArray(r.data) ? r.data[0] : r.data);
           }
           case 'labUpsertAngle': {   // Dyno — maintain the angle playbook from Odo (writer)
@@ -3225,12 +3226,15 @@ export default {
             if (!d.slug || !d.name) return err('slug and name required', 422);
             const STATUS = ['candidate', 'testing', 'proven', 'retired'];
             if (d.status && !STATUS.includes(d.status)) return err(`status must be one of: ${STATUS.join(', ')}`);
-            const row = { slug: String(d.slug).trim(), name: d.name, description: d.description || null,
-              psychology_pillar: d.psychology_pillar || null, hypothesis: d.hypothesis || null,
-              status: d.status || 'candidate', evidence: d.evidence || null, updated_at: nowISO() };
+            // Only include fields the caller actually sent — a merge-duplicates upsert would otherwise
+            // NULL an unspecified column (e.g. an edit form that omits `description` would wipe it).
+            const row = { slug: String(d.slug).trim(), name: d.name, updated_at: nowISO() };
+            for (const k of ['description', 'psychology_pillar', 'hypothesis', 'evidence']) if (d[k] !== undefined) row[k] = d[k] || null;
+            if (d.status !== undefined) row.status = d.status || 'candidate';
             const r = await sbSales('/rest/v1/lab_angles?on_conflict=slug', { method: 'POST',
               prefer: 'return=representation,resolution=merge-duplicates', body: JSON.stringify(row) });
             if (!r.ok) return err('Angle upsert failed: ' + JSON.stringify(r.data), 502);
+            await ledgerWrite({ actor_user_id: userId, action: 'labUpsertAngle', daily_delta_inr: 0, request: d, status: 'ok' });
             return ok(Array.isArray(r.data) ? r.data[0] : r.data);
           }
           case 'getAngles': {   // Dyno — the angle library
