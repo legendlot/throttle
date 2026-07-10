@@ -122,6 +122,9 @@ export default function ReportingPage() {
   const [prodView,   setProdView]   = useState('product');
   const [defView,    setDefView]    = useState('code');
 
+  const [fmtData,    setFmtData]    = useState(null);   // L17: output by run format (CKD/SKD/FBU)
+  const [fmtLoading, setFmtLoading] = useState(false);
+
   // ── Apply preset ─────────────────────────────────────────
   function applyPreset(p) {
     const today = new Date();
@@ -186,6 +189,18 @@ export default function ReportingPage() {
         .finally(() => setTaktLoading(false));
     }
   }, [section, taktData, dateFrom, dateTo, session]);
+
+  // ── Output by format (L17) — load when the section is active ──
+  useEffect(() => {
+    if (section !== 'formats' || !dateFrom || !dateTo || !session) return;
+    let cancelled = false;
+    setFmtLoading(true);
+    garageFetch('getOutputByFormat', { from: dateFrom, to: dateTo }, session)
+      .then(res => { if (!cancelled) setFmtData(Array.isArray(res) ? res : (Array.isArray(res?.data) ? res.data : [])); })
+      .catch(() => { if (!cancelled) setFmtData([]); })
+      .finally(() => { if (!cancelled) setFmtLoading(false); });
+    return () => { cancelled = true; };
+  }, [section, dateFrom, dateTo, session]);
 
   // ── Attendance & OT (salary) — load per selected range ──
   useEffect(() => {
@@ -406,6 +421,7 @@ export default function ReportingPage() {
     { id: 'cycle',       label: 'Cycle Time' },
     { id: 'defects',     label: 'Defects' },
     { id: 'throughput',  label: 'Throughput' },
+    { id: 'formats',     label: 'Output by Format' },
     ...(canViewAttendance ? [{ id: 'attendance', label: 'Attendance & OT' }] : []),
     { id: 'downloads',   label: 'Downloads' },
   ];
@@ -469,6 +485,9 @@ export default function ReportingPage() {
       )}
       {section === 'throughput' && (
         <ThroughputSection taktAggs={taktAggs} taktLoading={taktLoading} />
+      )}
+      {section === 'formats' && (
+        <FormatsSection data={fmtData} loading={fmtLoading} periodLabel={periodLabel} />
       )}
       {section === 'attendance' && (
         <AttendanceSection
@@ -744,6 +763,76 @@ function DefectsSection({ aggs, fpyPct, fpyTone, defView, setDefView }) {
 }
 
 // ── Throughput section ───────────────────────────────────────
+function FormatsSection({ data, loading, periodLabel }) {
+  const tdNum  = { padding: '9px 12px', fontSize: 12, textAlign: 'right', fontFamily: 'var(--mono)', borderBottom: '1px solid rgba(42,42,42,.6)' };
+  const tdNumB = { ...tdNum, fontWeight: 700, borderBottom: 'none' };
+  if (loading || data === null) {
+    return <Panel pad={40}><div style={{ display: 'flex', justifyContent: 'center' }}><Spinner /></div></Panel>;
+  }
+  const rows = (data || []).filter(r => Number(r.run_count) > 0 || Number(r.target_qty) > 0);
+  if (!rows.length) return <Panel pad={0}><EmptyMsg icon="clock" text="No runs in this period" /></Panel>;
+  const FMT_SUB = { CKD: 'full in-house build', SKD: 'semi-built kit', FBU: 'fully-built units', '(unspecified)': 'legacy runs, no format set' };
+  const num = v => Number(v || 0);
+  const pct = (a, b) => b > 0 ? Math.round((a / b) * 1000) / 10 : null;
+  const tot = rows.reduce((a, r) => ({
+    run_count: a.run_count + num(r.run_count), target_qty: a.target_qty + num(r.target_qty),
+    actual_qc_pass: a.actual_qc_pass + num(r.actual_qc_pass), actual_dispatched: a.actual_dispatched + num(r.actual_dispatched),
+  }), { run_count: 0, target_qty: 0, actual_qc_pass: 0, actual_dispatched: 0 });
+  const real = rows.filter(r => r.issue_format !== '(unspecified)');
+  return (
+    <>
+      {real.length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${real.length}, 1fr)`, gap: 10, marginBottom: 16 }}>
+          {real.map(r => (
+            <KpiTile key={r.issue_format} label={`${r.issue_format} dispatched`} value={fmt(num(r.actual_dispatched))}
+              sub={`${fmt(num(r.target_qty))} target · ${num(r.run_count)} run${num(r.run_count) === 1 ? '' : 's'}`} />
+          ))}
+        </div>
+      )}
+      <Panel pad={0}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>
+              {['Format', 'Runs', 'Target', 'QC-Pass', 'Dispatched', 'Completion'].map((h, i) => (
+                <th key={h} style={{ padding: '10px 12px', fontSize: 10, textAlign: i === 0 ? 'left' : 'right', color: 'var(--t3)', textTransform: 'uppercase', letterSpacing: '0.08em', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }}>{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {rows.map(r => {
+                const cp = pct(num(r.actual_dispatched), num(r.target_qty));
+                return (
+                  <tr key={r.issue_format}>
+                    <td style={{ padding: '9px 12px', fontSize: 12, borderBottom: '1px solid rgba(42,42,42,.6)', whiteSpace: 'nowrap' }}>
+                      <span style={{ fontFamily: 'var(--mono)', fontWeight: 700 }}>{r.issue_format}</span>
+                      <span style={{ color: 'var(--t3)', fontSize: 11, marginLeft: 8 }}>{FMT_SUB[r.issue_format] || ''}</span>
+                    </td>
+                    <td style={tdNum}>{fmt(num(r.run_count))}</td>
+                    <td style={tdNum}>{fmt(num(r.target_qty))}</td>
+                    <td style={tdNum}>{fmt(num(r.actual_qc_pass))}</td>
+                    <td style={tdNum}>{fmt(num(r.actual_dispatched))}</td>
+                    <td style={tdNum}>{cp == null ? '—' : `${cp}%`}</td>
+                  </tr>
+                );
+              })}
+              <tr style={{ borderTop: '2px solid var(--border)' }}>
+                <td style={{ padding: '9px 12px', fontSize: 12, fontWeight: 700 }}>Total</td>
+                <td style={tdNumB}>{fmt(tot.run_count)}</td>
+                <td style={tdNumB}>{fmt(tot.target_qty)}</td>
+                <td style={tdNumB}>{fmt(tot.actual_qc_pass)}</td>
+                <td style={tdNumB}>{fmt(tot.actual_dispatched)}</td>
+                <td style={tdNumB}>{pct(tot.actual_dispatched, tot.target_qty) == null ? '—' : `${pct(tot.actual_dispatched, tot.target_qty)}%`}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+      <div style={{ fontSize: 11, color: 'var(--t3)', marginTop: 10, lineHeight: 1.5 }}>
+        {periodLabel} · Output attributed to a run's format by product + line + day (same basis as the Lines board); a day/line/product shared by two formats counts once. Primary unit = car or drone; remotes excluded.
+      </div>
+    </>
+  );
+}
+
 function ThroughputSection({ taktAggs, taktLoading }) {
   if (taktLoading || !taktAggs) {
     return (
