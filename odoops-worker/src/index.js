@@ -3163,6 +3163,57 @@ export default {
             await ledgerWrite({ actor_user_id: userId, action: 'adsSetVerdict', entity_type: 'ad', entity_id: d.meta_id, daily_delta_inr: 0, request: d, status: 'ok' });
             return ok(await managedGet('ad', d.meta_id));
           }
+          case 'adsSetPlanVerdict': {   // Dyno — experiment-grain verdict (writer; no spend impact)
+            if (!canAdsWrite(P)) return err('No permission', 403);
+            if (!d.plan_id) return err('plan_id required');
+            const VERDICTS = ['winner', 'promising', 'killed', 'inconclusive', 'paused'];
+            if (!VERDICTS.includes(d.verdict)) return err(`verdict must be one of: ${VERDICTS.join(', ')}`);
+            const TERMINAL = new Set(['winner', 'killed', 'inconclusive']);
+            const patch = { verdict: d.verdict, verdict_reason: d.reason || null, updated_at: nowISO() };
+            patch.concluded_at = d.concluded_at || (TERMINAL.has(d.verdict) ? nowISO() : null);
+            const r = await sbSales(`/rest/v1/ads_plan?id=eq.${d.plan_id}`, { method: 'PATCH', prefer: 'return=representation', body: JSON.stringify(patch) });
+            if (!r.ok || !Array.isArray(r.data) || !r.data[0]) return err('Plan not found or update failed: ' + JSON.stringify(r.data), 404);
+            await ledgerWrite({ actor_user_id: userId, action: 'adsSetPlanVerdict', plan_id: d.plan_id, daily_delta_inr: 0, request: d, status: 'ok' });
+            return ok(r.data[0]);
+          }
+          case 'labAddDecision': {   // Dyno — a decision-tree edge (writer; no spend impact)
+            if (!canAdsWrite(P)) return err('No permission', 403);
+            const TYPES = ['kill', 'scale', 'graduate', 'iterate', 'pause', 'hold', 'restore-budget'];
+            if (!TYPES.includes(d.type)) return err(`type must be one of: ${TYPES.join(', ')}`);
+            if (!d.plan_id && !d.variant_meta_id) return err('plan_id or variant_meta_id required', 422);
+            const row = { plan_id: d.plan_id || null, variant_meta_id: d.variant_meta_id || null,
+              type: d.type, rationale: d.rationale || null, spawned_meta_id: d.spawned_meta_id || null,
+              decided_by: userId, decided_at: nowISO() };
+            const r = await sbSales('/rest/v1/lab_decisions', { method: 'POST', prefer: 'return=representation', body: JSON.stringify(row) });
+            if (!r.ok) return err('Decision write failed: ' + JSON.stringify(r.data), 502);
+            return ok(Array.isArray(r.data) ? r.data[0] : r.data);
+          }
+          case 'labUpsertAngle': {   // Dyno — maintain the angle playbook from Odo (writer)
+            if (!canAdsWrite(P)) return err('No permission', 403);
+            if (!d.slug || !d.name) return err('slug and name required', 422);
+            const STATUS = ['candidate', 'testing', 'proven', 'retired'];
+            if (d.status && !STATUS.includes(d.status)) return err(`status must be one of: ${STATUS.join(', ')}`);
+            const row = { slug: String(d.slug).trim(), name: d.name, description: d.description || null,
+              psychology_pillar: d.psychology_pillar || null, hypothesis: d.hypothesis || null,
+              status: d.status || 'candidate', evidence: d.evidence || null, updated_at: nowISO() };
+            const r = await sbSales('/rest/v1/lab_angles?on_conflict=slug', { method: 'POST',
+              prefer: 'return=representation,resolution=merge-duplicates', body: JSON.stringify(row) });
+            if (!r.ok) return err('Angle upsert failed: ' + JSON.stringify(r.data), 502);
+            return ok(Array.isArray(r.data) ? r.data[0] : r.data);
+          }
+          case 'getAngles': {   // Dyno — the angle library
+            if (!canView(P)) return err('No permission', 403);
+            const r = await sbSales('/rest/v1/lab_angles?select=*&order=slug.asc');
+            if (!r.ok) return err('Angles read failed: ' + JSON.stringify(r.data), 502);
+            return ok({ angles: r.data || [] });
+          }
+          case 'getDecisions': {   // Dyno — decisions for one experiment (on-demand)
+            if (!canView(P)) return err('No permission', 403);
+            if (!qp('plan_id')) return err('plan_id required', 422);
+            const r = await sbSales(`/rest/v1/lab_decisions?plan_id=eq.${encodeURIComponent(qp('plan_id'))}&select=*&order=decided_at.desc`);
+            if (!r.ok) return err('Decisions read failed: ' + JSON.stringify(r.data), 502);
+            return ok({ decisions: r.data || [] });
+          }
           case 'metaCreateCampaign': {   // creates PAUSED (no budget at campaign level in ABO)
             if (!canAdsWrite(P)) return err('No permission', 403);
             if (!d.plan_id) return err('plan_id required');
