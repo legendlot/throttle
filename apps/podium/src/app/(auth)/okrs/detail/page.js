@@ -3,10 +3,10 @@ import { useEffect, useState, useCallback, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { Spinner, EmptyState } from '@throttle/ui';
-import { ChevronLeft, Plus } from 'lucide-react';
+import { ChevronLeft, Plus, Pencil, Trash2 } from 'lucide-react';
 import { podiumopsGet, podiumopsPost } from '../../../../lib/podiumopsFetch.js';
 import { CONFIDENCE, METRIC_TYPES, DIRECTIONS, displayedScore, scorePct } from '../../../../lib/okrs.js';
-import { KrRow, ScoreBar, LevelPill, ConfidenceDot, Field, inp, miniBtn } from '../../../../components/OkrPanels.js';
+import { KrRow, ScoreBar, LevelPill, ConfidenceDot, Field, inp, miniBtn, iconMini } from '../../../../components/OkrPanels.js';
 import { fmtDate } from '../../../../lib/format.js';
 
 function DetailInner() {
@@ -16,6 +16,8 @@ function DetailInner() {
   const [d, setD] = useState(null);
   const [adding, setAdding] = useState(false);
   const [grading, setGrading] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [busyDel, setBusyDel] = useState(false);
 
   const load = useCallback(() => {
     if (!session || !id) return;
@@ -33,6 +35,13 @@ function DetailInner() {
   const canEdit = d._can_edit;
   const canGrade = d._can_grade;
 
+  async function removeObjective() {
+    if (!confirm(`Delete objective “${o.title}”? This removes its key results and check-ins too.`)) return;
+    setBusyDel(true);
+    try { await podiumopsPost('deleteObjective', { data: { id: o.id } }, session); router.push('/okrs'); }
+    catch (e) { alert(e.message); setBusyDel(false); }
+  }
+
   return (
     <div style={{ maxWidth: 820 }}>
       <div onClick={() => router.back()} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--t3)', cursor: 'pointer', marginBottom: 14 }}>
@@ -45,8 +54,16 @@ function DetailInner() {
           {o.owner?.full_name && <span style={{ fontSize: 12, color: 'var(--t3)' }}>{o.owner.full_name}</span>}
           {o.department?.name && <span style={{ fontSize: 12, color: 'var(--t3)' }}>· {o.department.name}</span>}
           {o.cycle?.name && <span style={{ fontSize: 12, color: 'var(--t4)' }}>· {o.cycle.name}</span>}
+          <span style={{ flex: 1 }} />
+          {canEdit && !editing && <>
+            <button title="Edit objective" onClick={() => setEditing(true)} style={iconMini}><Pencil size={13} /></button>
+            <button title="Delete objective" disabled={busyDel} onClick={removeObjective} style={iconMini}><Trash2 size={13} /></button>
+          </>}
         </div>
-        <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--t1)', marginBottom: 6 }}>{o.title}</div>
+        {editing ? (
+          <EditObjectiveForm o={o} session={session} onDone={() => { setEditing(false); load(); }} onCancel={() => setEditing(false)} />
+        ) : <>
+        <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--t1)', marginBottom: 6 }}>{o.title}{o.status === 'closed' && <span style={{ fontSize: 11, color: 'var(--t4)', marginLeft: 8 }}>· closed</span>}</div>
         {o.description && <div style={{ fontSize: 13, color: 'var(--t2)', marginBottom: 12, whiteSpace: 'pre-wrap' }}>{o.description}</div>}
         <div style={{ display: 'flex', gap: 24, alignItems: 'center', marginTop: 6 }}>
           <div style={{ flex: 1, maxWidth: 320 }}>
@@ -63,6 +80,7 @@ function DetailInner() {
             <span style={{ color: 'var(--t4)' }}>Reflection: </span>{o.reflection_note}
           </div>
         )}
+        </>}
       </div>
 
       {/* Key results */}
@@ -126,6 +144,28 @@ function AddKrForm({ objectiveId, session, onDone }) {
       </>}
       <Field label="Weight" w={80}><input type="number" value={f.weight} onChange={e => set('weight', e.target.value)} style={inp} /></Field>
       <button disabled={busy} onClick={save} style={{ ...miniBtn, background: 'var(--yellow)', color: '#1b1b1e', border: 'none', height: 34 }}>{busy ? '…' : 'Add'}</button>
+    </div>
+  );
+}
+
+function EditObjectiveForm({ o, session, onDone, onCancel }) {
+  const [title, setTitle] = useState(o.title);
+  const [description, setDescription] = useState(o.description || '');
+  const [status, setStatus] = useState(o.status || 'active');
+  const [busy, setBusy] = useState(false);
+  async function save() {
+    if (!title.trim()) return alert('Title required');
+    setBusy(true);
+    try { await podiumopsPost('updateObjective', { data: { id: o.id, title, description: description || null, status } }, session); onDone(); }
+    catch (e) { alert(e.message); } finally { setBusy(false); }
+  }
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'flex-end', marginTop: 4 }}>
+      <Field label="Objective" w={360}><input value={title} onChange={e => setTitle(e.target.value)} style={inp} /></Field>
+      <Field label="Status" w={120}><select value={status} onChange={e => setStatus(e.target.value)} style={inp}><option value="active">Active</option><option value="closed">Closed</option></select></Field>
+      <Field label="Description" w={480}><input value={description} onChange={e => setDescription(e.target.value)} style={inp} /></Field>
+      <button disabled={busy} onClick={save} style={{ ...miniBtn, background: 'var(--yellow)', color: '#1b1b1e', border: 'none', height: 34 }}>{busy ? '…' : 'Save'}</button>
+      <button onClick={onCancel} style={{ ...miniBtn, height: 34 }}>Cancel</button>
     </div>
   );
 }

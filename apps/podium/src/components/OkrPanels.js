@@ -2,10 +2,10 @@
 // Reusable OKR UI pieces (Phase 4). Presentation + light local state only; all data
 // fetching + mutation live in the pages that compose these.
 import { useState } from 'react';
-import { TrendingUp, TrendingDown, Flag, AlertTriangle } from 'lucide-react';
+import { TrendingUp, TrendingDown, Flag, AlertTriangle, Pencil, Trash2 } from 'lucide-react';
 import { podiumopsPost } from '../lib/podiumopsFetch.js';
 import {
-  LEVELS, CONFIDENCE, CONFIDENCE_COLOR, scorePct, scoreColor, fmtKrValue, metricLabel,
+  LEVELS, CONFIDENCE, CONFIDENCE_COLOR, DIRECTIONS, scorePct, scoreColor, fmtKrValue, metricLabel,
 } from '../lib/okrs.js';
 
 // ── Score bar (0..1) ──────────────────────────────────────────────────────────
@@ -47,22 +47,28 @@ export function LevelPill({ level }) {
   );
 }
 
-// ── One KR row (read + optional inline check-in) ───────────────────────────────
+// ── One KR row (read + inline check-in + edit/delete) ─────────────────────────
 export function KrRow({ kr, canEdit, session, onChanged }) {
-  const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState(null); // null | 'checkin' | 'edit'
   const [value, setValue] = useState(kr.current_value ?? kr.start_value ?? 0);
   const [confidence, setConfidence] = useState(kr.latest_checkin?.confidence || 'on_track');
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const dirIcon = kr.direction === 'decrease' ? <TrendingDown size={12} /> : <TrendingUp size={12} />;
 
-  async function submit() {
+  async function submitCheckin() {
     setBusy(true);
     try {
       await podiumopsPost('recordCheckin', { data: { key_result_id: kr.id, value: Number(value), confidence, note: note || null } }, session);
-      setOpen(false); setNote('');
+      setMode(null); setNote('');
       onChanged?.();
     } catch (e) { alert(e.message); } finally { setBusy(false); }
+  }
+  async function remove() {
+    if (!confirm(`Delete key result “${kr.title}”? This removes its check-ins too.`)) return;
+    setBusy(true);
+    try { await podiumopsPost('deleteKeyResult', { data: { id: kr.id } }, session); onChanged?.(); }
+    catch (e) { alert(e.message); } finally { setBusy(false); }
   }
 
   return (
@@ -77,13 +83,17 @@ export function KrRow({ kr, canEdit, session, onChanged }) {
           <div style={{ fontSize: 11.5, color: 'var(--t3)', marginTop: 3 }}>
             {fmtKrValue(kr, kr.current_value)} <span style={{ color: 'var(--t4)' }}>/ {fmtKrValue(kr, kr.target_value)}</span>
             {kr.latest_checkin && <span style={{ marginLeft: 8 }}><ConfidenceDot c={kr.latest_checkin.confidence} /></span>}
-            <span style={{ color: 'var(--t4)', marginLeft: 8 }}>· {metricLabel(kr.metric_type)} · w{Number(kr.weight)}</span>
+            <span style={{ color: 'var(--t4)', marginLeft: 8 }}>· {metricLabel(kr.metric_type)} · w{Number(kr.weight)}{kr.status === 'closed' ? ' · closed' : ''}</span>
           </div>
         </div>
         <div style={{ width: 130 }}><ScoreBar score={kr.kr_score} /></div>
-        {canEdit && <button onClick={() => setOpen(o => !o)} style={miniBtn}>{open ? 'Cancel' : 'Check in'}</button>}
+        {canEdit && <>
+          <button onClick={() => setMode(m => m === 'checkin' ? null : 'checkin')} style={miniBtn}>{mode === 'checkin' ? 'Cancel' : 'Check in'}</button>
+          <button title="Edit KR" onClick={() => setMode(m => m === 'edit' ? null : 'edit')} style={iconMini}><Pencil size={13} /></button>
+          <button title="Delete KR" disabled={busy} onClick={remove} style={iconMini}><Trash2 size={13} /></button>
+        </>}
       </div>
-      {open && (
+      {mode === 'checkin' && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10, alignItems: 'flex-end' }}>
           <Field label={kr.metric_type === 'milestone' ? 'Done? (0/1)' : 'Current value'} w={120}>
             <input type="number" value={value} onChange={e => setValue(e.target.value)} style={inp} />
@@ -96,9 +106,40 @@ export function KrRow({ kr, canEdit, session, onChanged }) {
           <Field label="Note (optional)" w={260}>
             <input value={note} onChange={e => setNote(e.target.value)} placeholder="What moved?" style={inp} />
           </Field>
-          <button disabled={busy} onClick={submit} style={{ ...miniBtn, background: 'var(--yellow)', color: '#1b1b1e', border: 'none', height: 34 }}>{busy ? '…' : 'Save'}</button>
+          <button disabled={busy} onClick={submitCheckin} style={{ ...miniBtn, background: 'var(--yellow)', color: '#1b1b1e', border: 'none', height: 34 }}>{busy ? '…' : 'Save'}</button>
         </div>
       )}
+      {mode === 'edit' && <EditKrForm kr={kr} session={session} onDone={() => { setMode(null); onChanged?.(); }} />}
+    </div>
+  );
+}
+
+function EditKrForm({ kr, session, onDone }) {
+  const [f, setF] = useState({
+    title: kr.title, start_value: kr.start_value, target_value: kr.target_value,
+    unit: kr.unit || '', direction: kr.direction, weight: kr.weight, status: kr.status || 'active',
+  });
+  const [busy, setBusy] = useState(false);
+  const isMilestone = kr.metric_type === 'milestone';
+  const set = (k, v) => setF(s => ({ ...s, [k]: v }));
+  async function save() {
+    if (!f.title.trim()) return alert('Title required');
+    setBusy(true);
+    try { await podiumopsPost('updateKeyResult', { data: { id: kr.id, ...f } }, session); onDone(); }
+    catch (e) { alert(e.message); } finally { setBusy(false); }
+  }
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10, alignItems: 'flex-end', background: 'var(--bg-2)', borderRadius: 9, padding: 11 }}>
+      <Field label="Key result" w={240}><input value={f.title} onChange={e => set('title', e.target.value)} style={inp} /></Field>
+      {!isMilestone && <>
+        <Field label="Start" w={80}><input type="number" value={f.start_value} onChange={e => set('start_value', e.target.value)} style={inp} /></Field>
+        <Field label="Target" w={80}><input type="number" value={f.target_value} onChange={e => set('target_value', e.target.value)} style={inp} /></Field>
+        <Field label="Unit" w={80}><input value={f.unit} onChange={e => set('unit', e.target.value)} style={inp} /></Field>
+        <Field label="Direction" w={140}><select value={f.direction} onChange={e => set('direction', e.target.value)} style={inp}>{DIRECTIONS.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}</select></Field>
+      </>}
+      <Field label="Weight" w={80}><input type="number" value={f.weight} onChange={e => set('weight', e.target.value)} style={inp} /></Field>
+      <Field label="Status" w={120}><select value={f.status} onChange={e => set('status', e.target.value)} style={inp}><option value="active">Active</option><option value="closed">Closed</option></select></Field>
+      <button disabled={busy} onClick={save} style={{ ...miniBtn, background: 'var(--yellow)', color: '#1b1b1e', border: 'none', height: 34 }}>{busy ? '…' : 'Save'}</button>
     </div>
   );
 }
@@ -120,6 +161,10 @@ export const miniBtn = {
   display: 'inline-flex', alignItems: 'center', height: 30, padding: '0 12px', background: 'var(--surface-2)',
   color: 'var(--t2)', border: '1px solid var(--border)', borderRadius: 7, fontFamily: 'var(--font-display)',
   fontSize: 10.5, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', cursor: 'pointer', flex: 'none',
+};
+export const iconMini = {
+  display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, flex: 'none',
+  background: 'var(--surface-2)', color: 'var(--t3)', border: '1px solid var(--border)', borderRadius: 7, cursor: 'pointer',
 };
 
 // ── Objective summary card (used in trees + lists; click to open detail) ───────
