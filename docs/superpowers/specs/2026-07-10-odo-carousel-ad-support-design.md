@@ -6,6 +6,12 @@
 > that cannot launch because `metaCreateAd` is single-image only.
 > **Verified against live code** (odoops `src/index.js`, `metaCreateAd` at L3211; `f_dyno_board`
 > `migrations/0011_dyno_v1.sql`; brand `scripts/odo-launch.mjs` L145-159) on 2026-07-10.
+>
+> **AS-BUILT (2026-07-10):** all three scoped pieces shipped — (1) carousel branch, (2) `format`
+> persistence, (3) full Dyno metadata tagging (worker persists + `odo-launch.mjs` forwards +
+> plans canonicalised + 3 live rows backfilled). odoops deployed `ed924020`; `05_Throttle` +
+> `brand-content` pushed. Decisions in §9 were resolved YES (both format + full metadata).
+> Remaining: Brand relaunches shadow-0003 Variant B; Fang needs new `lab_angles` slugs.
 
 ---
 
