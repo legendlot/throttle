@@ -1,8 +1,8 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '@throttle/auth'
-import { workerFetch } from '@throttle/db'
-import { Panel, StatusBadge, useEscapeClose } from '@throttle/ui'
+import { workerFetch, garageFetch } from '@throttle/db'
+import { Panel, StatusBadge, Combobox, useEscapeClose } from '@throttle/ui'
 import { FilterChip } from '../../../components/kit/index.js'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -114,9 +114,9 @@ function isOverdue(createdAt, severity) {
 
 // ── AddFindingModal ───────────────────────────────────────────────────────────
 
-function AddFindingModal({ roundId, roundNumber, session, onClose, onSaved }) {
+function AddFindingModal({ roundId, roundNumber, products, session, onClose, onSaved }) {
   const [form, setForm] = useState({
-    line: '', category: '', severity: '', description: '', action_required: ACTIONS_REQUIRED[0],
+    line: '', product: '', category: '', severity: '', description: '', action_required: ACTIONS_REQUIRED[0],
   })
   const [saving, setSaving] = useState(false)
   const [formErr, setFormErr] = useState('')
@@ -171,6 +171,16 @@ function AddFindingModal({ roundId, roundNumber, session, onClose, onSaved }) {
         </div>
 
         <div style={{ marginBottom: 12 }}>
+          <label style={S.label}>Product</label>
+          <Combobox
+            value={form.product}
+            onChange={v => set('product', v || '')}
+            options={(products || []).map(p => ({ value: p, label: p }))}
+            placeholder="Select product (optional — for product-wise tracking)"
+          />
+        </div>
+
+        <div style={{ marginBottom: 12 }}>
           <label style={S.label}>Severity *</label>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
             {Object.entries(SEV).map(([k, s]) => (
@@ -216,7 +226,7 @@ function AddFindingModal({ roundId, roundNumber, session, onClose, onSaved }) {
 
 // ── LogTab ────────────────────────────────────────────────────────────────────
 
-function LogTab({ date, setDate, rounds, session, userId, perms, onRefresh }) {
+function LogTab({ date, setDate, rounds, products, session, userId, perms, onRefresh }) {
   const [expanded, setExpanded]           = useState(new Set())
   const [roundFindings, setRoundFindings] = useState({})
   const [loadingRound, setLoadingRound]   = useState({})
@@ -354,6 +364,9 @@ function LogTab({ date, setDate, rounds, session, userId, perms, onRefresh }) {
                       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
                         <span style={{ width: 8, height: 8, borderRadius: '50%', background: SEV[f.severity]?.dot || 'var(--t3)', flexShrink: 0, marginTop: 4 }} />
                         <span style={S.lineBadge}>{f.line}</span>
+                        {f.product && (
+                          <span style={{ fontSize: 10, fontWeight: 700, background: 'rgba(242,205,26,0.14)', color: 'var(--yellow)', border: '1px solid rgba(242,205,26,0.3)', padding: '2px 6px', borderRadius: 3, flexShrink: 0 }}>{f.product}</span>
+                        )}
                         <span style={{ fontSize: 10, background: 'var(--surface2)', color: 'var(--t2)', padding: '2px 6px', borderRadius: 3, flexShrink: 0, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.category}</span>
                         <span style={{ flex: 1, fontSize: 12, color: 'var(--t1)', lineHeight: 1.4 }}>{f.description}</span>
                         {f.is_repeat && (
@@ -396,6 +409,7 @@ function LogTab({ date, setDate, rounds, session, userId, perms, onRefresh }) {
         <AddFindingModal
           roundId={addModal.roundId}
           roundNumber={addModal.roundNumber}
+          products={products}
           session={session}
           onClose={() => setAddModal(null)}
           onSaved={() => handleFindingSaved(addModal.roundId)}
@@ -407,12 +421,12 @@ function LogTab({ date, setDate, rounds, session, userId, perms, onRefresh }) {
 
 // ── TrackerTab ────────────────────────────────────────────────────────────────
 
-function TrackerTab({ session, userId, perms }) {
+function TrackerTab({ session, userId, perms, products }) {
   const [findings, setFindings]               = useState([])
   const [repeatOffenders, setRepeatOffenders] = useState([])
   const [loading, setLoading]                 = useState(true)
   const [filters, setFilters]                 = useState({
-    line: '', status: '', category: '', severity: '', from_date: '', to_date: '',
+    line: '', status: '', category: '', severity: '', product: '', from_date: '', to_date: '',
   })
   const [resolveOpen, setResolveOpen]   = useState(new Set())
   const [resolveDraft, setResolveDraft] = useState({})
@@ -500,6 +514,14 @@ function TrackerTab({ session, userId, perms }) {
           <option value="">All Categories</option>
           {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
+        <div style={{ minWidth: 170 }}>
+          <Combobox
+            value={filters.product}
+            onChange={v => setFilter('product', v || '')}
+            options={[{ value: '', label: 'All Products' }, ...(products || []).map(p => ({ value: p, label: p }))]}
+            placeholder="All Products"
+          />
+        </div>
         <input type="date" style={S.input} value={filters.from_date} onChange={e => setFilter('from_date', e.target.value)} />
         <input type="date" style={S.input} value={filters.to_date}   onChange={e => setFilter('to_date',   e.target.value)} />
       </div>
@@ -544,7 +566,7 @@ function TrackerTab({ session, userId, perms }) {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr>
-                {['Sev', 'Line', 'Category · Description', 'Round', 'Age', 'Status', 'Action'].map(h => (
+                {['Sev', 'Line', 'Product', 'Category · Description', 'Round', 'Age', 'Status', 'Action'].map(h => (
                   <th key={h} style={thStyle}>{h}</th>
                 ))}
               </tr>
@@ -564,6 +586,11 @@ function TrackerTab({ session, userId, perms }) {
                       </td>
                       <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
                         <span style={S.lineBadge}>{f.line}</span>
+                      </td>
+                      <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
+                        {f.product
+                          ? <span style={{ fontSize: 10, fontWeight: 700, background: 'rgba(242,205,26,0.14)', color: 'var(--yellow)', border: '1px solid rgba(242,205,26,0.3)', padding: '2px 6px', borderRadius: 3 }}>{f.product}</span>
+                          : <span style={{ fontSize: 11, color: 'var(--t3)' }}>—</span>}
                       </td>
                       <td style={{ ...tdStyle, maxWidth: 320 }}>
                         <div style={{ fontSize: 10, color: 'var(--t3)', marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.category}</div>
@@ -617,7 +644,7 @@ function TrackerTab({ session, userId, perms }) {
                     </tr>
                     {resolveFormOpen && (
                       <tr key={`resolve-${f.id}`}>
-                        <td colSpan={7} style={{ padding: '12px 16px', background: 'var(--surface2)', borderBottom: '1px solid var(--border)' }}>
+                        <td colSpan={8} style={{ padding: '12px 16px', background: 'var(--surface2)', borderBottom: '1px solid var(--border)' }}>
                           <p style={{ ...S.label, marginBottom: 6 }}>What was done to fix this? (required)</p>
                           <textarea style={{ ...S.textarea, height: 56, marginBottom: 8 }}
                             placeholder="Describe the resolution…"
@@ -679,6 +706,7 @@ export default function AuditPage() {
   const [tab, setTab]         = useState('log')
   const [date, setDate]       = useState(todayIST())
   const [rounds, setRounds]   = useState([])
+  const [products, setProducts] = useState([])
   const [loading, setLoading] = useState(true)
 
   const loadRounds = useCallback(async () => {
@@ -690,6 +718,14 @@ export default function AuditPage() {
   }, [date, session])
 
   useEffect(() => { loadRounds() }, [loadRounds])
+
+  // Product families for the finding product picker + tracker filter (product-wise defect tracking).
+  useEffect(() => {
+    if (!session) return
+    garageFetch('getProductCatalogue', {}, session)
+      .then(cat => setProducts(Array.isArray(cat?.products) ? cat.products : []))
+      .catch(() => {})
+  }, [session])
 
   return (
     <div style={{ color: 'var(--t1)', fontFamily: 'var(--font-ui)' }}>
@@ -708,13 +744,13 @@ export default function AuditPage() {
           ) : (
             <LogTab
               date={date} setDate={d => setDate(d)}
-              rounds={rounds}
+              rounds={rounds} products={products}
               session={session} userId={userId} perms={perms}
               onRefresh={loadRounds}
             />
           )
         ) : (
-          <TrackerTab session={session} userId={userId} perms={perms} />
+          <TrackerTab session={session} userId={userId} perms={perms} products={products} />
         )}
       </div>
     </div>
