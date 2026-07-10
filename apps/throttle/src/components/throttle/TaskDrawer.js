@@ -8,7 +8,7 @@ import React, { useState, useEffect } from 'react';
 import { Icon } from '@/components/throttle/Icon';
 import { Avatar, ProductTag } from '@/components/throttle/ui';
 import { STAGES, PRIORITY, DTYPE, stageByVal, teamById, taskTag } from '@/lib/throttleData';
-import { fetchTaskActivity, fetchTaskAttachments, fetchTaskBrief, postComment, relAge, setTaskOwner, selfAssignOwner, addCollaborator, abandonTask, submitForReview } from '@/lib/throttleApi';
+import { fetchTaskActivity, fetchTaskAttachments, fetchTaskBrief, postComment, relAge, setTaskOwner, selfAssignOwner, addCollaborator, abandonTask, submitForReview, approveWork, rejectWork } from '@/lib/throttleApi';
 
 const toast = (msg, tone = 'ok', icon) => window.dispatchEvent(new CustomEvent('throttle:toast', { detail: { msg, tone, icon: icon || (tone === 'bad' ? 'alert' : 'check') } }));
 
@@ -32,10 +32,12 @@ export function TaskDrawer({ task, onClose, onMove, session, members = [], role,
   const [abandonReason, setAbandonReason] = useState('');
   const [reviewing, setReviewing] = useState(false);
   const [reviewLink, setReviewLink] = useState('');
+  const [rejecting, setRejecting] = useState(false);
+  const [rejectFeedback, setRejectFeedback] = useState('');
   const [attachments, setAttachments] = useState(null);
   const [brief, setBrief] = useState(null);
 
-  useEffect(() => { setComment(''); setComments(null); setAbandoning(false); setAbandonReason(''); setReviewing(false); setReviewLink(''); setAttachments(null); setBrief(null); }, [task?.id]);
+  useEffect(() => { setComment(''); setComments(null); setAbandoning(false); setAbandonReason(''); setReviewing(false); setReviewLink(''); setRejecting(false); setRejectFeedback(''); setAttachments(null); setBrief(null); }, [task?.id]);
   useEffect(() => {
     if (!task) return;
     const onKey = e => { if (e.key === 'Escape') onClose(); };
@@ -160,11 +162,52 @@ export function TaskDrawer({ task, onClose, onMove, session, members = [], role,
     setBusy(false);
   }
 
-  // Moving INTO in_review must capture a deliverable link — open the review form
-  // instead of a bare stage move (which would skip the upload + the approval record).
+  // Transitions that must NOT be bare stage moves — each has to hit a dedicated
+  // worker action (records an attachment / approval / feedback + Slack). If routed
+  // through onMove (updateTaskStage) those side-effects are silently skipped.
+  const isDeferred = to =>
+    (to === 'in_review' && task.stage !== 'in_review') ||               // submit-for-review (needs link)
+    (task.stage === 'in_review' && to === 'approved') ||                // approveWork (records approval)
+    (task.stage === 'in_review' && to === 'in_progress');               // rejectWork (feedback required)
+
   function handleMove(id, to) {
+    if (task.stage === 'in_review' && to === 'approved') { doApprove(); return; }
+    if (task.stage === 'in_review' && to === 'in_progress') { setRejecting(true); return; }
     if (to === 'in_review' && task.stage !== 'in_review') { setReviewing(true); return; }
     onMove(id, to);
+  }
+
+  async function doApprove() {
+    if (busy) return;
+    if (!session) { onMove(task.id, 'approved'); onClose(); return; }  // no-session dev preview
+    setBusy(true);
+    try {
+      await approveWork(session, task.id);
+      toast('Work approved');
+      onChanged?.(task.id);
+      onClose();
+    } catch (e) {
+      toast('Could not approve: ' + (e.message || 'not allowed'), 'bad');
+    }
+    setBusy(false);
+  }
+
+  async function confirmReject() {
+    const fb = rejectFeedback.trim();
+    if (!fb) { toast('Feedback is required to request changes', 'bad'); return; }
+    if (busy) return;
+    if (!session) { onMove(task.id, 'in_progress'); setRejecting(false); setRejectFeedback(''); onClose(); return; }
+    setBusy(true);
+    try {
+      await rejectWork(session, task.id, fb);
+      toast('Sent back for changes');
+      setRejecting(false); setRejectFeedback('');
+      onChanged?.(task.id);
+      onClose();
+    } catch (e) {
+      toast('Could not request changes: ' + (e.message || 'not allowed'), 'bad');
+    }
+    setBusy(false);
   }
 
   async function confirmReview() {
@@ -381,10 +424,27 @@ export function TaskDrawer({ task, onClose, onMove, session, members = [], role,
               <button onClick={() => { setReviewing(false); setReviewLink(''); }} className="t-chip">Cancel</button>
             </div>
           </div>
+        ) : rejecting ? (
+          <div style={{ padding: '14px 18px', borderTop: '1px solid var(--border)', flexShrink: 0 }}>
+            <div className="eyebrow" style={{ padding: 0, marginBottom: 6 }}>Request changes</div>
+            <div style={{ fontSize: 12.5, color: 'var(--t2)', marginBottom: 8 }}>Tell the owner what needs to change — required. Sends the task back to In Progress and notifies them.</div>
+            <textarea value={rejectFeedback} onChange={e => setRejectFeedback(e.target.value)} autoFocus rows={3}
+              placeholder="What needs changing before this can be approved?"
+              style={{ width: '100%', boxSizing: 'border-box', background: 'var(--bg-2)', border: '1px solid var(--border-2)', borderRadius: 'var(--r-sm)',
+                padding: '9px 12px', color: 'var(--t1)', fontFamily: 'var(--font-ui)', fontSize: 13, outline: 'none', resize: 'vertical' }} />
+            <div style={{ display: 'flex', gap: 8, marginTop: 9 }}>
+              <button onClick={confirmReject} disabled={busy || !rejectFeedback.trim()}
+                style={{ flex: 1, justifyContent: 'center', display: 'inline-flex', alignItems: 'center', gap: 7, padding: '10px 15px', borderRadius: 'var(--r-sm)',
+                  cursor: busy || !rejectFeedback.trim() ? 'default' : 'pointer', background: 'var(--yellow)', color: '#15140b', border: '1px solid var(--yellow)',
+                  opacity: busy || !rejectFeedback.trim() ? 0.5 : 1, fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 11.5, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+                <Icon name="send" size={14} />Send back</button>
+              <button onClick={() => { setRejecting(false); setRejectFeedback(''); }} className="t-chip">Cancel</button>
+            </div>
+          </div>
         ) : actions.length > 0 && (
           <div style={{ display: 'flex', gap: 10, padding: '14px 18px', borderTop: '1px solid var(--border)', flexShrink: 0 }}>
             {actions.map(a => (
-              <button key={a.to} onClick={() => { if (a.to === 'in_review') { setReviewing(true); return; } onMove(task.id, a.to); if (a.kind === 'primary') onClose(); }} className="t-btn"
+              <button key={a.to} onClick={() => { handleMove(task.id, a.to); if (a.kind === 'primary' && !isDeferred(a.to)) onClose(); }} className="t-btn"
                 style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '10px 15px', borderRadius: 'var(--r-sm)', cursor: 'pointer',
                   fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 11.5, letterSpacing: '0.06em', textTransform: 'uppercase',
                   ...(a.kind === 'primary' ? { background: 'var(--yellow)', color: '#15140b', border: '1px solid var(--yellow)', flex: 1, justifyContent: 'center' }

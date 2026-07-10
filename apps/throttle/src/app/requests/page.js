@@ -3,7 +3,7 @@
    pulse rail. Click a request → drawer; approve / hold / reject update
    status live (worker: approveRequest / requestMoreInfo / rejectRequest)
    and fire a toast. Ported from requests.jsx; seed fallback. */
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { AppShell } from '@/components/throttle/AppShell';
 import { Icon, Sparkline } from '@/components/throttle/Icon';
@@ -163,6 +163,13 @@ function RequestsScreen() {
   const [reqs, setReqs] = useState(session ? [] : REQUESTS);
   const [selected, setSelected] = useState(null);
 
+  const load = useCallback(async () => {
+    if (!session) return;
+    const usersRes = await fetchUsers(session);
+    const data = await fetchRequests(session, usersRes?.byId || {});
+    setReqs(data || []);
+  }, [session]);
+
   useEffect(() => {
     if (!session) return;
     let cancelled = false;
@@ -174,6 +181,15 @@ function RequestsScreen() {
     })();
     return () => { cancelled = true; };
   }, [session]);
+
+  // Re-pull when a request is filed OR edited from the global intake modal
+  // (NewRequestModal fires `throttle:requestfiled` on submit for both new + edit).
+  useEffect(() => {
+    if (!session) return;
+    const onFiled = () => { load(); };
+    window.addEventListener('throttle:requestfiled', onFiled);
+    return () => window.removeEventListener('throttle:requestfiled', onFiled);
+  }, [session, load]);
 
   const act = async (id, status) => {
     const prev = reqs;

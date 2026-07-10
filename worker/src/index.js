@@ -247,6 +247,10 @@ export default {
     }
 
     try {
+    // return AWAIT the dispatch (via an IIFE) so async handler rejections are
+    // caught here — `case X: return handleX(...)` returns the promise unawaited,
+    // so a rejection would otherwise escape this try/catch as a CORS-less 500.
+    return await (async () => {
     switch (action) {
       case 'getMe':               return handleGetMe(body, ctx, env);
       case 'updateUserRole':      return handleUpdateUserRole(body, ctx, env);
@@ -306,6 +310,7 @@ export default {
       default:
         return err(`Unknown action: ${action}`, 404);
     }
+    })();
     } catch (e) {
       console.error('[throttleops] handler error', action, e?.stack || e);
       return err(`${action} failed: ${e?.message || e}`, 500);
@@ -2162,6 +2167,50 @@ async function closeSprintById(sprintId, closedByUserId, env) {
 
 // ── Auto sprint close — runs on Cloudflare Cron ──────────────────────────────
 
+// Thursday (DOW 4) of the current sprint week — the most recent Thursday on/before
+// today. Sprints are Thu→Wed, enforced by a DB CHECK (start DOW=4, end-start=6).
+function currentWeekThursday() {
+  const d = new Date(); d.setHours(0, 0, 0, 0);
+  const diff = (d.getDay() - 4 + 7) % 7; // days since the week's Thursday
+  d.setDate(d.getDate() - diff);
+  return d;
+}
+
+// Re-seed an active sprint when none exists (bootstrap gap — see runSprintClose).
+// Creates THIS week's Thu→Wed sprint; idempotent (bails if a sprint already exists
+// for the same start_date, whatever its status). Returns the sprint row or {error}.
+async function bootstrapActiveSprint(env) {
+  const thu = currentWeekThursday();
+  const wed = new Date(thu); wed.setDate(wed.getDate() + 6);
+  const start_date = thu.toISOString().split('T')[0];
+  const end_date = wed.toISOString().split('T')[0];
+
+  const existsRes = await sbFetch(`sprints?start_date=eq.${start_date}&select=id,name,status`, { method: 'GET' }, env);
+  const existing = existsRes.ok ? await existsRes.json() : [];
+  if (existing.length > 0) {
+    // A sprint for this week already exists (e.g. closed early) — do NOT force it
+    // active; report it so we don't create a duplicate / fight a deliberate close.
+    console.log(`[bootstrapActiveSprint] Sprint for week of ${start_date} already exists (${existing[0].status}); not creating`);
+    return existing[0];
+  }
+
+  const countRes = await sbFetch('sprints?select=id', { method: 'GET' }, env);
+  const count = countRes.ok ? (await countRes.json()).length : 0;
+  const name = `Sprint ${count + 1} — ${formatDateShort(thu)} to ${formatDateShort(wed)}`;
+
+  const insertRes = await sbFetch('sprints', {
+    method: 'POST',
+    body: JSON.stringify({ name, start_date, end_date, status: 'active', created_by: null }),
+  }, env);
+  if (!insertRes.ok) {
+    const e = await insertRes.text();
+    return { error: `insert ${insertRes.status}: ${e.slice(0, 200)}` };
+  }
+  const [sprint] = await insertRes.json();
+  await slackOps(`🆕 *Sprint auto-bootstrapped* — *"${name}"* (no active sprint existed; chain re-seeded)`, env);
+  return sprint;
+}
+
 async function runSprintClose(env) {
   console.log('[throttleops] Auto sprint close cron fired');
 
@@ -2177,7 +2226,18 @@ async function runSprintClose(env) {
   const activeSprints = await activeRes.json();
 
   if (activeSprints.length === 0) {
-    console.log('[sprintClose] No active sprint found — nothing to close');
+    // Self-bootstrap: the cron creates the next sprint only as a side-effect of
+    // CLOSING an active one, so a single failed create-next (or any gap) would
+    // otherwise stall the chain forever (S191 — Sprint 5 closed 10 Jun → 3 dead
+    // weeks). Re-seed this week's active sprint so the chain resumes.
+    console.log('[sprintClose] No active sprint found — bootstrapping this week\'s sprint to re-seed the chain');
+    const created = await bootstrapActiveSprint(env);
+    if (created?.error) {
+      await slackOps(`⚠️ *Sprint chain stalled* — no active sprint and auto-bootstrap failed: ${created.error}. Create one manually in the planner.`, env);
+      console.error('[sprintClose] bootstrap failed:', created.error);
+    } else if (created) {
+      console.log(`[sprintClose] Bootstrapped "${created.name || created.id}"`);
+    }
     return;
   }
 

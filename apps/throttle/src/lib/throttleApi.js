@@ -307,6 +307,16 @@ export async function moveTaskStage(session, taskId, stage, blockedReason) {
 export async function submitForReview(session, taskId, link, label) {
   return workerFetch('submitForReview', { task_id: taskId, attachment_url: link, attachment_label: label || 'Deliverable' }, session.access_token);
 }
+// Approve reviewed work — worker's approveWork records a brand.approvals row + Slack
+// and moves in_review → approved (NOT a bare stage move, which skips the approval record).
+export async function approveWork(session, taskId, feedback) {
+  return workerFetch('approveWork', { task_id: taskId, feedback: feedback || null }, session.access_token);
+}
+// Request changes — worker's rejectWork REQUIRES feedback, records the rejection +
+// Slack, and moves in_review → in_progress.
+export async function rejectWork(session, taskId, feedback) {
+  return workerFetch('rejectWork', { task_id: taskId, feedback }, session.access_token);
+}
 export async function addTaskToSprint(session, taskId, sprintId) {
   return workerFetch('addTaskToSprint', { task_id: taskId, sprint_id: sprintId }, session.access_token);
 }
