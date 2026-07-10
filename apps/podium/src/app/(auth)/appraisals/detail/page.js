@@ -7,6 +7,7 @@ import { Printer } from 'lucide-react';
 import { podiumopsGet, podiumopsPost } from '../../../../lib/podiumopsFetch.js';
 import { RATING_LABELS, ratingColor, APPRAISAL_STATUS, fmtMonths } from '../../../../lib/appraisals.js';
 import { fmtDate } from '../../../../lib/format.js';
+import { ScoreBar } from '../../../../components/OkrPanels.js';
 
 export default function Page() {
   return <Suspense fallback={<Spinner />}><DetailPage /></Suspense>;
@@ -75,6 +76,28 @@ function DetailPage() {
           </div>
         </>
       )}
+
+      <OkrsReadonly okrs={a.okrs} />
+    </div>
+  );
+}
+
+// ── OKRs for the period (read-only context; never weighted into the rating) ──
+function OkrsReadonly({ okrs }) {
+  if (!okrs || okrs.length === 0) return null;
+  return (
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '15px 18px', marginTop: 16 }}>
+      <div style={{ fontFamily: 'var(--font-display)', fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--t2)', marginBottom: 4 }}>OKRs this period</div>
+      <div style={{ fontSize: 11.5, color: 'var(--t4)', marginBottom: 10 }}>For context only — not part of the rating.</div>
+      {okrs.map(o => (
+        <div key={o.id} style={{ padding: '10px 0', borderTop: '1px solid var(--hairline)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ flex: 1, fontSize: 13, color: 'var(--t1)' }}>{o.title}{o.final_score != null && <span style={{ color: 'var(--yellow)', fontSize: 11, marginLeft: 6 }}>graded</span>}</span>
+            <div style={{ width: 140 }}><ScoreBar score={o.displayed_score} /></div>
+          </div>
+          {o.reflection_note && <div style={{ fontSize: 12, color: 'var(--t3)', marginTop: 4 }}>{o.reflection_note}</div>}
+        </div>
+      ))}
     </div>
   );
 }

@@ -9,6 +9,7 @@ import { fmtDate } from '../../../lib/format.js';
 import { sentimentMeta } from '../../../lib/performance.js';
 import { ObservationsPanel } from '../../../components/PerformancePanels.js';
 import { Avatar, FilterChip } from '../../../components/ui.js';
+import { ObjectiveCard } from '../../../components/OkrPanels.js';
 
 const KINDS = [
   { id: 'all',         label: 'All' },
@@ -55,6 +56,8 @@ export default function TeamFeedPage() {
 
   return (
     <div style={{ maxWidth: 880 }}>
+      <TeamOkrs session={session} onOpen={id => router.push(`/okrs/detail/?id=${id}`)} />
+
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
         {KINDS.map(k => <FilterChip key={k.id} active={kind === k.id} onClick={() => setKind(k.id)}>{k.label}</FilterChip>)}
         <div style={{ width: 190, marginLeft: 4 }}>
@@ -111,6 +114,30 @@ function ActivityCard({ it, person, onOpen }) {
         {it.kind === 'win' && <><strong>{it.title}</strong>{it.description ? ` — ${it.description}` : ''}</>}
         {it.kind === 'one_on_one' && (it.shared_notes || (it._private_hidden ? <em style={{ color: 'var(--t3)' }}>Private 1:1</em> : '—'))}
       </div>
+    </div>
+  );
+}
+
+function TeamOkrs({ session, onOpen }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const [d, setD] = useState(null);
+  useEffect(() => { podiumopsGet('getTeamOkrs', {}, session).then(setD).catch(() => setD(false)); }, [session]);
+  if (!d || d === false || !d.cycle) return null;
+  const objs = d.objectives || [];
+  if (objs.length === 0) return null;
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <div onClick={() => setCollapsed(c => !c)} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, cursor: 'pointer' }}>
+        <span style={{ fontFamily: 'var(--font-display)', fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--t1)' }}>Team OKRs</span>
+        <span style={{ fontSize: 11, color: 'var(--t4)' }}>{d.cycle.name} · {objs.length} objective{objs.length === 1 ? '' : 's'}</span>
+        <span style={{ flex: 1 }} />
+        <span style={{ fontSize: 11, color: 'var(--t3)' }}>{collapsed ? 'Show' : 'Hide'}</span>
+      </div>
+      {!collapsed && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {objs.map(o => <ObjectiveCard key={o.id} obj={o} onOpen={() => onOpen(o.id)} compact />)}
+        </div>
+      )}
     </div>
   );
 }

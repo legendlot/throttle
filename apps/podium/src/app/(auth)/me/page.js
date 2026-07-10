@@ -9,6 +9,7 @@ import { fmtDate } from '../../../lib/format.js';
 import { ObservationsPanel, WinsPanel, OneOnOnesPanel } from '../../../components/PerformancePanels.js';
 import MyCompensation from '../../../components/MyCompensation.js';
 import MyPayouts from '../../../components/MyPayouts.js';
+import MyOkrsBlock from '../../../components/MyOkrsBlock.js';
 
 const TABS = [
   { id: 'wins',         label: 'My Wins' },
@@ -43,6 +44,7 @@ export default function MyPerformancePage() {
 
       <MyCompensation />
       <MyPayouts />
+      <MyOkrsBlock session={session} employeeId={me.employee_id} />
 
       {open.length > 0 && (
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 11, padding: '13px 16px', marginBottom: 18 }}>

@@ -1,7 +1,7 @@
 import {
   Users, Network, Briefcase, Building2, BarChart3, Settings, UserPlus,
   Star, Activity, ShieldCheck, UserCog, ClipboardCheck, BookOpen, Factory, Wallet,
-  TrendingUp,
+  TrendingUp, Target,
 } from 'lucide-react';
 
 export const NAV_GROUPS = [
@@ -19,6 +19,7 @@ export const NAV_GROUPS = [
     id: 'performance', label: 'PERFORMANCE', icon: Activity,
     items: [
       { id: 'me',   label: 'My Performance', route: '/me',   icon: Star },
+      { id: 'okrs', label: 'OKRs',           route: '/okrs', icon: Target,   requires: 'podium_view' },
       { id: 'team', label: 'Team',           route: '/team', icon: Activity, requires: 'podium_view' },
       { id: 'appraisals', label: 'Appraisals', route: '/appraisals', icon: ClipboardCheck, requires: 'podium_hr' },
       { id: 'analytics', label: 'Analytics', route: '/analytics', icon: TrendingUp, requires: 'podium_hr' },
