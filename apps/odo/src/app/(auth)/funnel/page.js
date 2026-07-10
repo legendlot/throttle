@@ -191,6 +191,72 @@ function DriversPanel({ drivers }) {
   );
 }
 
+// Hybrid net conversion — the reliable CRO metric: Shopify net orders (exact) ÷ GA4 website sessions.
+function BigKpi({ label, val, tone = 'var(--t1)' }) {
+  return (
+    <div style={{ textAlign: 'right' }}>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 22, fontWeight: 700, color: tone, lineHeight: 1 }}>{val}</div>
+      <div className="so-sub" style={{ fontSize: 10.5, marginTop: 3 }}>{label}</div>
+    </div>
+  );
+}
+function NetCr({ data }) {
+  if (!data) return <div className="so-card"><Spinner /></div>;
+  const rows = data.rows || [];
+  const s = data.summary || {};
+  const fmtCr = (v) => (v == null ? '—' : Number(v).toFixed(2) + '%');
+  // chronological prev-day lookup for the CR ▲/▼ (independent of row order)
+  const prev = {};
+  { const chron = [...rows].sort((a, b) => (a.the_date < b.the_date ? -1 : 1)); chron.forEach((r, i) => { if (i > 0) prev[r.the_date] = chron[i - 1]; }); }
+  return (
+    <div className="so-card" style={{ boxShadow: '0 0 0 1px var(--accent)33' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap', marginBottom: 12 }}>
+        <div>
+          <div style={{ fontFamily: 'var(--cond)', fontWeight: 700, fontSize: 15 }}>Net Conversion <span style={{ color: 'var(--t3)', fontWeight: 400, fontSize: 12 }}>· Shopify net orders ÷ GA4 website sessions</span></div>
+          <div className="so-sub" style={{ fontSize: 11.5, marginTop: 3, maxWidth: 640 }}>
+            Net orders = paid Website orders, excluding cancelled, ₹0, and MO_Repair / MO_Replacement. Recent 3 days provisional (late orders + GA4 revisions still settle). GA4 sessions sit at a different absolute level than Shopify sessions — trust the trend, not the last decimal.
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 20 }}>
+          <BigKpi label="Conversion rate" val={fmtCr(s.cr)} tone="var(--accent)" />
+          <BigKpi label="Net orders" val={fmtInt(s.net_orders)} />
+          <BigKpi label="Sessions" val={fmtInt(s.sessions)} />
+        </div>
+      </div>
+      <div style={{ overflowX: 'auto', maxHeight: 340, overflowY: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+          <thead><tr style={{ color: 'var(--t2)', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            <th style={{ textAlign: 'left', padding: '6px 8px', position: 'sticky', top: 0, background: 'var(--surface)' }}>Date</th>
+            <th style={{ textAlign: 'right', padding: '6px 8px', position: 'sticky', top: 0, background: 'var(--surface)' }}>Sessions</th>
+            <th style={{ textAlign: 'right', padding: '6px 8px', position: 'sticky', top: 0, background: 'var(--surface)' }}>Net orders</th>
+            <th style={{ textAlign: 'right', padding: '6px 8px', position: 'sticky', top: 0, background: 'var(--surface)' }}>Excl.</th>
+            <th style={{ textAlign: 'right', padding: '6px 8px', position: 'sticky', top: 0, background: 'var(--surface)' }}>CR</th>
+          </tr></thead>
+          <tbody>
+            {rows.map(r => {
+              const p = prev[r.the_date];
+              const dod = p && r.cr != null && p.cr != null ? Number(r.cr) - Number(p.cr) : null;
+              return (
+                <tr key={r.the_date} style={{ borderTop: '1px solid var(--border)' }}>
+                  <td style={{ padding: '6px 8px', fontFamily: 'var(--mono)' }}>{r.the_date}
+                    {r.provisional && <span style={{ marginLeft: 6, fontSize: 9.5, color: '#E8A33D', border: '1px solid #E8A33D55', borderRadius: 4, padding: '0 4px' }}>provisional</span>}</td>
+                  <td style={{ padding: '6px 8px', textAlign: 'right', fontFamily: 'var(--mono)' }}>{fmtInt(r.sessions)}</td>
+                  <td style={{ padding: '6px 8px', textAlign: 'right', fontFamily: 'var(--mono)' }}>{fmtInt(r.net_orders)}</td>
+                  <td style={{ padding: '6px 8px', textAlign: 'right', fontFamily: 'var(--mono)', color: 'var(--t3)' }}>{fmtInt(r.excluded_orders)}</td>
+                  <td style={{ padding: '6px 8px', textAlign: 'right', fontFamily: 'var(--mono)' }}>
+                    <b>{fmtCr(r.cr)}</b>
+                    {dod != null && Math.abs(dod) >= 0.005 && <span style={{ marginLeft: 5, fontSize: 10.5, color: dod > 0 ? 'var(--green)' : 'var(--red)' }}>{dod > 0 ? '▲' : '▼'}{Math.abs(dod).toFixed(2)}</span>}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export default function FunnelPage() {
   const { session } = useAuth();
   const mtd = rangePresets().find(p => p.key === 'mtd');
@@ -202,11 +268,15 @@ export default function FunnelPage() {
   const [changes, setChanges] = useState([]);  // change events (website + stock) — timeline annotations
   const [drivers, setDrivers] = useState(null);  // { days, library, settings } — attribution (layer d)
   const [view, setView] = useState('overview');  // overview | history
+  const [netcr, setNetcr] = useState(null);   // hybrid net CR (Shopify net orders / GA4 website sessions)
   const [err, setErr] = useState('');
 
   useEffect(() => {
     if (!session) return;
-    setRows(null); setPay(null); setHist(null); setChanges([]); setDrivers(null); setErr('');
+    setRows(null); setPay(null); setHist(null); setChanges([]); setDrivers(null); setNetcr(null); setErr('');
+    salesGet('getWebsiteCr', { from, to }, session)
+      .then(c => setNetcr(c || { rows: [], summary: {} }))
+      .catch(() => setNetcr({ rows: [], summary: {} }));
     salesGet('getTraffic', { from, to }, session)
       .then(t => setRows(t?.rows || []))
       .catch(e => setErr(e.message || String(e)));
@@ -248,6 +318,8 @@ export default function FunnelPage() {
         right={<><SegmentedToggle options={[['overview', 'Overview'], ['history', 'Daily history']]} value={view} onChange={setView} size="sm" /><span className="so-sub" style={{ marginLeft: 10 }}>GA4 · Website</span></>} />
 
       {err && <div className="so-card" style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12 }}>{err}</div>}
+
+      <NetCr data={netcr} />
 
       {view === 'history' ? (
         !hist ? <div style={{ padding: 60, textAlign: 'center' }}><Spinner /></div> : (
