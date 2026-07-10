@@ -3125,6 +3125,26 @@ async function getWaConversation(params, auth, env) {
   const live = await loadWaLive(thread, env);
   if (!live.ok) return err(`Failed to load WhatsApp conversation from BiteSpeed (${live.status}): ${live.error}`, 502);
 
+  // Agent-attribution overlay (Pruthvi #bugs 2026-07-10): the live BiteSpeed pull tags
+  // every OUTGOING message with BiteSpeed's connected API-account name (shows as "Afshaan"),
+  // not the agent who actually sent it. Our own sendWaReply stores the real agent in
+  // cs_wa_messages.sent_by_name keyed by the BiteSpeed message id (provider_message_id ==
+  // mapChatwootMessage's String(m.id)), so overlay ours onto the live rows. Replies sent
+  // directly in the BiteSpeed UI (not via Pitstop) have no stored row → keep the live name.
+  const attrRes = await sb(
+    `/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(thread.id)}&direction=eq.outbound&is_internal=eq.false&sent_by_name=not.is.null&provider_message_id=not.is.null&select=provider_message_id,sent_by_name&limit=400`,
+    env,
+  );
+  const nameByPmid = {};
+  for (const m of (attrRes.data || [])) {
+    if (m.provider_message_id && m.sent_by_name) nameByPmid[String(m.provider_message_id)] = m.sent_by_name;
+  }
+  for (const m of live.messages) {
+    if (m.direction === 'outbound' && m.provider_message_id && nameByPmid[m.provider_message_id]) {
+      m.sent_by_name = nameByPmid[m.provider_message_id];
+    }
+  }
+
   // Internal notes live ONLY in our DB (Chatwoot never sees them), so merge the
   // local notes back into the live pull — otherwise notes added on a WA thread
   // vanish on the next re-pull.
