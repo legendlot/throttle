@@ -17,7 +17,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast, Panel, StatusBadge } from '@throttle/ui';
-import { Printer, X, Check, AlertTriangle } from 'lucide-react';
+import { Printer, X, Check, AlertTriangle, Pencil } from 'lucide-react';
 
 function inr(n) {
   const v = Number(n) || 0;
@@ -137,6 +137,19 @@ function DetailInner() {
             }}>
             <Printer size={14} strokeWidth={2} /> Print
           </button>
+          {h.status === 'draft' && (
+            <button onClick={() => router.push(`/dispatch-challans/new?edit=${id}`)} disabled={busy}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                background: 'transparent', color: 'var(--t1)',
+                border: '1px solid var(--border)', borderRadius: 4,
+                padding: '9px 16px', cursor: busy ? 'wait' : 'pointer',
+                fontFamily: 'var(--mono)', fontSize: 13, fontWeight: 600,
+                opacity: busy ? 0.5 : 1,
+              }}>
+              <Pencil size={14} strokeWidth={2} /> Edit
+            </button>
+          )}
           {h.status === 'draft' && (
             <button onClick={issue} disabled={busy}
               style={{

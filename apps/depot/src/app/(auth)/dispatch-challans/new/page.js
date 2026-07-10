@@ -13,8 +13,8 @@
  * - "Save Draft" creates with status='draft'. "Issue Challan" creates + issues
  *   in two steps (so the draft survives if issue fails).
  */
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, useCallback, useMemo, useRef, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast, Panel } from '@throttle/ui';
@@ -69,9 +69,22 @@ function composeCompanyAddress(a) {
 }
 
 export default function NewChallanPage() {
+  // useSearchParams needs a Suspense boundary under static export (same pattern
+  // as the challan detail page).
+  return (
+    <Suspense fallback={<div style={{ padding: 32 }}><Spinner /></div>}>
+      <NewChallanInner />
+    </Suspense>
+  );
+}
+
+function NewChallanInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const editId = searchParams.get('edit');   // present → editing an existing DRAFT (L100)
   const { session } = useAuth();
   const { showToast } = useToast();
+  const [editChallanNo, setEditChallanNo] = useState('');
 
   const [addresses, setAddresses] = useState([]);
   const [fromId, setFromId] = useState('');
@@ -110,9 +123,10 @@ export default function NewChallanPage() {
         if (cancelled) return;
         const list = Array.isArray(data) ? data : [];
         setAddresses(list);
-        // Prefer the registered office or first active row as default From
+        // Prefer the registered office or first active row as default From —
+        // but NOT when editing (the loaded challan's From must win).
         const def = list.find(a => a.is_registered_office) || list[0];
-        if (def) {
+        if (def && !editId) {
           setFromId(String(def.id));
           setFromName(def.legal_name || def.company_name || '');
           setFromAddress(composeCompanyAddress(def));
@@ -123,7 +137,44 @@ export default function NewChallanPage() {
       }
     })();
     return () => { cancelled = true; };
-  }, [session, showToast]);
+  }, [session, showToast, editId]);
+
+  // Edit mode (L100): load an existing DRAFT and prefill the form. updateDeliveryChallan
+  // is draft-only server-side; we also bounce non-drafts back to the read-only detail view.
+  useEffect(() => {
+    if (!editId || !session) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const dc = await garageFetch('getDeliveryChallan', { id: editId }, session);
+        if (cancelled || !dc?.header) return;
+        const h = dc.header;
+        if (h.status !== 'draft') {
+          showToast('Only draft challans can be edited', 'error');
+          router.push(`/dispatch-challans/detail?id=${editId}`);
+          return;
+        }
+        setEditChallanNo(h.challan_no || '');
+        if (h.challan_date) setChallanDate(String(h.challan_date).slice(0, 10));
+        setFromId('');
+        setFromName(h.from_name || ''); setFromAddress(h.from_address || ''); setFromGstin(h.from_gstin || '');
+        setToName(h.to_name || ''); setToAddress(h.to_address || ''); setToGstin(h.to_gstin || '');
+        setPurpose(h.purpose || 'Material transfer'); setNotes(h.notes || '');
+        setTransportMode(h.transport_mode || 'Road'); setVehicleNumber(h.vehicle_number || ''); setTransporterName(h.transporter_name || '');
+        setEwbNumber(h.ewb_number || ''); setEwbDate(h.ewb_date ? String(h.ewb_date).slice(0, 10) : '');
+        setGstRate(Number(h.gst_rate) || 18);
+        const ls = Array.isArray(dc.lines) ? dc.lines : [];
+        setLines(ls.length ? ls.map(l => ({
+          description: l.description || '', hsn_code: l.hsn_code || HSN_DEFAULT,
+          product_code: l.product_code || null, ean: l.ean || null,
+          quantity: l.quantity ?? '', unit: l.unit || 'Pcs', rate: l.rate ?? '',
+        })) : [newLine()]);
+      } catch (e) {
+        showToast('Failed to load challan: ' + (e.message || e), 'error');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [editId, session]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // When user picks a different From address from the dropdown, prefill but leave editable
   function onPickFromId(id) {
@@ -199,23 +250,28 @@ export default function NewChallanPage() {
         gst_rate:         Number(gstRate) || 0,
         lines:            cleanLines,
       };
-      const res = await workerFetch('createDeliveryChallan', { data: payload }, session);
+      const res = editId
+        ? await workerFetch('updateDeliveryChallan', { data: { id: editId, ...payload } }, session)
+        : await workerFetch('createDeliveryChallan', { data: payload }, session);
       if (!res.ok) {
-        showToast('Create failed: ' + (res.error || 'unknown'), 'error');
+        showToast(`${editId ? 'Update' : 'Create'} failed: ` + (res.error || 'unknown'), 'error');
         setSaving(false);
         return;
       }
-      const created = res.data;
+      // updateDeliveryChallan returns {id,...} without challan_no; use the loaded one.
+      const created = editId
+        ? { id: editId, challan_no: editChallanNo || res.data?.challan_no || 'draft' }
+        : res.data;
       if (andIssue) {
         const iss = await workerFetch('issueDeliveryChallan', { data: { id: created.id } }, session);
         if (!iss.ok) {
-          showToast(`Created ${created.challan_no} as draft, but issue failed: ${iss.error || 'unknown'}`, 'info');
+          showToast(`Saved ${created.challan_no} as draft, but issue failed: ${iss.error || 'unknown'}`, 'info');
           router.push(`/dispatch-challans/detail?id=${created.id}`);
           return;
         }
         showToast(`Challan ${created.challan_no} issued`, 'success');
       } else {
-        showToast(`Draft ${created.challan_no} saved`, 'success');
+        showToast(`Draft ${created.challan_no} ${editId ? 'updated' : 'saved'}`, 'success');
       }
       router.push(`/dispatch-challans/detail?id=${created.id}`);
     } catch (e) {
@@ -242,10 +298,10 @@ export default function NewChallanPage() {
           fontFamily: 'var(--cond)', fontSize: 'var(--text-xl)', fontWeight: 700,
           textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--t1)',
         }}>
-          New Delivery Challan
+          {editId ? `Edit Draft${editChallanNo ? ` · ${editChallanNo}` : ''}` : 'New Delivery Challan'}
         </h1>
         <div style={{ marginLeft: 'auto', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--t3)' }}>
-          Number auto-assigned on save (LOT-DC-{challanDate.slice(0,4)}-NNNN)
+          {editId ? 'Editing a draft — changes replace the saved lines' : `Number auto-assigned on save (LOT-DC-${challanDate.slice(0,4)}-NNNN)`}
         </div>
       </div>
 
@@ -492,7 +548,7 @@ export default function NewChallanPage() {
               padding: '9px 16px', cursor: saving ? 'wait' : 'pointer', color: 'var(--t1)',
               fontFamily: 'var(--mono)', fontSize: 13, opacity: saving ? 0.5 : 1,
             }}>
-            {saving ? '…' : 'Save as Draft'}
+            {saving ? '…' : (editId ? 'Save Draft' : 'Save as Draft')}
           </button>
           <button onClick={() => save({ andIssue: true })} disabled={saving}
             style={{

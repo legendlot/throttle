@@ -8,7 +8,7 @@
    a units feed and shipped-today data that this payload doesn't
    carry — skipped (no new API calls).
    ════════════════════════════════════════════════════════════ */
-import { Fragment, useState, useEffect, useCallback } from 'react';
+import { Fragment, useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
 import { Spinner } from '@throttle/ui';
@@ -58,12 +58,21 @@ export default function DispatchPipelinePage() {
     });
   }
 
+  const headRef = useRef(null);
+  const [headH, setHeadH] = useState(42);
+  useEffect(() => {
+    if (headRef.current) setHeadH(headRef.current.offsetHeight);
+  }, [data, loading]);
+
   const thStyle = {
     padding: '11px 14px', textAlign: 'left', whiteSpace: 'nowrap',
     borderBottom: '1px solid var(--border)', background: 'var(--surface)',
-    position: 'sticky', top: 0, zIndex: 1,
+    position: 'sticky', top: 0, zIndex: 3,
   };
   const numTh = { ...thStyle, textAlign: 'right' };
+  // "All products" totals row pins directly beneath the header (measured height,
+  // so the two rows stay frozen while the grid scrolls — Mohit #bugs 2026-07-10).
+  const totalsSticky = { position: 'sticky', top: headH, zIndex: 2, background: 'var(--bg-2)' };
 
   const products = data?.products || [];
   const channels = data?.channels || [];
@@ -122,10 +131,10 @@ export default function DispatchPipelinePage() {
             </div>
           </div>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
+          <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 210px)' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
               <thead>
-                <tr>
+                <tr ref={headRef}>
                   <th className="eyebrow" style={{ ...thStyle, minWidth: 220 }}>Product / Variant</th>
                   <th className="eyebrow" style={numTh}>With Production</th>
                   <th className="eyebrow" style={numTh}>Unalloc (R)</th>
@@ -139,17 +148,17 @@ export default function DispatchPipelinePage() {
               </thead>
               <tbody>
                 {/* column totals row */}
-                <tr style={{ background: 'var(--bg-2)', borderBottom: '2px solid var(--border-2)' }}>
-                  <td style={{ padding: '10px 14px', whiteSpace: 'nowrap' }}>
+                <tr style={{ borderBottom: '2px solid var(--border-2)' }}>
+                  <td style={{ padding: '10px 14px', whiteSpace: 'nowrap', ...totalsSticky }}>
                     <span className="label" style={{ fontSize: 11, color: 'var(--t2)' }}>All products</span>
                   </td>
-                  <td className="num" style={numTd(totals.with_production, 'var(--t1)', true)}>{fmtCell(totals.with_production)}</td>
-                  <td className="num" style={numTd(totals.unallocated_retail, 'var(--yellow)', true)}>{fmtCell(totals.unallocated_retail)}</td>
-                  <td className="num" style={numTd(totals.unallocated_ecom, 'var(--yellow)', true)}>{fmtCell(totals.unallocated_ecom)}</td>
-                  <td className="num" style={numTd(totals.unallocated_retail + totals.unallocated_ecom, 'var(--yellow)', true)}>{fmtCell(totals.unallocated_retail + totals.unallocated_ecom)}</td>
-                  <td className="num" style={numTd(grandAlloc, 'var(--ok-fg)', true)}>{fmtCell(grandAlloc)}</td>
+                  <td className="num" style={{ ...numTd(totals.with_production, 'var(--t1)', true), ...totalsSticky }}>{fmtCell(totals.with_production)}</td>
+                  <td className="num" style={{ ...numTd(totals.unallocated_retail, 'var(--yellow)', true), ...totalsSticky }}>{fmtCell(totals.unallocated_retail)}</td>
+                  <td className="num" style={{ ...numTd(totals.unallocated_ecom, 'var(--yellow)', true), ...totalsSticky }}>{fmtCell(totals.unallocated_ecom)}</td>
+                  <td className="num" style={{ ...numTd(totals.unallocated_retail + totals.unallocated_ecom, 'var(--yellow)', true), ...totalsSticky }}>{fmtCell(totals.unallocated_retail + totals.unallocated_ecom)}</td>
+                  <td className="num" style={{ ...numTd(grandAlloc, 'var(--ok-fg)', true), ...totalsSticky }}>{fmtCell(grandAlloc)}</td>
                   {channels.map(ch => (
-                    <td key={ch} className="num" style={numTd(totals.channels[ch], 'var(--info-fg)', true)}>{fmtCell(totals.channels[ch])}</td>
+                    <td key={ch} className="num" style={{ ...numTd(totals.channels[ch], 'var(--info-fg)', true), ...totalsSticky }}>{fmtCell(totals.channels[ch])}</td>
                   ))}
                 </tr>
                 {products.map(p => {
