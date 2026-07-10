@@ -2338,6 +2338,52 @@ async function syncInventorySnapshot(env) {
   return { date: today, variants: rows.length, mapped: rows.filter(r => r.product_code).length, flips: (rc.ok ? rc.data : null) };
 }
 
+// The ShopifyQL for daily online-store sessions. Kept as a one-liner so it's trivial to adjust if
+// the live probe shows a different keyword works (day vs date, SINCE window form, metric name).
+const SHOPIFYQL_SESSIONS = (lookbackDays) =>
+  `FROM sessions SHOW sessions GROUP BY day SINCE -${lookbackDays}d UNTIL today ORDER BY day`;
+// Run one ShopifyQL query → { columns:[{name,dataType}], rows:[...], parseErrors }. Reuses the
+// Shopify client-credentials token + 401-remint pattern. NEEDS the read_reports scope on the app.
+async function shopifyQl(env, ql) {
+  if (!env.SHOPIFY_STORE_DOMAIN || !env.SHOPIFY_CLIENT_ID || !env.SHOPIFY_CLIENT_SECRET) throw new Error('Shopify not configured');
+  const ver = env.SHOPIFY_API_VERSION || SHOPIFY_API_VERSION_DEFAULT;
+  const gql = `query($q:String!){ shopifyqlQuery(query:$q){ __typename ... on ShopifyqlResponse { tableData { columns { name dataType } rows } parseErrors } } }`;
+  let token = await getShopifyToken(env);
+  if (!token) throw new Error('Shopify auth failed (client credentials)');
+  const run = (tok) => fetch(`https://${env.SHOPIFY_STORE_DOMAIN}/admin/api/${ver}/graphql.json`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': tok },
+    body: JSON.stringify({ query: gql, variables: { q: ql } }),
+  });
+  let res = await run(token).catch(() => null);
+  if (res && res.status === 401) { token = await getShopifyToken(env, true); if (!token) throw new Error('Shopify auth lost'); res = await run(token).catch(() => null); }
+  if (!res || !res.ok) throw new Error(`ShopifyQL HTTP ${res ? res.status : 'network'}`);
+  const data = await res.json().catch(() => null);
+  // A missing read_reports scope surfaces as a top-level GraphQL error, not parseErrors.
+  if (data?.errors?.length) throw new Error('ShopifyQL error (likely missing read_reports scope): ' + (data.errors[0].message || 'error'));
+  const q = data?.data?.shopifyqlQuery || {};
+  return { columns: q.tableData?.columns || [], rows: q.tableData?.rows || [], parseErrors: q.parseErrors || [] };
+}
+// Pull daily Shopify online-store sessions → sales.web_sessions (the same-source CR denominator).
+// Best-effort; robust to array-of-arrays OR array-of-objects rows + column naming.
+async function syncWebSessions(env, lookbackDays = 60) {
+  if (!env.SHOPIFY_STORE_DOMAIN || !env.SHOPIFY_CLIENT_ID || !env.SHOPIFY_CLIENT_SECRET) return { skipped: 'Shopify not configured' };
+  const out = await shopifyQl(env, SHOPIFYQL_SESSIONS(lookbackDays));
+  if (out.parseErrors.length) throw new Error('ShopifyQL parse error: ' + JSON.stringify(out.parseErrors).slice(0, 200));
+  const cols = out.columns;
+  const dateIdx = cols.findIndex(c => (c.dataType || '').toLowerCase().includes('date') || /^(day|date|the_date)$/i.test(c.name || ''));
+  const sessIdx = cols.findIndex(c => /session/i.test(c.name || ''));
+  if (dateIdx < 0 || sessIdx < 0) throw new Error('ShopifyQL sessions: unexpected columns ' + JSON.stringify(cols.map(c => c.name)));
+  const cell = (row, idx, name) => Array.isArray(row) ? row[idx] : (row?.[name] ?? row?.[cols[idx]?.name]);
+  const rows = [];
+  for (const r of out.rows) {
+    const d = String(cell(r, dateIdx, cols[dateIdx]?.name) || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
+    rows.push({ the_date: d, sessions: Math.round(num(cell(r, sessIdx, cols[sessIdx]?.name))), source: 'shopify', updated_at: new Date().toISOString() });
+  }
+  if (rows.length) await sbInsertChunked('/rest/v1/web_sessions?on_conflict=the_date', rows, 'return=minimal,resolution=merge-duplicates');
+  return { days: rows.length, columns: cols.map(c => c.name), sample: rows.slice(0, 3) };
+}
+
 export default {
   async scheduled(event, env, ctx) {
     SUPABASE_SERVICE_KEY = env.SUPABASE_SERVICE_KEY || '';
@@ -2377,6 +2423,9 @@ export default {
     // Stock in/out stream (layer c): snapshot native Shopify inventory + diff → stock change_events.
     // Best-effort; never disturbs the rest of the cron.
     try { await syncInventorySnapshot(env); } catch (e) { console.error('odoops cron (inventory snapshot) failed:', e?.message || e); }
+    // Shopify online-store sessions (same-source CR denominator) via ShopifyQL → web_sessions.
+    // Trailing 60-day refresh; no-op/throws-caught until the read_reports scope is added. Best-effort.
+    try { await syncWebSessions(env); } catch (e) { console.error('odoops cron (web sessions) failed:', e?.message || e); }
     // L142: full-staging unmapped-SKU sweep — keeps the /mapping queue complete for SKUs that
     // fell outside per-window resolveSkus. One set-based RPC; best-effort.
     try { await rpcSales('reconcile_unmapped_sku', {}); } catch (e) { console.error('odoops cron (reconcile unmapped) failed:', e?.message || e); }
@@ -2659,10 +2708,12 @@ export default {
             // Recent 3 IST days are provisional — late orders, cancellations, and GA4 session revisions still settle.
             const provFrom = istDay(2);
             const rows = (r.data || []).map(x => ({ ...x, provisional: x.the_date >= provFrom }));
-            const tot = rows.reduce((a, x) => { a.sessions += num(x.sessions); a.net += num(x.net_orders); a.gross += num(x.net_gross); return a; }, { sessions: 0, net: 0, gross: 0 });
+            const tot = rows.reduce((a, x) => { a.sessions += num(x.sessions); a.shopify += num(x.shopify_sessions); a.net += num(x.net_orders); a.gross += num(x.net_gross); return a; }, { sessions: 0, shopify: 0, net: 0, gross: 0 });
             return ok({ rows, from, to, provisional_from: provFrom,
-              summary: { sessions: tot.sessions, net_orders: tot.net, net_gross: tot.gross,
-                cr: tot.sessions > 0 ? Math.round(tot.net / tot.sessions * 10000) / 100 : null } });
+              summary: { sessions: tot.sessions, shopify_sessions: tot.shopify, net_orders: tot.net, net_gross: tot.gross,
+                cr: tot.sessions > 0 ? Math.round(tot.net / tot.sessions * 10000) / 100 : null,
+                cr_shopify: tot.shopify > 0 ? Math.round(tot.net / tot.shopify * 10000) / 100 : null,
+                calibration: (tot.shopify > 0 && tot.sessions > 0) ? Math.round(tot.shopify / tot.sessions * 100) / 100 : null } });
           }
           case 'getChangeEvents': {   // S186 — website-changes stream (annotations on the conversion timeline)
             if (!canView(P)) return err('No permission', 403);
@@ -2746,6 +2797,17 @@ export default {
             if (!canSuperAdmin(P)) return err('No permission', 403);
             try { const res = await syncInventorySnapshot(env); return ok(res); }
             catch (e) { return err('Inventory snapshot failed: ' + String(e?.message || e), 502); }
+          }
+          case 'shopifyqlProbe': {   // diagnostic: run any ShopifyQL string → confirm the sessions query + response shape (super-admin)
+            if (!canSuperAdmin(P)) return err('No permission', 403);
+            const ql = qp('ql') || SHOPIFYQL_SESSIONS(14);
+            try { const out = await shopifyQl(env, ql); return ok({ ql, columns: out.columns, parseErrors: out.parseErrors, row_count: out.rows.length, sample: out.rows.slice(0, 8) }); }
+            catch (e) { return err('ShopifyQL probe: ' + String(e?.message || e), 502); }
+          }
+          case 'syncWebSessionsNow': {   // manual Shopify-sessions pull → web_sessions (super-admin)
+            if (!canSuperAdmin(P)) return err('No permission', 403);
+            try { const res = await syncWebSessions(env, Math.min(Math.max(Number(qp('days')) || 60, 1), 365)); return ok(res); }
+            catch (e) { return err('Web-sessions sync failed: ' + String(e?.message || e), 502); }
           }
           case 'syncChangeEventsNow': {   // manual pull + diagnostic (super-admin)
             if (!canSuperAdmin(P)) return err('No permission', 403);
