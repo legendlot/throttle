@@ -263,6 +263,50 @@ function NetCr({ data }) {
   );
 }
 
+// Shopify-sourced daily funnel — Sessions → Net orders → CR. Shopify's API doesn't expose the
+// ATC/Checkout middle steps (only `sessions` + `conversion_rate`), so those live on the GA4 tab.
+function ShopifyDailyFunnel({ rows }) {
+  const list = rows || [];
+  const hasShop = list.some(r => r.shopify_sessions != null);
+  const fmtCr = (v) => (v == null ? '—' : Number(v).toFixed(2) + '%');
+  const prev = {};
+  { const chron = [...list].sort((a, b) => (a.the_date < b.the_date ? -1 : 1)); chron.forEach((r, i) => { if (i > 0) prev[r.the_date] = chron[i - 1]; }); }
+  return (
+    <>
+      <div className="so-sub" style={{ fontSize: 11, padding: '4px 18px 0', color: 'var(--t3)', maxWidth: 760 }}>
+        Shopify-sourced · same source as your orders. Sessions = Shopify online-store sessions; Net orders excl. cancelled / ₹0 / MO_Repair / MO_Replacement; CR = Net orders ÷ Shopify sessions (your hand-calc). <b style={{ color: 'var(--t2)' }}>Add-to-cart &amp; Checkout aren't exposed by Shopify's API — use the GA4 tab for those.</b>
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <table className="so-table" style={{ marginTop: 8 }}>
+          <thead><tr>
+            <th style={{ textAlign: 'left' }}>Date</th>
+            <th style={{ textAlign: 'right' }}>Sessions</th>
+            <th style={{ textAlign: 'right' }}>Net orders</th>
+            <th style={{ textAlign: 'right' }}>CR · Shopify</th>
+            <th style={{ textAlign: 'right' }}>CR · GA4</th>
+          </tr></thead>
+          <tbody>
+            {!hasShop && <tr><td colSpan={5} style={{ color: 'var(--t3)', padding: 14 }}>Shopify sessions not synced for this range yet.</td></tr>}
+            {hasShop && list.map(r => {
+              const p = prev[r.the_date];
+              const dod = p && r.cr_shopify != null && p.cr_shopify != null ? Number(r.cr_shopify) - Number(p.cr_shopify) : null;
+              return (
+                <tr key={r.the_date}>
+                  <td style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>{r.the_date}{r.provisional && <span style={{ marginLeft: 6, fontSize: 9.5, color: '#E8A33D', border: '1px solid #E8A33D55', borderRadius: 4, padding: '0 4px' }}>prov</span>}</td>
+                  <td className="so-num">{numfmt(r.shopify_sessions)}</td>
+                  <td className="so-num">{numfmt(r.net_orders)}</td>
+                  <td className="so-num" style={{ color: 'var(--green)' }}>{fmtCr(r.cr_shopify)}{dod != null && Math.abs(dod) >= 0.005 && <span style={{ marginLeft: 5, fontSize: 10.5, color: dod > 0 ? 'var(--green)' : '#EC6A5E' }}>{dod > 0 ? '▲' : '▼'}{Math.abs(dod).toFixed(2)}</span>}</td>
+                  <td className="so-num" style={{ color: 'var(--t3)' }}>{fmtCr(r.cr)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
 export default function FunnelPage() {
   const { session } = useAuth();
   const mtd = rangePresets().find(p => p.key === 'mtd');
@@ -274,6 +318,7 @@ export default function FunnelPage() {
   const [changes, setChanges] = useState([]);  // change events (website + stock) — timeline annotations
   const [drivers, setDrivers] = useState(null);  // { days, library, settings } — attribution (layer d)
   const [view, setView] = useState('overview');  // overview | history
+  const [histSrc, setHistSrc] = useState('ga4');  // daily-funnel source: ga4 (full funnel) | shopify (sessions→net orders→CR)
   const [netcr, setNetcr] = useState(null);   // hybrid net CR (Shopify net orders / GA4 website sessions)
   const [err, setErr] = useState('');
 
@@ -363,7 +408,11 @@ export default function FunnelPage() {
               })()}
             </div>
             <div className="so-card" style={{ padding: 0, overflow: 'hidden' }}>
-              <div className="so-kpi-lbl" style={{ padding: '16px 18px 0' }}>Daily funnel <span className="so-sub" style={{ fontSize: 10, textTransform: 'none', letterSpacing: 0 }}>· <span style={{ color: 'var(--green)' }}>▲</span>/<span style={{ color: '#EC6A5E' }}>▼</span> vs previous day</span></div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, padding: '16px 18px 0' }}>
+                <div className="so-kpi-lbl" style={{ margin: 0 }}>Daily funnel <span className="so-sub" style={{ fontSize: 10, textTransform: 'none', letterSpacing: 0 }}>· <span style={{ color: 'var(--green)' }}>▲</span>/<span style={{ color: '#EC6A5E' }}>▼</span> vs previous day</span></div>
+                <SegmentedToggle options={[['ga4', 'GA4'], ['shopify', 'Shopify']]} value={histSrc} onChange={setHistSrc} size="sm" />
+              </div>
+              {histSrc === 'ga4' ? (
               <div style={{ overflowX: 'auto' }}>
                 <table className="so-table" style={{ marginTop: 8 }}>
                   <thead><tr>
@@ -394,6 +443,7 @@ export default function FunnelPage() {
                   </tbody>
                 </table>
               </div>
+              ) : <ShopifyDailyFunnel rows={netcr?.rows} />}
             </div>
             <DriversPanel drivers={drivers} />
             {changes.length > 0 && (
