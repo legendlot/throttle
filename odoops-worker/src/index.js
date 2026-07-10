@@ -2547,6 +2547,14 @@ export default {
             if (!r.ok) return err('Angles read failed: ' + JSON.stringify(r.data), 502);
             return ok({ angles: r.data || [] });
           }
+          case 'getDynoSpend': {   // Dyno — actual spend split experiment/scale × today/lifetime (GET)
+            if (!canView(P)) return err('No permission', 403);
+            const r = await rpcSales('f_dyno_spend_summary', {});
+            if (!r.ok) return err('Spend summary failed: ' + JSON.stringify(r.data), 502);
+            const s = Array.isArray(r.data) ? (r.data[0] || {}) : (r.data || {});
+            return ok({ experiment: { today: num(s.exp_today), life: num(s.exp_life) },
+              scale: { today: num(s.scale_today), life: num(s.scale_life) } });
+          }
           case 'getDecisions': {   // Dyno — decisions for one experiment, on-demand (GET)
             if (!canView(P)) return err('No permission', 403);
             if (!qp('plan_id')) return err('plan_id required', 422);
@@ -2559,7 +2567,7 @@ export default {
             const recentDays = Math.min(Math.max(Number(qp('recent_days')) || 3, 1), 30);
             const r = await rpcSales('f_dyno_board', {
               p_filter: qp('filter') || 'active', p_product: qp('product') || null,
-              p_angle: qp('angle') || null, p_recent_days: recentDays });
+              p_angle: qp('angle') || null, p_recent_days: recentDays, p_kind: qp('kind') || null });
             if (!r.ok) return err('Dyno board failed: ' + JSON.stringify(r.data), 502);
             const rows = r.data || [];
             // Board thumbnails live in the private lab-creatives bucket → bulk-sign all paths in ONE
@@ -3219,6 +3227,15 @@ export default {
             const r = await sbSales(`/rest/v1/ads_plan?id=eq.${d.plan_id}`, { method: 'PATCH', prefer: 'return=representation', body: JSON.stringify(patch) });
             if (!r.ok || !Array.isArray(r.data) || !r.data[0]) return err('Plan not found or update failed: ' + JSON.stringify(r.data), 404);
             await ledgerWrite({ actor_user_id: userId, action: 'adsSetPlanVerdict', plan_id: d.plan_id, daily_delta_inr: 0, request: d, status: 'ok' });
+            return ok(r.data[0]);
+          }
+          case 'setPlanKind': {   // Dyno — move a plan between the experiment and scaling buckets (writer)
+            if (!canAdsWrite(P)) return err('No permission', 403);
+            if (!d.plan_id) return err('plan_id required');
+            if (!['experiment', 'scale'].includes(d.kind)) return err("kind must be 'experiment' or 'scale'", 422);
+            const r = await sbSales(`/rest/v1/ads_plan?id=eq.${d.plan_id}`, { method: 'PATCH', prefer: 'return=representation', body: JSON.stringify({ kind: d.kind, updated_at: nowISO() }) });
+            if (!r.ok || !Array.isArray(r.data) || !r.data[0]) return err('Plan not found or update failed: ' + JSON.stringify(r.data), 404);
+            await ledgerWrite({ actor_user_id: userId, action: 'setPlanKind', plan_id: d.plan_id, daily_delta_inr: 0, request: d, status: 'ok' });
             return ok(r.data[0]);
           }
           case 'labAddDecision': {   // Dyno — a decision-tree edge (writer; no spend impact)
