@@ -4639,13 +4639,14 @@ async function getMessagingThreads(params, auth, env) {
   if (since) q += `&last_message_at=gte.${encodeURIComponent(since)}`;
   const until = params.get('until');               // ISO — last activity ≤ (S164 date filter)
   if (until) q += `&last_message_at=lte.${encodeURIComponent(until)}`;
-  // Search box (S178, Pruthvi) — match by phone number (partial; +91 optional) or
-  // IG/email handle. Server-side so it finds threads beyond the loaded window, not
-  // just the visible ~hour. Strip PostgREST or()-breaking chars from the input.
+  // Search box (S178, Pruthvi) — match by phone number (partial; +91 optional),
+  // display name/IG handle (customer_handle), or the channel handle in external_user_id
+  // (the EMAIL ADDRESS on email threads; IG/FB user id on Meta threads). Server-side so
+  // it finds threads beyond the loaded window. Strip PostgREST or()-breaking chars.
   const search = (params.get('q') || '').replace(/[(),*]/g, '').trim().slice(0, 50);
   if (search) {
     const s = encodeURIComponent(search);
-    q += `&or=(customer_phone.ilike.*${s}*,customer_handle.ilike.*${s}*)`;
+    q += `&or=(customer_phone.ilike.*${s}*,customer_handle.ilike.*${s}*,external_user_id.ilike.*${s}*)`;
   }
   const tagFilter = params.get('tag');             // tag facet (S163)
   if (tagFilter) {
