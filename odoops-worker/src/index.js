@@ -3208,14 +3208,40 @@ export default {
               return ok({ adset_id: out.entity_id, daily_budget_inr: budgetInr, status: 'PAUSED' });
             } catch (e) { return err(String(e?.message || e), 422); }
           }
-          case 'metaCreateAd': {   // upload image → adcreative → ad (all PAUSED)
+          case 'metaCreateAd': {   // single-image OR carousel: upload image(s) → adcreative → ad (all PAUSED)
             if (!canAdsWrite(P)) return err('No permission', 403);
             if (!d.plan_id || !d.adset_id) return err('plan_id and adset_id required');
             const ad = d.ad || {};
             if (!ad.page_id) return err('ad.page_id required', 422);
             if (!ad.link) return err('ad.link required', 422);
-            if (!ad.image_base64 && !ad.image_hash) return err('ad.image_base64 or ad.image_hash required', 422);
-            const redacted = { ...d, ad: { ...ad, image_base64: ad.image_base64 ? `[${ad.image_base64.length} chars]` : undefined } };
+            // Carousel = presence of ad.cards[] (2–10). Absent → single-image path (unchanged).
+            const isCarousel = Array.isArray(ad.cards);
+            if (isCarousel) {
+              if (ad.cards.length < 2 || ad.cards.length > 10) return err('carousel needs 2–10 cards', 422);
+              for (let i = 0; i < ad.cards.length; i++) {
+                const c = ad.cards[i] || {};
+                if (!c.image_base64 && !c.image_hash) return err(`card ${i + 1}: image_base64 or image_hash required`, 422);
+              }
+            } else if (!ad.image_base64 && !ad.image_hash) {
+              return err('ad.image_base64 or ad.image_hash required', 422);
+            }
+            // Redact raw base64 out of the ledger request (per-card for carousel).
+            const redactAd = isCarousel
+              ? { ...ad, cards: ad.cards.map(c => ({ ...c, image_base64: c.image_base64 ? `[${c.image_base64.length} chars]` : undefined })) }
+              : { ...ad, image_base64: ad.image_base64 ? `[${ad.image_base64.length} chars]` : undefined };
+            const redacted = { ...d, ad: redactAd };
+            // Dyno (0011_dyno_v1) reads these off the ads_managed row — persist at launch so the
+            // board/matrix tag the variant. format is derived; the rest ride in on the ad payload.
+            const dynoMeta = {
+              format: isCarousel ? 'carousel' : (ad.format || 'static-image'),
+              angle: ad.angle || null,
+              audience_segment: ad.audience_segment || null,
+              psychology_pillar: ad.psychology_pillar || null,
+              headline: ad.headline || null,
+              primary_text: ad.primary_text || null,
+              utm_content: ad.utm_content || null,
+              parent_meta_id: ad.parent_meta_id || null,   // creative lineage (distinct from parent_id = Meta hierarchy)
+            };
             try {
               const out = await adsGuardedWrite({ userId, action: 'metaCreateAd', planId: d.plan_id, request: redacted, fn: async () => {
                 if (ad.name) {
@@ -3224,24 +3250,53 @@ export default {
                 }
                 const plan = await adsLoadPlan(d.plan_id, 'approved');
                 const acct = await metaAdAccount(plan.ad_account_id);
-                let imageHash = ad.image_hash;
-                if (!imageHash) {
-                  const up = await metaPost(env, `act_${acct}/adimages`, { bytes: ad.image_base64 });
-                  imageHash = Object.values(up.images || {})[0]?.hash;
-                  if (!imageHash) throw new Error('adimages upload returned no hash: ' + JSON.stringify(up).slice(0, 160));
+                // Upload one image → hash (same helper the single + carousel paths share).
+                const uploadHash = async (b64) => {
+                  const up = await metaPost(env, `act_${acct}/adimages`, { bytes: b64 });
+                  const h = Object.values(up.images || {})[0]?.hash;
+                  if (!h) throw new Error('adimages upload returned no hash: ' + JSON.stringify(up).slice(0, 160));
+                  return h;
+                };
+                let cre, imageHash = null;
+                if (isCarousel) {
+                  // Resolve each card's hash (sequential — each upload is a subrequest), then build
+                  // child_attachments. A mid-loop failure creates no ad; a retry re-uploads (Meta
+                  // adimages is content-addressed → same bytes = same hash, no dupes).
+                  const child_attachments = [];
+                  for (const c of ad.cards) {
+                    const hash = c.image_hash || await uploadHash(c.image_base64);
+                    child_attachments.push({
+                      link: c.link || ad.link,
+                      image_hash: hash,
+                      ...(c.headline ? { name: c.headline } : {}),
+                      ...(c.description ? { description: c.description } : {}),
+                      call_to_action: { type: ad.cta || 'SHOP_NOW', value: { link: c.link || ad.link } },
+                    });
+                  }
+                  cre = await metaPost(env, `act_${acct}/adcreatives`, {
+                    name: ad.name ? `${ad.name} — creative` : 'LOT creative',
+                    object_story_spec: { page_id: ad.page_id, link_data: {
+                      link: ad.link, message: ad.primary_text || '',
+                      multi_share_optimized: ad.multi_share_optimized ?? false,   // keep our card order (narrative)
+                      multi_share_end_card:  ad.multi_share_end_card  ?? false,   // frame N is our CTA — no Meta end card
+                      child_attachments } },
+                    url_tags: ad.url_tags || undefined,
+                  });
+                } else {
+                  imageHash = ad.image_hash || await uploadHash(ad.image_base64);
+                  cre = await metaPost(env, `act_${acct}/adcreatives`, {
+                    name: ad.name ? `${ad.name} — creative` : 'LOT creative',
+                    object_story_spec: { page_id: ad.page_id, link_data: {
+                      image_hash: imageHash, link: ad.link, message: ad.primary_text || '', name: ad.headline || '',
+                      call_to_action: { type: ad.cta || 'SHOP_NOW', value: { link: ad.link } } } },
+                    url_tags: ad.url_tags || undefined,   // UTM string Meta appends to the click (+ resolves {{macros}})
+                  });
                 }
-                const cre = await metaPost(env, `act_${acct}/adcreatives`, {
-                  name: ad.name ? `${ad.name} — creative` : 'LOT creative',
-                  object_story_spec: { page_id: ad.page_id, link_data: {
-                    image_hash: imageHash, link: ad.link, message: ad.primary_text || '', name: ad.headline || '',
-                    call_to_action: { type: ad.cta || 'SHOP_NOW', value: { link: ad.link } } } },
-                  url_tags: ad.url_tags || undefined,   // UTM string Meta appends to the click (+ resolves {{macros}})
-                });
                 const res = await metaPost(env, `act_${acct}/ads`, { name: ad.name || 'LOT ad', adset_id: d.adset_id, creative: { creative_id: cre.id }, status: 'PAUSED' });
-                await managedUpsert({ entity_type: 'ad', meta_id: res.id, parent_id: d.adset_id, plan_id: d.plan_id, channel_id: plan.channel_id, ad_account_id: acct, name: ad.name || null, daily_budget_inr: 0, status: 'paused' });
-                return { entity_type: 'ad', entity_id: res.id, meta_response: { ad_id: res.id, creative_id: cre.id, image_hash: imageHash } };
+                await managedUpsert({ entity_type: 'ad', meta_id: res.id, parent_id: d.adset_id, plan_id: d.plan_id, channel_id: plan.channel_id, ad_account_id: acct, name: ad.name || null, daily_budget_inr: 0, status: 'paused', ...dynoMeta });
+                return { entity_type: 'ad', entity_id: res.id, meta_response: { ad_id: res.id, creative_id: cre.id, image_hash: imageHash, cards: isCarousel ? ad.cards.length : null } };
               }});
-              return ok({ ad_id: out.entity_id, creative_id: out.meta_response.creative_id, image_hash: out.meta_response.image_hash });
+              return ok({ ad_id: out.entity_id, creative_id: out.meta_response.creative_id, image_hash: out.meta_response.image_hash, cards: out.meta_response.cards });
             } catch (e) { return err(String(e?.message || e), 422); }
           }
           case 'metaSetStatus': {   // activate (ceiling-checked for adsets) or pause (free)
