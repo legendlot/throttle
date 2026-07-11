@@ -67,7 +67,6 @@ function Funnel({ steps }) {
 // charts). Website-change events overlay as reference lines; the tooltip shows the exact CR%, the
 // day's funnel counts, and any change that shipped that day.
 const C_GRID = '#33343D', C_T2 = '#A4A6AE', C_T3 = '#6E6F79', C_SURFACE2 = '#26272E', C_GREEN = '#34D27B', C_ACCENT = '#F2CD1A', C_STOCK = '#2DA8F0', C_RED = '#EC6A5E';
-const streamColor = s => (s === 'stock' ? C_STOCK : C_ACCENT);
 const mmdd = d => (d ? String(d).slice(5) : '');
 function DailyTrend({ rows, changes = [] }) {
   if (!rows || rows.length < 2) return <div className="so-sub" style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--t3)', padding: '20px 0' }}>Not enough days in this range yet — widen it.</div>;
@@ -90,11 +89,11 @@ function DailyTrend({ rows, changes = [] }) {
         {row('Add to cart', d.atc.toLocaleString('en-IN'))}
         {row('Checkout', d.checkout.toLocaleString('en-IN'))}
         {row('Purchases', d.purchases.toLocaleString('en-IN'))}
-        {chg.map(c => (
-          <div key={c.id} style={{ display: 'flex', gap: 6, marginTop: 5, paddingTop: 5, borderTop: `1px solid ${C_GRID}`, color: streamColor(c.stream), maxWidth: 230 }}>
-            <span>{c.stream === 'stock' ? '■' : '▸'}</span><span style={{ color: '#F2F3F0', whiteSpace: 'normal' }}>{c.title}{c.result && c.result !== 'pending' ? ` · ${c.result}` : ''}</span>
+        {chg.map(c => { const k = catKey(c.stream, c.status); return (
+          <div key={c.id} style={{ display: 'flex', gap: 6, marginTop: 5, paddingTop: 5, borderTop: `1px solid ${C_GRID}`, color: CAT[k].color, maxWidth: 230 }}>
+            <span>{CAT[k].arrow}</span><span style={{ color: '#F2F3F0', whiteSpace: 'normal' }}>{c.title}{c.result && c.result !== 'pending' ? ` · ${c.result}` : ''}</span>
           </div>
-        ))}
+        ); })}
       </div>
     );
   };
@@ -109,8 +108,12 @@ function DailyTrend({ rows, changes = [] }) {
         <Tooltip content={<TT />} cursor={{ stroke: '#FFFFFF', strokeOpacity: 0.3, strokeWidth: 1 }} />
         <ReferenceLine y={avg} stroke={C_T3} strokeDasharray="5 5" label={{ value: `avg ${avg.toFixed(2)}%`, position: 'right', fill: C_T3, fontSize: 10, fontFamily: 'var(--mono)' }} />
         {markedDates.map(dt => {
-          const hasWeb = (byDate[dt] || []).some(c => (c.stream || 'website') !== 'stock');
-          return <ReferenceLine key={dt} x={dt} stroke={hasWeb ? C_ACCENT : C_STOCK} strokeDasharray="3 3" strokeOpacity={0.5} />;
+          // A date can carry mixed changes; a single marker line takes one colour by priority
+          // (out-of-stock dominates — the likeliest CR mover — then website, then restock).
+          // The tooltip lists every change in its own category colour.
+          const cats = new Set((byDate[dt] || []).map(c => catKey(c.stream, c.status)));
+          const k = cats.has('oos') ? 'oos' : cats.has('web') ? 'web' : 'restock';
+          return <ReferenceLine key={dt} x={dt} stroke={CAT[k].color} strokeDasharray="3 3" strokeOpacity={0.55} />;
         })}
         <Area type="monotone" dataKey="cr" stroke={C_GREEN} strokeWidth={2} fill="url(#cr-grad)" dot={false} activeDot={{ r: 4, fill: C_GREEN }} />
       </AreaChart>
@@ -506,7 +509,7 @@ export default function FunnelPage() {
                 </div>
               </div>
             )}
-            <div className="so-sub" style={{ fontSize: 10.5, color: 'var(--t3)' }}>Frozen daily snapshot of the GA4 website funnel — recent days refresh as GA4 finalises, older days lock. Markers: <span style={{ color: 'var(--accent)' }}>▸ website changes</span> (from the Website repo change-log) · <span style={{ color: '#2DA8F0' }}>■ stock in/out</span> (native Shopify inventory, forward-only). Likely drivers are heuristic time-proximity — correlation, not proof.</div>
+            <div className="so-sub" style={{ fontSize: 10.5, color: 'var(--t3)' }}>Frozen daily snapshot of the GA4 website funnel — recent days refresh as GA4 finalises, older days lock. Markers: <span style={{ color: '#EC6A5E' }}>▼ out of stock</span> · <span style={{ color: 'var(--green)' }}>▲ restocked</span> (native Shopify inventory, forward-only) · <span style={{ color: 'var(--accent)' }}>◆ website changes</span> (Website repo change-log). A marker line takes the priority colour (out-of-stock first); hover for the full per-change list. Likely drivers are heuristic time-proximity — correlation, not proof.</div>
           </>
         )
       ) : (
