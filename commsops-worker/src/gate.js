@@ -41,8 +41,9 @@ function testModeAllows(to, allow) {
   });
 }
 
-// runGate(env, {profileId, channel, purpose, to}) → {pass, reason}
-async function runGate(env, { profileId, channel, purpose, to }) {
+// runGate(env, {profileId, channel, purpose, to, wa?}) → {pass, reason}
+// wa (WhatsApp only): {mode:'template'|'text', window_open:boolean, hasTemplate:boolean}
+async function runGate(env, { profileId, channel, purpose, to, wa }) {
   const settings = await getSettings(env);
 
   // 0. TEST MODE — global send lock, ahead of everything. Default ON (fail-safe).
@@ -83,6 +84,15 @@ async function runGate(env, { profileId, channel, purpose, to }) {
   // 5. channel rule
   if (channel === 'email' && (!to || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)))
     return { pass: false, reason: 'invalid_address' };
+  if (channel === 'whatsapp') {
+    // recipient must look like an E.164 (8–15 digits after stripping '+'/spaces)
+    const digits = String(to || '').replace(/[^\d]/g, '');
+    if (digits.length < 8 || digits.length > 15) return { pass: false, reason: 'invalid_address' };
+    // free-form text is only permitted inside the 24h customer-service window;
+    // a template send (hasTemplate) is valid any time. Belt-and-braces with the adapter.
+    if (wa && wa.mode === 'text' && wa.window_open !== true)
+      return { pass: false, reason: 'window_closed' };
+  }
 
   // 6. warm-up send budget (M9) — marketing only; transactional/utility bypass. Consumed
   // LAST so a unit is never burned on a send that another check would skip (quiet hours,

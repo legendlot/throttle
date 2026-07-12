@@ -2,12 +2,24 @@
 // Idempotent via dedup_key. On gate-fail writes a skipped/suppressed messages row
 // (never a silent drop). Exposed to internal callers; Pitstop re-points here at WA cutover.
 const A = require('./auth.js');
-const { renderEmail } = require('./render.js');
+const { renderEmail, renderWhatsapp } = require('./render.js');
 const { tagLinks } = require('./tracking.js');
 const { runGate } = require('./gate.js');
 const emailAdapter = require('./adapters/email.js');
+const whatsappAdapter = require('./adapters/whatsapp.js');
 
-const ADAPTERS = { email: emailAdapter };
+const ADAPTERS = { email: emailAdapter, whatsapp: whatsappAdapter };
+
+// Is the WA customer-service window open for this recipient? (last inbound < 24h ago)
+async function waWindowOpen(env, to) {
+  const id = whatsappAdapter.toWaId(to);
+  if (!id) return false;
+  const r = await A.sbComms(
+    `/rest/v1/wa_windows?identifier_value=eq.${A.enc(id)}&select=last_inbound_at&limit=1`, env);
+  const row = r.ok ? r.data?.[0] : null;
+  if (!row?.last_inbound_at) return false;
+  return (Date.now() - new Date(row.last_inbound_at).getTime()) < 24 * 3600 * 1000;
+}
 const nowIso = () => new Date().toISOString();
 const rand = () => (crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '') : `${Date.now()}${Math.round(Math.random() * 1e9)}`);
 
@@ -84,38 +96,54 @@ async function send(env, opts) {
   const profile = await getProfile(env, opts.profileId);
   const to = opts.to || null;
 
-  // render
+  // render — channel-branched. Both share the variable engine + unresolved-token discipline.
   let rendered;
+  let waMeta = null;   // {mode, window_open, hasTemplate} — WA-only gate inputs
   try {
-    const sys = {};
-    if (purpose === 'marketing') {
-      const u = await unsubscribeUrl(env, opts.profileId, channel);
-      if (u) sys.unsubscribe_url = u;
-    }
-    const body = renderEmail(template, {
-      profile, event: opts.eventContext, constants: opts.constants,
-      recipient: opts.recipient, system: sys,
-    });
-    // UTM-tag LOT-owned links on MARKETING sends → GA4 attributes the landing session
-    // → Odo /funnel by-source. Transactional/utility left untouched (keeps attribution clean).
-    if (purpose === 'marketing') {
-      const utm = {
-        utm_source: 'relay', utm_medium: channel,
-        utm_campaign: opts.tracking?.campaign,
-        utm_content: opts.tracking?.content ?? template.name,
+    if (channel === 'whatsapp') {
+      const isTemplate = !!(template.content && template.content.meta_name);
+      const windowOpen = isTemplate ? false : await waWindowOpen(env, to);
+      const body = renderWhatsapp(template, {
+        profile, event: opts.eventContext, constants: opts.constants,
+        recipient: opts.recipient, system: {},
+      });
+      rendered = {
+        ...body, to,
+        phone_number_id: sender.metadata?.phone_number_id || null,
+        window_open: windowOpen,
       };
-      const skip = sys.unsubscribe_url ? [sys.unsubscribe_url] : [];
-      body.html = tagLinks(body.html, { params: utm, skip, mode: 'html' });
-      body.text = tagLinks(body.text, { params: utm, skip, mode: 'text' });
+      waMeta = { mode: body.mode, window_open: windowOpen, hasTemplate: isTemplate };
+    } else {
+      const sys = {};
+      if (purpose === 'marketing') {
+        const u = await unsubscribeUrl(env, opts.profileId, channel);
+        if (u) sys.unsubscribe_url = u;
+      }
+      const body = renderEmail(template, {
+        profile, event: opts.eventContext, constants: opts.constants,
+        recipient: opts.recipient, system: sys,
+      });
+      // UTM-tag LOT-owned links on MARKETING sends → GA4 attributes the landing session
+      // → Odo /funnel by-source. Transactional/utility left untouched (keeps attribution clean).
+      if (purpose === 'marketing') {
+        const utm = {
+          utm_source: 'relay', utm_medium: channel,
+          utm_campaign: opts.tracking?.campaign,
+          utm_content: opts.tracking?.content ?? template.name,
+        };
+        const skip = sys.unsubscribe_url ? [sys.unsubscribe_url] : [];
+        body.html = tagLinks(body.html, { params: utm, skip, mode: 'html' });
+        body.text = tagLinks(body.text, { params: utm, skip, mode: 'text' });
+      }
+      const fromName = sender.metadata?.from_name || 'Legend of Toys';
+      rendered = { ...body, to, from: `${fromName} <${sender.address}>`, unsubscribe_url: sys.unsubscribe_url };
     }
-    const fromName = sender.metadata?.from_name || 'Legend of Toys';
-    rendered = { ...body, to, from: `${fromName} <${sender.address}>`, unsubscribe_url: sys.unsubscribe_url };
   } catch (e) {
     return await finalize(env, opts, { status: 'skipped', reason: e.message }, sender, channel, purpose, template);
   }
 
   // gate
-  const g = await runGate(env, { profileId: opts.profileId, channel, purpose, to });
+  const g = await runGate(env, { profileId: opts.profileId, channel, purpose, to, wa: waMeta });
   if (!g.pass) {
     const st = g.reason === 'suppressed' ? 'suppressed' : 'skipped';
     return await finalize(env, opts, { status: st, reason: g.reason }, sender, channel, purpose, template);

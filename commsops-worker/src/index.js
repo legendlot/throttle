@@ -5,6 +5,8 @@ const { ingest } = require('./ingest.js');
 const { recordConsent } = require('./consent.js');
 const { send } = require('./send.js');
 const { handleResendWebhook, handleUnsubscribe } = require('./webhooks.js');
+const { handleWhatsappWebhook, verifyWhatsappWebhook } = require('./wa-webhooks.js');
+const WATPL = require('./wa-templates.js');
 const CAMP = require('./campaigns.js');
 const J = require('./journeys.js');
 const SHOP = require('./shopify.js');
@@ -348,6 +350,17 @@ async function handlePost(body, auth, env) {
       catch (e) { return err(e?.message || 'shopify_error', 400); }
     }
 
+    case 'waSubmitTemplate': {           // M14 — submit a WA template to Meta for approval
+      if (!A.canTemplate(auth.permissions)) return err('forbidden', 403);
+      const r = await WATPL.waSubmitTemplate(env, body);
+      return r.ok ? ok(r) : err(r.error, 400);
+    }
+    case 'waSyncTemplateStatus': {        // M14 — poll Meta approval status → local mirror
+      if (!A.canTemplate(auth.permissions)) return err('forbidden', 403);
+      const r = await WATPL.waSyncTemplateStatus(env, body);
+      return r.ok ? ok(r) : err(r.error, 400);
+    }
+
     default:
       return err(`unknown_action:${body.action}`, 404);
   }
@@ -456,6 +469,18 @@ export default {
     // only. The source of checkout_started that fires the abandoned-cart journey.
     if (url.pathname === '/pixel' && request.method === 'POST') {
       const r = await SHOPWH.handlePixel(env, request);
+      return r.ok ? ok(r) : err(r.error, r.status || 400);
+    }
+    // WhatsApp Cloud API webhook (M14). GET = Meta subscription verify (echo hub.challenge as
+    // text/plain); POST = statuses + inbound + template/quality updates (HMAC X-Hub-Signature-256).
+    if (url.pathname === '/webhooks/whatsapp' && request.method === 'GET') {
+      const challenge = verifyWhatsappWebhook(env, url);
+      return challenge === null
+        ? err('forbidden', 403)
+        : new Response(challenge, { status: 200, headers: { ...CORS, 'Content-Type': 'text/plain' } });
+    }
+    if (url.pathname === '/webhooks/whatsapp' && request.method === 'POST') {
+      const r = await handleWhatsappWebhook(env, request);
       return r.ok ? ok(r) : err(r.error, r.status || 400);
     }
 
