@@ -4053,7 +4053,7 @@ async function sendMetaAttachment(body, auth, env) {
   const path = `${thread.id}/${crypto.randomUUID()}.${spec.ext}`;
   const up = await fetch(`${env.SUPABASE_URL}/storage/v1/object/cs-inbox-media/${path}`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, 'Content-Type': mime_type, 'x-upsert': 'true' },
+    headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, 'Content-Type': mime_type, 'x-upsert': 'true' },
     body: bytes,
   });
   if (!up.ok) { const t = await up.text().catch(() => ''); return err(`Upload failed: ${t.slice(0, 200)}`, up.status || 500); }
@@ -4548,7 +4548,7 @@ async function sendEmailReply(body, auth, env) {
       const path = `${thread.id}/${crypto.randomUUID()}.${a.ext}`;
       const up = await fetch(`${env.SUPABASE_URL}/storage/v1/object/cs-inbox-media/${path}`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, 'Content-Type': a.mime, 'x-upsert': 'true' },
+        headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, 'Content-Type': a.mime, 'x-upsert': 'true' },
         body: a.bytes,
       });
       if (up.ok) url = `${env.SUPABASE_URL}/storage/v1/object/public/cs-inbox-media/${path}`;
