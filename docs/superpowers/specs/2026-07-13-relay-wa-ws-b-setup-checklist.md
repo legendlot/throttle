@@ -14,12 +14,28 @@
 > - System user **"relay wa bot"** (ID `61591826343110`, **Employee**) created; **LOT Relay app assigned Full control**.
 >   Token permissions chosen = `whatsapp_business_messaging` + `whatsapp_business_management` (NOT manage_events).
 >
+> **Also done this session (evening):**
+> - `WA_VERIFY_TOKEN` set on commsops (random hex).
+> - **Webhook CONFIGURED + VERIFIED** in Meta (Configuration → Webhooks): callback
+>   `https://commsops.afshaan.workers.dev/webhooks/whatsapp`, verify token matched → saved (green / "Remove
+>   subscription" present). **Subscribed fields:** `messages` ✓, `message_template_status_update` ✓
+>   (+ `message_template_quality_update` toggled on, harmless; `phone_number_quality_update` = optional for
+>   number-quality alerts).
+>
+> **⚠️ KEY FINDING — app must be PUBLISHED for real inbound.** The Configuration page banner: *"Apps will
+> only receive TEST webhooks (dashboard 'Test' button) while unpublished; no production data delivered until
+> the app is published."* Same gate as Pitstop's IG DMs (S161). So a real customer WhatsApp won't reach our
+> webhook until **LOT Relay is flipped Unpublished→Live**. Business verification is done + Requirements showed
+> "none", so publishing a WhatsApp-only app should be a simple toggle (NOT the messaging/login App Review) —
+> confirm the exact publish gate in the morning. Outbound sending is NOT blocked by publish state; only inbound
+> webhook delivery is.
+>
 > **Remaining (morning):**
 > 1. Second admin approves → **Generate token** (expiration Never, the 2 perms) → `npx wrangler secret put WA_TOKEN`.
-> 2. `npx wrangler secret put WA_WABA_ID` (`1752135339132947`) + `npx wrangler secret put WA_VERIFY_TOKEN` (random).
-> 3. Meta app → WhatsApp → **Configuration → Webhooks**: callback `https://commsops.afshaan.workers.dev/webhooks/whatsapp`,
->    verify token = the `WA_VERIFY_TOKEN` string → Verify & save → subscribe **`messages`** (+ template-status, quality).
-> 4. Claude runs Part 8 tests (inbound to the test number → window/event; a Relay `/send` out to your phone).
+> 2. `npx wrangler secret put WA_WABA_ID` (`1752135339132947`) — and `WA_VERIFY_TOKEN` already set.
+> 3. **Publish the app** (Unpublished→Live) so real inbound flows; confirm no App Review is required for WA-only.
+> 4. Claude runs Part 8 tests (a Relay `/send` out to your phone; inbound to the test number → window/event —
+>    inbound needs the app Published first).
 > 5. If a send hits a permissions error: also assign the **test WABA `1752135339132947`** to the "relay wa bot" system user.
 >
 > **BiteSpeed status: untouched** (all on the test number). Nothing disruptive done or pending here.
