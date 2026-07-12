@@ -116,12 +116,38 @@ All new channel code lives in `adapters/` + small hooks in `send.js`/`gate.js`/`
 **Acceptance (against the test number, WS-B):** template send; free-form inside window; block outside window; inbound forwarded + logged; statuses + cost land on `messages`.
 
 ### WS-B — Connect our Meta app to the owned WABAs  *(= v2 plan M15, simplified — we already own the WABAs)*
-1. Confirm Meta Business verification is current.
-2. **Create/confirm a LOT Meta app** with `whatsapp_business_messaging` + `whatsapp_business_management`; generate a **never-expiring system-user token** under the LOT business.
-3. Add the app as a partner/app on the **existing owned WABAs** (no new WABA). For each target number, get its **`phone_number_id`** (WhatsApp Manager → Phone numbers).
+
+> **DECISION (2026-07-13, Afshaan + Claude): a SEPARATE standalone Meta app for Relay/WhatsApp — NOT
+> reusing Pitstop's Messenger/IG DM app.** Both are technically viable (one app can route
+> `whatsapp_business_account` webhooks to commsops while `page`/`instagram` webhooks stay on csops —
+> callback URLs are per-product). We chose separate for long-term robustness: **(1) blast-radius/policy
+> isolation** — WhatsApp is a different Meta product with its own quality/rate-limit/ban regime; an
+> app-level restriction over a WA marketing-quality strike must NOT be able to take the Messenger/IG DM
+> inbox down (or vice versa); **(2) least-privilege tokens** — Relay's system-user token carries only
+> `whatsapp_business_messaging`+`_management`, never page/IG messaging scopes; **(3) clean service
+> ownership + independent secret rotation** — csops (Pitstop=inbox) and commsops (Relay=gateway) are
+> separate workers/secret stores; **(4) different asset classes** — the DM app is on Page+IG assets, the
+> WA app on WABA assets (near-zero overlap). Cost is negligible (apps free; Business verification is
+> shared at the portfolio level; a 2nd app can be granted access to the same owned WABAs). Note WhatsApp
+> for our own opted-in customers does NOT need the Messenger-style App Review that Pitstop's DM scopes
+> await, so there is no "shared review" upside to reuse. **The WS-A code already assumes this** — its
+> `WA_APP_SECRET`/`WA_VERIFY_TOKEN`/`WA_TOKEN` are distinct from csops's `META_*`, so the separate app
+> slots in with zero code change.
+
+1. Confirm Meta Business verification is current (portfolio-level; already done for LOT).
+2. **Create a NEW dedicated LOT Meta app "Relay"** (under the same verified Business portfolio) with the
+   **WhatsApp product** added; grant `whatsapp_business_messaging` + `whatsapp_business_management`;
+   generate a **never-expiring system-user token** (Business Settings → System Users) for THIS app, scoped
+   to the owned WABAs. Keep it entirely separate from Pitstop's DM app.
+3. Add the new app on the **existing owned WABAs** (no new WABA). For each target number, get its
+   **`phone_number_id`** (WhatsApp Manager → Phone numbers).
 4. **Sandbox first** on the **+1 555 test number** we already own (or `7338402888`) → run WS-A acceptance end-to-end before any live number.
 5. Pre-register the **production template backlog** — re-author every BiteSpeed WA template we actually use (utility + marketing categories), submit via `waSubmitTemplate`, track approvals. Keep a running template registry doc in `docs/superpowers/specs/`.
-6. Secrets on `commsops`: `WA_TOKEN` (system user), `WA_PHONE_NUMBER_ID_<slug>` per number, `WA_VERIFY_TOKEN`, `WA_APP_SECRET`.
+6. Secrets on `commsops` (the Relay app's, NOT csops's): `WA_TOKEN` (system user), `WA_WABA_ID`,
+   `WA_PHONE_NUMBER_ID_<slug>` per number, `WA_VERIFY_TOKEN`, `WA_APP_SECRET` (`WA_GRAPH_VERSION` optional,
+   default `v21.0`). Point the new app's **WhatsApp** webhook at `commsops.afshaan.workers.dev/webhooks/whatsapp`
+   with that verify token. Add an active `sender_identities` row (channel `whatsapp`) carrying
+   `metadata.phone_number_id` per number.
 
 **Acceptance:** test number fully working through Relay; production template set approved; this runbook's per-number steps rehearsed.
 
