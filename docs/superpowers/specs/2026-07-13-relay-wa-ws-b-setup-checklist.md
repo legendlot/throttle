@@ -1,5 +1,31 @@
 # Relay WhatsApp — WS-B Setup Checklist (guarded)
 
+> ## ⏸️ PROGRESS — paused 2026-07-13 evening (resume in the morning)
+> **Blocked on:** generating the system-user token requires a **second LOT admin's approval** (Meta business
+> guardrail). Ask another LOT Business admin to approve, then finish the token → outbound test.
+>
+> **Done + verified:**
+> - App **"LOT Relay"** created (App ID `1343061317893118`; business `Legend of Toys`, verification ✓; Unpublished — fine).
+> - WhatsApp product added; **test number `+1 555 174 8518`** provisioned. **Phone number ID `1154880417717547`**,
+>   **WABA ID `1752135339132947`** (these are identifiers, not secrets).
+> - `comms.sender_identities` WhatsApp row inserted + **active** (id `bd9f9323-d14d-442f-ab53-b41f9318ef79`,
+>   metadata carries phone_number_id + waba_id).
+> - `WA_APP_SECRET` set on commsops + **verified live** (webhook POST now returns `401 bad_signature`, was `503`).
+> - System user **"relay wa bot"** (ID `61591826343110`, **Employee**) created; **LOT Relay app assigned Full control**.
+>   Token permissions chosen = `whatsapp_business_messaging` + `whatsapp_business_management` (NOT manage_events).
+>
+> **Remaining (morning):**
+> 1. Second admin approves → **Generate token** (expiration Never, the 2 perms) → `npx wrangler secret put WA_TOKEN`.
+> 2. `npx wrangler secret put WA_WABA_ID` (`1752135339132947`) + `npx wrangler secret put WA_VERIFY_TOKEN` (random).
+> 3. Meta app → WhatsApp → **Configuration → Webhooks**: callback `https://commsops.afshaan.workers.dev/webhooks/whatsapp`,
+>    verify token = the `WA_VERIFY_TOKEN` string → Verify & save → subscribe **`messages`** (+ template-status, quality).
+> 4. Claude runs Part 8 tests (inbound to the test number → window/event; a Relay `/send` out to your phone).
+> 5. If a send hits a permissions error: also assign the **test WABA `1752135339132947`** to the "relay wa bot" system user.
+>
+> **BiteSpeed status: untouched** (all on the test number). Nothing disruptive done or pending here.
+
+
+
 > **Companion to** the BiteSpeed-exit runbook (`docs/superpowers/plans/2026-07-12-bitespeed-exit-cutover-runbook.md`, §WS-B).
 > **Goal:** stand up a **separate, dedicated Meta app for Relay** + a permanent token + the commsops secrets,
 > and prove the WhatsApp adapter end-to-end **on a throwaway test number** — with **zero** effect on BiteSpeed.
