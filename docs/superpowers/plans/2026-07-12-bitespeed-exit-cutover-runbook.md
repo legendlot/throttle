@@ -90,7 +90,16 @@ Pitstop inbox (cs_wa_threads / cs_wa_messages)  └── one gate, one log, all
 
 ## 5. Workstreams
 
-### WS-A — Relay WhatsApp Cloud API adapter  *(= v2 plan M14; ~2–3 wks, the critical path)*
+### WS-A — Relay WhatsApp Cloud API adapter  *(= v2 plan M14; the critical path)*
+> **STATUS: CODE BUILT + DEPLOYED (2026-07-13, commsops version `629e4a97`) — INERT until WS-B.**
+> The whole channel is shipped behind the config gate: **inert until `WA_*` secrets + an active
+> `whatsapp` `sender_identity` exist**; TEST MODE stays ON; the email path is untouched
+> (`send.js` only branches on `channel==='whatsapp'`). Migration `0016_comms_wa_windows` applied.
+> 16 node unit tests green; live smoke confirms the webhook is inert (GET verify → 403 without
+> `WA_VERIFY_TOKEN`; POST → 503 `wa_not_configured` without `WA_APP_SECRET`). **Remaining in WS-A:**
+> the M8 deliverability-panel surfacing of WA quality (alerts already wired). Files: `adapters/whatsapp.js`,
+> `wa-webhooks.js`, `wa-templates.js`, hooks in `render.js`/`send.js`/`gate.js`/`index.js`, `test/wa.test.js`.
+
 All new channel code lives in `adapters/` + small hooks in `send.js`/`gate.js`/`render.js`/`index.js`.
 
 1. **`adapters/whatsapp.js`** — mirror the email contract:
