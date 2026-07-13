@@ -9,7 +9,7 @@ test('defaults when env is empty', () => {
   assert.deepEqual(c.nonWorkingDays, [0]);
   assert.equal(c.ttlMs, 12 * 3600 * 1000);
   assert.equal(c.copy.fallback, "Delivery in 5–7 days");
-  assert.equal(c.copy.unserviceable, "We don't deliver to this pincode yet");
+  assert.equal(c.copy.unserviceable, "We don’t deliver to this pincode yet");
 });
 
 test('env overrides parse correctly', () => {

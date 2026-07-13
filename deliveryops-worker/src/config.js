@@ -11,7 +11,7 @@ export function loadConfig(env = {}) {
     ttlMs: (Number(env.CACHE_TTL_HOURS) || 12) * 3600 * 1000,
     copy: {
       fallback: "Delivery in 5–7 days",
-      unserviceable: "We don't deliver to this pincode yet",
+      unserviceable: "We don’t deliver to this pincode yet",
     },
   };
 }
