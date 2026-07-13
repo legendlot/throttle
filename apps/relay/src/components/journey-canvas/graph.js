@@ -9,8 +9,11 @@
 const TRIGGER_ID = '__trigger';
 const LEGACY_HANDLES = ['next', 'if_true', 'if_false'];
 
-// outcome handles each J0 step type declares (spec §3 palette)
-const HANDLES = { send: ['next'], wait: ['next'], condition: ['if_true', 'if_false'], exit: [] };
+// outcome handles each step type declares (spec §3 palette; wait_response added J1)
+const HANDLES = {
+  send: ['next'], wait: ['next'], condition: ['if_true', 'if_false'], exit: [],
+  wait_response: ['responded', 'timeout'],
+};
 
 // [handle, target] for every non-empty target a step declares. Handle-aware union of
 // outcomes-keys ∪ legacy handles (outcomes wins per handle) — mirrors the worker's
@@ -103,6 +106,21 @@ function localLint(nodes, edges) {
     for (const h of declared)
       if (!edges.some((e) => e.source === n.id && e.sourceHandle === h))
         out.push(`${n.id}: outcome "${h}" is not wired`);
+  }
+  // Waterfall check: back-to-back marketing sends (directly, or across a wait_response
+  // whose timeout falls straight into another marketing send) risk the frequency cap.
+  const configOf = (id) => stepNodes.find((s) => s.id === id)?.data?.config;
+  const targetOf = (id, handle) => edges.find((e) => e.source === id && e.sourceHandle === handle)?.target;
+  const isMarketingSend = (cfg) => cfg?.type === 'send' && cfg.purpose === 'marketing';
+  for (const n of stepNodes) {
+    const cfg = n.data?.config;
+    if (!isMarketingSend(cfg)) continue;
+    const nextId = targetOf(n.id, 'next');
+    if (!nextId) continue;
+    const nextCfg = configOf(nextId);
+    const chainedCfg = nextCfg?.type === 'wait_response' ? configOf(targetOf(nextId, 'timeout')) : nextCfg;
+    if (isMarketingSend(chainedCfg))
+      out.push(`waterfall: consecutive marketing sends near "${n.id}" may hit the frequency cap`);
   }
   return out;
 }

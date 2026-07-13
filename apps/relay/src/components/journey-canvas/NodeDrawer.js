@@ -59,6 +59,20 @@ export default function NodeDrawer({ nodeId, config, templates, onChange, onDele
             {channelTemplates.map((x) => <option key={x.id} value={x.id}>{x.name} · v{x.version} ({x.status})</option>)}
           </select>
         </Field>
+        <Field label="If skipped (not sent — e.g. suppressed/unsubscribed)">
+          <select className="f-inp" value={config.on_skip || 'continue'} disabled={disabled}
+            onChange={(e) => set({ on_skip: e.target.value })}>
+            <option value="continue">Continue — proceed as if sent</option>
+            <option value="advance">Advance — skip the next wait, go straight to its timeout</option>
+            <option value="exit">Exit — leave the journey</option>
+          </select>
+        </Field>
+        {config.on_skip === 'exit' && (
+          <Field label="Skip outcome label">
+            <input className="f-inp mono" value={config.on_skip_outcome || 'skipped'} disabled={disabled}
+              onChange={(e) => set({ on_skip_outcome: e.target.value })} placeholder="skipped" />
+          </Field>
+        )}
       </>)}
 
       {t === 'wait' && (
@@ -67,6 +81,20 @@ export default function NodeDrawer({ nodeId, config, templates, onChange, onDele
             onChange={(e) => set({ duration: e.target.value })} placeholder="24 hours" />
         </Field>
       )}
+
+      {t === 'wait_response' && (<>
+        <Field label="Awaited events (comma-separated)">
+          <input className="f-inp mono" list="jc-event-suggest" value={(config.awaited || []).join(', ')} disabled={disabled}
+            onChange={(e) => set({ awaited: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })}
+            placeholder="order_placed, whatsapp_inbound" />
+          <datalist id="jc-event-suggest">{EVENT_SUGGEST.map((a) => <option key={a} value={a} />)}</datalist>
+        </Field>
+        <Field label='Within (e.g. "6 hours", "30 minutes")'>
+          <input className="f-inp mono" value={config.within || ''} disabled={disabled}
+            onChange={(e) => set({ within: e.target.value })} placeholder="6 hours" />
+        </Field>
+        <div className="tw-note" style={{ margin: 0 }}>Responded path = <span className="mono">responded</span> handle, timeout = <span className="mono">timeout</span>.</div>
+      </>)}
 
       {t === 'condition' && (<>
         <Field label="Check">

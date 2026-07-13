@@ -8,14 +8,15 @@ import {
   applyNodeChanges, applyEdgeChanges, addEdge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Zap, Mail, MessageCircle, Clock, GitBranch, LogOut, Plus } from 'lucide-react';
+import { Zap, Mail, MessageCircle, Clock, Timer, GitBranch, LogOut, Plus } from 'lucide-react';
 import { HANDLES, TRIGGER_ID, localLint } from './graph.js';
 
 const STEP_META = {
-  send:      { label: 'Send',      icon: null,      color: 'var(--accent, #F2CD1A)' },
-  wait:      { label: 'Wait',      icon: Clock,     color: '#9aa0a6' },
-  condition: { label: 'Condition', icon: GitBranch, color: '#e8b93c' },
-  exit:      { label: 'Exit',      icon: LogOut,    color: '#57b56b' },
+  send:          { label: 'Send',              icon: null,      color: 'var(--accent, #F2CD1A)' },
+  wait:          { label: 'Wait',               icon: Clock,     color: '#9aa0a6' },
+  wait_response: { label: 'Wait for response',  icon: Timer,     color: '#7aa7ff' },
+  condition:     { label: 'Condition',          icon: GitBranch, color: '#e8b93c' },
+  exit:          { label: 'Exit',               icon: LogOut,    color: '#57b56b' },
 };
 
 const nodeBox = (selected, color) => ({
@@ -46,6 +47,7 @@ function StepNode({ data, selected }) {
   const handles = HANDLES[c.type] || [];
   const sub = c.type === 'send' ? `${c.channel || 'email'} · ${c.purpose || 'marketing'}`
     : c.type === 'wait' ? (c.duration || 'duration not set')
+    : c.type === 'wait_response' ? `awaits ${(c.awaited || []).join(', ') || 'not set'} · ${c.within || 'duration not set'}`
     : c.type === 'condition' ? (c.check?.kind ? `${c.check.kind}${c.check.event ? `: ${c.check.event}` : ''}` : 'check not set')
     : (c.outcome || 'completed');
   return (
@@ -70,10 +72,11 @@ function StepNode({ data, selected }) {
 const nodeTypes = { trigger: TriggerNode, step: StepNode };
 
 const NEW_STEP = {
-  send:      { type: 'send', channel: 'email', purpose: 'marketing', templateId: '' },
-  wait:      { type: 'wait', duration: '24 hours' },
-  condition: { type: 'condition', check: { kind: 'no_event_since_enrol', event: 'order_placed' } },
-  exit:      { type: 'exit', outcome: 'completed' },
+  send:          { type: 'send', channel: 'email', purpose: 'marketing', templateId: '' },
+  wait:          { type: 'wait', duration: '24 hours' },
+  wait_response: { type: 'wait_response', awaited: ['order_placed'], within: '6 hours' },
+  condition:     { type: 'condition', check: { kind: 'no_event_since_enrol', event: 'order_placed' } },
+  exit:          { type: 'exit', outcome: 'completed' },
 };
 
 let seq = 0;
@@ -89,7 +92,11 @@ export default function JourneyCanvas({ nodes, edges, setNodes, setEdges, onSele
   const addStep = (t) => setNodes((ns) => [...ns, {
     id: newId(t), type: 'step',
     position: { x: 120 + Math.random() * 80, y: 60 + Math.random() * 60 },
-    data: { config: { ...NEW_STEP[t], ...(t === 'condition' ? { check: { ...NEW_STEP.condition.check } } : {}) } },
+    data: { config: {
+      ...NEW_STEP[t],
+      ...(t === 'condition' ? { check: { ...NEW_STEP.condition.check } } : {}),
+      ...(t === 'wait_response' ? { awaited: [...NEW_STEP.wait_response.awaited] } : {}),
+    } },
   }]);
 
   const lint = localLint(nodes, edges);

@@ -4,7 +4,7 @@ import dynamic from 'next/dynamic';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
-import { Plus, ArrowLeft, Check, Play, Pause, AlertTriangle, GitBranch } from 'lucide-react';
+import { Plus, Minus, ArrowLeft, Check, Play, Pause, AlertTriangle, GitBranch } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState, Pipeline } from '@/components/ui.js';
 import { fmtDate } from '@/components/format.js';
 import { fromDefinition, toDefinition, TRIGGER_ID } from '@/components/journey-canvas/graph.js';
@@ -26,7 +26,8 @@ const EVENT_SUGGEST = ['checkout_started', 'order_placed', 'order_fulfilled', 'o
 
 function emptyJourney() {
   return { id: null, name: '', status: 'draft', active_version: null,
-    triggerEvent: 'checkout_started', reenrolment: 'once_while_active', reenrolCooldown: 24, versions: [] };
+    triggerEvent: 'checkout_started', reenrolment: 'once_while_active', reenrolCooldown: 24,
+    max_duration: '30 days', exit_rules: [], versions: [] };
 }
 
 function triggerSummary(t) {
@@ -119,9 +120,17 @@ export default function JourneysPage() {
       triggerEvent: t.name || 'checkout_started',
       reenrolment: r.reenrolment || 'once_while_active',
       reenrolCooldown: r.reenrol_cooldown_hours || 24,
+      max_duration: r.max_duration || '30 days',
+      exit_rules: Array.isArray(r.exit_rules) ? r.exit_rules : [],
       versions: r.versions || [],
     });
     seedCanvas(r, def);
+  }
+
+  function addExitRule() { setJ((p) => ({ ...p, exit_rules: [...(p.exit_rules || []), { event: '', outcome: 'exited' }] })); }
+  function removeExitRule(i) { setJ((p) => ({ ...p, exit_rules: (p.exit_rules || []).filter((_, idx) => idx !== i) })); }
+  function setExitRule(i, k, v) {
+    setJ((p) => ({ ...p, exit_rules: (p.exit_rules || []).map((r, idx) => (idx === i ? { ...r, [k]: v } : r)) }));
   }
 
   async function refresh() {
@@ -177,6 +186,8 @@ export default function JourneysPage() {
         trigger: { type: 'event', name: j.triggerEvent.trim() },
         reenrolment: j.reenrolment,
         reenrol_cooldown_hours: j.reenrolment === 'cooldown' ? (Number(j.reenrolCooldown) || null) : null,
+        max_duration: (j.max_duration || '').trim() || null,
+        exit_rules: (j.exit_rules || []).filter((r) => (r.event || '').trim() && (r.outcome || '').trim()),
         definition,
       };
       if (j.id) payload.id = j.id;
@@ -258,6 +269,23 @@ export default function JourneysPage() {
                 <input className="f-inp mono" type="number" min="1" value={j.reenrolCooldown} onChange={(e) => set('reenrolCooldown', e.target.value)} disabled={busy || !editable} />
               </div>
             )}
+            <div className="ff"><div className="kv-k">Max duration (auto-exit after)</div>
+              <input className="f-inp mono" value={j.max_duration} onChange={(e) => set('max_duration', e.target.value)} placeholder="30 days" disabled={busy || !editable} />
+            </div>
+          </div>
+
+          <div style={{ marginTop: 14 }}>
+            <div className="kv-k" style={{ marginBottom: 6 }}>Exit rules — event fires → journey exits early with this outcome</div>
+            {(j.exit_rules || []).map((rule, i) => (
+              <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+                <input className="f-inp mono" list="journey-event-suggest" style={{ flex: 1 }} value={rule.event || ''}
+                  onChange={(e) => setExitRule(i, 'event', e.target.value)} placeholder="order_cancelled" disabled={busy || !editable} />
+                <input className="f-inp mono" style={{ flex: 1 }} value={rule.outcome || ''}
+                  onChange={(e) => setExitRule(i, 'outcome', e.target.value)} placeholder="exited" disabled={busy || !editable} />
+                {editable && <Btn onClick={() => removeExitRule(i)} disabled={busy}><Minus size={14} /></Btn>}
+              </div>
+            ))}
+            {editable && <Btn onClick={addExitRule} disabled={busy}><Plus size={14} /> Add exit rule</Btn>}
           </div>
         </Panel>
 

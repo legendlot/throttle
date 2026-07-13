@@ -69,3 +69,23 @@ const gp = fromDefinition({ trigger: {} }, { entry: 'w', steps: {
 assert.equal(gp.edges.filter((x) => x.source === 'w').length, 1);
 
 console.log('graph.test.js: all assertions passed');
+
+// --- J1: wait_response handles + waterfall lint ---
+const G3 = require('./graph.js');
+assert.deepEqual(G3.HANDLES.wait_response, ['responded', 'timeout']);
+{
+  const nodes = [
+    { id: '__trigger', data: {} },
+    { id: 's1', data: { config: { type: 'send', purpose: 'marketing', channel: 'whatsapp' } } },
+    { id: 's2', data: { config: { type: 'send', purpose: 'marketing', channel: 'email' } } },
+    { id: 'ex', data: { config: { type: 'exit', outcome: 'completed' } } },
+  ];
+  const edges = [
+    { source: '__trigger', target: 's1', sourceHandle: 'entry' },
+    { source: 's1', target: 's2', sourceHandle: 'next' },
+    { source: 's2', target: 'ex', sourceHandle: 'next' },
+  ];
+  const lint = G3.localLint(nodes, edges);
+  assert.ok(lint.some((m) => /waterfall|frequency|consecutive/i.test(m)), JSON.stringify(lint));
+}
+console.log('graph J1 ok');
