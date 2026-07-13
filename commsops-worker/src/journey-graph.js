@@ -31,4 +31,32 @@ function stepTargets(step) {
 // #doSend previously hardcoded email; WA/SMS/voice sends need the phone identifier).
 const ID_TYPE_FOR_CHANNEL = { email: 'email', whatsapp: 'phone', sms: 'phone', voice: 'phone' };
 
-module.exports = { resolveTarget, stepTargets, ID_TYPE_FOR_CHANNEL };
+// Outcome handles each step type declares (kept in sync with the app's graph.js HANDLES).
+// wait_response is the J1 escalation gate: responded (awaited event arrived) vs timeout.
+const HANDLES = {
+  send: ['next'], wait: ['next'], condition: ['if_true', 'if_false'],
+  wait_response: ['responded', 'timeout'], exit: [],
+};
+
+// Internal step names the interpreter uses as step.do/step names — never valid user ids.
+const RESERVED_STEP_IDS = [
+  'load-definition', 'load-enrolment', 'load-trigger', 'load-journey-name', 'load-journey-cfg',
+  'boot', 'register-waits', 'clear-waits',
+];
+
+// Parse a human duration string ("6 hours", "30 minutes", "2 days", "90 seconds")
+// to milliseconds. Returns null on anything unrecognised. Used for expires_at math;
+// the durable wait itself passes the raw string to step.waitForEvent/step.sleep.
+const _UNIT_MS = { second: 1000, minute: 60000, hour: 3600000, day: 86400000, week: 604800000 };
+function durationToMs(str) {
+  const m = String(str || '').trim().toLowerCase().match(/^(\d+(?:\.\d+)?)\s*(second|minute|hour|day|week)s?$/);
+  if (!m) return null;
+  return Math.round(Number(m[1]) * _UNIT_MS[m[2]]);
+}
+
+// Did a send() result actually leave the building? (vs a gate skip/suppression/failure)
+function sendWentOut(res) {
+  return !!res && (res.status === 'sent' || res.status === 'delivered' || res.status === 'deduped');
+}
+
+module.exports = { resolveTarget, stepTargets, ID_TYPE_FOR_CHANNEL, HANDLES, RESERVED_STEP_IDS, durationToMs, sendWentOut };

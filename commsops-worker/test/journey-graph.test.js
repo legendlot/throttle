@@ -35,3 +35,26 @@ assert.equal(G.ID_TYPE_FOR_CHANNEL.whatsapp, 'phone');
 assert.equal(G.ID_TYPE_FOR_CHANNEL.sms, 'phone');
 
 console.log('journey-graph.test.js: all assertions passed');
+
+const G2 = require('../src/journey-graph.js');
+// durationToMs
+assert.equal(G2.durationToMs('30 minutes'), 30 * 60 * 1000);
+assert.equal(G2.durationToMs('6 hours'), 6 * 3600 * 1000);
+assert.equal(G2.durationToMs('2 days'), 2 * 86400 * 1000);
+assert.equal(G2.durationToMs('1 hour'), 3600 * 1000);
+assert.equal(G2.durationToMs('90 seconds'), 90 * 1000);
+assert.equal(G2.durationToMs('garbage'), null);
+// handles for the new step type
+assert.deepEqual(G2.HANDLES.wait_response, ['responded', 'timeout']);
+assert.deepEqual(G2.HANDLES.wait, ['next']);
+// reserved ids include the J1 internal step names
+assert.ok(G2.RESERVED_STEP_IDS.includes('register-waits'));
+assert.ok(G2.RESERVED_STEP_IDS.includes('clear-waits'));
+assert.ok(G2.RESERVED_STEP_IDS.includes('load-journey-cfg'));
+// sendWentOut classifier
+assert.equal(G2.sendWentOut({ status: 'sent' }), true);
+assert.equal(G2.sendWentOut({ status: 'delivered' }), true);
+assert.equal(G2.sendWentOut({ status: 'deduped' }), true);
+assert.equal(G2.sendWentOut({ status: 'skipped', reason: 'freq_cap' }), false);
+assert.equal(G2.sendWentOut({ status: 'suppressed' }), false);
+console.log('journey-graph J1 helpers ok');
