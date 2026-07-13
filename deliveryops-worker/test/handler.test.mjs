@@ -57,6 +57,20 @@ test('bad pincode → 400', async () => {
   assert.equal(res.status, 400);
 });
 
+test('Uniware HTTP error → fallback, not cached', async () => {
+  let cachePutCalled = false;
+  const cachePut = async () => { cachePutCalled = true; };
+  const res = await handleDeliveryCheck(req('560001'), ENV, {
+    ...base,
+    cachePut,
+    checkServiceability: async () => { throw new Error('uniware 503'); },
+    delhiveryTransitDays: async () => { throw new Error('should not be called'); },
+  });
+  const b = await res.json();
+  assert.equal(b.state, 'fallback');
+  assert.equal(cachePutCalled, false);
+});
+
 test('a fresh cache row short-circuits the couriers', async () => {
   const res = await handleDeliveryCheck(req('560001'), ENV, {
     ...base,

@@ -33,6 +33,19 @@ test('Sunday (a non-working day) even before cut-off rolls to Monday', () => {
   assert.equal(day.getUTCDate(), 20);
 });
 
+test('exactly at cut-off (14:00:00 IST) rolls to the next working day', () => {
+  // Wed 2026-07-15 14:00:00 IST is not "before" cut-off → rolls to Thu 16th
+  const day = dispatchDate(istInstant(2026, 6, 15, 14, 0), CFG);
+  assert.equal(day.getUTCDate(), 16);
+});
+
+test('multi-day skip over two consecutive non-working days', () => {
+  const cfg = { cutoffHour: 14, cutoffMin: 0, nonWorkingDays: [0, 6] };
+  // Fri 2026-07-17 18:00 IST (after cut-off) → skips Sat 18 + Sun 19 → Mon 20
+  const day = dispatchDate(istInstant(2026, 6, 17, 18, 0), cfg);
+  assert.equal(day.getUTCDate(), 20);
+});
+
 test('addTransit adds calendar days', () => {
   const base = new Date(Date.UTC(2026, 6, 15));
   assert.equal(addTransit(base, 3).getUTCDate(), 18);

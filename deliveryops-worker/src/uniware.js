@@ -28,6 +28,7 @@ export async function checkServiceability(env, { pincode, cod = false }, deps = 
     headers: { Authorization: `bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ pincode, cashOnDelivery: !!cod }),
   });
+  if (!res.ok) throw new Error('uniware getServiceability ' + res.status);
   const body = await res.json().catch(() => ({}));
   const facilityCodes = Array.isArray(body.facilityCodes) ? body.facilityCodes : [];
   const serviceable = body.successful === true && facilityCodes.length > 0;

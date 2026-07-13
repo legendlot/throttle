@@ -37,3 +37,11 @@ test('COD query marks codAvailable when serviceable', async () => {
     { fetchImpl: stub({ successful: true, facilityCodes: ['BLR1'] }) });
   assert.equal(r.codAvailable, true);
 });
+
+test('non-ok serviceability response (5xx/429) rejects instead of resolving to unserviceable', async () => {
+  // Note: the module-level token cache may already hold a token from earlier tests — that's
+  // fine, this stub still answers /oauth/token with 200 either way. The 503 on the
+  // serviceability call itself is what must trigger the throw.
+  await assert.rejects(() => checkServiceability(ENV, { pincode: '560001', cod: false },
+    { fetchImpl: stub({}, 503) }));
+});
