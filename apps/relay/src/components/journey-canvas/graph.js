@@ -108,7 +108,8 @@ function localLint(nodes, edges) {
         out.push(`${n.id}: outcome "${h}" is not wired`);
   }
   // Waterfall check: back-to-back marketing sends (directly, or across a wait_response
-  // whose timeout falls straight into another marketing send) risk the frequency cap.
+  // whose responded OR timeout branch falls straight into another marketing send) risk
+  // the frequency cap. Reply-then-re-send (the responded branch) is the common case.
   const configOf = (id) => stepNodes.find((s) => s.id === id)?.data?.config;
   const targetOf = (id, handle) => edges.find((e) => e.source === id && e.sourceHandle === handle)?.target;
   const isMarketingSend = (cfg) => cfg?.type === 'send' && cfg.purpose === 'marketing';
@@ -118,8 +119,10 @@ function localLint(nodes, edges) {
     const nextId = targetOf(n.id, 'next');
     if (!nextId) continue;
     const nextCfg = configOf(nextId);
-    const chainedCfg = nextCfg?.type === 'wait_response' ? configOf(targetOf(nextId, 'timeout')) : nextCfg;
-    if (isMarketingSend(chainedCfg))
+    const chained = nextCfg?.type === 'wait_response'
+      ? ['responded', 'timeout'].map((h) => configOf(targetOf(nextId, h)))
+      : [nextCfg];
+    if (chained.some(isMarketingSend))
       out.push(`waterfall: consecutive marketing sends near "${n.id}" may hit the frequency cap`);
   }
   return out;

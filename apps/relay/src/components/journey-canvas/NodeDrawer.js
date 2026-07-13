@@ -1,7 +1,23 @@
 'use client';
 // Config form for the selected canvas node. Pure controlled component:
 // receives the node's config + templates list, calls onChange(partial) / onDelete().
+import { useState, useEffect } from 'react';
 import { Trash2 } from 'lucide-react';
+
+// Multi-value comma-separated input with a local text buffer. Committing the parsed
+// array on every keystroke (filter(Boolean) drops the trailing empty token) makes a
+// second value un-typeable by hand — so we buffer the raw text and commit on blur.
+function AwaitedEventsInput({ nodeId, value, onChange, disabled }) {
+  const [text, setText] = useState((value || []).join(', '));
+  // Reset the buffer when a different node is selected (nodeId changes).
+  useEffect(() => { setText((value || []).join(', ')); }, [nodeId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const commit = () => onChange(text.split(',').map((x) => x.trim()).filter(Boolean));
+  return (
+    <input className="f-inp mono" list="jc-event-suggest" value={text} disabled={disabled}
+      onChange={(e) => setText(e.target.value)} onBlur={commit}
+      placeholder="order_placed, whatsapp_inbound" />
+  );
+}
 
 const COND_KINDS = [
   { id: 'no_event_since_enrol', label: "Hasn't done event since enrol" },
@@ -84,9 +100,8 @@ export default function NodeDrawer({ nodeId, config, templates, onChange, onDele
 
       {t === 'wait_response' && (<>
         <Field label="Awaited events (comma-separated)">
-          <input className="f-inp mono" list="jc-event-suggest" value={(config.awaited || []).join(', ')} disabled={disabled}
-            onChange={(e) => set({ awaited: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })}
-            placeholder="order_placed, whatsapp_inbound" />
+          <AwaitedEventsInput nodeId={nodeId} value={config.awaited} disabled={disabled}
+            onChange={(arr) => set({ awaited: arr })} />
           <datalist id="jc-event-suggest">{EVENT_SUGGEST.map((a) => <option key={a} value={a} />)}</datalist>
         </Field>
         <Field label='Within (e.g. "6 hours", "30 minutes")'>

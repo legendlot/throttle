@@ -88,4 +88,22 @@ assert.deepEqual(G3.HANDLES.wait_response, ['responded', 'timeout']);
   const lint = G3.localLint(nodes, edges);
   assert.ok(lint.some((m) => /waterfall|frequency|consecutive/i.test(m)), JSON.stringify(lint));
 }
+{
+  const nodes = [
+    { id: '__trigger', data: {} },
+    { id: 's1', data: { config: { type: 'send', purpose: 'marketing', channel: 'whatsapp' } } },
+    { id: 'wr', data: { config: { type: 'wait_response', awaited: ['x'], within: '6 hours' } } },
+    { id: 's2', data: { config: { type: 'send', purpose: 'marketing', channel: 'email' } } },
+    { id: 'ex', data: { config: { type: 'exit', outcome: 'completed' } } },
+  ];
+  const edges = [
+    { source: '__trigger', target: 's1', sourceHandle: 'entry' },
+    { source: 's1', target: 'wr', sourceHandle: 'next' },
+    { source: 'wr', target: 's2', sourceHandle: 'responded' },
+    { source: 'wr', target: 'ex', sourceHandle: 'timeout' },
+    { source: 's2', target: 'ex', sourceHandle: 'next' },
+  ];
+  const lint = G3.localLint(nodes, edges);
+  assert.ok(lint.some((m) => /waterfall|frequency|consecutive/i.test(m)), 'responded-edge waterfall: ' + JSON.stringify(lint));
+}
 console.log('graph J1 ok');
