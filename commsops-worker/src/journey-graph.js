@@ -18,10 +18,13 @@ function resolveTarget(step, handle) {
 }
 
 // Every non-empty target the step declares (for reachability / dangling checks).
+// Handle-aware: each handle resolves through resolveTarget so a mixed-shape step
+// (outcomes for one handle + a legacy field for another) validates exactly the
+// targets the runtime will follow — no validator/runtime drift.
 function stepTargets(step) {
   if (!step) return [];
-  if (step.outcomes) return Object.values(step.outcomes).filter(Boolean);
-  return LEGACY_HANDLES.map((h) => step[h]).filter(Boolean);
+  const handles = new Set([...(step.outcomes ? Object.keys(step.outcomes) : []), ...LEGACY_HANDLES]);
+  return [...handles].map((h) => resolveTarget(step, h)).filter(Boolean);
 }
 
 // Which identifier type a journey send must resolve for a channel (spec §4.2 —

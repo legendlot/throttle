@@ -24,6 +24,11 @@ assert.deepEqual(G.stepTargets({ if_true: 't', if_false: 'f' }).sort(), ['f', 't
 assert.deepEqual(G.stepTargets({ outcomes: { a: 'x', b: 'y', c: '' } }).sort(), ['x', 'y']);
 assert.deepEqual(G.stepTargets({}), []);
 
+// mixed shape: outcomes for one handle + legacy field for another — BOTH targets returned
+assert.deepEqual(G.stepTargets({ outcomes: { if_true: 's' }, if_false: 'e' }).sort(), ['e', 's']);
+// mixed shape: outcomes key overriding the same-name legacy field must not duplicate
+assert.deepEqual(G.stepTargets({ next: 'old', outcomes: { next: 'new' } }), ['new']);
+
 // identifier type per channel
 assert.equal(G.ID_TYPE_FOR_CHANNEL.email, 'email');
 assert.equal(G.ID_TYPE_FOR_CHANNEL.whatsapp, 'phone');
