@@ -1,73 +1,32 @@
 'use client';
 import { useEffect, useState, useCallback } from 'react';
+import dynamic from 'next/dynamic';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { Plus, ArrowLeft, Check, Play, Pause, AlertTriangle, GitBranch } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState, Pipeline } from '@/components/ui.js';
 import { fmtDate } from '@/components/format.js';
+import { fromDefinition, toDefinition, TRIGGER_ID } from '@/components/journey-canvas/graph.js';
+import NodeDrawer from '@/components/journey-canvas/NodeDrawer.js';
+
+// React Flow touches window — client-only.
+const JourneyCanvas = dynamic(() => import('@/components/journey-canvas/JourneyCanvas.js'),
+  { ssr: false, loading: () => <div style={{ padding: 24 }}><Spinner /></div> });
 
 const STEP_TONE = { wait: 'gray', condition: 'yellow', send: 'blue', exit: 'green' };
-
 const STATUS_TONE = { draft: 'gray', active: 'green', paused: 'yellow', archived: 'gray' };
 const REENROL = [
   { id: 'once_while_active', label: 'Once while active' },
   { id: 'once_ever', label: 'Once ever' },
   { id: 'cooldown', label: 'Cooldown (hours)' },
 ];
-const COND_KINDS = [
-  { id: 'no_event_since_enrol', label: "Hasn't done event since enrol" },
-  { id: 'event_since_enrol', label: 'Has done event since enrol' },
-];
 const EVENT_SUGGEST = ['checkout_started', 'order_placed', 'order_fulfilled', 'order_delivered',
   'add_to_cart', 'checkout_abandoned', 'return_created'];
 
-// The linear abandoned-cart shape the structured form round-trips:
-//   entry=wait1 → cond1 → {send1 | exit1};  send1 → exit1;  exit1 exit
 function emptyJourney() {
-  return {
-    id: null, name: '', status: 'draft', active_version: null,
-    triggerEvent: 'checkout_started',
-    reenrolment: 'once_while_active', reenrolCooldown: 24,
-    waitDuration: '24 hours',
-    condKind: 'no_event_since_enrol', condEvent: 'order_placed',
-    templateId: '',
-    rawOnly: false, rawDefinition: null, versions: [],
-  };
-}
-
-// Decide whether an existing definition fits the linear form. If it doesn't,
-// we fall back to a read-only raw JSON view (judgment call per task spec).
-function isLinearShape(def) {
-  if (!def || def.entry !== 'wait1') return false;
-  const s = def.steps || {};
-  const ids = Object.keys(s).sort().join(',');
-  if (ids !== 'cond1,exit1,send1,wait1') return false;
-  return s.wait1?.type === 'wait' && s.cond1?.type === 'condition'
-    && s.send1?.type === 'send' && s.exit1?.type === 'exit';
-}
-
-function fromDefinition(def) {
-  const s = def.steps;
-  const check = s.cond1.check || {};
-  return {
-    waitDuration: s.wait1.duration || '24 hours',
-    condKind: check.kind || 'no_event_since_enrol',
-    condEvent: check.event || 'order_placed',
-    templateId: s.send1.templateId || '',
-  };
-}
-
-function buildDefinition(j) {
-  return {
-    entry: 'wait1',
-    steps: {
-      wait1: { type: 'wait', duration: j.waitDuration.trim(), next: 'cond1' },
-      cond1: { type: 'condition', check: { kind: j.condKind, event: j.condEvent.trim() }, if_true: 'send1', if_false: 'exit1' },
-      send1: { type: 'send', channel: 'email', purpose: 'marketing', templateId: j.templateId, next: 'exit1' },
-      exit1: { type: 'exit', outcome: 'completed' },
-    },
-  };
+  return { id: null, name: '', status: 'draft', active_version: null,
+    triggerEvent: 'checkout_started', reenrolment: 'once_while_active', reenrolCooldown: 24, versions: [] };
 }
 
 function triggerSummary(t) {
@@ -87,8 +46,20 @@ export default function JourneysPage() {
   const [busy, setBusy] = useState(false);
   const [compileErrors, setCompileErrors] = useState(null);
   const [funnel, setFunnel] = useState(null);
+  // canvas state — page-owned so save/drawer/canvas share one source of truth
+  const [nodes, setNodesRaw] = useState([]);
+  const [edges, setEdges] = useState([]);
+  const [selected, setSelected] = useState(null);
 
   const canBuild = !perms || perms.campaign_build;
+
+  // the trigger node must survive any change set (Backspace-delete guard)
+  const setNodes = useCallback((updater) => setNodesRaw((prev) => {
+    const next = typeof updater === 'function' ? updater(prev) : updater;
+    return next.some((n) => n.id === TRIGGER_ID)
+      ? next
+      : [...next, prev.find((n) => n.id === TRIGGER_ID)].filter(Boolean);
+  }), []);
 
   const loadFunnel = useCallback(async (id) => {
     if (!id) { setFunnel(null); return; }
@@ -113,11 +84,21 @@ export default function JourneysPage() {
 
   function set(k, v) { setJ((p) => ({ ...p, [k]: v })); }
 
-  function startNew() { setJ(emptyJourney()); setCompileErrors(null); setFunnel(null); setView('form'); }
+  function seedCanvas(journey, def) {
+    const g = fromDefinition(journey || {}, def);
+    setNodesRaw(g.nodes);
+    setEdges(g.edges);
+    setSelected(null);
+  }
+
+  function startNew() {
+    setJ(emptyJourney()); setCompileErrors(null); setFunnel(null);
+    seedCanvas({ trigger: { type: 'event', name: 'checkout_started' } }, null);
+    setView('form');
+  }
 
   async function open(r) {
     setCompileErrors(null); setFunnel(null);
-    // seed from the list row first, then refresh with versions
     seed(r, null);
     setView('form');
     loadFunnel(r.id);
@@ -133,26 +114,14 @@ export default function JourneysPage() {
 
   function seed(r, def) {
     const t = r.trigger || {};
-    const base = {
+    setJ({
       id: r.id, name: r.name || '', status: r.status || 'draft', active_version: r.active_version ?? null,
       triggerEvent: t.name || 'checkout_started',
       reenrolment: r.reenrolment || 'once_while_active',
       reenrolCooldown: r.reenrol_cooldown_hours || 24,
       versions: r.versions || [],
-      rawOnly: false, rawDefinition: null,
-      ...emptyDefaults(),
-    };
-    if (def && isLinearShape(def)) {
-      Object.assign(base, fromDefinition(def));
-    } else if (def) {
-      base.rawOnly = true;
-      base.rawDefinition = def;
-    }
-    setJ(base);
-  }
-  function emptyDefaults() {
-    const e = emptyJourney();
-    return { waitDuration: e.waitDuration, condKind: e.condKind, condEvent: e.condEvent, templateId: e.templateId };
+    });
+    seedCanvas(r, def);
   }
 
   async function refresh() {
@@ -169,18 +138,33 @@ export default function JourneysPage() {
     } catch { /* non-fatal */ }
   }
 
-  const emailTemplates = templates.filter((t) => t.channel === 'email');
+  // keep the canvas trigger node's summary in sync with the trigger form
+  useEffect(() => {
+    setNodesRaw((ns) => ns.map((n) => n.id === TRIGGER_ID
+      ? { ...n, data: { trigger: { type: 'event', name: j.triggerEvent } } } : n));
+  }, [j.triggerEvent]);
+
+  const selectedNode = nodes.find((n) => n.id === selected && n.id !== TRIGGER_ID) || null;
+
+  function updateSelectedConfig(cfg) {
+    setNodesRaw((ns) => ns.map((n) => (n.id === selected ? { ...n, data: { ...n.data, config: cfg } } : n)));
+  }
+  function deleteSelected() {
+    setNodesRaw((ns) => ns.filter((n) => n.id !== selected));
+    setEdges((es) => es.filter((e) => e.source !== selected && e.target !== selected));
+    setSelected(null);
+  }
 
   async function save() {
     if (!j.name.trim()) { showToast('Name required', 'error'); return; }
     if (!j.triggerEvent.trim()) { showToast('Trigger event name required', 'error'); return; }
-    if (!j.templateId) { showToast('Pick a send template', 'error'); return; }
     setBusy(true);
     setCompileErrors(null);
     try {
-      const definition = buildDefinition(j);
-      // Pre-validate so we can surface per-step compile errors (saveJourney's
-      // error response drops the details array).
+      let definition;
+      try { definition = toDefinition(nodes, edges); }
+      catch { showToast('Connect the trigger to an entry step first', 'error'); setBusy(false); return; }
+      // pre-validate so per-step compile errors surface (saveJourney's error drops details)
       const comp = await workerFetch('compileJourney', { definition }, session);
       if (comp?.data && comp.data.ok === false) {
         setCompileErrors(comp.data.errors || []);
@@ -203,11 +187,8 @@ export default function JourneysPage() {
       refresh();
       load();
     } catch (e) {
-      if (String(e.message) === 'invalid_definition') {
-        showToast('Journey has validation errors — check the steps', 'error');
-      } else {
-        showToast(e.message || 'Save failed', 'error');
-      }
+      if (String(e.message) === 'invalid_definition') showToast('Journey has validation errors — check the nodes', 'error');
+      else showToast(e.message || 'Save failed', 'error');
     } finally { setBusy(false); }
   }
 
@@ -235,7 +216,7 @@ export default function JourneysPage() {
   );
 
   if (view === 'form') {
-    const editable = canBuild && !j.rawOnly;
+    const editable = canBuild;
     return (
       <div className="pg">
         <div className="po-head">
@@ -251,13 +232,6 @@ export default function JourneysPage() {
         </div>
 
         {gateBanner}
-
-        {j.rawOnly && (
-          <div className="info-bar" style={{ background: 'rgba(242,205,26,.07)', borderColor: 'var(--accent-bd)' }}>
-            <AlertTriangle size={16} style={{ color: 'var(--accent)' }} />
-            <span>This journey has a custom step graph the simple builder can't edit. Showing the definition read-only.</span>
-          </div>
-        )}
 
         {compileErrors && compileErrors.length > 0 && (
           <div className="info-bar" style={{ background: 'rgba(222,42,42,.07)', borderColor: 'var(--red-bd, rgba(222,42,42,.3))' }}>
@@ -285,46 +259,14 @@ export default function JourneysPage() {
               </div>
             )}
           </div>
-          <div className="tw-note" style={{ marginBottom: 0, marginTop: 12 }}>
-            Trigger type is <strong>event</strong> (v1). A matching event enrols the profile; the flow below runs once per enrolment.
-          </div>
         </Panel>
 
-        {j.rawOnly ? (
-          <Panel title="Definition (read-only)" pad>
-            <pre className="mono" style={{ margin: 0, fontSize: 12, lineHeight: 1.5, overflowX: 'auto', color: 'var(--text-2)' }}>
-              {JSON.stringify(j.rawDefinition, null, 2)}
-            </pre>
-          </Panel>
-        ) : (
-          <Panel title="Steps" pad>
-            <div className="tw-note" style={{ marginTop: 0 }}>
-              A linear flow: <strong>wait</strong> → <strong>condition</strong> → on true <strong>send</strong>, on false exit → exit.
-            </div>
-            <div className="form-grid">
-              <div className="ff"><div className="kv-k">1 · Wait — duration</div>
-                <input className="f-inp mono" value={j.waitDuration} onChange={(e) => set('waitDuration', e.target.value)} placeholder="24 hours" disabled={busy || !editable} />
-              </div>
-              <div className="ff"><div className="kv-k">2 · Condition — check</div>
-                <select className="f-inp" value={j.condKind} onChange={(e) => set('condKind', e.target.value)} disabled={busy || !editable}>
-                  {COND_KINDS.map((x) => <option key={x.id} value={x.id}>{x.label}</option>)}
-                </select>
-              </div>
-              <div className="ff"><div className="kv-k">2 · Condition — event</div>
-                <input className="f-inp mono" list="journey-event-suggest" value={j.condEvent} onChange={(e) => set('condEvent', e.target.value)} placeholder="order_placed" disabled={busy || !editable} />
-              </div>
-              <div className="ff"><div className="kv-k">3 · Send (if condition true) — template</div>
-                <select className="f-inp" value={j.templateId} onChange={(e) => set('templateId', e.target.value)} disabled={busy || !editable}>
-                  <option value="">— pick a template —</option>
-                  {emailTemplates.map((t) => <option key={t.id} value={t.id}>{t.name} · v{t.version} ({t.status})</option>)}
-                </select>
-              </div>
-            </div>
-            <div className="tw-note" style={{ marginBottom: 0, marginTop: 12 }}>
-              The send step requires an <strong>active</strong> template (the engine validates this on save). If the condition is false, the journey exits without sending.
-            </div>
-          </Panel>
-        )}
+        <Panel title="Flow" pad>
+          <JourneyCanvas nodes={nodes} edges={edges} setNodes={setNodes} setEdges={setEdges}
+            onSelect={setSelected} readOnly={busy || !editable} />
+          <NodeDrawer nodeId={selectedNode?.id} config={selectedNode?.data?.config} templates={templates}
+            onChange={updateSelectedConfig} onDelete={deleteSelected} disabled={busy || !editable} />
+        </Panel>
 
         <Panel title="Lifecycle" pad>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
@@ -379,7 +321,7 @@ export default function JourneysPage() {
       {gateBanner}
       {loading ? <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
         : rows.length === 0
-          ? <Panel><EmptyState icon="arrow-right" title="No journeys yet" hint="Create a journey — pick a trigger event, set a wait, branch on a follow-up event, then send." /></Panel>
+          ? <Panel><EmptyState icon="arrow-right" title="No journeys yet" hint="Create a journey — pick a trigger event, then build the flow on the canvas." /></Panel>
           : (
             <Panel title="Journeys" count={rows.length}>
               <table className="dt">
