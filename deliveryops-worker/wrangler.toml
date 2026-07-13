@@ -1,0 +1,21 @@
+name = "deliveryops"
+main = "src/index.js"
+compatibility_date = "2026-05-28"
+workers_dev = true
+
+# deliveryops — in-house PDP delivery-date checker. HTTP only (behind Shopify App Proxy); NO cron.
+# Uniware getServiceability = "can we deliver + COD"; Delhivery Express = the date; LOT logic = dispatch date.
+# Writes/reads the delivery_edd_cache table on the SAME Supabase project as courierops/lotopsproxy.
+#
+# Secrets set via `wrangler secret put` — never stored in this file:
+#   UNIWARE_TENANT          (= "fraternitas")
+#   UNIWARE_USERNAME        (native-password admin user, e.g. systems@legendoftoys.com)
+#   UNIWARE_PASSWORD
+#   DELHIVERY_API_TOKEN     (Delhivery One → Settings → API Setup; header is `Token <t>`, not Bearer)
+#   SUPABASE_SERVICE_KEY    (service_role sb_secret key — same project as courierops)
+#   SHOPIFY_APP_PROXY_SECRET (LOT Storefront Kit app client secret — verifies the App Proxy signature)
+#
+# Optional vars (defaults live in src/config.js; set here only to override):
+#   ORIGIN_PINCODE, CUTOFF_HHMM (e.g. "14:00"), NON_WORKING_DAYS (e.g. "0"), CACHE_TTL_HOURS
+[vars]
+SUPABASE_URL = "https://jkxcnjabmrkteanzoofj.supabase.co"
