@@ -59,4 +59,24 @@ function sendWentOut(res) {
   return !!res && (res.status === 'sent' || res.status === 'delivered' || res.status === 'deduped');
 }
 
-module.exports = { resolveTarget, stepTargets, ID_TYPE_FOR_CHANNEL, HANDLES, RESERVED_STEP_IDS, durationToMs, sendWentOut };
+// Decide where a send step goes after send() returns, honoring on_skip (spec §4.2).
+//  - sent/delivered/deduped → plain 'next'.
+//  - skipped/suppressed/failed with on_skip:
+//      'continue' (default) → plain 'next' (customer not re-targeted on another leg either).
+//      'exit'               → terminate with on_skip_outcome (default 'skipped').
+//      'advance'            → skip the pointless downstream wait: if 'next' is a wait_response,
+//                             jump to ITS 'timeout' target (the next channel) and report skippedWait.
+// Returns { next } | { next, skippedWait } | { terminate }.
+function resolveSendNext(step, res, def) {
+  const plainNext = resolveTarget(step, 'next');
+  if (sendWentOut(res)) return { next: plainNext };
+  const policy = step.on_skip || 'continue';
+  if (policy === 'exit') return { terminate: step.on_skip_outcome || 'skipped' };
+  if (policy === 'advance') {
+    const nx = def.steps && def.steps[plainNext];
+    if (nx && nx.type === 'wait_response') return { next: resolveTarget(nx, 'timeout'), skippedWait: plainNext };
+  }
+  return { next: plainNext };
+}
+
+module.exports = { resolveTarget, stepTargets, ID_TYPE_FOR_CHANNEL, HANDLES, RESERVED_STEP_IDS, durationToMs, sendWentOut, resolveSendNext };

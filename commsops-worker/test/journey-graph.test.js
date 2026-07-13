@@ -58,3 +58,27 @@ assert.equal(G2.sendWentOut({ status: 'deduped' }), true);
 assert.equal(G2.sendWentOut({ status: 'skipped', reason: 'freq_cap' }), false);
 assert.equal(G2.sendWentOut({ status: 'suppressed' }), false);
 console.log('journey-graph J1 helpers ok');
+
+// resolveSendNext(step, sendRes, def) → { next } | { next, skippedWait } | { terminate }
+{
+  const def = { steps: {
+    s: { type: 'send', channel: 'whatsapp', on_skip: 'advance', outcomes: { next: 'wr' } },
+    wr: { type: 'wait_response', awaited: ['x'], within: '6 hours', outcomes: { responded: 'ex', timeout: 's2' } },
+    s2: { type: 'send', outcomes: { next: 'ex' } }, ex: { type: 'exit', outcome: 'completed' } } };
+  // sent → always plain next
+  assert.deepEqual(G2.resolveSendNext(def.steps.s, { status: 'sent' }, def), { next: 'wr' });
+  // skipped + advance + next-is-wait_response → jump to that wait's timeout target, note skippedWait
+  assert.deepEqual(G2.resolveSendNext(def.steps.s, { status: 'skipped', reason: 'freq_cap' }, def),
+    { next: 's2', skippedWait: 'wr' });
+}
+{
+  // skipped + continue (default) → plain next
+  const def = { steps: { s: { type: 'send', outcomes: { next: 'ex' } }, ex: { type: 'exit' } } };
+  assert.deepEqual(G2.resolveSendNext(def.steps.s, { status: 'skipped', reason: 'quiet_hours' }, def), { next: 'ex' });
+}
+{
+  // skipped + exit → terminate with on_skip_outcome
+  const def = { steps: { s: { type: 'send', on_skip: 'exit', on_skip_outcome: 'unreachable', outcomes: { next: 'ex' } }, ex: { type: 'exit' } } };
+  assert.deepEqual(G2.resolveSendNext(def.steps.s, { status: 'suppressed' }, def), { terminate: 'unreachable' });
+}
+console.log('resolveSendNext ok');
