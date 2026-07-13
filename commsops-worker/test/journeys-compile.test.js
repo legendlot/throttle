@@ -84,5 +84,19 @@ const { compile } = require('../src/journeys.js');
   }
   console.log('compile J1 ok');
 
+  // journey-level: exit_rules === null is treated as "not provided" (no error)
+  {
+    const def = { entry: 'ex', steps: { ex: { type: 'exit', outcome: 'completed' } } };
+    const r = await compile({}, def, { max_duration: null, exit_rules: null });
+    assert.ok(r.ok, 'null exit_rules/max_duration should compile clean: ' + JSON.stringify(r.errors));
+  }
+  // journey-level: exit_rules present but not an array → bad_exit_rules
+  {
+    const def = { entry: 'ex', steps: { ex: { type: 'exit', outcome: 'completed' } } };
+    const r = await compile({}, def, { exit_rules: 'nope' });
+    assert.ok(r.errors.includes('bad_exit_rules'), JSON.stringify(r.errors));
+  }
+  console.log('compile J1 null-handling ok');
+
   console.log('journeys-compile.test.js: all assertions passed');
 })().catch((e) => { console.error(e); process.exit(1); });

@@ -18,7 +18,9 @@ async function getJourney(env, id) {
 }
 
 // Validate the step graph: single declared entry, every next/branch target exists,
-// at least one reachable exit, send steps reference an approved template. Returns { ok, errors:[] }.
+// at least one reachable exit, send steps reference an approved template, wait_response
+// steps have valid awaited/within/handlers, on_skip is a known policy, and (when a journey
+// is passed) journey-level exit_rules + max_duration are well-formed. Returns { ok, errors:[] }.
 async function compile(env, definition, journey) {
   const errors = [];
   const steps = definition?.steps || {};
@@ -60,7 +62,7 @@ async function compile(env, definition, journey) {
   if (journey) {
     if (journey.max_duration !== undefined && journey.max_duration !== null &&
         G.durationToMs(journey.max_duration) === null) errors.push('bad_max_duration');
-    if (journey.exit_rules !== undefined) {
+    if (journey.exit_rules !== undefined && journey.exit_rules !== null) {
       if (!Array.isArray(journey.exit_rules)) errors.push('bad_exit_rules');
       else journey.exit_rules.forEach((r, i) => {
         if (!r || !r.event) errors.push(`exit_rule_no_event:${i}`);
