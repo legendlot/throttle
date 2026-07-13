@@ -1,5 +1,6 @@
 // Journey CRUD + versioning + step-graph validation + enrol (enrol() added in a later task).
 const A = require('./auth.js');
+const G = require('./journey-graph.js');
 const nowIso = () => new Date().toISOString();
 
 async function listJourneys(env) {
@@ -23,14 +24,16 @@ async function compile(env, definition) {
   const steps = definition?.steps || {};
   const ids = Object.keys(steps);
   if (!definition?.entry || !steps[definition.entry]) errors.push('entry_missing_or_unknown');
-  const targets = (s) => [s.next, s.if_true, s.if_false].filter(Boolean);
+  const targets = (s) => G.stepTargets(s);
   for (const id of ids) {
     const s = steps[id];
     if (['load-definition', 'load-enrolment', 'load-trigger', 'load-journey-name', 'boot'].includes(id) || /^(log:|end:)/.test(id))
       errors.push(`reserved_step_id:${id}`);
     if (!['wait', 'condition', 'send', 'exit'].includes(s.type)) errors.push(`bad_type:${id}:${s.type}`);
     for (const t of targets(s)) if (!steps[t]) errors.push(`dangling_target:${id}->${t}`);
-    if (s.type === 'condition' && (!steps[s.if_true] || !steps[s.if_false])) errors.push(`condition_branch_missing:${id}`);
+    if (s.type === 'condition' &&
+        (!steps[G.resolveTarget(s, 'if_true')] || !steps[G.resolveTarget(s, 'if_false')]))
+      errors.push(`condition_branch_missing:${id}`);
     if (s.type === 'wait' && !s.duration) errors.push(`wait_no_duration:${id}`);
   }
   const seen = new Set(); const stack = definition?.entry ? [definition.entry] : [];
