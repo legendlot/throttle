@@ -1954,12 +1954,19 @@ async function adsAutoPause(env) {
     if (!(await adsWriteEnabled())) return;
     const killRoas  = num(await adsSetting('ads_kill_roas', '2'));
     const killAfter = num(await adsSetting('ads_kill_after_inr', '6500'));
+    // The kill-gate is a PROSPECT-test policy: cheaply retire experiment losers. It must NOT
+    // auto-pause a graduated winner in a SCALE campaign, which re-enters Meta's learning phase
+    // on launch and is expected to be volatile for its first week. Scale is human-managed
+    // (Afshaan approves each budget step); the daily spend ceiling remains the hard backstop.
+    const sp = await sbSales('/rest/v1/ads_plan?kind=eq.scale&select=id');
+    const scalePlanIds = new Set((sp.ok ? sp.data : []).map(r => r.id));
     const mr = await sbSales('/rest/v1/ads_managed?entity_type=eq.ad&status=eq.active&select=meta_id,plan_id');
     const ads = mr.ok ? mr.data : [];
     if (!ads.length) return;
     const roll = await rpcSales('f_mkt_ad_rollup', { p_from: '2025-04-01', p_to: todayISO(), p_group: 'ad' });
     const perf = {}; for (const r of (roll.ok ? roll.data : [])) perf[r.ad_id] = r;
     for (const a of ads) {
+      if (scalePlanIds.has(a.plan_id)) continue;   // exempt SCALE from the prospect kill-gate
       const p = perf[a.meta_id]; if (!p) continue;
       const spend = num(p.spend), roas = spend > 0 ? num(p.conv_value) / spend : 0;
       if (spend >= killAfter && roas < killRoas) {
