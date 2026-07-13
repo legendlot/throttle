@@ -75,7 +75,7 @@ async function compile(env, definition, journey) {
 
 // Save = upsert journey header + (if definition changed) publish a NEW immutable version.
 async function saveJourney(env, body, userId) {
-  const { id, name, trigger, reenrolment, reenrol_cooldown_hours, definition, status } = body;
+  const { id, name, trigger, reenrolment, reenrol_cooldown_hours, definition, status, exit_rules, max_duration } = body;
   if (definition) {
     const c = await compile(env, definition, body);
     if (!c.ok) return { ok: false, error: 'invalid_definition', details: c.errors };
@@ -85,7 +85,9 @@ async function saveJourney(env, body, userId) {
     const ins = await A.sbComms('/rest/v1/journeys', env, {
       method: 'POST', headers: { Prefer: 'return=representation' },
       body: JSON.stringify({ name, trigger: trigger || {}, reenrolment: reenrolment || 'once_while_active',
-        reenrol_cooldown_hours: reenrol_cooldown_hours || null, status: 'draft', created_by: userId }),
+        reenrol_cooldown_hours: reenrol_cooldown_hours || null, status: 'draft', created_by: userId,
+        exit_rules: Array.isArray(exit_rules) ? exit_rules : [],
+        max_duration: max_duration || '30 days' }),
     });
     journeyId = ins.data?.[0]?.id;
     if (!journeyId) return { ok: false, error: 'create_failed' };
@@ -96,6 +98,8 @@ async function saveJourney(env, body, userId) {
     if (reenrolment !== undefined) patch.reenrolment = reenrolment;
     if (reenrol_cooldown_hours !== undefined) patch.reenrol_cooldown_hours = reenrol_cooldown_hours;
     if (status !== undefined) patch.status = status;
+    if (exit_rules !== undefined) patch.exit_rules = Array.isArray(exit_rules) ? exit_rules : [];
+    if (max_duration !== undefined) patch.max_duration = max_duration;
     await A.sbComms(`/rest/v1/journeys?id=eq.${A.enc(journeyId)}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
   }
   if (definition) {
