@@ -19,7 +19,7 @@ async function getJourney(env, id) {
 
 // Validate the step graph: single declared entry, every next/branch target exists,
 // at least one reachable exit, send steps reference an approved template. Returns { ok, errors:[] }.
-async function compile(env, definition) {
+async function compile(env, definition, journey) {
   const errors = [];
   const steps = definition?.steps || {};
   const ids = Object.keys(steps);
@@ -27,14 +27,21 @@ async function compile(env, definition) {
   const targets = (s) => G.stepTargets(s);
   for (const id of ids) {
     const s = steps[id];
-    if (['load-definition', 'load-enrolment', 'load-trigger', 'load-journey-name', 'boot'].includes(id) || /^(log:|end:)/.test(id))
+    if (G.RESERVED_STEP_IDS.includes(id) || /^(log:|end:)/.test(id))
       errors.push(`reserved_step_id:${id}`);
-    if (!['wait', 'condition', 'send', 'exit'].includes(s.type)) errors.push(`bad_type:${id}:${s.type}`);
+    if (!['wait', 'condition', 'send', 'wait_response', 'exit'].includes(s.type)) errors.push(`bad_type:${id}:${s.type}`);
     for (const t of targets(s)) if (!steps[t]) errors.push(`dangling_target:${id}->${t}`);
     if (s.type === 'condition' &&
         (!steps[G.resolveTarget(s, 'if_true')] || !steps[G.resolveTarget(s, 'if_false')]))
       errors.push(`condition_branch_missing:${id}`);
     if (s.type === 'wait' && !s.duration) errors.push(`wait_no_duration:${id}`);
+    if (s.type === 'wait_response') {
+      if (!Array.isArray(s.awaited) || s.awaited.length === 0) errors.push(`wait_response_no_awaited:${id}`);
+      if (!s.within || G.durationToMs(s.within) === null) errors.push(`wait_response_bad_within:${id}`);
+      if (!G.resolveTarget(s, 'responded') || !G.resolveTarget(s, 'timeout')) errors.push(`wait_response_handle_missing:${id}`);
+    }
+    if (s.type === 'send' && s.on_skip !== undefined &&
+        !['continue', 'advance', 'exit'].includes(s.on_skip)) errors.push(`bad_on_skip:${id}`);
   }
   const seen = new Set(); const stack = definition?.entry ? [definition.entry] : [];
   while (stack.length) {
@@ -49,6 +56,18 @@ async function compile(env, definition) {
     const byId = Object.fromEntries(((r.ok && r.data) || []).map((t) => [t.id, t.status]));
     for (const t of tplIds) if (byId[t] !== 'active') errors.push(`template_not_active:${t}`);
   }
+  // Journey-level escalation config (optional; passed from saveJourney).
+  if (journey) {
+    if (journey.max_duration !== undefined && journey.max_duration !== null &&
+        G.durationToMs(journey.max_duration) === null) errors.push('bad_max_duration');
+    if (journey.exit_rules !== undefined) {
+      if (!Array.isArray(journey.exit_rules)) errors.push('bad_exit_rules');
+      else journey.exit_rules.forEach((r, i) => {
+        if (!r || !r.event) errors.push(`exit_rule_no_event:${i}`);
+        if (!r || !r.outcome) errors.push(`exit_rule_no_outcome:${i}`);
+      });
+    }
+  }
   return { ok: errors.length === 0, errors };
 }
 
@@ -56,7 +75,7 @@ async function compile(env, definition) {
 async function saveJourney(env, body, userId) {
   const { id, name, trigger, reenrolment, reenrol_cooldown_hours, definition, status } = body;
   if (definition) {
-    const c = await compile(env, definition);
+    const c = await compile(env, definition, body);
     if (!c.ok) return { ok: false, error: 'invalid_definition', details: c.errors };
   }
   let journeyId = id;

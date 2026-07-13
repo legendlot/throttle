@@ -321,7 +321,7 @@ async function handlePost(body, auth, env) {
       const r = await J.saveJourney(env, body, auth.userId);
       return r.ok ? ok(r) : err(r.error, 400); }
     case 'compileJourney':
-      return ok(await J.compile(env, body.definition));
+      return ok(await J.compile(env, body.definition, body));
     case 'setJourneyStatus': { if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
       const r = await J.setJourneyStatus(env, body.id, body.status);
       return r.ok ? ok(r) : err(r.error, 400); }
