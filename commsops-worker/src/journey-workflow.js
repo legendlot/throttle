@@ -82,17 +82,14 @@ class JourneyWorkflow extends WorkflowEntrypoint {
       if (!s) { await this.#end(env, step, enrolmentId, 'failed', cur); return; }
 
       if (s.type === 'wait') {
-        // Per-step entry timestamp: the pre-check lower bound must be when THIS step
-        // started, not enrol — else an exit event that fired earlier in the journey
-        // would short-circuit a later wait on a STALE event. Residual: an event landing
-        // in the sub-second window between the preceding step and this entry is caught
-        // only by the live signal path (documented v1 limitation, consistent with
-        // profile-level correlation).
-        const since = await step.do(`since:${cur}`, async () => new Date().toISOString());
         await this.#logStep(env, step, enrolmentId, cur, s.type, { duration: s.duration });
-        // Pre-check: an exit event already fired since this step started? (only if exit rules exist)
+        // Exit pre-check uses enrolledAt (ambient): exit rules span the whole enrolment
+        // and are terminal, so detecting a matching exit event from ANYWHERE in the
+        // journey history and ending is always correct (no "stale exit" hazard — the
+        // first detection ends the journey). enrolledAt also closes the boot→first-wait
+        // gap where an exit's live signal is lost because the instance isn't parked yet.
         const pre = exitEventSet.size
-          ? await step.do(`precheck:${cur}`, async () => this.#eventSince(env, profileId, [...exitEventSet], since))
+          ? await step.do(`precheck:${cur}`, async () => this.#eventSince(env, profileId, [...exitEventSet], enrolledAt))
           : null;
         if (pre) { await this.#end(env, step, enrolmentId, exitOutcomeFor(pre), cur); return; }
         // Interruptible sleep: timeout = normal completion (→ next); exit signal → terminate.
@@ -100,11 +97,13 @@ class JourneyWorkflow extends WorkflowEntrypoint {
         if (r.kind === 'exit') { await this.#end(env, step, enrolmentId, r.outcome, cur); return; }
         cur = G.resolveTarget(s, 'next');
       } else if (s.type === 'wait_response') {
-        // Per-step entry timestamp: pre-check bound = when THIS step started, not enrol —
-        // else a re-awaited event that fired earlier short-circuits to 'responded' on a
-        // STALE event. Residual: an event in the sub-second window between the preceding
-        // step and this entry is caught only by the live signal path (documented v1
-        // limitation, consistent with profile-level correlation).
+        // Per-step entry timestamp: the RESPONSE pre-check bound must be when THIS step
+        // started, not enrol — else a re-awaited event that fired earlier short-circuits
+        // to 'responded' on a STALE event. (The EXIT pre-check below uses enrolledAt
+        // instead — ambient + terminal, so catching a missed exit anywhere in the
+        // enrolment is always correct.) Residual: a sub-second response arriving during
+        // the immediately-preceding send is caught only by the live signal path
+        // (documented v1 limitation, consistent with profile-level correlation).
         const since = await step.do(`since:${cur}`, async () => new Date().toISOString());
         // Register the response rows for the awaited events, then park.
         await step.do(`waitreg:${cur}`, async () => {
@@ -118,10 +117,11 @@ class JourneyWorkflow extends WorkflowEntrypoint {
           return true;
         });
         await this.#logStep(env, step, enrolmentId, cur, s.type, { awaited: s.awaited, within: s.within });
-        // Pre-check (since this step started): exit event wins over an awaited response.
+        // Exit pre-check uses enrolledAt (ambient/terminal); response pre-check uses per-step
+        // since (avoids stale reuse). Exit wins over an awaited response.
         let outHandle = null, terminateOutcome = null;
         const preExit = exitEventSet.size
-          ? await step.do(`precheckx:${cur}`, async () => this.#eventSince(env, profileId, [...exitEventSet], since))
+          ? await step.do(`precheckx:${cur}`, async () => this.#eventSince(env, profileId, [...exitEventSet], enrolledAt))
           : null;
         if (preExit) terminateOutcome = exitOutcomeFor(preExit);
         else {

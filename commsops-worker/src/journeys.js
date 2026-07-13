@@ -58,7 +58,7 @@ async function compile(env, definition, journey) {
   // Reject cycles — the interpreter keys durable steps by step id, so a revisited
   // step returns cached results and spins to the transition cap. True loops are a
   // deferred feature; for now a cyclic graph is a compile error.
-  const WHITE = 0, GREY = 1, BLACK = 2;
+  const GREY = 1, BLACK = 2;
   const color = {};
   const hasCycle = (id) => {
     if (!steps[id]) return false;
