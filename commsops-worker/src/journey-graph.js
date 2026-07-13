@@ -46,7 +46,8 @@ const RESERVED_STEP_IDS = [
 
 // Parse a human duration string ("6 hours", "30 minutes", "2 days", "90 seconds")
 // to milliseconds. Returns null on anything unrecognised. Used for expires_at math;
-// the durable wait itself passes the raw string to step.waitForEvent/step.sleep.
+// the durable wait itself passes the raw string to step.waitForEvent (all waits are
+// interruptible waitForEvent now — step.sleep is no longer used by the interpreter).
 const _UNIT_MS = { second: 1000, minute: 60000, hour: 3600000, day: 86400000, week: 604800000 };
 function durationToMs(str) {
   const m = String(str || '').trim().toLowerCase().match(/^(\d+(?:\.\d+)?)\s*(second|minute|hour|day|week)s?$/);

@@ -120,7 +120,7 @@ async function saveJourney(env, body, userId) {
     if (reenrol_cooldown_hours !== undefined) patch.reenrol_cooldown_hours = reenrol_cooldown_hours;
     if (status !== undefined) patch.status = status;
     if (exit_rules !== undefined) patch.exit_rules = Array.isArray(exit_rules) ? exit_rules : [];
-    if (max_duration !== undefined) patch.max_duration = max_duration;
+    if (max_duration !== undefined) patch.max_duration = max_duration || '30 days'; // coalesce: column is NOT NULL (a cleared field → default, never a 23502 that silently drops the whole PATCH)
     await A.sbComms(`/rest/v1/journeys?id=eq.${A.enc(journeyId)}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
   }
   if (definition) {
