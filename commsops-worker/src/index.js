@@ -385,6 +385,29 @@ async function runScheduled(env) {
   // 2. deliverability spike watch (≤1 alert/hour via settings.last_alert_at)
   try { await checkDeliverabilitySpike(env); }
   catch (e) { console.log('spike_check_error', e?.message || String(e)); }
+
+  // (J1) Lifetime cap: auto-exit enrolments older than their journey's max_duration.
+  // We signal the parked instance so it ends cleanly via #park → 'expired'.
+  try {
+    const jr = await A.sbComms('/rest/v1/journeys?select=id,max_duration', env);
+    for (const j of ((jr.ok && jr.data) || [])) {
+      const ms = require('./journey-graph.js').durationToMs(j.max_duration || '30 days') || 2592000000;
+      const cutoff = new Date(Date.now() - ms).toISOString();
+      const er = await A.sbComms(
+        `/rest/v1/enrolments?journey_id=eq.${A.enc(j.id)}&status=eq.active&enrolled_at=lt.${A.enc(cutoff)}&select=id&limit=200`, env);
+      for (const e of ((er.ok && er.data) || [])) {
+        try {
+          const inst = await env.JOURNEY_WORKFLOW.get(String(e.id));
+          await inst.sendEvent({ type: 'signal', payload: { kind: 'exit', outcome: 'expired', event: '__max_duration' } });
+        } catch (_) { /* not parked / already gone */ }
+      }
+    }
+  } catch (e) { console.log('j1_maxduration_sweep_error', e?.message || String(e)); }
+
+  // (J1) Delete expired / orphaned wait-index rows (bounded write volume).
+  try {
+    await A.sbComms(`/rest/v1/enrolment_waits?expires_at=lt.${A.enc(new Date().toISOString())}`, env, { method: 'DELETE' });
+  } catch (e) { console.log('j1_wait_sweep_error', e?.message || String(e)); }
 }
 
 async function checkDeliverabilitySpike(env) {
