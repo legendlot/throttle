@@ -98,5 +98,22 @@ const { compile } = require('../src/journeys.js');
   }
   console.log('compile J1 null-handling ok');
 
+  // cyclic definition → cycle_detected
+  {
+    const def = { entry: 'a', steps: {
+      a: { type: 'wait', duration: '1 hour', outcomes: { next: 'b' } },
+      b: { type: 'condition', check: { kind: 'attribute', attr: 'x', op: 'eq', value: '1' }, outcomes: { if_true: 'a', if_false: 'ex' } },
+      ex: { type: 'exit', outcome: 'completed' } } };
+    const r = await compile({}, def);
+    assert.ok(r.errors.includes('cycle_detected'), JSON.stringify(r.errors));
+  }
+  // exit step with reserved terminal outcome 'active' → reserved_outcome:<id>
+  {
+    const def = { entry: 'ex', steps: { ex: { type: 'exit', outcome: 'active' } } };
+    const r = await compile({}, def);
+    assert.ok(r.errors.includes('reserved_outcome:ex'), JSON.stringify(r.errors));
+  }
+  console.log('compile J1 cycle + reserved-outcome ok');
+
   console.log('journeys-compile.test.js: all assertions passed');
 })().catch((e) => { console.error(e); process.exit(1); });

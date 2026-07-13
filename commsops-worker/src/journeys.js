@@ -29,7 +29,7 @@ async function compile(env, definition, journey) {
   const targets = (s) => G.stepTargets(s);
   for (const id of ids) {
     const s = steps[id];
-    if (G.RESERVED_STEP_IDS.includes(id) || /^(log:|end:)/.test(id))
+    if (G.RESERVED_STEP_IDS.includes(id) || /^(log:|end:|precheck:|precheckx:|waitreg:|waitclr:|since:|clear-waits:)/.test(id))
       errors.push(`reserved_step_id:${id}`);
     if (!['wait', 'condition', 'send', 'wait_response', 'exit'].includes(s.type)) errors.push(`bad_type:${id}:${s.type}`);
     for (const t of targets(s)) if (!steps[t]) errors.push(`dangling_target:${id}->${t}`);
@@ -44,6 +44,10 @@ async function compile(env, definition, journey) {
     }
     if (s.type === 'send' && s.on_skip !== undefined &&
         !['continue', 'advance', 'exit'].includes(s.on_skip)) errors.push(`bad_on_skip:${id}`);
+    // 'active' is the live-enrolment status — a terminal outcome equal to it would strand
+    // a terminated enrolment as active (and corrupt the funnel aggregation).
+    if (s.type === 'exit' && s.outcome === 'active') errors.push(`reserved_outcome:${id}`);
+    if (s.type === 'send' && s.on_skip_outcome === 'active') errors.push(`reserved_outcome:${id}`);
   }
   const seen = new Set(); const stack = definition?.entry ? [definition.entry] : [];
   while (stack.length) {
@@ -51,6 +55,22 @@ async function compile(env, definition, journey) {
     targets(steps[id]).forEach((t) => stack.push(t));
   }
   if (![...seen].some((id) => steps[id]?.type === 'exit')) errors.push('no_reachable_exit');
+  // Reject cycles — the interpreter keys durable steps by step id, so a revisited
+  // step returns cached results and spins to the transition cap. True loops are a
+  // deferred feature; for now a cyclic graph is a compile error.
+  const WHITE = 0, GREY = 1, BLACK = 2;
+  const color = {};
+  const hasCycle = (id) => {
+    if (!steps[id]) return false;
+    color[id] = GREY;
+    for (const t of G.stepTargets(steps[id])) {
+      if (color[t] === GREY) return true;
+      if (color[t] === undefined && hasCycle(t)) return true;
+    }
+    color[id] = BLACK;
+    return false;
+  };
+  if (definition?.entry && hasCycle(definition.entry)) errors.push('cycle_detected');
   const tplIds = [...seen].map((id) => steps[id]).filter((s) => s?.type === 'send' && s.templateId).map((s) => s.templateId);
   if (tplIds.length) {
     const inList = tplIds.map((t) => A.enc(t)).join(',');
@@ -67,6 +87,7 @@ async function compile(env, definition, journey) {
       else journey.exit_rules.forEach((r, i) => {
         if (!r || !r.event) errors.push(`exit_rule_no_event:${i}`);
         if (!r || !r.outcome) errors.push(`exit_rule_no_outcome:${i}`);
+        if (r && r.outcome === 'active') errors.push(`exit_rule_reserved_outcome:${i}`);
       });
     }
   }
