@@ -34,3 +34,20 @@ test('cachePut issues an upsert with resolution=merge-duplicates', async () => {
   assert.equal(seen.init.method, 'POST');
   assert.match(seen.init.headers.Prefer, /merge-duplicates/);
 });
+
+test('cacheGet returns null on a non-ok (500) response', async () => {
+  const fetchImpl = async () => new Response('err', { status: 500 });
+  const got = await cacheGet(ENV, { pincode: '560001', cod: false }, { fetchImpl, now: NOW, ttlMs: TTL });
+  assert.equal(got, null);
+});
+
+test('cacheGet returns null when fetch throws', async () => {
+  const fetchImpl = async () => { throw new Error('network down'); };
+  const got = await cacheGet(ENV, { pincode: '560001', cod: false }, { fetchImpl, now: NOW, ttlMs: TTL });
+  assert.equal(got, null);
+});
+
+test('cachePut never throws when fetch throws', async () => {
+  const fetchImpl = async () => { throw new Error('network down'); };
+  await assert.doesNotReject(() => cachePut(ENV, { pincode: '560001', cod: false, serviceable: true, source: 'delhivery', transit_days: 3 }, { fetchImpl }));
+});
