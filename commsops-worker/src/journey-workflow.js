@@ -5,6 +5,7 @@
 import { WorkflowEntrypoint } from 'cloudflare:workers';
 const A = require('./auth.js');
 const { send } = require('./send.js');
+const G = require('./journey-graph.js');
 
 const MAX_TRANSITIONS = 100; // safety against a mis-validated cyclic definition
 
@@ -56,15 +57,15 @@ class JourneyWorkflow extends WorkflowEntrypoint {
       if (s.type === 'wait') {
         await this.#logStep(env, step, enrolmentId, cur, s.type, { duration: s.duration });
         await step.sleep(cur, s.duration);
-        cur = s.next;
+        cur = G.resolveTarget(s, 'next');
       } else if (s.type === 'condition') {
         const branch = await step.do(cur, async () => this.#evalCondition(env, s.check, profileId, enrolledAt));
         await this.#logStep(env, step, enrolmentId, cur, s.type, { branch });
-        cur = branch ? s.if_true : s.if_false;
+        cur = G.resolveTarget(s, branch ? 'if_true' : 'if_false');
       } else if (s.type === 'send') {
         const res = await step.do(cur, async () => this.#doSend(env, s, profileId, enrolmentId, cur, triggerProps, journeyName));
         await this.#logStep(env, step, enrolmentId, cur, s.type, res);
-        cur = s.next;
+        cur = G.resolveTarget(s, 'next');
       } else if (s.type === 'exit') {
         await this.#logStep(env, step, enrolmentId, cur, s.type, { outcome: s.outcome || 'completed' });
         await this.#end(env, step, enrolmentId, s.outcome === 'exited' ? 'exited' : 'completed', cur);
@@ -78,15 +79,19 @@ class JourneyWorkflow extends WorkflowEntrypoint {
 
   // Resolve recipient + call the M5 send() spine. dedupKey makes a retried durable step idempotent.
   // send() does NOT auto-resolve `to` from the profile (it loads the profile only for template
-  // rendering; the adapter + gate use opts.to verbatim). So we resolve the profile's primary email
-  // identifier here and pass it as `to`. No email → skip WITHOUT calling send().
+  // rendering; the adapter + gate use opts.to verbatim). So we resolve the identifier per the
+  // step's channel (journey-graph ID_TYPE_FOR_CHANNEL: email→email, WA/SMS/voice→phone) and pass
+  // it as `to`. No matching identifier → skip WITHOUT calling send().
   async #doSend(env, s, profileId, enrolmentId, stepId, triggerProps, journeyName) {
     const channel = s.channel || 'email';
+    // spec §4.2: resolve the identifier TYPE the channel needs (email→email, WA/SMS/voice→phone).
+    // Previously hardcoded email — a WA journey send could never resolve a recipient.
+    const idType = G.ID_TYPE_FOR_CHANNEL[channel] || 'email';
     const idr = await A.sbComms(
-      `/rest/v1/identifiers?profile_id=eq.${A.enc(profileId)}&type=eq.email&select=value&order=last_seen.desc&limit=1`, env);
+      `/rest/v1/identifiers?profile_id=eq.${A.enc(profileId)}&type=eq.${A.enc(idType)}&select=value&order=last_seen.desc&limit=1`, env);
     if (!idr.ok) throw new Error('identifier_lookup_failed:' + JSON.stringify(idr.data));
     const to = idr.data?.[0]?.value;
-    if (!to) return { status: 'skipped', reason: 'no_email_identifier' };
+    if (!to) return { status: 'skipped', reason: `no_${idType}_identifier` };
     return send(env, {
       channel, purpose: s.purpose || 'marketing', profileId, to,
       templateId: s.templateId, constants: s.constants || {}, eventContext: triggerProps || {},
