@@ -54,4 +54,18 @@ assert.ok(localLint(noExit, g1.edges).some((m) => m.includes('exit')));
 assert.deepEqual(HANDLES.condition, ['if_true', 'if_false']);
 assert.deepEqual(HANDLES.exit, []);
 
+// mixed-shape step (outcomes for one handle + legacy field for another) — BOTH edges created
+// (defense-in-depth: mirrors the worker's stepTargets union so no transition is dropped on load)
+const mixedDef = { entry: 'c', steps: {
+  c: { type: 'condition', check: {}, outcomes: { if_true: 's' }, if_false: 'e' },
+  s: { type: 'exit', outcome: 'completed' },
+  e: { type: 'exit', outcome: 'completed' } } };
+const gm = fromDefinition({ trigger: {} }, mixedDef);
+assert.ok(gm.edges.find((x) => x.source === 'c' && x.sourceHandle === 'if_true' && x.target === 's'));
+assert.ok(gm.edges.find((x) => x.source === 'c' && x.sourceHandle === 'if_false' && x.target === 'e'));
+// pure-outcomes step still yields exactly its declared edge (no legacy leakage)
+const gp = fromDefinition({ trigger: {} }, { entry: 'w', steps: {
+  w: { type: 'wait', duration: '1 hours', outcomes: { next: 'x' } }, x: { type: 'exit' } } });
+assert.equal(gp.edges.filter((x) => x.source === 'w').length, 1);
+
 console.log('graph.test.js: all assertions passed');

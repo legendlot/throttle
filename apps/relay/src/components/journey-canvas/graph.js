@@ -7,15 +7,24 @@
 // layout keys entirely.
 
 const TRIGGER_ID = '__trigger';
+const LEGACY_HANDLES = ['next', 'if_true', 'if_false'];
 
 // outcome handles each J0 step type declares (spec §3 palette)
 const HANDLES = { send: ['next'], wait: ['next'], condition: ['if_true', 'if_false'], exit: [] };
 
+// [handle, target] for every non-empty target a step declares. Handle-aware union of
+// outcomes-keys ∪ legacy handles (outcomes wins per handle) — mirrors the worker's
+// journey-graph.stepTargets so a mixed-shape step (outcomes for one handle + a legacy
+// field for another) never silently drops an edge on load. Pure-shape steps are unaffected.
 function targetsOf(step) {
-  if (step.outcomes) return Object.entries(step.outcomes).filter(([, t]) => t);
-  return ['next', 'if_true', 'if_false']
-    .filter((h) => step[h])
-    .map((h) => [h, step[h]]);
+  const handles = new Set([...(step.outcomes ? Object.keys(step.outcomes) : []), ...LEGACY_HANDLES]);
+  const out = [];
+  for (const h of handles) {
+    const t = step.outcomes && Object.prototype.hasOwnProperty.call(step.outcomes, h)
+      ? step.outcomes[h] : step[h];
+    if (t) out.push([h, t]);
+  }
+  return out;
 }
 
 // BFS depth from entry → column; discovery order within a column → row.
