@@ -11,6 +11,7 @@ const CAMP = require('./campaigns.js');
 const J = require('./journeys.js');
 const SHOP = require('./shopify.js');
 const SHOPWH = require('./shopify-webhooks.js');
+const SHOPFLO = require('./shopflo-webhooks.js');
 const AL = require('./alerts.js');
 
 const CORS = {
@@ -504,6 +505,14 @@ export default {
     }
     if (url.pathname === '/webhooks/whatsapp' && request.method === 'POST') {
       const r = await handleWhatsappWebhook(env, request);
+      return r.ok ? ok(r) : err(r.error, r.status || 400);
+    }
+    // Shopflo Abandoned Cart Webhook (S211) — the checkout layer forwards abandonment /
+    // order events carrying the Shop Pass identity (phone) + cart. Token-guarded (no HMAC
+    // from Shopflo); inert 503 until SHOPFLO_WEBHOOK_TOKEN set. DISCOVERY: captures raw
+    // payload to comms.webhook_captures until the mapper is written off a real sample.
+    if (url.pathname === '/webhooks/shopflo' && request.method === 'POST') {
+      const r = await SHOPFLO.handleShopfloWebhook(env, request);
       return r.ok ? ok(r) : err(r.error, r.status || 400);
     }
 
