@@ -49,6 +49,32 @@ class JourneyWorkflow extends WorkflowEntrypoint {
       return r.data?.[0]?.name || null;
     });
 
+    // J1: journey-level escalation config (exit rules + lifetime cap).
+    const jcfg = await step.do('load-journey-cfg', async () => {
+      const r = await A.sbComms(`/rest/v1/journeys?id=eq.${A.enc(journeyId)}&select=exit_rules,max_duration&limit=1`, env);
+      if (!r.ok) throw new Error('load_journey_cfg_failed:' + JSON.stringify(r.data));
+      const row = r.data?.[0] || {};
+      return { exitRules: Array.isArray(row.exit_rules) ? row.exit_rules : [], maxDuration: row.max_duration || '30 days' };
+    });
+    const expiresAt = new Date(Date.parse(enrolledAt || new Date().toISOString()) + (G.durationToMs(jcfg.maxDuration) || 2592000000)).toISOString();
+
+    // Register ambient exit-rule rows so an incoming customer event can find + wake this
+    // parked instance (instance_id == enrolmentId). Idempotent upsert (unique index).
+    if (jcfg.exitRules.length) {
+      await step.do('register-waits', async () => {
+        for (const rule of jcfg.exitRules) {
+          if (!rule?.event || !rule?.outcome) continue;
+          await A.sbComms('/rest/v1/enrolment_waits?on_conflict=enrolment_id,awaited_event,kind', env, {
+            method: 'POST', headers: { Prefer: 'resolution=merge-duplicates' },
+            body: JSON.stringify({ enrolment_id: enrolmentId, instance_id: String(enrolmentId), profile_id: profileId,
+              awaited_event: rule.event, kind: 'exit', outcome: rule.outcome, expires_at: expiresAt }) });
+        }
+        return true;
+      });
+    }
+    const exitEventSet = new Set(jcfg.exitRules.map((r) => r && r.event).filter(Boolean));
+    const exitOutcomeFor = (evName) => (jcfg.exitRules.find((r) => r.event === evName) || {}).outcome || 'exited';
+
     let cur = def.entry;
     for (let i = 0; i < MAX_TRANSITIONS; i++) {
       const s = def.steps[cur];
@@ -56,19 +82,59 @@ class JourneyWorkflow extends WorkflowEntrypoint {
 
       if (s.type === 'wait') {
         await this.#logStep(env, step, enrolmentId, cur, s.type, { duration: s.duration });
-        await step.sleep(cur, s.duration);
+        // Pre-check: an exit event already fired between waits? (only if exit rules exist)
+        const pre = exitEventSet.size
+          ? await step.do(`precheck:${cur}`, async () => this.#eventSince(env, profileId, [...exitEventSet], enrolledAt))
+          : null;
+        if (pre) { await this.#terminate(env, step, enrolmentId, exitOutcomeFor(pre), cur); return; }
+        // Interruptible sleep: timeout = normal completion (→ next); exit signal → terminate.
+        const r = await this.#park(step, cur, s.duration);
+        if (r.kind === 'exit') { await this.#terminate(env, step, enrolmentId, r.outcome, cur); return; }
         cur = G.resolveTarget(s, 'next');
+      } else if (s.type === 'wait_response') {
+        // Register the response rows for the awaited events, then park.
+        await step.do(`waitreg:${cur}`, async () => {
+          for (const evName of (s.awaited || [])) {
+            await A.sbComms('/rest/v1/enrolment_waits?on_conflict=enrolment_id,awaited_event,kind', env, {
+              method: 'POST', headers: { Prefer: 'resolution=merge-duplicates' },
+              body: JSON.stringify({ enrolment_id: enrolmentId, instance_id: String(enrolmentId), profile_id: profileId,
+                awaited_event: evName, kind: 'response', step_id: cur, expires_at: expiresAt }) });
+          }
+          return true;
+        });
+        await this.#logStep(env, step, enrolmentId, cur, s.type, { awaited: s.awaited, within: s.within });
+        // Pre-check: response OR exit event already happened since enrol?
+        const preNames = [...(s.awaited || []), ...exitEventSet];
+        const pre = await step.do(`precheck:${cur}`, async () => this.#eventSince(env, profileId, preNames, enrolledAt));
+        let outHandle = null, terminateOutcome = null;
+        if (pre && exitEventSet.has(pre)) terminateOutcome = exitOutcomeFor(pre);
+        else if (pre) outHandle = 'responded';
+        else {
+          const r = await this.#park(step, cur, s.within);
+          if (r.kind === 'exit') terminateOutcome = r.outcome;
+          else if (r.kind === 'response') outHandle = 'responded';
+          else outHandle = 'timeout';
+        }
+        // Clear this step's response rows (delete-on-transition).
+        await step.do(`waitclr:${cur}`, async () => {
+          await A.sbComms(`/rest/v1/enrolment_waits?enrolment_id=eq.${A.enc(enrolmentId)}&kind=eq.response&step_id=eq.${A.enc(cur)}`, env, { method: 'DELETE' });
+          return true;
+        });
+        if (terminateOutcome) { await this.#terminate(env, step, enrolmentId, terminateOutcome, cur); return; }
+        cur = G.resolveTarget(s, outHandle);
       } else if (s.type === 'condition') {
         const branch = await step.do(cur, async () => this.#evalCondition(env, s.check, profileId, enrolledAt));
         await this.#logStep(env, step, enrolmentId, cur, s.type, { branch });
         cur = G.resolveTarget(s, branch ? 'if_true' : 'if_false');
       } else if (s.type === 'send') {
         const res = await step.do(cur, async () => this.#doSend(env, s, profileId, enrolmentId, cur, triggerProps, journeyName));
-        await this.#logStep(env, step, enrolmentId, cur, s.type, res);
-        cur = G.resolveTarget(s, 'next');
+        const decision = G.resolveSendNext(s, res, def);
+        await this.#logStep(env, step, enrolmentId, cur, s.type, { ...res, on_skip: s.on_skip || 'continue', skipped_wait: decision.skippedWait || null });
+        if (decision.terminate) { await this.#terminate(env, step, enrolmentId, decision.terminate, cur); return; }
+        cur = decision.next;
       } else if (s.type === 'exit') {
         await this.#logStep(env, step, enrolmentId, cur, s.type, { outcome: s.outcome || 'completed' });
-        await this.#end(env, step, enrolmentId, s.outcome === 'exited' ? 'exited' : 'completed', cur);
+        await this.#terminate(env, step, enrolmentId, s.outcome === 'exited' ? 'exited' : (s.outcome || 'completed'), cur);
         return;
       } else { await this.#end(env, step, enrolmentId, 'failed', cur); return; }
 
@@ -98,6 +164,35 @@ class JourneyWorkflow extends WorkflowEntrypoint {
       tracking: { campaign: journeyName },
       source: `journey:${enrolmentId}`, dedupKey: `journey:${enrolmentId}:${stepId}`,
     });
+  }
+
+  // Park on the single 'signal' event type with a timeout. Returns:
+  //   { kind:'timeout' }             — the timeout elapsed (waitForEvent threw). Normal wait completion.
+  //   { kind:'response', event }     — an awaited response event arrived (wait_response).
+  //   { kind:'exit', outcome, event }— an ambient exit / expiry signal arrived → terminate.
+  // NOTE: waitForEvent THROWS on timeout (spike-verified) — the catch IS the timeout path.
+  async #park(step, stepName, within) {
+    try {
+      const ev = await step.waitForEvent(stepName, { type: 'signal', timeout: within });
+      const p = (ev && ev.payload) || {};
+      if (p.kind === 'exit') return { kind: 'exit', outcome: p.outcome || 'exited', event: p.event };
+      return { kind: 'response', event: p.event };
+    } catch (e) {
+      return { kind: 'timeout' };
+    }
+  }
+
+  // Before parking, cheaply check whether a qualifying event ALREADY happened since
+  // enrol (closes the tiny window where an event lands while the instance is between
+  // waits, i.e. not inside waitForEvent). Reuses the events-since-enrol read.
+  async #eventSince(env, profileId, names, sinceIso) {
+    if (!names.length) return null;
+    const inList = names.map((n) => A.enc(n)).join(',');
+    const r = await A.sbComms(
+      `/rest/v1/events?profile_id=eq.${A.enc(profileId)}&name=in.(${inList})` +
+      `&occurred_at=gte.${A.enc(sinceIso)}&select=name&order=occurred_at.asc&limit=1`, env);
+    if (!r.ok) return null;
+    return r.data?.[0]?.name || null;
   }
 
   // condition v1
@@ -135,6 +230,15 @@ class JourneyWorkflow extends WorkflowEntrypoint {
         { method: 'PATCH', body: JSON.stringify({ current_step: stepId }) });
       return true;
     });
+  }
+
+  // Terminal stop: clear this enrolment's wait-index rows, then mark the enrolment ended.
+  async #terminate(env, step, enrolmentId, status, lastStep) {
+    await step.do(`clear-waits:${lastStep || 'end'}`, async () => {
+      await A.sbComms(`/rest/v1/enrolment_waits?enrolment_id=eq.${A.enc(enrolmentId)}`, env, { method: 'DELETE' });
+      return true;
+    });
+    await this.#end(env, step, enrolmentId, status, lastStep);
   }
 
   async #end(env, step, enrolmentId, status, lastStep) {
