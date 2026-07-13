@@ -44,7 +44,7 @@ function fromDefinition(journey, def) {
   const d = def && def.steps ? def : { entry: null, steps: {} };
   const auto = autoPositions(d);
   const nodes = [{
-    id: TRIGGER_ID, type: 'trigger',
+    id: TRIGGER_ID, type: 'trigger', deletable: false,
     position: d.trigger_layout || auto[TRIGGER_ID],
     data: { trigger: (journey && journey.trigger) || {} },
   }];

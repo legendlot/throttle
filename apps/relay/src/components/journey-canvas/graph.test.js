@@ -13,6 +13,8 @@ const legacyDef = { entry: 'wait1', steps: {
 const g1 = fromDefinition({ trigger: { type: 'event', name: 'checkout_started' } }, legacyDef);
 assert.equal(g1.nodes.length, 5); // 4 steps + trigger pseudo-node
 assert.ok(g1.nodes.find((n) => n.id === TRIGGER_ID));
+// trigger node must be excluded from React Flow's delete computation (edge-cascade guard)
+assert.equal(g1.nodes.find((n) => n.id === TRIGGER_ID).deletable, false);
 // entry edge + wait->cond + cond true/false + send->exit = 5 edges
 assert.equal(g1.edges.length, 5);
 const entryEdge = g1.edges.find((e) => e.source === TRIGGER_ID);
