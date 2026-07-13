@@ -3,6 +3,23 @@
 // the event (idempotent) → derives attributes → (M7: fires journey triggers).
 const A = require('./auth.js');
 
+// Given the enrolment_waits rows matching (profile, event), produce ONE signal per
+// instance (exit wins over response — a cancel/convert must pre-empt a nudge). The
+// payload is what the parked JourneyWorkflow's #park reads.
+function pickSignals(rows, eventName, eventId) {
+  const byInstance = new Map();
+  for (const r of rows || []) {
+    const cur = byInstance.get(r.instance_id);
+    if (!cur || (r.kind === 'exit' && cur.kind !== 'exit')) byInstance.set(r.instance_id, r);
+  }
+  return [...byInstance.values()].map((r) => ({
+    instanceId: r.instance_id,
+    payload: r.kind === 'exit'
+      ? { kind: 'exit', outcome: r.outcome || 'exited', event: eventName, event_id: eventId }
+      : { kind: 'response', event: eventName, event_id: eventId },
+  }));
+}
+
 // Known-event attribute derivation (v1 — comms-relevant signals only). Mutates
 // the survivor profile's attributes from the event. Kept in JS so rules evolve freely.
 async function deriveAttributes(env, profileId, name, properties) {
@@ -87,9 +104,26 @@ async function ingest(env, payload) {
         await env.BROADCAST_QUEUE.send({ kind: 'enrol', journeyId: j.id, profileId, eventId });
       }
     } catch (e) { /* triggers are best-effort; never fail the ingest write on a trigger error */ }
+
+    // (J1) Wake parked enrolments: find every enrolment awaiting THIS event for THIS
+    // profile (O(log n) via the enrolment_waits index) and signal each instance once.
+    // Best-effort: a matcher failure must never fail the ingest write. The DB pre-check
+    // in the interpreter is the correctness backbone; these signals are the immediacy path.
+    try {
+      const wr = await A.sbComms(
+        `/rest/v1/enrolment_waits?profile_id=eq.${A.enc(profileId)}&awaited_event=eq.${A.enc(name)}` +
+        `&expires_at=gt.${A.enc(new Date().toISOString())}&select=instance_id,kind,outcome`, env);
+      const rows = (wr.ok && wr.data) || [];
+      for (const sig of pickSignals(rows, name, eventId)) {
+        try {
+          const inst = await env.JOURNEY_WORKFLOW.get(sig.instanceId);
+          await inst.sendEvent({ type: 'signal', payload: sig.payload });
+        } catch (e) { /* instance already ended / not waiting — benign; the row is swept later */ }
+      }
+    } catch (e) { /* matcher is best-effort; never fail the ingest write */ }
   }
 
   return { ok: true, profile_id: profileId, event_id: eventId, deduped };
 }
 
-module.exports = { ingest, deriveAttributes };
+module.exports = { ingest, deriveAttributes, pickSignals };
