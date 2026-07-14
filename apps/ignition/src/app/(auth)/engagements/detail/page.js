@@ -513,6 +513,14 @@ function CodesCard({ engagementId, canManage, session }) {
     try { const r = await ignitionopsPost('syncCouponRedemptions', { coupon_code_id: id }, session); toast(`Redemptions synced (${r.synced})`, 'success'); load(); }
     catch (e) { toast(e.message === 'shopify_not_configured' ? 'Shopify not connected' : e.message, 'error'); }
   }
+  async function retry(id) {
+    try {
+      const r = await ignitionopsPost('retryCoupon', { coupon_code_id: id }, session);
+      if (r.shopify === 'created' || r.already) toast('Code pushed live to Shopify', 'success');
+      else toast(`Still pending — ${r.note || 'Shopify unavailable'}${r.scope_missing ? ' (add write_discounts)' : ''}`, 'info');
+      load();
+    } catch (e) { toast(e.message, 'error'); }
+  }
 
   const gift = (coupons || []).filter(c => c.kind === 'gift');
   const aff = (coupons || []).filter(c => c.kind === 'affiliate');
@@ -525,7 +533,7 @@ function CodesCard({ engagementId, canManage, session }) {
             <div style={subhead}>Affiliate code — for the creator&apos;s audience</div>
             {aff.length === 0
               ? <div style={{ color: 'var(--text-3)', fontSize: 13 }}>None yet.</div>
-              : aff.map(c => <CodeRow key={c.id} c={c} canManage={canManage} onRetire={retire} onSync={sync} big />)}
+              : aff.map(c => <CodeRow key={c.id} c={c} canManage={canManage} onRetire={retire} onSync={sync} onRetry={retry} big />)}
             {canManage && (
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
                 <input type="number" min="1" max="100" placeholder="% off" value={pct} onChange={e => setPct(e.target.value)} style={pctInp} />
@@ -537,7 +545,7 @@ function CodesCard({ engagementId, canManage, session }) {
             <div style={subhead}>Gift code — internal, places the creator&apos;s free order (100% off)</div>
             {gift.length === 0
               ? <div style={{ color: 'var(--text-3)', fontSize: 13 }}>None yet.</div>
-              : gift.map(c => <CodeRow key={c.id} c={c} canManage={canManage} onRetire={retire} onSync={sync} />)}
+              : gift.map(c => <CodeRow key={c.id} c={c} canManage={canManage} onRetire={retire} onSync={sync} onRetry={retry} />)}
             {canManage && <button onClick={() => issue('gift')} disabled={busy} style={{ ...issueBtn, marginTop: 8 }}>Issue gift code</button>}
           </div>
         </div>
@@ -605,7 +613,7 @@ function ComplianceCard({ e, canManage, session, onSaved }) {
 const okPill = { display: 'inline-block', fontSize: 11, color: '#27c93f', border: '1px solid #27c93f', borderRadius: 'var(--radius-sm)', padding: '3px 8px', textTransform: 'uppercase', letterSpacing: '0.04em' };
 const badPill = { display: 'inline-block', fontSize: 11, color: 'var(--state-error-fg)', border: '1px solid var(--state-error-fg)', borderRadius: 'var(--radius-sm)', padding: '3px 8px', textTransform: 'uppercase', letterSpacing: '0.04em' };
 
-function CodeRow({ c, canManage, onRetire, onSync, big }) {
+function CodeRow({ c, canManage, onRetire, onSync, onRetry, big }) {
   const retired = c.status === 'retired';
   const pending = c.status === 'pending_shopify';
   return (
@@ -620,6 +628,9 @@ function CodeRow({ c, canManage, onRetire, onSync, big }) {
       </span>
       {canManage && !retired && (
         <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+          {pending && onRetry && (
+            <button onClick={() => onRetry(c.id)} style={{ ...miniBtn, background: '#FF6B00', color: '#fff', borderColor: '#FF6B00', fontWeight: 700 }}>Push to Shopify</button>
+          )}
           <button onClick={() => onSync(c.id)} style={miniBtn}>Sync</button>
           <button onClick={() => onRetire(c.id)} style={miniBtn}>Retire</button>
         </span>

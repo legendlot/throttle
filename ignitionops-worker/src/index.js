@@ -1869,6 +1869,26 @@ async function issueCoupon(body, auth, env) {
   return ok({ coupon: ins.data?.[0], shopify: gid ? 'created' : 'pending', note: gid ? null : (sh.error || 'shopify_unavailable') });
 }
 
+// Re-attempt the Shopify create for a code stuck at pending_shopify (e.g. issued
+// while write_discounts was missing on the app). Pushes the SAME code — no new row,
+// so a vanity code already handed to a creator goes live unchanged (S214).
+async function retryCoupon(body, auth, env) {
+  const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
+  if (!body.coupon_code_id) return err('coupon_code_id required', 400);
+  const cr = await sb(`/rest/v1/coupon_codes?id=eq.${body.coupon_code_id}&select=id,code,kind,discount_pct,status,shopify_discount_gid&limit=1`, env);
+  if (!cr.ok || !cr.data?.[0]) return err('not_found', 404);
+  const c = cr.data[0];
+  if (c.shopify_discount_gid) return ok({ pushed: true, already: true, shopify: 'exists' });
+  if (c.status !== 'pending_shopify') return err('not_pending', 400);
+  const sh = await shopifyCreateDiscount(env, { code: c.code, pct: Number(c.discount_pct) || 0, singleUse: c.kind === 'gift' });
+  if (!sh.gid) return ok({ pushed: false, shopify: 'pending', note: sh.error || 'shopify_unavailable', scope_missing: !!sh.scope_missing });
+  await sb(`/rest/v1/coupon_codes?id=eq.${body.coupon_code_id}`, env, {
+    method: 'PATCH', prefer: 'return=minimal',
+    body: JSON.stringify({ shopify_discount_gid: sh.gid, status: 'active' }),
+  });
+  return ok({ pushed: true, shopify: 'created', code: c.code, gid: sh.gid });
+}
+
 async function retireCoupon(body, auth, env) {
   const gate = requirePerm('ignition_manage', auth); if (gate) return gate;
   if (!body.coupon_code_id) return err('coupon_code_id required', 400);
@@ -2590,6 +2610,7 @@ const POST_ACTIONS = {
   addAttachment,
   assignDiscountCode,
   issueCoupon,
+  retryCoupon,
   retireCoupon,
   syncCouponRedemptions,
   refreshProductPrices,
