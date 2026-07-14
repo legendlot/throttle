@@ -11,8 +11,11 @@ function json(body, status = 200) {
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    if (url.pathname === '/healthz') return json({ ok: true });
-    if (url.pathname.endsWith('/delivery-check')) {
+    const path = url.pathname.replace(/\/+$/, '') || '/';
+    if (path === '/healthz') return json({ ok: true });
+    // Shopify App Proxy forwards the base subpath (/apps/delivery-check) to the worker
+    // as "/", and any deeper path as "/…/delivery-check"; accept both.
+    if (path === '/' || path.endsWith('/delivery-check')) {
       return handleDeliveryCheck(request, env, {
         verify: (u) => verifyAppProxySignature(env.SHOPIFY_APP_PROXY_SECRET, u),
         cacheGet, cachePut, checkServiceability, delhiveryTransitDays,
