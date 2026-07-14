@@ -559,6 +559,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'setRoutingConfig':     return setRoutingConfig(body, auth, env);
     case 'createTag':            return createTag(body, auth, env);
     case 'updateTag':            return updateTag(body, auth, env);
+    case 'deleteTag':            return deleteTag(body, auth, env);
     case 'setTicketTags':        return setTicketTags(body, auth, env);
     case 'setThreadTags':        return setThreadTags(body, auth, env);
     case 'setMyopDefaultDepartment': return setMyopDefaultDepartment(body, auth, env);
@@ -1577,12 +1578,25 @@ async function idsWithTag(kind, tagId, env) {
 
 async function getTags(params, auth, env) {
   const g = require('cs_ticket_view', auth); if (g) return g;
-  const includeArchived = params.get('all') === '1' && !!auth.permissions?.cs_ticket_admin;
+  const adminAll = params.get('all') === '1' && !!auth.permissions?.cs_ticket_admin;
   const q = `/rest/v1/cs_tags?select=id,name,slug,color,description,is_active,sort_order`
-    + `${includeArchived ? '' : '&is_active=eq.true'}&order=sort_order.asc,name.asc`;
+    + `${adminAll ? '' : '&is_active=eq.true'}&order=sort_order.asc,name.asc`;
   const r = await sb(q, env);
   if (!r.ok) return err('failed to load tags', 500);
-  return ok({ tags: r.data || [] });
+  let tags = r.data || [];
+  // Admin curation view: attach per-tag usage counts (drives the delete confirmation).
+  if (adminAll && tags.length) {
+    const u = await sb(`/rest/v1/rpc/cs_tag_usage`, env, { method: 'POST', body: '{}' });
+    if (u.ok && Array.isArray(u.data)) {
+      const byId = Object.fromEntries(u.data.map(row => [row.tag_id, row]));
+      tags = tags.map(t => ({
+        ...t,
+        ticket_count: byId[t.id]?.ticket_count || 0,
+        thread_count: byId[t.id]?.thread_count || 0,
+      }));
+    }
+  }
+  return ok({ tags });
 }
 
 async function createTag(body, auth, env) {
@@ -1624,6 +1638,19 @@ async function updateTag(body, auth, env) {
   const r = await sb(`/rest/v1/cs_tags?id=eq.${encodeURIComponent(id)}`, env, { method: 'PATCH', body: JSON.stringify(patch) });
   if (!r.ok) return err('failed to update tag', 500);
   return ok({ tag: r.data?.[0] || null });
+}
+
+// Hard-delete a tag. cs_ticket_tags / cs_thread_tags both FK it ON DELETE CASCADE,
+// so this also strips the tag from every ticket + conversation it was on. Admin-only,
+// confirmed in the UI (which shows the usage counts from getTags before deleting).
+async function deleteTag(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const id = body?.id;
+  if (!id) return err('id required');
+  const r = await sb(`/rest/v1/cs_tags?id=eq.${encodeURIComponent(id)}`, env, { method: 'DELETE' });
+  if (!r.ok) return err('failed to delete tag', 500);
+  if (!Array.isArray(r.data) || !r.data.length) return err('tag not found', 404);
+  return ok({ deleted: true, id });
 }
 
 // Replace-set a ticket's / thread's tags (batched delete-not-in + insert-missing).
