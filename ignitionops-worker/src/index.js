@@ -240,16 +240,21 @@ function requirePerm(perm, auth) {
 
 // ── Stage state machine ────────────────────────────────────────────────────
 
-// Stage model (Reann #8, S138). Free transitions — any stage to any other.
+// Stage model (Reann #8, S138; S214 6-pt ⑤). Free transitions — any stage to any other.
 // Main flow then side/terminal states; order here drives picker/stepper order.
+// S214: 'completed' dropped — for a video deal **'live' is the terminal success stage**
+// (video posted = deal done); mandatory colour rating + post_date now enforced at live.
+// ('completed' stays legal in the DB CHECK as an unused legacy value; app never emits it.)
 const STAGES = [
-  'planning','agreed','shipped','delivered','scheduled','posting','live','completed',
+  'planning','agreed','shipped','delivered','scheduled','posting','live',
   'delayed','on_hold','ghosted','dropped',
 ];
 
 // Terminal stages — entering one stamps closed_at + closed_reason.
+// 'live' is terminal-success for video deals but NOT for UGC (UGC terminals = retired/dropped),
+// so it's handled conditionally in advanceStage rather than sitting in this global set.
 const TERMINAL_FAIL = new Set(['ghosted','dropped']);
-const TERMINAL = new Set(['completed','ghosted','dropped','retired']);   // 'retired' = UGC terminal (C1, S177)
+const TERMINAL = new Set(['ghosted','dropped','retired']);   // 'retired' = UGC terminal (C1, S177)
 
 // UGC pipeline stage set (Reann Batch C1, S177). Reuses engagements with
 // engagement_type='ugc'; vault/paused are non-terminal holds (vault reopenable to live).
@@ -592,7 +597,7 @@ async function getRoster(url, auth, env) {
   );
   if (!r.ok) return err('db_error', 500);
   // Roster = influencers with at least one engagement in shipped+ stages.
-  const PROGRESSED = new Set(['shipped','delivered','scheduled','posting','live','completed']);
+  const PROGRESSED = new Set(['shipped','delivered','scheduled','posting','live']);
   const rows = (r.data || []).filter(i => (i.engagements || []).some(e => PROGRESSED.has(e.stage)));
   return ok({ roster: rows, offset, limit });
 }
@@ -622,7 +627,7 @@ async function getDiscountCodes(url, auth, env) {
 function campaignRollup(c) {
   const engs = c.engagements || [];
   const num = v => Number(v) || 0;
-  const POSTED = new Set(['posting', 'live', 'completed']);
+  const POSTED = new Set(['posting', 'live']);
   const spend = engs.reduce((s, e) => s + (e.total_cost != null ? num(e.total_cost) : num(e.payment_amount)), 0);
   return {
     linked_count: engs.length,
@@ -776,13 +781,12 @@ async function getKpis(url, auth, env) {
     const m = cr.match(/\/(\d+)$/);
     return m ? Number(m[1]) : 0;
   }
-  // Active = anything not terminal (completed/ghosted/dropped), incl. delayed/on_hold.
-  const ACTIVE = "stage=in.(planning,agreed,shipped,delivered,scheduled,posting,live,delayed,on_hold)";
-  // `closed` KPI now counts Completed deals (frontend key kept for compat).
-  const [active, live, closed, ghosted, overdue] = await Promise.all([
+  // Active = in-progress, non-terminal. 'live' is now the terminal SUCCESS stage
+  // (S214 ⑤) — excluded from active and shown on its own "Live" tile.
+  const ACTIVE = "stage=in.(planning,agreed,shipped,delivered,scheduled,posting,delayed,on_hold)";
+  const [active, live, ghosted, overdue] = await Promise.all([
     count(ACTIVE),
     count('stage=eq.live'),
-    count('stage=eq.completed'),
     count('stage=eq.ghosted'),
     count(overdueFilter()),
   ]);
@@ -811,7 +815,7 @@ async function getKpis(url, auth, env) {
     ugc_summary.conversions_value = Math.round(ugc_summary.conversions_value);
   }
 
-  return ok({ active, live, closed, ghosted, overdue, engagement_totals, ugc_summary });
+  return ok({ active, live, ghosted, overdue, engagement_totals, ugc_summary });
 }
 
 // ── Overdue-post detection (auto-rating signal) ──────────────────────────────
@@ -821,7 +825,7 @@ async function getKpis(url, auth, env) {
 const OVERDUE_DEFAULT_DAYS = 7;
 // Don't flag as overdue if it's already posting/posted/done, terminal, or
 // deliberately paused/late (on_hold/delayed) — the team already knows about those.
-const POSTED_OR_TERMINAL = ['posting', 'live', 'completed', 'ghosted', 'dropped', 'on_hold', 'delayed'];
+const POSTED_OR_TERMINAL = ['posting', 'live', 'ghosted', 'dropped', 'on_hold', 'delayed'];
 
 function overdueCutoffDate(days) {
   const n = Number(days) || OVERDUE_DEFAULT_DAYS;
@@ -1543,7 +1547,7 @@ async function markGiftedNoPost(body, auth, env) {
 async function getQualityFlags(url, auth, env) {
   const re = await sb(`/rest/v1/rpc/reengage_list`, env, { method: 'POST', body: JSON.stringify({ p_days: 60 }) });
   const gp = await sb(`/rest/v1/engagements?gifted_no_post=eq.true&select=goodies_cost`, env);
-  const nc = await sb(`/rest/v1/engagements?stage=in.(live,completed)&or=(compliance_caption_link.is.false,compliance_coupon_verbal.is.false,compliance_car_motion.is.false)&select=id`, env);
+  const nc = await sb(`/rest/v1/engagements?stage=eq.live&or=(compliance_caption_link.is.false,compliance_coupon_verbal.is.false,compliance_car_motion.is.false)&select=id`, env);
   const gifted = gp.data || [];
   return ok({
     reengage: re.data || [],
@@ -1559,7 +1563,7 @@ async function advanceStage(body, auth, env) {
   if (!body.to_stage) return err('to_stage required', 400);
 
   const cur = await sb(
-    `/rest/v1/engagements?id=eq.${body.engagement_id}&select=stage,video_link,shipping_order_id,influencer_id,engagement_type,live_at,tracking_url,affiliate_active_from&limit=1`, env,
+    `/rest/v1/engagements?id=eq.${body.engagement_id}&select=stage,video_link,shipping_order_id,influencer_id,engagement_type,live_at,tracking_url,affiliate_active_from,post_date&limit=1`, env,
   );
   if (!cur.ok || !cur.data?.[0]) return err('not_found', 404);
   const from = cur.data[0].stage;
@@ -1576,6 +1580,15 @@ async function advanceStage(body, auth, env) {
     if (!incomingLink && !existingLink) return err('video_link_required_for_live', 422);
   }
 
+  // Video deals (S214 6-pt ②): a video POST DATE is mandatory at go-live so views
+  // attribute to the month the video actually posted (the monthly-target driver).
+  // Accepted inline or already on the row. UGC uses live_at instead — exempt.
+  if (body.to_stage === 'live' && !isUgc) {
+    const incomingDate = (body.post_date != null ? String(body.post_date) : '').trim();
+    const existingDate = (cur.data[0].post_date || '').toString().trim();
+    if (!incomingDate && !existingDate) return err('post_date_required_for_live', 422);
+  }
+
   // Shipped guard. UGC (C1 #2) requires a tracking LINK; influencer deals (Batch A #7)
   // require the Shopify order ID. Either accepted inline or already on the row.
   if (body.to_stage === 'shipped') {
@@ -1590,8 +1603,10 @@ async function advanceStage(body, auth, env) {
     }
   }
 
-  // Completed requires a colour rating on the influencer (Reann #3) — apply inline if given.
-  if (body.to_stage === 'completed') {
+  // Going live requires a colour rating on the influencer (Reann Batch A#3, moved to
+  // 'live' in S214 6-pt ⑤ now that 'live' is the terminal success stage) — apply inline
+  // if given. Video deals only; UGC keeps its own quality flow.
+  if (body.to_stage === 'live' && !isUgc) {
     const infId = cur.data[0].influencer_id;
     let rated = false;
     if (infId) {
@@ -1605,7 +1620,7 @@ async function advanceStage(body, auth, env) {
         rated = true;
       }
     }
-    if (!rated) return err('rating_required_for_completed', 422);
+    if (!rated) return err('rating_required_for_live', 422);
   }
 
   const patch = { stage: body.to_stage, updated_at: nowIso() };
@@ -1621,7 +1636,10 @@ async function advanceStage(body, auth, env) {
   } else if (from === 'live') {
     patch.affiliate_active_to = _today;
   }
-  if (TERMINAL.has(body.to_stage)) {
+  // 'live' is the terminal SUCCESS stage for video deals (S214 ⑤); UGC still closes at
+  // retired/dropped, so live is terminal only when !isUgc.
+  const terminalSuccessLive = body.to_stage === 'live' && !isUgc;
+  if (TERMINAL.has(body.to_stage) || terminalSuccessLive) {
     patch.closed_at = nowIso();
     patch.closed_reason = body.closed_reason
       || (TERMINAL_FAIL.has(body.to_stage) ? body.to_stage
@@ -1646,8 +1664,10 @@ async function advanceStage(body, auth, env) {
 }
 
 async function closeEngagement(body, auth, env) {
-  // Default close = Completed; caller can pass to_stage ghosted/dropped instead.
-  if (!TERMINAL.has(body.to_stage)) body.to_stage = 'completed';
+  // Default close = Live (the terminal success stage, S214 ⑤); caller can pass
+  // to_stage ghosted/dropped/retired instead. Live close still runs the go-live
+  // guards (video link + post date + rating) in advanceStage.
+  if (!TERMINAL.has(body.to_stage)) body.to_stage = 'live';
   return advanceStage(body, auth, env);
 }
 
@@ -2150,12 +2170,18 @@ async function getMonthlyTargets(url, auth, env) {
   const spendOf = e => (e.total_cost != null ? num(e.total_cost) : num(e.payment_amount) + num(e.ad_spend) + num(e.commission_amount));
   const er = await sb(`/rest/v1/engagements?select=post_date,created_at,views,total_cost,payment_amount,ad_spend,commission_amount&limit=5000`, env);
   const actMap = {};
+  const bucket = (m) => (actMap[m] || (actMap[m] = { actual_views: 0, actual_spend: 0 }));
   if (er.ok) {
     for (const e of (er.data || [])) {
-      const month = (e.post_date || e.created_at || '').slice(0, 7);
-      if (!/^\d{4}-\d{2}$/.test(month)) continue;
-      const a = actMap[month] || (actMap[month] = { actual_views: 0, actual_spend: 0 });
-      a.actual_views += num(e.views); a.actual_spend += spendOf(e);
+      // Views attribute to the month the video actually POSTED (S214 6-pt ②) — post_date
+      // is now mandatory at go-live, so a deal without one hasn't posted and its views
+      // (which should be 0) don't count toward any month's target.
+      const postMonth = (e.post_date || '').slice(0, 7);
+      if (/^\d{4}-\d{2}$/.test(postMonth)) bucket(postMonth).actual_views += num(e.views);
+      // Spend still buckets by post_date, falling back to created_at (an "unallocated
+      // funds" pre-post spend column was deferred — Afshaan S214).
+      const spendMonth = (e.post_date || e.created_at || '').slice(0, 7);
+      if (/^\d{4}-\d{2}$/.test(spendMonth)) bucket(spendMonth).actual_spend += spendOf(e);
     }
   }
 

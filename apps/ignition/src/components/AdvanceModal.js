@@ -15,28 +15,34 @@ export default function AdvanceModal({ open, engagement, onClose, onAdvance }) {
   const [target, setTarget] = useState('');
   const [note, setNote] = useState('');
   const [videoLink, setVideoLink] = useState('');
+  const [postDate, setPostDate] = useState('');             // ② — required at live (non-UGC)
   const [trackChoice, setTrackChoice] = useState('on_track'); // on_track | delayed (#10)
   const [revisedDate, setRevisedDate] = useState('');
-  const [rating, setRating] = useState('');                  // #3 — required for completed
+  const [rating, setRating] = useState('');                  // ⑤ — required at live
   const [ratingNotes, setRatingNotes] = useState('');
   const [shipOrderId, setShipOrderId] = useState('');        // #7 — required for shipped
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   if (!engagement) return null;
 
+  const isUgc          = engagement.engagement_type === 'ugc';
   const options = allowedTransitions(engagement.stage);
-  const needsVideoLink = target === 'live';                 // #4
+  const isLive         = target === 'live';                 // ⑤ terminal success (video)
+  const needsVideoLink = isLive;                            // #4
   const isSchedule     = target === 'scheduled';            // #10
-  const isCompleted    = target === 'completed';            // #3
   const isShipped      = target === 'shipped';              // #7
   const existingLink   = (engagement.video_link || '').trim();
+  const existingPost   = (engagement.post_date || '').toString().trim();
   const existingRating = (engagement.influencer?.quality_rating || '').trim();
   const isRated        = ['green', 'yellow', 'red'].includes(existingRating);
   const existingOrder  = (engagement.shipping_order_id || '').trim();
   const isDelayed      = isSchedule && trackChoice === 'delayed';
 
-  // #3 — only prompt for a rating when the influencer isn't already rated.
-  const needsRating    = isCompleted && !isRated;
+  // ② — a video post date is mandatory at go-live (drives monthly-target views);
+  // only prompt when one isn't already on the deal. UGC uses live_at — exempt.
+  const needsPostDate  = isLive && !isUgc && !existingPost;
+  // ⑤ — going live requires a colour rating (video deals); only prompt if unrated.
+  const needsRating    = isLive && !isUgc && !isRated;
   // #7 — only prompt for an order id when one isn't already on the deal.
   const needsOrderId   = isShipped && !existingOrder;
 
@@ -45,11 +51,12 @@ export default function AdvanceModal({ open, engagement, onClose, onAdvance }) {
   const _toIdx   = HAPPY_PATH.indexOf(target);
   const skipped  = (_fromIdx >= 0 && _toIdx > _fromIdx + 1) ? HAPPY_PATH.slice(_fromIdx + 1, _toIdx) : [];
 
-  const missingVideo   = needsVideoLink && !(videoLink.trim() || existingLink);
-  const missingRevised = isDelayed && !revisedDate;
-  const missingRating  = needsRating && !rating;
-  const missingOrderId = needsOrderId && !shipOrderId.trim();
-  const canSubmit = !!target && !busy && !missingVideo && !missingRevised && !missingRating && !missingOrderId;
+  const missingVideo    = needsVideoLink && !(videoLink.trim() || existingLink);
+  const missingPostDate = needsPostDate && !postDate;
+  const missingRevised  = isDelayed && !revisedDate;
+  const missingRating   = needsRating && !rating;
+  const missingOrderId  = needsOrderId && !shipOrderId.trim();
+  const canSubmit = !!target && !busy && !missingVideo && !missingPostDate && !missingRevised && !missingRating && !missingOrderId;
 
   async function submit() {
     if (!canSubmit) return;
@@ -59,6 +66,7 @@ export default function AdvanceModal({ open, engagement, onClose, onAdvance }) {
       let outNote = note;
       const extra = {};
       if (needsVideoLink) extra.video_link = (videoLink.trim() || existingLink);
+      if (needsPostDate && postDate) extra.post_date = postDate;
       if (needsRating && rating) {
         extra.rating = rating;
         if (ratingNotes.trim()) extra.rating_notes = ratingNotes.trim();
@@ -78,7 +86,8 @@ export default function AdvanceModal({ open, engagement, onClose, onAdvance }) {
       // Surface the worker's guard reasons inline so the operator can fill in
       // the missing field and resubmit (mirrors the video-link prompt).
       const m = e?.message || '';
-      if (/rating_required_for_completed/.test(m)) setErr('Rate the influencer (green / yellow / red) to mark this completed.');
+      if (/rating_required_for_live/.test(m)) setErr('Rate the influencer (green / yellow / red) to mark this live.');
+      else if (/post_date_required_for_live/.test(m)) setErr('A video posting date is required to mark this live.');
       else if (/shipping_order_id_required_for_shipped/.test(m)) setErr('A Shopify order ID is required to mark this shipped.');
       else if (/video_link_required_for_live/.test(m)) setErr('A video link is required to mark this live.');
       else setErr(m || 'Could not advance');
@@ -131,7 +140,18 @@ export default function AdvanceModal({ open, engagement, onClose, onAdvance }) {
           </div>
         )}
 
-        {/* #3 — marking completed requires a colour rating if not already rated */}
+        {/* ② — going live requires the video posting date (feeds the monthly target) */}
+        {needsPostDate && (
+          <div>
+            <label style={lblStyle}>Video posting date *</label>
+            <input type="date" value={postDate} onChange={(e) => setPostDate(e.target.value)} style={fieldStyle} />
+            {missingPostDate
+              ? <div style={{ fontSize: 11, color: 'var(--state-error-fg)', marginTop: 4 }}>Required to mark live — views count toward this month&apos;s target</div>
+              : <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>Views attribute to the month the video posted.</div>}
+          </div>
+        )}
+
+        {/* ⑤ — going live requires a colour rating if not already rated */}
         {needsRating && (
           <div>
             <label style={lblStyle}>Rating *</label>
@@ -151,7 +171,7 @@ export default function AdvanceModal({ open, engagement, onClose, onAdvance }) {
                 );
               })}
             </div>
-            {missingRating && <div style={{ fontSize: 11, color: 'var(--state-error-fg)', marginTop: 4 }}>Required to mark completed</div>}
+            {missingRating && <div style={{ fontSize: 11, color: 'var(--state-error-fg)', marginTop: 4 }}>Required to mark live</div>}
             <input
               value={ratingNotes}
               onChange={(e) => setRatingNotes(e.target.value)}

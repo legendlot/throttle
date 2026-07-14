@@ -144,18 +144,7 @@ export default function EngagementDetailPage() {
           <KV label="Assigned to" value={e.poc_name || '—'} />
         </Card>
 
-        <Card title="Costs">
-          <KV label="Goodies" value={`₹${Number(e.goodies_cost || 0).toLocaleString()}`} />
-          <KV label="Shipping" value={`₹${Number(e.shipping_cost || 0).toLocaleString()}`} />
-          <KV label="Return" value={`₹${Number(e.return_cost || 0).toLocaleString()}`} />
-          <KV label="Ad spend" value={`₹${Number(e.ad_spend || 0).toLocaleString()}`} />
-          <KV label="CPM" value={e.cpm != null
-            ? <span style={{ color: Number(e.cpm) > 100 ? 'var(--state-error-fg)' : 'var(--text-1)', fontWeight: Number(e.cpm) > 100 ? 700 : 400 }}>
-                ₹{Number(e.cpm).toFixed(2)}{Number(e.cpm) > 100 ? ' ⚠ high' : ''}
-              </span>
-            : '—'} />
-          <KV label="TOTAL" value={<strong style={{ color: '#FF6B00' }}>₹{Number(e.total_cost || 0).toLocaleString()}</strong>} />
-        </Card>
+        <CostsCard e={e} canEdit={canManage} session={session} onSaved={reload} />
 
         <Card title="Logistics">
           <KV label="Shipping order" value={e.shipping_order_id || '—'} />
@@ -174,7 +163,7 @@ export default function EngagementDetailPage() {
 
         <PerformanceCard
           e={e}
-          canEdit={!!perms?.ignition_manage && ['live', 'completed'].includes(e.stage)}
+          canEdit={!!perms?.ignition_manage && e.stage === 'live'}
           session={session}
           onSaved={reload}
         />
@@ -318,7 +307,10 @@ function ProductsCard({ products, directedTo, engagementId, canEdit, session, on
                   <span style={{ color: 'var(--text-1)', fontWeight: 600 }}>{p.product_code || '—'}</span>
                   {p.product_variant && <span style={{ color: 'var(--text-2)' }}>{p.product_variant}</span>}
                   {Number(p.quantity) > 1 && <span style={{ color: 'var(--text-3)' }}>×{p.quantity}</span>}
-                  {p.goodies_cost != null && <span style={{ marginLeft: 'auto', color: 'var(--text-3)' }}>₹{Number(p.goodies_cost).toLocaleString()}</span>}
+                  <span style={{ marginLeft: 'auto', color: 'var(--text-3)', display: 'flex', gap: 10 }}>
+                    {p.goodies_cost != null && <span title="Goodies">🎁 ₹{Number(p.goodies_cost).toLocaleString()}</span>}
+                    {p.shipping_cost != null && <span title="Shipping">🚚 ₹{Number(p.shipping_cost).toLocaleString()}</span>}
+                  </span>
                 </div>
               ))}
             </div>
@@ -329,6 +321,82 @@ function ProductsCard({ products, directedTo, engagementId, canEdit, session, on
         </>
       )}
     </section>
+  );
+}
+
+// Costs card. Goodies + shipping roll up from the product lines (edit those in the
+// Products card); return cost + ad spend are engagement-level and editable here (⑦).
+function CostsCard({ e, canEdit, session, onSaved }) {
+  const { showToast: toast } = useToast();
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [ret, setRet] = useState('');
+  const [ad, setAd] = useState('');
+
+  function startEdit() {
+    setRet(e.return_cost ?? '');
+    setAd(e.ad_spend ?? '');
+    setEditing(true);
+  }
+  async function save() {
+    setBusy(true);
+    try {
+      const numOrNull = (v) => (v === '' || v == null ? null : Number(v));
+      await ignitionopsPost('updateEngagement', {
+        engagement_id: e.id,
+        return_cost: numOrNull(ret),
+        ad_spend: numOrNull(ad),
+      }, session);
+      toast('Costs updated', 'success');
+      setEditing(false);
+      onSaved?.();
+    } catch (err) { toast(err.message, 'error'); }
+    finally { setBusy(false); }
+  }
+
+  const cpm = e.cpm;
+  return (
+    <section style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <h2 style={{ fontSize: 12, color: 'var(--text-3)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Costs</h2>
+        {canEdit && !editing && (
+          <button onClick={startEdit} style={{ padding: '4px 10px', background: 'var(--surface-3)', color: 'var(--text-1)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer' }}>Edit</button>
+        )}
+      </div>
+      <KV label="Goodies" value={`₹${Number(e.goodies_cost || 0).toLocaleString()}`} />
+      <KV label="Shipping" value={`₹${Number(e.shipping_cost || 0).toLocaleString()}`} />
+      {editing ? (
+        <>
+          <CostEdit label="Return ₹" value={ret} onChange={setRet} />
+          <CostEdit label="Ad spend ₹" value={ad} onChange={setAd} />
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 10 }}>
+            <button onClick={() => setEditing(false)} style={{ padding: '6px 12px', background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, cursor: 'pointer' }}>Cancel</button>
+            <button onClick={save} disabled={busy} style={{ padding: '6px 12px', background: '#FF6B00', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }}>{busy ? 'Saving…' : 'Save'}</button>
+          </div>
+        </>
+      ) : (
+        <>
+          <KV label="Return" value={`₹${Number(e.return_cost || 0).toLocaleString()}`} />
+          <KV label="Ad spend" value={`₹${Number(e.ad_spend || 0).toLocaleString()}`} />
+          <KV label="CPM" value={cpm != null
+            ? <span style={{ color: Number(cpm) > 100 ? 'var(--state-error-fg)' : 'var(--text-1)', fontWeight: Number(cpm) > 100 ? 700 : 400 }}>
+                ₹{Number(cpm).toFixed(2)}{Number(cpm) > 100 ? ' ⚠ high' : ''}
+              </span>
+            : '—'} />
+          <KV label="TOTAL" value={<strong style={{ color: '#FF6B00' }}>₹{Number(e.total_cost || 0).toLocaleString()}</strong>} />
+        </>
+      )}
+    </section>
+  );
+}
+
+function CostEdit({ label, value, onChange }) {
+  return (
+    <div style={{ display: 'flex', gap: 8, padding: '3px 0', alignItems: 'center' }}>
+      <span style={{ width: 130, color: 'var(--text-3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</span>
+      <input type="number" min="0" value={value} onChange={e => onChange(e.target.value)} placeholder="0"
+        style={{ flex: 1, background: 'var(--surface-2)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 9px', fontFamily: 'var(--font-mono)', fontSize: 13, width: '100%', boxSizing: 'border-box' }} />
+    </div>
   );
 }
 
@@ -482,7 +550,7 @@ function CodesCard({ engagementId, canManage, session }) {
 function ComplianceCard({ e, canManage, session, onSaved }) {
   const { showToast: toast } = useToast();
   const [busy, setBusy] = useState(false);
-  const postLive = ['live', 'completed'].includes(e.stage);
+  const postLive = e.stage === 'live';
   const checks = [
     ['compliance_caption_link', 'Link in caption'],
     ['compliance_coupon_verbal', 'Coupon mentioned verbally'],

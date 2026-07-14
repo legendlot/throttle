@@ -5,6 +5,7 @@ import { Modal, useToast } from '@throttle/ui';
 import { ignitionopsGet, ignitionopsPost } from '../lib/ignitionopsFetch.js';
 import ProductLinesEditor, { emptyLine, linesToPayload } from './ProductLinesEditor.js';
 import PocSelect from './PocSelect.js';
+import SelectedInfluencerCard from './SelectedInfluencerCard.js';
 
 // Quick-add deal (engagement). Essentials only — influencer, type, deal terms,
 // product, expected post date (feeds the Schedule). Lands on the new deal to
@@ -66,13 +67,10 @@ export function NewDealModal({ open, onClose, session, presetInfluencer, onCreat
       <div style={{ marginBottom: 14 }}>
         <div style={lbl}>Influencer *</div>
         {selected ? (
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 10, background: 'var(--surface-2)', borderRadius: 'var(--radius-sm)' }}>
-            <div>
-              <span style={{ color: '#FF6B00', fontWeight: 700 }}>{selected.influencer_code}</span>
-              <span style={{ marginLeft: 10 }}>{selected.channel_name || selected.person_name}</span>
-            </div>
-            {!presetInfluencer && <button type="button" onClick={() => setSelected(null)} style={ghost}>Change</button>}
-          </div>
+          <SelectedInfluencerCard
+            influencer={selected}
+            onChange={presetInfluencer ? null : () => setSelected(null)}
+          />
         ) : (
           <>
             <input autoFocus value={search} onChange={e => setSearch(e.target.value)} placeholder="Search code, handle, name…" style={inp} />

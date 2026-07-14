@@ -53,8 +53,7 @@ export default function DashboardPage() {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12, maxWidth: 1100 }}>
         <KpiCard label="Active" value={kpis.active} />
-        <KpiCard label="Live" value={kpis.live} accent="#FF6B00" />
-        <KpiCard label="Completed" value={kpis.closed} />
+        <KpiCard label="Live (done)" value={kpis.live} accent="#4ade80" />
         <KpiCard label="Ghosted" value={kpis.ghosted} accent="#ff7070" />
         <KpiCard label={`Overdue posts (>${OVERDUE_DAYS}d)`} value={kpis.overdue ?? 0} accent={kpis.overdue > 0 ? '#ff7070' : undefined} />
         <KpiCard label="Total views" value={(kpis.engagement_totals?.views ?? 0).toLocaleString()} />

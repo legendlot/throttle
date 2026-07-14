@@ -1,10 +1,11 @@
 'use client';
 import { useEffect, useState, Fragment } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { ArrowLeft, ExternalLink, Trash2 } from 'lucide-react';
+import { ArrowLeft, ExternalLink, Trash2, Plus } from 'lucide-react';
 import { useAuth } from '@throttle/auth';
 import { Spinner, useToast } from '@throttle/ui';
 import { ignitionopsGet, ignitionopsPost } from '../../../../lib/ignitionopsFetch.js';
+import { NewDealModal } from '../../../../components/NewDealModal.js';
 import RatingBadge from '../../../../components/RatingBadge.js';
 import StageBadge from '../../../../components/StageBadge.js';
 import DealTypeBadge from '../../../../components/DealTypeBadge.js';
@@ -23,6 +24,7 @@ export default function InfluencerDetailPage() {
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({});
   const [catalogs, setCatalogs] = useState(null);
+  const [showDeal, setShowDeal] = useState(false);   // ④ — add deal from profile
 
   function reload() {
     if (!session || (!id && !code)) return;
@@ -157,12 +159,27 @@ export default function InfluencerDetailPage() {
             <button key={r} onClick={() => setRating(r)} style={ratingBtn}>{r}</button>
           ))}
           {canManage && (
+            <button onClick={() => setShowDeal(true)} title="Create a deal for this influencer" style={newDealBtn}>
+              <Plus size={13} strokeWidth={2.4} /> New deal
+            </button>
+          )}
+          {canManage && (
             <button onClick={removeInfluencer} title="Delete influencer" style={deleteBtn}>
               <Trash2 size={13} strokeWidth={2} /> Delete
             </button>
           )}
         </div>
       </div>
+
+      {canManage && (
+        <NewDealModal
+          open={showDeal}
+          onClose={() => setShowDeal(false)}
+          session={session}
+          presetInfluencer={inf}
+          onCreated={() => { setShowDeal(false); reload(); }}
+        />
+      )}
 
       {/* Two-column: narrow left (identity/contact), wide right (engagements/shopify).
           flex-wrap stacks them on narrow viewports so it never breaks on a laptop. */}
@@ -651,6 +668,13 @@ const deleteBtn = {
   padding: '4px 10px', background: 'transparent', color: 'var(--state-error-fg, #e5484d)',
   border: '1px solid var(--state-error-fg, #e5484d)', borderRadius: 'var(--radius-sm)',
   fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer',
+  textTransform: 'uppercase', letterSpacing: '0.04em',
+};
+const newDealBtn = {
+  display: 'inline-flex', alignItems: 'center', gap: 5, marginLeft: 8,
+  padding: '4px 12px', background: '#FF6B00', color: '#fff',
+  border: 'none', borderRadius: 'var(--radius-sm)',
+  fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700, cursor: 'pointer',
   textTransform: 'uppercase', letterSpacing: '0.04em',
 };
 const th = { padding: '8px 10px', fontSize: 11, color: 'var(--text-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600 };

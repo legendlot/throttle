@@ -1,6 +1,6 @@
 import {
   Inbox, Users, Flame, Star, ListChecks, BarChart3, Plus,
-  Settings, Tag, Layers, FileSpreadsheet, UserCircle, CalendarDays, Wallet, Target,
+  Settings, Layers, FileSpreadsheet, UserCircle, CalendarDays, Wallet, Target,
   BookOpen,
 } from 'lucide-react';
 
@@ -24,7 +24,8 @@ export const NAV_GROUPS = [
       { id: 'blist',          label: 'B-List',        route: '/blist',          icon: Layers },
       { id: 'ugc',            label: 'UGC',           route: '/ugc',            icon: Flame },
       { id: 'campaigns',      label: 'Campaigns',     route: '/campaigns',      icon: Layers },
-      { id: 'discount-codes', label: 'Codes',         route: '/discount-codes', icon: Tag },
+      // Legacy pre-minted code pool retired from nav (S214 ⑧) — deals now use
+      // Issue Gift/Affiliate codes on the engagement. Route + data kept for history.
     ],
   },
   {

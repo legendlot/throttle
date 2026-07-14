@@ -8,12 +8,13 @@ import StageBadge from '../../../components/StageBadge.js';
 import DealTypeBadge from '../../../components/DealTypeBadge.js';
 import { STAGE_VALUES, STAGE_LABELS } from '../../../lib/stages.js';
 
+// 'Live' is the terminal success stage (S214 ⑤) — the old 'Completed' tab is gone.
 const TABS = [
   { id: 'all',       label: 'All',       filter: null },
   { id: 'live',      label: 'Live',      filter: 'live' },
-  { id: 'posting',   label: 'Posting',   filter: 'posting' },
+  { id: 'scheduled', label: 'Scheduled', filter: 'scheduled' },
+  { id: 'posting',   label: 'Draft rcvd', filter: 'posting' },
   { id: 'delivered', label: 'Delivered', filter: 'delivered' },
-  { id: 'completed', label: 'Completed', filter: 'completed' },
 ];
 
 export default function EngagementsPage() {

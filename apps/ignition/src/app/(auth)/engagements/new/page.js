@@ -6,6 +6,7 @@ import { useToast, Spinner } from '@throttle/ui';
 import { ignitionopsGet, ignitionopsPost } from '../../../../lib/ignitionopsFetch.js';
 import ProductLinesEditor, { emptyLine, linesToPayload } from '../../../../components/ProductLinesEditor.js';
 import PocSelect from '../../../../components/PocSelect.js';
+import SelectedInfluencerCard from '../../../../components/SelectedInfluencerCard.js';
 
 export default function NewEngagementPage() {
   const { session } = useAuth();
@@ -64,14 +65,7 @@ export default function NewEngagementPage() {
       <section style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 16, marginBottom: 12 }}>
         <h2 style={hd}>Influencer</h2>
         {selected ? (
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 12, background: 'var(--surface-2)', borderRadius: 'var(--radius-sm)' }}>
-            <div>
-              <span style={{ color: '#FF6B00', fontWeight: 700 }}>{selected.influencer_code}</span>
-              <span style={{ marginLeft: 12 }}>{selected.channel_name || selected.person_name}</span>
-              <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{selected.influencer_type} · {selected.location}</div>
-            </div>
-            <button onClick={() => setSelected(null)} style={btnGhost}>Change</button>
-          </div>
+          <SelectedInfluencerCard influencer={selected} onChange={() => setSelected(null)} />
         ) : (
           <>
             <input

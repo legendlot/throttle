@@ -38,7 +38,7 @@ export default function RosterPage() {
           Roster
         </h1>
         <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
-          Influencers with ≥1 completed engagement.
+          Influencers with ≥1 posted (shipped-or-later) engagement.
         </div>
       </header>
 

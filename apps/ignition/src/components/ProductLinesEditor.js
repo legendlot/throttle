@@ -1,11 +1,12 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Combobox } from '@throttle/ui';
 import { ignitionopsGet } from '../lib/ignitionopsFetch.js';
 
-// Multi-row product picker (#4). Each row = product (dropdown from getCatalogs,
-// with free-text fallback) → variant (free text) + quantity + goodies cost.
-// Catalog only carries product names/skus (no variant taxonomy), so variant
-// stays free text — mirrors the legacy single-product fields.
+// Multi-row product picker (#4). Each row = product (searchable Combobox from
+// getCatalogs — standing UI rule, PATTERN-160) → variant (free text) + quantity
+// + goodies cost + shipping cost (⑥, S214). Catalog carries no variant taxonomy,
+// so variant stays free text — mirrors the legacy single-product fields.
 //
 // `value` is an array of line objects; `onChange(nextLines)` reports edits up.
 // Each line: { product_code, product_variant, quantity, goodies_cost, shipping_cost }.
@@ -28,6 +29,11 @@ export default function ProductLinesEditor({ value, onChange, session }) {
       .then(r => setCatalog(Array.isArray(r?.products) ? r.products : []))
       .catch(() => setCatalog([]));
   }, [session]);
+
+  const productOptions = useMemo(
+    () => catalog.map(p => ({ value: p.name, label: p.name, hint: p.sku })),
+    [catalog],
+  );
 
   function setRow(i, patch) {
     const next = lines.map((l, idx) => (idx === i ? { ...l, ...patch } : l));
@@ -57,14 +63,16 @@ export default function ProductLinesEditor({ value, onChange, session }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       {lines.map((l, i) => (
-        <div key={i} style={{ display: 'grid', gridTemplateColumns: '1.4fr 1.2fr 70px 1fr auto', gap: 8, alignItems: 'end' }}>
+        <div key={i} style={{ display: 'grid', gridTemplateColumns: '1.5fr 1.1fr 60px 1fr 1fr auto', gap: 8, alignItems: 'end' }}>
           <div>
             {i === 0 && <div style={lbl}>Product</div>}
-            <input
-              list="ign-product-list"
-              value={l.product_code}
-              onChange={e => onProductPick(i, e.target.value)}
-              placeholder="e.g. Brutus"
+            <Combobox
+              value={l.product_code || ''}
+              options={productOptions}
+              onChange={(v) => onProductPick(i, v)}
+              placeholder="Search product…"
+              allowClear
+              portal
               style={inp}
             />
           </div>
@@ -87,12 +95,14 @@ export default function ProductLinesEditor({ value, onChange, session }) {
             <input type="number" min="0" value={l.goodies_cost ?? ''}
               onChange={e => setRow(i, { goodies_cost: e.target.value })} placeholder="0" style={inp} />
           </div>
+          <div>
+            {i === 0 && <div style={lbl}>Shipping ₹</div>}
+            <input type="number" min="0" value={l.shipping_cost ?? ''}
+              onChange={e => setRow(i, { shipping_cost: e.target.value })} placeholder="0" style={inp} />
+          </div>
           <button type="button" onClick={() => removeRow(i)} title="Remove" style={removeBtn}>×</button>
         </div>
       ))}
-      <datalist id="ign-product-list">
-        {catalog.map(p => <option key={p.sku || p.name} value={p.name} />)}
-      </datalist>
       <div>
         <button type="button" onClick={addRow} style={addBtn}>+ Add product</button>
       </div>
