@@ -1757,7 +1757,17 @@ async function shopifyGraphql(env, query, variables) {
   let res = await run(token).catch(() => null);
   if (res && res.status === 401) { token = await getShopifyToken(env, true); if (token) res = await run(token).catch(() => null); }
   if (!res || !res.ok) return { ok: false, configured: true, error: `shopify_${res ? res.status : 'network'}` };
-  const data = await res.json().catch(() => null);
+  let data = await res.json().catch(() => null);
+  // A scope/access-denied GraphQL error (HTTP 200) can mean the app's scopes were
+  // updated AFTER this cached token was minted — force one fresh token + retry so a
+  // just-released scope change takes effect without a worker redeploy.
+  if (data?.errors?.length && isScopeError(data.errors[0]?.message)) {
+    const t2 = await getShopifyToken(env, true);
+    if (t2) {
+      const res2 = await run(t2).catch(() => null);
+      if (res2 && res2.ok) data = await res2.json().catch(() => data);
+    }
+  }
   if (data?.errors?.length) return { ok: false, configured: true, error: data.errors[0]?.message, errors: data.errors };
   return { ok: true, configured: true, data: data?.data };
 }
