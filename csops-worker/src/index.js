@@ -3270,7 +3270,53 @@ async function sendWaReply(body, auth, env) {
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(threadPatch) }).catch(() => {});
 
   const ticketId = auth.viaIgnitionBridge ? null : await assignLinkedTicketToReplier(thread.id, auth, env);
-  return ok({ sent: true, message_id: data?.id != null ? String(data.id) : null, auto_claimed: !thread.assigned_agent_id && !auth.viaIgnitionBridge, ticket_assigned: ticketId });
+
+  // Agent attribution (Pruthvi #bugs 2026-07-14): the Chatwoot live pull + mirror webhook
+  // tag every OUTGOING message with the connected API-account name (renders as "Afshaan"),
+  // never the agent who actually replied. Pre-write the outbound row keyed by the Chatwoot
+  // message id with the REAL sender so getWaConversation's overlay (which reads our local
+  // sent_by_name by provider_message_id) shows the right person. Upsert with
+  // merge-duplicates so we win regardless of webhook-vs-response race: if we land first the
+  // webhook dedupes on the pmid; if the webhook lands first (with "Afshaan") the merge
+  // overwrites its name with ours. Outbound WA history is written here too — the webhook's
+  // history row is gated to inbound-only, so it's single + correctly attributed either way.
+  const pmid = data?.id != null ? String(data.id) : null;
+  if (pmid) {
+    const senderName = auth.fullName || auth.name || auth.email || null;
+    await sb(`/rest/v1/cs_wa_messages?on_conflict=provider_message_id`, env, {
+      method: 'POST',
+      prefer: 'resolution=merge-duplicates,return=minimal',
+      body: JSON.stringify({
+        thread_id: thread.id,
+        ticket_id: ticketId,
+        direction: 'outbound',
+        kind: 'text',
+        body: String(text),
+        provider_message_id: pmid,
+        status: 'sent',
+        is_internal: false,
+        sent_by_user_id: auth.userId,
+        sent_by_name: senderName,
+        sent_at: now,
+      }),
+    }).catch(() => {});
+    if (ticketId) {
+      await sb(`/rest/v1/cs_ticket_history`, env, {
+        method: 'POST', prefer: 'return=minimal',
+        body: JSON.stringify({
+          ticket_id: ticketId,
+          field_name: 'wa_message_sent',
+          old_value: null,
+          new_value: 'text',
+          note: String(text).slice(0, 140),
+          changed_by_user_id: auth.userId,
+          changed_by_name: senderName,
+        }),
+      }).catch(() => {});
+    }
+  }
+
+  return ok({ sent: true, message_id: pmid, auto_claimed: !thread.assigned_agent_id && !auth.viaIgnitionBridge, ticket_assigned: ticketId });
 }
 
 // Phase C admin-only: simulate an inbound message for testing the UI before
@@ -3769,12 +3815,16 @@ async function biteSpeedMessageCreated(body, env) {
 
   // Activity row on the linked ticket so the message surfaces in the ticket's
   // history feed (without exposing message content to history rows — privacy).
-  if (linkedTicketId) {
+  // INBOUND only: outbound WA history is written by sendWaReply with the real agent
+  // (this webhook only knows the "Afshaan" API-account name), so writing it here too
+  // would duplicate + mis-attribute. Direct-in-BiteSpeed outbound sends (not via
+  // Pitstop) therefore get no history row — acceptable, they're outside our workflow.
+  if (linkedTicketId && direction === 'inbound') {
     await sb(`/rest/v1/cs_ticket_history`, env, {
       method: 'POST',
       body: JSON.stringify({
         ticket_id: linkedTicketId,
-        field_name: direction === 'inbound' ? 'wa_message_received' : 'wa_message_sent',
+        field_name: 'wa_message_received',
         old_value: null,
         new_value: kind === 'template' ? `template:${templateName}` : kind,
         note: (content || '').slice(0, 140),
