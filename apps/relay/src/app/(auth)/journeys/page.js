@@ -14,7 +14,18 @@ import NodeDrawer from '@/components/journey-canvas/NodeDrawer.js';
 const JourneyCanvas = dynamic(() => import('@/components/journey-canvas/JourneyCanvas.js'),
   { ssr: false, loading: () => <div style={{ padding: 24 }}><Spinner /></div> });
 
-const STEP_TONE = { wait: 'gray', condition: 'yellow', send: 'blue', exit: 'green' };
+const STEP_TONE = { wait: 'gray', wait_response: 'yellow', condition: 'yellow', send: 'blue', exit: 'green' };
+// Per-branch outcome → chip tone (keys as emitted by journey_funnel results).
+function branchTone(key) {
+  if (key === 'responded' || key === 'sent' || key === 'branch_true' || key === 'completed') return 'green';
+  if (key === 'timeout' || key === 'skipped' || key === 'branch_false') return 'yellow';
+  if (key.startsWith('exit:') || key === 'exited' || key === 'expired' || key === 'failed') return 'red';
+  return 'gray';
+}
+function branchLabel(key) {
+  if (key.startsWith('exit:')) return `exit → ${key.slice(5)}`;
+  return key.replace(/^branch_/, '');
+}
 const STATUS_TONE = { draft: 'gray', active: 'green', paused: 'yellow', archived: 'gray' };
 const REENROL = [
   { id: 'once_while_active', label: 'Once while active' },
@@ -317,7 +328,7 @@ export default function JourneysPage() {
         {j.id && (
           <Panel title="Funnel" count={funnel?.total_enrolments ?? 0} pad>
             {!funnel || funnel.total_enrolments === 0 ? (
-              <EmptyState icon="git-branch" title="No enrolments yet" hint="Once profiles enrol, each step's entered count and branch/send/exit results appear here (across all versions)." />
+              <EmptyState icon="git-branch" title="No enrolments yet" hint="Once profiles enrol, each step shows how many entered and how they branched — e.g. a wait-for-response gate's responded vs timeout vs exit counts (across all versions)." />
             ) : (
               <>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
@@ -326,10 +337,22 @@ export default function JourneysPage() {
                   ))}
                 </div>
                 <Pipeline stages={(funnel.steps || []).map((s) => ({ stage: `${s.step_id} · ${s.step_type}`, count: s.entered, tone: STEP_TONE[s.step_type] || 'gray' }))} />
-                <div className="tw-note" style={{ marginBottom: 0, marginTop: 14 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 14 }}>
                   {(funnel.steps || []).map((s) => {
-                    const res = Object.entries(s.results || {}).map(([k, v]) => `${k} ${v}`).join(', ');
-                    return <div key={s.step_id} style={{ marginBottom: 2 }}><strong className="mono">{s.step_id}</strong>: {res || '—'}</div>;
+                    const parked = Number((funnel.parked || {})[s.step_id] || 0);
+                    const branches = Object.entries(s.results || {}).filter(([k]) => k !== 'entered');
+                    return (
+                      <div key={s.step_id} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <strong className="mono" style={{ fontSize: 13 }}>{s.step_id}</strong>
+                        <Badge label={s.step_type} tone={STEP_TONE[s.step_type] || 'gray'} />
+                        <span className="dim" style={{ fontSize: 12 }}>{s.entered} resolved</span>
+                        {parked > 0 && <Badge label={`⏳ ${parked} waiting`} tone="yellow" dot />}
+                        <span style={{ flex: 1 }} />
+                        {branches.length === 0
+                          ? <span className="dim" style={{ fontSize: 12 }}>—</span>
+                          : branches.map(([k, v]) => <Badge key={k} label={`${branchLabel(k)}: ${v}`} tone={branchTone(k)} />)}
+                      </div>
+                    );
                   })}
                 </div>
               </>

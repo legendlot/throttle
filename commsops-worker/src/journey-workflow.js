@@ -116,7 +116,16 @@ class JourneyWorkflow extends WorkflowEntrypoint {
           }
           return true;
         });
-        await this.#logStep(env, step, enrolmentId, cur, s.type, { awaited: s.awaited, within: s.within });
+        // J2: track current_step on ENTRY (so a parked enrolment reports as held here via
+        // journey_funnel.parked) but DON'T write an enrolment_steps row yet — the row is
+        // written once at RESOLUTION carrying the resolved outcome (responded|timeout|exit),
+        // which is what gives the escalation gate its per-branch funnel counts. (#logStep is
+        // keyed step.do(log:<id>) → once per step, so it can't be called on both entry+exit.)
+        await step.do(`enter:${cur}`, async () => {
+          await A.sbComms(`/rest/v1/enrolments?id=eq.${A.enc(enrolmentId)}`, env,
+            { method: 'PATCH', body: JSON.stringify({ current_step: cur }) });
+          return true;
+        });
         // Exit pre-check uses enrolledAt (ambient/terminal); response pre-check uses per-step
         // since (avoids stale reuse). Exit wins over an awaited response.
         let outHandle = null, terminateOutcome = null;
@@ -140,6 +149,10 @@ class JourneyWorkflow extends WorkflowEntrypoint {
           if (!del.ok) throw new Error('wait_clear_failed:' + JSON.stringify(del.data));
           return true;
         });
+        // J2: log the wait_response step ONCE, at resolution, with the outcome it took —
+        // responded | timeout | exit:<outcome> — so journey_funnel shows per-branch counts.
+        await this.#logStep(env, step, enrolmentId, cur, s.type,
+          { awaited: s.awaited, within: s.within, outcome: terminateOutcome ? `exit:${terminateOutcome}` : outHandle });
         if (terminateOutcome) { await this.#end(env, step, enrolmentId, terminateOutcome, cur); return; }
         cur = G.resolveTarget(s, outHandle);
       } else if (s.type === 'condition') {
