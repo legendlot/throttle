@@ -14,10 +14,14 @@ CSOPS_URL = "https://csops.afshaan.workers.dev"
 binding = "CSOPS"
 service = "csops"
 
-# Daily UGC Meta ad-metrics pull (Batch C2, S177) — ~07:50 IST. Per-ad-id only
-# (scoped to meta_ad_id on UGC deals), never an account-level sweep (that's Odo).
+# Cron triggers (handler branches on event.cron — each tick is its own subrequest budget):
+#   20 2 * * *  (07:50 IST daily) — UGC Meta ad-metrics pull (Batch C2, S177). Per-ad-id
+#               only (scoped to meta_ad_id on UGC deals), never an account sweep (that's Odo).
+#   10 3 * * *  (08:40 IST daily) — coupon-redemption reconcile off Shopify (S214). Drains
+#               COUPON_SYNC_MAX active codes/pass, oldest-synced first; refund-aware.
+#   30 3 * * 1  (09:00 IST Mondays) — Shopify variant-price cache refresh (goodies auto-fill).
 [triggers]
-crons = ["20 2 * * *"]
+crons = ["20 2 * * *", "10 3 * * *", "30 3 * * 1"]
 
 # Secrets set via `wrangler secret put` — never stored in this file:
 # SUPABASE_ANON_KEY

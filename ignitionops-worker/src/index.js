@@ -2690,13 +2690,40 @@ export default {
     return err('method_not_allowed', 405);
   },
 
-  // Daily cron (wrangler.toml [triggers]) — UGC Meta ad-metrics pull (Batch C2, S177).
-  // Per-ad-id only; inert (no-op) until META_SYSTEM_USER_TOKEN is set.
-  async scheduled(_event, env, ctx) {
-    if (!env.META_SYSTEM_USER_TOKEN) return;
-    ctx.waitUntil(syncUgcMetaMetrics(env).then(
-      r => console.log('[ugc-meta] cron', JSON.stringify(r)),
-      e => console.error('[ugc-meta] cron error', e),
-    ));
+  // Cron entrypoint (wrangler.toml [triggers]) — branch on event.cron so each schedule
+  // is its own invocation + subrequest budget. System auth passes the perm gates.
+  async scheduled(event, env, ctx) {
+    const cron = event?.cron || '';
+    const CRON_AUTH = { userId: 'cron', permissions: { ignition_manage: true, ignition_view: true } };
+
+    // 07:50 IST daily — UGC Meta ad-metrics pull (Batch C2, S177). Inert until token set.
+    if (cron === '20 2 * * *') {
+      if (!env.META_SYSTEM_USER_TOKEN) return;
+      ctx.waitUntil(syncUgcMetaMetrics(env).then(
+        r => console.log('[ugc-meta] cron', JSON.stringify(r)),
+        e => console.error('[ugc-meta] cron error', e),
+      ));
+      return;
+    }
+
+    // 08:40 IST daily — reconcile coupon redemptions off Shopify (S214). Drains
+    // COUPON_SYNC_MAX active codes/pass (oldest-synced first); refund-aware. No-op if
+    // Shopify unconfigured (the action returns a 503 that just resolves here).
+    if (cron === '10 3 * * *') {
+      ctx.waitUntil(syncCouponRedemptions({}, CRON_AUTH, env).then(
+        () => console.log('[coupon-sync] cron done'),
+        e => console.error('[coupon-sync] cron error', e),
+      ));
+      return;
+    }
+
+    // 09:00 IST Mondays — refresh the Shopify variant-price cache (goodies auto-fill).
+    if (cron === '30 3 * * 1') {
+      ctx.waitUntil(refreshProductPrices({}, CRON_AUTH, env).then(
+        () => console.log('[price-refresh] cron done'),
+        e => console.error('[price-refresh] cron error', e),
+      ));
+      return;
+    }
   },
 };
