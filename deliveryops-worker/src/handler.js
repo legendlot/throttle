@@ -13,7 +13,7 @@ function render(serviceable, transitDays, codAvailable, cfg, now) {
 }
 
 export async function handleDeliveryCheck(request, env, deps) {
-  const { verify, cacheGet, cachePut, checkServiceability, delhiveryTransitDays, now = new Date() } = deps;
+  const { verify, cacheGet, cachePut, checkServiceability, tatDays, now = new Date() } = deps;
   const cfg = loadConfig(env);
   const url = new URL(request.url);
 
@@ -36,7 +36,7 @@ export async function handleDeliveryCheck(request, env, deps) {
   }
 
   // Delhivery: the date.
-  const transitDays = await delhiveryTransitDays(env, { originPin: cfg.originPin, destPin: pincode, cod }, { now });
+  const transitDays = tatDays(pincode, cfg.mode);
   await cachePut(env, {
     pincode, cod, serviceable: true, cod_available: svc.codAvailable,
     source: transitDays == null ? 'fallback' : 'delhivery', transit_days: transitDays,

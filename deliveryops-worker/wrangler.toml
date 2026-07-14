@@ -10,7 +10,6 @@ workers_dev = true
 # Secrets set via `wrangler secret put` — never stored in this file:
 #   UNIWARE_USERNAME        (native-password admin user, e.g. systems@legendoftoys.com)
 #   UNIWARE_PASSWORD
-#   DELHIVERY_API_TOKEN     (Delhivery One → Settings → API Setup; header is `Token <t>`, not Bearer)
 #   SUPABASE_SERVICE_KEY    (service_role sb_secret key — same project as courierops)
 #   SHOPIFY_APP_PROXY_SECRET (LOT EDD App client secret — verifies the App Proxy signature)
 #
@@ -20,3 +19,4 @@ workers_dev = true
 SUPABASE_URL = "https://jkxcnjabmrkteanzoofj.supabase.co"
 UNIWARE_TENANT = "fraternitas"
 ORIGIN_PINCODE = "560049"
+SHIP_MODE = "surface"

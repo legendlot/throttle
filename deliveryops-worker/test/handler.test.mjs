@@ -16,7 +16,7 @@ test('date state when serviceable + Delhivery quotes', async () => {
   const res = await handleDeliveryCheck(req('560001'), ENV, {
     ...base,
     checkServiceability: async () => ({ serviceable: true, codAvailable: false, facilityCodes: ['BLR1'] }),
-    delhiveryTransitDays: async () => 3,
+    tatDays: () => 3,
   });
   const b = await res.json();
   assert.equal(b.state, 'date');
@@ -28,7 +28,7 @@ test('fallback state when serviceable but Delhivery cannot quote', async () => {
   const res = await handleDeliveryCheck(req('560001'), ENV, {
     ...base,
     checkServiceability: async () => ({ serviceable: true, codAvailable: false, facilityCodes: ['BLR1'] }),
-    delhiveryTransitDays: async () => null,
+    tatDays: () => null,
   });
   const b = await res.json();
   assert.equal(b.state, 'fallback');
@@ -39,7 +39,7 @@ test('unserviceable state when Uniware says no', async () => {
   const res = await handleDeliveryCheck(req('999999'), ENV, {
     ...base,
     checkServiceability: async () => ({ serviceable: false, codAvailable: false, facilityCodes: [] }),
-    delhiveryTransitDays: async () => { throw new Error('should not be called'); },
+    tatDays: () => { throw new Error('should not be called'); },
   });
   const b = await res.json();
   assert.equal(b.state, 'unserviceable');
@@ -64,7 +64,7 @@ test('Uniware HTTP error → fallback, not cached', async () => {
     ...base,
     cachePut,
     checkServiceability: async () => { throw new Error('uniware 503'); },
-    delhiveryTransitDays: async () => { throw new Error('should not be called'); },
+    tatDays: () => { throw new Error('should not be called'); },
   });
   const b = await res.json();
   assert.equal(b.state, 'fallback');
@@ -76,7 +76,7 @@ test('a fresh cache row short-circuits the couriers', async () => {
     ...base,
     cacheGet: async () => ({ pincode: '560001', cod: false, serviceable: true, source: 'delhivery', transit_days: 2, fetched_at: NOW.toISOString() }),
     checkServiceability: async () => { throw new Error('should not be called'); },
-    delhiveryTransitDays: async () => { throw new Error('should not be called'); },
+    tatDays: () => { throw new Error('should not be called'); },
   });
   const b = await res.json();
   assert.equal(b.state, 'date');

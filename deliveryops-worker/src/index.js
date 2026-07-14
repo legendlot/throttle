@@ -1,6 +1,6 @@
 import { verifyAppProxySignature } from './proxy-auth.js';
 import { checkServiceability } from './uniware.js';
-import { delhiveryTransitDays } from './delhivery.js';
+import { tatDays } from './tat.js';
 import { cacheGet, cachePut } from './cache.js';
 import { handleDeliveryCheck } from './handler.js';
 
@@ -18,7 +18,7 @@ export default {
     if (path === '/' || path.endsWith('/delivery-check')) {
       return handleDeliveryCheck(request, env, {
         verify: (u) => verifyAppProxySignature(env.SHOPIFY_APP_PROXY_SECRET, u),
-        cacheGet, cachePut, checkServiceability, delhiveryTransitDays,
+        cacheGet, cachePut, checkServiceability, tatDays,
         now: new Date(),
       });
     }

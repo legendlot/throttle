@@ -9,6 +9,7 @@ export function loadConfig(env = {}) {
     cutoffMin: Number(m || 0),
     nonWorkingDays: nwd.length ? nwd : [0],
     ttlMs: (Number(env.CACHE_TTL_HOURS) || 12) * 3600 * 1000,
+    mode: env.SHIP_MODE === 'express' ? 'express' : 'surface',
     copy: {
       fallback: "Delivery in 5–7 days",
       unserviceable: "We don’t deliver to this pincode yet",
