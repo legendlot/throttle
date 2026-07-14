@@ -38,10 +38,36 @@ async function handleGet(url, auth, env) {
       const r = await A.sbStore('/rest/v1/relayops_roles?select=*&order=role_key.asc', env);
       return r.ok ? ok(r.data) : err('db_error', 500);
     }
-    case 'getUserRoles': {             // assigned relay roles (M2)
+    case 'getUserRoles': {             // assigned relay roles, enriched with name+email+role label (M2)
       if (!A.canAdmin(auth.permissions)) return err('forbidden', 403);
       const r = await A.sbStore('/rest/v1/relayops_user_roles?select=*&order=assigned_at.desc', env);
-      return r.ok ? ok(r.data) : err('db_error', 500);
+      if (!r.ok) return err('db_error', 500);
+      const rows = Array.isArray(r.data) ? r.data : [];
+      const ids = [...new Set(rows.map(a => a.user_id).filter(Boolean))];
+      // Resolve full_name + email from auth.users (not PostgREST-reachable → RPC)
+      // and role labels from relayops_roles, so the UI shows people not UUIDs.
+      const [dirR, rolesR] = await Promise.all([
+        ids.length
+          ? A.sbStore('/rest/v1/rpc/lot_users_by_ids', env, { method: 'POST', body: JSON.stringify({ p_ids: ids }) })
+          : Promise.resolve({ ok: true, data: [] }),
+        A.sbStore('/rest/v1/relayops_roles?select=role_key,label', env),
+      ]);
+      const dir = {}; (dirR.ok ? dirR.data : []).forEach(u => { dir[u.id] = u; });
+      const roleLabel = {}; (rolesR.ok ? rolesR.data : []).forEach(r2 => { roleLabel[r2.role_key] = r2.label; });
+      const enriched = rows.map(a => ({
+        ...a,
+        full_name: dir[a.user_id]?.full_name || null,
+        email: dir[a.user_id]?.email || null,
+        role_label: roleLabel[a.role_key] || a.role_key,
+      }));
+      return ok(enriched);
+    }
+    case 'searchUsers': {              // searchable LOT-people directory for the grant picker
+      if (!A.canAdmin(auth.permissions)) return err('forbidden', 403);
+      const q = url.searchParams.get('q') || '';
+      const r = await A.sbStore('/rest/v1/rpc/search_lot_users', env,
+        { method: 'POST', body: JSON.stringify({ p_q: q }) });
+      return r.ok ? ok({ rows: r.data || [] }) : err('search_failed', 502);
     }
     case 'getRelaySettings': {
       const r = await A.sbComms('/rest/v1/settings?id=eq.1&select=*&limit=1', env);
@@ -162,8 +188,22 @@ async function handlePost(body, auth, env) {
     }
     case 'assignUserRole': {
       if (!A.canAdmin(auth.permissions)) return err('forbidden', 403);
-      const { user_id, role_key, active } = body;
+      const { user_id, role_key, active, full_name } = body;
       if (!user_id || !role_key) return err('user_id_and_role_key_required', 400);
+      // Ensure a users_profile row exists + is active — verifyJWT requires one,
+      // so a granted user can actually sign in (mirrors odoops grantAccess).
+      const profR = await A.sbStore(`/rest/v1/users_profile?id=eq.${A.enc(user_id)}&select=id&limit=1`, env);
+      if (profR.ok && profR.data?.[0]) {
+        await A.sbStore('/rest/v1/users_profile', env, {
+          method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates',
+          body: JSON.stringify({ id: user_id, active: true }),
+        });
+      } else {
+        await A.sbStore('/rest/v1/users_profile', env, {
+          method: 'POST', prefer: 'return=minimal',
+          body: JSON.stringify({ id: user_id, full_name: full_name || user_id, role: 'staff', active: true }),
+        });
+      }
       const r = await A.sbStore('/rest/v1/relayops_user_roles', env, {
         method: 'POST',
         prefer: 'return=representation,resolution=merge-duplicates',

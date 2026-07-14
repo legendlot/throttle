@@ -41,12 +41,13 @@ async function verifyJWT(authHeader, env) {
   const urRes = await sbStore(
     `/rest/v1/relayops_user_roles?user_id=eq.${user.id}&active=eq.true&select=role_key&limit=1`, env);
   const roleKey = (urRes.ok && urRes.data?.[0]?.role_key) || null;
-  let permissions = {};
-  if (roleKey) {
-    const rRes = await sbStore(
-      `/rest/v1/relayops_roles?role_key=eq.${enc(roleKey)}&select=permissions&limit=1`, env);
-    permissions = (rRes.ok && rRes.data?.[0]?.permissions) || {};
-  }
+  // No auto-login from the legendoftoys.com domain: a valid Google/Supabase
+  // session is NOT enough — access requires an explicit, active Relay role
+  // (mirrors odoops). Anyone not provisioned on the access list is denied.
+  if (!roleKey) return null;
+  const rRes = await sbStore(
+    `/rest/v1/relayops_roles?role_key=eq.${enc(roleKey)}&select=permissions&limit=1`, env);
+  const permissions = (rRes.ok && rRes.data?.[0]?.permissions) || {};
   return {
     userId: user.id, email: user.email, role: profile.role,
     fullName: profile.full_name, relayRole: roleKey, permissions,
