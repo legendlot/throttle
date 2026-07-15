@@ -430,6 +430,11 @@ export default {
     if (url.pathname === '/webhooks/bitespeed' && request.method === 'POST') {
       return handleBiteSpeedWebhook(request, env);
     }
+    // Relay WhatsApp inbound forward (WS-D) — token-authed, before JWT like the other
+    // webhooks. Inert until Relay forwards (post live-number cutover). See waTransport.
+    if (url.pathname === '/webhooks/relay-wa' && request.method === 'POST') {
+      return handleRelayWaWebhook(request, env);
+    }
     // Meta (Instagram + Facebook Messenger DMs) — GET verify handshake + POST events.
     if (url.pathname === '/webhooks/meta') {
       if (request.method === 'GET')  return handleMetaVerify(url, env);
@@ -3139,11 +3144,13 @@ async function getWaConversation(params, auth, env) {
   const g = require('cs_ticket_view', auth); if (g) return g;
   const thread_id = params.get('thread_id');
   if (!thread_id) return err('thread_id required');
-  if (!env.BITESPEED_API_TOKEN) return err('WhatsApp not configured (no BiteSpeed API token)', 503);
+  if (waTransport(env) !== 'relay' && !env.BITESPEED_API_TOKEN) return err('WhatsApp not configured (no BiteSpeed API token)', 503);
 
   const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=*&limit=1`, env);
   const thread = tRes.data?.[0];
   if (!thread) return err('Thread not found', 404);
+  // WS-D: WhatsApp threads on the Relay transport read from local cs_wa_messages.
+  if ((thread.channel || 'whatsapp') === 'whatsapp' && waTransport(env) === 'relay') return getWaConversationLocal(thread, env);
   if (!thread.provider_account_id || !thread.provider_thread_ref) {
     return ok({ messages: [], within_customer_window: false, window_until: null, live: false,
                 note: 'No BiteSpeed conversation reference on this thread yet.' });
@@ -3217,7 +3224,8 @@ async function sendWaReply(body, auth, env) {
   const g = require('cs_ticket_manage', auth); if (g) return g;
   const { thread_id, text } = body;
   if (!thread_id || !text || !String(text).trim()) return err('thread_id and text required');
-  if (!env.BITESPEED_API_TOKEN) return err('WhatsApp send not configured (no BiteSpeed API token)', 503);
+  // BiteSpeed token only needed when NOT on the Relay transport (WS-D).
+  if (waTransport(env) !== 'relay' && !env.BITESPEED_API_TOKEN) return err('WhatsApp send not configured (no BiteSpeed API token)', 503);
 
   const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=*&limit=1`, env);
   const thread = tRes.data?.[0];
@@ -3225,6 +3233,8 @@ async function sendWaReply(body, auth, env) {
   // Both WhatsApp and Web are Chatwoot conversations on BiteSpeed — same send path.
   const wchan = thread.channel || 'whatsapp';
   if (wchan !== 'whatsapp' && wchan !== 'web') return err('Not a WhatsApp/Web thread — use sendMetaMessage', 422);
+  // WS-D: WhatsApp threads on the Relay transport send via Relay /send (no Chatwoot ref).
+  if (wchan === 'whatsapp' && waTransport(env) === 'relay') return sendWaReplyViaRelay(thread, text, auth, env);
   if (!thread.provider_account_id || !thread.provider_thread_ref) {
     return err('Thread has no BiteSpeed conversation reference yet', 422);
   }
@@ -3835,6 +3845,201 @@ async function biteSpeedMessageCreated(body, env) {
   }
 
   return json({ ok: true, thread_id: thread.id, ticket_id: linkedTicketId, direction, kind });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// RELAY WhatsApp transport (WS-D — BiteSpeed exit). When a live WA number is
+// migrated onto LOT's own Meta Cloud API (Relay/commsops), Relay forwards inbound
+// customer messages to POST /webhooks/relay-wa and Pitstop sends agent replies back
+// out through Relay /send — swapping ONLY the transport under the channel-agnostic
+// inbox (cs_wa_threads/cs_wa_messages), exactly like the email channel did.
+// Gated by WA_TRANSPORT (default 'bitespeed'); the receiver itself is inert until
+// Relay actually forwards, which only happens after a live number is cut over (WS-C).
+// channel='web' ALWAYS stays on Chatwoot — this path is WhatsApp-only.
+// ════════════════════════════════════════════════════════════════════════════
+
+// Which transport backs Pitstop's WhatsApp agent replies + reads. In practice
+// per-support-number == the whole WA channel (the Pitstop inbox is fed by the
+// support number 9880212323). Default 'bitespeed' → every existing path unchanged.
+function waTransport(env) {
+  return String(env.WA_TRANSPORT || 'bitespeed').toLowerCase() === 'relay' ? 'relay' : 'bitespeed';
+}
+
+// Bearer match for Relay's forward (mirrors commsops CSOPS_WA_FORWARD_TOKEN).
+function verifyRelayWaAuth(request, env) {
+  const want = env.CSOPS_WA_FORWARD_TOKEN;
+  if (!want) return false;
+  const a = request.headers.get('Authorization') || '';
+  const bearer = a.slice(0, 7).toLowerCase() === 'bearer ' ? a.slice(7).trim() : '';
+  return bearer === want;
+}
+
+// WA message type → cs_wa_messages.kind. button/interactive/text all carry their
+// text in .text (parseInbound already flattened it), so → 'text'.
+function relayWaKind(type) {
+  switch (String(type || 'text').toLowerCase()) {
+    case 'image': return 'image';
+    case 'video': return 'video';
+    case 'audio': case 'voice': return 'audio';
+    case 'document': case 'sticker': return 'document';
+    default: return 'text';
+  }
+}
+
+// Find-or-create the WhatsApp thread for a phone. Relay threads carry no Chatwoot
+// provider refs; match an existing whatsapp thread by phone (continues a thread that
+// may have started on BiteSpeed pre-cutover) else create a fresh one.
+async function relayWaFindOrCreateThread(phone, phoneNumberId, env) {
+  if (!phone) return null;
+  const found = await sb(
+    `/rest/v1/cs_wa_threads?customer_phone=eq.${encodeURIComponent(phone)}&channel=eq.whatsapp&select=*&order=last_message_at.desc.nullslast&limit=1`, env);
+  if (found.data?.[0]) {
+    const t = found.data[0];
+    if (phoneNumberId && t.waba_phone_number_id !== phoneNumberId) {
+      await sb(`/rest/v1/cs_wa_threads?id=eq.${t.id}`, env,
+        { method: 'PATCH', body: JSON.stringify({ waba_phone_number_id: phoneNumberId }) }).catch(() => {});
+      t.waba_phone_number_id = phoneNumberId;
+    }
+    return t;
+  }
+  const ins = await sb(`/rest/v1/cs_wa_threads`, env, {
+    method: 'POST',
+    body: JSON.stringify({ customer_phone: phone, channel: 'whatsapp', waba_phone_number_id: phoneNumberId || null }),
+  });
+  return ins.data?.[0] || null;
+}
+
+// Ingest ONE forwarded inbound WA message → cs_wa_threads/cs_wa_messages. Mirrors
+// biteSpeedMessageCreated's INBOUND path: idempotent on the Meta wamid, phone-links to
+// the open ticket, resets the local 24h window (now authoritative), reopens a closed
+// thread. (Outbound is written by sendWaReplyViaRelay — Relay never forwards our own.)
+// NB inbound media is Meta id-based (no hosted URL) — filename/mime captured; a
+// media fetch-and-host is a documented follow-up (text is the CS 95% case).
+async function relayWaIngestInbound(m, env) {
+  const fromRaw = m?.from ? (String(m.from).startsWith('+') ? String(m.from) : `+${m.from}`) : null;
+  const phone = fromRaw ? toE164(fromRaw) : null;
+  if (!phone) return { skipped: 'no_phone' };
+  const pmid = m?.provider_message_id ? String(m.provider_message_id) : null;
+
+  if (pmid) {
+    const ex = await sb(`/rest/v1/cs_wa_messages?provider_message_id=eq.${encodeURIComponent(pmid)}&select=id&limit=1`, env);
+    if (ex.data?.[0]) return { deduped: true };
+  }
+
+  const thread = await relayWaFindOrCreateThread(phone, m?.phone_number_id, env);
+  if (!thread) return { skipped: 'no_thread' };
+
+  const tRes = await sb(`/rest/v1/cs_tickets?customer_phone=eq.${encodeURIComponent(phone)}&closed_at=is.null&select=id&order=created_at.desc&limit=1`, env);
+  const linkedTicketId = tRes.data?.[0]?.id || null;
+
+  const kind = relayWaKind(m?.type);
+  const media = m?.media || {};
+  const ts = m?.ts || new Date().toISOString();
+  const content = m?.text || null;
+
+  const ins = await sb(`/rest/v1/cs_wa_messages`, env, {
+    method: 'POST',
+    body: JSON.stringify({
+      thread_id: thread.id, ticket_id: linkedTicketId, direction: 'inbound', kind, body: content,
+      media_url: null, media_filename: media.filename || media.id || null, media_mime_type: media.mime_type || null,
+      provider_message_id: pmid, status: null, sent_by_user_id: null, sent_by_name: m?.name || null,
+      received_at: ts,
+    }),
+  });
+  if (!ins.ok) { console.error(`[relay-wa] cs_wa_messages insert failed ${ins.status} ${JSON.stringify(ins.data)?.slice(0, 200)}`); return { error: 'insert_failed' }; }
+
+  const patch = { last_message_at: ts, customer_window_until: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() };
+  if (thread.thread_state && thread.thread_state !== 'open') patch.thread_state = 'open';
+  await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) }).catch(() => {});
+
+  if (linkedTicketId) {
+    await sb(`/rest/v1/cs_ticket_history`, env, { method: 'POST', body: JSON.stringify({
+      ticket_id: linkedTicketId, field_name: 'wa_message_received', old_value: null,
+      new_value: kind, note: (content || '').slice(0, 140), changed_by_user_id: null,
+      changed_by_name: m?.name || 'Relay (auto)',
+    }) }).catch(() => {});
+  }
+  return { thread_id: thread.id, ticket_id: linkedTicketId };
+}
+
+async function handleRelayWaWebhook(request, env) {
+  if (!verifyRelayWaAuth(request, env)) return err('Invalid forward token', 401);
+  let body = {};
+  try { body = await request.json(); } catch { return err('Bad JSON', 400); }
+  const messages = Array.isArray(body?.messages) ? body.messages : [];
+  const results = [];
+  for (const m of messages) {
+    try { results.push(await relayWaIngestInbound(m, env)); }
+    catch (e) { console.error('[relay-wa] ingest error', e); results.push({ error: String(e?.message || e) }); }
+  }
+  return json({ ok: true, processed: results.length });
+}
+
+// Agent reply on a Relay-transported WhatsApp thread → send via Relay /send (channel
+// whatsapp, purpose utility → bypasses the marketing gate, still hits suppression +
+// TEST MODE). Window is checked from the local authoritative customer_window_until
+// (Relay writes it on every inbound). We insert the outbound row ourselves (there is
+// no Chatwoot mirror-back on this transport).
+async function sendWaReplyViaRelay(thread, text, auth, env) {
+  const until = thread.customer_window_until ? new Date(thread.customer_window_until).getTime() : 0;
+  if (!(until > Date.now()))
+    return err('Outside the 24h customer window — free-text replies are blocked until the customer messages again (templates coming soon)', 422);
+
+  const base = String(env.RELAY_SEND_URL || 'https://commsops.afshaan.workers.dev').replace(/\/+$/, '');
+  let resp, data;
+  try {
+    resp = await fetch(`${base}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.INGEST_TOKEN}` },
+      body: JSON.stringify({
+        channel: 'whatsapp', purpose: 'utility', to: thread.customer_phone,
+        template: { content: { text_body: String(text) } },
+        dedupKey: `pitstop:reply:${thread.id}:${Date.now()}`, source: 'pitstop_agent',
+      }),
+    });
+    data = await resp.json().catch(() => ({}));
+  } catch (e) { return err(`Relay send failed: ${e.message}`, 502); }
+  if (!resp.ok || data?.ok === false)
+    return err(`Relay send failed (${resp.status}): ${JSON.stringify(data)?.slice(0, 300)}`, resp.status || 502);
+
+  const msg = data?.data || data?.message || data || {};
+  const pmid = msg.provider_message_id || msg.id || null;
+  const now = new Date().toISOString();
+  const senderName = auth.fullName || auth.name || auth.email || null;
+
+  const threadPatch = { last_message_at: now };
+  if (!thread.assigned_agent_id && !auth.viaIgnitionBridge) {
+    threadPatch.assigned_agent_id = auth.userId;
+    threadPatch.assigned_agent_name = senderName;
+    threadPatch.assigned_at = now;
+  }
+  if (thread.thread_state && thread.thread_state !== 'open') threadPatch.thread_state = 'open';
+  await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(threadPatch) }).catch(() => {});
+
+  const ticketId = auth.viaIgnitionBridge ? null : await assignLinkedTicketToReplier(thread.id, auth, env);
+
+  await sb(`/rest/v1/cs_wa_messages`, env, {
+    method: 'POST',
+    body: JSON.stringify({
+      thread_id: thread.id, ticket_id: ticketId, direction: 'outbound', kind: 'text', body: String(text),
+      provider_message_id: pmid, status: msg.status || 'sent', is_internal: false,
+      sent_by_user_id: auth.userId, sent_by_name: senderName, sent_at: now,
+    }),
+  }).catch((e) => console.error('[relay-wa] outbound insert failed', e?.message));
+
+  if (ticketId) await insertHistory(ticketId, 'wa_message_sent', null, 'text', String(text).slice(0, 140), auth, env).catch(() => {});
+  return ok({ message: { direction: 'outbound', body: String(text), provider_message_id: pmid, status: msg.status || 'sent' }, via: 'relay' });
+}
+
+// Read a Relay-transported WA thread from LOCAL cs_wa_messages (Relay is the capture
+// source → full local history; no Chatwoot pull, no attribution overlay). Window from
+// the local authoritative column.
+async function getWaConversationLocal(thread, env) {
+  const r = await sb(`/rest/v1/cs_wa_messages?thread_id=eq.${encodeURIComponent(thread.id)}&select=*&order=created_at.asc&limit=1000`, env);
+  const messages = r.data || [];
+  const until = thread.customer_window_until || null;
+  const open = until ? (new Date(until).getTime() > Date.now()) : false;
+  return ok({ messages, within_customer_window: open, window_until: until, live: true, transport: 'relay' });
 }
 
 // ════════════════════════════════════════════════════════════════════════════
