@@ -1,12 +1,15 @@
 'use client';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Combobox } from '@throttle/ui';
+import { useEffect, useRef, useState } from 'react';
 import { ignitionopsGet } from '../lib/ignitionopsFetch.js';
 
-// Multi-row product picker (#4). Each row = product (searchable Combobox from
-// getCatalogs — standing UI rule, PATTERN-160) → variant (free text) + quantity
-// + goodies cost + shipping cost (⑥, S214). Catalog carries no variant taxonomy,
-// so variant stays free text — mirrors the legacy single-product fields.
+// Multi-row product picker (#4). Each row = product (free-text input + datalist
+// suggestions from getCatalogs) → variant (free text) + quantity + goodies cost
+// + shipping cost (⑥, S214). Product is deliberately FREE TEXT (not a Combobox):
+// influencer deals reference arbitrary products/variants that aren't always in the
+// Shopify catalog, so the catalog is only a suggestion list — a typed name that
+// isn't a catalog entry must still save. (A Combobox was tried S214 but it discards
+// non-matching typed text on blur → products vanished; reverted, Himani #bugs
+// 2026-07-15.) Catalog carries no variant taxonomy, so variant stays free text.
 //
 // `value` is an array of line objects; `onChange(nextLines)` reports edits up.
 // Each line: { product_code, product_variant, quantity, goodies_cost, shipping_cost }.
@@ -29,11 +32,6 @@ export default function ProductLinesEditor({ value, onChange, session }) {
       .then(r => setCatalog(Array.isArray(r?.products) ? r.products : []))
       .catch(() => setCatalog([]));
   }, [session]);
-
-  const productOptions = useMemo(
-    () => catalog.map(p => ({ value: p.name, label: p.name, hint: p.sku })),
-    [catalog],
-  );
 
   function setRow(i, patch) {
     const next = lines.map((l, idx) => (idx === i ? { ...l, ...patch } : l));
@@ -66,13 +64,11 @@ export default function ProductLinesEditor({ value, onChange, session }) {
         <div key={i} style={{ display: 'grid', gridTemplateColumns: '1.5fr 1.1fr 60px 1fr 1fr auto', gap: 8, alignItems: 'end' }}>
           <div>
             {i === 0 && <div style={lbl}>Product</div>}
-            <Combobox
+            <input
+              list="ign-product-list"
               value={l.product_code || ''}
-              options={productOptions}
-              onChange={(v) => onProductPick(i, v)}
-              placeholder="Search product…"
-              allowClear
-              portal
+              onChange={e => onProductPick(i, e.target.value)}
+              placeholder="e.g. Brutus"
               style={inp}
             />
           </div>
@@ -103,6 +99,9 @@ export default function ProductLinesEditor({ value, onChange, session }) {
           <button type="button" onClick={() => removeRow(i)} title="Remove" style={removeBtn}>×</button>
         </div>
       ))}
+      <datalist id="ign-product-list">
+        {catalog.map(p => <option key={p.sku || p.name} value={p.name} />)}
+      </datalist>
       <div>
         <button type="button" onClick={addRow} style={addBtn}>+ Add product</button>
       </div>
