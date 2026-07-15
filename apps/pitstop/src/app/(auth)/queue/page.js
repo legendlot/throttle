@@ -74,6 +74,7 @@ export default function QueuePage() {
   const agentFilter = searchParams.get('agent') || '';
   const stageFilter = searchParams.get('stage') || '';
   const tagFilter = searchParams.get('tag') || '';
+  const sortBy = searchParams.get('sort') || 'newest';
   const searchQ = searchParams.get('q') || '';
 
   const canFilterByAgent = !!(perms?.cs_ticket_admin || perms?.cs_ticket_reassign);
@@ -98,7 +99,7 @@ export default function QueuePage() {
   const [hasNext, setHasNext] = useState(false);
 
   // Reset to the first page whenever the tab / any filter / dept changes.
-  useEffect(() => { setPage(0); }, [activeTab, dispositionFilter, categoryFilter, platformFilter, agentFilter, stageFilter, tagFilter, searchQ, deptSlug]);
+  useEffect(() => { setPage(0); }, [activeTab, dispositionFilter, categoryFilter, platformFilter, agentFilter, stageFilter, tagFilter, sortBy, searchQ, deptSlug]);
 
   const { focusedIdx, setFocusedIdx } = useListNav(
     tickets.length,
@@ -163,6 +164,7 @@ export default function QueuePage() {
     if (agentFilter)       params.agent       = agentFilter;
     if (stageFilter)       params.stage       = stageFilter;
     if (tagFilter)         params.tag         = tagFilter;
+    if (sortBy && sortBy !== 'newest') params.sort = sortBy;
     if (searchQ)           params.search      = searchQ;
     if (perms?.cs_ticket_admin) params.department = deptSlug || 'all';
 
@@ -177,7 +179,7 @@ export default function QueuePage() {
       .catch(e => { if (alive) setError(e.message); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [session, activeTab, dispositionFilter, categoryFilter, platformFilter, agentFilter, stageFilter, tagFilter, searchQ, deptSlug, perms?.cs_ticket_admin, page]);
+  }, [session, activeTab, dispositionFilter, categoryFilter, platformFilter, agentFilter, stageFilter, tagFilter, sortBy, searchQ, deptSlug, perms?.cs_ticket_admin, page]);
 
   function submitSearch(e) { e.preventDefault(); setParam('q', searchInput.trim()); }
 
@@ -257,6 +259,13 @@ export default function QueuePage() {
             {agents.map(a => <option key={a.id} value={a.id}>{a.full_name}</option>)}
           </select>
         )}
+
+        <select value={sortBy} onChange={e => setParam('sort', e.target.value === 'newest' ? '' : e.target.value)} title="Sort tickets" style={selectStyle}>
+          <option value="newest">Newest first</option>
+          <option value="oldest">Oldest first</option>
+          <option value="due">Due date (soonest)</option>
+          <option value="updated">Recently updated</option>
+        </select>
 
         <span style={{ flex: 1 }} />
         <button onClick={exportCsv} style={btnGhost}><Icon name="ext" size={13} />Export CSV</button>

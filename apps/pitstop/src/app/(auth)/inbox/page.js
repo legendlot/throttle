@@ -122,6 +122,15 @@ export default function InboxPage() {
   const scrollRef = useRef(null);
   const taRef = useRef(null);
   const fileRef = useRef(null);
+  // In-thread scrollback for the Chatwoot-pulled WA/web path (Pruthvi #bugs 2026-07-10:
+  // history stopped at ~60 msgs). waPagesRef is the current page depth the poll re-pulls
+  // with (so loaded-older history survives the 15s refresh); loadingOlderRef + prevHeightRef
+  // preserve the scroll viewport when older messages prepend instead of jumping to bottom.
+  const [oldestReached, setOldestReached] = useState(true);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const waPagesRef = useRef(12);
+  const loadingOlderRef = useRef(false);
+  const prevHeightRef = useRef(0);
 
   const [listCollapsed, setListCollapsed] = useState(() => {
     try { return localStorage.getItem('ps-inbox-list-collapsed') === '1'; } catch { return false; }
@@ -186,15 +195,18 @@ export default function InboxPage() {
       // live two-way conversation (+ real 24h window) from Chatwoot on demand (C2-B).
       if (d?.thread?.channel === 'whatsapp' || d?.thread?.channel === 'web') {
         try {
-          const live = await csopsGet('getWaConversation', { thread_id: id }, session);
+          const live = await csopsGet('getWaConversation', { thread_id: id, pages: waPagesRef.current }, session);
           setConvo({ ...d, messages: live.messages || [],
             within_customer_window: !!live.within_customer_window,
             window_until: live.window_until || null, wa_live: !!live.live });
+          setOldestReached(live.oldest_reached !== false);
         } catch (e) {
           setConvo({ ...d, wa_live_error: e.message });   // fall back to mirrored view, flag it
+          setOldestReached(true);
         }
       } else {
         setConvo(d);
+        setOldestReached(true);   // DB path already returns full history (500)
       }
       setErr(null);   // self-heal on successful thread load (S177)
     } catch (e) { setErr(e.message); }
@@ -241,16 +253,35 @@ export default function InboxPage() {
   useEffect(() => {
     if (!selectedId) { setConvo(null); return undefined; }
     setLoadingConvo(true);
+    waPagesRef.current = 12; loadingOlderRef.current = false; setOldestReached(true);   // reset scrollback depth per thread
     loadConvo(selectedId);
     setMode('reply'); setShowEmoji(false); setShowCanned(false); setAssignOpen(false); setPendingFiles([]);
     const iv = setInterval(() => loadConvo(selectedId), 15000);
     return () => clearInterval(iv);
   }, [selectedId, loadConvo]);
 
-  // Auto-scroll to newest on message change.
+  // Scroll positioning on message change: normally pin to newest, but when older
+  // history was just prepended (Load older) keep the viewport anchored on the message
+  // that was at the top so the agent doesn't get thrown to the bottom.
   useEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    const el = scrollRef.current; if (!el) return;
+    if (loadingOlderRef.current) {
+      el.scrollTop = el.scrollHeight - prevHeightRef.current;
+      loadingOlderRef.current = false;
+      setLoadingOlder(false);
+    } else {
+      el.scrollTop = el.scrollHeight;
+    }
   }, [convo?.messages?.length, selectedId]);
+
+  function loadOlderMessages() {
+    if (loadingOlder || oldestReached) return;
+    prevHeightRef.current = scrollRef.current?.scrollHeight || 0;
+    loadingOlderRef.current = true;
+    setLoadingOlder(true);
+    waPagesRef.current = Math.min(waPagesRef.current + 12, 36);
+    loadConvo(selectedId);
+  }
 
   // Prefill the email composer fields when an email thread is opened — To = the
   // customer, Subject = the thread subject (Re:-prefixed). Cleared/reset per thread.
@@ -863,6 +894,17 @@ export default function InboxPage() {
 
               {/* Messages */}
               <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: 16, background: 'var(--surface-2)' }}>
+                {/* Load older — WA/web history is Chatwoot-paged; deepen on demand up to 36 pages */}
+                {!oldestReached && (convo?.messages || []).length > 0 && (
+                  <div style={{ textAlign: 'center', marginBottom: 12 }}>
+                    <button onClick={loadOlderMessages} disabled={loadingOlder} style={{
+                      background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
+                      color: 'var(--t2)', fontSize: 12, padding: '6px 14px',
+                      cursor: loadingOlder ? 'default' : 'pointer', opacity: loadingOlder ? 0.6 : 1 }}>
+                      {loadingOlder ? 'Loading…' : '↑ Load older messages'}
+                    </button>
+                  </div>
+                )}
                 {loadingConvo && !convo?.messages?.length ? (
                   <div style={{ color: 'var(--t3)', fontSize: 12, textAlign: 'center', padding: 24 }}>Loading thread…</div>
                 ) : (convo?.messages || []).length === 0 ? (

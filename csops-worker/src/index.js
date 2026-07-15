@@ -651,7 +651,15 @@ async function getTickets(params, auth, env) {
     }
   }
 
-  const orderClause = 'order=created_at.desc';
+  // Sort axis (Pruthvi #bugs 2026-07-15): newest (default) | oldest | due (SLA soonest) | updated.
+  const sort = params.get('sort') || 'newest';
+  const ORDERS = {
+    newest:  'created_at.desc',
+    oldest:  'created_at.asc',
+    due:     'due_at.asc.nullslast',
+    updated: 'stage_changed_at.desc.nullslast',
+  };
+  const orderClause = `order=${ORDERS[sort] || ORDERS.newest}`;
   const path = `/rest/v1/cs_tickets?select=id,ticket_no,created_at,customer_name,customer_phone,product,product_model,product_color,platform,external_order_id,disposition,issue_category,issue_subcategory,issue_subcategory_custom,stage,stage_changed_at,assigned_agent_id,assigned_agent_name,due_at,closed_at,auto_created&${filters.join('&')}&${orderClause}&limit=${limit}&offset=${offset}`;
 
   const res = await sb(path, env, {
@@ -3047,28 +3055,30 @@ function biteSpeedApiBase(env) {
 // each call returns messages strictly older than that id, so we walk to the start
 // of the conversation. Bounded by MAX_PAGES to respect the 50-subrequest Worker
 // limit (this fn runs inside a single getWaConversation request).
-async function chatwootGetMessages(thread, env) {
+async function chatwootGetMessages(thread, env, maxPages) {
   const base = `${biteSpeedApiBase(env)}/api/v1/accounts/${encodeURIComponent(thread.provider_account_id)}/conversations/${encodeURIComponent(thread.provider_thread_ref)}/messages`;
-  // 12 pages (~12 subrequests/open) — interim deepening of in-thread scrollback
-  // (Pruthvi #bugs 2026-07-10: history stopped at ~60 msgs). Still well under the
-  // 50-subrequest limit. Full frontend infinite-scroll is the open follow-up.
-  const MAX_PAGES = 12;
+  // Page BACKWARDS via ?before=<oldest id>. Default 12 pages (~12 subrequests/open);
+  // the inbox "Load older messages" button raises this on demand (Pruthvi #bugs
+  // 2026-07-10: history stopped at ~60 msgs). Capped at 36 to stay well under the
+  // 50-subrequest Worker limit (getWaConversation makes ~3 other subrequests).
+  const MAX_PAGES = Math.min(Math.max(Number(maxPages) || 12, 12), 36);
   const all = [];
   const seen = new Set();
   let before = null;
+  let reachedStart = false;   // true = we paged all the way to the conversation start
 
   for (let i = 0; i < MAX_PAGES; i++) {
     const url = before ? `${base}?before=${encodeURIComponent(before)}` : base;
     let r;
     try { r = await fetch(url, { headers: { 'api_access_token': env.BITESPEED_API_TOKEN } }); }
-    catch (e) { return all.length ? { ok: true, raw: all } : { ok: false, status: 502, error: e.message }; }
+    catch (e) { return all.length ? { ok: true, raw: all, reachedStart } : { ok: false, status: 502, error: e.message }; }
     if (!r.ok) {
       if (all.length) break;   // keep whatever we already pulled
       const t = await r.text().catch(() => ''); return { ok: false, status: r.status, error: t.slice(0, 200) };
     }
     const d = await r.json().catch(() => ({}));
     const batch = Array.isArray(d?.payload) ? d.payload : (Array.isArray(d) ? d : []);
-    if (!batch.length) break;  // reached the start of the conversation
+    if (!batch.length) { reachedStart = true; break; }  // reached the start of the conversation
 
     let added = 0, minId = null;
     for (const m of batch) {
@@ -3080,11 +3090,11 @@ async function chatwootGetMessages(thread, env) {
       const n = Number(m?.id);
       if (Number.isFinite(n) && (minId == null || n < minId)) minId = n;
     }
-    // No progress (no new rows or oldest id didn't move back) → stop.
-    if (!added || minId == null || minId === before) break;
+    // No progress (no new rows or oldest id didn't move back) → we're at the start.
+    if (!added || minId == null || minId === before) { reachedStart = true; break; }
     before = minId;
   }
-  return { ok: true, raw: all };
+  return { ok: true, raw: all, reachedStart };
 }
 
 // Map a Chatwoot message → the shape the Pitstop inbox Bubble renders.
@@ -3131,12 +3141,12 @@ function deriveWaWindow(mapped) {
   return { open: until > Date.now(), until: new Date(until).toISOString() };
 }
 
-async function loadWaLive(thread, env) {
-  const res = await chatwootGetMessages(thread, env);
+async function loadWaLive(thread, env, maxPages) {
+  const res = await chatwootGetMessages(thread, env, maxPages);
   if (!res.ok) return res;
   const messages = res.raw.map(mapChatwootMessage).filter(Boolean)
     .sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
-  return { ok: true, messages, window: deriveWaWindow(messages) };
+  return { ok: true, messages, window: deriveWaWindow(messages), oldest_reached: res.reachedStart === true };
 }
 
 // GET getWaConversation — the live two-way WhatsApp thread pulled from Chatwoot.
@@ -3156,7 +3166,7 @@ async function getWaConversation(params, auth, env) {
                 note: 'No BiteSpeed conversation reference on this thread yet.' });
   }
 
-  const live = await loadWaLive(thread, env);
+  const live = await loadWaLive(thread, env, params.get('pages'));
   if (!live.ok) return err(`Failed to load WhatsApp conversation from BiteSpeed (${live.status}): ${live.error}`, 502);
 
   // Agent-attribution overlay (Pruthvi #bugs 2026-07-10): the live BiteSpeed pull tags
@@ -3194,6 +3204,7 @@ async function getWaConversation(params, auth, env) {
     within_customer_window: live.window.open,
     window_until: live.window.until,
     live: true,
+    oldest_reached: live.oldest_reached,   // false = more history available via ?pages=
   });
 }
 

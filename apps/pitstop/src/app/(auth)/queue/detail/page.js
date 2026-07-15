@@ -519,7 +519,10 @@ function LifecycleStepper({ ticket: t }) {
 }
 
 function IdentityRail({ ticket: t, dispatch, pastCases, session, onRefresh }) {
+  const { perms } = useAuth();
   const [revealPhone, setRevealPhone] = useState(false);
+  const [editingCustomer, setEditingCustomer] = useState(false);
+  const canEdit = !!perms?.cs_ticket_manage;
   return (
     <aside style={{
       background: 'var(--surface)',
@@ -530,7 +533,10 @@ function IdentityRail({ ticket: t, dispatch, pastCases, session, onRefresh }) {
       <SectionLabel>Assignment</SectionLabel>
       <AssignmentControl ticket={t} session={session} onChanged={onRefresh} />
 
-      <SectionLabel style={{ marginTop: 18 }}>Customer</SectionLabel>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginTop: 18 }}>
+        <SectionLabel>Customer</SectionLabel>
+        {canEdit && <button onClick={() => setEditingCustomer(true)} style={miniLink}>Edit</button>}
+      </div>
       <Field label="Name" value={t.customer_name} />
       <Field
         label="Phone"
@@ -585,6 +591,16 @@ function IdentityRail({ ticket: t, dispatch, pastCases, session, onRefresh }) {
             </div>
           ))}
         </LinkedCard>
+      )}
+
+      {editingCustomer && (
+        <EditPanelModal
+          ticket={t}
+          field="customer"
+          session={session}
+          onClose={() => setEditingCustomer(false)}
+          onSaved={() => { setEditingCustomer(false); onRefresh(); }}
+        />
       )}
     </aside>
   );
@@ -870,6 +886,14 @@ function EditPanelModal({ ticket, field, session, onClose, onSaved }) {
                   : ticket.disposition === 'refund'
                   ? ['refund_amount_inr','refund_reference']
                   : ['repair_run_id','repair_order_id'],
+    // Editable customer/order details — for tickets from non-Shopify channels where
+    // these come in blank (Pruthvi #bugs 2026-06-27). updateTicket accepts them (not PROTECTED).
+    customer:   ['customer_name','customer_phone','customer_email','customer_address','external_order_id'],
+  };
+  // Friendly labels for the customer section's generic inputs.
+  const FIELD_LABELS = {
+    customer_name: 'Name', customer_phone: 'Phone', customer_email: 'Email',
+    customer_address: 'Address', external_order_id: 'Order ID',
   };
   const fields = sectionFields[field] || [];
   const numericFields = new Set(['return_cost_inr','replacement_cost_inr','refund_amount_inr','repair_run_id']);
@@ -936,8 +960,8 @@ function EditPanelModal({ ticket, field, session, onClose, onSaved }) {
           </>
         ) : fields.map(f => (
           <label key={f} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span style={{ color: 'var(--t3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.08em', fontFamily: 'var(--font-mono)' }}>{f}</span>
-            {f === 'issue_description' || f === 'inspection_note' ? (
+            <span style={{ color: 'var(--t3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.08em', fontFamily: 'var(--font-mono)' }}>{FIELD_LABELS[f] || f}</span>
+            {f === 'issue_description' || f === 'inspection_note' || f === 'customer_address' ? (
               <textarea
                 value={form[f] || ''}
                 onChange={e => setForm(s => ({ ...s, [f]: e.target.value }))}
