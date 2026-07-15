@@ -21,3 +21,4 @@ Thumbs.db
 
 # Redesign reference bundle (prototype, not app code)
 redesign-reference/
+.claude/worktrees/
