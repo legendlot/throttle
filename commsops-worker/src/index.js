@@ -13,6 +13,7 @@ const SHOP = require('./shopify.js');
 const SHOPWH = require('./shopify-webhooks.js');
 const SHOPFLO = require('./shopflo-webhooks.js');
 const AL = require('./alerts.js');
+const EA = require('./email-assets.js');
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -24,6 +25,7 @@ const json = (data, status = 200) =>
 const ok  = (data) => json({ ok: true, data });
 const err = (msg, status = 400) => json({ ok: false, error: msg }, status);
 const nowIso = () => new Date().toISOString();
+const enc2 = (p) => String(p).split('/').map(encodeURIComponent).join('/');
 
 // ── GET actions ──────────────────────────────────────────────────────────────
 async function handleGet(url, auth, env) {
@@ -269,6 +271,26 @@ async function handlePost(body, auth, env) {
         }),
       });
       return r.ok ? ok(r.data?.[0]) : err('db_error:' + JSON.stringify(r.data), 500);
+    }
+
+    case 'createEmailAssetUploadUrl': {   // email authoring v1 — signed upload into the public relay-email-assets bucket
+      if (!A.canTemplate(auth.permissions)) return err('forbidden', 403);
+      const fileName = body.file_name;
+      if (!fileName) return err('file_name_required', 400);
+      const bucket = 'relay-email-assets';
+      const path = EA.assetPath(fileName, Date.now());
+      const sr = await fetch(`${env.SUPABASE_URL}/storage/v1/object/upload/sign/${bucket}/${enc2(path)}`, {
+        method: 'POST',
+        headers: {
+          apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      const st = await sr.text();
+      let sd; try { sd = st ? JSON.parse(st) : null; } catch { sd = null; }
+      if (!sr.ok || !sd?.url) return err(`sign_failed:${st}`, 502);
+      return ok(EA.signToUrls(env, bucket, path, sd));
     }
 
     case 'sendTest': {                 // M5 — test-send: always allowed, no approval; transactional bypasses marketing gate
