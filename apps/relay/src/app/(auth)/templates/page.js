@@ -214,7 +214,7 @@ export default function TemplatesPage() {
                     ))}
                   </div>
                 )}
-                <EmailEditor key={editorKey} ref={edRef} initialDesign={t.design_json} session={session} />
+                <EmailEditor key={editorKey} onReady={(api) => { edRef.current = api; }} initialDesign={t.design_json} session={session} />
               </>
             ) : (
               <iframe title="Email preview" srcDoc={t.html_body || '<p style="font-family:sans-serif;color:#888;padding:24px">No content</p>'}

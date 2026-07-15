@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
+import { useEffect, useRef } from 'react';
 import grapesjs from 'grapesjs';
 import grapesjsMjml from 'grapesjs-mjml';
 import 'grapesjs/dist/css/grapes.min.css';
@@ -22,15 +22,10 @@ async function uploadAsset(file, session) {
   return d.public_url;
 }
 
-const EmailEditor = forwardRef(function EmailEditor({ initialDesign, session }, ref) {
+export default function EmailEditor({ initialDesign, session, onReady }) {
   const holderRef = useRef(null);
   const edRef = useRef(null);
   const { showToast } = useToast();
-  useImperativeHandle(ref, () => ({
-    export: () => (edRef.current ? exportEmail(edRef.current) : { mjml: '', html: '', text: '', design: null }),
-    setDevice: (name) => { if (edRef.current) edRef.current.setDevice(name); },
-    getEditor: () => edRef.current,
-  }), []);
   useEffect(() => {
     if (!holderRef.current) return undefined;
     const editor = grapesjs.init({
@@ -57,9 +52,18 @@ const EmailEditor = forwardRef(function EmailEditor({ initialDesign, session }, 
     if (initialDesign && Object.keys(initialDesign).length) editor.loadProjectData(initialDesign);
     else editor.setComponents(BLANK_MJML);
     edRef.current = editor;
-    return () => { try { editor.destroy(); } catch (_) {} edRef.current = null; };
+    const api = {
+      export: () => exportEmail(editor),
+      setDevice: (name) => editor.setDevice(name),
+      getEditor: () => editor,
+    };
+    if (onReady) onReady(api);
+    return () => {
+      if (onReady) onReady(null);
+      try { editor.destroy(); } catch (_) {}
+      edRef.current = null;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return <div ref={holderRef} className="email-gjs" />;
-});
-export default EmailEditor;
+}
