@@ -205,20 +205,23 @@ async function shopifyLookup({ phone, email }, env) {
   return { configured: true, found: true, customer, recent_orders };
 }
 
-// Resolve Shopify order NAMES → createdAt (for the purchase-date backfill). external_order_id
-// on Website tickets IS the Shopify order name (e.g. "LOT36533"). Batches names into one
-// orders(query:"name:.. OR name:..") call each (cost-cheap: only name+createdAt). Never throws.
+// Resolve Shopify order names → createdAt (for the purchase-date backfill). The Shopify order
+// NAME carries a "#" prefix (e.g. "#LOT36533"); tickets store external_order_id sometimes with
+// it, mostly without ("LOT36533"). So we search WITH the "#" and key the result map by the
+// normalised name (leading "#" stripped) so both sides match. Batches into one
+// orders(query:"status:any AND (name:.. OR ..)") call per CHUNK. Never throws.
+const normOrderName = (s) => String(s || '').trim().replace(/^#/, '');
 async function shopifyOrderDatesByName(names, env) {
-  const out = {};
+  const out = {};                                   // keyed by normalised name (no "#")
   if (!names.length || !env.SHOPIFY_STORE_DOMAIN || !env.SHOPIFY_CLIENT_ID) return out;
   let token = await getShopifyToken(env);
   if (!token) return out;
   const CHUNK = 40;
   for (let i = 0; i < names.length; i += CHUNK) {
     const batch = names.slice(i, i + CHUNK);
-    // status:any is REQUIRED — Shopify's orders search defaults to OPEN orders, so
-    // fulfilled/archived orders (the vast majority of complaints) match nothing without it.
-    const q = `status:any AND (${batch.map(n => `name:${JSON.stringify(String(n))}`).join(' OR ')})`;
+    // status:any — Shopify's orders search defaults to OPEN only; fulfilled orders are archived.
+    // "#"+core — the order name includes the "#" prefix; searching bare misses them.
+    const q = `status:any AND (${batch.map(n => `name:${JSON.stringify('#' + normOrderName(n))}`).join(' OR ')})`;
     const query = `query($q:String!){ orders(first:${CHUNK}, query:$q){ edges{ node{ name createdAt } } } }`;
     const run = (t) => fetch(`https://${env.SHOPIFY_STORE_DOMAIN}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
       method: 'POST',
@@ -230,7 +233,7 @@ async function shopifyOrderDatesByName(names, env) {
     if (!res || !res.ok) continue;
     const data = await res.json().catch(() => null);
     for (const e of (data?.data?.orders?.edges || [])) {
-      const o = e.node; if (o?.name && o?.createdAt) out[o.name] = o.createdAt;
+      const o = e.node; if (o?.name && o?.createdAt) out[normOrderName(o.name)] = o.createdAt;
     }
   }
   return out;
@@ -249,7 +252,7 @@ async function runPurchaseDateBackfill(env, { limit = 120 } = {}) {
   const dateByName = await shopifyOrderDatesByName(names, env);
   const istDay = (ts) => new Date(new Date(ts).getTime() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
   const updates = [];
-  for (const t of rows) { const c = dateByName[t.external_order_id]; if (c) updates.push({ id: t.id, purchase_date: istDay(c) }); }
+  for (const t of rows) { const c = dateByName[normOrderName(t.external_order_id)]; if (c) updates.push({ id: t.id, purchase_date: istDay(c) }); }
   let updated = 0;
   if (updates.length) {
     const up = await sb(`/rest/v1/rpc/set_ticket_purchase_dates`, env, { method: 'POST', body: JSON.stringify({ p: updates }) });
