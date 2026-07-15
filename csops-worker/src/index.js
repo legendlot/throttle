@@ -205,6 +205,67 @@ async function shopifyLookup({ phone, email }, env) {
   return { configured: true, found: true, customer, recent_orders };
 }
 
+// Resolve Shopify order NAMES → createdAt (for the purchase-date backfill). external_order_id
+// on Website tickets IS the Shopify order name (e.g. "LOT36533"). Batches names into one
+// orders(query:"name:.. OR name:..") call each (cost-cheap: only name+createdAt). Never throws.
+async function shopifyOrderDatesByName(names, env) {
+  const out = {};
+  if (!names.length || !env.SHOPIFY_STORE_DOMAIN || !env.SHOPIFY_CLIENT_ID) return out;
+  let token = await getShopifyToken(env);
+  if (!token) return out;
+  const CHUNK = 40;
+  for (let i = 0; i < names.length; i += CHUNK) {
+    const batch = names.slice(i, i + CHUNK);
+    const q = batch.map(n => `name:${JSON.stringify(String(n))}`).join(' OR ');
+    const query = `query($q:String!){ orders(first:${CHUNK}, query:$q){ edges{ node{ name createdAt } } } }`;
+    const run = (t) => fetch(`https://${env.SHOPIFY_STORE_DOMAIN}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': t },
+      body: JSON.stringify({ query, variables: { q } }),
+    });
+    let res = await run(token).catch(() => null);
+    if (res && res.status === 401) { token = await getShopifyToken(env, true); if (!token) break; res = await run(token).catch(() => null); }
+    if (!res || !res.ok) continue;
+    const data = await res.json().catch(() => null);
+    for (const e of (data?.data?.orders?.edges || [])) {
+      const o = e.node; if (o?.name && o?.createdAt) out[o.name] = o.createdAt;
+    }
+  }
+  return out;
+}
+
+// Fill cs_tickets.purchase_date for Website complaints from their Shopify order date.
+// Batch-bounded (subrequest-safe) + idempotent (RPC only fills NULLs); drains history over
+// runs and tops up new tickets. Called by the admin action + the cron. Marketplace channels
+// (Amazon/QC/etc.) have no Shopify order → stay NULL (manual field / "Ageing unknown").
+async function runPurchaseDateBackfill(env, { limit = 120 } = {}) {
+  if (!env.SHOPIFY_STORE_DOMAIN) return { ok: false, reason: 'shopify not configured' };
+  const r = await sb(`/rest/v1/cs_tickets?platform=eq.website&external_order_id=not.is.null&purchase_date=is.null&select=id,external_order_id&order=created_at.desc&limit=${limit}`, env);
+  const rows = r.data || [];
+  if (!rows.length) return { ok: true, scanned: 0, resolved: 0, updated: 0, remaining: 0 };
+  const names = [...new Set(rows.map(t => t.external_order_id).filter(Boolean))];
+  const dateByName = await shopifyOrderDatesByName(names, env);
+  const istDay = (ts) => new Date(new Date(ts).getTime() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+  const updates = [];
+  for (const t of rows) { const c = dateByName[t.external_order_id]; if (c) updates.push({ id: t.id, purchase_date: istDay(c) }); }
+  let updated = 0;
+  if (updates.length) {
+    const up = await sb(`/rest/v1/rpc/set_ticket_purchase_dates`, env, { method: 'POST', body: JSON.stringify({ p: updates }) });
+    updated = Number(up.data) || 0;
+  }
+  const remaining = await sbCount(`/rest/v1/cs_tickets?platform=eq.website&external_order_id=not.is.null&purchase_date=is.null&select=id`, env);
+  return { ok: true, scanned: rows.length, resolved: updates.length, updated, remaining };
+}
+
+// Admin action — run one backfill batch on demand (the cron also drains it). Re-run until
+// remaining=0. gated cs_ticket_admin.
+async function backfillPurchaseDates(body, auth, env) {
+  const g = require('cs_ticket_admin', auth); if (g) return g;
+  const limit = Math.min(Math.max(Number(body?.limit) || 120, 1), 200);
+  const res = await runPurchaseDateBackfill(env, { limit });
+  return res.ok ? ok(res) : err(res.reason || 'backfill failed', 503);
+}
+
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
 async function verifyJWT(authHeader, env) {
@@ -470,12 +531,22 @@ export default {
   // Cron: poll carecrew@ for new inbound email (Pitstop email channel, S175).
   // Armed via wrangler.toml [triggers] crons. Inert (no-op) until the Gmail SA
   // secrets are set. Idempotent — provider_message_id unique dedupes redelivery.
-  async scheduled(_event, env, ctx) {
-    if (!gmailConfigured(env)) return;   // not configured yet (no GOOGLE_SA_JSON)
-    ctx.waitUntil(syncGmail(env).then(
-      r => console.log('[email] cron sync', JSON.stringify(r)),
-      e => console.error('[email] cron sync error', e),
-    ));
+  async scheduled(event, env, ctx) {
+    if (gmailConfigured(env)) {
+      ctx.waitUntil(syncGmail(env).then(
+        r => console.log('[email] cron sync', JSON.stringify(r)),
+        e => console.error('[email] cron sync error', e),
+      ));
+    }
+    // Purchase-date backfill for Support Analytics ageing — throttled to ~every 20 min
+    // (the cron is */2). Cheap when drained: 0 unfilled tickets → no Shopify call.
+    const mins = new Date(event?.scheduledTime || Date.now()).getUTCMinutes();
+    if (env.SHOPIFY_STORE_DOMAIN && mins % 20 === 0) {
+      ctx.waitUntil(runPurchaseDateBackfill(env, { limit: 120 }).then(
+        r => console.log('[purchase-date] cron backfill', JSON.stringify(r)),
+        e => console.error('[purchase-date] cron backfill error', e),
+      ));
+    }
   },
 };
 
@@ -581,6 +652,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'sendMetaAttachment':       return sendMetaAttachment(body, auth, env);
     case 'sendEmailReply':           return sendEmailReply(body, auth, env);
     case 'syncGmailNow':             return syncGmailNow(body, auth, env);
+    case 'backfillPurchaseDates':    return backfillPurchaseDates(body, auth, env);
     case 'linkMessagingThread':      return linkMessagingThread(body, auth, env);
     case 'assignThread':             return assignThread(body, auth, env);
     case 'transferThread':           return transferThread(body, auth, env);

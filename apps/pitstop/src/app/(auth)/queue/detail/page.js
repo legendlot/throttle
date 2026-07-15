@@ -518,6 +518,15 @@ function LifecycleStepper({ ticket: t }) {
   );
 }
 
+// "· Nd after purchase" suffix for the Order rail — days from purchase to complaint (IST).
+function ageingLabel(purchaseDate, createdAt) {
+  if (!purchaseDate || !createdAt) return '';
+  const cd = new Date(new Date(createdAt).getTime() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+  const days = Math.floor((Date.parse(`${cd}T00:00:00Z`) - Date.parse(`${purchaseDate}T00:00:00Z`)) / 86400000);
+  if (!Number.isFinite(days) || days < 0) return '';
+  return ` · ${days}d after purchase`;
+}
+
 function IdentityRail({ ticket: t, dispatch, pastCases, session, onRefresh }) {
   const { perms } = useAuth();
   const [revealPhone, setRevealPhone] = useState(false);
@@ -560,6 +569,7 @@ function IdentityRail({ ticket: t, dispatch, pastCases, session, onRefresh }) {
       <SectionLabel style={{ marginTop: 18 }}>Order</SectionLabel>
       <Field label="Platform" value={t.platform || '—'} />
       <Field label="Order ID"  value={t.external_order_id || '—'} mono />
+      <Field label="Purchased" value={t.purchase_date ? `${t.purchase_date}${ageingLabel(t.purchase_date, t.created_at)}` : '—'} />
       <Field label="UPC"       value={t.lot_unit_upc || '—'} mono />
 
       {dispatch?.unit && (
@@ -888,12 +898,14 @@ function EditPanelModal({ ticket, field, session, onClose, onSaved }) {
                   : ['repair_run_id','repair_order_id'],
     // Editable customer/order details — for tickets from non-Shopify channels where
     // these come in blank (Pruthvi #bugs 2026-06-27). updateTicket accepts them (not PROTECTED).
-    customer:   ['customer_name','customer_phone','customer_email','customer_address','external_order_id'],
+    // purchase_date drives the Support Analytics ageing split (auto-filled from Shopify for
+    // Website via the backfill; manual here for Amazon/QC/offline).
+    customer:   ['customer_name','customer_phone','customer_email','customer_address','external_order_id','purchase_date'],
   };
   // Friendly labels for the customer section's generic inputs.
   const FIELD_LABELS = {
     customer_name: 'Name', customer_phone: 'Phone', customer_email: 'Email',
-    customer_address: 'Address', external_order_id: 'Order ID',
+    customer_address: 'Address', external_order_id: 'Order ID', purchase_date: 'Purchase date',
   };
   const fields = sectionFields[field] || [];
   const numericFields = new Set(['return_cost_inr','replacement_cost_inr','refund_amount_inr','repair_run_id']);
@@ -970,7 +982,7 @@ function EditPanelModal({ ticket, field, session, onClose, onSaved }) {
               />
             ) : (
               <input
-                type={numericFields.has(f) ? 'number' : 'text'}
+                type={f === 'purchase_date' ? 'date' : numericFields.has(f) ? 'number' : 'text'}
                 value={form[f] || ''}
                 onChange={e => setForm(s => ({ ...s, [f]: e.target.value }))}
                 style={inputStyle}
