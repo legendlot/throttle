@@ -3,6 +3,8 @@ const BLOCK = /<\/(p|div|h[1-6]|tr|table|li|ul|ol|section|header|footer)\s*>|<br
 export function htmlToPlain(html) {
   if (!html) return '';
   let s = String(html);
+  s = s.replace(/<head[\s\S]*?<\/head>/gi, '');          // drop <head> (title, MSO <o:PixelsPerInch>96</o:…>, etc.)
+  s = s.replace(/<!--\[if[\s\S]*?<!\[endif\]-->/gi, '');  // drop MSO/IE conditional blocks (ghost tables)
   s = s.replace(/<(style|script)[\s\S]*?<\/\1>/gi, '');
   s = s.replace(BLOCK, '\n');
   s = s.replace(/<[^>]+>/g, '');
