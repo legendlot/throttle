@@ -184,10 +184,11 @@ export default function ReceivingPage() {
   }
 
   function prefillFromPO(poNumber) {
-    const po = pos.find(p => p.po_number === poNumber);
-    if (!po) return;
     setNewPO(poNumber);
-    if (po.vendor_name) setNewSup(po.vendor_name);
+    const po = pos.find(p => p.po_number === poNumber);
+    if (!po) { setNewSup(''); return; }   // cleared selection → clear the PO-derived supplier
+    // Supplier is ALWAYS taken from the PO now (no free-text entry) — Afshaan 2026-07-15.
+    setNewSup(po.vendor_name || '');
     if (po.source)      setNewOrigin(po.source);
     // FBU unification (Plan 1): default the declared format to the PO's intent when known
     // (receiver confirms/overrides). Best-effort — no-op if the list row lacks the field.
@@ -195,7 +196,10 @@ export default function ReceivingPage() {
   }
 
   async function submitNewShipment() {
-    if (!newSup.trim()) { showToast('Enter supplier name', 'error'); return; }
+    // PO is now MANDATORY — no receiving without a linked purchase order (Afshaan 2026-07-15).
+    // Supplier is derived from the PO (never free-typed), so a missing supplier = a PO with no vendor.
+    if (!newPO.trim()) { showToast('Select a PO — receiving requires a linked purchase order', 'error'); return; }
+    if (!newSup.trim()) { showToast('That PO has no supplier set — fix the PO first', 'error'); return; }
     setNewSubmitting(true);
     try {
       const res = await workerFetch('postShipment', {
@@ -751,17 +755,17 @@ export default function ReceivingPage() {
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10, marginBottom: 10 }}>
                 <div>
-                  <span style={lbl}>Supplier *</span>
-                  <input style={inp} value={newSup} onChange={e => setNewSup(e.target.value)} placeholder="Supplier name" />
-                </div>
-                <div>
-                  <span style={lbl}>PO Reference</span>
-                  <select style={{ ...sel, width: '100%' }} value={newPO} onChange={e => { setNewPO(e.target.value); prefillFromPO(e.target.value); }}>
-                    <option value="">— None / Manual —</option>
+                  <span style={lbl}>PO Reference *</span>
+                  <select style={{ ...sel, width: '100%' }} value={newPO} onChange={e => prefillFromPO(e.target.value)}>
+                    <option value="">— Select PO (required) —</option>
                     {pos.filter(p => p.status !== 'Closed' && p.status !== 'Cancelled').map(p => (
                       <option key={p.po_number} value={p.po_number}>{p.po_number} · {p.vendor_name || '—'}</option>
                     ))}
                   </select>
+                </div>
+                <div>
+                  <span style={lbl}>Supplier (from PO)</span>
+                  <input style={{ ...inp, opacity: 0.7, cursor: 'not-allowed' }} value={newSup} readOnly placeholder="Select a PO first" />
                 </div>
                 <div>
                   <span style={lbl}>Arrival Date</span>
