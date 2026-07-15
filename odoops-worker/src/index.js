@@ -1958,7 +1958,10 @@ async function adsAutoPause(env) {
     // auto-pause a graduated winner in a SCALE campaign, which re-enters Meta's learning phase
     // on launch and is expected to be volatile for its first week. Scale is human-managed
     // (Afshaan approves each budget step); the daily spend ceiling remains the hard backstop.
-    const sp = await sbSales('/rest/v1/ads_plan?kind=eq.scale&select=id');
+    // SCREEN plans are exempt too: screening ads are ATC-optimized and judged on cost-per-ATC
+    // by human review at 48-72h (see Brand strategy/creative-throughput-loop.md) — purchase-ROAS
+    // would misfire on them the way it did on SCALE.
+    const sp = await sbSales('/rest/v1/ads_plan?kind=in.(scale,screen)&select=id');
     const scalePlanIds = new Set((sp.ok ? sp.data : []).map(r => r.id));
     const mr = await sbSales('/rest/v1/ads_managed?entity_type=eq.ad&status=eq.active&select=meta_id,plan_id');
     const ads = mr.ok ? mr.data : [];
@@ -3260,10 +3263,12 @@ export default {
           // ════════ Phase 2 — Ad Engine WRITE (gated; see migration 0010) ════════
           case 'adsSavePlan': {   // draft/update a launch plan (the engine's "brain" submits this)
             if (!canAdsWrite(P)) return err('No permission', 403);
+            if (d.kind && !['experiment', 'scale', 'screen'].includes(d.kind)) return err("kind must be 'experiment', 'scale' or 'screen'", 422);
             const planRow = {
               product: d.product || null, batch: d.batch || null,
               channel_id: d.channel_id || null, ad_account_id: d.ad_account_id || null,
               daily_budget_total_inr: num(d.daily_budget_total_inr),
+              ...(d.kind ? { kind: d.kind } : {}),
               plan: d.plan || {}, notes: d.notes || null, updated_at: nowISO(),
             };
             let r;
@@ -3316,7 +3321,7 @@ export default {
           case 'setPlanKind': {   // Dyno — move a plan between the experiment and scaling buckets (writer)
             if (!canAdsWrite(P)) return err('No permission', 403);
             if (!d.plan_id) return err('plan_id required');
-            if (!['experiment', 'scale'].includes(d.kind)) return err("kind must be 'experiment' or 'scale'", 422);
+            if (!['experiment', 'scale', 'screen'].includes(d.kind)) return err("kind must be 'experiment', 'scale' or 'screen'", 422);
             const r = await sbSales(`/rest/v1/ads_plan?id=eq.${d.plan_id}`, { method: 'PATCH', prefer: 'return=representation', body: JSON.stringify({ kind: d.kind, updated_at: nowISO() }) });
             if (!r.ok || !Array.isArray(r.data) || !r.data[0]) return err('Plan not found or update failed: ' + JSON.stringify(r.data), 404);
             await ledgerWrite({ actor_user_id: userId, action: 'setPlanKind', plan_id: d.plan_id, daily_delta_inr: 0, request: d, status: 'ok' });
@@ -3351,9 +3356,10 @@ export default {
             await ledgerWrite({ actor_user_id: userId, action: 'labUpsertAngle', daily_delta_inr: 0, request: d, status: 'ok' });
             return ok(Array.isArray(r.data) ? r.data[0] : r.data);
           }
-          case 'metaCreateCampaign': {   // creates PAUSED (no budget at campaign level in ABO)
+          case 'metaCreateCampaign': {   // creates PAUSED. ABO by default; pass daily_budget_inr for CBO (screening campaigns).
             if (!canAdsWrite(P)) return err('No permission', 403);
             if (!d.plan_id) return err('plan_id required');
+            const cboInr = num(d.daily_budget_inr);   // > 0 → CBO: budget lives on the campaign, ad sets carry none
             try {
               const out = await adsGuardedWrite({ userId, action: 'metaCreateCampaign', planId: d.plan_id, request: d, fn: async () => {
                 const ex = await sbSales(`/rest/v1/ads_managed?entity_type=eq.campaign&plan_id=eq.${d.plan_id}&status=neq.deleted&select=meta_id&limit=1`);
@@ -3361,20 +3367,23 @@ export default {
                 const plan = await adsLoadPlan(d.plan_id, 'approved');
                 const acct = await metaAdAccount(plan.ad_account_id);
                 const name = d.name || plan.plan?.campaign?.name || `LOT | PROSPECT | ${plan.product || 'Batch'}`;
-                const res = await metaPost(env, `act_${acct}/campaigns`, { name, objective: 'OUTCOME_SALES', buying_type: 'AUCTION', special_ad_categories: '[]', is_adset_budget_sharing_enabled: 'false', status: 'PAUSED' });
-                await managedUpsert({ entity_type: 'campaign', meta_id: res.id, parent_id: null, plan_id: d.plan_id, channel_id: plan.channel_id, ad_account_id: acct, name, daily_budget_inr: 0, status: 'paused' });
+                const body = { name, objective: 'OUTCOME_SALES', buying_type: 'AUCTION', special_ad_categories: '[]', is_adset_budget_sharing_enabled: 'false', status: 'PAUSED' };
+                if (cboInr > 0) { body.daily_budget = inrToMinor(cboInr); body.bid_strategy = 'LOWEST_COST_WITHOUT_CAP'; }   // CBO: budget + bid strategy at campaign level
+                const res = await metaPost(env, `act_${acct}/campaigns`, body);
+                await managedUpsert({ entity_type: 'campaign', meta_id: res.id, parent_id: null, plan_id: d.plan_id, channel_id: plan.channel_id, ad_account_id: acct, name, daily_budget_inr: cboInr > 0 ? cboInr : 0, status: 'paused' });
                 return { entity_type: 'campaign', entity_id: res.id, meta_response: res };
               }});
-              return ok({ campaign_id: out.entity_id });
+              return ok({ campaign_id: out.entity_id, cbo_daily_budget_inr: cboInr > 0 ? cboInr : undefined });
             } catch (e) { return err(String(e?.message || e), 422); }
           }
-          case 'metaCreateAdSet': {   // creates PAUSED; daily budget committed only on activation
+          case 'metaCreateAdSet': {   // creates PAUSED; daily budget committed only on activation. CBO parent → omit adset budget.
             if (!canAdsWrite(P)) return err('No permission', 403);
             if (!d.plan_id || !d.campaign_id) return err('plan_id and campaign_id required');
             const a = d.adset || {};
-            if (!a.pixel_id) return err('adset.pixel_id required (purchase optimization)', 422);
+            if (!a.pixel_id) return err('adset.pixel_id required (conversion optimization)', 422);
+            const optEvent = String(a.optimization_event || 'PURCHASE').toUpperCase();   // PURCHASE (default) | ADD_TO_CART (screening)
+            if (!['PURCHASE', 'ADD_TO_CART'].includes(optEvent)) return err("adset.optimization_event must be 'PURCHASE' or 'ADD_TO_CART'", 422);
             const budgetInr = num(a.daily_budget_inr);
-            if (budgetInr <= 0) return err('adset.daily_budget_inr must be > 0', 422);
             try {
               const out = await adsGuardedWrite({ userId, action: 'metaCreateAdSet', planId: d.plan_id, request: d, fn: async () => {
                 if (a.name) {
@@ -3383,17 +3392,22 @@ export default {
                 }
                 const plan = await adsLoadPlan(d.plan_id, 'approved');
                 const acct = await metaAdAccount(plan.ad_account_id);
+                // CBO parent (campaign carries the budget) → the adset must NOT set budget or bid_strategy.
+                const parent = await managedGet('campaign', d.campaign_id);
+                const isCbo = parent && num(parent.daily_budget_inr) > 0;
+                if (!isCbo && budgetInr <= 0) throw new Error('adset.daily_budget_inr must be > 0 (or parent campaign must be CBO)');
                 const targeting = a.targeting || { geo_locations: { countries: ['IN'] } };   // all-India broad default
-                const res = await metaPost(env, `act_${acct}/adsets`, {
+                const body = {
                   name: a.name || `${plan.product || 'Batch'} — adset`, campaign_id: d.campaign_id,
-                  daily_budget: inrToMinor(budgetInr), billing_event: 'IMPRESSIONS', optimization_goal: 'OFFSITE_CONVERSIONS',
-                  bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
-                  promoted_object: { pixel_id: a.pixel_id, custom_event_type: 'PURCHASE' }, targeting, status: 'PAUSED',
-                });
-                await managedUpsert({ entity_type: 'adset', meta_id: res.id, parent_id: d.campaign_id, plan_id: d.plan_id, channel_id: plan.channel_id, ad_account_id: acct, name: a.name || null, daily_budget_inr: budgetInr, status: 'paused' });
-                return { entity_type: 'adset', entity_id: res.id, meta_response: res };
+                  billing_event: 'IMPRESSIONS', optimization_goal: 'OFFSITE_CONVERSIONS',
+                  promoted_object: { pixel_id: a.pixel_id, custom_event_type: optEvent }, targeting, status: 'PAUSED',
+                };
+                if (!isCbo) { body.daily_budget = inrToMinor(budgetInr); body.bid_strategy = 'LOWEST_COST_WITHOUT_CAP'; }
+                const res = await metaPost(env, `act_${acct}/adsets`, body);
+                await managedUpsert({ entity_type: 'adset', meta_id: res.id, parent_id: d.campaign_id, plan_id: d.plan_id, channel_id: plan.channel_id, ad_account_id: acct, name: a.name || null, daily_budget_inr: isCbo ? 0 : budgetInr, status: 'paused' });
+                return { entity_type: 'adset', entity_id: res.id, meta_response: res, cbo: isCbo };
               }});
-              return ok({ adset_id: out.entity_id, daily_budget_inr: budgetInr, status: 'PAUSED' });
+              return ok({ adset_id: out.entity_id, daily_budget_inr: out.cbo ? 0 : budgetInr, optimization_event: optEvent, status: 'PAUSED' });
             } catch (e) { return err(String(e?.message || e), 422); }
           }
           case 'metaCreateAd': {   // single-image OR carousel: upload image(s) → adcreative → ad (all PAUSED)
@@ -3500,8 +3514,10 @@ export default {
               const out = await adsGuardedWrite({ userId, action: 'metaSetStatus', planId: d.plan_id || null, request: d, fn: async () => {
                 const m = await managedGet(et, mid);
                 let delta = 0;
-                // Only an adset commits budget, and only when flipping paused→active (idempotent re-activate adds nothing).
-                if (status === 'ACTIVE' && et === 'adset' && (!m || m.status !== 'active')) { const budget = m ? num(m.daily_budget_inr) : 0; await assertCeiling(budget); delta = budget; }
+                // Budget commits on paused→active (idempotent re-activate adds nothing): adsets always;
+                // campaigns only when they carry a CBO budget (daily_budget_inr > 0).
+                const carriesBudget = et === 'adset' || (et === 'campaign' && m && num(m.daily_budget_inr) > 0);
+                if (status === 'ACTIVE' && carriesBudget && (!m || m.status !== 'active')) { const budget = m ? num(m.daily_budget_inr) : 0; await assertCeiling(budget); delta = budget; }
                 const res = await metaPost(env, `${mid}`, { status });
                 if (m) await managedPatch(et, mid, { status: status === 'ACTIVE' ? 'active' : 'paused' });
                 return { entity_type: et, entity_id: mid, meta_response: res, daily_delta_inr: delta };
@@ -3525,6 +3541,25 @@ export default {
                 return { entity_type: 'adset', entity_id: adsetId, meta_response: res, daily_delta_inr: newInr - curInr };
               }});
               return ok({ adset_id: adsetId, daily_budget_inr: newInr });
+            } catch (e) { return err(String(e?.message || e), 422); }
+          }
+          case 'metaSetCampaignBudget': {   // CBO campaigns only. scale up = gated to approvers; scale down = free
+            if (!canAdsWrite(P)) return err('No permission', 403);
+            const campaignId = d.campaign_id, newInr = num(d.daily_budget_inr);
+            if (!campaignId) return err('campaign_id required', 422);
+            if (newInr <= 0) return err('daily_budget_inr must be > 0', 422);
+            try {
+              const m = await managedGet('campaign', campaignId);
+              const curInr = m ? num(m.daily_budget_inr) : 0;
+              if (curInr <= 0) return err('not a CBO campaign (no campaign-level budget managed)', 422);
+              if (newInr > curInr && !canAdsApprove(P)) return err('Budget increase requires approval (auto-scale is gated)', 403);
+              const out = await adsGuardedWrite({ userId, action: 'metaSetCampaignBudget', planId: m?.plan_id || null, request: d, fn: async () => {
+                if (m && m.status === 'active') await assertCeiling(newInr, curInr);
+                const res = await metaPost(env, `${campaignId}`, { daily_budget: inrToMinor(newInr) });
+                await managedPatch('campaign', campaignId, { daily_budget_inr: newInr });
+                return { entity_type: 'campaign', entity_id: campaignId, meta_response: res, daily_delta_inr: newInr - curInr };
+              }});
+              return ok({ campaign_id: campaignId, daily_budget_inr: newInr });
             } catch (e) { return err(String(e?.message || e), 422); }
           }
           case 'metaSetName': {   // rename a campaign/adset/ad (no spend impact — free)
