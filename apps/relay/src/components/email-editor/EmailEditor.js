@@ -24,7 +24,6 @@ async function uploadAsset(file, session) {
 
 export default function EmailEditor({ initialDesign, session, onReady }) {
   const holderRef = useRef(null);
-  const edRef = useRef(null);
   const { showToast } = useToast();
   useEffect(() => {
     if (!holderRef.current) return undefined;
@@ -51,7 +50,6 @@ export default function EmailEditor({ initialDesign, session, onReady }) {
     });
     if (initialDesign && Object.keys(initialDesign).length) editor.loadProjectData(initialDesign);
     else editor.setComponents(BLANK_MJML);
-    edRef.current = editor;
     const api = {
       export: () => exportEmail(editor),
       setDevice: (name) => editor.setDevice(name),
@@ -61,7 +59,6 @@ export default function EmailEditor({ initialDesign, session, onReady }) {
     return () => {
       if (onReady) onReady(null);
       try { editor.destroy(); } catch (_) {}
-      edRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
