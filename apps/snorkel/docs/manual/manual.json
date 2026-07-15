@@ -2,83 +2,359 @@
   "title": "Snorkel",
   "title_accent": "Operations Manual",
   "subtitle": "The self-serve guide to procurement at Legend of Toys: requests, purchase orders, vendors, payments, offline sales and the asset register.",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "date": "2026-06-25",
   "app_url": "snorkel.legendoftoys.com",
   "owner": "Legend of Toys",
   "roles": {
-    "req":  { "label": "Requester",   "name": "Requester / Anyone at LOT", "desc": "Any signed-in team member. Files PO requests for things they need; no special access required." },
-    "proc": { "label": "Procurement", "name": "Procurement Team",          "desc": "Raises and amends purchase orders, accepts requests, manages vendors, forwarders, reorders and new products." },
-    "appr": { "label": "Approver",    "name": "Approver",                  "desc": "Gives a purchase order its final sign-off after procurement has accepted it." },
-    "fin":  { "label": "Finance",     "name": "Finance / Payments",        "desc": "Routes approved purchase orders for payment and marks them paid; works the payment queue." },
-    "adm":  { "label": "Admin",       "name": "Manager / Admin",           "desc": "Full access: everything above plus managing Snorkel roles and assigning them to people." }
+    "req": {
+      "label": "Requester",
+      "name": "Requester / Anyone at LOT",
+      "desc": "Any signed-in team member. Files PO requests for things they need; no special access required."
+    },
+    "proc": {
+      "label": "Procurement",
+      "name": "Procurement Team",
+      "desc": "Raises and amends purchase orders, accepts requests, manages vendors, forwarders, reorders and new products."
+    },
+    "appr": {
+      "label": "Approver",
+      "name": "Approver",
+      "desc": "Gives a purchase order its final sign-off after procurement has accepted it."
+    },
+    "fin": {
+      "label": "Finance",
+      "name": "Finance / Payments",
+      "desc": "Routes approved purchase orders for payment and marks them paid; works the payment queue."
+    },
+    "adm": {
+      "label": "Admin",
+      "name": "Manager / Admin",
+      "desc": "Full access: everything above plus managing Snorkel roles and assigning them to people."
+    }
   },
   "parts": [
     {
       "part": "Getting Started",
       "subtitle": "What Snorkel is, how to sign in, find your way around, and what your role can see.",
       "chapters": [
-        { "id": "intro",      "title": "Welcome to Snorkel",          "file": "00-introduction.html", "roles": ["req","proc","appr","fin","adm"] },
-        { "id": "navigation", "title": "Signing In & Getting Around", "file": "01-navigation.html",   "roles": ["req","proc","appr","fin","adm"] },
-        { "id": "roles",      "title": "Roles & What You Can See",     "file": "02-roles.html",        "roles": ["req","proc","appr","fin","adm"] }
+        {
+          "id": "intro",
+          "title": "Welcome to Snorkel",
+          "file": "00-introduction.html",
+          "roles": [
+            "req",
+            "proc",
+            "appr",
+            "fin",
+            "adm"
+          ]
+        },
+        {
+          "id": "navigation",
+          "title": "Signing In & Getting Around",
+          "file": "01-navigation.html",
+          "roles": [
+            "req",
+            "proc",
+            "appr",
+            "fin",
+            "adm"
+          ]
+        },
+        {
+          "id": "roles",
+          "title": "Roles & What You Can See",
+          "file": "02-roles.html",
+          "roles": [
+            "req",
+            "proc",
+            "appr",
+            "fin",
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Requests & Purchase Orders",
       "subtitle": "From a free-form request, through the purchase-order approval chain, to a printed PO.",
       "chapters": [
-        { "id": "new-request",  "title": "New Request",        "route": "/requests/new",      "file": "req-new.html",       "roles": ["req","proc","appr","fin","adm"] },
-        { "id": "requests",     "title": "PO Requests",        "route": "/requests",          "file": "req-list.html",      "roles": ["req","proc","appr","fin","adm"] },
-        { "id": "overview",     "title": "Procurement Overview","route": "/procurement",      "file": "po-overview.html",   "roles": ["proc","appr","adm"] },
-        { "id": "pos",          "title": "Purchase Orders",    "route": "/procurement/pos",   "file": "po-list.html",       "roles": ["proc","appr","fin","adm"] },
-        { "id": "po-new",       "title": "Raising a PO",       "route": "/procurement/pos/new","file": "po-new.html",       "roles": ["proc","adm"] },
-        { "id": "po-detail",    "title": "Working a PO",       "route": "/procurement/pos/detail","file": "po-detail.html", "roles": ["proc","appr","fin","adm"] }
+        {
+          "id": "new-request",
+          "title": "New Request",
+          "route": "/requests/new",
+          "file": "req-new.html",
+          "roles": [
+            "req",
+            "proc",
+            "appr",
+            "fin",
+            "adm"
+          ]
+        },
+        {
+          "id": "requests",
+          "title": "PO Requests",
+          "route": "/requests",
+          "file": "req-list.html",
+          "roles": [
+            "req",
+            "proc",
+            "appr",
+            "fin",
+            "adm"
+          ]
+        },
+        {
+          "id": "overview",
+          "title": "Procurement Overview",
+          "route": "/procurement",
+          "file": "po-overview.html",
+          "roles": [
+            "proc",
+            "appr",
+            "adm"
+          ]
+        },
+        {
+          "id": "pos",
+          "title": "Purchase Orders",
+          "route": "/procurement/pos",
+          "file": "po-list.html",
+          "roles": [
+            "proc",
+            "appr",
+            "fin",
+            "adm"
+          ]
+        },
+        {
+          "id": "po-new",
+          "title": "Raising a PO",
+          "route": "/procurement/pos/new",
+          "file": "po-new.html",
+          "roles": [
+            "proc",
+            "adm"
+          ]
+        },
+        {
+          "id": "po-detail",
+          "title": "Working a PO",
+          "route": "/procurement/pos/detail",
+          "file": "po-detail.html",
+          "roles": [
+            "proc",
+            "appr",
+            "fin",
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Vendors & Reorders",
       "subtitle": "The supplier masters that feed every PO, plus shop-floor reorder requests.",
       "chapters": [
-        { "id": "reorders",   "title": "Reorders",     "route": "/procurement/reorders",   "file": "proc-reorders.html",   "roles": ["proc","adm"] },
-        { "id": "vendors",    "title": "Vendors",      "route": "/procurement/vendors",    "file": "proc-vendors.html",    "roles": ["proc","adm"] },
-        { "id": "forwarders", "title": "Forwarders",   "route": "/procurement/forwarders", "file": "proc-forwarders.html", "roles": ["proc","adm"] },
-        { "id": "new-product","title": "New Product",  "route": "/products/register",      "file": "proc-newproduct.html", "roles": ["proc","adm"] }
+        {
+          "id": "reorders",
+          "title": "Reorders",
+          "route": "/procurement/reorders",
+          "file": "proc-reorders.html",
+          "roles": [
+            "proc",
+            "adm"
+          ]
+        },
+        {
+          "id": "moulds",
+          "title": "Moulds & Mould Orders",
+          "route": "/moulds",
+          "file": "moulds.html",
+          "roles": [
+            "proc",
+            "adm"
+          ]
+        },
+        {
+          "id": "vendors",
+          "title": "Vendors",
+          "route": "/procurement/vendors",
+          "file": "proc-vendors.html",
+          "roles": [
+            "proc",
+            "adm"
+          ]
+        },
+        {
+          "id": "forwarders",
+          "title": "Forwarders",
+          "route": "/procurement/forwarders",
+          "file": "proc-forwarders.html",
+          "roles": [
+            "proc",
+            "adm"
+          ]
+        },
+        {
+          "id": "new-product",
+          "title": "New Product",
+          "route": "/products/register",
+          "file": "proc-newproduct.html",
+          "roles": [
+            "proc",
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Payments",
       "subtitle": "Getting approved purchase orders paid.",
       "chapters": [
-        { "id": "payments", "title": "Payment Queue", "route": "/payments", "file": "pay-queue.html", "roles": ["fin","proc","adm"] }
+        {
+          "id": "payments",
+          "title": "Payment Queue",
+          "route": "/payments",
+          "file": "pay-queue.html",
+          "roles": [
+            "fin",
+            "proc",
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Offline Sales",
       "subtitle": "Selling to General Trade and Modern Trade: orders, dispatch handoff, invoicing and collections.",
       "chapters": [
-        { "id": "sales-orders",    "title": "Sales Orders",         "route": "/sales/orders",      "file": "sales-orders.html",    "roles": ["proc","fin","adm"] },
-        { "id": "sales-fulfilment","title": "Fulfilment & tracking","route": "/sales/orders",      "file": "sales-fulfilment.html","roles": ["proc","fin","adm"] },
-        { "id": "sales-collections","title": "Collections",         "route": "/sales/collections", "file": "sales-collections.html","roles": ["proc","fin","adm"] },
-        { "id": "sales-credit-notes","title": "Credit Notes",       "route": "/sales/credit-notes","file": "sales-credit-notes.html","roles": ["proc","fin","adm"] },
-        { "id": "sales-partners",  "title": "Partners",             "route": "/sales/partners",    "file": "sales-partners.html",  "roles": ["proc","fin","adm"] },
-        { "id": "sales-settings",  "title": "Channels",             "route": "/sales/settings",    "file": "sales-channels.html",  "roles": ["adm"] }
+        {
+          "id": "sales-orders",
+          "title": "Sales Orders",
+          "route": "/sales/orders",
+          "file": "sales-orders.html",
+          "roles": [
+            "proc",
+            "fin",
+            "adm"
+          ]
+        },
+        {
+          "id": "sales-fulfilment",
+          "title": "Fulfilment & tracking",
+          "route": "/sales/orders",
+          "file": "sales-fulfilment.html",
+          "roles": [
+            "proc",
+            "fin",
+            "adm"
+          ]
+        },
+        {
+          "id": "sales-collections",
+          "title": "Collections",
+          "route": "/sales/collections",
+          "file": "sales-collections.html",
+          "roles": [
+            "proc",
+            "fin",
+            "adm"
+          ]
+        },
+        {
+          "id": "sales-credit-notes",
+          "title": "Credit Notes",
+          "route": "/sales/credit-notes",
+          "file": "sales-credit-notes.html",
+          "roles": [
+            "proc",
+            "fin",
+            "adm"
+          ]
+        },
+        {
+          "id": "sales-partners",
+          "title": "Partners",
+          "route": "/sales/partners",
+          "file": "sales-partners.html",
+          "roles": [
+            "proc",
+            "fin",
+            "adm"
+          ]
+        },
+        {
+          "id": "sales-settings",
+          "title": "Channels",
+          "route": "/sales/settings",
+          "file": "sales-channels.html",
+          "roles": [
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Assets",
       "subtitle": "A living register of what Legend of Toys owns and rents.",
       "chapters": [
-        { "id": "assets",         "title": "Asset Register",         "route": "/assets",          "file": "asset-register.html",  "roles": ["proc","appr","adm"] },
-        { "id": "assets-settings","title": "Categories & Locations", "route": "/assets/settings", "file": "asset-settings.html",  "roles": ["proc","adm"] }
+        {
+          "id": "assets",
+          "title": "Asset Register",
+          "route": "/assets",
+          "file": "asset-register.html",
+          "roles": [
+            "proc",
+            "appr",
+            "adm"
+          ]
+        },
+        {
+          "id": "assets-settings",
+          "title": "Categories & Locations",
+          "route": "/assets/settings",
+          "file": "asset-settings.html",
+          "roles": [
+            "proc",
+            "adm"
+          ]
+        }
       ]
     },
     {
       "part": "Library & Admin",
       "subtitle": "The company addresses every PO prints, and the roles that control who can do what.",
       "chapters": [
-        { "id": "addresses", "title": "Addresses",            "route": "/library/addresses", "file": "lib-addresses.html", "roles": ["proc","adm"] },
-        { "id": "roles-admin","title": "Roles & Permissions", "route": "/admin/roles",       "file": "adm-roles.html",     "roles": ["adm"] },
-        { "id": "users",     "title": "Users",                "route": "/admin/users",       "file": "adm-users.html",     "roles": ["adm"] }
+        {
+          "id": "addresses",
+          "title": "Addresses",
+          "route": "/library/addresses",
+          "file": "lib-addresses.html",
+          "roles": [
+            "proc",
+            "adm"
+          ]
+        },
+        {
+          "id": "roles-admin",
+          "title": "Roles & Permissions",
+          "route": "/admin/roles",
+          "file": "adm-roles.html",
+          "roles": [
+            "adm"
+          ]
+        },
+        {
+          "id": "users",
+          "title": "Users",
+          "route": "/admin/users",
+          "file": "adm-users.html",
+          "roles": [
+            "adm"
+          ]
+        }
       ]
     }
   ]

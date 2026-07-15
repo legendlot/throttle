@@ -1,0 +1,44 @@
+<p class="lead">Some of our India-made plastic parts come from <strong>moulds we own</strong>: we hand a mould to a vendor, they injection-mould the parts (they buy the plastic too) and charge us one block price per shot. A single mould makes several different part codes at once, in a fixed ratio. <strong>Moulds</strong> lets you order the way the vendor understands (by mould number) while the store still receives the exact part codes.</p>
+
+<div class="glance">
+  <div class="g-cell"><div class="g-lbl">What it&rsquo;s for</div><div class="g-val">Recording each mould and the parts it makes, so a mould can be ordered as one line.</div></div>
+  <div class="g-cell"><div class="g-lbl">Read or act?</div><div class="g-val">Read for most; <span class="role proc">Procurement</span> edits the mould map.</div></div>
+  <div class="g-cell"><div class="g-lbl">Who</div><div class="g-val"><span class="role proc">Procurement</span> <span class="role adm">Admin</span></div></div>
+  <div class="g-cell"><div class="g-lbl">Result</div><div class="g-val">A one-line mould PO that the store receives part by part.</div></div>
+</div>
+
+<h2 class="sec">The idea in one line</h2>
+<p>You order <strong>a number of shots</strong> of a mould. Each part the mould makes has a <strong>per-shot count</strong>, so the store&rsquo;s expected quantity is simply <em>shots &times; per-shot count</em> for every part. Order 2,000 shots of a mould that makes 8 remote parts, and the store expects 2,000 of each part that is one-per-shot, 4,000 of a part that is two-per-shot, and so on. It works exactly like ordering a full car and having it break into its parts, only the recipe comes from the mould instead of a car&rsquo;s bill of materials.</p>
+
+<h2 class="sec">The Moulds register</h2>
+<p>The list shows every mould we own: its number, a short description, the vendor who runs it, how many parts it makes, and whether it is active. Open one to see or edit two things:</p>
+<table class="tbl">
+  <thead><tr><th>Section</th><th>What it holds</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Details</strong></td><td>Vendor (one vendor per mould), the default HSN, GST% and block rate per shot that pre-fill onto a PO, and the active switch.</td></tr>
+    <tr><td><strong>Part map</strong></td><td>The list of part codes this mould produces, each with its <strong>per-shot count</strong>. This is the recipe the store receives against.</td></tr>
+  </tbody>
+</table>
+<p>To add or change a part, search for its code and set the per-shot count, then save the map. A part can appear in more than one mould (a mould-on-mould), which is fine.</p>
+
+<h2 class="sec">Ordering a mould</h2>
+<ol class="steps">
+  <li><span class="s-title">Start a PO as usual</span> and, on the lines, click <strong>+ Add Mould Line</strong> instead of a normal part line.</li>
+  <li><span class="s-title">Pick the mould and enter the number of shots.</span> The rate, HSN and GST fill in from the mould&rsquo;s defaults; you can override them. The whole mould is one line at one block price, which is exactly what the vendor sees.</li>
+  <li><span class="s-title">Check the &ldquo;Will receive&rdquo; preview.</span> Under the line, Snorkel lists every part the store will get and the quantity of each, so you can confirm the order is right before sending it.</li>
+</ol>
+
+<div class="callout note">
+  <div class="c-title">&#9432; The vendor sees the mould, the store sees the parts</div>
+  <p>On the printed PO the line reads as the mould (for example &ldquo;Mould 25306, Remote Control Parts, 2,000 shots&rdquo;), because that is all the vendor needs. When the shipment arrives, the receiving screen automatically shows every constituent part code with its own expected quantity, so the store counts and books stock against the real parts. Nothing about receiving changes for the store team.</p>
+</div>
+
+<div class="callout tip">
+  <div class="c-title">&#10003; Cost stays at the mould</div>
+  <p>The price lives on the mould line as one block cost. It is not split across the parts: the parts come in for stock only. So there is no need to work out a per-part price, which matches how the vendor bills us.</p>
+</div>
+
+<div class="callout danger">
+  <div class="c-title">&#9940; A mould can only order the parts in its map</div>
+  <p>If a part is missing from the map, it will not appear at receiving, so keep the map complete and the per-shot counts accurate. If a mould gains a new part, add it to the map; an arriving shipment can be refreshed to pick it up.</p>
+</div>

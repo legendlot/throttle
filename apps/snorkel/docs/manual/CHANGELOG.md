@@ -3,6 +3,15 @@
 The version here, in `manual.json`, and on the cover/footer of the PDF must always
 match. Versioning is manual.
 
+## [1.4.0] - 2026-07-15
+### Added
+- New "Moulds & Mould Orders" chapter in Vendors & Reorders: what a mould is (parts we
+  injection-mould at a vendor from a mould we own, block-priced per shot), the Moulds
+  register and its part map with per-shot counts, how to raise a one-line mould PO with
+  the "+ Add Mould Line" kind and the "Will receive" preview, and how the store still
+  receives the real constituent part codes (order shots times per-shot count) while the
+  vendor doc shows only the mould.
+
 ## [1.3.0] - 2026-06-25
 ### Added
 - New "Credit Notes" chapter in Offline Sales: when to raise one (under-supply, sales
