@@ -172,6 +172,8 @@ function NewPOPage() {
   // Lines
   const [lineMode, setLineMode] = useState('bom');
   const [lineItems, setLineItems] = useState([]); // {part_code, description, item_type, qty_ordered, unit, unit_price, product, variant}
+  const [mouldsCache, setMouldsCache] = useState(null); // mould master for the Mould line-kind
+  const [mouldPreview, setMouldPreview] = useState({}); // mould_no → parts[] (for the "will receive" preview)
 
   // BOM mode
   const [bomProduct, setBomProduct] = useState('');
@@ -382,6 +384,38 @@ function NewPOPage() {
     }
   }
 
+  // Mould line kind (order-by-mould / receive-by-part). A mould line carries
+  // item_type='Mould' + mould_no; qty_ordered = shots. Receiving explodes it into
+  // the constituent part codes at shots × qty_per_shot.
+  async function loadMoulds() {
+    if (mouldsCache) return;
+    try {
+      const data = await garageFetch('getMoulds', {}, session);
+      setMouldsCache(Array.isArray(data) ? data.filter(m => m.is_active) : []);
+    } catch { setMouldsCache([]); }
+  }
+  function addMouldLine() {
+    loadMoulds();
+    setLineItems((prev) => [...prev, { part_code: '', description: '', item_type: 'Mould', mould_no: '', qty_ordered: '', unit: 'shots', unit_price: '', hsn_code: '', gst_percent: '' }]);
+  }
+  async function selectMould(i, mouldNo) {
+    const m = (mouldsCache || []).find(x => x.mould_no === mouldNo);
+    setLineItems((prev) => prev.map((row, j) => j === i ? {
+      ...row, mould_no: mouldNo, item_type: 'Mould',
+      description: m ? `Mould ${m.mould_no}${m.description ? ' — ' + m.description : ''}` : row.description,
+      unit_price: m && m.default_shot_rate != null && !row.unit_price ? String(m.default_shot_rate) : row.unit_price,
+      hsn_code: m && m.hsn_code && !row.hsn_code ? m.hsn_code : row.hsn_code,
+      gst_percent: m && m.gst_percent != null && (row.gst_percent === '' || row.gst_percent == null) ? String(m.gst_percent) : row.gst_percent,
+    } : row));
+    // fetch the part map for the "will receive" preview
+    if (mouldNo && !mouldPreview[mouldNo]) {
+      try {
+        const full = await garageFetch('getMould', { mould_no: mouldNo }, session);
+        setMouldPreview((prev) => ({ ...prev, [mouldNo]: full?.parts || [] }));
+      } catch {}
+    }
+  }
+
   // Units mode (FBU)
   const fbuVariants = useMemo(() => fbuProduct ? (PRODUCT_VARIANTS[fbuProduct] || []) : [], [fbuProduct, PRODUCT_VARIANTS]);
   const fbuColors = useMemo(() => (fbuProduct ? (PRODUCT_COLORS[fbuProduct] || {}) : {}), [fbuProduct, PRODUCT_COLORS]);
@@ -490,6 +524,7 @@ function NewPOPage() {
         remote_qty:     parseInt(l.remote_qty, 10) || 0,
         hsn_code:       l.hsn_code || null,
         gst_percent:    l.gst_percent !== '' && l.gst_percent != null ? parseFloat(l.gst_percent) : null,
+        mould_no:       l.mould_no || null,
       })),
     };
 
@@ -785,6 +820,10 @@ function NewPOPage() {
               loadParts={loadParts}
               hsnMap={hsnMap}
               setLineItems={setLineItems}
+              mouldsCache={mouldsCache}
+              addMouldLine={addMouldLine}
+              selectMould={selectMould}
+              mouldPreview={mouldPreview}
             />
           )}
 
@@ -1061,9 +1100,16 @@ function BomMode(props) {
 function ManualMode({
   lineItems, addManualLine, updateLine, removeLine, currency,
   partsCache, partsLoading, loadParts, hsnMap, setLineItems,
+  mouldsCache, addMouldLine, selectMould, mouldPreview,
 }) {
   // Load the parts catalogue once so the part-code combobox is ready.
   useEffect(() => { loadParts(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+
+  const mouldOptions = useMemo(() => (mouldsCache || []).map((m) => ({
+    value: m.mould_no,
+    label: `${m.mould_no}${m.description ? ' — ' + m.description : ''}`,
+    hint: `${m.parts_count || 0} parts`,
+  })), [mouldsCache]);
 
   // Standardised part-code combobox options (same shape as the Part Journey /
   // stock-adjustments pickers). `hint` carries product · category · type so the
@@ -1080,12 +1126,13 @@ function ManualMode({
 
   return (
     <>
-      <div style={{ marginBottom: 8 }}>
+      <div style={{ marginBottom: 8, display: 'flex', gap: 8 }}>
         <button style={btnSecondary} onClick={addManualLine}>+ Add Line</button>
+        <button style={btnSecondary} onClick={addMouldLine}>+ Add Mould Line</button>
       </div>
       {lineItems.length === 0 && (
         <div style={{ color: 'var(--t3)', fontSize: 11, fontStyle: 'italic', textAlign: 'center', padding: 12 }}>
-          No lines yet — click + Add Line.
+          No lines yet — click + Add Line, or + Add Mould Line to order by mould.
         </div>
       )}
       {lineItems.length > 0 && (
@@ -1123,33 +1170,58 @@ function ManualMode({
                   }));
                 };
 
+                const isMould = l.item_type === 'Mould';
+                const preview = isMould && l.mould_no ? (mouldPreview?.[l.mould_no] || null) : null;
+                const shots = parseFloat(l.qty_ordered) || 0;
+                const colSpan = 7 + (currency === 'INR' ? 2 : 0);
                 return (
-                <tr key={i}>
+                <Fragment key={i}>
+                <tr>
                   <td style={tableTdStyle}>
-                    {/* Standardised searchable part picker (query by code / name /
-                        product / category). Catalog-backed: selecting auto-fills
-                        description + unit + HSN/GST. Custom / unnamed lines leave
-                        the code blank and use the free-text Description column. */}
-                    <div style={{ width: 240 }}>
-                      <Combobox
-                        value={l.part_code || ''}
-                        options={partOptions}
-                        onChange={(_, opt) => selectPart(opt)}
-                        placeholder="Search part code / name / product…"
-                        loading={!partsCache && partsLoading}
-                        inputStyle={{ fontFamily: 'var(--mono)' }}
-                        commitOnTab
-                        portal
-                      />
-                    </div>
+                    {isMould ? (
+                      /* Mould line — pick the mould; receiving explodes it into part codes. */
+                      <div style={{ width: 240 }}>
+                        <Combobox
+                          value={l.mould_no || ''}
+                          options={mouldOptions}
+                          onChange={(val) => selectMould(i, val || '')}
+                          placeholder="Search mould no / description…"
+                          emptyLabel="No mould"
+                          inputStyle={{ fontFamily: 'var(--mono)' }}
+                          commitOnTab
+                          portal
+                        />
+                      </div>
+                    ) : (
+                      /* Standardised searchable part picker (query by code / name /
+                          product / category). Catalog-backed: selecting auto-fills
+                          description + unit + HSN/GST. Custom / unnamed lines leave
+                          the code blank and use the free-text Description column. */
+                      <div style={{ width: 240 }}>
+                        <Combobox
+                          value={l.part_code || ''}
+                          options={partOptions}
+                          onChange={(_, opt) => selectPart(opt)}
+                          placeholder="Search part code / name / product…"
+                          loading={!partsCache && partsLoading}
+                          inputStyle={{ fontFamily: 'var(--mono)' }}
+                          commitOnTab
+                          portal
+                        />
+                      </div>
+                    )}
                   </td>
                   <td style={tableTdStyle}>
                     <input type="text" value={l.description} onChange={(e) => updateLine(i, 'description', e.target.value)} style={{ ...inputStyle, width: 240 }} />
                   </td>
                   <td style={tableTdStyle}>
-                    <select value={l.item_type} onChange={(e) => updateLine(i, 'item_type', e.target.value)} style={{ ...selectStyle, width: 130 }}>
-                      {ITEM_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-                    </select>
+                    {isMould ? (
+                      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent)' }}>Mould</span>
+                    ) : (
+                      <select value={l.item_type} onChange={(e) => updateLine(i, 'item_type', e.target.value)} style={{ ...selectStyle, width: 130 }}>
+                        {ITEM_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                      </select>
+                    )}
                   </td>
                   <td style={tableTdStyle}>
                     <input type="number" min="0" step="0.01" value={l.qty_ordered} onChange={(e) => updateLine(i, 'qty_ordered', e.target.value)} style={{ ...inputStyle, width: 90, fontFamily: 'var(--mono)' }} />
@@ -1212,6 +1284,27 @@ function ManualMode({
                     <button onClick={() => removeLine(i)} style={{ background: 'transparent', border: '1px solid var(--border)', color: '#ff7070', cursor: 'pointer', fontSize: 11, borderRadius: 3, padding: '2px 6px' }}>✕</button>
                   </td>
                 </tr>
+                {isMould && l.mould_no && (
+                  <tr>
+                    <td colSpan={colSpan} style={{ ...tableTdStyle, background: 'var(--surface-2, rgba(255,255,255,0.02))', padding: '6px 10px' }}>
+                      {preview == null ? (
+                        <span style={{ fontSize: 11, color: 'var(--t3)' }}>Loading part map…</span>
+                      ) : preview.length === 0 ? (
+                        <span style={{ fontSize: 11, color: '#fbbf24' }}>⚠ This mould has no parts mapped yet — the store will receive nothing. Map it in Moulds first.</span>
+                      ) : (
+                        <div style={{ fontSize: 11, color: 'var(--t2)' }}>
+                          <span style={{ color: 'var(--t3)' }}>Will receive ({preview.length} part{preview.length > 1 ? 's' : ''}{shots > 0 ? `, ${shots} shots` : ''}): </span>
+                          {preview.map((p, k) => (
+                            <span key={p.part_code} style={{ fontFamily: 'var(--mono)' }}>
+                              {k > 0 ? ', ' : ''}{p.part_code}{shots > 0 ? `×${Math.round(shots * (Number(p.qty_per_shot) || 1))}` : ''}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
                 );
               })}
             </tbody>

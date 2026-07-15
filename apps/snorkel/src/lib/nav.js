@@ -1,6 +1,6 @@
 import {
   ShoppingCart, BarChart3, FileText, RefreshCw, Building, Truck, Package, BookOpen,
-  Inbox, Wallet, Shield, Users, Boxes, Settings, Store, ClipboardList, HandCoins, ReceiptText,
+  Inbox, Wallet, Shield, Users, Boxes, Settings, Store, ClipboardList, HandCoins, ReceiptText, Layers,
 } from 'lucide-react';
 
 export const NAV_GROUPS = [
@@ -18,6 +18,7 @@ export const NAV_GROUPS = [
       { id: 'procurement-overview',   label: 'Overview',        route: '/procurement',            icon: BarChart3, requires: 'procurement_view' },
       { id: 'procurement-pos',        label: 'Purchase Orders', route: '/procurement/pos',        icon: FileText,  requires: 'procurement_view' },
       { id: 'procurement-reorders',   label: 'Reorders',        route: '/procurement/reorders',   icon: RefreshCw, requires: 'procurement_view' },
+      { id: 'moulds',                 label: 'Moulds',          route: '/moulds',                 icon: Layers,    requires: 'procurement_view' },
       { id: 'procurement-vendors',    label: 'Vendors',         route: '/procurement/vendors',    icon: Building,  requires: 'vendor_manage' },
       { id: 'procurement-forwarders', label: 'Forwarders',      route: '/procurement/forwarders', icon: Truck,     requires: 'vendor_manage' },
       { id: 'products-register',      label: 'New Product',     route: '/products/register',      icon: Package,   requires: 'po_china' },
