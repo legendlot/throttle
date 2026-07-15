@@ -4,6 +4,7 @@ import grapesjs from 'grapesjs';
 import grapesjsMjml from 'grapesjs-mjml';
 import 'grapesjs/dist/css/grapes.min.css';
 import { supabase, workerFetch } from '@throttle/db';
+import { useToast } from '@throttle/ui';
 import { exportEmail } from './exportEmail.js';
 import { BLANK_MJML } from './blankScaffold.js';
 
@@ -21,9 +22,10 @@ async function uploadAsset(file, session) {
   return d.public_url;
 }
 
-const EmailEditor = forwardRef(function EmailEditor({ initialDesign, session, canEdit }, ref) {
+const EmailEditor = forwardRef(function EmailEditor({ initialDesign, session }, ref) {
   const holderRef = useRef(null);
   const edRef = useRef(null);
+  const { showToast } = useToast();
   useImperativeHandle(ref, () => ({
     export: () => (edRef.current ? exportEmail(edRef.current) : { mjml: '', html: '', text: '', design: null }),
     setDevice: (name) => { if (edRef.current) edRef.current.setDevice(name); },
@@ -41,8 +43,13 @@ const EmailEditor = forwardRef(function EmailEditor({ initialDesign, session, ca
         uploadFile: async (e) => {
           const files = e.dataTransfer ? e.dataTransfer.files : e.target.files;
           for (const f of files) {
-            try { editor.AssetManager.add(await uploadAsset(f, session)); }
-            catch (err) { console.error('[email-editor] upload', err && err.message || err); }
+            try {
+              editor.AssetManager.add(await uploadAsset(f, session));
+              showToast('Image uploaded', 'success');
+            } catch (err) {
+              console.error('[email-editor] upload', err && err.message || err);
+              showToast('Upload failed: ' + (err?.message || err), 'error');
+            }
           }
         },
       },

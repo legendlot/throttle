@@ -7,7 +7,6 @@ import { Spinner, useToast } from '@throttle/ui';
 import { Plus, ArrowLeft, Check, Pencil, Send, Trash2 } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDate } from '@/components/format.js';
-import { htmlToPlain } from '@/components/email-editor/htmlToPlain.js';
 import { insertMergeTag } from '@/components/email-editor/mergeTags.js';
 
 const EmailEditor = dynamic(() => import('@/components/email-editor/EmailEditor.js'),
@@ -92,7 +91,7 @@ export default function TemplatesPage() {
     let content;
     if (t.channel === 'email' && edRef.current) {
       const ex = edRef.current.export();
-      content = { subject: t.subject, html_body: ex.html, text_body: ex.text || htmlToPlain(ex.html), design_json: ex.design };
+      content = { subject: t.subject, html_body: ex.html, text_body: ex.text, design_json: ex.design };
     } else {
       content = { subject: t.subject, html_body: t.html_body, text_body: t.text_body, design_json: t.design_json || null };
     }
@@ -104,6 +103,7 @@ export default function TemplatesPage() {
 
   async function save() {
     if (!t.name.trim()) { showToast('Name required', 'error'); return; }
+    if (t.channel === 'email' && !edRef.current) { showToast('Editor still loading — try again in a moment', 'error'); return; }
     const payload = buildPayload();
     if (t.channel === 'email' && t.purpose === 'marketing'
         && !(payload.content.html_body || '').includes('{unsubscribe_url}')) {
@@ -188,7 +188,7 @@ export default function TemplatesPage() {
         </Panel>
 
         <Panel title="Content" pad
-          action={t.channel === 'email' ? (
+          action={t.channel === 'email' && canEdit ? (
             <span style={{ display: 'flex', gap: 6 }}>
               <Btn onClick={() => edRef.current && edRef.current.setDevice('Desktop')}>Desktop</Btn>
               <Btn onClick={() => edRef.current && edRef.current.setDevice('Mobile portrait')}>Mobile</Btn>
@@ -200,21 +200,26 @@ export default function TemplatesPage() {
               placeholder="We miss you, {first} — 10% inside" disabled={saving || !canEdit} />
           </div>
           {t.channel === 'email' ? (
-            <>
-              {canEdit && t.variables.some((v) => v.token) && (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
-                  <span className="dim" style={{ fontSize: 12, alignSelf: 'center' }}>Merge tags:</span>
-                  {t.variables.filter((v) => v.token).map((v) => (
-                    <button key={v.token} type="button" className="chip"
-                      onClick={async () => {
-                        const res = await insertMergeTag(edRef.current && edRef.current.getEditor(), v.token);
-                        showToast(res === 'inserted' ? `Inserted {${v.token}}` : res === 'copied' ? `Copied {${v.token}} — paste into a text block` : 'Select a text block first', res === 'noop' ? 'error' : 'success');
-                      }}>{`{${v.token}}`}</button>
-                  ))}
-                </div>
-              )}
-              <EmailEditor key={editorKey} ref={edRef} initialDesign={t.design_json} session={session} canEdit={canEdit} />
-            </>
+            canEdit ? (
+              <>
+                {t.variables.some((v) => v.token) && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+                    <span className="dim" style={{ fontSize: 12, alignSelf: 'center' }}>Merge tags:</span>
+                    {t.variables.filter((v) => v.token).map((v) => (
+                      <button key={v.token} type="button" className="chip"
+                        onClick={async () => {
+                          const res = await insertMergeTag(edRef.current && edRef.current.getEditor(), v.token);
+                          showToast(res === 'inserted' ? `Inserted {${v.token}}` : res === 'copied' ? `Copied {${v.token}} — paste into a text block` : 'Select a text block first', res === 'noop' ? 'error' : 'success');
+                        }}>{`{${v.token}}`}</button>
+                    ))}
+                  </div>
+                )}
+                <EmailEditor key={editorKey} ref={edRef} initialDesign={t.design_json} session={session} />
+              </>
+            ) : (
+              <iframe title="Email preview" srcDoc={t.html_body || '<p style="font-family:sans-serif;color:#888;padding:24px">No content</p>'}
+                style={{ width: '100%', height: 640, border: '1px solid var(--border,#e5e5e5)', borderRadius: 8, background: '#fff' }} />
+            )
           ) : (
             <>
               <div className="ff" style={{ marginBottom: 14 }}><div className="kv-k">HTML body</div>

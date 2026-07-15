@@ -7,7 +7,6 @@ export async function insertMergeTag(editor, token) {
   if (sel && sel.is && (sel.is('mj-text') || sel.is('mj-button') || sel.is('text'))) {
     const cur = sel.get('content') || '';
     sel.set('content', `${cur}${tag}`);
-    editor.trigger('change:canvasOffset');
     return 'inserted';
   }
   try { await navigator.clipboard.writeText(tag); return 'copied'; }
