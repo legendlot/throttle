@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@throttle/auth';
-import { Modal, Spinner, useToast } from '@throttle/ui';
+import { Modal, Spinner, useToast, Combobox } from '@throttle/ui';
 import { ChevronLeft, ChevronRight, Link2, MessageSquare, Tag } from 'lucide-react';
 import { csopsGet, csopsPost } from '../../../../lib/csopsFetch.js';
 import TagPicker from '../../../../components/TagPicker.js';
@@ -1012,28 +1012,25 @@ function DetailProductCascade({ form, setForm, catalog }) {
   }
 
   const lbl = { color: 'var(--t3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.08em', fontFamily: 'var(--font-mono)' };
+  // Searchable Combobox per the standing product/part-picker rule (portal — this
+  // cascade lives inside the edit-issue Modal, so the dropdown would otherwise clip).
+  const toOpts = (arr) => arr.map(x => ({ value: x, label: x }));
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 8 }}>
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <span style={lbl}>product</span>
-        <select value={form.product || ''} onChange={e => selProduct(e.target.value)} style={inputStyle}>
-          <option value="">— select —</option>
-          {products.map(p => <option key={p} value={p}>{p}</option>)}
-        </select>
+        <Combobox value={form.product || ''} options={toOpts(products)} onChange={(v) => selProduct(v)}
+          placeholder="Search product…" inputStyle={inputStyle} allowClear={false} portal />
       </label>
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <span style={lbl}>variant</span>
-        <select value={form.product_model || ''} onChange={e => selModel(e.target.value)} style={inputStyle} disabled={!form.product}>
-          <option value="">{form.product ? '— select —' : '—'}</option>
-          {models.map(m => <option key={m} value={m}>{m}</option>)}
-        </select>
+        <Combobox value={form.product_model || ''} options={toOpts(models)} onChange={(v) => selModel(v)}
+          placeholder={form.product ? 'Search variant…' : '—'} disabled={!form.product} inputStyle={inputStyle} allowClear={false} portal />
       </label>
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <span style={lbl}>colour</span>
-        <select value={form.product_color || ''} onChange={e => selColor(e.target.value)} style={inputStyle} disabled={!form.product_model}>
-          <option value="">{form.product_model ? '— select —' : '—'}</option>
-          {colors.map(c => <option key={c} value={c}>{c}</option>)}
-        </select>
+        <Combobox value={form.product_color || ''} options={toOpts(colors)} onChange={(v) => selColor(v)}
+          placeholder={form.product_model ? 'Search colour…' : '—'} disabled={!form.product_model} inputStyle={inputStyle} allowClear={false} portal />
       </label>
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <span style={lbl}>sku</span>

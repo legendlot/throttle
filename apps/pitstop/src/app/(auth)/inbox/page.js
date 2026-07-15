@@ -425,9 +425,24 @@ export default function InboxPage() {
       finally { setSending(false); }
       return;
     }
-    // Attachments outside email/Meta reply mode aren't supported.
+    // WhatsApp / Web attachment send (reply mode, single file, via Chatwoot multipart).
+    if (mode === 'reply' && hasFiles && (chNow === 'whatsapp' || chNow === 'web')) {
+      setSending(true); setErr(null);
+      const f = pendingFiles[0];
+      try {
+        await csopsPost('sendWaAttachment', {
+          thread_id: convo.thread.id, mime_type: f.mime,
+          data_base64: f.dataUrl, filename: f.name, caption: t || null,
+        }, session);
+        setText(''); setPendingFiles([]); setShowEmoji(false); setShowCanned(false);
+        await loadConvo(selectedId); loadThreads(); loadStats();
+      } catch (e) { setErr(e.message); }
+      finally { setSending(false); }
+      return;
+    }
+    // Attachments outside email/Meta/WA/Web reply mode aren't supported.
     if (mode === 'reply' && hasFiles && chNow !== 'email') {
-      setErr('Attachments are only supported on Email, Instagram and Messenger.'); return;
+      setErr('Attachments are only supported on Email, Instagram, Messenger, WhatsApp and Web.'); return;
     }
     // Email may send attachments with no body text; every other path needs text.
     if (!t && !(mode === 'reply' && chNow === 'email' && hasFiles)) return;
@@ -582,13 +597,13 @@ export default function InboxPage() {
   const windowOpen = !hasWindow || !!convo?.within_customer_window;
   const mineThread = thread && thread.assigned_agent_id && thread.assigned_agent_id === myId;
   const noteMode = mode === 'note';
-  // WhatsApp (C2-B) replies tunnel through BiteSpeed: free-text only, and only
-  // inside the 24h customer window (worker enforces; template send is a fast-follow).
-  // No outbound attachments on WA in v1 (Chatwoot media send is a later add).
+  // WhatsApp (C2-B) replies tunnel through BiteSpeed: free-text + media, only inside
+  // the 24h customer window (worker enforces; template send is a fast-follow). Media
+  // now supported via Chatwoot multipart (sendWaAttachment).
   const isWa = thread?.channel === 'whatsapp';
   const isEmail = thread?.channel === 'email';
   const waReplyBlocked = isWa && !noteMode && !windowOpen;
-  const canAttach = ['instagram', 'messenger', 'email'].includes(thread?.channel);   // IG/FB = Graph URL; email = MIME parts (S201)
+  const canAttach = ['instagram', 'messenger', 'email', 'whatsapp', 'web'].includes(thread?.channel);   // IG/FB = Graph URL; email = MIME parts (S201); WA/Web = Chatwoot multipart
   const attachAccept = isEmail
     ? 'image/png,image/jpeg,image/webp,image/gif,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/msword,application/vnd.ms-excel,text/csv,text/plain,application/zip'
     : 'image/png,image/jpeg,image/webp,image/gif,application/pdf';

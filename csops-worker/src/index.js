@@ -572,6 +572,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'createTicketFromCall':     return createTicketFromCall(body, auth, env);
     case 'sendWaMessage':            return sendWaMessage(body, auth, env);
     case 'sendWaReply':              return sendWaReply(body, auth, env);
+    case 'sendWaAttachment':         return sendWaAttachment(body, auth, env);
     case 'sendMetaMessage':          return sendMetaMessage(body, auth, env);
     case 'sendMetaAttachment':       return sendMetaAttachment(body, auth, env);
     case 'sendEmailReply':           return sendEmailReply(body, auth, env);
@@ -3338,6 +3339,87 @@ async function sendWaReply(body, auth, env) {
   }
 
   return ok({ sent: true, message_id: pmid, auto_claimed: !thread.assigned_agent_id && !auth.viaIgnitionBridge, ticket_assigned: ticketId });
+}
+
+// Send a media attachment (image / PDF) to a WhatsApp or Web thread through Chatwoot's
+// Application API (Pruthvi #bugs 2026-06-26 — the composer paperclip was IG/FB/email-only).
+// Unlike Meta (Graph URL, no caption field) Chatwoot takes a multipart POST with content +
+// attachments[] in one call and HOSTS the media itself, so the live getWaConversation pull
+// renders the file from Chatwoot's data_url — we don't pre-host on cs-inbox-media. We do
+// pre-write an outbound row (kind + media meta + real sender) for the sent_by_name overlay,
+// mirroring sendWaReply's attribution fix.
+async function sendWaAttachment(body, auth, env) {
+  const g = require('cs_ticket_manage', auth); if (g) return g;
+  const { thread_id, mime_type, data_base64, filename, caption } = body;
+  if (!thread_id || !mime_type || !data_base64) return err('thread_id, mime_type and data_base64 required');
+  const spec = ATTACH_MIME[mime_type];
+  if (!spec) return err(`Unsupported file type: ${mime_type} (images + PDF only)`, 415);
+
+  let bytes;
+  try { bytes = b64ToBytes(data_base64); } catch { return err('Invalid file data'); }
+  if (!bytes.length) return err('Empty file');
+  if (bytes.length > ATTACH_MAX_BYTES) return err('File too large (max 8MB)', 413);
+
+  if (waTransport(env) !== 'relay' && !env.BITESPEED_API_TOKEN) return err('WhatsApp send not configured (no BiteSpeed API token)', 503);
+  const tRes = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}&select=*&limit=1`, env);
+  const thread = tRes.data?.[0];
+  if (!thread) return err('Thread not found', 404);
+  const wchan = thread.channel || 'whatsapp';
+  if (wchan !== 'whatsapp' && wchan !== 'web') return err('Not a WhatsApp/Web thread — use sendMetaAttachment', 422);
+  // WS-D Relay transport for WhatsApp doesn't carry outbound media yet (fetch-and-host follow-up).
+  if (wchan === 'whatsapp' && waTransport(env) === 'relay') return err('WhatsApp media send not available on the Relay transport yet', 501);
+  if (!thread.provider_account_id || !thread.provider_thread_ref) return err('Thread has no BiteSpeed conversation reference yet', 422);
+
+  // 24h customer-window gate (whatsapp only; web has no window) — same as sendWaReply.
+  if (wchan === 'whatsapp') {
+    const live = await loadWaLive(thread, env);
+    if (!live.ok) return err(`Couldn't verify the customer window with BiteSpeed (${live.status}): ${live.error}`, 502);
+    if (!live.window.open) return err('Outside the 24h customer window — media replies are blocked until the customer messages again', 422);
+  }
+
+  // Multipart POST — Chatwoot hosts the file + fires message_created back to /webhooks/bitespeed.
+  const apiUrl = `${biteSpeedApiBase(env)}/api/v1/accounts/${encodeURIComponent(thread.provider_account_id)}/conversations/${encodeURIComponent(thread.provider_thread_ref)}/messages`;
+  const fd = new FormData();
+  if (caption && String(caption).trim()) fd.append('content', String(caption).trim());
+  fd.append('message_type', 'outgoing');
+  fd.append('attachments[]', new Blob([bytes], { type: mime_type }), filename || `attachment.${spec.ext}`);
+  let resp, data;
+  try {
+    resp = await fetch(apiUrl, { method: 'POST', headers: { 'api_access_token': env.BITESPEED_API_TOKEN }, body: fd });
+    data = await resp.json().catch(() => ({}));
+  } catch (e) {
+    return err(`BiteSpeed media send failed: ${e.message}`, 502);
+  }
+  if (!resp.ok) return err(`BiteSpeed media send failed (${resp.status}): ${JSON.stringify(data)?.slice(0, 300)}`, resp.status);
+
+  const now = new Date().toISOString();
+  const senderName = auth.fullName || auth.name || auth.email || null;
+  const threadPatch = { last_message_at: now };
+  if (!thread.assigned_agent_id) {
+    threadPatch.assigned_agent_id = auth.userId;
+    threadPatch.assigned_agent_name = senderName;
+    threadPatch.assigned_at = now;
+  }
+  if (thread.thread_state && thread.thread_state !== 'open') threadPatch.thread_state = 'open';
+  await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(threadPatch) }).catch(() => {});
+  const ticketId = await assignLinkedTicketToReplier(thread.id, auth, env);
+
+  // Attribution pre-write (media renders from the live Chatwoot pull; this row carries
+  // the real sender for the getWaConversation overlay). Merge-duplicates vs the mirror.
+  const pmid = data?.id != null ? String(data.id) : null;
+  if (pmid) {
+    await sb(`/rest/v1/cs_wa_messages?on_conflict=provider_message_id`, env, {
+      method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal',
+      body: JSON.stringify({
+        thread_id: thread.id, ticket_id: ticketId, direction: 'outbound', kind: spec.kind,
+        body: (caption && String(caption).trim()) || null,
+        media_filename: filename || `attachment.${spec.ext}`, media_mime_type: mime_type, media_size_bytes: bytes.length,
+        provider_message_id: pmid, status: 'sent', is_internal: false,
+        sent_by_user_id: auth.userId, sent_by_name: senderName, sent_at: now,
+      }),
+    }).catch(() => {});
+  }
+  return ok({ sent: true, message_id: pmid, auto_claimed: !thread.assigned_agent_id, ticket_assigned: ticketId });
 }
 
 // Phase C admin-only: simulate an inbound message for testing the UI before
