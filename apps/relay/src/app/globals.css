@@ -194,3 +194,11 @@ button { font-family: inherit; }
     scroll-behavior: auto !important;
   }
 }
+
+/* ══════════════════════════════════════════════════════════
+   EMAIL EDITOR (GrapesJS + MJML)
+   ══════════════════════════════════════════════════════════ */
+
+.email-gjs { border: 1px solid var(--border, #e5e5e5); border-radius: 8px; overflow: hidden; }
+.email-gjs .gjs-cv-canvas { background: #f4f4f4; }
+.chip { font-family: var(--mono, monospace); font-size: 12px; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--border, #ddd); background: var(--surface, #fafafa); cursor: pointer; }

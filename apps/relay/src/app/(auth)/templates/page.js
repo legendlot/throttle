@@ -1,11 +1,17 @@
 'use client';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
+import dynamic from 'next/dynamic';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
 import { Plus, ArrowLeft, Check, Pencil, Send, Trash2 } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDate } from '@/components/format.js';
+import { htmlToPlain } from '@/components/email-editor/htmlToPlain.js';
+import { insertMergeTag } from '@/components/email-editor/mergeTags.js';
+
+const EmailEditor = dynamic(() => import('@/components/email-editor/EmailEditor.js'),
+  { ssr: false, loading: () => <div style={{ padding: 24 }}><Spinner /></div> });
 
 const CHANNELS = ['email']; // sms/whatsapp adapters land in later phases
 const PURPOSES = ['marketing', 'transactional', 'utility'];
@@ -17,7 +23,7 @@ const STATUS_TONE = { active: 'green', draft: 'gray', archived: 'red' };
 function emptyTemplate() {
   return {
     id: null, channel: 'email', name: '', purpose: 'marketing', language: 'en',
-    status: 'draft', subject: '', html_body: '', text_body: '', variables: [],
+    status: 'draft', subject: '', html_body: '', text_body: '', design_json: null, variables: [],
   };
 }
 
@@ -29,6 +35,8 @@ export default function TemplatesPage() {
   const [view, setView] = useState('list');
   const [t, setT] = useState(emptyTemplate());
   const [saving, setSaving] = useState(false);
+  const edRef = useRef(null);
+  const [editorKey, setEditorKey] = useState('new');
 
   // test-send state
   const [testTo, setTestTo] = useState('');
@@ -50,16 +58,18 @@ export default function TemplatesPage() {
   }, [session, showToast]);
   useEffect(() => { load(); }, [load]);
 
-  function startNew() { setT(emptyTemplate()); resetTest(); setView('form'); }
+  function startNew() { setT(emptyTemplate()); resetTest(); setEditorKey('new-' + Date.now()); setView('form'); }
   function startEdit(r) {
     const c = r.content || {};
     setT({
       id: r.id, channel: r.channel || 'email', name: r.name || '', purpose: r.purpose || 'marketing',
       language: r.language || 'en', status: r.status || 'draft',
       subject: c.subject || '', html_body: c.html_body || c.html || '', text_body: c.text_body || c.text || '',
+      design_json: c.design_json || null,
       variables: Array.isArray(r.variables) ? r.variables : [],
     });
     resetTest();
+    setEditorKey('t-' + r.id);
     setView('form');
   }
   function resetTest() { setTestTo(''); setTestVals('{}'); setTestResult(null); }
@@ -79,22 +89,32 @@ export default function TemplatesPage() {
         if (v.source === 'constant' && v.value != null && v.value !== '') out.value = v.value;
         return out;
       });
+    let content;
+    if (t.channel === 'email' && edRef.current) {
+      const ex = edRef.current.export();
+      content = { subject: t.subject, html_body: ex.html, text_body: ex.text || htmlToPlain(ex.html), design_json: ex.design };
+    } else {
+      content = { subject: t.subject, html_body: t.html_body, text_body: t.text_body, design_json: t.design_json || null };
+    }
     return {
       channel: t.channel, name: t.name.trim(), purpose: t.purpose, language: t.language || 'en',
-      status: t.status,
-      content: { subject: t.subject, html_body: t.html_body, text_body: t.text_body },
-      variables,
+      status: t.status, content, variables,
     };
   }
 
   async function save() {
     if (!t.name.trim()) { showToast('Name required', 'error'); return; }
+    const payload = buildPayload();
+    if (t.channel === 'email' && t.purpose === 'marketing'
+        && !(payload.content.html_body || '').includes('{unsubscribe_url}')) {
+      showToast('Marketing emails should include {unsubscribe_url} in the footer', 'error');
+    }
     setSaving(true);
     try {
-      const payload = buildPayload();
       if (t.id) payload.id = t.id;
       const r = await workerFetch('saveTemplate', payload, session);
       const saved = r?.data;
+      set('design_json', payload.content.design_json || null);
       showToast(t.id ? 'Template saved (new version)' : 'Template created', 'success');
       if (saved?.id && !t.id) set('id', saved.id);
       load();
@@ -167,21 +187,46 @@ export default function TemplatesPage() {
           </div>
         </Panel>
 
-        <Panel title="Content" pad>
-          <div className="ff" style={{ marginBottom: 14 }}><div className="kv-k">Subject</div>
-            <input className="f-inp" value={t.subject} onChange={(e) => set('subject', e.target.value)} placeholder="We miss you, {first} — 10% inside" disabled={saving || !canEdit} />
+        <Panel title="Content" pad
+          action={t.channel === 'email' ? (
+            <span style={{ display: 'flex', gap: 6 }}>
+              <Btn onClick={() => edRef.current && edRef.current.setDevice('Desktop')}>Desktop</Btn>
+              <Btn onClick={() => edRef.current && edRef.current.setDevice('Mobile portrait')}>Mobile</Btn>
+            </span>
+          ) : null}>
+          <div className="ff" style={{ marginBottom: 14 }}>
+            <div className="kv-k">Subject</div>
+            <input className="f-inp" value={t.subject} onChange={(e) => set('subject', e.target.value)}
+              placeholder="We miss you, {first} — 10% inside" disabled={saving || !canEdit} />
           </div>
-          <div className="ff" style={{ marginBottom: 14 }}><div className="kv-k">HTML body</div>
-            <textarea className="f-inp mono" rows={12} value={t.html_body} onChange={(e) => set('html_body', e.target.value)}
-              placeholder="<p>Hi {first},</p><p>…</p>" disabled={saving || !canEdit} />
-          </div>
-          <div className="ff"><div className="kv-k">Plain-text body (fallback)</div>
-            <textarea className="f-inp mono" rows={5} value={t.text_body} onChange={(e) => set('text_body', e.target.value)}
-              placeholder="Hi {first}, …" disabled={saving || !canEdit} />
-          </div>
+          {t.channel === 'email' ? (
+            <>
+              {canEdit && t.variables.some((v) => v.token) && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+                  <span className="dim" style={{ fontSize: 12, alignSelf: 'center' }}>Merge tags:</span>
+                  {t.variables.filter((v) => v.token).map((v) => (
+                    <button key={v.token} type="button" className="chip"
+                      onClick={async () => {
+                        const res = await insertMergeTag(edRef.current && edRef.current.getEditor(), v.token);
+                        showToast(res === 'inserted' ? `Inserted {${v.token}}` : res === 'copied' ? `Copied {${v.token}} — paste into a text block` : 'Select a text block first', res === 'noop' ? 'error' : 'success');
+                      }}>{`{${v.token}}`}</button>
+                  ))}
+                </div>
+              )}
+              <EmailEditor key={editorKey} ref={edRef} initialDesign={t.design_json} session={session} canEdit={canEdit} />
+            </>
+          ) : (
+            <>
+              <div className="ff" style={{ marginBottom: 14 }}><div className="kv-k">HTML body</div>
+                <textarea className="f-inp mono" rows={12} value={t.html_body} onChange={(e) => set('html_body', e.target.value)} disabled={saving || !canEdit} />
+              </div>
+              <div className="ff"><div className="kv-k">Plain-text body</div>
+                <textarea className="f-inp mono" rows={5} value={t.text_body} onChange={(e) => set('text_body', e.target.value)} disabled={saving || !canEdit} />
+              </div>
+            </>
+          )}
           <div className="tw-note" style={{ marginTop: 10 }}>
-            Use <code>{'{token}'}</code> anywhere in the subject/body. Each token must be declared below or it won’t render.
-            Marketing sends auto-expose <code>{'{unsubscribe_url}'}</code>.
+            Insert <code>{'{token}'}</code> merge tags from the chips above (or type them). Marketing sends auto-expose <code>{'{unsubscribe_url}'}</code>.
           </div>
         </Panel>
 
