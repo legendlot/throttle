@@ -551,6 +551,37 @@ export default {
             return ok(role === 'store' ? r.data.map(({ unit_cost, ...rest }) => rest) : r.data);
           }
 
+          // ── Mould master (Snorkel mould procurement): order-by-mould / receive-by-part ──
+          case 'getMoulds': {
+            if (!canView(P)) return err('No permission', 403);
+            const r = await query('moulds', '?order=mould_no.asc');
+            if (!r.ok) return err(r.data);
+            const cR = await query('mould_parts', '?select=mould_no');
+            const counts = {};
+            if (cR.ok) for (const x of cR.data) counts[x.mould_no] = (counts[x.mould_no] || 0) + 1;
+            return ok(r.data.map(m => ({ ...m, parts_count: counts[m.mould_no] || 0 })));
+          }
+
+          case 'getMould': {
+            if (!canView(P)) return err('No permission', 403);
+            const mn = url.searchParams.get('mould_no');
+            if (!mn) return err('mould_no required');
+            const [mR, pR] = await Promise.all([
+              query('moulds', `?mould_no=eq.${encodeURIComponent(mn)}&limit=1`),
+              query('mould_parts', `?mould_no=eq.${encodeURIComponent(mn)}&select=id,part_code,qty_per_shot&order=part_code.asc`),
+            ]);
+            if (!mR.ok || !mR.data[0]) return err('Mould not found', 404);
+            const parts = pR.ok ? pR.data : [];
+            const codes = [...new Set(parts.map(x => x.part_code))];
+            const names = {};
+            if (codes.length) {
+              const mmR = await query('material_current',
+                `?part_code=in.(${codes.map(c => `"${c}"`).join(',')})&select=part_code,part_name`);
+              if (mmR.ok) for (const x of mmR.data) names[x.part_code] = x.part_name;
+            }
+            return ok({ ...mR.data[0], parts: parts.map(x => ({ ...x, part_name: names[x.part_code] || x.part_code })) });
+          }
+
           case 'getBOM': {
             const product = url.searchParams.get('product');
             if (!product) return err('product required');
@@ -1416,6 +1447,51 @@ export default {
             return ok({ deleted: d.id });
           }
 
+          // ── Mould master writes (Snorkel mould procurement) — gated po_create ──
+          case 'createMould': {
+            if (!canRaisePO(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.mould_no) return err('mould_no required');
+            const r = await insert('moulds', {
+              mould_no: String(d.mould_no).trim(), description: d.description || null,
+              vendor_code: d.vendor_code || null, hsn_code: d.hsn_code || null,
+              gst_percent: d.gst_percent != null ? parseFloat(d.gst_percent) : null,
+              default_shot_rate: d.default_shot_rate != null ? parseFloat(d.default_shot_rate) : null,
+              is_active: d.is_active !== false, notes: d.notes || null,
+            });
+            if (!r.ok) return err('Mould insert failed: ' + JSON.stringify(r.data));
+            await logActivity(authResult?.fullName || postRole, postRole, 'MOULD_CREATED', 'MOULD', d.mould_no, `Mould ${d.mould_no} created`, {});
+            return ok({ mould_no: String(d.mould_no).trim() });
+          }
+
+          case 'updateMould': {
+            if (!canRaisePO(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.mould_no) return err('mould_no required');
+            const u = { updated_at: new Date().toISOString() };
+            ['description', 'vendor_code', 'hsn_code', 'gst_percent', 'default_shot_rate', 'is_active', 'notes']
+              .forEach(f => { if (d[f] !== undefined) u[f] = d[f]; });
+            await update('moulds', u, `mould_no=eq.${encodeURIComponent(d.mould_no)}`);
+            await logActivity(authResult?.fullName || postRole, postRole, 'MOULD_UPDATED', 'MOULD', d.mould_no, `Mould ${d.mould_no} updated`, {});
+            return ok({ mould_no: d.mould_no });
+          }
+
+          case 'setMouldParts': {   // replace the full part map for a mould
+            if (!canRaisePO(P)) return err('No permission', 403);
+            const d = body.data || {};
+            if (!d.mould_no || !Array.isArray(d.parts)) return err('mould_no and parts[] required');
+            await sb(`/rest/v1/mould_parts?mould_no=eq.${encodeURIComponent(d.mould_no)}`, { method: 'DELETE' });
+            const rows = d.parts.filter(p => p.part_code).map(p => ({
+              mould_no: d.mould_no, part_code: p.part_code, qty_per_shot: parseFloat(p.qty_per_shot) || 1,
+            }));
+            if (rows.length) {
+              const r = await insert('mould_parts', rows);
+              if (!r.ok) return err('Mould parts insert failed: ' + JSON.stringify(r.data));
+            }
+            await logActivity(authResult?.fullName || postRole, postRole, 'MOULD_PARTS_SET', 'MOULD', d.mould_no, `Mould ${d.mould_no} map set (${rows.length} parts)`, {});
+            return ok({ mould_no: d.mould_no, count: rows.length });
+          }
+
           case 'postPO': {
             if (!canRaisePO(P)) return err('No permission to raise POs', 403);
             const d = body.data;
@@ -1465,6 +1541,7 @@ export default {
                 remote_qty: parseInt(l.remote_qty) || 0,
                 hsn_code: l.hsn_code || null,
                 gst_percent: l.gst_percent != null ? parseFloat(l.gst_percent) : null,
+                mould_no: l.mould_no || null,
               }));
               const lr = await insert('po_lines', lineRows);
               if (!lr.ok) return err('PO lines insert failed: '+JSON.stringify(lr.data));
@@ -1593,6 +1670,7 @@ export default {
                 remote_qty: parseInt(l.remote_qty) || 0,
                 hsn_code: l.hsn_code || null,
                 gst_percent: l.gst_percent != null ? parseFloat(l.gst_percent) : null,
+                mould_no: l.mould_no || null,
               }));
               await insert('po_lines', lineRows);
             }
