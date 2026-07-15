@@ -12,6 +12,7 @@ export const NAV_PRIMARY = [
   { id: 'new',      label: 'New Ticket', route: '/new',    icon: 'plus' },
   { id: 'calls',    label: 'Calls',      route: '/calls',  icon: 'phone', badgeKey: 'missed' },
   { id: 'inbox',    label: 'Inbox',      route: '/inbox',  icon: 'msg' },
+  { id: 'analytics',label: 'Analytics',  route: '/analytics', icon: 'chart', requires: 'cs_reports_view' },
   { id: 'reports',  label: 'Reports',    route: '/reports',icon: 'chart', requires: 'cs_reports_view' },
   { id: 'history',  label: 'History',    route: '/history',icon: 'trend', requires: 'cs_reports_view' },
 ];
@@ -41,6 +42,7 @@ const CRUMBS = {
   '/calls':               { crumb: 'Work',             title: 'Call Log' },
   '/inbox':               { crumb: 'Work',             title: 'Inbox' },
   '/new':                 { crumb: 'Work',             title: 'New Ticket' },
+  '/analytics':           { crumb: 'Analyze',          title: 'Support Analytics' },
   '/reports':             { crumb: 'Analyze',          title: 'Reports' },
   '/history':             { crumb: 'Analyze',          title: 'Ticket History' },
   '/admin/shifts':        { crumb: 'Setup · Admin',    title: 'Shifts & Presence' },

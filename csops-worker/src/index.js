@@ -506,6 +506,10 @@ async function handleGet(action, params, auth, env) {
       const g2 = require('cs_reports_view', auth); if (g2) return g2;
       return getTicketHistory(params, auth, env);
     }
+    case 'getSupportAnalytics': {
+      const g2 = require('cs_reports_view', auth); if (g2) return g2;
+      return getSupportAnalytics(params, auth, env);
+    }
     case 'getAgents':        return getAgents(params, auth, env);
     case 'getIssueCatalog':  return getIssueCatalog(env);
     case 'getDepartments':   return getDepartments(params, auth, env);
@@ -1124,6 +1128,130 @@ async function getReports(params, auth, env) {
       replacement_cost_inr: +totalReplacementCost.toFixed(2),
       refund_amount_inr:    +totalRefundAmount.toFixed(2),
     },
+  });
+}
+
+// getSupportAnalytics — the Support Analytics Dashboard (Pruthvi #bugs 2026-07-14).
+// One scoped cs_tickets fetch → every panel, JS-aggregated (mirrors getReports; volume is
+// small). Respects dept + operator visibility. Ageing = created_at(IST) − purchase_date.
+// Spec: docs/superpowers/specs/2026-07-16-pitstop-support-analytics-dashboard-design.md
+function istDate(ts) {                       // UTC ISO → 'YYYY-MM-DD' in IST
+  if (!ts) return null;
+  return new Date(new Date(ts).getTime() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+}
+const SUPPORT_CHANNEL_LABELS = {
+  whatsapp: 'WhatsApp', email: 'Email', instagram: 'Instagram', messenger: 'Messenger',
+  web: 'Web', sheet: 'Imported', other: 'Other',
+};
+async function getSupportAnalytics(params, auth, env) {
+  // Default range = current month-to-date (IST). Presets/custom come from the page.
+  const nowIstIso = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString();
+  const monthStartIso = new Date(`${nowIstIso.slice(0, 7)}-01T00:00:00+05:30`).toISOString();
+  const from = params.get('from') || monthStartIso;
+  const to   = params.get('to')   || new Date().toISOString();
+
+  const scope = await visibilityFilters(params, auth, env);
+  if (!scope) return err('Unknown department slug', 404);
+
+  // A "complaint" = a triaged ticket carrying an issue_category. This is the same
+  // universe the team's manual sheet counts (verified 2026-07-16: issue_category
+  // IS NOT NULL ≈ 1,159 for Feb–Jun vs the sheet's ~1,160s) and it excludes the
+  // ~6.9k call/general support tickets that have no product-complaint categorisation.
+  const filters = [
+    `created_at=gte.${encodeURIComponent(from)}`,
+    `created_at=lte.${encodeURIComponent(to)}`,
+    `issue_category=not.is.null`,
+    ...scope,
+  ];
+  const [tRes, catRes, pmRes] = await Promise.all([
+    sb(`/rest/v1/cs_tickets?${filters.join('&')}&select=created_at,purchase_date,product,issue_category,issue_subcategory,issue_subcategory_custom,platform,intake_channel,auto_created&limit=20000`, env, { headers: { Prefer: 'count=exact' } }),
+    sb(`/rest/v1/cs_issue_catalog?is_active=eq.true&select=category,sort_order&order=sort_order.asc`, env),
+    sbPublic(`/rest/v1/product_master?select=product,product_line&product_line=not.is.null&limit=2000`, env),
+  ]);
+  if (!tRes.ok) return err(`Failed to load analytics data: ${JSON.stringify(tRes.data)}`, tRes.status);
+  const rows = tRes.data || [];
+
+  // product → LOT line map (seeded on product_master.product_line)
+  const lineOf = {};
+  for (const r of (pmRes.data || [])) if (r.product) lineOf[r.product] = r.product_line;
+  // issue-category display order (catalog sort_order); dedup preserving order
+  const catSeen = new Set(); const catOrderAll = [];
+  for (const r of (catRes.data || [])) if (r.category && !catSeen.has(r.category)) { catSeen.add(r.category); catOrderAll.push(r.category); }
+
+  const kpis = { total: rows.length, within_3d: 0, after_3d: 0, ageing_unknown: 0 };
+  const byCategory = {}, byLine = {}, bySale = {}, bySupport = {}, bySub = {};
+  const prodMap = {};                 // product → { total, cats:{cat:n} }
+  const catsPresent = new Set();
+  const monthProd = {}, monthCat = {}; // month → { total, <dim>:n }
+
+  for (const r of rows) {
+    // ageing
+    const pd = r.purchase_date, cd = istDate(r.created_at);
+    if (!pd || !cd) kpis.ageing_unknown++;
+    else {
+      const days = Math.floor((Date.parse(`${cd}T00:00:00Z`) - Date.parse(`${pd}T00:00:00Z`)) / 86400000);
+      if (days >= 0 && days <= 3) kpis.within_3d++;
+      else if (days > 3) kpis.after_3d++;
+      else kpis.ageing_unknown++;     // complaint dated before purchase = anomaly
+    }
+
+    const product = r.product || '—';
+    const cat = r.issue_category || 'Uncategorised';
+    catsPresent.add(cat);
+
+    byCategory[cat] = (byCategory[cat] || 0) + 1;
+
+    const line = lineOf[r.product] || 'Unclassified';
+    byLine[line] = (byLine[line] || 0) + 1;
+
+    const sale = r.platform || 'Unknown';
+    bySale[sale] = (bySale[sale] || 0) + 1;
+
+    const sup = r.auto_created || r.intake_channel === 'phone' || r.intake_channel === 'call'
+      ? 'Calls'
+      : (SUPPORT_CHANNEL_LABELS[r.intake_channel] || (r.intake_channel ? r.intake_channel : 'Unknown'));
+    bySupport[sup] = (bySupport[sup] || 0) + 1;
+
+    const sub = r.issue_subcategory || r.issue_subcategory_custom;
+    if (sub) bySub[sub] = (bySub[sub] || 0) + 1;
+
+    // product × category matrix
+    const pm = prodMap[product] || (prodMap[product] = { product, total: 0, cats: {} });
+    pm.total++; pm.cats[cat] = (pm.cats[cat] || 0) + 1;
+
+    // monthly trends
+    const mo = (cd || '').slice(0, 7);
+    if (mo) {
+      const mp = monthProd[mo] || (monthProd[mo] = { month: mo, total: 0 });
+      mp.total++; mp[product] = (mp[product] || 0) + 1;
+      const mc = monthCat[mo] || (monthCat[mo] = { month: mo, total: 0 });
+      mc.total++; mc[cat] = (mc[cat] || 0) + 1;
+    }
+  }
+
+  const pct = (n) => kpis.total ? +((n / kpis.total) * 100).toFixed(1) : 0;
+  const rank = (obj) => Object.entries(obj).map(([name, count]) => ({ name, count, pct: pct(count) })).sort((a, b) => b.count - a.count);
+  // matrix columns = catalog order, then any extra categories present, "Uncategorised" last
+  const categories = [
+    ...catOrderAll.filter(c => catsPresent.has(c)),
+    ...[...catsPresent].filter(c => !catSeen.has(c) && c !== 'Uncategorised').sort(),
+    ...([...catsPresent].includes('Uncategorised') ? ['Uncategorised'] : []),
+  ];
+
+  return ok({
+    range: { from, to, total: rows.length },
+    kpis,
+    by_product_matrix: {
+      categories,
+      products: Object.values(prodMap).sort((a, b) => b.total - a.total),
+    },
+    by_issue_category: rank(byCategory),
+    by_product_line: rank(byLine),
+    by_sale_channel: rank(bySale),
+    by_support_channel: rank(bySupport),
+    top_subcategories: Object.entries(bySub).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count).slice(0, 20),
+    monthly_product_trend: Object.values(monthProd).sort((a, b) => a.month.localeCompare(b.month)),
+    monthly_category_trend: Object.values(monthCat).sort((a, b) => a.month.localeCompare(b.month)),
   });
 }
 
