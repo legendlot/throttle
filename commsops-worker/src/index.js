@@ -555,6 +555,17 @@ export default {
       const r = await SHOPFLO.handleShopfloWebhook(env, request);
       return r.ok ? ok(r) : err(r.error, r.status || 400);
     }
+    // Internal WA template catalog pull (read-only Graph GET) — token-gated by WA_SYNC_TOKEN
+    // (set transiently for a sync, deleted after → route inert). No sends, no customer data.
+    if (url.pathname === '/internal/wa-templates' && request.method === 'POST') {
+      const want = env.WA_SYNC_TOKEN;
+      const a = request.headers.get('Authorization') || '';
+      const bearer = a.slice(0, 7).toLowerCase() === 'bearer ' ? a.slice(7).trim() : '';
+      if (!want || bearer !== want) return err('unauthorised', 401);
+      let b = {}; try { b = await request.json(); } catch {}
+      const r = await WATPL.waListTemplates(env, b.wabaIds || []);
+      return r.ok ? ok(r) : err(r.error, 400);
+    }
 
     const auth = await A.verifyJWT(request.headers.get('Authorization'), env);
     if (!auth) return err('unauthorised', 401);

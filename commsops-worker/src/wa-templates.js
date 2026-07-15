@@ -124,4 +124,24 @@ async function waSyncTemplateStatus(env, body) {
   return { ok: true, synced };
 }
 
-module.exports = { waSubmitTemplate, waSyncTemplateStatus, buildComponents, categoryFor };
+// waListTemplates(env, wabaIds[]) — READ-ONLY catalog pull across WABAs (grant
+// verification + template inventory). GET only; no sends, no writes. A WABA that
+// 403s = the system user isn't granted it. Returns {wabas:{<id>:{ok,count,templates[]|error}}}.
+async function waListTemplates(env, wabaIds) {
+  if (!env.WA_TOKEN) return { ok: false, error: 'wa_not_configured' };
+  const out = {};
+  for (const id of (Array.isArray(wabaIds) ? wabaIds : [])) {
+    try {
+      const res = await fetch(
+        `${graphBase(env)}/${encodeURIComponent(id)}/message_templates?fields=name,language,status,category&limit=200`,
+        { headers: { Authorization: `Bearer ${env.WA_TOKEN}` } });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { out[id] = { ok: false, status: res.status, error: data?.error?.message || `http_${res.status}` }; continue; }
+      const templates = (data?.data || []).map((t) => ({ name: t.name, language: t.language, status: t.status, category: t.category }));
+      out[id] = { ok: true, count: templates.length, templates };
+    } catch (e) { out[id] = { ok: false, error: String(e?.message || e) }; }
+  }
+  return { ok: true, wabas: out };
+}
+
+module.exports = { waSubmitTemplate, waSyncTemplateStatus, waListTemplates, buildComponents, categoryFor };
