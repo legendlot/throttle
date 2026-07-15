@@ -216,7 +216,9 @@ async function shopifyOrderDatesByName(names, env) {
   const CHUNK = 40;
   for (let i = 0; i < names.length; i += CHUNK) {
     const batch = names.slice(i, i + CHUNK);
-    const q = batch.map(n => `name:${JSON.stringify(String(n))}`).join(' OR ');
+    // status:any is REQUIRED — Shopify's orders search defaults to OPEN orders, so
+    // fulfilled/archived orders (the vast majority of complaints) match nothing without it.
+    const q = `status:any AND (${batch.map(n => `name:${JSON.stringify(String(n))}`).join(' OR ')})`;
     const query = `query($q:String!){ orders(first:${CHUNK}, query:$q){ edges{ node{ name createdAt } } } }`;
     const run = (t) => fetch(`https://${env.SHOPIFY_STORE_DOMAIN}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
       method: 'POST',
@@ -541,8 +543,8 @@ export default {
     // Purchase-date backfill for Support Analytics ageing — throttled to ~every 20 min
     // (the cron is */2). Cheap when drained: 0 unfilled tickets → no Shopify call.
     const mins = new Date(event?.scheduledTime || Date.now()).getUTCMinutes();
-    if (env.SHOPIFY_STORE_DOMAIN && mins % 20 === 0) {
-      ctx.waitUntil(runPurchaseDateBackfill(env, { limit: 120 }).then(
+    if (env.SHOPIFY_STORE_DOMAIN && mins % 10 === 0) {
+      ctx.waitUntil(runPurchaseDateBackfill(env, { limit: 200 }).then(
         r => console.log('[purchase-date] cron backfill', JSON.stringify(r)),
         e => console.error('[purchase-date] cron backfill error', e),
       ));
