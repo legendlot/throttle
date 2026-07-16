@@ -276,6 +276,24 @@ export default function ReceivingPage() {
     setActiveMarkId(null);
   }
 
+  // Delete an empty shipment (nothing received yet). Worker enforces the empty guard;
+  // the button only shows when the loaded shipment looks empty.
+  async function deleteShipment() {
+    if (!currentShipmentId) return;
+    if (!window.confirm(`Delete shipment ${currentShipmentId}? This only works if nothing has been received against it, and it can't be undone.`)) return;
+    setDetailLoading(true);
+    try {
+      const res = await workerFetch('deleteReceivingShipment', { data: { shipment_id: currentShipmentId } }, session);
+      if (!res.ok) throw new Error(res.data || 'Delete failed');
+      showToast(`${currentShipmentId} deleted`, 'success');
+      backToList();
+    } catch (e) {
+      showToast(e.message || 'Delete failed', 'error');
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
   // ── Mark form ────────────────────────────────────────────────────────────────
   async function submitMarkRange() {
     if (!rPrefix.trim()) { showToast('Enter a prefix', 'error'); return; }
@@ -691,6 +709,11 @@ export default function ReceivingPage() {
 
   const hasQtyForGRN   = lines.some(l => (parseInt(l.qty_counted) || 0) > (parseInt(l.qty_grn) || 0));
   const showBagButtons = !isFbu && lines.some(l => l.status === 'Counted' || l.status === 'GRN Raised');
+  // Empty shipment = nothing received: no boxes in, no counted/GRN'd lines (expected-only
+  // lines from a PO are fine). Only then is the Delete button offered (worker re-checks).
+  const shipmentEmpty  = !!shipmentData
+    && (parseInt(shipment.total_boxes_received) || 0) === 0
+    && lines.every(l => (parseInt(l.qty_counted) || 0) === 0 && (parseInt(l.qty_grn) || 0) === 0 && !l.grn_no);
 
   // ── RENDER: permission guard ──────────────────────────────────────────────────
   // Must run AFTER all hooks (Rules of Hooks). Moved here from above the
@@ -1043,6 +1066,13 @@ export default function ReceivingPage() {
               <button style={btnSec} onClick={resyncFromBOM} title="Add any BOM part created/reactivated after this shipment was set up">⟳ Re-sync from BOM</button>
             )}
             <button style={btnSec} onClick={() => refreshDetail()}>↻ Refresh</button>
+            {shipmentEmpty && (
+              <button
+                style={{ ...btnSec, color: '#ff7070', borderColor: 'rgba(222,42,42,.3)', marginLeft: 'auto' }}
+                onClick={deleteShipment}
+                title="Delete this shipment — only works while nothing has been received against it"
+              >🗑 Delete shipment</button>
+            )}
           </div>
 
           {/* Marks panel */}
