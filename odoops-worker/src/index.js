@@ -3123,20 +3123,42 @@ export default {
               try { const r = await fetch(`${host}/dsp/advertisers?count=50`, { headers: { ...baseH, 'Amazon-Advertising-API-Scope': profileId } }); out.dsp_advertisers = { status: r.status, body: (await r.text().catch(() => '')).slice(0, 500) }; }
               catch (e) { out.dsp_advertisers = { error: String(e?.message || e) }; }
             }
-            // (4) the REAL entitlement test — create a tiny v3 DSP CAMPAIGN report on the candidate account.
-            const account = qp('account');
-            if (account) {
+            // (4) the REAL entitlement test — create a tiny v3 DSP CAMPAIGN report. Auto-discover the
+            //     DSP account id(s) from managerAccounts (accountType DSP*), test each candidate id form
+            //     (the entity `accountId` AND the numeric `dspAdvertiserId`), plus any &account= override.
+            const candidates = [];
+            const acctOverride = qp('account');
+            if (acctOverride) candidates.push({ id: acctOverride, source: 'override' });
+            try {
+              const mbody = JSON.parse(out.managerAccounts?.body || '{}');
+              for (const ma of (mbody.managerAccounts || [])) {
+                for (const la of (ma.linkedAccounts || [])) {
+                  if (/DSP/i.test(la.accountType || '')) {
+                    if (la.accountId) candidates.push({ id: la.accountId, source: 'accountId', accountType: la.accountType });
+                    if (la.dspAdvertiserId) candidates.push({ id: la.dspAdvertiserId, source: 'dspAdvertiserId', accountType: la.accountType });
+                  }
+                }
+              }
+            } catch (_) { /* body wasn't parseable json */ }
+            const seenIds = new Set();
+            const uniq = candidates.filter(c => c.id && !seenIds.has(c.id) && seenIds.add(c.id));
+            if (uniq.length) {
               const day = amzAdsDay(Date.now() - 3 * 86400000);
-              try {
-                const r = await fetch(`${host}/accounts/${account}/dsp/reports`, {
-                  method: 'POST',
-                  headers: { ...baseH, Accept: 'application/vnd.dspcreatereports.v3+json', 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ startDate: day, endDate: day, type: 'CAMPAIGN', dimensions: ['ORDER'], metrics: AMZ_DSP_METRICS }),
-                });
-                out.dsp_v3_create = { account, status: r.status, verdict: r.status === 202 ? 'ENTITLED ✅ (set config.dsp_account_id=' + account + ' + enable)' : ((r.status === 401 || r.status === 403) ? 'NOT ENTITLED — needs DSP reporting-API access on the app/account' : 'inconclusive — see body'), body: (await r.text().catch(() => '')).slice(0, 500) };
-              } catch (e) { out.dsp_v3_create = { error: String(e?.message || e) }; }
+              out.entitlement = [];
+              for (const c of uniq) {
+                try {
+                  const r = await fetch(`${host}/accounts/${c.id}/dsp/reports`, {
+                    method: 'POST',
+                    headers: { ...baseH, Accept: 'application/vnd.dspcreatereports.v3+json', 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ startDate: day, endDate: day, type: 'CAMPAIGN', dimensions: ['ORDER'], metrics: AMZ_DSP_METRICS }),
+                  });
+                  out.entitlement.push({ id: c.id, source: c.source, status: r.status, verdict: r.status === 202 ? 'ENTITLED ✅' : ((r.status === 401 || r.status === 403) ? 'NOT ENTITLED' : 'inconclusive'), body: (await r.text().catch(() => '')).slice(0, 300) });
+                } catch (e) { out.entitlement.push({ id: c.id, source: c.source, error: String(e?.message || e) }); }
+              }
+              const win = out.entitlement.find(e => e.status === 202);
+              out.verdict = win ? ('ENTITLED ✅ — use dsp_account_id=' + win.id) : 'NOT ENTITLED — DSP reporting-API access must be granted to the app';
             }
-            return ok({ note: 'Add &profile=<profileId> to list DSP advertisers; &account=<dspAccountId> to run the v3 entitlement test (202 = entitled).', ...out });
+            return ok({ note: 'Auto-tests DSP entitlement against discovered account ids. &profile=<id> also lists DSP advertisers; &account=<id> adds a manual candidate.', ...out });
           }
           case 'searchTermProbe': {  // diagnostic (S185): Ads API search-term report (Nikhil P2 — keyword winners/leaks)
             if (!canConnector(P)) return err('No permission', 403);
