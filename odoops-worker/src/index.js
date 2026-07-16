@@ -1191,7 +1191,10 @@ const amazonDspAdapter = {
         const text = (buf[0] === 0x1f && buf[1] === 0x8b)
           ? await new Response(new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'))).text()
           : new TextDecoder().decode(buf);
-        let arr = []; try { arr = JSON.parse(text); } catch { arr = []; }
+        // orderId/advertiserId/entityId come back as BARE integers > 2^53 → JSON.parse silently rounds
+        // them (594059374243951462 → …951500). Quote those keys before parsing to keep the exact id.
+        const safe = text.replace(/"(orderId|advertiserId|entityId)"\s*:\s*(\d{16,})/g, '"$1":"$2"');
+        let arr = []; try { arr = JSON.parse(safe); } catch { try { arr = JSON.parse(text); } catch { arr = []; } }
         rows = (Array.isArray(arr) ? arr : []).map(d => ({
           channel_id: channelId, ad_account_id: String(dspAccountId),
           campaign_id: String(d.orderId ?? d.campaignId ?? ''), campaign_name: d.orderName || d.campaignName || null,
@@ -1219,7 +1222,18 @@ const amazonDspAdapter = {
     const day = startStr;
     let rid;
     try { rid = await createDspReport(host, dspAccountId, baseH, day, metrics); subreqs++; }
-    catch (e) { if (/\b429\b|throttl/i.test(String(e?.message || e))) return { rows: [], cursorAfter: null, subreqs, partial: true }; throw e; }
+    catch (e) {
+      const msg = String(e?.message || e);
+      if (/\b429\b|throttl/i.test(msg)) return { rows: [], cursorAfter: null, subreqs, partial: true };  // transient → retry same day
+      // A non-throttle create error on an OLD day is usually a retention/validation reject. Rather than
+      // stick on it forever (cursor never advances → connector wedged), skip the cursor forward a week so
+      // the backfill self-heals past the retention floor. Bounded by the trailing-14d floor above, so
+      // steady-state can never skip live days.
+      const dayMs = Date.parse(day + 'T00:00:00Z') || nowMs;
+      const skipTo = amzAdsDay(Math.min(dayMs + 7 * 86400000, nowMs));
+      if (skipTo > day) return { rows: [], cursorAfter: skipTo, subreqs, partial: skipTo < amzAdsDay(nowMs) };
+      throw e;
+    }
     await patchConnectorConfig(channelId, cfg, { pending_report_id: rid, pending_day: day });
     return { rows: [], cursorAfter: null, subreqs, partial: true };
   },
