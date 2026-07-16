@@ -87,8 +87,13 @@ export default function AmazonPage() {
 
   const seg = useMemo(() => aggOrders(d?.seg), [d]);
   const segP = useMemo(() => aggOrders(d?.segPrev), [d]);
-  const ad = useMemo(() => (d?.mkt || []).find(r => /amazon/i.test(r.grp || '')) || {}, [d]);
-  const adP = useMemo(() => (d?.mktPrev || []).find(r => /amazon/i.test(r.grp || '')) || {}, [d]);
+  // Sponsored Ads (SP/SB/SD) = platform EXACTLY 'amazon'. Amazon DSP is a SEPARATE platform
+  // ('amazon_dsp') — match each precisely so DSP never pollutes the Sponsored-Ads strip (they
+  // attribute the same ASINs, so a regex that caught both would double-count ROAS).
+  const ad = useMemo(() => (d?.mkt || []).find(r => (r.grp || '') === 'amazon') || {}, [d]);
+  const adP = useMemo(() => (d?.mktPrev || []).find(r => (r.grp || '') === 'amazon') || {}, [d]);
+  const dsp = useMemo(() => (d?.mkt || []).find(r => (r.grp || '') === 'amazon_dsp') || {}, [d]);
+  const dspP = useMemo(() => (d?.mktPrev || []).find(r => (r.grp || '') === 'amazon_dsp') || {}, [d]);
   const ret = useMemo(() => aggReturns(d?.ret), [d]);
   const sellers = useMemo(() => topByCode(d?.salesVar, grp, c2p), [d, grp, c2p]);
   // ad metrics per sellers-key (SKU mode → product_code; Model mode → product family via c2p).
@@ -126,6 +131,15 @@ export default function AmazonPage() {
   const ctr = pct1(clicks, impr), cpc = clicks > 0 ? spend / clicks : 0, cvr = pct1(convs, clicks);
   const organic = Math.max(gross - attr, 0), organicPct = pct1(organic, gross);
   const pOrganic = Math.max(pGross - pAttr, 0);
+
+  // Amazon DSP (programmatic) — SEPARATE lens; conversions=purchases14d, conv_value=sales14d.
+  const dSpend = Number(dsp.spend) || 0, dImpr = Number(dsp.impressions) || 0, dClicks = Number(dsp.clicks) || 0;
+  const dPurch = Number(dsp.conversions) || 0, dSales = Number(dsp.conv_value) || 0;
+  const dpSpend = Number(dspP.spend) || 0, dpSales = Number(dspP.conv_value) || 0;
+  const dRoas = dSpend > 0 ? dSales / dSpend : 0, dpRoas = dpSpend > 0 ? dpSales / dpSpend : 0;
+  const dCtr = pct1(dClicks, dImpr), dCpm = dImpr > 0 ? dSpend / dImpr * 1000 : 0;
+  const dPurchRate = dImpr > 0 ? dPurch / dImpr * 100 : 0;
+  const dspHasData = dSpend > 0 || dImpr > 0 || dSales > 0;
 
   // Settlement (true payout & fees) — sum the by_date rollup. Fees are negative; take/ad rates vs principal.
   const settle = useMemo(() => {
@@ -198,8 +212,8 @@ export default function AmazonPage() {
             Returns / RTO / RTV come from Amazon&apos;s Finances refund feed, which posts <b>weeks after</b> the sale — so a current-month figure understates and fills in as refunds settle. Older periods are the accurate read.
           </div>
 
-          {/* ── Advertising ── */}
-          <div className="so-kpi-lbl" style={{ marginTop: 4 }}>Advertising</div>
+          {/* ── Sponsored Ads (SP · SB · SD) — platform 'amazon', DSP excluded ── */}
+          <div className="so-kpi-lbl" style={{ marginTop: 4 }}>Sponsored Ads <span style={{ color: 'var(--t3)', fontWeight: 400, fontSize: 11 }}>· SP · SB · SD</span></div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 12 }}>
             <Kpi lbl="Ad Spend" val={inr(spend)} now={spend} prev={pSpend} tone="neutral" />
             <Kpi lbl="ROAS" val={roas.toFixed(2) + '×'} sub="attributed sales / spend" now={roas} prev={pRoas} />
@@ -208,6 +222,25 @@ export default function AmazonPage() {
             <Kpi lbl="CTR" val={ctr.toFixed(2) + '%'} sub="clicks / impressions" tone="neutral" />
             <Kpi lbl="CPC" val={inr(cpc)} sub="spend / click" tone="neutral" />
             <Kpi lbl="Conversion" val={cvr.toFixed(2) + '%'} sub="orders / click" tone="neutral" />
+          </div>
+
+          {/* ── Amazon DSP (programmatic) — SEPARATE lens, not summed into Sponsored Ads above ── */}
+          <div className="so-kpi-lbl" style={{ marginTop: 4 }}>Amazon DSP <span style={{ color: 'var(--t3)', fontWeight: 400, fontSize: 11 }}>· programmatic display/video · separate lens</span></div>
+          {dspHasData ? (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 12 }}>
+              <Kpi lbl="DSP Spend" val={inr(dSpend)} now={dSpend} prev={dpSpend} tone="neutral" accent="#7C5CF0" />
+              <Kpi lbl="DSP ROAS" val={dRoas.toFixed(2) + '×'} sub="sales (14d) / spend" now={dRoas} prev={dpRoas} />
+              <Kpi lbl="Impressions" val={fmtInt(dImpr)} tone="neutral" />
+              <Kpi lbl="CTR" val={dCtr.toFixed(2) + '%'} sub="clicks / impressions" tone="neutral" />
+              <Kpi lbl="CPM" val={inr(dCpm)} sub="cost / 1000 impr" tone="neutral" />
+              <Kpi lbl="Purchases (14d)" val={fmtInt(dPurch)} sub={`${dPurchRate.toFixed(3)}% purch. rate`} tone="neutral" />
+              <Kpi lbl="Sales (14d)" val={inr(dSales)} sub="DSP-attributed" tone="neutral" />
+            </div>
+          ) : (
+            <div className="so-sub" style={{ fontSize: 11, color: 'var(--t3)' }}>No DSP spend in this range yet — the DSP connector backfills from 2026-04-16 forward (one report per day), so recent days fill in first.</div>
+          )}
+          <div className="so-sub" style={{ fontSize: 10.5, color: 'var(--t3)', marginTop: -2 }}>
+            DSP (programmatic display/video) is reported <b>separately</b> from Sponsored Ads — the two attribute the same products, so their spend/ROAS must not be summed. Source: Amazon DSP reporting API.
           </div>
 
           {/* ── Daily trend ── */}

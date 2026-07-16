@@ -12,11 +12,14 @@ const roasOf = (r) => (Number(r.spend) > 0 ? Number(r.conv_value || 0) / Number(
 // Colour ROAS by the Ad Engine's gates: >=4 graduate (green), <2 kill (red), between = iterate.
 const roasTone = (v) => (v >= 4 ? 'var(--green)' : v > 0 && v < 2 ? 'var(--red)' : 'var(--t1)');
 const GROUP_LABEL = { platform: 'Platform', campaign: 'Campaign', adset: 'Ad set', ad: 'Ad' };
-const PLAT_COLOR = { meta: '#4C63F0', google: '#E8A33D', amazon: '#FF9900', ga4: '#E8643D' };
+const PLAT_COLOR = { meta: '#4C63F0', google: '#E8A33D', amazon: '#FF9900', amazon_dsp: '#7C5CF0', ga4: '#E8643D' };
+// Amazon Sponsored Ads (SP/SB/SD) = 'amazon'; Amazon DSP = 'amazon_dsp' — a distinct platform lens.
+const PLAT_LABEL = { meta: 'Meta', google: 'Google', amazon: 'Amazon (Sponsored)', amazon_dsp: 'Amazon DSP', ga4: 'GA4' };
+const platLabel = (p) => PLAT_LABEL[p] || p || '—';
 const PlatChip = ({ p }) => (
   <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, padding: '2px 7px', borderRadius: 5,
     background: (PLAT_COLOR[p] || 'var(--t3)') + '22', color: PLAT_COLOR[p] || 'var(--t2)',
-    border: `1px solid ${(PLAT_COLOR[p] || 'var(--t3)')}44` }}>{p || '—'}</span>
+    border: `1px solid ${(PLAT_COLOR[p] || 'var(--t3)')}44` }}>{platLabel(p)}</span>
 );
 // Live/Paused marker — green = ACTIVE, grey = paused/other. null (no status synced yet) → no dot.
 const StatusDot = ({ live }) => live == null ? null : (
@@ -129,7 +132,7 @@ export default function MarketingPage() {
               <tbody>
                 {sort.sorted.length === 0 && <tr><td colSpan={group === 'platform' ? 7 : 8} style={{ color: 'var(--t3)', padding: 14 }}>{adMode ? 'No ad-level data yet — the engine pulls the last ~14 days on the next Meta refresh.' : 'No spend in this range yet — connector may still be backfilling.'}</td></tr>}
                 {sort.sorted.map((r, i) => { const rv = roasOf(r); return (<tr key={i}>
-                  <td><StatusDot live={r.is_live} />{(adMode ? r.label : r.grp) || '—'}</td>
+                  <td><StatusDot live={r.is_live} />{(adMode ? r.label : (group === 'platform' ? platLabel(r.grp) : r.grp)) || '—'}</td>
                   {group !== 'platform' && <td><PlatChip p={r.platform} /></td>}
                   <td className="so-num">{inr(r.spend)}</td>
                   <td className="so-num" style={{ color: roasTone(rv), fontWeight: 500 }}>{rv ? rv.toFixed(2) + '×' : '—'}</td>
