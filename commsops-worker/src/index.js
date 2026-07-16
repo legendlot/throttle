@@ -277,6 +277,8 @@ async function handlePost(body, auth, env) {
       if (!A.canTemplate(auth.permissions)) return err('forbidden', 403);
       const fileName = body.file_name;
       if (!fileName) return err('file_name_required', 400);
+      const v = EA.validateAsset({ fileName, mimeType: body.mime_type });
+      if (!v.ok) return err(v.error, 400);
       const bucket = 'relay-email-assets';
       const path = EA.assetPath(fileName, Date.now());
       const sr = await fetch(`${env.SUPABASE_URL}/storage/v1/object/upload/sign/${bucket}/${enc2(path)}`, {

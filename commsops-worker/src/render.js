@@ -95,8 +95,11 @@ function renderWhatsapp(template, ctx) {
   const values = resolveDeclared(template, ctx);
 
   if (content.meta_name) {
-    const mapping = Array.isArray(content.mapping) ? content.mapping : [];
-    // group parameter slots by component type, in declared order
+    // Meta binds {{1}},{{2}}… by ARRAY POSITION of `parameters`, so slot order is load-bearing.
+    // Sort by `pos` — the same key wa-templates.js buildComponents() uses for the submitted
+    // example values — so what Meta approved and what we send can never disagree.
+    const mapping = (Array.isArray(content.mapping) ? content.mapping : [])
+      .slice().sort((a, b) => (a.pos ?? 0) - (b.pos ?? 0));
     const byComp = {};
     for (const slot of mapping) {
       const comp = slot.component || 'body';

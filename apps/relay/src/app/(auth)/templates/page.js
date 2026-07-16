@@ -4,25 +4,30 @@ import dynamic from 'next/dynamic';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
-import { Plus, ArrowLeft, Check, Pencil, Send, Trash2 } from 'lucide-react';
+import { Plus, ArrowLeft, Check, Pencil, Send, Trash2, Upload, RefreshCw } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState } from '@/components/ui.js';
 import { fmtDate } from '@/components/format.js';
-import { insertMergeTag } from '@/components/email-editor/mergeTags.js';
+import { insertMergeTag, findUndeclaredTokens } from '@/components/email-editor/mergeTags.js';
+import WaEditor from '@/components/wa-editor/WaEditor.js';
+import { validateWaTemplate } from '@/components/wa-editor/waTemplate.js';
 
 const EmailEditor = dynamic(() => import('@/components/email-editor/EmailEditor.js'),
   { ssr: false, loading: () => <div style={{ padding: 24 }}><Spinner /></div> });
 
-const CHANNELS = ['email']; // sms/whatsapp adapters land in later phases
+const CHANNELS = ['email', 'whatsapp']; // sms lands in Phase 2
 const PURPOSES = ['marketing', 'transactional', 'utility'];
 const STATUSES = ['draft', 'active', 'archived'];
 const VAR_SOURCES = ['profile', 'event', 'constant', 'recipient', 'system'];
 
 const STATUS_TONE = { active: 'green', draft: 'gray', archived: 'red' };
+const APPROVAL_TONE = { APPROVED: 'green', PENDING: 'yellow', REJECTED: 'red', PAUSED: 'yellow', DISABLED: 'red' };
 
 function emptyTemplate() {
   return {
     id: null, channel: 'email', name: '', purpose: 'marketing', language: 'en',
     status: 'draft', subject: '', html_body: '', text_body: '', design_json: null, variables: [],
+    wa: { meta_name: '', category: 'MARKETING', header: '', body: '', footer: '', buttons: [], mapping: [] },
+    approval_status: null, provider_template_id: null,
   };
 }
 
@@ -42,6 +47,7 @@ export default function TemplatesPage() {
   const [testVals, setTestVals] = useState('{}');
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const canEdit = !perms || perms.template_manage;
   const canTest = !perms || perms.campaign_build;
@@ -66,6 +72,14 @@ export default function TemplatesPage() {
       subject: c.subject || '', html_body: c.html_body || c.html || '', text_body: c.text_body || c.text || '',
       design_json: c.design_json || null,
       variables: Array.isArray(r.variables) ? r.variables : [],
+      wa: {
+        meta_name: c.meta_name || '', category: c.category || 'MARKETING',
+        header: c.header || '', body: c.body || '', footer: c.footer || '',
+        buttons: Array.isArray(c.buttons) ? c.buttons : [],
+        mapping: Array.isArray(c.mapping) ? c.mapping : [],
+      },
+      approval_status: r.approval_status || null,
+      provider_template_id: r.provider_template_id || null,
     });
     resetTest();
     setEditorKey('t-' + r.id);
@@ -89,7 +103,18 @@ export default function TemplatesPage() {
         return out;
       });
     let content;
-    if (t.channel === 'email' && edRef.current) {
+    if (t.channel === 'whatsapp') {
+      const w = t.wa || {};
+      // Shape consumed by render.js renderWhatsapp + wa-templates.js buildComponents.
+      content = {
+        meta_name: w.meta_name || '', language: t.language || 'en', category: w.category || 'MARKETING',
+        body: w.body || '',
+        mapping: (w.mapping || []).filter((m) => m.token),
+      };
+      if (w.header) content.header = w.header;
+      if (w.footer) content.footer = w.footer;
+      if ((w.buttons || []).length) content.buttons = w.buttons;
+    } else if (edRef.current) {
       const ex = edRef.current.export();
       content = { subject: t.subject, html_body: ex.html, text_body: ex.text, design_json: ex.design };
     } else {
@@ -105,9 +130,17 @@ export default function TemplatesPage() {
     if (!t.name.trim()) { showToast('Name required', 'error'); return; }
     if (t.channel === 'email' && !edRef.current) { showToast('Editor still loading — try again in a moment', 'error'); return; }
     const payload = buildPayload();
-    if (t.channel === 'email' && t.purpose === 'marketing'
-        && !(payload.content.html_body || '').includes('{unsubscribe_url}')) {
-      showToast('Marketing emails should include {unsubscribe_url} in the footer', 'error');
+    if (t.channel === 'email') {
+      if (t.purpose === 'marketing' && !(payload.content.html_body || '').includes('{unsubscribe_url}')) {
+        showToast('Marketing emails should include {unsubscribe_url} in the footer', 'error');
+      }
+      const stray = findUndeclaredTokens(
+        [payload.content.subject, payload.content.html_body, payload.content.text_body],
+        payload.variables.map((v) => v.token));
+      if (stray.length && !window.confirm(
+        `These look like merge tags but aren't declared as variables:\n\n`
+        + stray.map((s) => `  {${s}}`).join('\n')
+        + `\n\nThey will be sent as literal text, not filled in. Save anyway?`)) return;
     }
     setSaving(true);
     try {
@@ -145,6 +178,41 @@ export default function TemplatesPage() {
     finally { setTesting(false); }
   }
 
+  // Submitting sends the template into Meta's review queue under LOT's WhatsApp Business
+  // Account — an outward-facing, non-instant action, so it always confirms first.
+  async function submitToMeta() {
+    if (!t.id) { showToast('Save the template first', 'error'); return; }
+    const errs = validateWaTemplate(buildPayload().content, t.variables.map((v) => v.token));
+    if (errs.length) { showToast(`Fix ${errs.length} issue${errs.length === 1 ? '' : 's'} before submitting`, 'error'); return; }
+    if (!window.confirm(
+      `Submit "${t.wa.meta_name}" to Meta for approval?\n\n`
+      + `This creates a real template on LOT's WhatsApp Business Account and enters Meta's `
+      + `review queue. Review typically takes minutes to hours and can't be undone from here.`)) return;
+    setSubmitting(true);
+    try {
+      const r = await workerFetch('waSubmitTemplate', { templateId: t.id }, session);
+      const d = r?.data || {};
+      set('approval_status', d.status || 'PENDING');
+      set('provider_template_id', d.provider_template_id || null);
+      showToast(`Submitted — Meta says ${d.status || 'PENDING'}`, 'success');
+      load();
+    } catch (e) { showToast(e.message || 'Submit failed', 'error'); }
+    finally { setSubmitting(false); }
+  }
+
+  async function syncStatus() {
+    if (!t.id) return;
+    setSubmitting(true);
+    try {
+      const r = await workerFetch('waSyncTemplateStatus', { templateId: t.id }, session);
+      const s = r?.data?.synced?.[0];
+      if (s?.status) { set('approval_status', s.status); showToast(`Meta status: ${s.status}`, 'success'); }
+      else showToast('No status from Meta yet', 'error');
+      load();
+    } catch (e) { showToast(e.message || 'Sync failed', 'error'); }
+    finally { setSubmitting(false); }
+  }
+
   if (perms && !perms.relay_view) return <div style={{ padding: 24, color: 'var(--text-3)' }}>Relay access required.</div>;
 
   if (view === 'form') {
@@ -155,8 +223,16 @@ export default function TemplatesPage() {
             <Btn onClick={() => setView('list')}><ArrowLeft size={14} /> Back to templates</Btn>
             <span className="po-head-no" style={{ fontSize: 18 }}>{t.id ? (t.name || 'Template') : 'New Template'}</span>
             {t.id && <Badge label={`v${rows.find((r) => r.id === t.id)?.version || 1}`} tone="gray" />}
+            {t.channel === 'whatsapp' && t.approval_status
+              && <Badge label={`Meta: ${t.approval_status}`} tone={APPROVAL_TONE[t.approval_status] || 'gray'} />}
           </div>
           <div className="po-head-r">
+            {t.channel === 'whatsapp' && canEdit && t.id && (
+              <>
+                <Btn onClick={syncStatus} disabled={submitting}><RefreshCw size={14} /> Sync status</Btn>
+                <Btn onClick={submitToMeta} disabled={submitting}><Upload size={14} /> {submitting ? 'Working…' : 'Submit to Meta'}</Btn>
+              </>
+            )}
             {canEdit && <Btn kind="primary" onClick={save} disabled={saving}><Check size={14} /> {saving ? 'Saving…' : 'Save template'}</Btn>}
           </div>
         </div>
@@ -187,6 +263,9 @@ export default function TemplatesPage() {
           </div>
         </Panel>
 
+        {t.channel === 'whatsapp' ? (
+          <WaEditor wa={t.wa} setWa={(w) => set('wa', w)} variables={t.variables} disabled={saving || !canEdit} />
+        ) : (
         <Panel title="Content" pad
           action={t.channel === 'email' && canEdit ? (
             <span style={{ display: 'flex', gap: 6 }}>
@@ -234,6 +313,7 @@ export default function TemplatesPage() {
             Insert <code>{'{token}'}</code> merge tags from the chips above (or type them). Marketing sends auto-expose <code>{'{unsubscribe_url}'}</code>.
           </div>
         </Panel>
+        )}
 
         <Panel title="Variables" count={t.variables.length}
           action={canEdit ? <Btn onClick={addVar}><Plus size={14} /> Add variable</Btn> : null}>
@@ -260,7 +340,17 @@ export default function TemplatesPage() {
             )}
         </Panel>
 
-        {canTest && (
+        {canTest && t.channel === 'whatsapp' && (
+          <Panel title="Send a test" pad>
+            <div className="tw-note" style={{ marginTop: 0 }}>
+              WhatsApp templates can only be sent once Meta has <b>approved</b> them, so there is no
+              draft test-send here. Save → Submit to Meta → Sync status until <code>APPROVED</code>, then
+              test it from a campaign or journey against an allow-listed number.
+            </div>
+          </Panel>
+        )}
+
+        {canTest && t.channel !== 'whatsapp' && (
           <Panel title="Send a test" pad>
             <div className="tw-note" style={{ marginTop: 0, marginBottom: 12 }}>
               Sends the current (unsaved) draft as a transactional message. Test values fill any
@@ -299,7 +389,7 @@ export default function TemplatesPage() {
           : (
             <Panel title="Templates" count={rows.length}>
               <table className="dt">
-                <thead><tr><th>Name</th><th>Channel</th><th>Purpose</th><th>Status</th><th>Ver</th><th>Updated</th><th></th></tr></thead>
+                <thead><tr><th>Name</th><th>Channel</th><th>Purpose</th><th>Status</th><th>Meta</th><th>Ver</th><th>Updated</th><th></th></tr></thead>
                 <tbody>
                   {rows.map((r) => (
                     <tr key={r.id} className="row-click" onClick={() => startEdit(r)}>
@@ -307,6 +397,11 @@ export default function TemplatesPage() {
                       <td><Badge label={r.channel} tone="blue" /></td>
                       <td className="dim">{r.purpose}</td>
                       <td><Badge label={r.status} tone={STATUS_TONE[r.status] || 'gray'} /></td>
+                      <td>{r.channel === 'whatsapp'
+                        ? (r.approval_status
+                          ? <Badge label={r.approval_status} tone={APPROVAL_TONE[r.approval_status] || 'gray'} />
+                          : <span className="dim" style={{ fontSize: 12 }}>not submitted</span>)
+                        : <span className="dim">—</span>}</td>
                       <td className="mono dim">v{r.version}</td>
                       <td className="mono dim">{fmtDate(r.updated_at)}</td>
                       <td><Btn onClick={(e) => { e.stopPropagation(); startEdit(r); }}><Pencil size={14} /> {canEdit ? 'Edit' : 'View'}</Btn></td>
