@@ -1838,6 +1838,28 @@ async function mintCouponCode(env, inf) {
   return code;
 }
 
+// Gift codes are 100%-off internal codes — they must be UNGUESSABLE so a customer
+// can never land one by fluke (the old vanity `<NAME>LOT` was predictable — a shopper
+// could type a name + LOT and get a free order). So gift codes are random gibberish
+// (crypto-random, ambiguous chars I/O/0/1/L dropped for legibility). Affiliate codes
+// stay vanity (they're meant to be shared and aren't 100% off). Reann #bugs 2026-07-16.
+function randomGiftCode() {
+  const alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // 31 chars, no I/O/L/0/1
+  const bytes = new Uint8Array(12);
+  crypto.getRandomValues(bytes);
+  let s = '';
+  for (let i = 0; i < bytes.length; i++) s += alphabet[bytes[i] % alphabet.length];
+  return s;
+}
+async function mintRandomGiftCode(env) {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const code = randomGiftCode();
+    const r = await sb(`/rest/v1/coupon_codes?code=eq.${encodeURIComponent(code)}&select=code&limit=1`, env);
+    if (r.ok && (r.data || []).length === 0) return code;
+  }
+  return null; // astronomically unlikely — 31^12 space
+}
+
 // Is an order's date inside the engagement's commission window? from required (window
 // not open until live); to is exclusive (commission stops the day it leaves live).
 function couponInWindow(orderDateIso, from, to) {
@@ -1857,9 +1879,13 @@ async function issueCoupon(body, auth, env) {
   const eng = er.data[0];
   const pct = kind === 'gift' ? 100 : (body.discount_pct != null ? Number(body.discount_pct) : NaN);
   if (kind === 'affiliate' && (isNaN(pct) || pct <= 0 || pct > 100)) return err('discount_pct (1-100) required for affiliate', 400);
-  const code = body.code
-    ? String(body.code).toUpperCase().replace(/[^A-Z0-9]/g, '')
-    : await mintCouponCode(env, eng.influencer || {});
+  // Gift = ALWAYS a random unguessable code (ignore any passed code — a gift code must
+  // never be a predictable vanity string, RULE below). Affiliate = vanity (passed or minted).
+  const code = kind === 'gift'
+    ? await mintRandomGiftCode(env)
+    : (body.code
+        ? String(body.code).toUpperCase().replace(/[^A-Z0-9]/g, '')
+        : await mintCouponCode(env, eng.influencer || {}));
   if (!code) return err('could_not_mint_code', 500);
 
   // Create on Shopify — gated on write_discounts; graceful pending_shopify if unavailable.
