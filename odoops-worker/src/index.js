@@ -3106,6 +3106,28 @@ export default {
             const host = 'https://advertising-api-eu.amazon.com';
             const baseH = { 'Amazon-Advertising-API-ClientId': env.AMAZON_ADS_CLIENT_ID, Authorization: `Bearer ${token}` };
             const out = {};
+            // poll mode: &poll=<reportId> [&account=<id>] → fetch a created DSP report + sample rows
+            // (confirms the actual response field names, so the adapter maps them correctly).
+            const pollId = qp('poll');
+            if (pollId) {
+              const acc = qp('account') || '589754551245092029';
+              try {
+                const pr = await fetch(`${host}/accounts/${acc}/dsp/reports/${pollId}`, { headers: { ...baseH, Accept: 'application/vnd.dspgetreports.v3+json' } });
+                const rep = await pr.json().catch(() => ({}));
+                out.poll = { httpStatus: pr.status, reportStatus: rep.status, statusDetails: rep.statusDetails };
+                const loc = rep.location || rep.url;
+                if (loc) {
+                  const dl = await fetch(loc);
+                  const buf = new Uint8Array(await dl.arrayBuffer());
+                  const text = (buf[0] === 0x1f && buf[1] === 0x8b) ? await new Response(new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'))).text() : new TextDecoder().decode(buf);
+                  let arr = []; try { arr = JSON.parse(text); } catch { /* non-json */ }
+                  out.poll.rowCount = Array.isArray(arr) ? arr.length : 0;
+                  out.poll.firstRowKeys = (Array.isArray(arr) && arr[0]) ? Object.keys(arr[0]) : [];
+                  out.poll.sample = Array.isArray(arr) ? arr.slice(0, 3) : arr;
+                }
+              } catch (e) { out.poll = { error: String(e?.message || e) }; }
+              return ok(out);
+            }
             // (1) profiles → candidate DSP account ids (accountInfo.id for the DSP/agency entity)
             try {
               const pr = await fetch(`${host}/v2/profiles`, { headers: baseH });
