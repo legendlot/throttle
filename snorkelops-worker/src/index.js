@@ -676,11 +676,53 @@ export default {
 
           // ── Procurement domain reads ──
           case 'getProcurementParts': {
-            const r = await query('bom_register',
-              `?is_active=eq.true&select=part_code,part_name,part_category,issue_uom,hsn_code&order=part_code.asc`);
-            if (!r.ok) return err(r.data);
+            // Manual PO-line part picker source. Sourced from the FULL active catalogue
+            // (material_current = material_master WHERE is_active), enriched with
+            // issue_uom / hsn_code from bom_register where the part is on a BOM. Was
+            // previously bom_register-only, which hid catalogue parts that aren't on any
+            // BOM — raw materials, consumables, freshly-created codes — so they couldn't
+            // be ordered on a manual line (Siddhanth: LB-WD-PINE-3 raw material → "No
+            // matches"). Manual lines must be able to order any catalogued part.
+            const [matR, bomR] = await Promise.all([
+              query('material_current',
+                `?select=part_code,part_name,product,part_category,part_type&order=part_code.asc`),
+              query('bom_register',
+                `?is_active=eq.true&select=part_code,part_name,issue_uom,hsn_code`),
+            ]);
+            if (!matR.ok) return err(matR.data);
+            const bomMeta = new Map();
+            for (const b of (bomR.ok ? bomR.data : [])) {
+              if (!bomMeta.has(b.part_code)) bomMeta.set(b.part_code, b);
+            }
             const seen = new Map();
-            for (const row of r.data) seen.set(row.part_code, row);
+            for (const row of matR.data) {
+              if (seen.has(row.part_code)) continue;
+              const meta = bomMeta.get(row.part_code) || {};
+              seen.set(row.part_code, {
+                part_code:     row.part_code,
+                part_name:     row.part_name,
+                product:       row.product || null,
+                part_category: row.part_category || null,
+                part_type:     row.part_type || null,
+                issue_uom:     meta.issue_uom || null,
+                hsn_code:      meta.hsn_code || null,
+              });
+            }
+            // Defensive: keep any bom_register-only codes with no catalogue row
+            // (preserves prior orderability of a BOM code lacking a material_master row).
+            for (const b of (bomR.ok ? bomR.data : [])) {
+              if (!seen.has(b.part_code)) {
+                seen.set(b.part_code, {
+                  part_code:     b.part_code,
+                  part_name:     b.part_name || b.part_code,
+                  product:       null,
+                  part_category: null,
+                  part_type:     null,
+                  issue_uom:     b.issue_uom || null,
+                  hsn_code:      b.hsn_code || null,
+                });
+              }
+            }
             return ok([...seen.values()]);
           }
 
