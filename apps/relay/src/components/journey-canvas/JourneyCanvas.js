@@ -33,7 +33,9 @@ function TriggerNode({ data, selected }) {
         <Zap size={13} /> Trigger
       </div>
       <div className="mono" style={{ marginTop: 4, color: 'var(--text-2, #555)' }}>
-        {t.type === 'event' ? `event: ${t.name || '?'}` : (t.type || 'not set')}
+        {t.type === 'event' ? `event: ${t.name || '?'}`
+          : t.type === 'segment_entry' ? `enters: ${t.segment_name || t.segment_id || '?'}`
+          : (t.type || 'not set')}
       </div>
       <Handle type="source" position={Position.Right} id="entry" />
     </div>

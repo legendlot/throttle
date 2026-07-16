@@ -37,14 +37,27 @@ const EVENT_SUGGEST = ['checkout_started', 'order_placed', 'order_fulfilled', 'o
 
 function emptyJourney() {
   return { id: null, name: '', status: 'draft', active_version: null,
-    triggerEvent: 'checkout_started', reenrolment: 'once_while_active', reenrolCooldown: 24,
+    triggerType: 'event', triggerEvent: 'checkout_started', triggerSegmentId: '',
+    reenrolment: 'once_while_active', reenrolCooldown: 24,
     max_duration: '30 days', exit_rules: [], versions: [] };
 }
 
-function triggerSummary(t) {
+function triggerSummary(t, segments) {
   if (!t || !t.type) return '—';
   if (t.type === 'event') return `event: ${t.name || '?'}`;
+  if (t.type === 'segment_entry') {
+    const s = (segments || []).find((x) => x.id === t.segment_id);
+    return `enters: ${s ? s.name : (t.segment_id || '?')}`;
+  }
   return t.type;
+}
+
+// Build the stored trigger jsonb from form state — the shape ingest.js (event) and
+// segment-entry.js (segment_entry) each match on.
+function buildTrigger(j) {
+  return j.triggerType === 'segment_entry'
+    ? { type: 'segment_entry', segment_id: j.triggerSegmentId }
+    : { type: 'event', name: (j.triggerEvent || '').trim() };
 }
 
 export default function JourneysPage() {
@@ -52,6 +65,7 @@ export default function JourneysPage() {
   const { showToast } = useToast();
   const [rows, setRows] = useState([]);
   const [templates, setTemplates] = useState([]);
+  const [segments, setSegments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState('list');
   const [j, setJ] = useState(emptyJourney());
@@ -83,12 +97,14 @@ export default function JourneysPage() {
     if (!session) return;
     setLoading(true);
     try {
-      const [js, tp] = await Promise.all([
+      const [js, tp, sg] = await Promise.all([
         garageFetch('getJourneys', {}, session),
         garageFetch('getTemplates', {}, session),
+        garageFetch('getSegments', {}, session),
       ]);
       setRows(Array.isArray(js) ? js : []);
       setTemplates(Array.isArray(tp) ? tp : []);
+      setSegments(Array.isArray(sg) ? sg : []);
     } catch (e) { showToast(e.message || 'Failed to load journeys', 'error'); }
     finally { setLoading(false); }
   }, [session, showToast]);
@@ -128,7 +144,9 @@ export default function JourneysPage() {
     const t = r.trigger || {};
     setJ({
       id: r.id, name: r.name || '', status: r.status || 'draft', active_version: r.active_version ?? null,
+      triggerType: t.type === 'segment_entry' ? 'segment_entry' : 'event',
       triggerEvent: t.name || 'checkout_started',
+      triggerSegmentId: t.segment_id || '',
       reenrolment: r.reenrolment || 'once_while_active',
       reenrolCooldown: r.reenrol_cooldown_hours || 24,
       max_duration: r.max_duration || '30 days',
@@ -158,11 +176,17 @@ export default function JourneysPage() {
     } catch { /* non-fatal */ }
   }
 
-  // keep the canvas trigger node's summary in sync with the trigger form
+  // keep the canvas trigger node's summary in sync with the trigger form.
+  // segment_name is DISPLAY-ONLY (toDefinition reads only layout off this node; the saved
+  // trigger comes from buildTrigger(j)), so it can't leak into the stored definition.
   useEffect(() => {
-    setNodesRaw((ns) => ns.map((n) => n.id === TRIGGER_ID
-      ? { ...n, data: { trigger: { type: 'event', name: j.triggerEvent } } } : n));
-  }, [j.triggerEvent]);
+    const t = buildTrigger(j);
+    if (t.type === 'segment_entry') {
+      t.segment_name = (segments.find((s) => s.id === t.segment_id) || {}).name || null;
+    }
+    setNodesRaw((ns) => ns.map((n) => n.id === TRIGGER_ID ? { ...n, data: { trigger: t } } : n));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [j.triggerType, j.triggerEvent, j.triggerSegmentId, segments]);
 
   const selectedNode = nodes.find((n) => n.id === selected && n.id !== TRIGGER_ID) || null;
 
@@ -177,7 +201,8 @@ export default function JourneysPage() {
 
   async function save() {
     if (!j.name.trim()) { showToast('Name required', 'error'); return; }
-    if (!j.triggerEvent.trim()) { showToast('Trigger event name required', 'error'); return; }
+    if (j.triggerType === 'event' && !j.triggerEvent.trim()) { showToast('Trigger event name required', 'error'); return; }
+    if (j.triggerType === 'segment_entry' && !j.triggerSegmentId) { showToast('Pick a segment to watch', 'error'); return; }
     setBusy(true);
     setCompileErrors(null);
     try {
@@ -194,7 +219,7 @@ export default function JourneysPage() {
       }
       const payload = {
         name: j.name.trim(),
-        trigger: { type: 'event', name: j.triggerEvent.trim() },
+        trigger: buildTrigger(j),
         reenrolment: j.reenrolment,
         reenrol_cooldown_hours: j.reenrolment === 'cooldown' ? (Number(j.reenrolCooldown) || null) : null,
         max_duration: (j.max_duration || '').trim() || null,
@@ -267,9 +292,26 @@ export default function JourneysPage() {
             <div className="ff"><div className="kv-k">Name</div>
               <input className="f-inp" value={j.name} onChange={(e) => set('name', e.target.value)} placeholder="Abandoned cart" disabled={busy || !editable} />
             </div>
-            <div className="ff"><div className="kv-k">Trigger event</div>
-              <input className="f-inp mono" list="journey-event-suggest" value={j.triggerEvent} onChange={(e) => set('triggerEvent', e.target.value)} placeholder="checkout_started" disabled={busy || !editable} />
+            <div className="ff"><div className="kv-k">Trigger</div>
+              <select className="f-inp" value={j.triggerType} onChange={(e) => set('triggerType', e.target.value)} disabled={busy || !editable}>
+                <option value="event">When an event happens</option>
+                <option value="segment_entry">When a profile enters a segment</option>
+              </select>
             </div>
+            {j.triggerType === 'event' ? (
+              <div className="ff"><div className="kv-k">Trigger event</div>
+                <input className="f-inp mono" list="journey-event-suggest" value={j.triggerEvent} onChange={(e) => set('triggerEvent', e.target.value)} placeholder="checkout_started" disabled={busy || !editable} />
+              </div>
+            ) : (
+              <div className="ff"><div className="kv-k">Segment to watch</div>
+                <select className="f-inp" value={j.triggerSegmentId} onChange={(e) => set('triggerSegmentId', e.target.value)} disabled={busy || !editable}>
+                  <option value="">— pick a segment —</option>
+                  {segments.filter((s) => s.kind === 'dynamic').map((s) => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="ff"><div className="kv-k">Re-enrolment</div>
               <select className="f-inp" value={j.reenrolment} onChange={(e) => set('reenrolment', e.target.value)} disabled={busy || !editable}>
                 {REENROL.map((x) => <option key={x.id} value={x.id}>{x.label}</option>)}
@@ -284,6 +326,19 @@ export default function JourneysPage() {
               <input className="f-inp mono" value={j.max_duration} onChange={(e) => set('max_duration', e.target.value)} placeholder="30 days" disabled={busy || !editable} />
             </div>
           </div>
+
+          {j.triggerType === 'segment_entry' && (
+            <div className="tw-note" style={{ marginTop: 14 }}>
+              <b>People already in the segment will not be enrolled.</b> When this journey goes
+              active, the segment&apos;s current members are recorded as a baseline (you&apos;ll get a
+              Slack note saying how many) — only profiles who enter <i>after</i> that point start the
+              journey. Entry is checked every 5 minutes.
+              {(() => {
+                const s = segments.find((x) => x.id === j.triggerSegmentId);
+                return s ? <> Watching <b>{s.name}</b>.</> : null;
+              })()}
+            </div>
+          )}
 
           <div style={{ marginTop: 14 }}>
             <div className="kv-k" style={{ marginBottom: 6 }}>Exit rules — event fires → journey exits early with this outcome</div>
@@ -383,7 +438,7 @@ export default function JourneysPage() {
                       <td><GitBranch size={13} style={{ verticalAlign: -2, marginRight: 6, color: 'var(--text-4)' }} />{r.name}</td>
                       <td><Badge label={r.status || 'draft'} tone={STATUS_TONE[r.status] || 'gray'} /></td>
                       <td className="num mono dim">{r.active_version ?? '—'}</td>
-                      <td className="dim">{triggerSummary(r.trigger)}</td>
+                      <td className="dim">{triggerSummary(r.trigger, segments)}</td>
                       <td className="dim">{r.reenrolment || '—'}</td>
                       <td className="mono dim">{fmtDate(r.updated_at)}</td>
                     </tr>

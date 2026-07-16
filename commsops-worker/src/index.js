@@ -7,6 +7,7 @@ const { send } = require('./send.js');
 const { handleResendWebhook, handleUnsubscribe } = require('./webhooks.js');
 const { handleWhatsappWebhook, verifyWhatsappWebhook } = require('./wa-webhooks.js');
 const WATPL = require('./wa-templates.js');
+const SEG = require('./segment-entry.js');
 const CAMP = require('./campaigns.js');
 const J = require('./journeys.js');
 const SHOP = require('./shopify.js');
@@ -463,6 +464,13 @@ async function runScheduled(env) {
   // 2. deliverability spike watch (≤1 alert/hour via settings.last_alert_at)
   try { await checkDeliverabilitySpike(env); }
   catch (e) { console.log('spike_check_error', e?.message || String(e)); }
+
+  // 2b. segment-entry triggers — detect who newly entered a watched segment and enrol.
+  // Self-contained + never throws; a segment scan must not break the sweeps above.
+  try {
+    const se = await SEG.runSegmentEntry(env);
+    if (se.segments) console.log('segment_entry', JSON.stringify(se));
+  } catch (e) { console.log('segment_entry_error', e?.message || String(e)); }
 
   // (J1) Lifetime cap: auto-exit enrolments older than their journey's max_duration.
   // We signal the parked instance so it ends cleanly via #park → 'expired'.
