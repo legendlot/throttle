@@ -1158,6 +1158,29 @@ async function createDspReport(host, dspAccountId, baseH, day, metrics = AMZ_DSP
   if (!cj.reportId) throw new Error('Amazon DSP createReport: no reportId — ' + JSON.stringify(cj).slice(0, 160));
   return cj.reportId;
 }
+async function getDspReport(host, dspAccountId, baseH, reportId) {
+  const pr = await fetch(`${host}/accounts/${dspAccountId}/dsp/reports/${reportId}`, { headers: { ...baseH, Accept: 'application/vnd.dspgetreports.v3+json' } });
+  if (!pr.ok) throw new Error(`Amazon DSP getReport ${pr.status}: ${(await pr.text().catch(() => '')).slice(0, 160)}`);
+  const rep = await pr.json();
+  return { st: (rep.status || '').toUpperCase(), loc: rep.location || rep.url, detail: (rep.statusDetails || rep.failureReason || '') };
+}
+async function dspRowsFrom(loc, channelId, dspAccountId, day) {
+  const dl = await fetch(loc);                                          // presigned S3 — no auth headers
+  if (!dl.ok) throw new Error('Amazon DSP doc download ' + dl.status);
+  const buf = new Uint8Array(await dl.arrayBuffer());
+  const text = (buf[0] === 0x1f && buf[1] === 0x8b)                    // JSON, but tolerate a GZIP body
+    ? await new Response(new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'))).text()
+    : new TextDecoder().decode(buf);
+  // orderId/advertiserId/entityId are BARE ints > 2^53 → JSON.parse rounds them; quote first.
+  const safe = text.replace(/"(orderId|advertiserId|entityId)"\s*:\s*(\d{16,})/g, '"$1":"$2"');
+  let arr = []; try { arr = JSON.parse(safe); } catch { try { arr = JSON.parse(text); } catch { arr = []; } }
+  return (Array.isArray(arr) ? arr : []).map(d => ({
+    channel_id: channelId, ad_account_id: String(dspAccountId),
+    campaign_id: String(d.orderId ?? d.campaignId ?? ''), campaign_name: d.orderName || d.campaignName || null,
+    the_date: day, spend: num(d.totalCost), impressions: num(d.impressions),
+    clicks: num(d.clickThroughs ?? d.clicks), conversions: num(d.purchases14d), conv_value: num(d.sales14d), raw: d,
+  })).filter(r => r.the_date);
+}
 const amazonDspAdapter = {
   kind: 'amazon_dsp', stgTable: 'stg_amazon_dsp',
   datesOf(rows) { return [...new Set(rows.map(r => r.the_date))].sort(); },
@@ -1172,70 +1195,60 @@ const amazonDspAdapter = {
     let subreqs = 1;
     const nowMs = Date.now();
 
-    // ── pending report → poll ──
+    // Resolve ONE day's report end-to-end: (create if needed) → poll IN-CALL (DSP reports finish in
+    // seconds) → download. Returns { done, rows } — done=false means it's still processing after the
+    // in-call budget, so the caller stashes the reportId as pending and the next step re-enters here.
+    // In-call polling avoids the ~10-min inter-step workflow sleep that made the backfill trickle and
+    // held the single-flight slot between every create and poll.
+    const resolveDay = async (day, existingReportId) => {
+      let reportId = existingReportId;
+      if (!reportId) { reportId = await createDspReport(host, dspAccountId, baseH, day, metrics); subreqs++; }
+      for (let i = 0; i < 6 && subreqs < 40; i++) {                    // ~6 polls / ~18s; stays under the 50-subreq cap
+        const { st, loc, detail } = await getDspReport(host, dspAccountId, baseH, reportId); subreqs++;
+        if (st === 'SUCCESS' || st === 'COMPLETED') {
+          let rows = [];
+          if (loc) { subreqs++; rows = await dspRowsFrom(loc, channelId, dspAccountId, day); }
+          return { done: true, rows };
+        }
+        if (st && st !== 'IN_PROGRESS' && st !== 'PENDING' && st !== 'PROCESSING')
+          throw new Error(`Amazon DSP report ${st}: ${detail.slice(0, 120)}`);
+        await new Promise(r => setTimeout(r, 3000));
+      }
+      return { done: false, reportId };                               // still cooking → caller stores pending
+    };
+    // more history to cover after `day`? (anything before yesterday)
+    const moreAfter = (day) => { const t = Date.parse((day || '') + 'T00:00:00Z') || 0; return !!(t && t < nowMs - 24 * 3600 * 1000); };
+
+    // ── resume a pending report first ──
     if (cfg.pending_report_id) {
       const day = cfg.pending_day;
-      const pr = await fetch(`${host}/accounts/${dspAccountId}/dsp/reports/${cfg.pending_report_id}`, { headers: { ...baseH, Accept: 'application/vnd.dspgetreports.v3+json' } }); subreqs++;
-      if (!pr.ok) throw new Error(`Amazon DSP getReport ${pr.status}: ${(await pr.text().catch(() => '')).slice(0, 160)}`);
-      const rep = await pr.json();
-      const st = (rep.status || '').toUpperCase();
-      if (st === 'IN_PROGRESS' || st === 'PENDING' || st === 'PROCESSING') return { rows: [], cursorAfter: null, subreqs, partial: true };
-      if (st !== 'SUCCESS' && st !== 'COMPLETED') { await patchConnectorConfig(channelId, cfg, { pending_report_id: null, pending_day: null }); throw new Error(`Amazon DSP report ${st}: ${(rep.statusDetails || rep.failureReason || '').slice(0, 120)}`); }
-      let rows = [];
-      const loc = rep.location || rep.url;
-      if (loc) {
-        const dl = await fetch(loc); subreqs++;                          // presigned S3 — no auth headers
-        if (!dl.ok) throw new Error('Amazon DSP doc download ' + dl.status);
-        const buf = new Uint8Array(await dl.arrayBuffer());
-        // DSP examples return plain JSON; handle a GZIP body too (magic 1f 8b) to be safe.
-        const text = (buf[0] === 0x1f && buf[1] === 0x8b)
-          ? await new Response(new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'))).text()
-          : new TextDecoder().decode(buf);
-        // orderId/advertiserId/entityId come back as BARE integers > 2^53 → JSON.parse silently rounds
-        // them (594059374243951462 → …951500). Quote those keys before parsing to keep the exact id.
-        const safe = text.replace(/"(orderId|advertiserId|entityId)"\s*:\s*(\d{16,})/g, '"$1":"$2"');
-        let arr = []; try { arr = JSON.parse(safe); } catch { try { arr = JSON.parse(text); } catch { arr = []; } }
-        rows = (Array.isArray(arr) ? arr : []).map(d => ({
-          channel_id: channelId, ad_account_id: String(dspAccountId),
-          campaign_id: String(d.orderId ?? d.campaignId ?? ''), campaign_name: d.orderName || d.campaignName || null,
-          the_date: day, spend: num(d.totalCost), impressions: num(d.impressions),
-          clicks: num(d.clickThroughs ?? d.clicks), conversions: num(d.purchases14d), conv_value: num(d.sales14d), raw: d,
-        })).filter(r => r.the_date);
-      }
-      // walk forward: queue the next day if the covered day is before yesterday (more history to cover).
-      let partial = false, next = { pending_report_id: null, pending_day: null };
-      const dayMs = Date.parse((day || '') + 'T00:00:00Z') || 0;
-      if (dayMs && dayMs < nowMs - 24 * 3600 * 1000) {
-        const nextDay = amzAdsDay(dayMs + 86400000);
-        try { const rid = await createDspReport(host, dspAccountId, baseH, nextDay, metrics); subreqs++; next = { pending_report_id: rid, pending_day: nextDay }; partial = true; }
-        catch (e) { partial = /\b429\b|throttl/i.test(String(e?.message || e)); /* else leave cleared — next tick re-creates from the advanced cursor */ }
-      }
-      await patchConnectorConfig(channelId, cfg, next);
-      return { rows, cursorAfter: day, subreqs, partial };
+      const r = await resolveDay(day, cfg.pending_report_id);
+      if (!r.done) return { rows: [], cursorAfter: null, subreqs, partial: true };   // still processing → poll again next step
+      await patchConnectorConfig(channelId, cfg, { pending_report_id: null, pending_day: null });
+      return { rows: r.rows, cursorAfter: day, subreqs, partial: moreAfter(day) };
     }
 
-    // ── no pending → create the next day's report. Floor the start at today-14 so steady-state
-    //    always refreshes the trailing 14 days (DSP attributes conversions over a 14-day window). ──
+    // ── no pending → resolve the next day. Floor the start at today-14 so steady-state always
+    //    refreshes the trailing 14 days (DSP attributes conversions over a 14-day window). ──
     let startStr = (cursor || cfg.backfill_start || amzAdsDay(nowMs - 14 * 86400000)).slice(0, 10);
     const trailingStart = amzAdsDay(nowMs - 14 * 86400000);
     if (startStr > trailingStart) startStr = trailingStart;
     const day = startStr;
-    let rid;
-    try { rid = await createDspReport(host, dspAccountId, baseH, day, metrics); subreqs++; }
+    let r;
+    try { r = await resolveDay(day); }
     catch (e) {
       const msg = String(e?.message || e);
       if (/\b429\b|throttl/i.test(msg)) return { rows: [], cursorAfter: null, subreqs, partial: true };  // transient → retry same day
-      // A non-throttle create error on an OLD day is usually a retention/validation reject. Rather than
-      // stick on it forever (cursor never advances → connector wedged), skip the cursor forward a week so
-      // the backfill self-heals past the retention floor. Bounded by the trailing-14d floor above, so
-      // steady-state can never skip live days.
+      // A non-throttle error on an OLD day is usually a retention/validation reject. Rather than stick on
+      // it forever (cursor never advances → connector wedged), skip the cursor forward a week so the
+      // backfill self-heals past the retention floor. Bounded by the trailing-14d floor above.
       const dayMs = Date.parse(day + 'T00:00:00Z') || nowMs;
       const skipTo = amzAdsDay(Math.min(dayMs + 7 * 86400000, nowMs));
       if (skipTo > day) return { rows: [], cursorAfter: skipTo, subreqs, partial: skipTo < amzAdsDay(nowMs) };
       throw e;
     }
-    await patchConnectorConfig(channelId, cfg, { pending_report_id: rid, pending_day: day });
-    return { rows: [], cursorAfter: null, subreqs, partial: true };
+    if (!r.done) { await patchConnectorConfig(channelId, cfg, { pending_report_id: r.reportId, pending_day: day }); return { rows: [], cursorAfter: null, subreqs, partial: true }; }
+    return { rows: r.rows, cursorAfter: day, subreqs, partial: moreAfter(day) };
   },
   async stage(rows, runId, channelId) {
     if (!rows.length) return;
