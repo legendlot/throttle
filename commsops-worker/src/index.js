@@ -296,6 +296,11 @@ async function handlePost(body, auth, env) {
           Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
           'Content-Type': 'application/json',
         },
+        // Storage is Fastify: declaring application/json with NO body is a hard 400
+        // ("Body cannot be empty when content-type is set to 'application/json'").
+        // storage-js posts an empty object here — match it. Every image upload 400'd
+        // without this.
+        body: JSON.stringify({}),
       });
       const st = await sr.text();
       let sd; try { sd = st ? JSON.parse(st) : null; } catch { sd = null; }
