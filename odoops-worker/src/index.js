@@ -1138,6 +1138,105 @@ const amazonAdsAdapter = {
   },
 };
 
+// ── Amazon DSP (Ads API v3 DSP reporting · async) → mkt_fact platform='amazon_dsp' (SEPARATE lens) ──
+// DISTINCT API surface from Sponsored Ads: POST /accounts/{dspAccountId}/dsp/reports with the v3 media
+// types (dspcreatereports/dspgetreports) — the DSP account id lives in the PATH, NOT the Scope header.
+// A DSP report aggregates over [startDate,endDate] with NO date dimension, so we request ONE DAY per
+// report to get daily grain. Reuses the same LWA Ads token/app as SP/SB/SD (same entitlement gate).
+// Kept a separate platform ('amazon_dsp') so it is NEVER summed into Sponsored-Ads ('amazon') ROAS —
+// DSP + SP both attribute the same ASINs, so blending would double-count (RULE / BACKLOG note).
+// Requires config.dsp_account_id (discover via dspGateProbe, then set it + flip enabled).
+const AMZ_DSP_METRICS = ['totalCost', 'impressions', 'clickThroughs', 'sales14d', 'purchases14d'];
+async function createDspReport(host, dspAccountId, baseH, day, metrics = AMZ_DSP_METRICS) {
+  const cr = await fetch(`${host}/accounts/${dspAccountId}/dsp/reports`, {
+    method: 'POST',
+    headers: { ...baseH, Accept: 'application/vnd.dspcreatereports.v3+json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ startDate: day, endDate: day, type: 'CAMPAIGN', dimensions: ['ORDER'], metrics }),
+  });
+  if (!cr.ok) throw new Error(`Amazon DSP createReport ${cr.status}: ${(await cr.text().catch(() => '')).slice(0, 240)}`);
+  const cj = await cr.json();
+  if (!cj.reportId) throw new Error('Amazon DSP createReport: no reportId — ' + JSON.stringify(cj).slice(0, 160));
+  return cj.reportId;
+}
+const amazonDspAdapter = {
+  kind: 'amazon_dsp', stgTable: 'stg_amazon_dsp',
+  datesOf(rows) { return [...new Set(rows.map(r => r.the_date))].sort(); },
+  async fetch({ env, channelId, cursor, config }) {
+    const cfg = config || {};
+    const host = cfg.region_host || 'https://advertising-api-eu.amazon.com';
+    const dspAccountId = cfg.dsp_account_id;
+    if (!dspAccountId) throw new Error('Amazon DSP: config.dsp_account_id not set — run dspGateProbe to discover the DSP account id, set config.dsp_account_id, then enable');
+    const metrics = (Array.isArray(cfg.metrics) && cfg.metrics.length) ? cfg.metrics : AMZ_DSP_METRICS;
+    const token = await getAmazonAdsToken(env);
+    const baseH = { 'Amazon-Advertising-API-ClientId': env.AMAZON_ADS_CLIENT_ID, Authorization: `Bearer ${token}` };
+    let subreqs = 1;
+    const nowMs = Date.now();
+
+    // ── pending report → poll ──
+    if (cfg.pending_report_id) {
+      const day = cfg.pending_day;
+      const pr = await fetch(`${host}/accounts/${dspAccountId}/dsp/reports/${cfg.pending_report_id}`, { headers: { ...baseH, Accept: 'application/vnd.dspgetreports.v3+json' } }); subreqs++;
+      if (!pr.ok) throw new Error(`Amazon DSP getReport ${pr.status}: ${(await pr.text().catch(() => '')).slice(0, 160)}`);
+      const rep = await pr.json();
+      const st = (rep.status || '').toUpperCase();
+      if (st === 'IN_PROGRESS' || st === 'PENDING' || st === 'PROCESSING') return { rows: [], cursorAfter: null, subreqs, partial: true };
+      if (st !== 'SUCCESS' && st !== 'COMPLETED') { await patchConnectorConfig(channelId, cfg, { pending_report_id: null, pending_day: null }); throw new Error(`Amazon DSP report ${st}: ${(rep.statusDetails || rep.failureReason || '').slice(0, 120)}`); }
+      let rows = [];
+      const loc = rep.location || rep.url;
+      if (loc) {
+        const dl = await fetch(loc); subreqs++;                          // presigned S3 — no auth headers
+        if (!dl.ok) throw new Error('Amazon DSP doc download ' + dl.status);
+        const buf = new Uint8Array(await dl.arrayBuffer());
+        // DSP examples return plain JSON; handle a GZIP body too (magic 1f 8b) to be safe.
+        const text = (buf[0] === 0x1f && buf[1] === 0x8b)
+          ? await new Response(new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'))).text()
+          : new TextDecoder().decode(buf);
+        let arr = []; try { arr = JSON.parse(text); } catch { arr = []; }
+        rows = (Array.isArray(arr) ? arr : []).map(d => ({
+          channel_id: channelId, ad_account_id: String(dspAccountId),
+          campaign_id: String(d.orderId ?? d.campaignId ?? ''), campaign_name: d.orderName || d.campaignName || null,
+          the_date: day, spend: num(d.totalCost), impressions: num(d.impressions),
+          clicks: num(d.clickThroughs ?? d.clicks), conversions: num(d.purchases14d), conv_value: num(d.sales14d), raw: d,
+        })).filter(r => r.the_date);
+      }
+      // walk forward: queue the next day if the covered day is before yesterday (more history to cover).
+      let partial = false, next = { pending_report_id: null, pending_day: null };
+      const dayMs = Date.parse((day || '') + 'T00:00:00Z') || 0;
+      if (dayMs && dayMs < nowMs - 24 * 3600 * 1000) {
+        const nextDay = amzAdsDay(dayMs + 86400000);
+        try { const rid = await createDspReport(host, dspAccountId, baseH, nextDay, metrics); subreqs++; next = { pending_report_id: rid, pending_day: nextDay }; partial = true; }
+        catch (e) { partial = /\b429\b|throttl/i.test(String(e?.message || e)); /* else leave cleared — next tick re-creates from the advanced cursor */ }
+      }
+      await patchConnectorConfig(channelId, cfg, next);
+      return { rows, cursorAfter: day, subreqs, partial };
+    }
+
+    // ── no pending → create the next day's report. Floor the start at today-14 so steady-state
+    //    always refreshes the trailing 14 days (DSP attributes conversions over a 14-day window). ──
+    let startStr = (cursor || cfg.backfill_start || amzAdsDay(nowMs - 14 * 86400000)).slice(0, 10);
+    const trailingStart = amzAdsDay(nowMs - 14 * 86400000);
+    if (startStr > trailingStart) startStr = trailingStart;
+    const day = startStr;
+    let rid;
+    try { rid = await createDspReport(host, dspAccountId, baseH, day, metrics); subreqs++; }
+    catch (e) { if (/\b429\b|throttl/i.test(String(e?.message || e))) return { rows: [], cursorAfter: null, subreqs, partial: true }; throw e; }
+    await patchConnectorConfig(channelId, cfg, { pending_report_id: rid, pending_day: day });
+    return { rows: [], cursorAfter: null, subreqs, partial: true };
+  },
+  async stage(rows, runId, channelId) {
+    if (!rows.length) return;
+    const from = rows.reduce((m, x) => x.the_date < m ? x.the_date : m, rows[0].the_date);
+    const to   = rows.reduce((m, x) => x.the_date > m ? x.the_date : m, rows[0].the_date);
+    await sbSales(`/rest/v1/stg_amazon_dsp?channel_id=eq.${channelId}&the_date=gte.${from}&the_date=lte.${to}`, { method: 'DELETE', prefer: 'return=minimal' });
+    const body = rows.map(r => ({ run_id: runId, channel_id: channelId, ad_account_id: r.ad_account_id, campaign_id: r.campaign_id, campaign_name: r.campaign_name, the_date: r.the_date, spend: r.spend, impressions: Math.round(r.impressions || 0), clicks: Math.round(r.clicks || 0), conversions: r.conversions, conv_value: r.conv_value, raw: r.raw }));
+    await sbInsertChunked('/rest/v1/stg_amazon_dsp', body, 'return=minimal');
+  },
+  async recompute({ channelId, dates, runId }) {
+    const f = await rpcSales('recompute_amzn_dsp', { p_channel: channelId, p_dates: dates, p_run_id: runId });
+    return { mapped: 0, unmapped: 0, factsUpserted: (f.ok ? Number(f.data) : 0) };
+  },
+};
+
 // ── Meta Ads (Marketing API insights) — domain: marketing → mkt_fact ──────
 const META_API_VER = 'v21.0';
 const metaAdsAdapter = {
@@ -1984,7 +2083,7 @@ async function adsAutoPause(env) {
   } catch (e) { console.error('adsAutoPause failed:', e?.message || e); }
 }
 
-const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter, amazon_spapi: amazonAdapter, amazon_ads: amazonAdsAdapter, amazon_ads_product: amazonAdsProductAdapter, meta_ads: metaAdsAdapter, meta_status: metaStatusAdapter, google_ads: googleAdsAdapter, ga4: ga4Adapter, uniware: uniwareAdapter, uniware_agg: uniwareAggAdapter, razorpay_payments: razorpayPaymentsAdapter };
+const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter, amazon_spapi: amazonAdapter, amazon_ads: amazonAdsAdapter, amazon_ads_product: amazonAdsProductAdapter, amazon_dsp: amazonDspAdapter, meta_ads: metaAdsAdapter, meta_status: metaStatusAdapter, google_ads: googleAdsAdapter, ga4: ga4Adapter, uniware: uniwareAdapter, uniware_agg: uniwareAggAdapter, razorpay_payments: razorpayPaymentsAdapter };
 
 // minimal RFC-4180-ish CSV parser (handles quoted fields, commas, newlines)
 function parseCSV(text) {
@@ -3001,18 +3100,43 @@ export default {
             const byDate = j.salesAndTrafficByDate || [], byAsin = j.salesAndTrafficByAsin || [];
             return ok({ topKeys: Object.keys(j), byDateCount: byDate.length, byAsinCount: byAsin.length, sampleByDate: byDate[0] || null, sampleByAsin: byAsin[0] || null });
           }
-          case 'dspGateProbe': {  // diagnostic (S185): does the CURRENT Ads token already reach Amazon DSP? (200 = yes; 401/403 = needs entitlement)
+          case 'dspGateProbe': {  // diagnostic: is our Ads token entitled for the v3 DSP reporting API? + discover the dspAccountId.
             if (!canConnector(P)) return err('No permission', 403);
             let token; try { token = await getAmazonAdsToken(env); } catch (e) { return err(String(e?.message || e), 400); }
             const host = 'https://advertising-api-eu.amazon.com';
-            const profileId = qp('profile') || '202246193452230';
-            const H = { 'Amazon-Advertising-API-ClientId': env.AMAZON_ADS_CLIENT_ID, 'Amazon-Advertising-API-Scope': profileId, Authorization: `Bearer ${token}` };
+            const baseH = { 'Amazon-Advertising-API-ClientId': env.AMAZON_ADS_CLIENT_ID, Authorization: `Bearer ${token}` };
             const out = {};
-            for (const [k, path] of Object.entries({ dsp_advertisers: '/dsp/advertisers?count=10', dsp_v3_reports: '/dsp/reports' })) {
-              try { const r = await fetch(`${host}${path}`, { headers: H }); out[k] = { status: r.status, body: (await r.text().catch(() => '')).slice(0, 240) }; }
-              catch (e) { out[k] = { error: String(e?.message || e) }; }
+            // (1) profiles → candidate DSP account ids (accountInfo.id for the DSP/agency entity)
+            try {
+              const pr = await fetch(`${host}/v2/profiles`, { headers: baseH });
+              const pj = await pr.json().catch(() => []);
+              out.profiles = { status: pr.status, list: (Array.isArray(pj) ? pj : []).map(p => ({ profileId: p.profileId, country: p.countryCode, accountInfo: p.accountInfo })) };
+            } catch (e) { out.profiles = { error: String(e?.message || e) }; }
+            // (2) manager accounts (the DSP seat lives under one)
+            try {
+              const mr = await fetch(`${host}/managerAccounts`, { headers: { ...baseH, Accept: 'application/vnd.manageraccount.v1+json' } });
+              out.managerAccounts = { status: mr.status, body: (await mr.text().catch(() => '')).slice(0, 500) };
+            } catch (e) { out.managerAccounts = { error: String(e?.message || e) }; }
+            // (3) legacy DSP advertiser list (needs a Scope profile) — another way to surface the DSP account
+            const profileId = qp('profile');
+            if (profileId) {
+              try { const r = await fetch(`${host}/dsp/advertisers?count=50`, { headers: { ...baseH, 'Amazon-Advertising-API-Scope': profileId } }); out.dsp_advertisers = { status: r.status, body: (await r.text().catch(() => '')).slice(0, 500) }; }
+              catch (e) { out.dsp_advertisers = { error: String(e?.message || e) }; }
             }
-            return ok({ profileId, note: '200 = DSP reachable now; 401/403 = needs entitlement', ...out });
+            // (4) the REAL entitlement test — create a tiny v3 DSP CAMPAIGN report on the candidate account.
+            const account = qp('account');
+            if (account) {
+              const day = amzAdsDay(Date.now() - 3 * 86400000);
+              try {
+                const r = await fetch(`${host}/accounts/${account}/dsp/reports`, {
+                  method: 'POST',
+                  headers: { ...baseH, Accept: 'application/vnd.dspcreatereports.v3+json', 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ startDate: day, endDate: day, type: 'CAMPAIGN', dimensions: ['ORDER'], metrics: AMZ_DSP_METRICS }),
+                });
+                out.dsp_v3_create = { account, status: r.status, verdict: r.status === 202 ? 'ENTITLED ✅ (set config.dsp_account_id=' + account + ' + enable)' : ((r.status === 401 || r.status === 403) ? 'NOT ENTITLED — needs DSP reporting-API access on the app/account' : 'inconclusive — see body'), body: (await r.text().catch(() => '')).slice(0, 500) };
+              } catch (e) { out.dsp_v3_create = { error: String(e?.message || e) }; }
+            }
+            return ok({ note: 'Add &profile=<profileId> to list DSP advertisers; &account=<dspAccountId> to run the v3 entitlement test (202 = entitled).', ...out });
           }
           case 'searchTermProbe': {  // diagnostic (S185): Ads API search-term report (Nikhil P2 — keyword winners/leaks)
             if (!canConnector(P)) return err('No permission', 403);
