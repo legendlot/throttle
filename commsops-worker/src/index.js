@@ -159,6 +159,14 @@ async function handleGet(url, auth, env) {
         { method: 'POST', body: JSON.stringify({ p_campaign_id: id }) });
       return r.ok ? ok(r.data) : err('db_error', 500);
     }
+    case 'getJourneyAttribution': {     // M8.5 — journey revenue/conversion (BiteSpeed parity)
+      const id = url.searchParams.get('id'); if (!id) return err('id_required', 400);
+      const v = url.searchParams.get('version');
+      const r = await A.sbComms('/rest/v1/rpc/journey_attribution', env,
+        { method: 'POST', body: JSON.stringify({ p_journey_id: id, p_version: v ? Number(v) : null }) });
+      return r.ok ? ok(r.data) : err('db_error', 500);
+    }
+
     case 'getJourneyFunnel': {
       const id = url.searchParams.get('id'); if (!id) return err('id_required', 400);
       const v = url.searchParams.get('version');

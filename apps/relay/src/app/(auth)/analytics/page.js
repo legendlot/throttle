@@ -13,6 +13,14 @@ import { fmtDateShort, inr } from '@/components/format.js';
 const WINDOWS = [7, 30, 90];
 const pct = (num, den) => (den ? Math.round((Number(num) / Number(den)) * 1000) / 10 : 0);
 
+// ROI = attributed revenue ÷ spend. Only meaningful where sends are actually priced
+// (WhatsApp bills per conversation; Resend email is a flat plan and reports no per-message
+// cost), so this returns null rather than a fake ∞/0× when spend is 0.
+const roi = (revenue, spend) => (Number(spend) > 0 ? Number(revenue) / Number(spend) : null);
+const fmtRoi = (r) => (r == null ? '—' : `${r.toFixed(2)}×`);
+
+const QUALITY_TONE = { GREEN: 'green', YELLOW: 'yellow', RED: 'red', FLAGGED: 'red', RESTRICTED: 'red' };
+
 // Sends-by-day bars: yellow column = sent, green fill from the bottom = delivered share.
 function SendsBars({ data }) {
   if (!data.length) return <EmptyState icon="bar-chart-3" title="No sends in this window" />;
@@ -42,18 +50,29 @@ export default function AnalyticsPage() {
   const [overview, setOverview] = useState([]);
   const [health, setHealth] = useState([]);
   const [camps, setCamps] = useState([]);
+  const [journeys, setJourneys] = useState([]);
 
   const load = useCallback(async () => {
     if (!session) return;
     setLoading(true);
     try {
-      const [ov, hl, cs] = await Promise.all([
+      const [ov, hl, cs, js] = await Promise.all([
         garageFetch('getSendsOverview', { days }, session),
         garageFetch('getDeliverabilityHealth', { days }, session),
         garageFetch('getCampaigns', {}, session),
+        garageFetch('getJourneys', {}, session),
       ]);
       setOverview(Array.isArray(ov) ? ov : []);
       setHealth(Array.isArray(hl) ? hl : []);
+
+      // Journeys drive far more revenue than broadcasts (BiteSpeed: ₹39.1L vs ₹80k/30d),
+      // so they get the same revenue treatment campaigns already had.
+      const jlist = Array.isArray(js) ? js : [];
+      setJourneys(await Promise.all(jlist.map(async (j) => {
+        try { return { ...j, attr: (await garageFetch('getJourneyAttribution', { id: j.id }, session)) || {} }; }
+        catch { return { ...j, attr: {} }; }
+      })));
+
       const list = Array.isArray(cs) ? cs : [];
       // Pull per-campaign stats + attribution only for campaigns that have actually sent.
       const sent = list.filter((c) => ['sending', 'sent'].includes(c.status));
@@ -77,8 +96,12 @@ export default function AnalyticsPage() {
   // Overview totals + by-day series (aggregate across channel/purpose; chart oldest→newest).
   const totals = overview.reduce((a, r) => ({
     sent: a.sent + Number(r.sent || 0), delivered: a.delivered + Number(r.delivered || 0),
+    opened: a.opened + Number(r.opened || 0),
     failed: a.failed + Number(r.failed || 0), skipped: a.skipped + Number(r.skipped || 0),
-  }), { sent: 0, delivered: 0, failed: 0, skipped: 0 });
+    spend: a.spend + Number(r.spend || 0),
+  }), { sent: 0, delivered: 0, opened: 0, failed: 0, skipped: 0, spend: 0 });
+  const revenueTotal = [...camps.map((c) => c.attr), ...journeys.map((j) => j.attr)]
+    .reduce((a, x) => a + Number(x?.attributed_revenue || 0), 0);
   const byDayMap = {};
   for (const r of overview) {
     const k = r.day;
@@ -105,8 +128,20 @@ export default function AnalyticsPage() {
           <div className="kpi-row" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 12, marginBottom: 14 }}>
             <Kpi label={`Sent · ${days}d`} value={totals.sent} tone="gray" sub="messages handed to provider" />
             <Kpi label="Delivery rate" value={pct(totals.delivered, totals.sent)} tone="green" format={(v) => v.toFixed(1) + '%'} sub={`${totals.delivered.toLocaleString('en-IN')} delivered`} />
+            <Kpi label="Read rate" value={pct(totals.opened, totals.delivered)} tone="green" format={(v) => v.toFixed(1) + '%'} sub={`${totals.opened.toLocaleString('en-IN')} read · of delivered`} />
             <Kpi label="Failed / bounced" value={totals.failed} tone={totals.failed ? 'red' : 'gray'} sub="hard failures" />
             <Kpi label="Skipped" value={totals.skipped} tone={totals.skipped ? 'yellow' : 'gray'} sub="gate-blocked (incl. test mode)" />
+          </div>
+
+          <div className="kpi-row" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 12, marginBottom: 14 }}>
+            <Kpi label={`Spend · ${days}d`} value={totals.spend} tone="gray" format={(v) => inr(v)}
+              sub={totals.spend > 0 ? 'per-conversation cost' : 'no priced sends (email is flat-rate)'} />
+            <Kpi label="Attributed revenue" value={revenueTotal} tone="green" format={(v) => inr(v)}
+              sub="campaigns + journeys, last-touch" />
+            <Kpi label="Blended ROI" value={roi(revenueTotal, totals.spend) ?? 0}
+              tone={roi(revenueTotal, totals.spend) == null ? 'gray' : 'green'}
+              format={() => fmtRoi(roi(revenueTotal, totals.spend))}
+              sub={totals.spend > 0 ? 'revenue ÷ spend' : 'needs priced sends'} />
           </div>
 
           <Panel title={`Sends by day · ${days}d`} action={<span className="dim" style={{ fontSize: 12 }}><span style={{ color: 'var(--accent,#F2CD1A)' }}>■</span> sent&nbsp;&nbsp;<span style={{ color: '#22c55e' }}>■</span> delivered</span>} pad>
@@ -122,6 +157,7 @@ export default function AnalyticsPage() {
                     <th>Campaign</th><th className="num">Sent</th><th className="num">Delivered</th>
                     <th className="num">Opened</th><th className="num">Clicked</th><th className="num">Bounced</th>
                     <th className="num">Unsub</th><th className="num">Attr. orders</th><th className="num">Attr. revenue</th>
+                    <th className="num">Spend</th><th className="num">ROI</th>
                   </tr></thead>
                   <tbody>
                     {camps.map((c) => {
@@ -137,6 +173,42 @@ export default function AnalyticsPage() {
                           <td className="num mono">{s.unsubscribes ?? 0}</td>
                           <td className="num mono">{a.attributed_orders ?? 0}</td>
                           <td className="num mono">{inr(a.attributed_revenue ?? 0)}</td>
+                          <td className="num mono">{Number(s.spend) > 0 ? inr(s.spend) : <span className="dim">—</span>}</td>
+                          <td className="num mono">{fmtRoi(roi(a.attributed_revenue, s.spend))}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+          </Panel>
+
+          <Panel title="Journeys" count={journeys.length} pad
+            action={<span className="dim" style={{ fontSize: 12 }}>revenue ÷ conversion per journey</span>}>
+            {journeys.length === 0
+              ? <EmptyState icon="git-branch" title="No journeys yet" hint="Triggered, revenue and conversion per journey appear here once enrolments run." />
+              : (
+                <table className="dt">
+                  <thead><tr>
+                    <th>Journey</th><th>Status</th><th className="num">Triggered</th><th className="num">Sent</th>
+                    <th className="num">Engaged</th><th className="num">Orders</th><th className="num">Conv %</th>
+                    <th className="num">Revenue</th><th className="num">Spend</th><th className="num">ROI</th>
+                  </tr></thead>
+                  <tbody>
+                    {journeys.map((j) => {
+                      const a = j.attr || {};
+                      return (
+                        <tr key={j.id}>
+                          <td>{j.name}</td>
+                          <td><Badge label={j.status} tone={j.status === 'active' ? 'green' : 'gray'} /></td>
+                          <td className="num mono">{a.triggered ?? 0}</td>
+                          <td className="num mono">{a.messages_sent ?? 0}</td>
+                          <td className="num mono">{a.engaged_profiles ?? 0}</td>
+                          <td className="num mono">{a.attributed_orders ?? 0}</td>
+                          <td className="num mono">{a.conversion_rate == null ? <span className="dim">—</span> : `${Number(a.conversion_rate)}%`}</td>
+                          <td className="num mono">{inr(a.attributed_revenue ?? 0)}</td>
+                          <td className="num mono">{Number(a.spend) > 0 ? inr(a.spend) : <span className="dim">—</span>}</td>
+                          <td className="num mono">{fmtRoi(roi(a.attributed_revenue, a.spend))}</td>
                         </tr>
                       );
                     })}
@@ -151,19 +223,32 @@ export default function AnalyticsPage() {
               : (
                 <table className="dt">
                   <thead><tr>
-                    <th>Sender</th><th>Channel</th><th className="num">Sent</th><th className="num">Delivered</th>
-                    <th className="num">Delivery %</th><th className="num">Bounce %</th><th className="num">Complaint %</th>
+                    <th>Sender</th><th>Channel</th><th>Quality</th><th className="num">Sent</th><th className="num">Delivered</th>
+                    <th className="num">Delivery %</th><th className="num">Read %</th><th className="num">Bounce %</th>
+                    <th className="num">Complaint %</th><th className="num">Spend</th>
                   </tr></thead>
                   <tbody>
                     {health.map((h) => (
                       <tr key={h.sender_identity_id}>
                         <td className="mono">{h.address}</td>
                         <td><Badge label={h.channel} tone="blue" /></td>
+                        {/* WA quality/limit gate throughput — a drop means Meta is throttling us.
+                            Only WhatsApp carries these; email senders show a dash. */}
+                        <td>{h.channel === 'whatsapp'
+                          ? (h.quality_rating
+                            ? <span title={`Limit: ${h.messaging_limit || 'unknown'}${h.quality_updated_at ? ` · updated ${h.quality_updated_at}` : ''}`}>
+                                <Badge label={h.quality_rating} tone={QUALITY_TONE[String(h.quality_rating).toUpperCase()] || 'gray'} />
+                                {h.messaging_limit && <span className="dim" style={{ fontSize: 11, marginLeft: 6 }}>{h.messaging_limit}</span>}
+                              </span>
+                            : <span className="dim" style={{ fontSize: 12 }}>no signal yet</span>)
+                          : <span className="dim">—</span>}</td>
                         <td className="num mono">{h.sent}</td>
                         <td className="num mono">{h.delivered}</td>
                         <td className="num mono">{Number(h.delivered_rate ?? 0)}%</td>
+                        <td className="num mono">{h.read_rate == null ? <span className="dim">—</span> : `${Number(h.read_rate)}%`}</td>
                         <td className="num mono" style={{ color: Number(h.bounce_rate) > 2 ? '#ff7a7a' : undefined }}>{Number(h.bounce_rate ?? 0)}%</td>
                         <td className="num mono" style={{ color: Number(h.complaint_rate) > 0.1 ? '#ff7a7a' : undefined }}>{Number(h.complaint_rate ?? 0)}%</td>
+                        <td className="num mono">{Number(h.spend) > 0 ? inr(h.spend) : <span className="dim">—</span>}</td>
                       </tr>
                     ))}
                   </tbody>

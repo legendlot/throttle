@@ -115,6 +115,27 @@ async function handleInbound(env, payload) {
   return inbound.length;
 }
 
+// Merge Meta's quality/limit state onto the matching whatsapp sender_identity's metadata.
+// Matched on display_phone_number, compared digits-only because Meta reports it formatted
+// ("91 98802 12323") while sender_identities.address is E.164 ("+919880212323").
+async function persistQuality(env, v) {
+  const digits = (s) => String(s || '').replace(/\D/g, '');
+  const target = digits(v.display_phone_number);
+  if (!target) return;
+  const r = await A.sbComms('/rest/v1/sender_identities?channel=eq.whatsapp&select=id,address,metadata', env);
+  if (!r.ok) return;
+  const row = (r.data || []).find((s) => digits(s.address) === target);
+  if (!row) return;
+  const metadata = {
+    ...(row.metadata || {}),
+    quality_rating: v.current_quality_rating || v.event || null,
+    messaging_limit: v.current_limit || null,
+    quality_updated_at: new Date().toISOString(),
+  };
+  await A.sbComms(`/rest/v1/sender_identities?id=eq.${A.enc(row.id)}`, env,
+    { method: 'PATCH', body: JSON.stringify({ metadata }) });
+}
+
 // template-status + phone-quality updates → write sender metadata + alert on a drop.
 async function handleMeta(env, payload) {
   let touched = 0;
@@ -134,6 +155,11 @@ async function handleMeta(env, payload) {
           await AL.alert(env, `⚠️ *Relay WA template ${v.event}* — \`${v.message_template_name || '?'}\` (reason: ${v.reason || 'n/a'})`);
       } else if (f === 'phone_number_quality_update') {
         touched++;
+        // PERSIST, don't just alert. Meta's quality rating + messaging limit gate throughput
+        // (a drop = throttling), so deliverability_health reads them off sender metadata.
+        // Previously this branch only Slack-alerted and the state was lost the moment the
+        // message scrolled — nothing could show "what is our quality right now?".
+        await persistQuality(env, v).catch(() => {});
         await AL.alert(env, `⚠️ *Relay WA quality change* — number ${v.display_phone_number || '?'}: ${v.event || v.current_limit || 'updated'}`);
       }
     }
