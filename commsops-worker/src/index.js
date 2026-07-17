@@ -607,6 +607,25 @@ export default {
       const r = await handleUnsubscribe(env, url.searchParams.get('token'), url.searchParams.get('all') === '1');
       return new Response(r.html, { status: r.status, headers: { ...CORS, 'Content-Type': 'text/html; charset=utf-8' } });
     }
+    // RFC 8058 one-click. adapters/email.js advertises `List-Unsubscribe-Post:
+    // List-Unsubscribe=One-Click` on every marketing email, so Gmail/Yahoo hit this with a
+    // POST, not a GET. Without this branch that POST fell through to the JWT block below
+    // and 401'd — i.e. every native one-click unsubscribe silently failed while telling the
+    // customer it worked. Must stay ABOVE the JWT block with the other public routes.
+    //
+    // Single-channel by design (`all=false`): one-click withdraws the list the customer was
+    // actually mailed, which is what the button means. The all-channel option is a
+    // deliberate human choice on the confirmation page, not something to infer from a
+    // headless POST.
+    //
+    // No HTML: RFC 8058 says the response body is never shown to a human — the mail client
+    // only reads the status code. Plain text keeps that honest.
+    if (url.pathname === '/unsubscribe' && request.method === 'POST') {
+      const r = await handleUnsubscribe(env, url.searchParams.get('token'), false);
+      return new Response(r.status === 200 ? 'unsubscribed' : 'invalid', {
+        status: r.status, headers: { ...CORS, 'Content-Type': 'text/plain; charset=utf-8' },
+      });
+    }
     // Public Resend status webhook (M5) — svix-verified if RESEND_WEBHOOK_SECRET set.
     if (url.pathname === '/webhooks/resend' && request.method === 'POST') {
       const r = await handleResendWebhook(env, request);
