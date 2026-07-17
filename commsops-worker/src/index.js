@@ -604,7 +604,7 @@ export default {
 
     // Public unsubscribe (M5) — one-click List-Unsubscribe target, returns HTML.
     if (url.pathname === '/unsubscribe' && request.method === 'GET') {
-      const r = await handleUnsubscribe(env, url.searchParams.get('token'));
+      const r = await handleUnsubscribe(env, url.searchParams.get('token'), url.searchParams.get('all') === '1');
       return new Response(r.html, { status: r.status, headers: { ...CORS, 'Content-Type': 'text/html; charset=utf-8' } });
     }
     // Public Resend status webhook (M5) — svix-verified if RESEND_WEBHOOK_SECRET set.
