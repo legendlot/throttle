@@ -18,6 +18,12 @@ const RECENT_DAYS = 3;
 //    ☐   status variant angle spend buys roas  cpa  ctr verdict actions
 const COLS = [30,  92,   240,  200,  104,  52,  100,  76,  60,   92,   272];
 const TABLE_MIN = COLS.reduce((a, w) => a + w, 0);
+// Screen board (Gate 1) columns — no purchase ROAS/buys; leading indicators + CBO allocation instead.
+//    ☐   status variant angle spend·share ctr  cpc  atc cpatc verdict actions
+const COLS_SCREEN = [30, 100, 240, 190, 120, 66, 66, 52, 84, 92, 272];
+const TABLE_MIN_SCREEN = COLS_SCREEN.reduce((a, w) => a + w, 0);
+// Shadow Gate-1 pass line (creative-throughput-loop §4): CPATC ≤ ~₹400. Product-specific later.
+const CPATC_PASS_INR = 400;
 
 const N = (v) => Number(v || 0);
 const CHIP = {
@@ -26,8 +32,13 @@ const CHIP = {
   killing: { dot: '🔴', label: 'Killing', bg: 'var(--red)' },
   killed:  { dot: '🔴', label: 'Killed',  bg: 'var(--red)' },
   early:   { dot: '⚪', label: 'Early',    bg: 'var(--t3)' },
+  // Screen (Gate 1) status vocabulary — CBO spend-share + CTR/CPATC vs the batch median.
+  promote: { dot: '🟢', label: 'Promote', bg: 'var(--green)' },
+  starved: { dot: '⚪', label: 'Starved', bg: 'var(--t3)' },
+  kill:    { dot: '🔴', label: 'Kill',    bg: 'var(--red)' },
 };
 const roasTone = (v) => (v == null ? 'var(--t3)' : v >= 4 ? 'var(--green)' : v > 0 && v < 2 ? 'var(--red)' : 'var(--t1)');
+const cpatcTone = (v) => (v == null ? 'var(--t3)' : v <= CPATC_PASS_INR ? 'var(--green)' : v <= CPATC_PASS_INR * 1.5 ? '#E8A33D' : 'var(--red)');
 const VERDICTS = ['winner', 'promising', 'killed', 'inconclusive', 'paused'];
 const DECISION_TYPES = ['kill', 'scale', 'graduate', 'iterate', 'pause', 'hold', 'restore-budget'];
 
@@ -66,7 +77,21 @@ function GateBar({ spend }) {
     </div>
   );
 }
-// Actual-spend split (experiment vs scaling × today · lifetime). The active bucket is emphasised.
+// Spend-and-share cell for the screen board: absolute spend + this ad's % of the batch's total
+// spend, with a bar. In a CBO the allocation IS the verdict, so share is the headline signal.
+function SpendShare({ spend, share }) {
+  const pct = Math.min(100, N(share));
+  const tone = pct >= 15 ? 'var(--green)' : pct < 3 ? 'var(--t3)' : 'var(--accent)';
+  return (
+    <div title={`${inr(spend)} — ${N(share).toFixed(1)}% of batch spend`} style={{ display: 'inline-block', width: 108, textAlign: 'right', verticalAlign: 'middle' }}>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>{inr(spend)} <span style={{ color: 'var(--t3)' }}>· {N(share).toFixed(1)}%</span></div>
+      <div style={{ height: 4, borderRadius: 3, background: 'var(--t3)33', marginTop: 3, overflow: 'hidden' }}>
+        <div style={{ width: `${pct}%`, height: '100%', background: tone }} />
+      </div>
+    </div>
+  );
+}
+// Actual-spend split (experiment vs scaling vs screen × today · lifetime). The active bucket is emphasised.
 function SpendSplit({ spend, kind }) {
   const Row = ({ label, v, on }) => (
     <div style={{ opacity: on ? 1 : 0.6 }}>
@@ -78,6 +103,7 @@ function SpendSplit({ spend, kind }) {
     <div style={{ minWidth: 220 }}>
       <div style={{ fontSize: 11, color: 'var(--t2)' }}>Spend — today · lifetime</div>
       <div style={{ fontFamily: 'var(--mono)', fontSize: 12.5, display: 'grid', gap: 1, marginTop: 2 }}>
+        <Row label="Screen" v={spend?.screen} on={kind === 'screen'} />
         <Row label="Experiment" v={spend?.experiment} on={kind === 'experiment'} />
         <Row label="Scaling" v={spend?.scale} on={kind === 'scale'} />
       </div>
@@ -87,12 +113,15 @@ function SpendSplit({ spend, kind }) {
 
 export function DynoBoard({ kind = 'experiment' }) {
   const isScale = kind === 'scale';
+  const isScreen = kind === 'screen';
   const { session, perms } = useAuth();
   const P = perms || {};
   const canWrite = !!P.sales_ads_write || !!P.salesops_admin;
   const canApprove = !!P.sales_ads_approve || !!P.salesops_admin;
 
-  const [filter, setFilter] = useState('active');
+  // Screen batches are often paused as a whole (Gate-1 read is done) but their ads stay 'active';
+  // default to All so a concluded screen batch still shows (per the brief's acceptance criteria).
+  const [filter, setFilter] = useState(isScreen ? 'all' : 'active');
   const [vModal, setVModal] = useState(null);   // { mode, target }
   const [board, setBoard] = useState(null);       // { rows, committed_daily_inr, ceiling_inr, write_enabled }
   const [spend, setSpend] = useState(null);       // { experiment:{today,life}, scale:{today,life} }
@@ -120,11 +149,13 @@ export function DynoBoard({ kind = 'experiment' }) {
     if (!session) return;
     if (!quiet) { setBoard(null); setErr(''); }
     try {
-      const b = await salesGet('getDynoBoard', { filter, recent_days: RECENT_DAYS, kind }, session);
+      const b = isScreen
+        ? await salesGet('getDynoScreenBoard', { filter, recent_days: RECENT_DAYS }, session)
+        : await salesGet('getDynoBoard', { filter, recent_days: RECENT_DAYS, kind }, session);
       setBoard(b || { rows: [] });
     } catch (e) { setErr(String(e?.message || e)); }
-    salesGet('getDynoSpend', {}, session).then(setSpend).catch(() => {});   // header split (both buckets, non-fatal)
-  }, [session, filter, kind]);
+    salesGet('getDynoSpend', {}, session).then(setSpend).catch(() => {});   // header split (all buckets, non-fatal)
+  }, [session, filter, kind, isScreen]);
 
   useEffect(() => { load(); }, [load]);
   // Auto-refresh every 60s (quiet — no spinner flash).
@@ -144,12 +175,14 @@ export function DynoBoard({ kind = 'experiment' }) {
   }, [rows]);
 
   const stats = useMemo(() => {
-    const s = { groups: new Set(), winning: 0, killing: 0, live: 0 };
+    const s = { groups: new Set(), winning: 0, killing: 0, live: 0, promote: 0, starved: 0 };
     for (const r of rows) {
       s.groups.add(r.plan_id);
       if (r.ad_status === 'active') s.live += 1;
       if (r.computed_status === 'winning') s.winning += 1;
       if (r.computed_status === 'killing' || r.computed_status === 'killed') s.killing += 1;
+      if (r.computed_status === 'promote') s.promote += 1;
+      if (r.computed_status === 'starved') s.starved += 1;
     }
     return s;
   }, [rows]);
@@ -183,7 +216,8 @@ export function DynoBoard({ kind = 'experiment' }) {
   const openVerdict = (r) => setVModal({ mode: 'variant', target: r });
   const openConclude = (plan) => setVModal({ mode: 'plan', target: plan });
   const movePlan = (plan) => {
-    const target = isScale ? 'experiment' : 'scale';
+    // Screen survivors graduate INTO the Experiments (proving) bucket; experiment↔scale toggle otherwise.
+    const target = (isScale || isScreen) ? 'experiment' : 'scale';
     run(`kind-${plan.plan_id}`, 'Move', () => salesPost('setPlanKind', { plan_id: plan.plan_id, kind: target }, session));
   };
 
@@ -207,11 +241,13 @@ export function DynoBoard({ kind = 'experiment' }) {
       {/* Header strip */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', marginBottom: 16 }}>
         <div>
-          <h1 style={{ fontFamily: 'var(--cond)', fontSize: 22, fontWeight: 700, letterSpacing: '0.03em', margin: 0 }}>Dyno{isScale ? ' · Scaling' : ''}</h1>
+          <h1 style={{ fontFamily: 'var(--cond)', fontSize: 22, fontWeight: 700, letterSpacing: '0.03em', margin: 0 }}>Dyno{isScale ? ' · Scaling' : isScreen ? ' · Screen' : ''}</h1>
           <div style={{ color: 'var(--t2)', fontSize: 12.5, marginTop: 2 }}>
             {isScale
               ? <>Scaling — graduated winners running for volume. Separate from experiments so spend stays clear.</>
-              : <>Creative testing grounds — ROAS shown <b>recent {RECENT_DAYS}d</b> | <b>lifetime</b>. Decision gate {inr(GATE_INR)}.</>}
+              : isScreen
+                ? <>Gate 1 — the cheap ATC screen. Judged on <b>CTR</b>, <b>cost-per-ATC</b> &amp; <b>CBO spend-share</b> (Meta's allocation is the verdict) — not purchase ROAS. Promote survivors → Experiments.</>
+                : <>Creative testing grounds — ROAS shown <b>recent {RECENT_DAYS}d</b> | <b>lifetime</b>. Decision gate {inr(GATE_INR)}.</>}
           </div>
         </div>
         <div style={{ display: 'flex', gap: 22, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -223,10 +259,15 @@ export function DynoBoard({ kind = 'experiment' }) {
               <div style={{ width: `${ceilPct}%`, height: '100%', background: ceilPct >= 95 ? 'var(--red)' : 'var(--accent)' }} />
             </div>
           </div>
-          <Stat lbl={isScale ? 'Campaigns' : 'Experiments'} val={stats.groups.size} />
+          <Stat lbl={isScale ? 'Campaigns' : isScreen ? 'Batches' : 'Experiments'} val={stats.groups.size} />
           <Stat lbl="Live ads" val={stats.live} />
-          <Stat lbl="Winning" val={stats.winning} tone="var(--green)" />
-          <Stat lbl="Killing" val={stats.killing} tone="var(--red)" />
+          {isScreen ? <>
+            <Stat lbl="Promote" val={stats.promote} tone="var(--green)" />
+            <Stat lbl="Starved" val={stats.starved} tone="var(--t3)" />
+          </> : <>
+            <Stat lbl="Winning" val={stats.winning} tone="var(--green)" />
+            <Stat lbl="Killing" val={stats.killing} tone="var(--red)" />
+          </>}
           <button className="so-btn ghost" onClick={() => load()} title="Refresh">↻</button>
         </div>
       </div>
@@ -236,7 +277,7 @@ export function DynoBoard({ kind = 'experiment' }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
         <SegmentedToggle value={filter} onChange={setFilter} options={[
           { key: 'active', label: 'Active' }, { key: 'all', label: 'All' }, { key: 'staged', label: 'Staged' }]} />
-        {!isScale && <button className="so-btn ghost" onClick={() => setShowAngles(s => !s)}>{showAngles ? 'Hide' : 'Angle library'}</button>}
+        {!isScale && !isScreen && <button className="so-btn ghost" onClick={() => setShowAngles(s => !s)}>{showAngles ? 'Hide' : 'Angle library'}</button>}
         {board?.write_enabled === false && <span style={{ fontSize: 11.5, color: 'var(--red)' }}>⚠ Ad writes are OFF (settings.ads_write_enabled=false)</span>}
         {selIds.length > 0 && canWrite && (
           <button className="so-btn" onClick={bulkPause} style={{ marginLeft: 'auto' }}>Pause selected ({selIds.length})</button>
@@ -247,7 +288,7 @@ export function DynoBoard({ kind = 'experiment' }) {
 
       {!isScale && showAngles && <AngleLibrary angles={angles} canWrite={canWrite} session={session} onSaved={loadAngles} />}
 
-      {groups.length === 0 && <div style={{ color: 'var(--t2)', padding: 30, textAlign: 'center' }}>No {isScale ? 'scaling campaigns' : (filter === 'staged' ? 'staged experiments' : 'variants')} in this view.</div>}
+      {groups.length === 0 && <div style={{ color: 'var(--t2)', padding: 30, textAlign: 'center' }}>No {isScale ? 'scaling campaigns' : isScreen ? 'screen batches' : (filter === 'staged' ? 'staged experiments' : 'variants')} in this view.</div>}
 
       {groups.map(({ plan, variants }) => {
         const staged = plan.plan_status === 'staged';
@@ -268,8 +309,9 @@ export function DynoBoard({ kind = 'experiment' }) {
                 {canWrite && !staged && (
                   <div style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6 }}>
                     <BtnMini onClick={() => movePlan(plan)} disabled={busy === `kind-${plan.plan_id}`}
-                      title={isScale ? 'Move back to the Experiments bucket' : 'Move to the Scaling bucket'}>
-                      {isScale ? '→ Experiments' : '→ Scaling'}
+                      title={isScreen ? 'Graduate this screen survivor into the Experiments (proving) bucket'
+                        : isScale ? 'Move back to the Experiments bucket' : 'Move to the Scaling bucket'}>
+                      {isScreen ? '→ Promote to Experiments' : isScale ? '→ Experiments' : '→ Scaling'}
                     </BtnMini>
                     <button className="so-btn ghost" onClick={() => openConclude(plan)}>Conclude</button>
                   </div>
@@ -282,19 +324,27 @@ export function DynoBoard({ kind = 'experiment' }) {
 
             {/* Variants table */}
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', minWidth: TABLE_MIN, borderCollapse: 'collapse', fontSize: 12.5, tableLayout: 'fixed' }}>
-                <colgroup>{COLS.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
+              <table style={{ width: '100%', minWidth: isScreen ? TABLE_MIN_SCREEN : TABLE_MIN, borderCollapse: 'collapse', fontSize: 12.5, tableLayout: 'fixed' }}>
+                <colgroup>{(isScreen ? COLS_SCREEN : COLS).map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
                 <thead>
                   <tr style={{ color: 'var(--t2)', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                     <th style={{ padding: '7px 8px', textAlign: 'left', width: 26 }}></th>
                     <th style={{ padding: '7px 8px', textAlign: 'left' }}>Status</th>
                     <th style={{ padding: '7px 8px', textAlign: 'left' }}>Variant</th>
                     <th style={{ padding: '7px 8px', textAlign: 'left' }}>Angle · Segment</th>
-                    <th style={{ padding: '7px 8px', textAlign: 'right' }}>Spend (gate)</th>
-                    <th style={{ padding: '7px 8px', textAlign: 'right' }}>Buys</th>
-                    <th style={{ padding: '7px 8px', textAlign: 'right' }}>ROAS r|life</th>
-                    <th style={{ padding: '7px 8px', textAlign: 'right' }}>CPA</th>
-                    <th style={{ padding: '7px 8px', textAlign: 'right' }}>CTR</th>
+                    {isScreen ? <>
+                      <th style={{ padding: '7px 8px', textAlign: 'right' }}>Spend · share</th>
+                      <th style={{ padding: '7px 8px', textAlign: 'right' }}>CTR</th>
+                      <th style={{ padding: '7px 8px', textAlign: 'right' }}>CPC</th>
+                      <th style={{ padding: '7px 8px', textAlign: 'right' }}>ATC</th>
+                      <th style={{ padding: '7px 8px', textAlign: 'right' }}>CPATC</th>
+                    </> : <>
+                      <th style={{ padding: '7px 8px', textAlign: 'right' }}>Spend (gate)</th>
+                      <th style={{ padding: '7px 8px', textAlign: 'right' }}>Buys</th>
+                      <th style={{ padding: '7px 8px', textAlign: 'right' }}>ROAS r|life</th>
+                      <th style={{ padding: '7px 8px', textAlign: 'right' }}>CPA</th>
+                      <th style={{ padding: '7px 8px', textAlign: 'right' }}>CTR</th>
+                    </>}
                     <th style={{ padding: '7px 8px', textAlign: 'left' }}>Verdict</th>
                     <th style={{ padding: '7px 8px', textAlign: 'right' }}>Actions</th>
                   </tr>
@@ -326,11 +376,19 @@ export function DynoBoard({ kind = 'experiment' }) {
                           </div>
                         </td>
                         <td style={{ padding: '8px' }}><Tag>{r.angle}</Tag> <Tag tone="var(--t3)">{r.audience_segment}</Tag></td>
-                        <td style={{ padding: '8px', textAlign: 'right', minWidth: 96 }}><GateBar spend={r.spend_life} /></td>
-                        <td style={{ padding: '8px', textAlign: 'right', fontFamily: 'var(--mono)' }}>{fmtInt(r.purchases_life)}</td>
-                        <td style={{ padding: '8px', textAlign: 'right' }}><Roas recent={r.roas_recent} life={r.roas_life} /></td>
-                        <td style={{ padding: '8px', textAlign: 'right', fontFamily: 'var(--mono)' }}>{r.cpa_life == null ? '—' : inr(r.cpa_life)}</td>
-                        <td style={{ padding: '8px', textAlign: 'right', fontFamily: 'var(--mono)' }}>{r.ctr_life == null ? '—' : N(r.ctr_life).toFixed(2) + '%'}</td>
+                        {isScreen ? <>
+                          <td style={{ padding: '8px', textAlign: 'right', minWidth: 108 }}><SpendShare spend={r.spend_life} share={r.spend_share} /></td>
+                          <td style={{ padding: '8px', textAlign: 'right', fontFamily: 'var(--mono)' }}>{r.ctr_life == null ? '—' : N(r.ctr_life).toFixed(2) + '%'}</td>
+                          <td style={{ padding: '8px', textAlign: 'right', fontFamily: 'var(--mono)' }}>{r.cpc_life == null ? '—' : inr(r.cpc_life)}</td>
+                          <td style={{ padding: '8px', textAlign: 'right', fontFamily: 'var(--mono)' }}>{fmtInt(r.atc_life)}</td>
+                          <td style={{ padding: '8px', textAlign: 'right', fontFamily: 'var(--mono)', color: cpatcTone(r.cpatc_life) }} title={`Gate-1 pass ≤ ${inr(CPATC_PASS_INR)}`}>{r.cpatc_life == null ? '—' : inr(r.cpatc_life)}</td>
+                        </> : <>
+                          <td style={{ padding: '8px', textAlign: 'right', minWidth: 96 }}><GateBar spend={r.spend_life} /></td>
+                          <td style={{ padding: '8px', textAlign: 'right', fontFamily: 'var(--mono)' }}>{fmtInt(r.purchases_life)}</td>
+                          <td style={{ padding: '8px', textAlign: 'right' }}><Roas recent={r.roas_recent} life={r.roas_life} /></td>
+                          <td style={{ padding: '8px', textAlign: 'right', fontFamily: 'var(--mono)' }}>{r.cpa_life == null ? '—' : inr(r.cpa_life)}</td>
+                          <td style={{ padding: '8px', textAlign: 'right', fontFamily: 'var(--mono)' }}>{r.ctr_life == null ? '—' : N(r.ctr_life).toFixed(2) + '%'}</td>
+                        </>}
                         <td style={{ padding: '8px' }}>{r.verdict ? <Tag tone="var(--t1)">{r.verdict}</Tag> : <span style={{ color: 'var(--t3)' }}>—</span>}</td>
                         <td style={{ padding: '8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                           {canWrite ? (
@@ -339,7 +397,7 @@ export function DynoBoard({ kind = 'experiment' }) {
                                 ? <BtnMini onClick={() => resume(r)} disabled={isBusy}>Resume</BtnMini>
                                 : <BtnMini onClick={() => pause(r)} disabled={isBusy}>Pause</BtnMini>}
                               <BtnMini onClick={() => kill(r)} disabled={isBusy} tone="var(--red)">Kill</BtnMini>
-                              <BtnMini onClick={() => scale(r)} disabled={isBusy || !canApprove} title={canApprove ? 'Scale ad-set budget' : 'Scaling needs approver role'}>Scale</BtnMini>
+                              {!isScreen && <BtnMini onClick={() => scale(r)} disabled={isBusy || !canApprove} title={canApprove ? 'Scale ad-set budget' : 'Scaling needs approver role'}>Scale</BtnMini>}
                               <BtnMini onClick={() => rename(r)} disabled={isBusy}>Rename</BtnMini>
                               <BtnMini onClick={() => openVerdict(r)} disabled={isBusy}>Verdict</BtnMini>
                             </div>

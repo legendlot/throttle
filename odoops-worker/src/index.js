@@ -1336,11 +1336,15 @@ const metaAdsAdapter = {
           for (const d of (j.data || [])) {
             const purch = (d.actions || []).find(a => a.action_type === 'omni_purchase' || a.action_type === 'purchase');
             const purchVal = (d.action_values || []).find(a => a.action_type === 'omni_purchase' || a.action_type === 'purchase');
+            // Add-to-cart — the leading metric the Dyno screen board runs on (purchase is meaningless for
+            // ATC-optimized screen ads). omni_add_to_cart aggregates pixel+app+offline, mirroring omni_purchase.
+            const atc = (d.actions || []).find(a => a.action_type === 'omni_add_to_cart' || a.action_type === 'add_to_cart');
             adRows.push({
               channel_id: channelId, ad_account_id: acct, campaign_id: d.campaign_id, campaign_name: d.campaign_name || null,
               adset_id: d.adset_id, adset_name: d.adset_name || null, ad_id: d.ad_id, ad_name: d.ad_name || null, the_date: d.date_start,
               spend: num(d.spend), impressions: num(d.impressions), clicks: num(d.clicks),
-              conversions: purch ? num(purch.value) : 0, conv_value: purchVal ? num(purchVal.value) : 0, raw: d,
+              conversions: purch ? num(purch.value) : 0, conv_value: purchVal ? num(purchVal.value) : 0,
+              add_to_carts: atc ? num(atc.value) : 0, raw: d,
             });
           }
           aurl = (j.paging && j.paging.next) || null;
@@ -1367,7 +1371,7 @@ const metaAdsAdapter = {
           run_id: runId, channel_id: channelId, ad_account_id: r.ad_account_id, campaign_id: r.campaign_id, campaign_name: r.campaign_name,
           adset_id: r.adset_id, adset_name: r.adset_name, ad_id: r.ad_id, ad_name: r.ad_name, the_date: r.the_date,
           spend: r.spend, impressions: Math.round(r.impressions), clicks: Math.round(r.clicks),
-          conversions: r.conversions, conv_value: r.conv_value, raw: r.raw,
+          conversions: r.conversions, conv_value: r.conv_value, add_to_carts: r.add_to_carts || 0, raw: r.raw,
         }));
         await sbInsertChunked('/rest/v1/stg_meta_ad?on_conflict=channel_id,ad_account_id,ad_id,the_date', adBody, 'return=minimal,resolution=merge-duplicates');
       } catch { /* ad-level staging is best-effort */ }
@@ -2784,7 +2788,8 @@ export default {
             if (!r.ok) return err('Spend summary failed: ' + JSON.stringify(r.data), 502);
             const s = Array.isArray(r.data) ? (r.data[0] || {}) : (r.data || {});
             return ok({ experiment: { today: num(s.exp_today), life: num(s.exp_life) },
-              scale: { today: num(s.scale_today), life: num(s.scale_life) } });
+              scale: { today: num(s.scale_today), life: num(s.scale_life) },
+              screen: { today: num(s.screen_today), life: num(s.screen_life) } });
           }
           case 'getDecisions': {   // Dyno — decisions for one experiment, on-demand (GET)
             if (!canView(P)) return err('No permission', 403);
@@ -2811,6 +2816,32 @@ export default {
                   body: JSON.stringify({ expiresIn: 3600, paths }) });
                 if (sg.ok) {
                   const signed = await sg.json();   // [{ path, signedURL }]
+                  const byPath = {}; for (const s of signed) if (s.signedURL) byPath[s.path] = `${SUPABASE_URL}/storage/v1${s.signedURL}`;
+                  for (const x of rows) if (x.asset_url && byPath[x.asset_url]) x.asset_url = byPath[x.asset_url];
+                }
+              } catch (e) { console.error('lab-creatives sign failed:', e?.message || e); }
+            }
+            return ok({ rows, recent_days: recentDays,
+              committed_daily_inr: await adsCommittedDailyInr(), ceiling_inr: await adsCeilingInr(),
+              write_enabled: await adsWriteEnabled() });
+          }
+          case 'getDynoScreenBoard': {   // Dyno — Gate-1 screening board (CTR/CPC/cost-per-ATC/CBO spend-share; no purchase ROAS)
+            if (!canView(P)) return err('No permission', 403);
+            const recentDays = Math.min(Math.max(Number(qp('recent_days')) || 3, 1), 30);
+            const r = await rpcSales('f_dyno_screen_board', {
+              p_filter: qp('filter') || 'all', p_product: qp('product') || null,
+              p_angle: qp('angle') || null, p_recent_days: recentDays });
+            if (!r.ok) return err('Dyno screen board failed: ' + JSON.stringify(r.data), 502);
+            const rows = r.data || [];
+            // Thumbnails live in the private lab-creatives bucket → bulk-sign in ONE subrequest (same as getDynoBoard).
+            const paths = [...new Set(rows.map(x => x.asset_url).filter(Boolean))];
+            if (paths.length) {
+              try {
+                const sg = await fetch(`${SUPABASE_URL}/storage/v1/object/sign/lab-creatives`, {
+                  method: 'POST', headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`, 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ expiresIn: 3600, paths }) });
+                if (sg.ok) {
+                  const signed = await sg.json();
                   const byPath = {}; for (const s of signed) if (s.signedURL) byPath[s.path] = `${SUPABASE_URL}/storage/v1${s.signedURL}`;
                   for (const x of rows) if (x.asset_url && byPath[x.asset_url]) x.asset_url = byPath[x.asset_url];
                 }

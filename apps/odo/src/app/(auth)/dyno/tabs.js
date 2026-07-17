@@ -8,11 +8,14 @@ export function DynoTabs() {
   const pathname = usePathname();
   const router = useRouter();
   const active = pathname.startsWith('/dyno/matrix') ? 'matrix'
-    : pathname.startsWith('/dyno/scaling') ? 'scaling' : 'board';
+    : pathname.startsWith('/dyno/scaling') ? 'scaling'
+    : pathname.startsWith('/dyno/screen') ? 'screen' : 'board';
   return (
     <div className="so-seg" style={{ marginBottom: 14 }}>
       <button className={active === 'board' ? 'on' : ''} onClick={() => router.push('/dyno')}
         style={{ padding: '6px 15px', fontSize: 12.5 }}>Board</button>
+      <button className={active === 'screen' ? 'on' : ''} onClick={() => router.push('/dyno/screen')}
+        style={{ padding: '6px 15px', fontSize: 12.5 }} title="Gate 1 — the cheap ATC screen (CTR · CPATC · CBO spend-share)">Screen</button>
       <button className={active === 'scaling' ? 'on' : ''} onClick={() => router.push('/dyno/scaling')}
         style={{ padding: '6px 15px', fontSize: 12.5 }}>Scaling</button>
       <button className={active === 'matrix' ? 'on' : ''} onClick={() => router.push('/dyno/matrix')}
