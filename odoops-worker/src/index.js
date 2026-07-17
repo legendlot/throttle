@@ -1741,8 +1741,19 @@ const uniwareAggAdapter = {
       const r = await resolveSkus(chId, dates, 'stg_uniware', null);
       const f = await rpcSales('recompute_facts', { p_channel: chId, p_dates: dates, p_run_id: runId });
       mapped += r.mapped; unmapped += r.unmapped; factsUpserted += (f.ok ? Number(f.data) : 0);
-      // Stamp the member connector so the Connectors page shows it Active + fresh.
-      await sbSales(`/rest/v1/connector_config?channel_id=eq.${chId}`, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ last_ok_at: nowISO(), last_error: null }) });
+    }
+    // Stamp EVERY allow-listed member, not only the ones that happened to have rows this window.
+    // `last_ok_at` means "we checked this feed and the run succeeded" — the same contract every
+    // other adapter honours in executeRun (~L2273: "Always stamp success … even for adapters that
+    // return no cursor"). Stamping row-bearing members ONLY made a quiet channel drift stale purely
+    // for being quiet (Firstcry read 2h behind while healthy) and conflated "no orders" with "pipe
+    // broken" — the aggregator pulls every channel in ONE window, so a member with no rows WAS
+    // checked. Whether a channel has sales is a business fact, visible in its sales numbers.
+    // ONE PATCH via in.() — never a per-member await loop (50-subrequest limit).
+    const ids = Object.values(await this.memberMap());
+    if (ids.length) {
+      await sbSales(`/rest/v1/connector_config?channel_id=in.(${ids.join(',')})`,
+        { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ last_ok_at: nowISO(), last_error: null }) });
     }
     return { mapped, unmapped, factsUpserted };
   },

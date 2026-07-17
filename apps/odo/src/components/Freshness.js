@@ -58,12 +58,22 @@ export function FreshnessChip() {
   const color = TONE_COLOR[sum.tone] || 'var(--t3)';
   const stale = sum.tone === 'error' || sum.tone === 'never';
 
-  // Green/amber → the plain roll-up. Red → name the culprit; a stamp you can act on beats one that just alarms.
+  // ALWAYS name the feed the stamp refers to. An unqualified "Data as of 2h ago" reads as "this
+  // whole page is 2h old", so it looks wrong the moment you can see a fresher number on the page
+  // (Afshaan, S220: chip said 2h — the weakest link — while Cred was visibly updating). The stamp
+  // is bounded by ONE feed; say which, and the number stops contradicting the screen.
+  // A fresh-but-erroring feed is NOT "behind" — say what's actually wrong, not a misleading age.
+  const badLabel = (f) => !f.last_ok_at ? `${f.name} never run`
+    : f.last_error ? `${f.name} erroring`
+    : `${f.name} ${shortAge(f.last_ok_at, now)} behind`;
+
   const label = manualOnly
     ? `Updated ${ago(sum.manual[0]?.at, now)}`
     : stale && sum.worst
-      ? `${sum.worst.name} ${sum.worst.last_ok_at ? shortAge(sum.worst.last_ok_at, now) + ' behind' : 'never run'}`
-      : `Data as of ${ago(sum.oldestAt, now)}`;
+      ? badLabel(sum.worst)
+      : sum.feeds.length === 1
+        ? `${sum.feeds[0].name} · ${ago(sum.oldestAt, now)}`
+        : `Oldest ${sum.worst?.name} · ${ago(sum.oldestAt, now)}`;
 
   return (
     <div ref={boxRef} style={{ position: 'relative' }}>
