@@ -136,6 +136,89 @@ function stubFetch(handler) {
     assert.ok(seen.some((u) => u.includes('/rest/v1/consent')), 'consent must still have been written');
   });
 
+  console.log('wa-webhooks — inbound STOP');
+  const waHook = require('../src/wa-webhooks.js');
+
+  // resolve_identity returns a BARE UUID SCALAR (rpc.data), and sbComms parses res.text().
+  function waFetch(calls) {
+    globalThis.fetch = async (url, opts) => {
+      const u = String(url);
+      calls.push({ url: u, body: opts?.body ? JSON.parse(opts.body) : null });
+      if (u.includes('/rest/v1/rpc/resolve_identity'))
+        return { ok: true, status: 200, text: async () => JSON.stringify('p-stop') };
+      return { ok: true, status: 201, text: async () => '[]' };
+    };
+  }
+  const payload = (body) => ({
+    entry: [{ changes: [{ value: {
+      metadata: { phone_number_id: '123' },
+      messages: [{ id: 'wamid.' + Math.floor(Math.random() * 1e6), from: '919999999999',
+                   timestamp: '1700000000', type: 'text', text: { body } }],
+    } }] }],
+  });
+
+  await t('bare STOP opts the profile out of WhatsApp marketing', async () => {
+    const calls = []; waFetch(calls);
+    await waHook.handleInbound({ ...ENV, CSOPS_WA_FORWARD_URL: '' }, payload('STOP'));
+    const consent = calls.find((c) => c.url.includes('/rest/v1/consent') && c.body?.state === 'opted_out');
+    assert.ok(consent, 'a bare STOP must write an opted_out consent row');
+    assert.equal(consent.body.channel, 'whatsapp');
+    assert.equal(consent.body.purpose, 'marketing');
+    assert.equal(consent.body.source, 'whatsapp_inbound_keyword');
+    assert.equal(consent.body.evidence.keyword, 'STOP', 'raw text is the s.6(10) proof');
+  });
+
+  await t('support message does NOT opt out', async () => {
+    const calls = []; waFetch(calls);
+    await waHook.handleInbound({ ...ENV, CSOPS_WA_FORWARD_URL: '' },
+      payload('my car stopped working, please help'));
+    assert.ok(!calls.some((c) => c.url.includes('/rest/v1/consent')),
+      'a support message must never be read as a withdrawal');
+  });
+
+  await t('a failed consent write PROPAGATES (Meta must retry, not lose the STOP)', async () => {
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      if (u.includes('/rest/v1/rpc/resolve_identity'))
+        return { ok: true, status: 200, text: async () => JSON.stringify('p-stop') };
+      if (u.includes('/rest/v1/consent'))
+        return { ok: false, status: 500, text: async () => '{"message":"boom"}' };
+      return { ok: true, status: 201, text: async () => '[]' };
+    };
+    await assert.rejects(
+      () => waHook.handleInbound({ ...ENV, CSOPS_WA_FORWARD_URL: '' }, payload('STOP')),
+      /consent_write_failed/,
+      'must throw so the route 500s and Meta redelivers');
+  });
+
+  await t('ingest failure on a STOP THROWS (must not silently drop the withdrawal)', async () => {
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      if (u.includes('/rest/v1/rpc/resolve_identity'))
+        return { ok: true, status: 200, text: async () => JSON.stringify('p-stop') };
+      if (u.includes('/rest/v1/events'))
+        return { ok: false, status: 500, text: async () => '{"message":"events boom"}' };
+      return { ok: true, status: 201, text: async () => '[]' };
+    };
+    await assert.rejects(
+      () => waHook.handleInbound({ ...ENV, CSOPS_WA_FORWARD_URL: '' }, payload('STOP')),
+      /optout_profile_unresolved/,
+      'an ingest failure on a STOP must 500 so Meta redelivers — never a silent 200');
+  });
+
+  await t('ingest failure on a NON-stop message does NOT throw (no redelivery storms)', async () => {
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      if (u.includes('/rest/v1/rpc/resolve_identity'))
+        return { ok: true, status: 200, text: async () => JSON.stringify('p-ok') };
+      if (u.includes('/rest/v1/events'))
+        return { ok: false, status: 500, text: async () => '{"message":"events boom"}' };
+      return { ok: true, status: 201, text: async () => '[]' };
+    };
+    await waHook.handleInbound({ ...ENV, CSOPS_WA_FORWARD_URL: '' }, payload('hello there'));
+    // reaching here without throwing is the assertion
+  });
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

@@ -13,6 +13,7 @@
 const A = require('./auth.js');
 const wa = require('./adapters/whatsapp.js');
 const { ingest } = require('./ingest.js');
+const { detectOptOut, applyOptOut } = require('./optout.js');
 const AL = require('./alerts.js');
 
 // ── signature ──
@@ -100,7 +101,7 @@ async function handleInbound(env, payload) {
       body: JSON.stringify({ identifier_value: m.from, last_inbound_at: m.ts, updated_at: new Date().toISOString() }),
     });
     // 2. substrate — resolve/create profile + append the inbound event
-    await ingest(env, {
+    const res = await ingest(env, {
       identifiers: [{ type: 'phone', value: `+${wa.toWaId(m.from)}` }],
       name: 'whatsapp_inbound',
       occurred_at: m.ts,
@@ -108,7 +109,48 @@ async function handleInbound(env, payload) {
       idempotency_key: m.provider_message_id ? `wa:inbound:${m.provider_message_id}` : undefined,
       properties: { channel: 'whatsapp', text: m.text, type: m.type, phone_number_id: m.phone_number_id,
                     name: m.name, media: m.media, provider_message_id: m.provider_message_id },
-    }).catch((e) => console.log('wa_ingest_error', e?.message || String(e)));
+    }).catch((e) => { console.log('wa_ingest_error', e?.message || String(e)); return null; });
+
+    // 2b. honour STOP/START. Our approved marketing templates carry "Reply STOP to
+    // unsubscribe" and Meta requires opt-out requests to be respected. Marketing-only —
+    // this never blocks the customer's order/shipping updates (see optout.js).
+    //
+    // NOT wrapped in try/catch and NOT gated on res.deduped, both deliberate:
+    //  - errors must propagate so the route 500s and Meta redelivers (a swallowed error
+    //    = a silently lost withdrawal, the one failure this feature exists to prevent);
+    //  - a redelivery re-runs this while ingest dedups the event, which can write a second
+    //    identical opted_out row. Append-only + latest-wins, so that is cosmetic.
+    // parseInbound normalises button/interactive replies into m.text, so a tapped
+    // "Stop promotions" button lands here too.
+    const intent = detectOptOut(m.text);
+    if (intent) {
+      // We detected a withdrawal but could not resolve the profile — MUST NOT fall through
+      // to a 200. ingest() returns {ok:false} WITHOUT profile_id on resolve_failed AND on
+      // event_insert_failed (even when identity already resolved), and sbComms never throws
+      // on a non-2xx, so the .catch() above cannot see either. Falling through here would
+      // silently lose the STOP — the exact failure this feature exists to prevent. Throw so
+      // the route 500s and Meta redelivers.
+      //
+      // This guard is INSIDE `if (intent)` deliberately: an ordinary inbound message whose
+      // ingest fails must keep logging and continuing. Throwing for all traffic would turn
+      // every transient events-insert blip into a Meta redelivery storm.
+      if (!res?.profile_id) {
+        throw new Error(`optout_profile_unresolved:${res?.error || 'ingest_failed'}`);
+      }
+      await applyOptOut(env, {
+        profile_id: res.profile_id,
+        channel: 'whatsapp',
+        purpose: 'marketing',
+        state: intent === 'opt_out' ? 'opted_out' : 'opted_in',
+        source: 'whatsapp_inbound_keyword',
+        evidence: {
+          keyword: m.text,
+          provider_message_id: m.provider_message_id || null,
+          from: m.from,
+          received_at: m.ts || null,
+        },
+      });
+    }
   }
   // 3. hand the conversation to Pitstop
   await forwardToCsops(env, inbound);
@@ -183,4 +225,4 @@ async function handleWhatsappWebhook(env, request) {
   return { ok: true, statuses, inbound, meta };
 }
 
-module.exports = { handleWhatsappWebhook, verifyWhatsappWebhook, verifySignature };
+module.exports = { handleWhatsappWebhook, verifyWhatsappWebhook, verifySignature, handleInbound };
