@@ -256,6 +256,47 @@ async function applyNodes(env, nodes) {
   return applyMapped(env, nodes.map(mapCustomer));
 }
 
+// ── last_order_at targeted backfill (winback prerequisite, 2026-07-17) ────────
+// The customer backfill (mapCustomer) captured numberOfOrders/amountSpent but NEVER a
+// last-order DATE, so ~97% of profiles have no `last_order_at` and a winback segment
+// ("ordered, but not in N days") cannot be built. This pulls ONLY lastOrder.createdAt per
+// customer and patches ONLY that one attribute key — shopify_apply_customers shallow-merges
+// (`attributes || incoming`), so it can neither clobber event-bumped lifetime_orders nor
+// re-touch consent. Filtered to customers with >0 orders (a 0-order customer has no last
+// order and can't be winback). Deliberately NOT the full mapCustomer re-run, which would
+// re-merge counts/consent for all 92k.
+const LAST_ORDER_QUERY = `
+query($first:Int!,$after:String){
+  customers(first:$first, after:$after, query:"orders_count:>0"){
+    pageInfo{ hasNextPage endCursor }
+    edges{ node{ id lastOrder{ createdAt } } }
+  }
+}`;
+
+// pure: node -> { identifiers:[shopify_customer_id], attributes:{last_order_at} } | null.
+// null when the id or the order date is missing — applyMapped filters those out.
+function mapLastOrder(n) {
+  const cid = gidNum(n?.id);
+  const at = n?.lastOrder?.createdAt || null;
+  if (!cid || !at) return null;
+  return { identifiers: [{ type: 'shopify_customer_id', value: cid }], attributes: { last_order_at: at } };
+}
+
+async function fetchLastOrderPage(env, { first = 40, after = null }) {
+  const d = await shopifyGraphQL(env, LAST_ORDER_QUERY, { first, after });
+  const conn = d.customers;
+  return { customers: (conn.edges || []).map((e) => e.node),
+    hasNext: !!conn.pageInfo?.hasNextPage, cursor: conn.pageInfo?.endCursor || null };
+}
+
+// One page; caller continues from `cursor` while hasNext. lastOrder is a single nested
+// object (not a connection) so cost is low — pageSize 40 mirrors the proven backfill.
+async function backfillLastOrderPage(env, after, pageSize = 40) {
+  const { customers, hasNext, cursor } = await fetchLastOrderPage(env, { first: pageSize, after });
+  const res = await applyMapped(env, customers.map(mapLastOrder));
+  return { fetched: customers.length, ...res, hasNext, cursor };
+}
+
 // ── webhook registration ──────────────────────────────────────────────────────
 // GraphQL enum topics (uppercase) — runtime delivers the slash form in X-Shopify-Topic.
 const WEBHOOK_TOPICS = [
@@ -308,6 +349,7 @@ async function backfillPage(env, after, pageSize = 40) {
 
 module.exports = {
   mapCustomer, normalizePhone, mktState, gidNum, fetchCustomerPage, applyNodes, applyMapped, backfillSample, backfillPage,
+  mapLastOrder, fetchLastOrderPage, backfillLastOrderPage,
   // M4 webhooks + pixel
   mapCustomerRest, identsFromContact, mapOrderEvent, mapCheckoutEvent, ORDER_TOPIC_EVENT,
   verifyWebhookHmac, registerWebhooks, listWebhooks, WEBHOOK_TOPICS,

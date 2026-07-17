@@ -602,6 +602,22 @@ export default {
       return r.ok ? ok(r) : err(r.error, 400);
     }
 
+    // Internal one-off: seed the last_order_at backfill (winback prerequisite). Token-gated
+    // (INGEST_TOKEN), public so it's triggerable without a Google-login JWT — mirrors
+    // /internal/wa-templates. Only seeds the queue; the pull runs in the queue consumer.
+    if (url.pathname === '/internal/backfill-last-order' && request.method === 'POST') {
+      const hdr = request.headers.get('Authorization') || '';
+      const tok = hdr.startsWith('Bearer ') ? hdr.slice(7) : (request.headers.get('X-Ingest-Token') || '');
+      if (!env.INGEST_TOKEN || tok !== env.INGEST_TOKEN) return err('unauthorised', 401);
+      const b = await request.json().catch(() => ({}));
+      if (b.mode === 'sample') {   // run ONE page inline + return counts (dry-run before the full queue walk)
+        const r = await SHOP.backfillLastOrderPage(env, b.after || null);
+        return ok(r);
+      }
+      await env.BROADCAST_QUEUE.send({ kind: 'last_order_backfill', after: null });
+      return ok({ started: true });
+    }
+
     // Public unsubscribe (M5) — one-click List-Unsubscribe target, returns HTML.
     if (url.pathname === '/unsubscribe' && request.method === 'GET') {
       const r = await handleUnsubscribe(env, url.searchParams.get('token'), url.searchParams.get('all') === '1');
@@ -723,6 +739,12 @@ export default {
             console.log('shopify_backfill', JSON.stringify(r));
             if (r.hasNext && r.cursor) await env.BROADCAST_QUEUE.send({ kind: 'shopify_backfill', after: r.cursor });
           } catch (e) { console.log('shopify_backfill_error', e?.message || String(e)); throw e; }
+        } else if (b.kind === 'last_order_backfill') {
+          try {
+            const r = await SHOP.backfillLastOrderPage(env, b.after || null);   // patches last_order_at only
+            console.log('last_order_backfill', JSON.stringify(r));
+            if (r.hasNext && r.cursor) await env.BROADCAST_QUEUE.send({ kind: 'last_order_backfill', after: r.cursor });
+          } catch (e) { console.log('last_order_backfill_error', e?.message || String(e)); throw e; }
         } else {
           await CAMP.processQueueMessage(env, b);   // campaign fan-out (default, back-compat)
         }
