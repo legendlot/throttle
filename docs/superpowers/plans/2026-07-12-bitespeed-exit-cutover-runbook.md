@@ -25,9 +25,11 @@
 
 **The estate = 3 real live numbers** (the ~10 WABAs are mostly duplicate/legacy registrations left behind as numbers hopped BSPs — 360Dialog is fully legacy, everything "Transferred"):
 
+> **Canonical copy of this table = `reference/bitespeed.md` §1.** Keep them in sync; prefer that one.
+
 | # | Number | Function | Live on WABA | BSP (partner) | Cutover order |
 |---|--------|----------|--------------|---------------|---------------|
-| 1 | **9880212323** | **Support — ALL incoming WA** (BiteSpeed inbox 7625) | `2257035788468620` ("TS Legend of Toys") | TrustSignal *(inferred — confirm Partners tab)* | **3rd (last, highest care)** |
+| 1 | **9880212323** | **Support — ALL incoming WA** (BiteSpeed inbox 7625) | `2257035788468620` ("TS Legend of Toys") | **Smartping AI + TrustSignal** — ✅ **CONFIRMED on the Partners tab 2026-07-17**; credit line = **SMARTPING AI LIMITED**. (The "TS" name is a red herring — it is NOT TrustSignal-exclusive.) | **3rd (last, highest care)** |
 | 2 | **7022142666** | Transactional + COD WA journey | `717043791430518` | Smartping + TrustSignal | 2nd |
 | 3 | **9035697508** | Marketing + Abandoned-cart journey (ABC) | `4607501919493306` | Smartping + TrustSignal | **1st (outbound-only, lowest risk)** |
 
@@ -189,7 +191,7 @@ Preconditions: all 3 numbers live on our WABAs **and** Pitstop inbox covers ever
 
 ## 7. Pre-flight checklist (before build starts)
 
-- [ ] Confirm the **Partners tab on WABA `2257035788468620` (support)** — is it TrustSignal? (inferred from the "TS" name; we saw its phone tab, not partners). This is the BSP we detach from for support.
+- [x] ~~Confirm the **Partners tab on WABA `2257035788468620` (support)**~~ — **DONE 2026-07-17.** Partners tab shows **2 partners with partial access: Smartping AI + TrustSignal**; credit line = **SMARTPING AI LIMITED**; the single number 9880212323 is **Connected / quality High**. So the detach-from set for support is **both**, not TrustSignal alone. (`reference/bitespeed.md` §1 previously claimed "TrustSignal + 360dialog across all three" and "corrected" this table's "Smartping + TrustSignal" — **that correction was itself wrong**; this table was right. The reference doc is now fixed + carries a correction log.)
 - [ ] Audit **BiteSpeed's live WA templates** (utility + marketing) → the re-authoring backlog for WS-B.5.
 - [ ] Confirm who owns the **COD/GoKwik** flow on `7022142666` (WS-C.2 coordination).
 - [ ] Decide the **go-live / TEST MODE** posture for the support cutover (ties to M10).
