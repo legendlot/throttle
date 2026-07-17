@@ -1,43 +1,65 @@
 # Relay Opt-Out & Consent Compliance — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+>
+> **Rev 2 (2026-07-17)** — rewritten after a hostile review against the real code. Rev 1 had three runtime blockers (`A.can` doesn't exist; the `resolve_identity` test stub returned the wrong shape *and* used `.json()` where `sbComms` uses `.text()`; `auth.sub` doesn't exist) and one silent-data-loss bug (swallowed the opt-out error → 200 → Meta never retries → the STOP is gone). All fixed below. Do not resurrect Rev 1.
 
 **Goal:** Make a customer's "STOP" actually stop marketing WhatsApp — writing a provable, auditable withdrawal to the consent ledger — and give withdrawal parity across every channel it can arrive on.
 
-**Architecture:** One new pure-ish module `src/optout.js` owns (a) keyword detection and (b) the single writer that appends a withdrawal to `comms.consent` + mirrors it as a substrate event. Every opt-out path — WhatsApp inbound keyword, the email unsubscribe link, and an agent-actioned admin call — funnels through that one writer, so proof/evidence is uniform and there is exactly one place withdrawal semantics live. No new tables; `comms.consent` already has the right grain (`profile × channel × purpose`) and an unused `evidence jsonb`.
+**Architecture:** One new module `src/optout.js` owns (a) keyword detection (pure) and (b) `applyOptOut` — the single writer that appends a withdrawal to `comms.consent` and mirrors it as a substrate event. All three opt-out paths (WhatsApp inbound keyword, email unsubscribe link, agent-actioned admin call) funnel through it, so evidence is uniform and withdrawal semantics live in exactly one place. No new tables: `comms.consent` already has the right grain (`profile × channel × purpose`) plus an unused `evidence jsonb`.
 
 **Tech Stack:** Cloudflare Workers (commsops), Supabase/PostgREST via `src/auth.js sbComms`, plain-Node unit tests (`node test/x.test.js`, `assert`, no framework).
 
 ---
 
+## Verified facts (checked against the code — do not re-derive)
+
+| Fact | Why it matters |
+|---|---|
+| `sbComms` reads responses via **`res.text()` → `JSON.parse`**, never `.json()` | Test stubs MUST implement `text`, not `json`. A stub returning `text: ''` yields `data = null`. |
+| `resolve_identity` returns a **bare uuid scalar** (`const profileId = rpc.data`) | Stub it as `text: async () => JSON.stringify('p-1')`, NOT `{profile_id:...}`. |
+| `sbComms` uses `env.SUPABASE_URL` + `env.SUPABASE_SERVICE_ROLE_KEY` | Test ENV needs both. |
+| `auth` = `{ userId, email, role, fullName, relayRole, permissions }` | No `.sub`. Use `auth.userId`. |
+| Permission gates are `A.canConsentAdmin(auth.permissions)` etc. **`A.can` is module-private and NOT exported** | Rev 1's `A.can(auth, 'x')` was a TypeError. |
+| `parseInbound` already normalises **button replies** into `m.text` (`m.button.text`, `interactive.button_reply.title`) | A tapped "Stop promotions" button flows through the same text detector. Free. |
+| Gate step ② is `profileId ? latestConsent(...) : 'unknown'`, and `'unknown' !== 'opted_in'` → **fails closed** | Marketing with no resolvable profile is already blocked; the opt-out cannot be bypassed. |
+| Gate step ② is **channel-specific** (`latestConsent(env, profileId, channel, 'marketing')`) | A WhatsApp opt-out correctly leaves email marketing alone. |
+| `unsubscribeUrl` **self-heals** a missing token (mints + PATCHes it onto the latest row) | Token-less rows don't break links — but see Task 5, we still forward the token. |
+| `ingest()` returns `{ ok, profile_id, event_id, deduped }` and dedups the **event** on `idempotency_key` | Opt-out runs outside that dedup — deliberate, see Task 3. |
+
+---
+
 ## Context an engineer needs before starting
 
-**Read these first:** `systems/relay.md` (the send gate + TEST MODE), `reference/bitespeed.md` §1 (WABA inventory).
+**Read first:** `systems/relay.md` (the send gate + TEST MODE), `reference/bitespeed.md` §1.
 
 ### The load-bearing decision: withdrawal = consent opt-out, NOT suppression
 
-`comms` has two block mechanisms and they are **not** interchangeable:
-
 | | Grain | Gate step | Blocks |
 |---|---|---|---|
-| `comms.suppressions` | `channel × value` (address/phone) | ① — first, absolute | **Everything, including transactional** |
-| `comms.consent` | `profile × channel × purpose` | ② — marketing only | Marketing only |
+| `comms.suppressions` | `channel × value` | ① first, absolute | **Everything, incl. transactional** |
+| `comms.consent` | `profile × channel × purpose` | ② marketing only | Marketing only |
 
-A marketing STOP **must** write a consent opt-out, never a suppression. If it wrote a suppression, a customer who stops promos would also stop receiving **their own order and shipping updates**. That is wrong operationally, wrong under Meta's policy (which is about promotional messaging), and wrong under DPDP — s.6(5)'s illustration is explicit that withdrawal does not undo a paid order's fulfilment. Suppressions stay reserved for hard blocks (Shopify GDPR redaction, hard bounces, spam complaints).
+A marketing STOP **must** write a consent opt-out, never a suppression. A suppression would stop the customer's own **order and shipping updates**. Wrong operationally, wrong under Meta's policy (which governs *promotional* messaging), and wrong under DPDP — s.6(5)'s illustration says withdrawal does not undo the paid order's fulfilment. Suppressions stay reserved for hard blocks (Shopify GDPR redaction, hard bounces, spam complaints).
 
-### Why the compliance case is real (but not November-urgent)
+### Why this is real (but not November-urgent)
 
-- **Meta** (WhatsApp Business Messaging Policy, verified against primary source): *"You must respect all requests (either on or off WhatsApp) by a person to block, discontinue, or otherwise opt out of communications from you via WhatsApp."* Meta does **not** mandate a "Reply STOP" footer and states **no 24h SLA** — both are vendor folklore. But **our approved template `lot_abandoned_cart_01` promises "Reply STOP to unsubscribe"**, so we are bound by our own copy.
-- **DPDP** s.6(4): withdrawal must be *"with the ease of doing so being comparable to the ease with which such consent was given"* — statutory, not guidance. s.6(10) puts the **burden of proof on us** — hence `evidence`.
-- **Timing:** DPDP consent/notice/rights obligations commence **14 May 2027**, not Nov 2026 (that date is Consent Manager registration only, and does not apply to LOT). So this is *correctness*, not a deadline scramble.
+- **Meta** (Business Messaging Policy, primary source): *"You must respect all requests (either on or off WhatsApp) by a person to block, discontinue, or otherwise opt out of communications from you via WhatsApp."* Meta does **not** mandate a "Reply STOP" footer and specifies **no 24h SLA** — both are vendor folklore. But **our approved `lot_abandoned_cart_01` promises "Reply STOP to unsubscribe"**, so we're bound by our own copy.
+- **DPDP** s.6(4): withdrawal must be *"with the ease... comparable to the ease with which such consent was given"* — statutory. s.6(10) puts the **burden of proof on us** → `evidence`.
+- **Timing:** DPDP consent/notice/rights commence **14 May 2027**. Nov 2026 is Consent Manager registration and does not apply to LOT. This is *correctness*, not a deadline scramble.
 
-### What is deliberately NOT in this plan
+### Decisions taken (Afshaan, 2026-07-17)
 
-- **Processor cascade (s.6(6))** — verified a non-issue for our own rails: no audience/contact list exists at Resend (the adapter only calls `POST /emails` per message), so a gate-blocked send never hands the address to the processor. The real cascade exposure is **BiteSpeed's 125k-profile CDP**, which is the exit, not a code task.
-- **The 47k SMS-inferred WhatsApp consent base** — needs a legal opinion + an Afshaan decision. Highest DPDP exposure; tracked in BACKLOG, not fixable in code.
-- **s.5(2) legacy notice campaign** to the ~92k — a campaign, gated on the same legal opinion.
+1. **English-only keywords for now.** `normalise()` strips non-`[a-z\s]`, so Devanagari/Tamil/Bengali STOP is **not detected**. Accepted: our approved template instructs "Reply STOP" in English. **Known gap — must be logged in BACKLOG** (Task 6): a customer writing बंद करो is a withdrawal we fail to action, which is a DPDP s.6(4) exposure. The agent-actioned path (Task 4) is the manual backstop.
+2. **Never lose a STOP.** The opt-out error **propagates** → non-2xx → Meta retries. `ingest` dedups the *event*, but `applyOptOut` runs again, so a partial failure can write two identical `opted_out` rows. **This is a deliberate trade**: the ledger is append-only and latest-wins, so duplicates are cosmetic; a lost withdrawal is a compliance failure *and* invisible.
+
+### Out of scope (and why)
+
+- **Processor cascade (s.6(6))** — verified a non-issue for our rails: no audience/contact list at Resend (the adapter only `POST`s `/emails` per message), so a gate-blocked send never hands the address over. Real exposure is **BiteSpeed's 125k CDP** = the exit, not code.
+- **The 47k SMS-inferred WhatsApp consent base** — needs a legal opinion + Afshaan's decision. Highest DPDP exposure. BACKLOG.
+- **s.5(2) legacy notice** to the ~92k — a campaign, same legal gate.
 - **Phase-B shortener** — separate plan, needs a DNS record on `go.legendoftoys.com`.
-- **Third Schedule 3-year erasure** — does not apply (threshold is 2 crore registered users; LOT is at ~92k). Do not build it.
+- **Third Schedule 3-year erasure** — does NOT apply (2 crore registered users; LOT ~92k). Do not build.
 
 ---
 
@@ -45,15 +67,15 @@ A marketing STOP **must** write a consent opt-out, never a suppression. If it wr
 
 | File | Responsibility |
 |---|---|
-| **Create** `src/optout.js` | Keyword detection (pure) + `applyOptOut` — the single withdrawal writer. Channel-agnostic so WA/email/admin all share it. |
-| **Create** `test/optout.test.js` | Unit tests. Pure detection needs no network; `applyOptOut` stubs `fetch`. |
-| **Modify** `src/wa-webhooks.js` | `handleInbound` — capture `profile_id` from ingest, detect keyword, apply. |
-| **Modify** `src/index.js` | New JWT-gated `optOutProfile` action (agent-actioned, for requests arriving off-WhatsApp). |
-| **Modify** `src/webhooks.js` | `handleUnsubscribe` — add an all-channels marketing withdrawal (s.6(4) parity). |
+| **Create** `src/optout.js` | Keyword detection (pure) + `applyOptOut` — the single withdrawal writer. |
+| **Create** `test/optout.test.js` | Unit tests. Follows `test/wa.test.js`'s promise-based `t()` (handles sync + async uniformly). |
+| **Modify** `src/wa-webhooks.js` | `handleInbound` — capture `profile_id`, detect keyword, apply. |
+| **Modify** `src/index.js` | `optOutProfile` action + pass `all` through the unsubscribe route. |
+| **Modify** `src/webhooks.js` | `handleUnsubscribe` — all-channel withdrawal (s.6(4) parity). |
 
 ---
 
-### Task 1: Opt-out keyword detection (pure)
+### Task 1: Keyword detection + the withdrawal writer
 
 **Files:**
 - Create: `05_Throttle/commsops-worker/src/optout.js`
@@ -61,50 +83,136 @@ A marketing STOP **must** write a consent opt-out, never a suppression. If it wr
 
 - [ ] **Step 1: Write the failing test**
 
-Create `test/optout.test.js`:
+Create `test/optout.test.js` (mirrors `test/wa.test.js`'s harness — `t()` returns a promise so sync and async cases share one runner; no trailing-line surgery in later tasks):
 
 ```js
 // Node unit tests for opt-out keyword detection + the withdrawal writer.
-// Run: node test/optout.test.js   (Node 18+)
+// Run: node test/optout.test.js   (Node 18+ — global fetch)
+// Pure detection needs no network; applyOptOut stubs fetch per-case.
+
 const assert = require('assert');
-const { detectOptOut } = require('../src/optout.js');
+const { detectOptOut, applyOptOut } = require('../src/optout.js');
 
 let pass = 0, fail = 0;
 function t(name, fn) {
-  try { fn(); pass++; console.log('  ok  ', name); }
-  catch (e) { fail++; console.log('  FAIL', name, '\n        ', e.message); }
+  return Promise.resolve().then(fn).then(
+    () => { pass++; console.log('  ok  ', name); },
+    (e) => { fail++; console.log('  FAIL', name, '\n        ', e.message); });
 }
 
-console.log('detectOptOut — opt-out keywords');
-t('bare STOP', () => assert.equal(detectOptOut('STOP'), 'opt_out'));
-t('lowercase stop', () => assert.equal(detectOptOut('stop'), 'opt_out'));
-t('trailing punctuation', () => assert.equal(detectOptOut('Stop.'), 'opt_out'));
-t('exclamation', () => assert.equal(detectOptOut('STOP!'), 'opt_out'));
-t('surrounding whitespace', () => assert.equal(detectOptOut('  stop  '), 'opt_out'));
-t('hyphenated OPT-OUT', () => assert.equal(detectOptOut('OPT-OUT'), 'opt_out'));
-t('unsubscribe', () => assert.equal(detectOptOut('unsubscribe'), 'opt_out'));
-t('stop promotions', () => assert.equal(detectOptOut('Stop promotions'), 'opt_out'));
+const ENV = { SUPABASE_URL: 'https://x.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'k' };
 
-console.log('detectOptOut — opt-in keywords');
-t('START', () => assert.equal(detectOptOut('START'), 'opt_in'));
-t('subscribe', () => assert.equal(detectOptOut('subscribe'), 'opt_in'));
+// sbComms reads via res.text() then JSON.parse — NOT res.json(). Stubs must honour that.
+function stubFetch(handler) {
+  const calls = [];
+  globalThis.fetch = async (url, opts) => {
+    const u = String(url);
+    calls.push({ url: u, method: opts?.method, body: opts?.body ? JSON.parse(opts.body) : null });
+    const r = handler ? handler(u) : null;
+    return { ok: true, status: 201, text: async () => (r === undefined ? '[]' : r) };
+  };
+  return calls;
+}
 
-console.log('detectOptOut — MUST NOT false-positive (support messages)');
-t('complaint containing stop', () =>
-  assert.equal(detectOptOut('please stop sending me broken cars'), null));
-t('stop the order', () => assert.equal(detectOptOut('can you stop the order'), null));
-t('cancel my order is NOT an opt-out', () =>
-  assert.equal(detectOptOut('cancel my order please'), null));
-t('greeting', () => assert.equal(detectOptOut('Hi'), null));
+(async () => {
+  console.log('detectOptOut — opt-out keywords');
+  await t('bare STOP', () => assert.equal(detectOptOut('STOP'), 'opt_out'));
+  await t('lowercase', () => assert.equal(detectOptOut('stop'), 'opt_out'));
+  await t('trailing full stop', () => assert.equal(detectOptOut('Stop.'), 'opt_out'));
+  await t('exclamation', () => assert.equal(detectOptOut('STOP!'), 'opt_out'));
+  await t('surrounding whitespace', () => assert.equal(detectOptOut('  stop  '), 'opt_out'));
+  await t('hyphenated OPT-OUT', () => assert.equal(detectOptOut('OPT-OUT'), 'opt_out'));
+  await t('unsubscribe', () => assert.equal(detectOptOut('unsubscribe'), 'opt_out'));
+  await t('button title "Stop promotions"', () => assert.equal(detectOptOut('Stop promotions'), 'opt_out'));
 
-console.log('detectOptOut — degenerate input');
-t('empty string', () => assert.equal(detectOptOut(''), null));
-t('null', () => assert.equal(detectOptOut(null), null));
-t('undefined', () => assert.equal(detectOptOut(undefined), null));
-t('emoji only', () => assert.equal(detectOptOut('🛑'), null));
+  console.log('detectOptOut — opt-in keywords');
+  await t('START', () => assert.equal(detectOptOut('START'), 'opt_in'));
+  await t('subscribe', () => assert.equal(detectOptOut('subscribe'), 'opt_in'));
 
-console.log(`\n${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+  console.log('detectOptOut — MUST NOT false-positive on support messages');
+  await t('complaint containing stop', () =>
+    assert.equal(detectOptOut('please stop sending me broken cars'), null));
+  await t('stop the order', () => assert.equal(detectOptOut('can you stop the order'), null));
+  await t('cancel my order is not an opt-out', () =>
+    assert.equal(detectOptOut('cancel my order please'), null));
+  await t('greeting', () => assert.equal(detectOptOut('Hi'), null));
+
+  console.log('detectOptOut — degenerate input');
+  await t('empty', () => assert.equal(detectOptOut(''), null));
+  await t('null', () => assert.equal(detectOptOut(null), null));
+  await t('undefined', () => assert.equal(detectOptOut(undefined), null));
+  await t('emoji only', () => assert.equal(detectOptOut('🛑'), null));
+  // KNOWN GAP (accepted 2026-07-17): non-Latin scripts normalise to '' and are never
+  // detected. Documented in BACKLOG; the agent-actioned path is the backstop.
+  await t('KNOWN GAP: Hindi STOP is not detected', () =>
+    assert.equal(detectOptOut('बंद करो'), null));
+
+  console.log('applyOptOut');
+  await t('writes consent + event with evidence', async () => {
+    const calls = stubFetch();
+    await applyOptOut(ENV, {
+      profile_id: 'p1', channel: 'whatsapp', state: 'opted_out',
+      source: 'whatsapp_inbound_keyword', evidence: { keyword: 'STOP' },
+    });
+    const consent = calls.find((c) => c.url.includes('/rest/v1/consent'));
+    const event = calls.find((c) => c.url.includes('/rest/v1/events'));
+    assert.ok(consent, 'must POST a consent row');
+    assert.equal(consent.body.purpose, 'marketing');
+    assert.equal(consent.body.state, 'opted_out');
+    assert.equal(consent.body.channel, 'whatsapp');
+    assert.deepEqual(consent.body.evidence, { keyword: 'STOP' }, 's.6(10) proof must persist');
+    assert.ok(event, 'must mirror as a substrate event');
+    assert.equal(event.body.name, 'opted_out');
+  });
+
+  await t('NEVER writes a suppression (would kill transactional)', async () => {
+    const calls = stubFetch();
+    await applyOptOut(ENV, { profile_id: 'p1', channel: 'whatsapp', state: 'opted_out', source: 's' });
+    assert.ok(!calls.some((c) => c.url.includes('/rest/v1/suppressions')),
+      'a marketing withdrawal must not suppress — order updates must survive it');
+  });
+
+  await t('forwards unsubscribe_token when given', async () => {
+    const calls = stubFetch();
+    await applyOptOut(ENV, { profile_id: 'p1', channel: 'email', state: 'opted_out',
+      source: 'unsubscribe_link', unsubscribe_token: 'tok-1' });
+    const consent = calls.find((c) => c.url.includes('/rest/v1/consent'));
+    assert.equal(consent.body.unsubscribe_token, 'tok-1', 'token must survive — unsubscribeUrl keys off it');
+  });
+
+  await t('opt_in emits opted_in', async () => {
+    const calls = stubFetch();
+    await applyOptOut(ENV, { profile_id: 'p1', channel: 'whatsapp', state: 'opted_in', source: 's' });
+    assert.equal(calls.find((c) => c.url.includes('/rest/v1/events')).body.name, 'opted_in');
+  });
+
+  await t('requires profile_id', async () => {
+    stubFetch();
+    const r = await applyOptOut(ENV, { channel: 'whatsapp', state: 'opted_out', source: 's' });
+    assert.equal(r.ok, false);
+    assert.equal(r.error, 'profile_id_required');
+  });
+
+  await t('rejects a bad state', async () => {
+    stubFetch();
+    const r = await applyOptOut(ENV, { profile_id: 'p1', channel: 'whatsapp', state: 'maybe', source: 's' });
+    assert.equal(r.ok, false);
+    assert.equal(r.error, 'bad_state');
+  });
+
+  await t('THROWS when the consent write fails (must not silently lose a STOP)', async () => {
+    globalThis.fetch = async (url) => String(url).includes('/rest/v1/consent')
+      ? { ok: false, status: 500, text: async () => '{"message":"boom"}' }
+      : { ok: true, status: 201, text: async () => '[]' };
+    await assert.rejects(
+      () => applyOptOut(ENV, { profile_id: 'p1', channel: 'whatsapp', state: 'opted_out', source: 's' }),
+      /consent_write_failed/,
+      'a failed withdrawal must throw so the webhook 500s and Meta retries');
+  });
+
+  console.log(`\n${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+})();
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -119,7 +227,7 @@ Create `src/optout.js`:
 ```js
 // Opt-out / opt-in intent detection + the single withdrawal writer.
 // Channel-agnostic: WhatsApp inbound, the email unsubscribe link, and the agent-actioned
-// admin call all funnel through applyOptOut so evidence is uniform and withdrawal
+// admin call all funnel through applyOptOut, so evidence is uniform and withdrawal
 // semantics live in exactly one place.
 
 const A = require('./auth.js');
@@ -127,18 +235,25 @@ const { recordConsent } = require('./consent.js');
 
 // EXACT-MATCH, not substring — deliberate. "please stop sending me broken cars" is a
 // support complaint, not a withdrawal; substring-matching "stop" would silently opt that
-// customer out of marketing while they were asking for help. That failure is invisible and
-// unrecoverable (we'd never know to re-ask). A missed keyword, by contrast, is visible —
-// the customer repeats themselves or an agent actions it via optOutProfile. Bare keywords
-// are also the TRAI/Meta convention, so exact-match is both safer AND standard.
+// customer out while they were asking for help. That failure is invisible and
+// unrecoverable — we'd never know to re-ask. A missed keyword is visible: the customer
+// repeats themselves, or an agent actions it via optOutProfile. Bare keywords are also
+// the TRAI/Meta convention, so exact-match is both safer AND standard.
+//
+// 'cancel' is deliberately ABSENT: "cancel my order" is a support intent, not a withdrawal.
 const KEYWORDS_OUT = new Set([
   'stop', 'stopall', 'stop promotions', 'unsubscribe', 'unsub',
   'optout', 'opt out', 'end', 'quit', 'revoke',
 ]);
 const KEYWORDS_IN = new Set(['start', 'unstop', 'subscribe', 'optin', 'opt in', 'resume']);
 
-// Lowercase, strip anything that isn't a letter or space (punctuation, digits, emoji),
+// Lowercase, drop anything that isn't a letter or space (punctuation, digits, emoji),
 // collapse whitespace. "OPT-OUT" -> "opt out"; "Stop." -> "stop"; "🛑" -> "".
+//
+// KNOWN GAP (accepted by Afshaan 2026-07-17): this strips non-Latin scripts, so a Hindi
+// "बंद करो" normalises to '' and is NEVER detected. Accepted because our approved
+// template instructs "Reply STOP" in English. Tracked in BACKLOG as a DPDP s.6(4)
+// exposure; optOutProfile (agent-actioned) is the manual backstop.
 function normalise(text) {
   return String(text == null ? '' : text)
     .toLowerCase()
@@ -156,125 +271,33 @@ function detectOptOut(text) {
   return null;
 }
 
-module.exports = { detectOptOut, normalise, KEYWORDS_OUT, KEYWORDS_IN };
-```
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `cd 05_Throttle/commsops-worker && node test/optout.test.js`
-Expected: `19 passed, 0 failed`
-
-- [ ] **Step 5: Commit**
-
-```bash
-cd /Users/afshaansiddiqui/Documents/Claude/05_Throttle
-git add commsops-worker/src/optout.js commsops-worker/test/optout.test.js
-git commit -m "commsops: opt-out keyword detection (exact-match, pure)"
-```
-
----
-
-### Task 2: The withdrawal writer (`applyOptOut`)
-
-**Files:**
-- Modify: `05_Throttle/commsops-worker/src/optout.js`
-- Test: `05_Throttle/commsops-worker/test/optout.test.js`
-
-- [ ] **Step 1: Write the failing test**
-
-Append to `test/optout.test.js`, immediately **before** the final `console.log`/`process.exit` lines:
-
-```js
-// --- applyOptOut: stub fetch, assert what we POST ---
-const { applyOptOut } = require('../src/optout.js');
-
-async function ta(name, fn) {
-  try { await fn(); pass++; console.log('  ok  ', name); }
-  catch (e) { fail++; console.log('  FAIL', name, '\n        ', e.message); }
-}
-
-const ENV = { SUPABASE_URL: 'https://x.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'k' };
-
-function stubFetch() {
-  const calls = [];
-  globalThis.fetch = async (url, opts) => {
-    calls.push({ url: String(url), body: JSON.parse(opts.body) });
-    return { ok: true, status: 201, json: async () => ([]), text: async () => '[]' };
-  };
-  return calls;
-}
-
-(async () => {
-  await ta('applyOptOut writes consent + event with evidence', async () => {
-    const calls = stubFetch();
-    await applyOptOut(ENV, {
-      profile_id: 'p1', channel: 'whatsapp', state: 'opted_out',
-      source: 'whatsapp_inbound_keyword', evidence: { keyword: 'STOP' },
-    });
-    const consent = calls.find((c) => c.url.includes('/rest/v1/consent'));
-    const event = calls.find((c) => c.url.includes('/rest/v1/events'));
-    assert.ok(consent, 'must POST a consent row');
-    assert.equal(consent.body.purpose, 'marketing', 'defaults to the marketing purpose');
-    assert.equal(consent.body.state, 'opted_out');
-    assert.equal(consent.body.channel, 'whatsapp');
-    assert.deepEqual(consent.body.evidence, { keyword: 'STOP' }, 's.6(10) proof must persist');
-    assert.ok(event, 'must mirror as a substrate event');
-    assert.equal(event.body.name, 'opted_out');
-  });
-
-  await ta('applyOptOut NEVER writes a suppression (would kill transactional)', async () => {
-    const calls = stubFetch();
-    await applyOptOut(ENV, { profile_id: 'p1', channel: 'whatsapp', state: 'opted_out', source: 's' });
-    assert.ok(!calls.some((c) => c.url.includes('/rest/v1/suppressions')),
-      'a marketing withdrawal must not suppress — order updates must survive it');
-  });
-
-  await ta('applyOptOut opt_in emits opted_in', async () => {
-    const calls = stubFetch();
-    await applyOptOut(ENV, { profile_id: 'p1', channel: 'whatsapp', state: 'opted_in', source: 's' });
-    assert.equal(calls.find((c) => c.url.includes('/rest/v1/events')).body.name, 'opted_in');
-  });
-
-  await ta('applyOptOut requires profile_id', async () => {
-    stubFetch();
-    const r = await applyOptOut(ENV, { channel: 'whatsapp', state: 'opted_out', source: 's' });
-    assert.equal(r.ok, false);
-    assert.equal(r.error, 'profile_id_required');
-  });
-
-  console.log(`\n${pass} passed, ${fail} failed`);
-  process.exit(fail ? 1 : 0);
-})();
-```
-
-Then **delete** the old trailing two lines from Task 1's file (`console.log(...)` and `process.exit(...)`) — the async IIFE above now owns the summary, otherwise it prints before the async tests finish.
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `cd 05_Throttle/commsops-worker && node test/optout.test.js`
-Expected: FAIL — `applyOptOut is not a function`
-
-- [ ] **Step 3: Write minimal implementation**
-
-Append to `src/optout.js`, before `module.exports`:
-
-```js
 // Append a withdrawal (or re-subscribe) to the consent ledger + mirror it as an event.
 //
 // Deliberately NOT a suppression: `comms.suppressions` is gate step ① and blocks EVERY
 // purpose including transactional, so suppressing here would stop a customer's own order
-// and shipping updates. `comms.consent` is gate step ②, which only gates marketing —
-// exactly the semantics of "stop the promos, keep my delivery texts". This matches Meta's
-// promotional-messaging policy and DPDP s.6(5) (withdrawal does not undo the paid order).
+// and shipping updates. `comms.consent` is gate step ② and gates marketing only — exactly
+// "stop the promos, keep my delivery texts". Matches Meta's promotional policy and DPDP
+// s.6(5) (withdrawal does not undo the paid order).
 //
-// `evidence` is the s.6(10) proof burden — the fiduciary must be able to PROVE the
-// withdrawal happened and on what basis. Always pass the raw artefact (the message text,
-// the provider message id, who actioned it).
-async function applyOptOut(env, { profile_id, channel, purpose = 'marketing', state, source, evidence }) {
+// THROWS on a failed consent write — never swallow. The caller is a webhook; a swallowed
+// error returns 200, Meta never retries, and the customer's STOP is lost forever with no
+// trace. Throwing surfaces a 500, Meta retries, and `ingest` dedups the event while this
+// runs again. Cost: a partial failure can leave two identical opted_out rows. The ledger
+// is append-only + latest-wins, so that's cosmetic. A lost withdrawal is not.
+//
+// `evidence` is the DPDP s.6(10) proof burden — the fiduciary must PROVE the withdrawal
+// happened and on what basis. Always pass the raw artefact.
+async function applyOptOut(env, { profile_id, channel, purpose = 'marketing', state, source, evidence, unsubscribe_token }) {
   if (!profile_id) return { ok: false, error: 'profile_id_required' };
   if (state !== 'opted_out' && state !== 'opted_in') return { ok: false, error: 'bad_state' };
 
-  await recordConsent(env, { profile_id, channel, purpose, state, source, evidence });
+  const c = await recordConsent(env, {
+    profile_id, channel, purpose, state, source, evidence, unsubscribe_token,
+  });
+  if (!c.ok) throw new Error(`consent_write_failed:${JSON.stringify(c.data)}`);
+
+  // Best-effort mirror. The consent row is the system of record; a failed event write
+  // must not re-trigger the whole webhook and duplicate the consent row.
   await A.sbComms('/rest/v1/events', env, {
     method: 'POST',
     body: JSON.stringify({
@@ -283,109 +306,110 @@ async function applyOptOut(env, { profile_id, channel, purpose = 'marketing', st
       source: source || null,
       properties: { channel, purpose },
     }),
-  });
+  }).catch((e) => console.log('optout_event_error', e?.message || String(e)));
+
   return { ok: true, profile_id, channel, purpose, state };
 }
-```
 
-Update the export line:
-
-```js
 module.exports = { detectOptOut, normalise, applyOptOut, KEYWORDS_OUT, KEYWORDS_IN };
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd 05_Throttle/commsops-worker && node test/optout.test.js`
-Expected: `23 passed, 0 failed`
+Expected: `25 passed, 0 failed`
 
 - [ ] **Step 5: Commit**
 
 ```bash
 cd /Users/afshaansiddiqui/Documents/Claude/05_Throttle
 git add commsops-worker/src/optout.js commsops-worker/test/optout.test.js
-git commit -m "commsops: applyOptOut — single withdrawal writer w/ s.6(10) evidence"
+git commit -m "commsops: opt-out detection + applyOptOut (single withdrawal writer)"
 ```
 
 ---
 
-### Task 3: Wire STOP into the WhatsApp inbound webhook
+### Task 2: Wire STOP into the WhatsApp inbound webhook
 
 **Files:**
-- Modify: `05_Throttle/commsops-worker/src/wa-webhooks.js:92-116` (`handleInbound`)
+- Modify: `05_Throttle/commsops-worker/src/wa-webhooks.js` (`handleInbound`, ~lines 92-116)
 - Test: `05_Throttle/commsops-worker/test/optout.test.js`
-
-**Note:** `handleInbound` currently discards ingest's return value (`.catch(...)` only). `ingest()` returns `{ ok, profile_id, event_id, deduped }` — we need `profile_id` to write consent against.
 
 - [ ] **Step 1: Write the failing test**
 
-Insert into `test/optout.test.js`, inside the async IIFE before the final summary:
+Insert into `test/optout.test.js`, inside the async IIFE, immediately **before** the final `console.log(`\n${pass} passed...`)` line:
 
 ```js
-  await ta('WA inbound "STOP" opts the profile out of marketing', async () => {
-    const waHook = require('../src/wa-webhooks.js');
-    const calls = stubFetch();
+  console.log('wa-webhooks — inbound STOP');
+  const waHook = require('../src/wa-webhooks.js');
+
+  // resolve_identity returns a BARE UUID SCALAR (rpc.data), and sbComms parses res.text().
+  function waFetch(calls) {
     globalThis.fetch = async (url, opts) => {
       const u = String(url);
       calls.push({ url: u, body: opts?.body ? JSON.parse(opts.body) : null });
-      // resolve_identity RPC -> a profile id
-      if (u.includes('/rest/v1/rpc/resolve_identity')) {
-        return { ok: true, status: 200, json: async () => ({ profile_id: 'p-stop' }), text: async () => '' };
-      }
-      return { ok: true, status: 201, json: async () => ([]), text: async () => '[]' };
+      if (u.includes('/rest/v1/rpc/resolve_identity'))
+        return { ok: true, status: 200, text: async () => JSON.stringify('p-stop') };
+      return { ok: true, status: 201, text: async () => '[]' };
     };
-    await waHook.handleInbound({ ...ENV, CSOPS_WA_FORWARD_URL: '' }, {
-      entry: [{ changes: [{ value: {
-        metadata: { phone_number_id: '123' },
-        messages: [{ id: 'wamid.1', from: '919999999999', timestamp: '1700000000',
-                     type: 'text', text: { body: 'STOP' } }],
-      } }] }],
-    });
+  }
+  const payload = (body) => ({
+    entry: [{ changes: [{ value: {
+      metadata: { phone_number_id: '123' },
+      messages: [{ id: 'wamid.' + Math.floor(Math.random() * 1e6), from: '919999999999',
+                   timestamp: '1700000000', type: 'text', text: { body } }],
+    } }] }],
+  });
+
+  await t('bare STOP opts the profile out of WhatsApp marketing', async () => {
+    const calls = []; waFetch(calls);
+    await waHook.handleInbound({ ...ENV, CSOPS_WA_FORWARD_URL: '' }, payload('STOP'));
     const consent = calls.find((c) => c.url.includes('/rest/v1/consent') && c.body?.state === 'opted_out');
     assert.ok(consent, 'a bare STOP must write an opted_out consent row');
     assert.equal(consent.body.channel, 'whatsapp');
     assert.equal(consent.body.purpose, 'marketing');
     assert.equal(consent.body.source, 'whatsapp_inbound_keyword');
-    assert.equal(consent.body.evidence.keyword, 'STOP', 'raw text is the proof');
+    assert.equal(consent.body.evidence.keyword, 'STOP', 'raw text is the s.6(10) proof');
   });
 
-  await ta('WA inbound support message does NOT opt out', async () => {
-    const waHook = require('../src/wa-webhooks.js');
-    const calls = [];
-    globalThis.fetch = async (url, opts) => {
-      const u = String(url);
-      calls.push({ url: u, body: opts?.body ? JSON.parse(opts.body) : null });
-      if (u.includes('/rest/v1/rpc/resolve_identity')) {
-        return { ok: true, status: 200, json: async () => ({ profile_id: 'p-help' }), text: async () => '' };
-      }
-      return { ok: true, status: 201, json: async () => ([]), text: async () => '[]' };
-    };
-    await waHook.handleInbound({ ...ENV, CSOPS_WA_FORWARD_URL: '' }, {
-      entry: [{ changes: [{ value: {
-        metadata: { phone_number_id: '123' },
-        messages: [{ id: 'wamid.2', from: '919999999999', timestamp: '1700000000',
-                     type: 'text', text: { body: 'my car stopped working, please help' } }],
-      } }] }],
-    });
+  await t('support message does NOT opt out', async () => {
+    const calls = []; waFetch(calls);
+    await waHook.handleInbound({ ...ENV, CSOPS_WA_FORWARD_URL: '' },
+      payload('my car stopped working, please help'));
     assert.ok(!calls.some((c) => c.url.includes('/rest/v1/consent')),
       'a support message must never be read as a withdrawal');
+  });
+
+  await t('a failed consent write PROPAGATES (Meta must retry, not lose the STOP)', async () => {
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      if (u.includes('/rest/v1/rpc/resolve_identity'))
+        return { ok: true, status: 200, text: async () => JSON.stringify('p-stop') };
+      if (u.includes('/rest/v1/consent'))
+        return { ok: false, status: 500, text: async () => '{"message":"boom"}' };
+      return { ok: true, status: 201, text: async () => '[]' };
+    };
+    await assert.rejects(
+      () => waHook.handleInbound({ ...ENV, CSOPS_WA_FORWARD_URL: '' }, payload('STOP')),
+      /consent_write_failed/,
+      'must throw so the route 500s and Meta redelivers');
   });
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cd 05_Throttle/commsops-worker && node test/optout.test.js`
-Expected: FAIL on the first — "a bare STOP must write an opted_out consent row"
+Expected: FAIL — "a bare STOP must write an opted_out consent row"
 
 - [ ] **Step 3: Write minimal implementation**
 
-In `src/wa-webhooks.js`, add to the requires at the top of the file:
+In `src/wa-webhooks.js`, add to the requires at the top:
 
 ```js
 const { detectOptOut, applyOptOut } = require('./optout.js');
 ```
 
-Replace the body of the `for (const m of inbound)` loop in `handleInbound` (currently lines ~94-112) with:
+Replace the `for (const m of inbound)` loop body inside `handleInbound` with:
 
 ```js
   for (const m of inbound) {
@@ -408,8 +432,16 @@ Replace the body of the `for (const m of inbound)` loop in `handleInbound` (curr
     }).catch((e) => { console.log('wa_ingest_error', e?.message || String(e)); return null; });
 
     // 2b. honour STOP/START. Our approved marketing templates carry "Reply STOP to
-    // unsubscribe", and Meta requires opt-out requests to be respected. Marketing-only:
+    // unsubscribe" and Meta requires opt-out requests to be respected. Marketing-only —
     // this never blocks the customer's order/shipping updates (see optout.js).
+    //
+    // NOT wrapped in try/catch and NOT gated on res.deduped, both deliberate:
+    //  - errors must propagate so the route 500s and Meta redelivers (a swallowed error
+    //    = a silently lost withdrawal, the one failure this feature exists to prevent);
+    //  - a redelivery re-runs this while ingest dedups the event, which can write a second
+    //    identical opted_out row. Append-only + latest-wins, so that is cosmetic.
+    // parseInbound normalises button/interactive replies into m.text, so a tapped
+    // "Stop promotions" button lands here too.
     const intent = detectOptOut(m.text);
     if (intent && res?.profile_id) {
       await applyOptOut(env, {
@@ -424,17 +456,17 @@ Replace the body of the `for (const m of inbound)` loop in `handleInbound` (curr
           from: m.from,
           received_at: m.ts || null,
         },
-      }).catch((e) => console.log('wa_optout_error', e?.message || String(e)));
+      });
     }
   }
 ```
 
-**Do not** skip the Pitstop forward for opt-out messages — the agent should still see that the customer said STOP (it's context, and Meta's "on or off WhatsApp" means agents may need to action related requests).
+**Do not** skip the Pitstop forward for opt-out messages — the agent should still see that the customer said STOP.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 4: Run tests**
 
 Run: `cd 05_Throttle/commsops-worker && node test/optout.test.js && node test/wa.test.js`
-Expected: both suites pass; `wa.test.js` must not regress.
+Expected: both pass; `wa.test.js` must not regress.
 
 - [ ] **Step 5: Commit**
 
@@ -446,55 +478,60 @@ git commit -m "commsops: honour WhatsApp STOP/START -> marketing consent withdra
 
 ---
 
-### Task 4: Agent-actioned opt-out (`optOutProfile`)
+### Task 3: Agent-actioned opt-out (`optOutProfile`)
 
-Meta requires honouring opt-out requests **"either on or off WhatsApp"** — i.e. a request *about* WhatsApp that arrives by any route (a Pitstop email, an IG DM, a phone call). That is a semantic judgement a keyword matcher cannot make, so it needs a human-actioned path. This is also the DPDP s.6(4) "ease comparable" backstop.
+Meta requires honouring opt-out requests **"either on or off WhatsApp"** — a request *about* WhatsApp arriving by any route (a Pitstop email, an IG DM, a phone call). That's a semantic judgement no keyword matcher can make, so it needs a human-actioned path. It's also the backstop for the accepted English-only gap, and the DPDP s.6(4) safety valve.
 
 **Files:**
-- Modify: `05_Throttle/commsops-worker/src/index.js` (add a case to the JWT-authenticated action switch, next to `recordConsent`)
+- Modify: `05_Throttle/commsops-worker/src/index.js`
 
-- [ ] **Step 1: Add the action**
+- [ ] **Step 1: Add the require**
 
-Find the existing `case 'recordConsent':` in the action switch. Add immediately after it:
+At the top of `index.js`, alongside the other module requires:
 
 ```js
-    case 'optOutProfile': {   // agent-actioned withdrawal — Meta "on or off WhatsApp"
-      if (!A.can(auth, 'data_consent_admin')) return err('forbidden', 403);
+const OPTOUT = require('./optout.js');
+```
+
+- [ ] **Step 2: Add the action**
+
+Find `case 'recordConsent':` (~line 254). Add immediately **after** its closing brace — note it uses `A.canConsentAdmin(auth.permissions)`, matching its neighbour exactly (`A.can` does not exist):
+
+```js
+    case 'optOutProfile': {            // agent-actioned withdrawal — Meta "on or off WhatsApp"
+      if (!A.canConsentAdmin(auth.permissions)) return err('forbidden', 403);
       if (!body.profile_id) return err('profile_id_required', 400);
       const channels = Array.isArray(body.channels) && body.channels.length
         ? body.channels : ['email', 'sms', 'whatsapp'];
-      const out = [];
+      const state = body.state === 'opted_in' ? 'opted_in' : 'opted_out';
+      const applied = [];
       for (const ch of channels) {
-        out.push(await OPTOUT.applyOptOut(env, {
+        applied.push(await OPTOUT.applyOptOut(env, {
           profile_id: body.profile_id,
           channel: ch,
           purpose: 'marketing',
-          state: body.state === 'opted_in' ? 'opted_in' : 'opted_out',
+          state,
           source: 'agent_actioned',
           evidence: {
-            actioned_by: auth?.email || auth?.sub || 'unknown',
+            actioned_by: auth.email || auth.userId || 'unknown',
             reason: body.reason || null,
             requested_via: body.requested_via || null,
             actioned_at: new Date().toISOString(),
           },
         }));
       }
-      return ok({ applied: out });
+      return ok({ applied });
     }
 ```
 
-Add the require at the top of `index.js`, alongside the other module requires:
+- [ ] **Step 3: Verify it parses**
 
-```js
-const OPTOUT = require('./optout.js');
-```
+Run: `cd 05_Throttle/commsops-worker && node -e "require('./src/optout.js'); console.log('optout ok')"`
+Expected: `optout ok`
 
-- [ ] **Step 2: Verify it parses**
+(`index.js` can't be required standalone — it's a Workers ES-module entry. Syntax is validated by `wrangler deploy` in Task 5.)
 
-Run: `cd 05_Throttle/commsops-worker && node -e "require('./src/index.js')" 2>&1 | head -3`
-Expected: no output, or only a Workers-runtime warning — **not** a SyntaxError.
-
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 cd /Users/afshaansiddiqui/Documents/Claude/05_Throttle
@@ -504,24 +541,25 @@ git commit -m "commsops: optOutProfile — agent-actioned withdrawal (off-WhatsA
 
 ---
 
-### Task 5: All-channel withdrawal on the unsubscribe page (s.6(4) parity)
+### Task 4: All-channel withdrawal on the unsubscribe page (s.6(4) parity)
 
-Today `handleUnsubscribe` opts out **only the channel the token belongs to** (`row.channel`), so an email unsubscribe leaves WhatsApp marketing live. DPDP s.6(4) requires withdrawal to be as easy as consent was to give; a customer who thinks they've unsubscribed but keeps getting WhatsApp promos is the exact failure that provokes a Board complaint (and, on WhatsApp, a **block** — which damages the number's quality rating).
+`handleUnsubscribe` today opts out **only the token's own channel** (`row.channel`), so an email unsubscribe leaves WhatsApp promos running. A customer who believes they've unsubscribed and keeps getting WhatsApp marketing is exactly who **blocks** the number — which damages the marketing number's quality rating, the thing we can least afford to burn at cutover.
 
-**Decision:** keep the default one-click as *this channel* (predictable, matches the link they clicked), and add an explicit **"stop all marketing"** link on the confirmation page. Not automatic, because silently withdrawing channels a customer didn't ask about is its own surprise.
+**Decision:** default one-click stays *this channel* (predictable — it matches the link they clicked); add an explicit **"stop all marketing"** link on the confirmation page. Not automatic: silently withdrawing channels the customer didn't ask about is its own surprise.
 
 **Files:**
-- Modify: `05_Throttle/commsops-worker/src/webhooks.js:87-109` (`handleUnsubscribe`), `src/index.js` (route)
+- Modify: `05_Throttle/commsops-worker/src/webhooks.js` (`handleUnsubscribe` + `page`, lines 87-119)
+- Modify: `05_Throttle/commsops-worker/src/index.js` (the `/unsubscribe` route, ~line 561)
 
-- [ ] **Step 1: Implement the all-channel branch**
+- [ ] **Step 1: Add the require**
 
-In `src/webhooks.js`, add to the requires at the top:
+At the top of `src/webhooks.js`:
 
 ```js
 const { applyOptOut } = require('./optout.js');
 ```
 
-Replace `handleUnsubscribe` with:
+- [ ] **Step 2: Replace `handleUnsubscribe`**
 
 ```js
 // One-click List-Unsubscribe target. `all=1` withdraws marketing on EVERY channel
@@ -541,6 +579,10 @@ async function handleUnsubscribe(env, token, all) {
       purpose: 'marketing',
       state: 'opted_out',
       source: all ? 'unsubscribe_link_all' : 'unsubscribe_link',
+      // Forward the token — unsubscribeUrl() keys off the LATEST consent row's token, and
+      // a token-less row makes it mint a fresh one on the next send (token churn).
+      // Only stamp it on the row for the token's own channel; the others never had it.
+      unsubscribe_token: ch === row.channel ? token : null,
       evidence: { unsubscribe_token: token, all_channels: !!all, at: new Date().toISOString() },
     });
   }
@@ -556,7 +598,7 @@ async function handleUnsubscribe(env, token, all) {
 }
 ```
 
-Update `page()` to accept the extra block:
+- [ ] **Step 3: Replace `page` (exact current markup + one `extra` slot)**
 
 ```js
 function page(msg, extra) {
@@ -570,11 +612,9 @@ h1{font-size:18px;margin:0 0 10px}p{color:#bbb;font-size:14px;line-height:1.5;ma
 }
 ```
 
-**Note:** verify the existing `page()` body markup before overwriting — reuse whatever the current `.card`/`h1` structure is; only the `${extra || ''}` slot and the second parameter are new.
+- [ ] **Step 4: Pass the flag through the route**
 
-- [ ] **Step 2: Pass the flag through the route**
-
-In `src/index.js`, update the unsubscribe route:
+In `src/index.js`, replace the `/unsubscribe` route:
 
 ```js
     if (url.pathname === '/unsubscribe' && request.method === 'GET') {
@@ -583,12 +623,12 @@ In `src/index.js`, update the unsubscribe route:
     }
 ```
 
-- [ ] **Step 3: Verify it parses**
+- [ ] **Step 5: Verify it parses**
 
 Run: `cd 05_Throttle/commsops-worker && node -e "require('./src/webhooks.js'); console.log('ok')"`
 Expected: `ok`
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 cd /Users/afshaansiddiqui/Documents/Claude/05_Throttle
@@ -598,19 +638,17 @@ git commit -m "commsops: all-channel marketing withdrawal on unsubscribe (DPDP s
 
 ---
 
-### Task 6: Deploy + live verification
+### Task 5: Deploy + live verification
 
-**Files:** none (deploy + verify)
-
-- [ ] **Step 1: Run the full test suite**
+- [ ] **Step 1: Full suite**
 
 ```bash
 cd /Users/afshaansiddiqui/Documents/Claude/05_Throttle/commsops-worker
 for f in test/*.test.js; do echo "== $f"; node "$f" || exit 1; done
 ```
-Expected: every suite passes. `wa.test.js`, `journey-*.test.js`, `segment-entry.test.js` must not regress.
+Expected: all pass. `wa.test.js`, `journey-*.test.js`, `segment-entry.test.js`, `shopflo.test.js` must not regress.
 
-- [ ] **Step 2: Push, then deploy**
+- [ ] **Step 2: Push, then deploy** (⚠️ commsops also carries the journey engine + the `*/5` scheduler — confirm with Afshaan before deploying)
 
 ```bash
 cd /Users/afshaansiddiqui/Documents/Claude/05_Throttle && git push
@@ -618,42 +656,35 @@ cd commsops-worker && npx wrangler deploy
 ```
 Expected: deploy succeeds; output still shows `schedule */5`, `Consumer for commsops-broadcast`, `Consumer for commsops-dlq`, `workflow: commsops-journey`.
 
-- [ ] **Step 3: Live smoke — a real STOP on the sandbox number**
+- [ ] **Step 3: Live smoke — real STOP on the sandbox number**
 
-From the phone already registered as a test recipient, WhatsApp **`STOP`** to the sandbox number **+1 555-174-8518**. Then:
+From the phone already registered as a test recipient, WhatsApp **`STOP`** to **+1 555-174-8518**. Then:
 
 ```sql
-select c.channel, c.purpose, c.state, c.source, c.evidence, c.captured_at
+select c.profile_id, c.channel, c.purpose, c.state, c.source, c.evidence, c.captured_at
 from comms.consent c
 join comms.identifiers i on i.profile_id = c.profile_id
 where i.value = '<your E.164 phone>' and c.channel = 'whatsapp'
 order by c.captured_at desc limit 3;
 ```
-Expected: one row — `purpose=marketing`, `state=opted_out`, `source=whatsapp_inbound_keyword`, `evidence.keyword='STOP'`.
+Expected: one row — `purpose=marketing`, `state=opted_out`, `source=whatsapp_inbound_keyword`, `evidence.keyword='STOP'`. **Note the returned `profile_id` for Step 4.**
 
-- [ ] **Step 4: Verify the gate now blocks marketing but NOT transactional**
+- [ ] **Step 4: Prove it did NOT suppress (the whole point)**
 
 ```sql
--- marketing must now be blocked for this profile; utility must still pass.
-select state from comms.consent
-where profile_id = '<profile_id>' and channel='whatsapp' and purpose='marketing'
-order by captured_at desc limit 1;   -- expect: opted_out
+select count(*) as suppressions from comms.suppressions where profile_id = '<profile_id from Step 3>';
 ```
-Then confirm no suppression was created (this is the whole point):
-```sql
-select count(*) from comms.suppressions where profile_id = '<profile_id>';
--- expect: 0  — a marketing withdrawal must NEVER suppress
-```
+Expected: `0`. A marketing withdrawal must never suppress — the customer's order updates must survive it.
 
-- [ ] **Step 5: Send START and confirm re-subscribe**
+- [ ] **Step 5: START re-subscribes**
 
-WhatsApp **`START`** to the same number, then re-run the Step-3 query.
-Expected: a newer row with `state=opted_in`.
+WhatsApp **`START`** to the same number; re-run Step 3's query.
+Expected: a newer row, `state=opted_in`.
 
-- [ ] **Step 6: Update the knowledge files + commit**
+- [ ] **Step 6: Knowledge files + commit**
 
-- `systems/relay.md` — add an opt-out section: STOP/START honoured on WA inbound → marketing consent withdrawal (never suppression); `optOutProfile` for off-WhatsApp requests; all-channel unsubscribe.
-- `BACKLOG.md` — close the `[relay] [P1] WhatsApp opt-out (STOP) is NOT handled` item; leave the WA-consent-rebuild and s.5(2)-notice items open.
+- `systems/relay.md` — new opt-out section: STOP/START honoured on WA inbound → marketing consent withdrawal (never suppression); `optOutProfile` for off-WhatsApp requests; all-channel unsubscribe; the English-only gap.
+- `BACKLOG.md` — close `[relay] [P1] WhatsApp opt-out (STOP) is NOT handled`. **Add** `[relay] [MED] STOP detection is English-only` (DPDP s.6(4) exposure; non-Latin scripts normalise to '' and are never detected; agent-actioned path is the backstop). Leave the WA-consent-rebuild + s.5(2)-notice items open.
 
 ```bash
 cd /Users/afshaansiddiqui/Documents/Claude
@@ -662,10 +693,17 @@ git add -A && git commit -m "knowledge: WA opt-out handling live [2026-07-17]" &
 
 ---
 
+## Deferred — recorded, not fixed here
+
+Found during the Rev-2 hostile review. None block this plan; all are worth a BACKLOG line.
+
+1. **`latestConsent` has no tiebreaker.** It orders by `captured_at desc, limit 1`. Two rows in the same millisecond → non-deterministic winner. Same class as the S132 shift-version bug this codebase already fixed with an `effective_from.desc, created_at.desc` tiebreaker. Low probability (a STOP→START flip inside 1ms), known pattern. Fix = add `created_at.desc` as a secondary sort.
+2. **`unsubscribeUrl` PATCHes the append-only ledger** to backfill a missing token. Only adds a token, never changes state — but mutating rows that are DPDP s.6(10) evidence is a smell. Consider a separate `unsubscribe_tokens` table.
+3. **`/unsubscribe` is a GET.** Mail scanners and link-prefetchers follow GETs, which can trigger an unsubscribe nobody clicked. RFC 8058 one-click expects `POST` with `List-Unsubscribe-Post`. Pre-existing; worth its own look before volume ramps.
+4. **Webhook subrequest budget.** `handleInbound` now does up to 5 sequential `sbComms` calls per inbound message (window, resolve, event, consent, event-mirror) inside a Worker capped at 50 subrequests. Opt-outs are rare, but a batched Meta payload with many messages could approach it after the support cutover. Move the consent write to the queue if inbound volume grows.
+
 ## Self-review
 
-**Spec coverage.** STOP handling → Tasks 1-3. Cross-channel ("on or off WhatsApp") → Task 4 (agent-actioned) + Task 5 (all-channel unsubscribe). s.6(10) proof burden → `evidence` on every path (Tasks 2-5). s.6(4) ease-comparability → Task 5. Processor cascade → verified non-issue, documented above, no task. WA-consent rebuild + s.5(2) notice → explicitly out of scope, gated on legal. Shortener → separate plan.
+**Spec coverage.** STOP handling → Tasks 1-2. Cross-channel ("on or off WhatsApp") → Task 3 (agent-actioned) + Task 4 (all-channel unsubscribe). s.6(10) proof → `evidence` on every path. s.6(4) ease-comparability → Task 4. Processor cascade → verified non-issue, no task. English-only gap → accepted, tested as a known gap, BACKLOG'd in Task 5 Step 6. WA-consent rebuild + s.5(2) → out of scope, legal-gated. Shortener → separate plan.
 
-**Type consistency.** `applyOptOut(env, {profile_id, channel, purpose, state, source, evidence})` — same signature at all four call sites (Tasks 3, 4, 5). `detectOptOut(text) -> 'opt_out'|'opt_in'|null` — callers map to `state` explicitly rather than passing the intent through. `recordConsent` is used unchanged from `consent.js`.
-
-**Known risk to watch.** `handleInbound` now does up to 4 sequential `sbComms` calls per inbound message (window, ingest, consent, event) inside a webhook. Meta retries on non-2xx, and Workers cap at 50 subrequests — a batched payload with many messages could approach it. Opt-outs are rare enough that this is fine in practice, but if inbound volume grows after the support cutover, move the consent write to the queue.
+**Type consistency.** `applyOptOut(env, {profile_id, channel, purpose, state, source, evidence, unsubscribe_token})` — identical at all four call sites (Tasks 2, 3, 4). `detectOptOut(text) -> 'opt_out'|'opt_in'|null`; callers map to `state` explicitly. `A.canConsentAdmin(auth.permissions)` matches the neighbouring `recordConsent` case. `recordConsent` used unchanged from `consent.js`. Test stubs implement `text()` (not `json()`) and return a bare uuid scalar for `resolve_identity` — matching `sbComms` and `ingest`.
