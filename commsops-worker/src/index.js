@@ -608,7 +608,7 @@ export default {
       const bearer = a.slice(0, 7).toLowerCase() === 'bearer ' ? a.slice(7).trim() : '';
       if (!want || bearer !== want) return err('unauthorised', 401);
       let b = {}; try { b = await request.json(); } catch {}
-      const r = await WATPL.waListTemplates(env, b.wabaIds || []);
+      const r = await WATPL.waListTemplates(env, b.wabaIds || [], b);
       return r.ok ? ok(r) : err(r.error, 400);
     }
 

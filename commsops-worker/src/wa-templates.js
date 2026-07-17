@@ -124,21 +124,37 @@ async function waSyncTemplateStatus(env, body) {
   return { ok: true, synced };
 }
 
-// waListTemplates(env, wabaIds[]) — READ-ONLY catalog pull across WABAs (grant
+// waListTemplates(env, wabaIds[], opts) — READ-ONLY catalog pull across WABAs (grant
 // verification + template inventory). GET only; no sends, no writes. A WABA that
 // 403s = the system user isn't granted it. Returns {wabas:{<id>:{ok,count,templates[]|error}}}.
-async function waListTemplates(env, wabaIds) {
+//
+// opts.search         — Meta-side `name_or_content` filter. USE THIS to find a template:
+//                       the bare list is capped at `limit` and does NOT paginate, and the
+//                       live marketing/support WABAs hold 200+ each, so local filtering
+//                       silently misses anything past the cap. Server-side search escapes it.
+// opts.withComponents — include each template's `components` (header/body/footer/buttons),
+//                       i.e. the actual message text. Off by default: 200 templates' bodies
+//                       is a large payload and most callers only want the inventory.
+async function waListTemplates(env, wabaIds, opts = {}) {
   if (!env.WA_TOKEN) return { ok: false, error: 'wa_not_configured' };
+  const fields = `name,language,status,category${opts.withComponents ? ',components' : ''}`;
+  const limit = Math.min(Number(opts.limit) || 200, 200);
+  const search = opts.search ? `&name_or_content=${encodeURIComponent(opts.search)}` : '';
   const out = {};
   for (const id of (Array.isArray(wabaIds) ? wabaIds : [])) {
     try {
       const res = await fetch(
-        `${graphBase(env)}/${encodeURIComponent(id)}/message_templates?fields=name,language,status,category&limit=200`,
+        `${graphBase(env)}/${encodeURIComponent(id)}/message_templates?fields=${fields}&limit=${limit}${search}`,
         { headers: { Authorization: `Bearer ${env.WA_TOKEN}` } });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { out[id] = { ok: false, status: res.status, error: data?.error?.message || `http_${res.status}` }; continue; }
-      const templates = (data?.data || []).map((t) => ({ name: t.name, language: t.language, status: t.status, category: t.category }));
-      out[id] = { ok: true, count: templates.length, templates };
+      const templates = (data?.data || []).map((t) => {
+        const row = { name: t.name, language: t.language, status: t.status, category: t.category };
+        if (opts.withComponents) row.components = t.components || [];
+        return row;
+      });
+      // `capped` = the page filled exactly, so there are probably more we can't see.
+      out[id] = { ok: true, count: templates.length, capped: templates.length >= limit, templates };
     } catch (e) { out[id] = { ok: false, error: String(e?.message || e) }; }
   }
   return { ok: true, wabas: out };
