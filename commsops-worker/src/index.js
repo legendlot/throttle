@@ -608,7 +608,10 @@ export default {
     if (url.pathname === '/internal/backfill-last-order' && request.method === 'POST') {
       const hdr = request.headers.get('Authorization') || '';
       const tok = hdr.startsWith('Bearer ') ? hdr.slice(7) : (request.headers.get('X-Ingest-Token') || '');
-      if (!env.INGEST_TOKEN || tok !== env.INGEST_TOKEN) return err('unauthorised', 401);
+      // Accept INGEST_TOKEN or WA_SYNC_TOKEN — both are internal service secrets; either
+      // authorises this one-off admin backfill trigger.
+      const okTok = tok && ((env.INGEST_TOKEN && tok === env.INGEST_TOKEN) || (env.WA_SYNC_TOKEN && tok === env.WA_SYNC_TOKEN));
+      if (!okTok) return err('unauthorised', 401);
       const b = await request.json().catch(() => ({}));
       if (b.mode === 'sample') {   // run ONE page inline + return counts (dry-run before the full queue walk)
         const r = await SHOP.backfillLastOrderPage(env, b.after || null);
