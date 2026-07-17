@@ -15,6 +15,7 @@ const SHOPWH = require('./shopify-webhooks.js');
 const SHOPFLO = require('./shopflo-webhooks.js');
 const AL = require('./alerts.js');
 const EA = require('./email-assets.js');
+const OPTOUT = require('./optout.js');
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -255,6 +256,49 @@ async function handlePost(body, auth, env) {
       if (!A.canConsentAdmin(auth.permissions)) return err('forbidden', 403);
       const r = await recordConsent(env, body);
       return r.ok ? ok(r.data?.[0]) : err('db_error', 500);
+    }
+
+    case 'optOutProfile': {            // agent-actioned withdrawal — Meta "on or off WhatsApp"
+      if (!A.canConsentAdmin(auth.permissions)) return err('forbidden', 403);
+      if (!body.profile_id) return err('profile_id_required', 400);
+      const channels = Array.isArray(body.channels) && body.channels.length
+        ? body.channels : ['email', 'sms', 'whatsapp'];
+      const state = body.state === 'opted_in' ? 'opted_in' : 'opted_out';
+      // Attempt every channel, then report. applyOptOut has a mixed contract: it THROWS on
+      // a failed consent write (→ 500, loud, correct for an authenticated admin) but
+      // RETURNS {ok:false} on a validation failure. An unchecked push would send that
+      // {ok:false} back inside a 200 — the agent would believe a customer's withdrawal was
+      // recorded when nothing was written. That is the same silent-loss failure optout.js
+      // throws to prevent, one layer up. Both validation branches are unreachable from this
+      // call site today (profile_id is guarded above, state is a ternary) — but that is
+      // unreachability by call site, not by contract, so check it anyway.
+      //
+      // Deliberately does NOT abort on first failure: a partial withdrawal is safe
+      // (over-withdrawing never harms a customer) and attempting all channels tells the
+      // agent exactly which ones need a retry. applyOptOut is idempotent-safe — the ledger
+      // is append-only and latest-wins, so a retry costs a duplicate row, nothing more.
+      const applied = [];
+      for (const ch of channels) {
+        const r = await OPTOUT.applyOptOut(env, {
+          profile_id: body.profile_id,
+          channel: ch,
+          purpose: 'marketing',
+          state,
+          source: 'agent_actioned',
+          evidence: {
+            actioned_by: auth.email || auth.userId || 'unknown',
+            reason: body.reason || null,
+            requested_via: body.requested_via || null,
+            actioned_at: new Date().toISOString(),
+          },
+        });
+        applied.push({ channel: ch, ...r });
+      }
+      const failed = applied.filter((r) => !r.ok);
+      if (failed.length) {
+        return err(`optout_failed:${failed.map((f) => `${f.channel}:${f.error}`).join(',')}`, 500);
+      }
+      return ok({ applied });
     }
 
     case 'saveTemplate': {             // M5 — editing an active template publishes a new version
