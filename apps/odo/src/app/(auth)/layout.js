@@ -5,6 +5,7 @@ import { RequireAuth, useAuth } from '@throttle/auth';
 import { Spinner, AppLauncher } from '@throttle/ui';
 import { LayoutDashboard, Receipt, Store, Boxes, Megaphone, Filter, GitMerge, PlugZap, Upload, ShieldCheck, LogOut, ChevronDown, ChevronRight, Landmark, Gauge } from 'lucide-react';
 import { FAMILY_ORDER, FAMILIES } from '../../lib/families.js';
+import { FreshnessProvider, FreshnessChip } from '../../components/Freshness.js';
 
 const CHANNEL_CHILDREN = FAMILY_ORDER.map(k => ({ route: `/channels/${k}`, label: FAMILIES[k].label }));
 const PRODUCT_CHILDREN = [{ route: '/products/drr', label: 'DRR' }, { route: '/products/pnl', label: 'P&L' }];
@@ -26,7 +27,7 @@ const NAV = [
 ];
 
 export default function AuthLayout({ children }) {
-  return <RequireAuth><Shell>{children}</Shell></RequireAuth>;
+  return <RequireAuth><FreshnessProvider><Shell>{children}</Shell></FreshnessProvider></RequireAuth>;
 }
 
 function Shell({ children }) {
@@ -86,7 +87,10 @@ function Shell({ children }) {
       <div className="so-main">
         <header style={{ height: 56, borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 28px', flexShrink: 0 }}>
           <div style={{ fontFamily: 'var(--cond)', fontWeight: 600, fontSize: 16, letterSpacing: '0.04em', color: 'var(--t1)' }}>{title}</div>
-          <AppLauncher current="odo" />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <FreshnessChip />
+            <AppLauncher current="odo" />
+          </div>
         </header>
         <div className="so-scroll">{children}</div>
       </div>

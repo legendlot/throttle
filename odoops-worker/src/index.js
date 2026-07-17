@@ -2650,6 +2650,41 @@ export default {
             });
           }
 
+          case 'getFreshness': {   // Data-freshness stamp — every feed's last successful run + manual-input mtimes.
+            // Deliberately NOT served off getBootstrap: getChannels() filters is_sale=eq.true, so the
+            // ad/analytics feeds (Meta/Google/Amazon Ads/DSP/GA4/Razorpay/Uniware-agg — all synthetic
+            // is_sale=false channels) are invisible there. /marketing + /funnel depend on exactly those.
+            if (!canView(P)) return err('No permission', 403);
+            const [ccR, chR, pmR, pcR, ubR] = await Promise.all([
+              sbSales('/rest/v1/connector_config?select=channel_id,adapter_kind,enabled,last_ok_at,last_error'),
+              sbPublic('/rest/v1/dispatch_channels?select=id,name,is_sale'),
+              sbSales('/rest/v1/pnl_manual?select=updated_at&order=updated_at.desc&limit=1'),
+              sbSales('/rest/v1/product_cost?select=updated_at&order=updated_at.desc&limit=1'),
+              sbSales('/rest/v1/upload_batch?select=uploaded_at&order=uploaded_at.desc&limit=1'),
+            ]);
+            if (!ccR.ok) return err('Freshness read failed: ' + JSON.stringify(ccR.data), 502);
+            const chById = {}; (chR.ok ? chR.data : []).forEach(c => { chById[c.id] = c; });
+            const feeds = (ccR.data || []).map(c => ({
+              channel_id: c.channel_id,
+              name: chById[c.channel_id]?.name || '—',
+              is_sale: !!chById[c.channel_id]?.is_sale,
+              adapter_kind: c.adapter_kind || null,
+              enabled: !!c.enabled,
+              last_ok_at: c.last_ok_at || null,
+              last_error: c.last_error || null,
+            })).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+            const first = (r, col) => (r.ok && r.data && r.data[0] ? r.data[0][col] : null) || null;
+            return ok({
+              feeds,
+              manual: {
+                pnl_manual:   first(pmR, 'updated_at'),
+                product_cost: first(pcR, 'updated_at'),
+                upload_batch: first(ubR, 'uploaded_at'),
+              },
+              server_now: new Date().toISOString(),
+            });
+          }
+
           case 'wfProbe': {
             if (!canConnector(P)) return err('No permission', 403);
             const cid = qp('channel_id');
