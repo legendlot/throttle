@@ -13,6 +13,8 @@ const J = require('./journeys.js');
 const SHOP = require('./shopify.js');
 const SHOPWH = require('./shopify-webhooks.js');
 const SHOPFLO = require('./shopflo-webhooks.js');
+const CF = require('./cashfree.js');
+const CFWH = require('./cashfree-webhooks.js');
 const AL = require('./alerts.js');
 const EA = require('./email-assets.js');
 const OPTOUT = require('./optout.js');
@@ -483,6 +485,17 @@ async function handlePost(body, auth, env) {
       const r = await WATPL.waSyncTemplateStatus(env, body);
       return r.ok ? ok(r) : err(r.error, 400);
     }
+    case 'cashfreeMintTestLink': {        // J3 — mint a Cashfree pay-link (sandbox bring-up proof)
+      if (!A.canSuperAdmin(auth.permissions)) return err('forbidden', 403);
+      const r = await CF.createPaymentLink(env, {
+        amount: body.amount, phone: body.phone, email: body.email, name: body.name,
+        purpose: body.purpose || 'Relay Cashfree test link',
+        linkId: body.linkId || `relay-test-${Date.now()}`,
+        notes: body.notes, notifyUrl: body.notifyUrl, returnUrl: body.returnUrl,
+        notifySms: !!body.notifySms, notifyEmail: !!body.notifyEmail,
+      });
+      return r.ok ? ok(r) : err(r.error, r.status || 400);
+    }
 
     default:
       return err(`unknown_action:${body.action}`, 404);
@@ -680,6 +693,14 @@ export default {
     // payload to comms.webhook_captures until the mapper is written off a real sample.
     if (url.pathname === '/webhooks/shopflo' && request.method === 'POST') {
       const r = await SHOPFLO.handleShopfloWebhook(env, request);
+      return r.ok ? ok(r) : err(r.error, r.status || 400);
+    }
+    // Cashfree payment-link webhook (J3 COD→prepaid). HMAC-verified (x-webhook-signature
+    // over x-webhook-timestamp + raw body, keyed on CASHFREE_CLIENT_SECRET). Maps a
+    // PAID/EXPIRED/CANCELLED link → /ingest → the J1 wait_response matcher. Inert 503
+    // until CASHFREE_CLIENT_ID/_SECRET set; discovery-captures unmapped shapes.
+    if (url.pathname === '/webhook/cashfree' && request.method === 'POST') {
+      const r = await CFWH.handleCashfreeWebhook(env, request);
       return r.ok ? ok(r) : err(r.error, r.status || 400);
     }
     // Internal WA template catalog pull (read-only Graph GET) — token-gated by WA_SYNC_TOKEN
