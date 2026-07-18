@@ -128,9 +128,16 @@ function timingSafeEqual(a, b) {
   return diff === 0;
 }
 
+// The webhook signing key: prefer a dedicated CASHFREE_WEBHOOK_SECRET (the newer
+// "Add Webhook Endpoint" flow can generate a per-endpoint secret distinct from the API
+// client secret), falling back to the client secret (legacy / per-link notify_url path).
+function webhookSecret(env) {
+  return env.CASHFREE_WEBHOOK_SECRET || env.CASHFREE_CLIENT_SECRET || '';
+}
 async function verifyWebhook(env, timestamp, rawBody, signature) {
-  if (!env.CASHFREE_CLIENT_SECRET || !signature || !timestamp) return false;
-  const expected = await computeSignature(env.CASHFREE_CLIENT_SECRET, timestamp, rawBody);
+  const secret = webhookSecret(env);
+  if (!secret || !signature || !timestamp) return false;
+  const expected = await computeSignature(secret, timestamp, rawBody);
   return timingSafeEqual(expected, String(signature));
 }
 

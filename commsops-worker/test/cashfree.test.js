@@ -128,6 +128,18 @@ t('verifyWebhook accepts a correct signature, rejects tampering', async () => {
   assert.strictEqual(await CF.verifyWebhook(env, ts, raw, ''), false);        // no sig
 });
 
+t('verifyWebhook prefers CASHFREE_WEBHOOK_SECRET over client secret', async () => {
+  const ts = '1737200000000';
+  const raw = '{"type":"PAYMENT_LINK_EVENT"}';
+  const sigWebhook = await CF.computeSignature('endpoint-secret', ts, raw);
+  const sigClient = await CF.computeSignature('client-secret', ts, raw);
+  const env = { CASHFREE_CLIENT_SECRET: 'client-secret', CASHFREE_WEBHOOK_SECRET: 'endpoint-secret' };
+  assert.strictEqual(await CF.verifyWebhook(env, ts, raw, sigWebhook), true);  // endpoint secret wins
+  assert.strictEqual(await CF.verifyWebhook(env, ts, raw, sigClient), false);  // client secret no longer accepted
+  // fallback: no endpoint secret → client secret is used
+  assert.strictEqual(await CF.verifyWebhook({ CASHFREE_CLIENT_SECRET: 'client-secret' }, ts, raw, sigClient), true);
+});
+
 // ── webhook → /ingest mapping ──
 const PAID = {
   type: 'PAYMENT_LINK_EVENT', event_time: '2026-07-19T10:00:00+05:30',

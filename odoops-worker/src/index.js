@@ -2649,9 +2649,11 @@ export default {
     // (provider='cashfree'). Inert 503 until CASHFREE_CLIENT_SECRET set. Full payload lands in
     // stg_payments.raw so the field mapping is verifiable/adjustable against real sandbox data.
     if (request.method === 'POST' && url.pathname === '/webhook/cashfree') {
-      if (!env.CASHFREE_CLIENT_SECRET) return new Response('cashfree not configured', { status: 503 });
+      // Prefer a dedicated per-endpoint signing secret (newer webhook UI) over the API client secret.
+      const cfSecret = env.CASHFREE_WEBHOOK_SECRET || env.CASHFREE_CLIENT_SECRET || '';
+      if (!cfSecret) return new Response('cashfree not configured', { status: 503 });
       const raw = await request.text();
-      const okSig = await verifyCashfreeSig(raw, request.headers.get('x-webhook-timestamp') || '', request.headers.get('x-webhook-signature') || '', env.CASHFREE_CLIENT_SECRET);
+      const okSig = await verifyCashfreeSig(raw, request.headers.get('x-webhook-timestamp') || '', request.headers.get('x-webhook-signature') || '', cfSecret);
       if (!okSig) return new Response('invalid signature', { status: 401 });
       let body = {}; try { body = JSON.parse(raw); } catch { /* ignore */ }
       if (String(body.type || '').startsWith('PAYMENT_')) {   // PAYMENT_SUCCESS/FAILED/USER_DROPPED_WEBHOOK
