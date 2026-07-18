@@ -115,5 +115,36 @@ const { compile } = require('../src/journeys.js');
   }
   console.log('compile J1 cycle + reserved-outcome ok');
 
+  // J3 action nodes — valid set_attr + payment_link (both handles wired)
+  {
+    const def = { entry: 'a', steps: {
+      a: { type: 'action', kind: 'set_attr', attr: 'converted', value: true, outcomes: { next: 'p' } },
+      p: { type: 'action', kind: 'payment_link', purpose: 'Pay', outcomes: { next: 'ex', failed: 'ex' } },
+      ex: { type: 'exit', outcome: 'completed' } } };
+    assert.deepEqual((await compile({}, def)).errors, []);
+  }
+  // bad action kind
+  {
+    const def = { entry: 'a', steps: {
+      a: { type: 'action', kind: 'wat', outcomes: { next: 'ex' } }, ex: { type: 'exit' } } };
+    const r = await compile({}, def);
+    assert.ok(r.errors.includes('bad_action_kind:a:wat'), JSON.stringify(r.errors));
+  }
+  // set_attr missing attr
+  {
+    const def = { entry: 'a', steps: {
+      a: { type: 'action', kind: 'set_attr', outcomes: { next: 'ex' } }, ex: { type: 'exit' } } };
+    const r = await compile({}, def);
+    assert.ok(r.errors.includes('set_attr_no_attr:a'), JSON.stringify(r.errors));
+  }
+  // payment_link missing the 'failed' branch → action_handle_missing
+  {
+    const def = { entry: 'p', steps: {
+      p: { type: 'action', kind: 'payment_link', outcomes: { next: 'ex' } }, ex: { type: 'exit' } } };
+    const r = await compile({}, def);
+    assert.ok(r.errors.some((e) => e.startsWith('action_handle_missing:p:failed')), JSON.stringify(r.errors));
+  }
+  console.log('compile J3 action ok');
+
   console.log('journeys-compile.test.js: all assertions passed');
 })().catch((e) => { console.error(e); process.exit(1); });

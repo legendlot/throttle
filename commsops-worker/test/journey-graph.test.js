@@ -82,3 +82,16 @@ console.log('journey-graph J1 helpers ok');
   assert.deepEqual(G2.resolveSendNext(def.steps.s, { status: 'suppressed' }, def), { terminate: 'unreachable' });
 }
 console.log('resolveSendNext ok');
+
+// J3 — handlesFor: action nodes have DYNAMIC handles by kind
+assert.deepEqual(G.handlesFor({ type: 'action', kind: 'payment_link' }), ['next', 'failed']);
+assert.deepEqual(G.handlesFor({ type: 'action', kind: 'set_attr' }), ['next']);
+assert.deepEqual(G.handlesFor({ type: 'action', kind: 'unknown' }), ['next']);
+assert.deepEqual(G.handlesFor({ type: 'send' }), ['next']);
+assert.deepEqual(G.handlesFor({ type: 'condition' }), ['if_true', 'if_false']);
+assert.deepEqual(G.handlesFor({ type: 'wait_response' }), ['responded', 'timeout']);
+// stepTargets picks up the action's failed branch declared via outcomes
+assert.deepEqual(
+  G.stepTargets({ type: 'action', kind: 'payment_link', outcomes: { next: 'a', failed: 'b' } }).sort(),
+  ['a', 'b']);
+console.log('handlesFor ok');

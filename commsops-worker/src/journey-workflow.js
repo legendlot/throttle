@@ -6,6 +6,7 @@ import { WorkflowEntrypoint } from 'cloudflare:workers';
 const A = require('./auth.js');
 const { send } = require('./send.js');
 const G = require('./journey-graph.js');
+const CF = require('./cashfree.js');
 
 const MAX_TRANSITIONS = 100; // safety against a mis-validated cyclic definition
 
@@ -165,6 +166,13 @@ class JourneyWorkflow extends WorkflowEntrypoint {
         await this.#logStep(env, step, enrolmentId, cur, s.type, { ...res, on_skip: s.on_skip || 'continue', skipped_wait: decision.skippedWait || null });
         if (decision.terminate) { await this.#end(env, step, enrolmentId, decision.terminate, cur); return; }
         cur = decision.next;
+      } else if (s.type === 'action') {
+        // J3: side-effect nodes. Memoized by step id (step.do(cur)) so a durable retry
+        // never re-executes the side effect. #doAction NEVER throws — it returns an
+        // outcome handle ('next'|'failed') the graph routes on.
+        const res = await step.do(cur, async () => this.#doAction(env, s, profileId, enrolmentId, cur, triggerProps));
+        await this.#logStep(env, step, enrolmentId, cur, s.type, { kind: s.kind || null, ...res });
+        cur = G.resolveTarget(s, res.outcome || 'next');
       } else if (s.type === 'exit') {
         await this.#logStep(env, step, enrolmentId, cur, s.type, { outcome: s.outcome || 'completed' });
         await this.#end(env, step, enrolmentId, s.outcome === 'exited' ? 'exited' : (s.outcome || 'completed'), cur);
@@ -197,6 +205,54 @@ class JourneyWorkflow extends WorkflowEntrypoint {
       tracking: { campaign: journeyName },
       source: `journey:${enrolmentId}`, dedupKey: `journey:${enrolmentId}:${stepId}`,
     });
+  }
+
+  // J3 action node. Side-effect steps that never send to the customer themselves
+  // (delivery is a separate, gated `send` node). Returns an outcome handle. NEVER throws.
+  //  - set_attr     — merge {attr:value} into the profile's attributes → 'next'.
+  //  - payment_link — mint a Cashfree pay-link (J3 COD→prepaid) and stash its URL onto
+  //    the profile so a downstream send template can bind {payment_link_url}. The paid/
+  //    failed OUTCOME arrives later as the payment_link_paid/_failed webhook event → a
+  //    wait_response node parks on it. INERT until comms.settings.payment_links_enabled
+  //    is flipped on (mints nothing while off — the belt-and-braces go-live switch).
+  async #doAction(env, s, profileId, enrolmentId, stepId, triggerProps) {
+    const kind = s.kind;
+    if (kind === 'set_attr') {
+      if (!s.attr) return { outcome: 'next', skipped: 'no_attr' };
+      const r = await A.sbComms(`/rest/v1/profiles?id=eq.${A.enc(profileId)}&select=attributes&limit=1`, env);
+      const attrs = (r.ok && r.data?.[0]?.attributes) || {};
+      attrs[s.attr] = s.value ?? null;
+      await A.sbComms(`/rest/v1/profiles?id=eq.${A.enc(profileId)}`, env,
+        { method: 'PATCH', body: JSON.stringify({ attributes: attrs, updated_at: new Date().toISOString() }) });
+      return { outcome: 'next', attr: s.attr };
+    }
+    if (kind === 'payment_link') {
+      const setR = await A.sbComms('/rest/v1/settings?id=eq.1&select=payment_links_enabled&limit=1', env);
+      if (!(setR.ok && setR.data?.[0]?.payment_links_enabled === true)) return { outcome: 'failed', reason: 'payment_links_disabled' };
+      // Amount: a fixed step amount, else the trigger order's total (COD order → pay-link).
+      const amount = Number(s.amount) || Number(triggerProps?.total ?? triggerProps?.total_price ?? triggerProps?.total_payable ?? triggerProps?.order_amount) || null;
+      const idr = await A.sbComms(`/rest/v1/identifiers?profile_id=eq.${A.enc(profileId)}&type=eq.phone&select=value&order=last_seen.desc&limit=1`, env);
+      const phone = idr.ok ? idr.data?.[0]?.value : null;
+      if (!phone) return { outcome: 'failed', reason: 'no_phone' };
+      if (!amount || amount <= 0) return { outcome: 'failed', reason: 'no_amount' };
+      const orderId = triggerProps?.order_id ?? triggerProps?.shopflo_order_id ?? triggerProps?.order_name ?? null;
+      const r = await CF.createPaymentLink(env, {
+        amount, phone,
+        purpose: s.purpose || 'Complete your order payment',
+        // Deterministic id → the Cashfree mint is idempotent + the paid webhook's
+        // link_notes echo these refs back for order reconciliation.
+        linkId: `relay-${enrolmentId}-${stepId}`,
+        notes: { enrolment: String(enrolmentId), ...(orderId ? { order_id: String(orderId) } : {}) },
+      });
+      if (!r.ok) return { outcome: 'failed', reason: r.error };
+      const pr = await A.sbComms(`/rest/v1/profiles?id=eq.${A.enc(profileId)}&select=attributes&limit=1`, env);
+      const attrs = (pr.ok && pr.data?.[0]?.attributes) || {};
+      attrs.payment_link_url = r.link_url; attrs.payment_link_id = r.link_id;
+      await A.sbComms(`/rest/v1/profiles?id=eq.${A.enc(profileId)}`, env,
+        { method: 'PATCH', body: JSON.stringify({ attributes: attrs, updated_at: new Date().toISOString() }) });
+      return { outcome: 'next', link_id: r.link_id };
+    }
+    return { outcome: 'failed', reason: `unknown_action_kind:${kind}` };
   }
 
   // Park on the single 'signal' event type with a timeout. Returns:

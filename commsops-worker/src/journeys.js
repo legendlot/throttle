@@ -31,8 +31,14 @@ async function compile(env, definition, journey) {
     const s = steps[id];
     if (G.RESERVED_STEP_IDS.includes(id) || /^(log:|end:|precheck:|precheckx:|waitreg:|waitclr:|since:|clear-waits:)/.test(id))
       errors.push(`reserved_step_id:${id}`);
-    if (!['wait', 'condition', 'send', 'wait_response', 'exit'].includes(s.type)) errors.push(`bad_type:${id}:${s.type}`);
+    if (!['wait', 'condition', 'send', 'wait_response', 'exit', 'action'].includes(s.type)) errors.push(`bad_type:${id}:${s.type}`);
     for (const t of targets(s)) if (!steps[t]) errors.push(`dangling_target:${id}->${t}`);
+    if (s.type === 'action') {
+      if (!['payment_link', 'set_attr'].includes(s.kind)) errors.push(`bad_action_kind:${id}:${s.kind}`);
+      if (s.kind === 'set_attr' && !s.attr) errors.push(`set_attr_no_attr:${id}`);
+      // every outcome handle the kind declares must route somewhere (no dangling branch)
+      for (const h of G.handlesFor(s)) if (!steps[G.resolveTarget(s, h)]) errors.push(`action_handle_missing:${id}:${h}`);
+    }
     if (s.type === 'condition' &&
         (!steps[G.resolveTarget(s, 'if_true')] || !steps[G.resolveTarget(s, 'if_false')]))
       errors.push(`condition_branch_missing:${id}`);

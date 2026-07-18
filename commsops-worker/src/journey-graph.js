@@ -17,13 +17,25 @@ function resolveTarget(step, handle) {
   return null;
 }
 
+// Outcome handles a step declares, DYNAMIC per step (J3): an `action` node's handles
+// depend on its kind (interactive buttons / action kinds are data, not fixed). Compile,
+// interpreter, and the canvas all read handles through here so they can't drift.
+function handlesFor(step) {
+  if (!step) return [];
+  if (step.type === 'action') {
+    if (step.kind === 'payment_link') return ['next', 'failed'];
+    return ['next']; // set_attr (and any future no-branch action) → next
+  }
+  return HANDLES[step.type] || [];
+}
+
 // Every non-empty target the step declares (for reachability / dangling checks).
 // Handle-aware: each handle resolves through resolveTarget so a mixed-shape step
 // (outcomes for one handle + a legacy field for another) validates exactly the
 // targets the runtime will follow — no validator/runtime drift.
 function stepTargets(step) {
   if (!step) return [];
-  const handles = new Set([...(step.outcomes ? Object.keys(step.outcomes) : []), ...LEGACY_HANDLES]);
+  const handles = new Set([...(step.outcomes ? Object.keys(step.outcomes) : []), ...LEGACY_HANDLES, ...handlesFor(step)]);
   return [...handles].map((h) => resolveTarget(step, h)).filter(Boolean);
 }
 
@@ -80,4 +92,4 @@ function resolveSendNext(step, res, def) {
   return { next: plainNext };
 }
 
-module.exports = { resolveTarget, stepTargets, ID_TYPE_FOR_CHANNEL, HANDLES, RESERVED_STEP_IDS, durationToMs, sendWentOut, resolveSendNext };
+module.exports = { resolveTarget, stepTargets, handlesFor, ID_TYPE_FOR_CHANNEL, HANDLES, RESERVED_STEP_IDS, durationToMs, sendWentOut, resolveSendNext };
