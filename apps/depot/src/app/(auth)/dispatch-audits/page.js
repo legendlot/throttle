@@ -180,6 +180,31 @@ function NewAuditModal({ session, toast, onClose, onCreated }) {
   );
 }
 
+function csvCell(v) {
+  const s = v == null ? '' : String(v);
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+// Discrepancy lines → CSV (matches the on-screen table + car_upc split out for analysis).
+// "Last Stage" = where the unit was last seen (missing → expected_status, extra → found_status);
+// "Correction" = what it's moving to now.
+function downloadAuditCsv(audit, lines) {
+  const header = ['Result', 'Product', 'Model', 'Color', 'Car UPC', 'Batch Label', 'Last Stage', 'Correction'];
+  const rows = lines.map(l => {
+    const lastStage = l.result === 'missing' ? (l.expected_status || '') : (l.found_status || '');
+    const correction = l.reviewed
+      ? (l.corrected_to_status ? `-> ${l.corrected_to_status}` : (l.correction === 'skip' ? 'skipped' : 'no change'))
+      : (l.correction === 'write_off' ? '-> lost' : '-> handed_over');
+    return [l.result, l.product, l.model, l.color, l.car_upc, l.batch_label, lastStage, correction];
+  });
+  const csv = [header, ...rows].map(r => r.map(csvCell).join(',')).join('\r\n');
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `${audit.audit_no}-discrepancies.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
 function AuditDetail({ auditNo, session, toast, canRecord, canApprove, meId, onBack }) {
   const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
@@ -315,7 +340,12 @@ function AuditDetail({ auditNo, session, toast, canRecord, canApprove, meId, onB
           {/* IN REVIEW / COMPLETED / CANCELLED — frozen lines */}
           {!isOpen && (
             <>
-              <SectionTitle>Discrepancies ({lines.length})</SectionTitle>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <SectionTitle>Discrepancies ({lines.length})</SectionTitle>
+                {lines.length > 0 && (
+                  <button onClick={() => downloadAuditCsv(audit, lines)} style={btnS}>⬇ CSV</button>
+                )}
+              </div>
               {lines.length === 0 ? <Muted>No discrepancies — scanned stock matched the system exactly.</Muted> : (
                 <div style={{ overflowX: 'auto', maxHeight: 540, overflowY: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse' }}>

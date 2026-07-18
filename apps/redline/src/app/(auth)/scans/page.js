@@ -1,8 +1,8 @@
 'use client';
 /* ════════════════════════════════════════════════════════════
    SCANS — Inbox stream (Pit Wall v2). Scan feed with date
-   presets, activity filters, UPC search (server-side ≥4 chars
-   via getScansByUpc, client-side 1–3), voided toggle, summary
+   presets, activity filters, UPC search (server-side ≥3 chars
+   via getScansByUpc — global, box-label aware; client-side 1–2), voided toggle, summary
    tiles and cursor load-more. Data actions unchanged:
    useScans (getAllScans) · getScanSummary · getScansByUpc.
    ════════════════════════════════════════════════════════════ */
@@ -164,8 +164,9 @@ export default function ScansPage() {
       setUpcScans([]);
       return;
     }
-    if (trimmed.length >= 4) {
-      // Long search → fetch via getScansByUpc
+    if (trimmed.length >= 3) {
+      // ≥3 chars → global server lookup via getScansByUpc (all history, not just the
+      // loaded page). Handles full UPCs, bare/short numbers, and box labels (LOT-…-E/R).
       debounceRef.current = setTimeout(async () => {
         if (!session) return;
         setUpcLoading(true);
@@ -180,7 +181,7 @@ export default function ScansPage() {
         }
       }, 500);
     } else {
-      // 1–3 chars → client-side filter (200ms debounce just to settle UI)
+      // 1–2 chars → client-side quick-filter of the loaded rows (200ms to settle UI)
       debounceRef.current = setTimeout(() => {
         setUpcMode(false);
       }, 200);
@@ -223,7 +224,7 @@ export default function ScansPage() {
     // In UPC mode, allow toggle to filter voided client-side; in normal mode the hook already excludes
     if (upcMode && !showVoided) rows = rows.filter(r => !r.voided);
     if (upcMode && activityFilter) rows = rows.filter(r => r.activity === activityFilter);
-    if (!upcMode && trimmed.length >= 1 && trimmed.length <= 3) {
+    if (!upcMode && trimmed.length >= 1 && trimmed.length <= 2) {
       rows = rows.filter(r => (r.upc || '').toUpperCase().includes(trimmed));
     }
     return rows;
@@ -265,7 +266,7 @@ export default function ScansPage() {
         <input
           data-search-primary
           type="text"
-          placeholder="Search UPC…  · /"
+          placeholder="Search UPC / box label…  · /"
           style={searchInput}
           value={upcSearch}
           onChange={e => setUpcSearch(e.target.value)}
