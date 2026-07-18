@@ -71,12 +71,13 @@ async function createPaymentLink(env, opts = {}) {
     // verbatim on the webhook so the paid signal can convert the right order.
     ...(opts.notes && typeof opts.notes === 'object' ? { link_notes: opts.notes } : {}),
     ...(opts.expiryTime ? { link_expiry_time: opts.expiryTime } : {}),
-    ...((opts.notifyUrl || opts.returnUrl)
-      ? { link_meta: {
-          ...(opts.notifyUrl ? { notify_url: opts.notifyUrl } : {}),
-          ...(opts.returnUrl ? { return_url: opts.returnUrl } : {}),
-        } }
-      : {}),
+    // link_meta.notify_url is the PER-LINK webhook: Cashfree POSTs the payment-link
+    // lifecycle (paid/expired/cancelled) HERE, NOT to the global PG webhook. Default it
+    // to our own /webhook/cashfree so every Relay-minted link self-wires its callback.
+    link_meta: {
+      notify_url: opts.notifyUrl || `${env.PUBLIC_BASE_URL || 'https://commsops.afshaan.workers.dev'}/webhook/cashfree`,
+      ...(opts.returnUrl ? { return_url: opts.returnUrl } : {}),
+    },
   };
 
   const headers = {

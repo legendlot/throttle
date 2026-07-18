@@ -5,10 +5,13 @@ const assert = require('assert');
 const CF = require('../src/cashfree.js');
 
 let pass = 0, fail = 0;
-function t(name, fn) {
-  Promise.resolve().then(fn).then(
-    () => { pass++; console.log('  ok  ', name); },
-    (e) => { fail++; console.log('  FAIL', name, '\n        ', e.message); });
+const queue = [];
+function t(name, fn) { queue.push([name, fn]); }  // collected, run sequentially below
+async function run() {
+  for (const [name, fn] of queue) {
+    try { await fn(); pass++; console.log('  ok  ', name); }
+    catch (e) { fail++; console.log('  FAIL', name, '\n        ', e.message); }
+  }
 }
 
 // ── config gate / base url ──
@@ -78,6 +81,27 @@ t('createPaymentLink shapes headers + body + returns link', async () => {
     assert.strictEqual(b.link_meta.notify_url, 'https://commsops.afshaan.workers.dev/webhook/cashfree');
   } finally { global.fetch = orig; }
 });
+t('createPaymentLink defaults link_meta.notify_url to our own webhook', async () => {
+  const env = { CASHFREE_CLIENT_ID: 'id', CASHFREE_CLIENT_SECRET: 'sec' };
+  let captured = null;
+  const orig = global.fetch;
+  global.fetch = async (url, opts) => { captured = opts; return { ok: true, status: 200, text: async () => '{}' }; };
+  try {
+    await CF.createPaymentLink(env, { amount: 10, phone: '9000000000' });
+    const b = JSON.parse(captured.body);
+    assert.strictEqual(b.link_meta.notify_url, 'https://commsops.afshaan.workers.dev/webhook/cashfree');
+  } finally { global.fetch = orig; }
+});
+t('createPaymentLink honours PUBLIC_BASE_URL + explicit notifyUrl', async () => {
+  const orig = global.fetch;
+  global.fetch = async (url, opts) => { global.__b = JSON.parse(opts.body); return { ok: true, status: 200, text: async () => '{}' }; };
+  try {
+    await CF.createPaymentLink({ CASHFREE_CLIENT_ID: 'i', CASHFREE_CLIENT_SECRET: 's', PUBLIC_BASE_URL: 'https://x.dev' }, { amount: 10, phone: '9000000000' });
+    assert.strictEqual(global.__b.link_meta.notify_url, 'https://x.dev/webhook/cashfree');
+    await CF.createPaymentLink({ CASHFREE_CLIENT_ID: 'i', CASHFREE_CLIENT_SECRET: 's' }, { amount: 10, phone: '9000000000', notifyUrl: 'https://y.dev/hook' });
+    assert.strictEqual(global.__b.link_meta.notify_url, 'https://y.dev/hook');
+  } finally { global.fetch = orig; delete global.__b; }
+});
 t('createPaymentLink surfaces a Cashfree error body', async () => {
   const env = { CASHFREE_CLIENT_ID: 'id', CASHFREE_CLIENT_SECRET: 'sec' };
   const orig = global.fetch;
@@ -145,7 +169,7 @@ t('mapPaymentLinkEvent no identity → null', () => {
   assert.strictEqual(e, null);
 });
 
-process.on('exit', () => {
+run().then(() => {
   console.log(`\ncashfree: ${pass} passed, ${fail} failed`);
   if (fail) process.exitCode = 1;
 });
