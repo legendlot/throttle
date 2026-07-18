@@ -17,6 +17,27 @@ export default function ConnectorsPage() {
   const [shopResult, setShopResult] = useState(null);
   const [whBusy, setWhBusy] = useState(false);
   const [whResult, setWhResult] = useState(null);
+  const [cfBusy, setCfBusy] = useState(false);
+  const [cfResult, setCfResult] = useState(null);
+  const [cfForm, setCfForm] = useState({ amount: '1', phone: '', purpose: 'Relay Cashfree sandbox test' });
+
+  // Cashfree — mint a sandbox payment link (J3 bring-up proof). The minted link
+  // self-wires its per-link notify_url → commsops /webhook/cashfree, so paying it
+  // fires a payment_link_paid event we can watch. Inert until the CASHFREE_* secrets
+  // are set on commsops (returns cashfree_not_configured).
+  async function cashfreeMint() {
+    if (!cfForm.phone.trim()) { showToast('Enter a phone number', 'error'); return; }
+    setCfBusy(true); setCfResult(null);
+    try {
+      const r = await workerFetch('cashfreeMintTestLink', {
+        amount: Number(cfForm.amount) || 1, phone: cfForm.phone.trim(), purpose: cfForm.purpose,
+      }, session);
+      const d = r?.data || {};
+      setCfResult(d);
+      showToast(d.link_url ? 'Payment link minted' : 'Minted', 'success');
+    } catch (e) { showToast(e.message || 'Mint failed', 'error'); setCfResult({ error: e.message }); }
+    finally { setCfBusy(false); }
+  }
 
   async function shopifyBackfill(mode) {
     if (mode === 'full' && !window.confirm('Import ALL Shopify customers into Relay?\n\nProfiles + consent only — no emails are sent (Test Mode is the separate lock). Runs in the background.')) return;
@@ -109,6 +130,44 @@ export default function ConnectorsPage() {
           </div>
         </Panel>
       )}
+
+      {perms?.relay_super_admin && (
+        <Panel title="Cashfree — payment link (sandbox)">
+          <div style={{ padding: 16 }}>
+            <div style={{ fontSize: 13, color: 'var(--text-3)', marginBottom: 12 }}>
+              Mints a Cashfree payment link (J3 COD→prepaid). The link self-wires its callback to
+              <span className="mono"> /webhook/cashfree</span>, so paying it fires a
+              <span className="mono"> payment_link_paid</span> event. <strong>Inert until the CASHFREE_* secrets are set on commsops.</strong>
+              {' '}Environment follows <span className="mono">CASHFREE_ENV</span> (defaults to sandbox).
+            </div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <label style={{ fontSize: 12, color: 'var(--text-3)' }}>Amount (₹)<br />
+                <input type="number" min="1" value={cfForm.amount}
+                  onChange={(e) => setCfForm((f) => ({ ...f, amount: e.target.value }))}
+                  style={{ width: 90, marginTop: 4 }} /></label>
+              <label style={{ fontSize: 12, color: 'var(--text-3)' }}>Customer phone<br />
+                <input type="tel" placeholder="9876543210" value={cfForm.phone}
+                  onChange={(e) => setCfForm((f) => ({ ...f, phone: e.target.value }))}
+                  style={{ width: 160, marginTop: 4 }} /></label>
+              <label style={{ fontSize: 12, color: 'var(--text-3)', flex: 1, minWidth: 180 }}>Purpose<br />
+                <input type="text" value={cfForm.purpose}
+                  onChange={(e) => setCfForm((f) => ({ ...f, purpose: e.target.value }))}
+                  style={{ width: '100%', marginTop: 4 }} /></label>
+              <Btn kind="primary" onClick={cashfreeMint} disabled={cfBusy}>Mint test link</Btn>
+            </div>
+            {cfBusy && <div style={{ marginTop: 10, color: 'var(--text-3)', fontSize: 13 }}><Spinner /> minting…</div>}
+            {cfResult?.error && <div style={{ marginTop: 10, fontSize: 13, color: 'var(--signal-red, #DE2A2A)' }}>Error: {cfResult.error}</div>}
+            {cfResult?.link_url && (
+              <div style={{ marginTop: 12, fontSize: 13 }}>
+                <div>Link <span className="mono">{cfResult.link_id}</span> — status <Badge label={cfResult.link_status || '—'} tone="green" /></div>
+                <a href={cfResult.link_url} target="_blank" rel="noreferrer" className="mono"
+                  style={{ display: 'inline-block', marginTop: 6, wordBreak: 'break-all' }}>{cfResult.link_url}</a>
+              </div>
+            )}
+          </div>
+        </Panel>
+      )}
+
       {loading ? <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
         : byChannel.map(({ channel, senders }) => (
           <Panel key={channel} title={channel} count={senders.length}>

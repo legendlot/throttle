@@ -1885,6 +1885,44 @@ async function verifyRazorpaySig(rawBody, signature, secret) {
   let diff = 0; for (let i = 0; i < hex.length; i++) diff |= hex.charCodeAt(i) ^ signature.charCodeAt(i);
   return diff === 0;
 }
+
+// ── Cashfree payments → payment funnel (2026-07-19) ──────────────────────────
+// Cashfree is LOT's current PG (Razorpay = legacy). Its PG webhook stages into the
+// SAME provider-agnostic sales.stg_payments (provider='cashfree'), so f_payment_funnel
+// reads both. channel_id is a synthetic constant (nullable, no FK — mirrors razorpay a8).
+// Signature: base64( HMAC-SHA256( x-webhook-timestamp + rawBody, CLIENT_SECRET ) ).
+const CASHFREE_CHANNEL_ID = '00000000-0000-4000-a000-0000000000aa';
+async function verifyCashfreeSig(rawBody, timestamp, signature, secret) {
+  if (!signature || !timestamp || !secret) return false;
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(String(timestamp) + String(rawBody)));
+  const bytes = new Uint8Array(sig); let bin = ''; for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  const expected = btoa(bin);
+  if (expected.length !== signature.length) return false;
+  let diff = 0; for (let i = 0; i < expected.length; i++) diff |= expected.charCodeAt(i) ^ signature.charCodeAt(i);
+  return diff === 0;
+}
+function mapCashfreePayment(data, channelId) {
+  const pay = data.payment || {};
+  const order = data.order || {};
+  const errd = data.error_details || pay.error_details || {};
+  const amt = Number(pay.payment_amount != null ? pay.payment_amount : order.order_amount);
+  const method = pay.payment_group
+    || (pay.payment_method && typeof pay.payment_method === 'object' ? Object.keys(pay.payment_method)[0] : null)
+    || null;
+  return {
+    channel_id: channelId, provider: 'cashfree',
+    provider_payment_id: pay.cf_payment_id != null ? String(pay.cf_payment_id) : null,
+    order_ref: order.order_id != null ? String(order.order_id) : null,
+    status: pay.payment_status ? String(pay.payment_status).toLowerCase() : null,
+    method,
+    error_code: errd.error_code || null,
+    error_reason: errd.error_reason || errd.error_description || null,
+    amount: isFinite(amt) ? amt : 0, currency: pay.payment_currency || order.order_currency || 'INR',
+    created_at: pay.payment_time || data.event_time || null,
+    raw: data,
+  };
+}
 const razorpayPaymentsAdapter = {
   kind: 'razorpay_payments', stgTable: 'stg_payments',
   datesOf() { return []; },   // stage-only — f_payment_funnel reads staging directly
@@ -2604,6 +2642,26 @@ export default {
         }
       }
       return new Response('ok', { status: 200 });   // 200 fast; non-payment events ignored
+    }
+
+    // ── Cashfree PG payment webhook (2026-07-19) — no JWT; HMAC (ts + body, client secret) ──
+    // Mirrors /webhook/razorpay: stages PAYMENT_SUCCESS/FAILED/USER_DROPPED into stg_payments
+    // (provider='cashfree'). Inert 503 until CASHFREE_CLIENT_SECRET set. Full payload lands in
+    // stg_payments.raw so the field mapping is verifiable/adjustable against real sandbox data.
+    if (request.method === 'POST' && url.pathname === '/webhook/cashfree') {
+      if (!env.CASHFREE_CLIENT_SECRET) return new Response('cashfree not configured', { status: 503 });
+      const raw = await request.text();
+      const okSig = await verifyCashfreeSig(raw, request.headers.get('x-webhook-timestamp') || '', request.headers.get('x-webhook-signature') || '', env.CASHFREE_CLIENT_SECRET);
+      if (!okSig) return new Response('invalid signature', { status: 401 });
+      let body = {}; try { body = JSON.parse(raw); } catch { /* ignore */ }
+      if (String(body.type || '').startsWith('PAYMENT_')) {   // PAYMENT_SUCCESS/FAILED/USER_DROPPED_WEBHOOK
+        const data = body.data || {};
+        if (data.payment && data.payment.cf_payment_id != null) {
+          try { await sbInsertChunked('/rest/v1/stg_payments?on_conflict=provider,provider_payment_id', [{ run_id: null, ...mapCashfreePayment(data, CASHFREE_CHANNEL_ID) }], 'return=minimal,resolution=merge-duplicates'); }
+          catch (_) { /* 200 anyway — Cashfree retries; the API pull reconciles */ }
+        }
+      }
+      return new Response('ok', { status: 200 });
     }
 
     const auth = await verifyJWT(request.headers.get('Authorization'));
