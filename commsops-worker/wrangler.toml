@@ -11,6 +11,10 @@ workers_dev = true
 
 [vars]
 SUPABASE_URL = "https://jkxcnjabmrkteanzoofj.supabase.co"
+# Cashfree environment for the payment-link mint (J3). production → api.cashfree.com;
+# anything else → sandbox.cashfree.com (default). LOT's Cashfree account is live
+# (same account powering the website/Shopflo), so the keys are production keys.
+CASHFREE_ENV = "production"
 
 # Secrets set via `wrangler secret put` — never stored in this file:
 # SUPABASE_ANON_KEY
