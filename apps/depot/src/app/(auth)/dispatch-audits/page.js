@@ -190,10 +190,12 @@ function csvCell(v) {
 function downloadAuditCsv(audit, lines) {
   const header = ['Result', 'Product', 'Model', 'Color', 'Car UPC', 'Batch Label', 'Last Stage', 'Correction'];
   const rows = lines.map(l => {
-    const lastStage = l.result === 'missing' ? (l.expected_status || '') : (l.found_status || '');
+    const lastStage = l.result === 'channel_mismatch' ? `${l.expected_status || ''} -> ${l.found_status || ''}`
+      : l.result === 'missing' ? (l.expected_status || '') : (l.found_status || '');
     const correction = l.reviewed
       ? (l.corrected_to_status ? `-> ${l.corrected_to_status}` : (l.correction === 'skip' ? 'skipped' : 'no change'))
-      : (l.correction === 'write_off' ? '-> lost' : '-> handed_over');
+      : (l.result === 'channel_mismatch' ? `-> relabel ${l.found_status || ''}`.trim()
+         : l.correction === 'write_off' ? '-> lost' : '-> handed_over');
     return [l.result, l.product, l.model, l.color, l.car_upc, l.batch_label, lastStage, correction];
   });
   const csv = [header, ...rows].map(r => r.map(csvCell).join(',')).join('\r\n');
@@ -249,12 +251,12 @@ function AuditDetail({ auditNo, session, toast, canRecord, canApprove, meId, onB
     } finally { setBusy(false); }
   }
   async function approve() {
-    if (!confirm('Approve and apply corrections? Missing units → lost, extras → back into holding.')) return;
+    if (!confirm('Approve and apply corrections? Missing units → lost, extras → back into holding, channel mismatches relabelled to the scanned channel.')) return;
     setBusy(true);
     try {
       const r = await workerFetch('reviewDispatchAudit', { data: { audit_no: auditNo, skip_line_ids: [...skip] } }, session);
       if (!r?.ok) { toast(r?.data?.error || 'Failed', 'error'); return; }
-      toast(`Completed · corrected ${r.data.corrected} (wrote off ${r.data.wrote_off}, restored ${r.data.restored})`, 'success'); load();
+      toast(`Completed · corrected ${r.data.corrected} (wrote off ${r.data.wrote_off}, restored ${r.data.restored}, relabelled ${r.data.relabeled ?? 0})`, 'success'); load();
     } finally { setBusy(false); }
   }
   async function cancel() {
@@ -270,6 +272,7 @@ function AuditDetail({ auditNo, session, toast, canRecord, canApprove, meId, onB
 
   const counts = isOpen ? (v.counts || { present: 0, missing: 0, extra: 0 })
     : { present: audit.present_count || 0, missing: audit.missing_count || 0, extra: audit.extra_count || 0 };
+  const chmm = audit.channel_mismatch_count || 0;
 
   return (
     <div style={{ padding: 16 }}>
@@ -295,6 +298,7 @@ function AuditDetail({ auditNo, session, toast, canRecord, canApprove, meId, onB
             <KpiTile label="Present" value={counts.present} tone="green" />
             <KpiTile label="Missing" value={counts.missing} tone="red" />
             <KpiTile label="Extra" value={counts.extra} tone="orange" />
+            {chmm > 0 && <KpiTile label="Channel" value={chmm} tone="yellow" />}
             {audit.status === 'completed' && <KpiTile label="Corrected" value={audit.corrected_count ?? 0} />}
           </div>
 
@@ -357,14 +361,24 @@ function AuditDetail({ auditNo, session, toast, canRecord, canApprove, meId, onB
                     <tbody>
                       {lines.map(l => (
                         <tr key={l.id}>
-                          <td style={td}><StatusBadge status={l.result === 'missing' ? 'cancelled' : 'in_review'} /></td>
+                          <td style={td}>
+                            {l.result === 'channel_mismatch'
+                              ? <span style={{ display: 'inline-block', padding: '2px 7px', borderRadius: 2, fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '.04em', textTransform: 'uppercase', background: TONE.yellow.bg, color: TONE.yellow.fg, border: `1px solid ${TONE.yellow.border}`, whiteSpace: 'nowrap' }}>Channel</span>
+                              : <StatusBadge status={l.result === 'missing' ? 'cancelled' : 'in_review'} />}
+                          </td>
                           <td style={{ ...td, fontSize: 11 }}>{variantName(l)}</td>
                           <td style={{ ...td, fontFamily: 'var(--mono)', fontSize: 11 }}>{l.batch_label || l.car_upc}</td>
-                          <td style={{ ...td, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>{l.result === 'missing' ? (l.expected_status || '—') : (l.found_status || '—')}</td>
+                          <td style={{ ...td, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)' }}>
+                            {l.result === 'channel_mismatch'
+                              ? `${l.expected_status || '—'} → ${l.found_status || '—'}`
+                              : (l.result === 'missing' ? (l.expected_status || '—') : (l.found_status || '—'))}
+                          </td>
                           <td style={{ ...td, fontSize: 11, color: l.corrected_to_status ? '#4ade80' : 'var(--t2)' }}>
                             {l.reviewed
                               ? (l.corrected_to_status ? `→ ${l.corrected_to_status}` : (l.correction === 'skip' ? 'skipped' : 'no change'))
-                              : (skip.has(l.id) ? 'will skip' : (l.correction === 'write_off' ? '→ lost' : '→ handed_over'))}
+                              : (skip.has(l.id) ? 'will skip'
+                                 : l.result === 'channel_mismatch' ? `→ relabel ${l.found_status || ''}`.trim()
+                                 : l.correction === 'write_off' ? '→ lost' : '→ handed_over')}
                           </td>
                           {isReview && canApprove && !isCounter && (
                             <td style={{ ...td, textAlign: 'center' }}>
