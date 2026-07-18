@@ -7,8 +7,15 @@ const A = require('./auth.js');
 const { send } = require('./send.js');
 const G = require('./journey-graph.js');
 const CF = require('./cashfree.js');
+const SH = require('./shopify.js');
 
 const MAX_TRANSITIONS = 100; // safety against a mis-validated cyclic definition
+
+// order_modify (COD→prepaid reconciliation) Shopify Admin API ops. Needs write_orders.
+const ORDER_STATUS_Q = `query($id:ID!){ order(id:$id){ id displayFulfillmentStatus displayFinancialStatus createdAt cancelledAt } }`;
+const ORDER_MARK_PAID_M = `mutation($input:OrderMarkAsPaidInput!){ orderMarkAsPaid(input:$input){ order{ id displayFinancialStatus } userErrors{ field message } } }`;
+const ORDER_CANCEL_M = `mutation($orderId:ID!,$reason:OrderCancelReason!,$refund:Boolean!,$restock:Boolean!){ orderCancel(orderId:$orderId,reason:$reason,refund:$refund,restock:$restock){ job{ id } orderCancelUserErrors{ field message } userErrors{ field message } } }`;
+const TAGS_ADD_M = `mutation($id:ID!,$tags:[String!]!){ tagsAdd(id:$id,tags:$tags){ userErrors{ field message } } }`;
 
 class JourneyWorkflow extends WorkflowEntrypoint {
   // params: { enrolmentId, journeyId, journeyVersion, profileId }
@@ -162,10 +169,20 @@ class JourneyWorkflow extends WorkflowEntrypoint {
         cur = G.resolveTarget(s, branch ? 'if_true' : 'if_false');
       } else if (s.type === 'send') {
         const res = await step.do(cur, async () => this.#doSend(env, s, profileId, enrolmentId, cur, triggerProps, journeyName));
-        const decision = G.resolveSendNext(s, res, def);
-        await this.#logStep(env, step, enrolmentId, cur, s.type, { ...res, on_skip: s.on_skip || 'continue', skipped_wait: decision.skippedWait || null });
-        if (decision.terminate) { await this.#end(env, step, enrolmentId, decision.terminate, cur); return; }
-        cur = decision.next;
+        if (s.interactive) {
+          // Interactive send (WA quick-reply buttons): after sending, park on the reply
+          // event and route by which button was tapped (else no_reply on timeout). Inert
+          // while WA is not live — the send skips → no_reply, no parking.
+          const dec = await this.#interactiveBranch(env, step, s, res, profileId, enrolmentId, cur, expiresAt);
+          await this.#logStep(env, step, enrolmentId, cur, s.type, { ...res, interactive: true, outcome: dec.terminate ? `exit:${dec.terminate}` : dec.handle });
+          if (dec.terminate) { await this.#end(env, step, enrolmentId, dec.terminate, cur); return; }
+          cur = G.resolveTarget(s, dec.handle);
+        } else {
+          const decision = G.resolveSendNext(s, res, def);
+          await this.#logStep(env, step, enrolmentId, cur, s.type, { ...res, on_skip: s.on_skip || 'continue', skipped_wait: decision.skippedWait || null });
+          if (decision.terminate) { await this.#end(env, step, enrolmentId, decision.terminate, cur); return; }
+          cur = decision.next;
+        }
       } else if (s.type === 'action') {
         // J3: side-effect nodes. Memoized by step id (step.do(cur)) so a durable retry
         // never re-executes the side effect. #doAction NEVER throws — it returns an
@@ -252,7 +269,98 @@ class JourneyWorkflow extends WorkflowEntrypoint {
         { method: 'PATCH', body: JSON.stringify({ attributes: attrs, updated_at: new Date().toISOString() }) });
       return { outcome: 'next', link_id: r.link_id };
     }
+    if (kind === 'order_modify') {
+      // The Shopify COD→prepaid reconciliation (mirrors BiteSpeed's Modify Order node —
+      // pure Shopify; Shiprocket picks up the prepaid status via its Shopify sync). Gated
+      // by the same go-live switch, and needs write_orders (fails gracefully → not_done).
+      const op = s.op; // 'convert_to_prepaid' | 'cancel' | 'add_tag'
+      if (op !== 'add_tag') {   // add_tag is harmless; the consequential ops are flag-gated
+        const setR = await A.sbComms('/rest/v1/settings?id=eq.1&select=payment_links_enabled&limit=1', env);
+        if (!(setR.ok && setR.data?.[0]?.payment_links_enabled === true)) return { outcome: 'not_done', reason: 'cod_flow_disabled' };
+      }
+      const oid = triggerProps?.shopify_order_id ?? triggerProps?.order_id ?? null;
+      if (!oid) return { outcome: 'not_done', reason: 'no_order_id' };
+      const gid = String(oid).startsWith('gid://') ? String(oid) : `gid://shopify/Order/${oid}`;
+      try {
+        if (op === 'add_tag') {
+          await SH.shopifyGraphQL(env, TAGS_ADD_M, { id: gid, tags: (Array.isArray(s.tags) && s.tags.length ? s.tags : ['relay-cod-confirmed']) });
+          return { outcome: 'done', op };
+        }
+        // convert_to_prepaid + cancel: guard on the order NOT being fulfilled yet (mirrors
+        // "Disable Modify Order on Fulfillment" — once shipped, COD is locked to the courier)
+        // + an optional within-hours window (mirrors "Disable Modify Order After X Hours").
+        const q = await SH.shopifyGraphQL(env, ORDER_STATUS_Q, { id: gid });
+        const order = q?.order;
+        if (!order) return { outcome: 'not_done', reason: 'order_not_found' };
+        if (order.cancelledAt) return { outcome: 'not_done', reason: 'already_cancelled' };
+        if (order.displayFulfillmentStatus && order.displayFulfillmentStatus !== 'UNFULFILLED')
+          return { outcome: 'not_done', reason: `fulfilled:${order.displayFulfillmentStatus}` };
+        if (s.within_hours && order.createdAt &&
+            (Date.now() - Date.parse(order.createdAt)) > Number(s.within_hours) * 3600000)
+          return { outcome: 'not_done', reason: 'too_old' };
+        if (op === 'convert_to_prepaid') {
+          // Money already collected via Cashfree → mark the Shopify order paid (out-of-band).
+          if (order.displayFinancialStatus === 'PAID') { await SH.shopifyGraphQL(env, TAGS_ADD_M, { id: gid, tags: ['relay-c2p-converted'] }).catch(() => {}); return { outcome: 'done', op, already_paid: true }; }
+          const r = await SH.shopifyGraphQL(env, ORDER_MARK_PAID_M, { input: { id: gid } });
+          const errs = r?.orderMarkAsPaid?.userErrors || [];
+          if (errs.length) return { outcome: 'not_done', reason: errs.map((e) => e.message).join('; ').slice(0, 120) };
+          await SH.shopifyGraphQL(env, TAGS_ADD_M, { id: gid, tags: ['relay-c2p-converted'] }).catch(() => {});
+          return { outcome: 'done', op };
+        }
+        if (op === 'cancel') {
+          const r = await SH.shopifyGraphQL(env, ORDER_CANCEL_M, { orderId: gid, reason: 'CUSTOMER', refund: false, restock: true });
+          const errs = (r?.orderCancel?.orderCancelUserErrors || []).concat(r?.orderCancel?.userErrors || []);
+          if (errs.length) return { outcome: 'not_done', reason: errs.map((e) => e.message).join('; ').slice(0, 120) };
+          await SH.shopifyGraphQL(env, TAGS_ADD_M, { id: gid, tags: ['relay-cod-cancelled'] }).catch(() => {});
+          return { outcome: 'done', op };
+        }
+        return { outcome: 'not_done', reason: `unknown_op:${op}` };
+      } catch (e) {
+        // write_orders missing / API error → graceful not_done (never throws).
+        return { outcome: 'not_done', reason: String(e?.message || e).slice(0, 120) };
+      }
+    }
     return { outcome: 'failed', reason: `unknown_action_kind:${kind}` };
+  }
+
+  // Interactive send → branch. Reuses the J1 wait machinery: register a response wait on
+  // the reply event, park until it arrives or `within` elapses, then route by button_id.
+  // Returns { handle } or { terminate }.
+  async #interactiveBranch(env, step, s, res, profileId, enrolmentId, stepId, expiresAt) {
+    if (!G.sendWentOut(res)) return { handle: 'no_reply' };   // send skipped (WA inert) → no_reply
+    const replyEvent = s.reply_event || 'whatsapp_reply';
+    const since = await step.do(`isince:${stepId}`, async () => new Date().toISOString());
+    await step.do(`ireg:${stepId}`, async () => {
+      const w = await A.sbComms('/rest/v1/enrolment_waits?on_conflict=enrolment_id,awaited_event,kind', env, {
+        method: 'POST', headers: { Prefer: 'resolution=merge-duplicates' },
+        body: JSON.stringify({ enrolment_id: enrolmentId, instance_id: String(enrolmentId), profile_id: profileId,
+          awaited_event: replyEvent, kind: 'response', step_id: stepId, expires_at: expiresAt }) });
+      if (!w.ok) throw new Error('wait_register_failed:' + JSON.stringify(w.data));
+      return true;
+    });
+    const pre = await step.do(`iprecheck:${stepId}`, async () => this.#eventSince(env, profileId, [replyEvent], since));
+    const woke = pre ? { kind: 'response' } : await this.#park(step, `iwait:${stepId}`, s.within);
+    await step.do(`iclr:${stepId}`, async () => {
+      const del = await A.sbComms(`/rest/v1/enrolment_waits?enrolment_id=eq.${A.enc(enrolmentId)}&kind=eq.response&step_id=eq.${A.enc(stepId)}`, env, { method: 'DELETE' });
+      if (!del.ok) throw new Error('wait_clear_failed:' + JSON.stringify(del.data));
+      return true;
+    });
+    if (woke.kind === 'exit') return { terminate: woke.outcome };
+    if (woke.kind !== 'response') return { handle: 'no_reply' };   // timeout
+    const btn = await step.do(`ibtn:${stepId}`, async () => this.#latestButtonId(env, profileId, replyEvent, since));
+    const declared = new Set((s.buttons || []).map((b) => b && b.id).filter(Boolean));
+    return { handle: (btn && declared.has(btn)) ? btn : 'no_reply' };
+  }
+
+  // Latest reply event since the send → its button id (WA button payload). The matcher's
+  // wake signal doesn't carry properties, so we re-read the event for the tapped button.
+  async #latestButtonId(env, profileId, name, sinceIso) {
+    const r = await A.sbComms(
+      `/rest/v1/events?profile_id=eq.${A.enc(profileId)}&name=eq.${A.enc(name)}` +
+      `&occurred_at=gte.${A.enc(sinceIso)}&select=properties&order=occurred_at.desc&limit=1`, env);
+    if (!r.ok) return null;
+    const p = r.data?.[0]?.properties || {};
+    return p.button_id || p.button || p.payload || null;
   }
 
   // Park on the single 'signal' event type with a timeout. Returns:

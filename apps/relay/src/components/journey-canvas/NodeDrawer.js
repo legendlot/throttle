@@ -54,7 +54,7 @@ export default function NodeDrawer({ nodeId, config, templates, onChange, onDele
         )}
       </div>
 
-      {t === 'send' && (<>
+      {t === 'send' && !config.interactive && (<>
         <Field label="Channel">
           <select className="f-inp" value={config.channel || 'email'} disabled={disabled}
             onChange={(e) => set({ channel: e.target.value, templateId: '' })}>
@@ -153,6 +153,69 @@ export default function NodeDrawer({ nodeId, config, templates, onChange, onDele
           </select>
         </Field>
       )}
+
+      {t === 'send' && config.interactive && (<>
+        <div className="tw-note" style={{ margin: '0 0 10px' }}>WhatsApp quick-reply buttons. Each button becomes an outcome handle; the reply routes there. Inert until WhatsApp is live (send skips → <span className="mono">no_reply</span>).</div>
+        <Field label="Purpose">
+          <select className="f-inp" value={config.purpose || 'utility'} disabled={disabled}
+            onChange={(e) => set({ purpose: e.target.value })}>
+            <option value="utility">utility</option>
+            <option value="marketing">marketing</option>
+          </select>
+        </Field>
+        <Field label="Template (WA, with buttons — must be active)">
+          <select className="f-inp" value={config.templateId || ''} disabled={disabled}
+            onChange={(e) => set({ templateId: e.target.value })}>
+            <option value="">— pick a WhatsApp template —</option>
+            {(templates || []).filter((x) => x.channel === 'whatsapp').map((x) => <option key={x.id} value={x.id}>{x.name} · v{x.version} ({x.status})</option>)}
+          </select>
+        </Field>
+        <Field label='Wait for reply within (e.g. "6 hours")'>
+          <input className="f-inp mono" value={config.within || ''} disabled={disabled}
+            onChange={(e) => set({ within: e.target.value })} placeholder="6 hours" />
+        </Field>
+        <Field label="Buttons (id must match the template's button payload · max 3)">
+          {(config.buttons || []).map((b, i) => (
+            <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+              <input className="f-inp mono" style={{ flex: 1 }} value={b.id || ''} disabled={disabled} placeholder="make_payment"
+                onChange={(e) => { const bs = [...config.buttons]; bs[i] = { ...bs[i], id: e.target.value }; set({ buttons: bs }); }} />
+              <input className="f-inp" style={{ flex: 1 }} value={b.label || ''} disabled={disabled} placeholder="Make Payment"
+                onChange={(e) => { const bs = [...config.buttons]; bs[i] = { ...bs[i], label: e.target.value }; set({ buttons: bs }); }} />
+              {!disabled && <button className="btn" type="button" onClick={() => set({ buttons: config.buttons.filter((_, j) => j !== i) })} style={{ color: '#DE2A2A' }}><Trash2 size={12} /></button>}
+            </div>
+          ))}
+          {!disabled && (config.buttons || []).length < 3 && (
+            <button className="btn" type="button" onClick={() => set({ buttons: [...(config.buttons || []), { id: '', label: '' }] })}>+ Add button</button>
+          )}
+        </Field>
+      </>)}
+
+      {t === 'action' && config.kind === 'order_modify' && (<>
+        <Field label="Operation">
+          <select className="f-inp" value={config.op || 'convert_to_prepaid'} disabled={disabled}
+            onChange={(e) => set({ op: e.target.value })}>
+            <option value="convert_to_prepaid">Convert to prepaid (mark Shopify order paid)</option>
+            <option value="cancel">Cancel order (on Shopify)</option>
+            <option value="add_tag">Add tag only</option>
+          </select>
+        </Field>
+        {config.op === 'add_tag' && (
+          <Field label="Tags (comma-separated)">
+            <input className="f-inp mono" value={(config.tags || []).join(', ')} disabled={disabled}
+              onChange={(e) => set({ tags: e.target.value.split(',').map((x) => x.trim()).filter(Boolean) })}
+              placeholder="relay-cod-confirmed" />
+          </Field>
+        )}
+        {config.op !== 'add_tag' && (
+          <Field label="Only within N hours of order (blank = no time limit)">
+            <input className="f-inp mono" type="number" min="1" value={config.within_hours ?? ''} disabled={disabled}
+              onChange={(e) => set({ within_hours: e.target.value === '' ? undefined : Number(e.target.value) })} placeholder="(no limit)" />
+          </Field>
+        )}
+        <div className="tw-note" style={{ margin: 0 }}>
+          Shopify order op (mirrors BiteSpeed's Modify Order). Convert/cancel are <strong>guarded to UNFULFILLED orders</strong> (once shipped, COD is locked to the courier) and <strong>gated by the go-live switch</strong> + need <span className="mono">write_orders</span>. Outcomes: <span className="mono">done</span> · <span className="mono">not_done</span>.
+        </div>
+      </>)}
 
       {t === 'action' && config.kind === 'payment_link' && (<>
         <Field label="Purpose (shown to the customer on the payment page)">

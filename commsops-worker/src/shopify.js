@@ -353,4 +353,6 @@ module.exports = {
   // M4 webhooks + pixel
   mapCustomerRest, identsFromContact, mapOrderEvent, mapCheckoutEvent, ORDER_TOPIC_EVENT,
   verifyWebhookHmac, registerWebhooks, listWebhooks, WEBHOOK_TOPICS,
+  // J3 order_modify (COD→prepaid reconciliation) — raw Admin API access
+  shopifyGraphQL,
 };

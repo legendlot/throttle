@@ -29,15 +29,23 @@ async function compile(env, definition, journey) {
   const targets = (s) => G.stepTargets(s);
   for (const id of ids) {
     const s = steps[id];
-    if (G.RESERVED_STEP_IDS.includes(id) || /^(log:|end:|precheck:|precheckx:|waitreg:|waitclr:|since:|clear-waits:)/.test(id))
+    if (G.RESERVED_STEP_IDS.includes(id) || /^(log:|end:|precheck:|precheckx:|waitreg:|waitclr:|since:|clear-waits:|isince:|ireg:|iclr:|iwait:|iprecheck:|ibtn:)/.test(id))
       errors.push(`reserved_step_id:${id}`);
     if (!['wait', 'condition', 'send', 'wait_response', 'exit', 'action'].includes(s.type)) errors.push(`bad_type:${id}:${s.type}`);
     for (const t of targets(s)) if (!steps[t]) errors.push(`dangling_target:${id}->${t}`);
     if (s.type === 'action') {
-      if (!['payment_link', 'set_attr'].includes(s.kind)) errors.push(`bad_action_kind:${id}:${s.kind}`);
+      if (!['payment_link', 'set_attr', 'order_modify'].includes(s.kind)) errors.push(`bad_action_kind:${id}:${s.kind}`);
       if (s.kind === 'set_attr' && !s.attr) errors.push(`set_attr_no_attr:${id}`);
+      if (s.kind === 'order_modify' && !['convert_to_prepaid', 'cancel', 'add_tag'].includes(s.op)) errors.push(`bad_order_op:${id}:${s.op}`);
       // every outcome handle the kind declares must route somewhere (no dangling branch)
       for (const h of G.handlesFor(s)) if (!steps[G.resolveTarget(s, h)]) errors.push(`action_handle_missing:${id}:${h}`);
+    }
+    if (s.type === 'send' && s.interactive) {
+      const btns = Array.isArray(s.buttons) ? s.buttons.filter((b) => b && b.id) : [];
+      if (!btns.length) errors.push(`interactive_send_no_buttons:${id}`);
+      if (btns.length > 3) errors.push(`interactive_send_too_many_buttons:${id}`);   // WA quick-reply cap
+      if (!s.within || G.durationToMs(s.within) === null) errors.push(`interactive_send_bad_within:${id}`);
+      for (const h of G.handlesFor(s)) if (!steps[G.resolveTarget(s, h)]) errors.push(`interactive_handle_missing:${id}:${h}`);
     }
     if (s.type === 'condition' &&
         (!steps[G.resolveTarget(s, 'if_true')] || !steps[G.resolveTarget(s, 'if_false')]))

@@ -22,8 +22,14 @@ function resolveTarget(step, handle) {
 // interpreter, and the canvas all read handles through here so they can't drift.
 function handlesFor(step) {
   if (!step) return [];
+  // Interactive send (WA quick-reply buttons): one handle per button + no_reply on timeout.
+  if (step.type === 'send' && step.interactive) {
+    const ids = Array.isArray(step.buttons) ? step.buttons.map((b) => b && b.id).filter(Boolean) : [];
+    return [...ids, 'no_reply'];
+  }
   if (step.type === 'action') {
     if (step.kind === 'payment_link') return ['next', 'failed'];
+    if (step.kind === 'order_modify') return ['done', 'not_done'];
     return ['next']; // set_attr (and any future no-branch action) → next
   }
   return HANDLES[step.type] || [];

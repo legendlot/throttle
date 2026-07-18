@@ -19,7 +19,15 @@ const HANDLES = {
 // journey-graph.handlesFor so canvas lint + edge validation match the engine.
 function handlesFor(cfg) {
   if (!cfg) return [];
-  if (cfg.type === 'action') return cfg.kind === 'payment_link' ? ['next', 'failed'] : ['next'];
+  if (cfg.type === 'send' && cfg.interactive) {
+    const ids = Array.isArray(cfg.buttons) ? cfg.buttons.map((b) => b && b.id).filter(Boolean) : [];
+    return [...ids, 'no_reply'];
+  }
+  if (cfg.type === 'action') {
+    if (cfg.kind === 'payment_link') return ['next', 'failed'];
+    if (cfg.kind === 'order_modify') return ['done', 'not_done'];
+    return ['next'];
+  }
   return HANDLES[cfg.type] || [];
 }
 

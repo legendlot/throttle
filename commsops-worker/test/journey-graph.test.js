@@ -95,3 +95,12 @@ assert.deepEqual(
   G.stepTargets({ type: 'action', kind: 'payment_link', outcomes: { next: 'a', failed: 'b' } }).sort(),
   ['a', 'b']);
 console.log('handlesFor ok');
+
+// order_modify + interactive send dynamic handles
+assert.deepEqual(G.handlesFor({ type: 'action', kind: 'order_modify' }), ['done', 'not_done']);
+assert.deepEqual(
+  G.handlesFor({ type: 'send', interactive: true, buttons: [{ id: 'pay' }, { id: 'cancel' }] }),
+  ['pay', 'cancel', 'no_reply']);
+assert.deepEqual(G.handlesFor({ type: 'send', interactive: true, buttons: [] }), ['no_reply']);
+assert.deepEqual(G.handlesFor({ type: 'send' }), ['next']);   // non-interactive send unchanged
+console.log('handlesFor order_modify + interactive ok');

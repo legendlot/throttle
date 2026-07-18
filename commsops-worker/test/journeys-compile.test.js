@@ -146,5 +146,43 @@ const { compile } = require('../src/journeys.js');
   }
   console.log('compile J3 action ok');
 
+  // order_modify — valid op + handles
+  {
+    const def = { entry: 'm', steps: {
+      m: { type: 'action', kind: 'order_modify', op: 'convert_to_prepaid', outcomes: { done: 'ex', not_done: 'ex' } },
+      ex: { type: 'exit', outcome: 'completed' } } };
+    assert.deepEqual((await compile({}, def)).errors, []);
+  }
+  {
+    const def = { entry: 'm', steps: {
+      m: { type: 'action', kind: 'order_modify', op: 'wat', outcomes: { done: 'ex', not_done: 'ex' } },
+      ex: { type: 'exit' } } };
+    assert.ok((await compile({}, def)).errors.includes('bad_order_op:m:wat'));
+  }
+  // interactive send — valid (buttons + within + all handles wired)
+  {
+    const def = { entry: 's', steps: {
+      s: { type: 'send', channel: 'whatsapp', interactive: true, within: '6 hours',
+           buttons: [{ id: 'pay', label: 'Pay' }, { id: 'cancel', label: 'Cancel' }],
+           outcomes: { pay: 'ex', cancel: 'ex', no_reply: 'ex' } },
+      ex: { type: 'exit', outcome: 'completed' } } };
+    assert.deepEqual((await compile({}, def)).errors, []);
+  }
+  // interactive send — no buttons
+  {
+    const def = { entry: 's', steps: {
+      s: { type: 'send', interactive: true, within: '6 hours', buttons: [], outcomes: { no_reply: 'ex' } },
+      ex: { type: 'exit' } } };
+    assert.ok((await compile({}, def)).errors.includes('interactive_send_no_buttons:s'));
+  }
+  // interactive send — a button handle not wired
+  {
+    const def = { entry: 's', steps: {
+      s: { type: 'send', interactive: true, within: '6 hours', buttons: [{ id: 'pay' }], outcomes: { no_reply: 'ex' } },
+      ex: { type: 'exit' } } };
+    assert.ok((await compile({}, def)).errors.some((e) => e.startsWith('interactive_handle_missing:s:pay')));
+  }
+  console.log('compile order_modify + interactive ok');
+
   console.log('journeys-compile.test.js: all assertions passed');
 })().catch((e) => { console.error(e); process.exit(1); });
