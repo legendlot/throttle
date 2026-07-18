@@ -132,13 +132,14 @@ export default function ConnectorsPage() {
       )}
 
       {perms?.relay_super_admin && (
-        <Panel title="Cashfree — payment link (sandbox)">
+        <Panel title="Cashfree — payment link">
           <div style={{ padding: 16 }}>
             <div style={{ fontSize: 13, color: 'var(--text-3)', marginBottom: 12 }}>
               Mints a Cashfree payment link (J3 COD→prepaid). The link self-wires its callback to
               <span className="mono"> /webhook/cashfree</span>, so paying it fires a
-              <span className="mono"> payment_link_paid</span> event. <strong>Inert until the CASHFREE_* secrets are set on commsops.</strong>
-              {' '}Environment follows <span className="mono">CASHFREE_ENV</span> (defaults to sandbox).
+              <span className="mono"> payment_link_paid</span> event. Environment follows
+              <span className="mono"> CASHFREE_ENV</span> (currently <strong>production</strong> — the
+              minted link is real; minting charges nothing, only paying moves money).
             </div>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
               <label style={{ fontSize: 12, color: 'var(--text-3)' }}>Amount (₹)<br />

@@ -15,6 +15,14 @@ const HANDLES = {
   wait_response: ['responded', 'timeout'],
 };
 
+// J3: an `action` node's handles are DYNAMIC by kind. Mirrors the worker's
+// journey-graph.handlesFor so canvas lint + edge validation match the engine.
+function handlesFor(cfg) {
+  if (!cfg) return [];
+  if (cfg.type === 'action') return cfg.kind === 'payment_link' ? ['next', 'failed'] : ['next'];
+  return HANDLES[cfg.type] || [];
+}
+
 // [handle, target] for every non-empty target a step declares. Handle-aware union of
 // outcomes-keys ∪ legacy handles (outcomes wins per handle) — mirrors the worker's
 // journey-graph.stepTargets so a mixed-shape step (outcomes for one handle + a legacy
@@ -102,7 +110,7 @@ function localLint(nodes, edges) {
   const stepNodes = nodes.filter((n) => n.id !== TRIGGER_ID);
   if (!stepNodes.some((n) => n.data?.config?.type === 'exit')) out.push('no exit node — every journey needs at least one');
   for (const n of stepNodes) {
-    const declared = HANDLES[n.data?.config?.type] || [];
+    const declared = handlesFor(n.data?.config);
     for (const h of declared)
       if (!edges.some((e) => e.source === n.id && e.sourceHandle === h))
         out.push(`${n.id}: outcome "${h}" is not wired`);
@@ -128,4 +136,4 @@ function localLint(nodes, edges) {
   return out;
 }
 
-module.exports = { fromDefinition, toDefinition, localLint, HANDLES, TRIGGER_ID };
+module.exports = { fromDefinition, toDefinition, localLint, HANDLES, handlesFor, TRIGGER_ID };

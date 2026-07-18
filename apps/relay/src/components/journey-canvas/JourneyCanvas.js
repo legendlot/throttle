@@ -8,8 +8,8 @@ import {
   applyNodeChanges, applyEdgeChanges, addEdge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Zap, Mail, MessageCircle, Clock, Timer, GitBranch, LogOut, Plus } from 'lucide-react';
-import { HANDLES, TRIGGER_ID, localLint } from './graph.js';
+import { Zap, Mail, MessageCircle, Clock, Timer, GitBranch, LogOut, Plus, CreditCard, Tag } from 'lucide-react';
+import { handlesFor, TRIGGER_ID, localLint } from './graph.js';
 
 const STEP_META = {
   send:          { label: 'Send',              icon: null,      color: 'var(--accent, #F2CD1A)' },
@@ -17,6 +17,9 @@ const STEP_META = {
   wait_response: { label: 'Wait for response',  icon: Timer,     color: '#7aa7ff' },
   condition:     { label: 'Condition',          icon: GitBranch, color: '#e8b93c' },
   exit:          { label: 'Exit',               icon: LogOut,    color: '#57b56b' },
+  // J3 action kinds — keyed by kind (both palette buttons AND node rendering use these).
+  payment_link:  { label: 'Payment link',       icon: CreditCard, color: '#c07ad6' },
+  set_attr:      { label: 'Set attribute',      icon: Tag,       color: '#c07ad6' },
 };
 
 const nodeBox = (selected, color) => ({
@@ -44,13 +47,16 @@ function TriggerNode({ data, selected }) {
 
 function StepNode({ data, selected }) {
   const c = data.config || {};
-  const meta = STEP_META[c.type] || STEP_META.wait;
+  // Action nodes are keyed by kind (payment_link / set_attr); everything else by type.
+  const isAction = c.type === 'action';
+  const meta = STEP_META[isAction ? c.kind : c.type] || STEP_META.wait;
   const Icon = c.type === 'send' ? (c.channel === 'whatsapp' ? MessageCircle : Mail) : meta.icon;
-  const handles = HANDLES[c.type] || [];
+  const handles = handlesFor(c);
   const sub = c.type === 'send' ? `${c.channel || 'email'} · ${c.purpose || 'marketing'}`
     : c.type === 'wait' ? (c.duration || 'duration not set')
     : c.type === 'wait_response' ? `awaits ${(c.awaited || []).join(', ') || 'not set'} · ${c.within || 'duration not set'}`
     : c.type === 'condition' ? (c.check?.kind ? `${c.check.kind}${c.check.event ? `: ${c.check.event}` : ''}` : 'check not set')
+    : isAction ? (c.kind === 'payment_link' ? (c.purpose || 'Cashfree pay-link') : `set ${c.attr || 'attr'} = ${c.value ?? ''}`)
     : (c.outcome || 'completed');
   return (
     <div style={nodeBox(selected, meta.color)}>
@@ -79,6 +85,9 @@ const NEW_STEP = {
   wait_response: { type: 'wait_response', awaited: ['order_placed'], within: '6 hours' },
   condition:     { type: 'condition', check: { kind: 'no_event_since_enrol', event: 'order_placed' } },
   exit:          { type: 'exit', outcome: 'completed' },
+  // J3 action kinds — each palette button mints an action node of the given kind.
+  payment_link:  { type: 'action', kind: 'payment_link', purpose: 'Complete your order payment' },
+  set_attr:      { type: 'action', kind: 'set_attr', attr: '', value: '' },
 };
 
 let seq = 0;

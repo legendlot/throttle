@@ -30,7 +30,8 @@ const CHANNELS = [
   { id: 'sms', label: 'SMS (not live yet)', live: false },
 ];
 const EVENT_SUGGEST = ['checkout_started', 'order_placed', 'order_fulfilled', 'order_cancelled',
-  'add_to_cart', 'link_clicked', 'whatsapp_inbound'];
+  'add_to_cart', 'link_clicked', 'whatsapp_inbound', 'shopflo_order_completed',
+  'payment_link_paid', 'payment_link_failed'];
 
 function Field({ label, children }) {
   return <div className="ff" style={{ marginBottom: 10 }}><div className="kv-k">{label}</div>{children}</div>;
@@ -152,6 +153,36 @@ export default function NodeDrawer({ nodeId, config, templates, onChange, onDele
           </select>
         </Field>
       )}
+
+      {t === 'action' && config.kind === 'payment_link' && (<>
+        <Field label="Purpose (shown to the customer on the payment page)">
+          <input className="f-inp" value={config.purpose || ''} disabled={disabled}
+            onChange={(e) => set({ purpose: e.target.value })} placeholder="Complete your order payment" />
+        </Field>
+        <Field label="Amount (₹) — blank = use the trigger order's total">
+          <input className="f-inp mono" type="number" min="1" value={config.amount ?? ''} disabled={disabled}
+            onChange={(e) => set({ amount: e.target.value === '' ? undefined : Number(e.target.value) })}
+            placeholder="(order total)" />
+        </Field>
+        <div className="tw-note" style={{ margin: 0 }}>
+          Mints a Cashfree pay-link (<strong>inert</strong> until <span className="mono">payment_links_enabled</span> is on).
+          Follow it with a <strong>Send</strong> node delivering <span className="mono">{'{payment_link_url}'}</span>,
+          then a <strong>Wait-for-response</strong> on <span className="mono">payment_link_paid</span>.
+          Outcomes: <span className="mono">next</span> (minted) · <span className="mono">failed</span>.
+        </div>
+      </>)}
+
+      {t === 'action' && config.kind === 'set_attr' && (<>
+        <Field label="Attribute">
+          <input className="f-inp mono" value={config.attr || ''} disabled={disabled}
+            onChange={(e) => set({ attr: e.target.value })} placeholder="cod_converted" />
+        </Field>
+        <Field label="Value">
+          <input className="f-inp mono" value={config.value ?? ''} disabled={disabled}
+            onChange={(e) => set({ value: e.target.value })} placeholder="true" />
+        </Field>
+        <div className="tw-note" style={{ margin: 0 }}>Merges <span className="mono">{'{attr: value}'}</span> into the profile. Outcome: <span className="mono">next</span>.</div>
+      </>)}
     </div>
   );
 }
