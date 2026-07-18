@@ -128,7 +128,9 @@ export default function ScanFeedPage() {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     const trimmed = upcSearch.trim();
     if (trimmed.length === 0) { setUpcMode(false); setUpcScans([]); return; }
-    if (trimmed.length >= 4) {
+    if (trimmed.length >= 3) {
+      // ≥3 chars → global server lookup via getScansByUpc (all history, not just the
+      // loaded page). Handles full UPCs, box labels (LOT-…-E/R), and partial fragments.
       debounceRef.current = setTimeout(async () => {
         if (!session) return;
         setUpcLoading(true);
@@ -208,7 +210,7 @@ export default function ScanFeedPage() {
 
         <div style={{ flex: 1 }} />
 
-        <input data-search-primary type="text" placeholder="Search UPC…  · /" style={searchInput}
+        <input data-search-primary type="text" placeholder="Search UPC / box label…  · /" style={searchInput}
           value={upcSearch} onChange={e => setUpcSearch(e.target.value)} />
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t2)', cursor: 'pointer' }}>
           <input type="checkbox" checked={showVoided} onChange={e => setShowVoided(e.target.checked)} />
