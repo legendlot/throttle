@@ -176,6 +176,26 @@ t('mapPaymentLinkEvent non-terminal status → null (captured, not emitted)', ()
   assert.strictEqual(CF.mapPaymentLinkEvent({ type: 'PAYMENT_LINK_EVENT', data: { ...PAID.data, link_status: 'ACTIVE' } }), null);
   assert.strictEqual(CF.mapPaymentLinkEvent({ type: 'PAYMENT_LINK_EVENT', data: { ...PAID.data, link_status: 'PARTIALLY_PAID' } }), null);
 });
+// Real wire shape (Cashfree test event, 2026-07-19): NO top-level `type`, link fields
+// directly under `data`, amounts as strings.
+const REAL_WIRE = { data: { cf_link_id: 1576977, link_id: 'payment_ps11', link_status: 'PAID',
+  link_currency: 'INR', link_amount: '200.12', link_amount_paid: '200.12',
+  customer_details: { customer_phone: '9000000000', customer_email: 'x@y.com' }, link_notes: { order_id: '99' } } };
+t('isPaymentLinkEvent true for real untyped link payload, false for a PG payment event', () => {
+  assert.strictEqual(CF.isPaymentLinkEvent(REAL_WIRE), true);
+  assert.strictEqual(CF.isPaymentLinkEvent({ data: { link: { link_status: 'PAID' } } }), true);
+  assert.strictEqual(CF.isPaymentLinkEvent({ type: 'PAYMENT_SUCCESS_WEBHOOK', data: { order: {}, payment: { cf_payment_id: 1 } } }), false);
+  assert.strictEqual(CF.isPaymentLinkEvent({}), false);
+});
+t('mapPaymentLinkEvent handles the real untyped shape (PAID→paid, string amounts, PARTIALLY_PAID→null)', () => {
+  const e = CF.mapPaymentLinkEvent(REAL_WIRE);
+  assert.strictEqual(e.name, 'payment_link_paid');
+  assert.strictEqual(e.properties.link_amount_paid, 200.12);   // string "200.12" → number
+  assert.strictEqual(e.idempotency_key, 'cashfree:link:payment_ps11:PAID');
+  assert.strictEqual(e.identifiers.find(i => i.type === 'phone').value, '+919000000000');
+  assert.deepStrictEqual(e.properties.link_notes, { order_id: '99' });
+  assert.strictEqual(CF.mapPaymentLinkEvent({ data: { ...REAL_WIRE.data, link_status: 'PARTIALLY_PAID' } }), null);
+});
 t('mapPaymentLinkEvent no identity → null', () => {
   const e = CF.mapPaymentLinkEvent({ type: 'PAYMENT_LINK_EVENT', data: { ...PAID.data, customer_details: {} } });
   assert.strictEqual(e, null);

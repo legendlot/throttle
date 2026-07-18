@@ -150,6 +150,15 @@ function linkOf(body) {
   return (d.link && typeof d.link === 'object') ? d.link : d;
 }
 
+// A Cashfree Payment-Link webhook carries the link object under `data` (directly, or
+// nested under data.link) and — confirmed from a REAL test event (2026-07-19) — has NO
+// top-level `type` field (the docs' "PAYMENT_LINK_EVENT" wrapper does not appear on the
+// wire). So detect a link event by the link fields, never by `type`.
+function isPaymentLinkEvent(body) {
+  const link = linkOf(body);
+  return !!(link && (link.link_status !== undefined || link.link_id !== undefined || link.cf_link_id !== undefined));
+}
+
 // link_status → the substrate event a wait_response can key on. Terminal only:
 //  PAID → payment_link_paid ; EXPIRED/CANCELLED/USER_DROPPED → payment_link_failed.
 //  ACTIVE/PARTIALLY_PAID are non-terminal → null (captured, not emitted).
@@ -206,5 +215,5 @@ function mapPaymentLinkEvent(body) {
 module.exports = {
   CF_API_VERSION, baseUrl, isConfigured, createPaymentLink,
   computeSignature, verifyWebhook, timingSafeEqual,
-  linkOf, eventForStatus, identsFromLink, mapPaymentLinkEvent,
+  linkOf, isPaymentLinkEvent, eventForStatus, identsFromLink, mapPaymentLinkEvent,
 };

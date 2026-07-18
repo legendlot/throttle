@@ -43,12 +43,12 @@ async function handleCashfreeWebhook(env, request) {
   let body;
   try { body = raw ? JSON.parse(raw) : {}; } catch { body = { _unparsed: raw }; }
 
-  const type = body && body.type;
-  // Only PAYMENT_LINK_EVENT is a link outcome; everything else (payment success,
-  // refunds, etc.) is not this route's concern → capture for visibility, ack.
-  if (type !== 'PAYMENT_LINK_EVENT') {
-    await capture(env, request, body, `unhandled_type:${type || 'none'}`);
-    return { ok: true, captured: true, type: type || null, mapped: false };
+  // Payment-Link events are detected by the link fields under `data` (NOT a top-level
+  // `type` — a real Cashfree test event has none). Anything else that reaches this route
+  // (e.g. a PG payment webhook mis-pointed here) → capture for visibility, ack.
+  if (!CF.isPaymentLinkEvent(body)) {
+    await capture(env, request, body, `not_a_link_event:${(body && body.type) || 'none'}`);
+    return { ok: true, captured: true, mapped: false };
   }
 
   let envlp;
@@ -57,15 +57,15 @@ async function handleCashfreeWebhook(env, request) {
   } catch (e) {
     await capture(env, request, body, `map_error:${e?.message || String(e)}`).catch(() => {});
     console.log('cashfree_map_error', e?.message || String(e));
-    return { ok: true, type, error_captured: true };
+    return { ok: true, error_captured: true };
   }
 
-  // Non-terminal status or no usable identity → nothing to signal yet; capture so the
-  // real payload shape is visible during bring-up, then ack.
+  // Non-terminal status (ACTIVE/PARTIALLY_PAID) or no usable identity → nothing to signal
+  // yet; capture so the real payload shape is visible during bring-up, then ack.
   if (!envlp) {
     const link = CF.linkOf(body);
     await capture(env, request, body, `unmapped_status:${link && link.link_status}`);
-    return { ok: true, type, mapped: false, link_status: (link && link.link_status) || null };
+    return { ok: true, mapped: false, link_status: (link && link.link_status) || null };
   }
 
   const r = await ingest(env, envlp);
@@ -73,7 +73,7 @@ async function handleCashfreeWebhook(env, request) {
     await capture(env, request, body, `ingest_error:${r.error}`);
     return { ok: false, error: r.error, status: 400 };
   }
-  return { ok: true, type, emitted: envlp.name, profile_id: r.profile_id, deduped: r.deduped };
+  return { ok: true, emitted: envlp.name, profile_id: r.profile_id, deduped: r.deduped };
 }
 
 module.exports = { handleCashfreeWebhook };
