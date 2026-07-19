@@ -218,6 +218,7 @@ class JourneyWorkflow extends WorkflowEntrypoint {
     if (!to) return { status: 'skipped', reason: `no_${idType}_identifier` };
     return send(env, {
       channel, purpose: s.purpose || 'marketing', profileId, to,
+      senderId: s.senderId || s.sender_id || undefined,   // optional per-node pin (routes to a specific number)
       templateId: s.templateId, constants: s.constants || {}, eventContext: triggerProps || {},
       tracking: { campaign: journeyName },
       source: `journey:${enrolmentId}`, dedupKey: `journey:${enrolmentId}:${stepId}`,
