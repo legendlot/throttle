@@ -53,6 +53,7 @@ export default function CampaignsPage() {
   const [busy, setBusy] = useState(false);
   const [stats, setStats] = useState(null);
   const [attr, setAttr] = useState(null);
+  const [reach, setReach] = useState(null);   // {loading}|{total,reachable} for the picked segment × (channel,purpose)
 
   const canBuild = !perms || perms.campaign_build;
   const canApprove = !perms || perms.approve;
@@ -122,6 +123,27 @@ export default function CampaignsPage() {
     }, 4000);
     return () => clearInterval(t);
   }, [view, c.status, c.id, session, load, loadStats]);
+
+  // Reachable-audience preview (Pruthvi) — how many recipients are actually reachable
+  // for the chosen segment on this (channel, purpose), BEFORE send. Debounced so flipping
+  // segment/channel/purpose doesn't spam. reachable = segment total − channel suppressions
+  // − (marketing) not-opted-in consent — the STABLE gate subset; the per-send freq-cap +
+  // quiet-hours gates are time-dependent and deliberately NOT counted here.
+  useEffect(() => {
+    if (view !== 'form' || !c.segment_id) { setReach(null); return undefined; }
+    const seg = segments.find((s) => s.id === c.segment_id);
+    if (!seg?.definition) { setReach(null); return undefined; }
+    let cancelled = false;
+    setReach({ loading: true });
+    const t = setTimeout(async () => {
+      try {
+        const r = await workerFetch('previewSegment', { definition: seg.definition, channel: c.channel, purpose: c.purpose }, session);
+        if (!cancelled) setReach(r?.data ? { total: Number(r.data.total || 0), reachable: Number(r.data.reachable || 0) } : null);
+      } catch { if (!cancelled) setReach(null); }
+    }, 300);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [view, c.segment_id, c.channel, c.purpose, segments, session]);
+
   function set(k, v) { setC((p) => ({ ...p, [k]: v })); }
 
   const isDraft = c.status === 'draft';
@@ -253,6 +275,16 @@ export default function CampaignsPage() {
                     {segments.map((s) => <option key={s.id} value={s.id}>{s.name} ({s.kind})</option>)}
                   </select>
                 : <div className="kv-v">{segName || <span className="dim">—</span>}</div>}
+              {c.segment_id && reach && (
+                <div className="dim" style={{ fontSize: 12, marginTop: 5 }}>
+                  {reach.loading ? 'Checking reachable audience…'
+                    : <span title="After channel suppression + marketing consent. The per-send frequency cap and quiet-hours gates are applied per recipient at send time and are not counted here.">
+                        <strong style={{ color: 'var(--text-1)' }}>{reach.reachable.toLocaleString('en-IN')}</strong> reachable
+                        {' · '}{reach.total.toLocaleString('en-IN')} in segment
+                        {reach.total > reach.reachable ? ` · ${(reach.total - reach.reachable).toLocaleString('en-IN')} suppressed/opted-out` : ''}
+                      </span>}
+                </div>
+              )}
             </div>
             <div className="ff"><div className="kv-k">Template</div>
               {isDraft && canBuild
