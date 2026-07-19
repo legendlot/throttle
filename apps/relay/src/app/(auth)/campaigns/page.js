@@ -16,6 +16,27 @@ const STATUS_TONE = {
   sending: 'orange', sent: 'green',
 };
 
+// Friendly, at-a-glance campaign state derived from the raw lifecycle status.
+// "Scheduled" is NOT a stored status — it's approved with a future scheduled_at.
+// Failed/Paused are intentionally omitted: the engine has no such states (a dead
+// fan-out surfaces via comms.queue_failures, not a campaign status) — BACKLOG [relay].
+function campaignStatus(r) {
+  const s = r?.status || 'draft';
+  const future = r?.scheduled_at && new Date(r.scheduled_at) > new Date();
+  if ((s === 'approved' || s === 'scheduled') && future)
+    return { label: 'Scheduled', tone: 'blue', dot: true,
+      sub: `fires ${new Date(r.scheduled_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}` };
+  switch (s) {
+    case 'draft':            return { label: 'Draft', tone: 'gray' };
+    case 'pending_approval': return { label: 'Pending approval', tone: 'yellow', dot: true };
+    case 'approved':
+    case 'scheduled':        return { label: 'Approved', tone: 'blue' };
+    case 'sending':          return { label: 'In progress', tone: 'orange', dot: true };
+    case 'sent':             return { label: 'Sent', tone: 'green', dot: true };
+    default:                 return { label: s.replace(/_/g, ' '), tone: STATUS_TONE[s] || 'gray' };
+  }
+}
+
 function emptyCampaign() {
   return { id: null, name: '', channel: 'email', purpose: 'marketing', segment_id: '', template_id: '', vars: '{}', scheduled_at: '', status: 'draft', audience_snapshot: null, reject_reason: null };
 }
@@ -183,13 +204,14 @@ export default function CampaignsPage() {
     const chTemplates = templates.filter((t) => t.channel === c.channel);
     const segName = segments.find((s) => s.id === c.segment_id)?.name;
     const tplName = templates.find((t) => t.id === c.template_id)?.name;
+    const cStatus = campaignStatus(c);
     return (
       <div className="pg">
         <div className="po-head">
           <div className="po-head-l">
             <Btn onClick={() => setView('list')}><ArrowLeft size={14} /> Back to campaigns</Btn>
             <span className="po-head-no" style={{ fontSize: 18 }}>{c.id ? (c.name || 'Campaign') : 'New Campaign'}</span>
-            <Badge label={c.status.replace('_', ' ')} tone={STATUS_TONE[c.status] || 'gray'} />
+            <Badge label={cStatus.label} tone={cStatus.tone} dot={cStatus.dot} />
             {c.audience_snapshot != null && <Badge label={`${c.audience_snapshot} reachable`} tone="blue" dot />}
           </div>
           <div className="po-head-r">
@@ -323,7 +345,11 @@ export default function CampaignsPage() {
                       <td>{r.name}</td>
                       <td><Badge label={r.channel} tone="blue" /></td>
                       <td className="dim">{r.purpose}</td>
-                      <td><Badge label={(r.status || '').replace('_', ' ')} tone={STATUS_TONE[r.status] || 'gray'} /></td>
+                      <td>{(() => { const st = campaignStatus(r); return (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'flex-start' }}>
+                          <Badge label={st.label} tone={st.tone} dot={st.dot} />
+                          {st.sub && <span className="mono dim" style={{ fontSize: 11 }}>{st.sub}</span>}
+                        </div>); })()}</td>
                       <td className="num mono dim">{r.audience_snapshot ?? '—'}</td>
                       <td className="mono dim">{fmtDate(r.updated_at)}</td>
                     </tr>
