@@ -720,10 +720,13 @@ export default {
     if (!A.canView(auth.permissions)) return err('forbidden', 403);
 
     try {
-      if (request.method === 'GET') return handleGet(url, auth, env);
+      // await is REQUIRED — handleGet/handlePost are async; returning the promise
+      // unawaited lets a rejection escape this synchronous catch, surfacing as a bare
+      // Cloudflare 1101 (no JSON body, no CORS) instead of {ok:false,error} + CORS.
+      if (request.method === 'GET') return await handleGet(url, auth, env);
       if (request.method === 'POST') {
         const body = await request.json().catch(() => ({}));
-        return handlePost(body, auth, env);
+        return await handlePost(body, auth, env);
       }
       return err('method_not_allowed', 405);
     } catch (e) {
