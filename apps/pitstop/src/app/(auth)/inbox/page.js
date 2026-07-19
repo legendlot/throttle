@@ -255,6 +255,11 @@ export default function InboxPage() {
     setLoadingConvo(true);
     waPagesRef.current = 12; loadingOlderRef.current = false; setOldestReached(true);   // reset scrollback depth per thread
     loadConvo(selectedId);
+    // Mark read on OPEN (S222, Pruthvi) — team-global watermark clears the unread dot/badge
+    // for everyone. Fires once per select (NOT on the 15s poll below). Optimistic local
+    // clear + refresh the tile counts. Fire-and-forget.
+    setThreads(prev => prev.map(t => t.id === selectedId ? { ...t, unread: false } : t));
+    if (session) csopsPost('markThreadRead', { thread_id: selectedId }, session).then(() => loadStats()).catch(() => {});
     setMode('reply'); setShowEmoji(false); setShowCanned(false); setAssignOpen(false); setPendingFiles([]);
     const iv = setInterval(() => loadConvo(selectedId), 15000);
     return () => clearInterval(iv);
@@ -1300,6 +1305,7 @@ function ChannelTile({ chKey, stat, active, onClick }) {
   const ch = chanOf(chKey);
   const tracksAwaiting = stat?.awaiting != null; // WhatsApp/Email (null) don't track awaiting here
   const awaiting = stat?.awaiting || 0;
+  const unread = stat?.unread || 0;   // new customer messages not yet opened (S222)
   const subText = tracksAwaiting ? (awaiting > 0 ? `${awaiting} awaiting reply` : 'all replied')
     : chKey === 'whatsapp' ? 'in BiteSpeed'
     : `${stat?.unassigned || 0} unassigned`;
@@ -1317,6 +1323,11 @@ function ChannelTile({ chKey, stat, active, onClick }) {
           overflow: 'hidden', textOverflow: 'ellipsis' }}>{subText}</span>
       </div>
       <div style={{ marginLeft: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: 1.1 }}>
+        {unread > 0 && (
+          <span className="num" title={`${unread} new customer message${unread === 1 ? '' : 's'}`}
+            style={{ fontSize: 9.5, fontWeight: 800, color: '#fff', background: ch.color, borderRadius: 999,
+              padding: '1px 6px', marginBottom: 3, lineHeight: 1.4 }}>{unread} new</span>
+        )}
         <span className="num" style={{ fontWeight: 700, fontSize: 18, color: 'var(--t1)', lineHeight: 1 }}>{stat?.total || 0}</span>
         <span className="num" style={{ fontSize: 9.5, fontWeight: 500, color: 'var(--t3)' }}>{stat?.closed || 0} closed</span>
       </div>
@@ -1358,11 +1369,14 @@ function ThreadRow({ t, active, myId, onClick, noBorder }) {
   const lm = t.last_message;
   const preview = lm ? (lm.body || (lm.kind && lm.kind !== 'text' ? `[${lm.kind}]` : '')) : '';
   const mine = t.assigned_agent_id && t.assigned_agent_id === myId;
-  // Unread / needs-attention: the customer's last message is unanswered (S191, Pruthvi).
-  // There's no per-agent read state, so "unread" = last message is inbound on a thread
-  // that isn't Done. Signals it three ways — a filled dot, a bolder name, a darker
-  // preview — plus a faint tint when the row isn't the active selection.
-  const unread = !!lm && lm.direction === 'inbound' && t.thread_state !== 'closed';
+  // Unread / needs-attention (S222, Pruthvi): a NEW customer message arrived after the
+  // thread was last opened, and it isn't Done. Server-computed team-global read state
+  // (`t.unread` from the last_inbound_at>last_read_at watermark) — clears when anyone
+  // opens the thread, NOT only on reply (the S191 heuristic over-flagged every
+  // awaiting-reply thread forever). Falls back to the old heuristic if the field is
+  // absent (stale payload during rollout). Signalled three ways — a filled dot, a bolder
+  // name, a darker preview — plus a faint tint when the row isn't the active selection.
+  const unread = t.unread ?? (!!lm && lm.direction === 'inbound' && t.thread_state !== 'closed');
   return (
     <button onClick={onClick} style={{ width: '100%', textAlign: 'left', cursor: 'pointer',
       display: 'flex', gap: 10, padding: '11px 13px', border: 'none',

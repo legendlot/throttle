@@ -641,6 +641,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'setShift':             return setShift(body, auth, env);
     case 'setAgentShift':        return setAgentShift(body, auth, env);
     case 'setThreadState':       return setThreadState(body, auth, env);
+    case 'markThreadRead':       return markThreadRead(body, auth, env);
     case 'setRoutingConfig':     return setRoutingConfig(body, auth, env);
     case 'createTag':            return createTag(body, auth, env);
     case 'updateTag':            return updateTag(body, auth, env);
@@ -1741,6 +1742,20 @@ async function setThreadState(body, auth, env) {
   });
   if (!r.ok) return err('failed to set thread state', 500);
   return ok({ thread_state: state });
+}
+
+// Mark a conversation read (S222, Pruthvi) — stamps last_read_at=now() so the generated
+// has_unread_inbound flag clears. Team-global (Option A): opening it clears unread for
+// everyone. No perm gate beyond a valid CS session (mirrors the read path getMessagingThreads
+// — reading a thread is exactly what triggers this) so viewers can clear unread too.
+async function markThreadRead(body, auth, env) {
+  const { thread_id } = body || {};
+  if (!thread_id) return err('thread_id required');
+  const r = await sb(`/rest/v1/cs_wa_threads?id=eq.${encodeURIComponent(thread_id)}`, env, {
+    method: 'PATCH', body: JSON.stringify({ last_read_at: new Date().toISOString() }),
+  });
+  if (!r.ok) return err('failed to mark read', 500);
+  return ok({ thread_id, read: true });
 }
 
 async function getRoutingConfig(_params, auth, env) {
@@ -3660,7 +3675,7 @@ async function recordInboundWaStub(body, auth, env) {
   const windowClose = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, {
     method: 'PATCH',
-    body: JSON.stringify({ last_message_at: now, customer_window_until: windowClose }),
+    body: JSON.stringify({ last_message_at: now, last_inbound_at: now, customer_window_until: windowClose }),
   });
 
   return ok({ message: ins.data?.[0], thread_id: thread.id, customer_window_until: windowClose });
@@ -4110,6 +4125,7 @@ async function biteSpeedMessageCreated(body, env) {
   // Inbound message resets the 24h Meta customer window + bumps last_message_at
   const threadPatch = { last_message_at: ts };
   if (direction === 'inbound') {
+    threadPatch.last_inbound_at = ts;   // unread watermark (team-global read state)
     threadPatch.customer_window_until = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     // Reopen a closed/snoozed thread when the customer messages again (standard helpdesk
     // behaviour). Also makes the empty-phantom cleanup safe — any real message resurfaces
@@ -4246,7 +4262,7 @@ async function relayWaIngestInbound(m, env) {
   });
   if (!ins.ok) { console.error(`[relay-wa] cs_wa_messages insert failed ${ins.status} ${JSON.stringify(ins.data)?.slice(0, 200)}`); return { error: 'insert_failed' }; }
 
-  const patch = { last_message_at: ts, customer_window_until: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() };
+  const patch = { last_message_at: ts, last_inbound_at: ts, customer_window_until: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() };
   if (thread.thread_state && thread.thread_state !== 'open') patch.thread_state = 'open';
   await sb(`/rest/v1/cs_wa_threads?id=eq.${thread.id}`, env, { method: 'PATCH', body: JSON.stringify(patch) }).catch(() => {});
 
@@ -4486,6 +4502,7 @@ async function metaHandleMessage(channel, ev, env) {
 
   const patch = { last_message_at: ts };
   if (direction === 'inbound') {
+    patch.last_inbound_at = ts;   // unread watermark (team-global read state)
     patch.customer_window_until = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     // Auto-reopen (Q1=B work-queue): any inbound makes the conversation active again,
     // clearing a prior Done/Snooze. The prior assignee (if any) is kept for continuity.
@@ -4966,7 +4983,7 @@ async function ingestInboundEmail(env, p) {
   if (!ins.ok) { console.error('[email] message insert failed', ins.status, JSON.stringify(ins.data)?.slice(0, 200)); return false; }
 
   // 4. Thread housekeeping: bump activity, backfill profile/subject, auto-reopen.
-  const patch = { last_message_at: p.internal_date };
+  const patch = { last_message_at: p.internal_date, last_inbound_at: p.internal_date };   // last_inbound_at = unread watermark
   if (!thread.comms_profile_id && profileId) patch.comms_profile_id = profileId;
   if (!thread.subject && p.subject) patch.subject = p.subject;
   if (thread.thread_state && thread.thread_state !== 'open') {
@@ -5291,6 +5308,10 @@ async function getMessagingThreads(params, auth, env) {
       linked_ticket_id: tid,
       linked_ticket_no: tid ? (ticketNoById[tid] || null) : null,
       within_customer_window: withinCustomerWindow(t),
+      // Team-global unread: a customer message arrived after the thread was last opened,
+      // and it isn't Done. `has_unread_inbound` is the DB-generated flag (last_inbound_at >
+      // last_read_at); we AND in the open-state check here (S222, Pruthvi unread indicator).
+      unread: !!t.has_unread_inbound && t.thread_state !== 'closed',
       tags: tagsByThread[t.id] || [],
     };
   });
@@ -5358,6 +5379,14 @@ async function getMessagingStats(params, auth, env) {
   // Ignition-transferred threads, consistent with the active counts above.
   for (const ch of ['instagram', 'messenger', 'whatsapp', 'email', 'web']) {
     stats[ch].closed = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.${ch}&ignition_connect=is.false&thread_state=eq.closed&select=id`, env);
+  }
+  // Per-channel UNREAD count (S222, Pruthvi) — active threads with a customer message
+  // that arrived after the thread was last opened. One set-based RPC over the generated
+  // `has_unread_inbound` flag (open+snoozed, non-Ignition) → team-global unread badges.
+  for (const ch of Object.keys(stats)) stats[ch].unread = 0;
+  const uRes = await sb(`/rest/v1/rpc/cs_unread_counts_by_channel`, env, { method: 'POST', body: '{}' });
+  for (const row of (uRes.data || [])) {
+    if (stats[row.channel]) stats[row.channel].unread = Number(row.cnt) || 0;
   }
   return ok({ stats });
 }
