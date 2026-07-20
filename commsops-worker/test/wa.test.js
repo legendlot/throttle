@@ -162,6 +162,61 @@ function restoreFetch() { global.fetch = realFetch; }
     assert.ok(comps.find((c) => c.type === 'BUTTONS'));
   });
 
+  await t('buildComponents emits a MEDIA header with an upload handle, not text', () => {
+    const comps = WATPL.buildComponents({
+      header_format: 'IMAGE', header: 'ignored when media', header_handle: 'h:ABC123',
+      body: 'Hi {{1}}', mapping: [{ component: 'body', pos: 1, example: 'Asha' }],
+    });
+    const header = comps.find((c) => c.type === 'HEADER');
+    assert.equal(header.format, 'IMAGE');
+    assert.equal(header.text, undefined);                       // media headers carry no text
+    assert.deepEqual(header.example, { header_handle: ['h:ABC123'] });
+  });
+
+  await t('buildComponents substitutes a URL-button example (Meta rejects without one)', () => {
+    const comps = WATPL.buildComponents({
+      body: 'Hi',
+      buttons: [
+        { type: 'URL', text: 'Track', url: 'https://go.example.com/{{1}}', example_suffix: 'a1b2c3' },
+        { type: 'QUICK_REPLY', text: 'Cancel Order' },
+      ],
+    });
+    const btns = comps.find((c) => c.type === 'BUTTONS').buttons;
+    assert.deepEqual(btns[0].example, ['https://go.example.com/a1b2c3']);
+    assert.equal(btns[0].example_suffix, undefined);             // internal-only, never sent to Meta
+    assert.equal(btns[1].example, undefined);                    // quick-reply takes no example
+  });
+
+  await t('buildComponents takes a URL-button example from the mapping index', () => {
+    const comps = WATPL.buildComponents({
+      body: 'Hi',
+      buttons: [{ type: 'QUICK_REPLY', text: 'No' }, { type: 'URL', text: 'Go', url: 'https://x.io/{{1}}' }],
+      mapping: [{ component: 'button', index: 1, token: 'code', example: 'zz9' }],
+    });
+    const btns = comps.find((c) => c.type === 'BUTTONS').buttons;
+    assert.deepEqual(btns[1].example, ['https://x.io/zz9']);     // index 1 → the 2nd button
+  });
+
+  await t('wabaFor prefers the template pin over the env default', () => {
+    assert.equal(WATPL.wabaFor({ WA_WABA_ID: 'ENV' }, { content: { waba_id: 'PINNED' } }), 'PINNED');
+    assert.equal(WATPL.wabaFor({ WA_WABA_ID: 'ENV' }, { content: {} }), 'ENV');
+    assert.equal(WATPL.wabaFor({}, { content: {} }), null);
+  });
+
+  await t('renderWhatsapp sends a media header component from header_media_url', () => {
+    const r = renderWhatsapp({
+      language: 'en',
+      variables: [{ token: 'first_name', source: 'profile', field: 'first_name' }],
+      content: {
+        meta_name: 'lot_x', header_format: 'IMAGE',
+        header_media_url: 'https://cdn.example.com/hero.jpg',
+        body: 'Hi {{1}}', mapping: [{ component: 'body', pos: 1, token: 'first_name' }],
+      },
+    }, { profile: { first_name: 'Asha' } });
+    const header = r.template.components.find((c) => c.type === 'header');
+    assert.deepEqual(header.parameters, [{ type: 'image', image: { link: 'https://cdn.example.com/hero.jpg' } }]);
+  });
+
   await t('categoryFor derives from purpose + honours override', () => {
     assert.equal(WATPL.categoryFor({ purpose: 'marketing', content: {} }), 'MARKETING');
     assert.equal(WATPL.categoryFor({ purpose: 'utility', content: {} }), 'UTILITY');

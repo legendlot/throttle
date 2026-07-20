@@ -112,8 +112,16 @@ function renderWhatsapp(template, ctx) {
       (byComp[comp] = byComp[comp] || []).push({ ...slot, value: raw });
     }
     const components = [];
-    // header (text params only in v1)
-    if (byComp.header?.length) {
+    // Header. A MEDIA header (IMAGE/VIDEO/DOCUMENT) carries no {{n}} text slot — Meta wants the
+    // asset itself at send time. Source it from a mapped header slot when the journey supplies a
+    // per-message asset, else the template's own static `header_media_url`. Emitting no header
+    // component at all for a media-header template makes Meta reject the SEND (132000).
+    const headerFormat = String(content.header_format || 'TEXT').toUpperCase();
+    if (headerFormat === 'IMAGE' || headerFormat === 'VIDEO' || headerFormat === 'DOCUMENT') {
+      const kind = headerFormat.toLowerCase();
+      const link = byComp.header?.[0]?.value || content.header_media_url || null;
+      if (link) components.push({ type: 'header', parameters: [{ type: kind, [kind]: { link } }] });
+    } else if (byComp.header?.length) {
       components.push({ type: 'header', parameters: byComp.header.map((s) => ({ type: 'text', text: s.value })) });
     }
     if (byComp.body?.length) {

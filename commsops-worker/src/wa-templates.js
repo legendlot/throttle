@@ -3,15 +3,29 @@
 // be used for a template-mode send (business-initiated / outside the 24h window).
 //
 // Local WA template `content` shape:
-//   { meta_name, language, category?, header?, body, footer?, buttons?, mapping? }
+//   { meta_name, language, category?, header?, header_format?, header_handle?,
+//     body, footer?, buttons?, mapping?, waba_id? }
 //   - body uses positional {{1}}, {{2}} … placeholders (Meta's format).
 //   - `mapping` (used at SEND time by renderWhatsapp) lists the {token→slot} bindings;
 //     `example` values for submission come from each mapping slot's `example` field.
+//   - `header_format` TEXT (default) | IMAGE | VIDEO | DOCUMENT. A media header carries NO
+//     text; Meta wants a `header_handle` from the Resumable Upload API instead (see waUploadHeaderMedia).
+//   - `waba_id` pins the template to ONE WhatsApp Business Account. Templates are WABA-scoped
+//     and NON-transferable, and LOT's three live numbers sit on three separate WABAs, so a
+//     single global env.WA_WABA_ID cannot serve marketing + transactional + support. Falls
+//     back to env.WA_WABA_ID when unset (pre-existing templates keep working unchanged).
 
 const A = require('./auth.js');
 
+const MEDIA_HEADERS = new Set(['IMAGE', 'VIDEO', 'DOCUMENT']);
+
 function graphBase(env) {
   return `https://graph.facebook.com/${env.WA_GRAPH_VERSION || 'v21.0'}`;
+}
+
+// Which WABA does this template belong to? Explicit pin wins; env is the legacy default.
+function wabaFor(env, template) {
+  return template?.content?.waba_id || env.WA_WABA_ID || null;
 }
 
 async function getTemplate(env, id) {
@@ -23,10 +37,19 @@ async function getTemplate(env, id) {
 function buildComponents(content) {
   const components = [];
   const mapping = Array.isArray(content.mapping) ? content.mapping : [];
-  const examplesFor = (comp) => mapping.filter((m) => (m.component || 'body') === comp)
-    .sort((a, b) => (a.pos ?? 0) - (b.pos ?? 0)).map((m) => m.example ?? 'sample');
+  const slotsFor = (comp) => mapping.filter((m) => (m.component || 'body') === comp)
+    .sort((a, b) => (a.pos ?? 0) - (b.pos ?? 0));
+  const examplesFor = (comp) => slotsFor(comp).map((m) => m.example ?? 'sample');
 
-  if (content.header) {
+  const headerFormat = String(content.header_format || 'TEXT').toUpperCase();
+  if (MEDIA_HEADERS.has(headerFormat)) {
+    // Media header: no text, no positional slot. Meta approves the template against a sample
+    // asset referenced by an upload handle (`h:…`) from the Resumable Upload API. At SEND time
+    // the real per-message media is supplied in the header component's parameters.
+    const c = { type: 'HEADER', format: headerFormat };
+    if (content.header_handle) c.example = { header_handle: [content.header_handle] };
+    components.push(c);
+  } else if (content.header) {
     const headerEx = examplesFor('header');
     const c = { type: 'HEADER', format: 'TEXT', text: content.header };
     if (headerEx.length) c.example = { header_text: headerEx };
@@ -40,9 +63,82 @@ function buildComponents(content) {
   }
   if (content.footer) components.push({ type: 'FOOTER', text: content.footer });
   if (Array.isArray(content.buttons) && content.buttons.length) {
-    components.push({ type: 'BUTTONS', buttons: content.buttons });
+    // A URL button may carry ONE trailing {{1}} (Meta's rule: static base + one variable).
+    // Meta REJECTS such a button unless the fully-substituted sample URL is supplied as
+    // `example: [url]` — so derive it from the button's own `example_suffix`, else from the
+    // matching mapping slot. Buttons key on `index` (0-based), the SAME key renderWhatsapp
+    // uses to address a button component at send time — never `pos`, which addresses {{n}}.
+    const btnSlots = slotsFor('button');
+    const buttons = content.buttons.map((b, i) => {
+      const btn = { ...b };
+      delete btn.example_suffix;
+      if (btn.type === 'URL' && /\{\{\d+\}\}/.test(btn.url || '')) {
+        const suffix = b.example_suffix
+          ?? btnSlots.find((s) => Number(s.index ?? 0) === i)?.example
+          ?? 'sample';
+        btn.example = [String(btn.url).replace(/\{\{\d+\}\}/, String(suffix))];
+      }
+      return btn;
+    });
+    components.push({ type: 'BUTTONS', buttons });
   }
   return components;
+}
+
+// waUploadHeaderMedia({templateId?, url, mimeType?}) — obtain the `h:…` handle a media-header
+// template needs for approval, via Meta's two-step Resumable Upload API on the APP (not the WABA):
+//   1. POST /{app_id}/uploads?file_length&file_type  → an upload session id
+//   2. POST /{session_id} with the bytes + `file_offset: 0` → { h: "<handle>" }
+// The handle identifies the SAMPLE asset Meta reviews; it is not the media sent at runtime.
+async function waUploadHeaderMedia(env, body) {
+  if (!env.WA_TOKEN) return { ok: false, error: 'wa_not_configured' };
+  const appId = env.WA_APP_ID;
+  if (!appId) return { ok: false, error: 'wa_app_id_not_configured' };
+  if (!body?.url) return { ok: false, error: 'url_required' };
+
+  let bytes, mime;
+  try {
+    const src = await fetch(body.url);
+    if (!src.ok) return { ok: false, error: `asset_fetch_http_${src.status}` };
+    mime = body.mimeType || src.headers.get('content-type') || 'image/jpeg';
+    bytes = new Uint8Array(await src.arrayBuffer());
+  } catch (e) { return { ok: false, error: `asset_fetch_error:${e?.message || e}` }; }
+  if (!bytes.length) return { ok: false, error: 'asset_empty' };
+
+  let sessionId;
+  try {
+    const res = await fetch(
+      `${graphBase(env)}/${encodeURIComponent(appId)}/uploads`
+      + `?file_length=${bytes.length}&file_type=${encodeURIComponent(mime)}`,
+      { method: 'POST', headers: { Authorization: `Bearer ${env.WA_TOKEN}` } });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.id) return { ok: false, error: data?.error?.message || `upload_session_http_${res.status}`, raw: data };
+    sessionId = data.id;   // already of the form "upload:…"
+  } catch (e) { return { ok: false, error: `upload_session_error:${e?.message || e}` }; }
+
+  try {
+    const res = await fetch(`${graphBase(env)}/${sessionId}`, {
+      method: 'POST',
+      headers: { Authorization: `OAuth ${env.WA_TOKEN}`, file_offset: '0', 'Content-Type': mime },
+      body: bytes,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.h) return { ok: false, error: data?.error?.message || `upload_http_${res.status}`, raw: data };
+
+    if (body.templateId) {   // persist the handle onto the template so submit picks it up
+      const tpl = await getTemplate(env, body.templateId);
+      if (tpl) {
+        await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(tpl.id)}`, env, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            content: { ...(tpl.content || {}), header_handle: data.h },
+            updated_at: new Date().toISOString(),
+          }),
+        });
+      }
+    }
+    return { ok: true, handle: data.h, bytes: bytes.length, mime };
+  } catch (e) { return { ok: false, error: `upload_error:${e?.message || e}` }; }
 }
 
 function categoryFor(template) {
@@ -53,12 +149,14 @@ function categoryFor(template) {
 
 // waSubmitTemplate({templateId}) — submit to Meta, mark local approval_status PENDING.
 async function waSubmitTemplate(env, body) {
-  if (!env.WA_TOKEN || !env.WA_WABA_ID) return { ok: false, error: 'wa_not_configured' };
+  if (!env.WA_TOKEN) return { ok: false, error: 'wa_not_configured' };
   const tpl = await getTemplate(env, body.templateId);
   if (!tpl) return { ok: false, error: 'template_not_found' };
   if (tpl.channel !== 'whatsapp') return { ok: false, error: 'not_a_whatsapp_template' };
   const content = tpl.content || {};
   if (!content.meta_name || !content.body) return { ok: false, error: 'meta_name_and_body_required' };
+  const wabaId = wabaFor(env, tpl);
+  if (!wabaId) return { ok: false, error: 'wa_waba_not_configured' };
 
   const graphBody = {
     name: content.meta_name,
@@ -68,7 +166,7 @@ async function waSubmitTemplate(env, body) {
   };
   let res, data;
   try {
-    res = await fetch(`${graphBase(env)}/${env.WA_WABA_ID}/message_templates`, {
+    res = await fetch(`${graphBase(env)}/${encodeURIComponent(wabaId)}/message_templates`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${env.WA_TOKEN}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(graphBody),
@@ -83,16 +181,19 @@ async function waSubmitTemplate(env, body) {
     body: JSON.stringify({
       provider_template_id: data?.id || null,
       approval_status: (data?.status || 'PENDING'),
+      // Pin the WABA the template was actually created on, so a later env change can never
+      // make sync/send look it up on the wrong account.
+      content: { ...content, waba_id: wabaId },
       updated_at: new Date().toISOString(),
     }),
   });
-  return { ok: true, provider_template_id: data?.id || null, status: data?.status || 'PENDING' };
+  return { ok: true, provider_template_id: data?.id || null, status: data?.status || 'PENDING', waba_id: wabaId };
 }
 
 // waSyncTemplateStatus({templateId?}) — poll Meta for status; PATCH local approval_status.
 // With no templateId, syncs every local whatsapp template that has a meta_name.
 async function waSyncTemplateStatus(env, body) {
-  if (!env.WA_TOKEN || !env.WA_WABA_ID) return { ok: false, error: 'wa_not_configured' };
+  if (!env.WA_TOKEN) return { ok: false, error: 'wa_not_configured' };
   let locals;
   if (body.templateId) {
     const t = await getTemplate(env, body.templateId);
@@ -106,20 +207,27 @@ async function waSyncTemplateStatus(env, body) {
   for (const t of locals) {
     const name = t.content?.meta_name;
     if (!name) continue;
+    // Look the template up on ITS OWN WABA — a name is only unique within one account, and
+    // querying the wrong WABA silently returns nothing (which would read as "no change").
+    const wabaId = wabaFor(env, t);
+    if (!wabaId) { synced.push({ id: t.id, meta_name: name, status: null, error: 'wa_waba_not_configured' }); continue; }
     let data;
     try {
       const res = await fetch(
-        `${graphBase(env)}/${env.WA_WABA_ID}/message_templates?name=${encodeURIComponent(name)}&fields=name,status,category`,
+        `${graphBase(env)}/${encodeURIComponent(wabaId)}/message_templates`
+        + `?name=${encodeURIComponent(name)}&fields=name,status,category,rejected_reason`,
         { headers: { Authorization: `Bearer ${env.WA_TOKEN}` } });
       data = await res.json().catch(() => ({}));
-      if (!res.ok) continue;
-    } catch { continue; }
-    const status = data?.data?.[0]?.status || null;
+      if (!res.ok) { synced.push({ id: t.id, meta_name: name, status: null, waba_id: wabaId, error: data?.error?.message || `http_${res.status}` }); continue; }
+    } catch (e) { synced.push({ id: t.id, meta_name: name, status: null, waba_id: wabaId, error: String(e?.message || e) }); continue; }
+    const hit = (data?.data || []).find((x) => x.name === name) || data?.data?.[0] || null;
+    const status = hit?.status || null;
     if (status && status !== t.approval_status) {
       await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(t.id)}`, env, {
         method: 'PATCH', body: JSON.stringify({ approval_status: status, updated_at: new Date().toISOString() }) });
     }
-    synced.push({ id: t.id, meta_name: name, status });
+    // Surface WHY Meta rejected — otherwise a REJECTED row gives the author nothing to act on.
+    synced.push({ id: t.id, meta_name: name, status, waba_id: wabaId, rejected_reason: hit?.rejected_reason || null });
   }
   return { ok: true, synced };
 }
@@ -160,4 +268,7 @@ async function waListTemplates(env, wabaIds, opts = {}) {
   return { ok: true, wabas: out };
 }
 
-module.exports = { waSubmitTemplate, waSyncTemplateStatus, waListTemplates, buildComponents, categoryFor };
+module.exports = {
+  waSubmitTemplate, waSyncTemplateStatus, waListTemplates, waUploadHeaderMedia,
+  buildComponents, categoryFor, wabaFor,
+};

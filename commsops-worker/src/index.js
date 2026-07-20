@@ -485,6 +485,11 @@ async function handlePost(body, auth, env) {
       const r = await WATPL.waSyncTemplateStatus(env, body);
       return r.ok ? ok(r) : err(r.error, 400);
     }
+    case 'waUploadHeaderMedia': {          // media-header templates need a Meta upload handle
+      if (!A.canTemplate(auth.permissions)) return err('forbidden', 403);
+      const r = await WATPL.waUploadHeaderMedia(env, body);
+      return r.ok ? ok(r) : err(r.error, 400);
+    }
     case 'cashfreeMintTestLink': {        // J3 — mint a Cashfree pay-link (sandbox bring-up proof)
       if (!A.canSuperAdmin(auth.permissions)) return err('forbidden', 403);
       const r = await CF.createPaymentLink(env, {
@@ -712,6 +717,22 @@ export default {
       if (!want || bearer !== want) return err('unauthorised', 401);
       let b = {}; try { b = await request.json(); } catch {}
       const r = await WATPL.waListTemplates(env, b.wabaIds || [], b);
+      return r.ok ? ok(r) : err(r.error, 400);
+    }
+    // Internal template submit/sync — the SAME waSubmitTemplate/waSyncTemplateStatus the
+    // `/templates` UI calls, reachable with the WA_SYNC_TOKEN instead of a Google-login JWT so
+    // a bulk authoring run isn't gated on an interactive browser session. Writes only to
+    // comms.templates + Meta's template catalog; it can send nothing.
+    if (url.pathname === '/internal/wa-template-op' && request.method === 'POST') {
+      const want = env.WA_SYNC_TOKEN;
+      const a = request.headers.get('Authorization') || '';
+      const bearer = a.slice(0, 7).toLowerCase() === 'bearer ' ? a.slice(7).trim() : '';
+      if (!want || bearer !== want) return err('unauthorised', 401);
+      let b = {}; try { b = await request.json(); } catch {}
+      const ops = { submit: WATPL.waSubmitTemplate, sync: WATPL.waSyncTemplateStatus, upload: WATPL.waUploadHeaderMedia };
+      const fn = ops[b.op];
+      if (!fn) return err('unknown_op', 400);
+      const r = await fn(env, b);
       return r.ok ? ok(r) : err(r.error, 400);
     }
 
