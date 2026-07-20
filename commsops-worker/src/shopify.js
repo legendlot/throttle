@@ -164,11 +164,40 @@ const ORDER_TOPIC_EVENT = {
   'orders/cancelled': 'order_cancelled',
 };
 
+// "Ghost RC Drift Car", "Ghost RC Drift Car + 1 more", "Ghost RC Drift Car + 2 more" — a
+// human-readable item summary for message copy ({items}). Kept short on purpose: WA bodies
+// are capped and a 6-item order should not blow the template.
+function summariseItems(lineItems) {
+  const names = (Array.isArray(lineItems) ? lineItems : [])
+    .map((li) => li?.title || li?.name).filter(Boolean);
+  if (!names.length) return null;
+  return names.length === 1 ? names[0] : `${names[0]} + ${names.length - 1} more`;
+}
+
+// Pull tracking off the fulfillments array. Shopify sends BOTH `tracking_number`/`tracking_url`
+// (singular, first entry) and `tracking_numbers`/`tracking_urls` (arrays) — prefer the singular,
+// fall back to the array. The LAST fulfillment is the most recent one.
+function trackingFrom(order) {
+  const fs = Array.isArray(order?.fulfillments) ? order.fulfillments : [];
+  if (!fs.length) return {};
+  const f = fs[fs.length - 1];
+  const number = f.tracking_number || (Array.isArray(f.tracking_numbers) ? f.tracking_numbers[0] : null) || null;
+  const url = f.tracking_url || (Array.isArray(f.tracking_urls) ? f.tracking_urls[0] : null) || null;
+  return {
+    tracking_number: number,
+    tracking_company: f.tracking_company || null,
+    tracking_url: url,
+    fulfillment_status: f.status || null,
+    fulfillment_count: fs.length,
+  };
+}
+
 function mapOrderEvent(o, name) {
   const identifiers = identsFromContact(o);
   if (!identifiers.length) return null;
   const oid = o.id != null ? String(o.id) : null;
   const total = o.total_price != null ? Number(o.total_price) : null;
+  const track = trackingFrom(o);
   const props = {
     shopify_order_id: oid,
     order_number: o.order_number || o.name || null,
@@ -177,6 +206,11 @@ function mapOrderEvent(o, name) {
     financial_status: o.financial_status || null,
     fulfillment_status: o.fulfillment_status || null,
     line_item_count: Array.isArray(o.line_items) ? o.line_items.length : null,
+    // ── message-copy bindings (these were being dropped, leaving WA/email templates to
+    //    fall back to generic values): {items}, {order_url}, {tracking_url}.
+    items: summariseItems(o.line_items),
+    order_status_url: o.order_status_url || null,
+    ...track,
   };
   const occurred = (name === 'order_cancelled' ? o.cancelled_at : o.created_at) || new Date().toISOString();
   return { identifiers, name, occurred_at: occurred, properties: props, source: 'shopify_webhook',
