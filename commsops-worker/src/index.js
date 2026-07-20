@@ -747,7 +747,14 @@ export default {
       // pass the */5 cron runs) so bring-up doesn't wait on a tick.
       const ops = { submit: WATPL.waSubmitTemplate, sync: WATPL.waSyncTemplateStatus,
                     upload: WATPL.waUploadHeaderMedia,
-                    shipmentEvents: (e) => SHIPEV.emitShipmentEvents(e, ingest) };
+                    shipmentEvents: (e) => SHIPEV.emitShipmentEvents(e, ingest),
+                    // Cutover pre-flight: prove the csops binding resolves. A 401 from csops's
+                    // own auth is a PASS — it means the request was delivered rather than 1042'd.
+                    pingCsops: async (e) => {
+                      if (!e.CSOPS?.fetch) return { ok: false, error: 'csops_binding_missing' };
+                      const r = await e.CSOPS.fetch(new Request('https://internal/webhooks/relay-wa', { method: 'POST' }));
+                      return { ok: true, bound: true, status: r.status };
+                    } };
       const fn = ops[b.op];
       if (!fn) return err('unknown_op', 400);
       const r = await fn(env, b);

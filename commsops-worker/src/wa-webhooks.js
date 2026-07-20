@@ -47,13 +47,23 @@ function verifyWhatsappWebhook(env, url) {
 
 // forward normalized inbound to Pitstop (csops). Best-effort, never throws.
 async function forwardToCsops(env, messages) {
-  if (!env.CSOPS_WA_FORWARD_URL || !env.CSOPS_WA_FORWARD_TOKEN || !messages.length) return;
+  if (!env.CSOPS_WA_FORWARD_TOKEN || !messages.length) return;
+  const init = {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${env.CSOPS_WA_FORWARD_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source: 'relay_whatsapp', messages }),
+  };
   try {
-    await fetch(env.CSOPS_WA_FORWARD_URL, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${env.CSOPS_WA_FORWARD_TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source: 'relay_whatsapp', messages }),
-    });
+    // Prefer the service binding. A plain fetch() to csops.workers.dev is the SAME workers.dev
+    // zone, which Cloudflare refuses with error 1042 — and because this function swallows its
+    // errors, that failure would be invisible: every inbound customer message would silently
+    // never reach Pitstop. The URL path stays only as a dev/self-hosted fallback.
+    const res = env.CSOPS && typeof env.CSOPS.fetch === 'function'
+      ? await env.CSOPS.fetch(new Request('https://internal/webhooks/relay-wa', init))
+      : (env.CSOPS_WA_FORWARD_URL ? await fetch(env.CSOPS_WA_FORWARD_URL, init) : null);
+    if (!res) { console.log('wa_forward_skipped', 'no CSOPS binding and no CSOPS_WA_FORWARD_URL'); return; }
+    // Log a non-2xx: a dropped inbound message is a customer waiting on a reply nobody sees.
+    if (!res.ok) console.log('wa_forward_failed', res.status, (await res.text()).slice(0, 160));
   } catch (e) { console.log('wa_forward_error', e?.message || String(e)); }
 }
 

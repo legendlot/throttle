@@ -63,3 +63,11 @@ crons = ["*/5 * * * *"]
 name = "commsops-journey"
 binding = "JOURNEY_WORKFLOW"
 class_name = "JourneyWorkflow"
+
+# Service binding to csops — REQUIRED for the inbound WhatsApp forward. A Worker cannot fetch()
+# another Worker on the same workers.dev zone (Cloudflare error 1042), and forwardToCsops()
+# swallows its errors, so without this every inbound customer message would vanish silently at
+# cutover and Pitstop would show an empty inbox with nothing in the logs.
+[[services]]
+binding = "CSOPS"
+service = "csops"
