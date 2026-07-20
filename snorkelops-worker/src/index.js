@@ -1681,11 +1681,23 @@ export default {
             if (!canRaisePO(P)) return err('No permission to amend POs', 403);
             const d = body.data;
             if (!d.po_number) return err('po_number required');
+            // STRICT (2026-07-20, Afshaan): an issued PO is a commercial document — every
+            // amendment must carry a reason, bump the revision, snapshot the prior state and
+            // land in the activity log. Reason was previously enforced in the UI only.
+            if (!d.change_summary || !String(d.change_summary).trim()) {
+              return err('change_summary required — an amendment must record what changed and why');
+            }
             const existing = await query('purchase_orders', `?po_number=eq.${encodeURIComponent(d.po_number)}&limit=1`);
             if (!existing.ok||!existing.data[0]) return err('PO not found');
             const po = existing.data[0];
             if (po.source === 'China' && !canRaiseChinaPO(P)) {
               return err('China PO amend requires po_china permission', 403);
+            }
+            if (['Cancelled','Closed'].includes(po.status)) {
+              return err(`A ${po.status} PO cannot be amended`, 400);
+            }
+            if (po.status === 'Soft') {
+              return err('Soft POs are promoted, not amended — use Promote', 400);
             }
             const newRev = po.revision+1;
             const linesR = await query('po_lines', `?po_number=eq.${encodeURIComponent(d.po_number)}&order=line_no.asc`);
@@ -1701,6 +1713,16 @@ export default {
               'quality_hold','notes','delivery_address_id','po_category'].forEach(f => { if (d[f]!==undefined) updates[f]=d[f]; });
             await update('purchase_orders', updates, `po_number=eq.${encodeURIComponent(d.po_number)}`);
             if (Array.isArray(d.lines)&&d.lines.length>0) {
+              // GUARD (2026-07-20): this path DELETEs every line and re-inserts from the client
+              // payload — it renumbers line_no and rewrites qty_received. On a PO with goods
+              // already booked against it that silently destroys the receiving reconciliation.
+              // No UI sends `lines` today (the Amend modal is header-only); to APPEND a line use
+              // the additive `addPOLines` action instead. Refuse the full replace once anything
+              // has been received.
+              const received = (linesR.data||[]).some(l => (parseFloat(l.qty_received)||0) > 0);
+              if (received) {
+                return err('This PO already has received quantities — a full line replace would rewrite that history. Use Add Line to append instead.', 409);
+              }
               await sb(`/rest/v1/po_lines?po_number=eq.${encodeURIComponent(d.po_number)}`, { method: 'DELETE' });
               const lineRows = d.lines.map((l,i) => ({
                 po_number: d.po_number, line_no: i+1, product: l.product||null, variant: l.variant||null,
@@ -1716,7 +1738,74 @@ export default {
               }));
               await insert('po_lines', lineRows);
             }
+            await logActivity(authResult?.fullName||postRole, postRole, 'PO_AMENDED', 'PO', d.po_number,
+              `PO ${d.po_number} amended to rev ${newRev} — ${String(d.change_summary).trim()}`,
+              { revision: newRev, change_summary: String(d.change_summary).trim() });
             return ok({ po_number: d.po_number, revision: newRev });
+          }
+
+          // Additive line append on an already-raised PO (2026-07-20). The legitimate case behind
+          // the recurring "add this part to SHP-NNN + its PO" tickets: the supplier ships something
+          // that was never on the PO. Receiving stays PO-driven (the PO-mandatory rule, 2026-07-15)
+          // — this makes the PO catch up quickly instead of people wanting to bypass it.
+          // Strict, same contract as amendPO: reason required, revision bumped, prior state
+          // snapshotted into po_revisions, activity logged. NEVER touches existing lines.
+          case 'addPOLines': {
+            if (!canRaisePO(P)) return err('No permission to amend POs', 403);
+            const d = body.data;
+            if (!d.po_number) return err('po_number required');
+            if (!d.change_summary || !String(d.change_summary).trim()) {
+              return err('change_summary required — an amendment must record what changed and why');
+            }
+            const newLines = Array.isArray(d.lines) ? d.lines.filter(l => l && (l.part_code || l.description)) : [];
+            if (!newLines.length) return err('At least one line with a part code or description is required');
+            const existing = await query('purchase_orders', `?po_number=eq.${encodeURIComponent(d.po_number)}&limit=1`);
+            if (!existing.ok||!existing.data[0]) return err('PO not found');
+            const po = existing.data[0];
+            if (po.source === 'China' && !canRaiseChinaPO(P)) {
+              return err('China PO amend requires po_china permission', 403);
+            }
+            if (['Cancelled','Closed'].includes(po.status)) {
+              return err(`A ${po.status} PO cannot be amended`, 400);
+            }
+            if (po.status === 'Soft') {
+              return err('Soft POs are promoted, not amended — use Promote', 400);
+            }
+            const curR = await query('po_lines', `?po_number=eq.${encodeURIComponent(d.po_number)}&order=line_no.asc`);
+            const curLines = curR.data || [];
+            // Snapshot the PRE-amendment state against the OLD revision (same shape as amendPO).
+            const newRev = po.revision + 1;
+            await insert('po_revisions', {
+              po_number: d.po_number, revision: po.revision, changed_by: postRole,
+              change_summary: `Rev ${newRev}: added ${newLines.length} line${newLines.length===1?'':'s'} — ${String(d.change_summary).trim()}`,
+              snapshot: JSON.stringify({ header: po, lines: curLines }),
+            });
+            // Append above the current highest line_no — never renumber what's there.
+            const maxLineNo = curLines.reduce((m,l) => Math.max(m, parseInt(l.line_no)||0), 0);
+            const lineRows = newLines.map((l,i) => ({
+              po_number: d.po_number, line_no: maxLineNo + i + 1,
+              product: l.product||null, variant: l.variant||null,
+              item_type: l.item_type||'Part', description: l.description||null, part_code: l.part_code||null,
+              qty_ordered: parseFloat(l.qty_ordered)||0, qty_received: 0, unit: l.unit||'pcs',
+              unit_price: l.unit_price != null && l.unit_price !== '' ? parseFloat(l.unit_price) : null,
+              color: l.color||null, component_type: l.component_type||null,
+              receive_format: l.receive_format || null,
+              remote_qty: parseInt(l.remote_qty) || 0,
+              hsn_code: l.hsn_code || null,
+              gst_percent: l.gst_percent != null && l.gst_percent !== '' ? parseFloat(l.gst_percent) : null,
+              mould_no: l.mould_no || null,
+            }));
+            const lr = await insert('po_lines', lineRows);
+            if (!lr.ok) return err('PO line insert failed: '+JSON.stringify(lr.data));
+            await update('purchase_orders',
+              { revision: newRev, updated_at: new Date().toISOString() },
+              `po_number=eq.${encodeURIComponent(d.po_number)}`);
+            const added = lineRows.map(l => `${l.part_code||l.description} ×${l.qty_ordered}`).join(', ');
+            await logActivity(authResult?.fullName||postRole, postRole, 'PO_LINES_ADDED', 'PO', d.po_number,
+              `PO ${d.po_number} → rev ${newRev}: added ${added} — ${String(d.change_summary).trim()}`,
+              { revision: newRev, lines_added: lineRows.length, parts: lineRows.map(l => l.part_code).filter(Boolean),
+                change_summary: String(d.change_summary).trim() });
+            return ok({ po_number: d.po_number, revision: newRev, lines_added: lineRows.length });
           }
 
           case 'cancelPO': {

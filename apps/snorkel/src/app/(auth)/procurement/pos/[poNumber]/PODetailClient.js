@@ -7,7 +7,7 @@ import { Spinner, useToast, Combobox, useEscapeClose } from '@throttle/ui';
 import { computeTax } from '@/lib/poTax';
 import { Panel, Badge, Btn } from '@/components/ui.js';
 import { sourceTone } from '@/components/format.js';
-import { ArrowLeft, Printer, Pencil, Check, Send, ClipboardList } from 'lucide-react';
+import { ArrowLeft, Printer, Pencil, Check, Send, ClipboardList, Plus, Trash2 } from 'lucide-react';
 
 const PO_STATUS_TONES = {
   Soft:                           'orange',
@@ -103,6 +103,14 @@ export default function PODetailPage() {
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
   const [cancelSubmitting, setCancelSubmitting] = useState(false);
+  // Add-line amendment (2026-07-20): the supplier ships something that was never on the PO.
+  // Receiving stays PO-driven — the PO catches up here instead of being bypassed.
+  const [addLineOpen, setAddLineOpen] = useState(false);
+  const [addLineRows, setAddLineRows] = useState([]);
+  const [addLineSummary, setAddLineSummary] = useState('');
+  const [addLineSubmitting, setAddLineSubmitting] = useState(false);
+  const [partsCache, setPartsCache] = useState(null);
+  const [partsLoading, setPartsLoading] = useState(false);
 
   const loadPO = useCallback(async () => {
     if (!session || !poNumber || poNumber === 'sample') {
@@ -222,6 +230,46 @@ export default function PODetailPage() {
     }
   }
 
+  async function loadParts() {
+    if (partsCache || partsLoading) return;
+    setPartsLoading(true);
+    try {
+      const data = await garageFetch('getProcurementParts', {}, session);
+      setPartsCache(Array.isArray(data) ? data : []);
+    } catch {
+      setPartsCache([]);
+    } finally {
+      setPartsLoading(false);
+    }
+  }
+
+  function openAddLine() {
+    setAddLineRows([{ part_code: '', description: '', item_type: 'Part', qty_ordered: '', unit: 'pcs', unit_price: '', hsn_code: '', gst_percent: '' }]);
+    setAddLineSummary('');
+    setAddLineOpen(true);
+    loadParts();
+  }
+
+  async function submitAddLine() {
+    if (!addLineSummary.trim()) { showToast('Reason required', 'error'); return; }
+    const rows = addLineRows.filter((l) => (l.part_code || l.description) && parseFloat(l.qty_ordered) > 0);
+    if (!rows.length) { showToast('Add at least one line with a quantity', 'error'); return; }
+    setAddLineSubmitting(true);
+    try {
+      const res = await workerFetch('addPOLines', {
+        data: { po_number: po.po_number, change_summary: addLineSummary.trim(), lines: rows },
+      }, session);
+      const n = res?.data?.lines_added ?? rows.length;
+      showToast(`${n} line${n === 1 ? '' : 's'} added — ${po.po_number} now rev ${res?.data?.revision ?? ''}. Re-sync the shipment in Receiving to count them.`, 'success');
+      setAddLineOpen(false);
+      loadPO();
+    } catch (e) {
+      showToast(e.message || 'Add line failed', 'error');
+    } finally {
+      setAddLineSubmitting(false);
+    }
+  }
+
   async function submitCancel() {
     if (!cancelReason.trim()) { showToast('Reason required', 'error'); return; }
     setCancelSubmitting(true);
@@ -282,6 +330,7 @@ export default function PODetailPage() {
           {canPay && payStatus === 'none' && <Btn onClick={() => handleAction('route', 'requester')} disabled={actionLoading}>Request Requester</Btn>}
           {canPay && payStatus === 'requested' && <Btn kind="primary" onClick={() => handleAction('markPaid')} disabled={actionLoading}><Check size={14} /> Mark Paid</Btn>}
           {canSend         && <Btn onClick={() => handleAction('send')} disabled={actionLoading}><Send size={14} /> Mark Sent</Btn>}
+          {canAmend        && <Btn onClick={openAddLine} disabled={actionLoading}><Plus size={14} /> Add Line</Btn>}
           {canAmend        && <Btn onClick={openAmend} disabled={actionLoading}><Pencil size={14} /> Amend</Btn>}
           {canCancel       && <Btn onClick={() => setCancelOpen(true)} disabled={actionLoading} style={{ borderColor: 'var(--red)', color: 'var(--red-fg)' }}>Cancel</Btn>}
         </div>
@@ -427,6 +476,20 @@ export default function PODetailPage() {
           submitting={amendSubmitting}
         />
       )}
+      {addLineOpen && (
+        <AddLineModal
+          po={po}
+          rows={addLineRows}
+          setRows={setAddLineRows}
+          summary={addLineSummary}
+          setSummary={setAddLineSummary}
+          partsCache={partsCache}
+          partsLoading={partsLoading}
+          onClose={() => !addLineSubmitting && setAddLineOpen(false)}
+          onSubmit={submitAddLine}
+          submitting={addLineSubmitting}
+        />
+      )}
       {cancelOpen && (
         <CancelModal
           poNumber={po.po_number}
@@ -446,6 +509,104 @@ function KV({ k, v, accent }) {
     <div className="kv">
       <div className="kv-k">{k}</div>
       <div className="kv-v" style={accent ? { color: 'var(--accent)' } : null}>{v}</div>
+    </div>
+  );
+}
+
+// Additive line amendment. Appends to an already-raised PO — never edits or renumbers the
+// existing lines (the worker enforces that too). Same strictness as any amendment: a reason
+// is mandatory, the revision bumps, prior state is snapshotted and the action is logged.
+function AddLineModal({ po, rows, setRows, summary, setSummary, partsCache, partsLoading, onClose, onSubmit, submitting }) {
+  useEscapeClose(true, () => { if (!submitting) onClose(); });
+  const partOptions = (partsCache || []).map((p) => ({
+    value: p.part_code,
+    label: `${p.part_code}${p.part_name ? ' — ' + p.part_name : ''}`,
+    hint:  [p.product, p.part_category, p.part_type].filter(Boolean).join(' · '),
+    part_name: p.part_name || '',
+    issue_uom: p.issue_uom || '',
+    hsn_code:  p.hsn_code || '',
+  }));
+  const upd = (i, field, value) => setRows((prev) => prev.map((l, j) => (j === i ? { ...l, [field]: value } : l)));
+  const selectPart = (i, opt) => setRows((prev) => prev.map((l, j) => (j === i ? {
+    ...l,
+    part_code: opt?.value || '',
+    description: opt?.part_name || l.description,
+    unit: opt?.issue_uom || l.unit || 'pcs',
+    hsn_code: opt?.hsn_code || l.hsn_code,
+  } : l)));
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 9000, padding: 24, overflowY: 'auto' }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: '#111', border: '1px solid #333', borderRadius: 6, padding: 20, color: '#eee', minWidth: 720, maxWidth: 1000, width: '100%', maxHeight: 'calc(100vh - 48px)', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+          <h3 style={{ margin: 0, fontFamily: 'var(--cond)', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--yellow)', fontSize: 16 }}>
+            Add Line to {po.po_number}
+          </h3>
+          <button style={btnSecondary} onClick={onClose} disabled={submitting}>✕</button>
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 14 }}>
+          Appends to this PO and bumps it to rev {(po.revision ?? 0) + 1}. Existing lines and their received
+          quantities are untouched. Afterwards, open the shipment in Garage → Receiving and hit
+          “⟳ Re-sync from BOM” to pull the new line in for counting.
+        </div>
+
+        <div style={{ marginBottom: 14 }}>
+          <span style={labelStyle}>Reason *</span>
+          <input type="text" value={summary} onChange={(e) => setSummary(e.target.value)} style={{ ...inputStyle, width: '100%' }} disabled={submitting} placeholder="e.g. supplier shipped these against the same order" />
+        </div>
+
+        <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 10 }}>
+          <thead>
+            <tr>
+              {['Part', 'Description', 'Qty *', 'Unit', 'Unit Price', 'HSN', 'GST %', ''].map((h) => (
+                <th key={h} style={{ ...labelStyle, textAlign: 'left', padding: '4px 6px', borderBottom: '1px solid #333' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((l, i) => (
+              <tr key={i}>
+                <td style={{ padding: '4px 6px' }}>
+                  <div style={{ width: 230 }}>
+                    <Combobox
+                      value={l.part_code || ''}
+                      options={partOptions}
+                      onChange={(_, opt) => selectPart(i, opt)}
+                      placeholder="Search part code / name…"
+                      loading={!partsCache && partsLoading}
+                      inputStyle={{ fontFamily: 'var(--mono)' }}
+                      commitOnTab
+                      portal
+                    />
+                  </div>
+                </td>
+                <td style={{ padding: '4px 6px' }}><input type="text" value={l.description} onChange={(e) => upd(i, 'description', e.target.value)} style={{ ...inputStyle, width: 200 }} disabled={submitting} /></td>
+                <td style={{ padding: '4px 6px' }}><input type="number" value={l.qty_ordered} onChange={(e) => upd(i, 'qty_ordered', e.target.value)} style={{ ...inputStyle, width: 90 }} disabled={submitting} /></td>
+                <td style={{ padding: '4px 6px' }}><input type="text" value={l.unit} onChange={(e) => upd(i, 'unit', e.target.value)} style={{ ...inputStyle, width: 70 }} disabled={submitting} /></td>
+                <td style={{ padding: '4px 6px' }}><input type="number" value={l.unit_price} onChange={(e) => upd(i, 'unit_price', e.target.value)} style={{ ...inputStyle, width: 100 }} disabled={submitting} /></td>
+                <td style={{ padding: '4px 6px' }}><input type="text" value={l.hsn_code} onChange={(e) => upd(i, 'hsn_code', e.target.value)} style={{ ...inputStyle, width: 90 }} disabled={submitting} /></td>
+                <td style={{ padding: '4px 6px' }}><input type="number" value={l.gst_percent} onChange={(e) => upd(i, 'gst_percent', e.target.value)} style={{ ...inputStyle, width: 70 }} disabled={submitting} /></td>
+                <td style={{ padding: '4px 6px' }}>
+                  {rows.length > 1 && (
+                    <button style={{ ...btnSecondary, padding: '4px 8px' }} onClick={() => setRows((prev) => prev.filter((_, j) => j !== i))} disabled={submitting}><Trash2 size={12} /></button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        <button style={btnSecondary} disabled={submitting}
+          onClick={() => setRows((prev) => [...prev, { part_code: '', description: '', item_type: 'Part', qty_ordered: '', unit: 'pcs', unit_price: '', hsn_code: '', gst_percent: '' }])}>
+          + Another line
+        </button>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+          <button style={btnSecondary} onClick={onClose} disabled={submitting}>Cancel</button>
+          <button style={btnPrimary} onClick={onSubmit} disabled={submitting}>
+            {submitting ? 'Adding…' : 'Add to PO'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
