@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast } from '@throttle/ui';
-import { Plus, ArrowLeft, Check, Send, ShieldCheck, X, AlertTriangle, Clock } from 'lucide-react';
+import { Plus, ArrowLeft, Check, Send, ShieldCheck, X, AlertTriangle, Clock, Mail, MessageCircle, Download } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState, Kpi } from '@/components/ui.js';
 import { fmtDate, inr } from '@/components/format.js';
 
@@ -11,6 +11,65 @@ const pct = (num, den) => (den ? Math.round((Number(num) / Number(den)) * 1000) 
 // campaign_stats_list returns rates as fractions; null = no denominator (nothing sent/delivered)
 // which is NOT the same as 0% — render an em dash so an unsent draft never reads as a 0% result.
 const rate = (v) => (v == null ? '—' : `${(Number(v) * 100).toFixed(1)}%`);
+
+// Channel glyph — WhatsApp and email read very differently at a glance in a mixed list.
+function ChannelIcon({ channel }) {
+  const c = String(channel || '').toLowerCase();
+  if (c === 'whatsapp') return <MessageCircle size={13} style={{ color: 'var(--ok, #25D366)' }} aria-label="WhatsApp" />;
+  if (c === 'email') return <Mail size={13} style={{ color: 'var(--text-3)' }} aria-label="Email" />;
+  return <Send size={13} style={{ color: 'var(--text-4)' }} aria-label={c || 'channel'} />;
+}
+
+// Which tab a campaign belongs to. Mirrors campaignStatus() so the chip and the tab can
+// never disagree — a campaign filed under "Scheduled" must be the one showing a Scheduled chip.
+function tabOf(r) {
+  const s = r?.status || 'draft';
+  const future = r?.scheduled_at && new Date(r.scheduled_at) > new Date();
+  if ((s === 'approved' || s === 'scheduled') && future) return 'scheduled';
+  if (s === 'sent' || s === 'sending') return 'sent';
+  if (s === 'draft' || s === 'pending_approval') return 'drafts';
+  return 'other';
+}
+const TABS = [
+  { id: 'all', label: 'All broadcasts' },
+  { id: 'scheduled', label: 'Scheduled' },
+  { id: 'drafts', label: 'Drafts' },
+  { id: 'sent', label: 'Sent' },
+];
+
+function csvCell(v) {
+  const s = v == null ? '' : String(v);
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+// Export exactly what is on screen (same rows, same filter) so a shared CSV and a shared
+// screenshot can never disagree. Rates go out as raw fractions AND counts so the numbers are
+// re-derivable in a sheet; 'unpriced' rides along because a cost figure without it misleads.
+function downloadCampaignsCsv(rows, overview, tab) {
+  const header = ['Broadcast', 'Channel', 'Purpose', 'Status', 'Sent/scheduled at',
+    'Revenue (INR)', 'Cost (INR)', 'Unpriced msgs', 'ROI',
+    'Targeted', 'Sent', 'Delivered', 'Opened', 'Clicked', 'Orders',
+    'Unsubscribes', 'Failed', 'Skipped',
+    'Read rate', 'Click rate', 'Order rate', 'Unsub rate', 'Fail rate', 'Skip rate',
+    'Attribution window (days)'];
+  const body = rows.map((r) => {
+    const o = overview[r.id] || {};
+    const st = campaignStatus(r);
+    return [r.name, r.channel, r.purpose, st.label, o.at || '',
+      o.attributed_revenue ?? '', o.cost_inr ?? '', o.unpriced ?? '', o.roi ?? '',
+      o.total ?? '', o.sent ?? '', o.delivered ?? '', o.opened ?? '', o.clicked ?? '',
+      o.attributed_orders ?? '', o.unsubscribes ?? '', o.failed ?? '', o.skipped ?? '',
+      o.read_rate ?? '', o.click_rate ?? '', o.order_rate ?? '', o.unsub_rate ?? '',
+      o.fail_rate ?? '', o.skip_rate ?? '', o.window_days ?? ''];
+  });
+  const csv = [header, ...body].map((r) => r.map(csvCell).join(',')).join('\r\n');
+  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `relay-broadcasts-${tab}-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
 
 const CHANNELS = ['email'];
 const PURPOSES = ['marketing', 'transactional', 'utility'];
@@ -49,6 +108,7 @@ export default function CampaignsPage() {
   const { showToast } = useToast();
   const [rows, setRows] = useState([]);
   const [overview, setOverview] = useState({});
+  const [tab, setTab] = useState('all');
   const [segments, setSegments] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -375,8 +435,25 @@ export default function CampaignsPage() {
       {loading ? <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}><Spinner /></div>
         : rows.length === 0
           ? <Panel><EmptyState icon="send" title="No campaigns yet" hint="Create a campaign, choose an audience and template, then send." /></Panel>
-          : (
-            <Panel title="Campaigns" count={rows.length}>
+          : (() => {
+            const shown = tab === 'all' ? rows : rows.filter((r) => tabOf(r) === tab);
+            const countFor = (id) => (id === 'all' ? rows.length : rows.filter((r) => tabOf(r) === id).length);
+            return (
+            <Panel title="Campaigns" count={shown.length}
+              action={<Btn onClick={() => downloadCampaignsCsv(shown, overview, tab)} disabled={!shown.length}>
+                <Download size={13} /> CSV
+              </Btn>}>
+              <div style={{ display: 'flex', gap: 4, marginBottom: 12, flexWrap: 'wrap' }}>
+                {TABS.map((t2) => (
+                  <button key={t2.id} onClick={() => setTab(t2.id)} className="mono"
+                    style={{ padding: '5px 11px', borderRadius: 6, fontSize: 11, cursor: 'pointer',
+                      border: '1px solid ' + (tab === t2.id ? 'var(--accent)' : 'var(--border)'),
+                      background: tab === t2.id ? 'var(--accent-soft, rgba(255,214,0,.10))' : 'transparent',
+                      color: tab === t2.id ? 'var(--accent)' : 'var(--text-3)' }}>
+                    {t2.label} <span style={{ opacity: .65 }}>{countFor(t2.id)}</span>
+                  </button>
+                ))}
+              </div>
               <table className="dt">
                 <thead><tr>
                   <th>Broadcast</th><th>Status</th><th>Sent / scheduled</th>
@@ -386,12 +463,14 @@ export default function CampaignsPage() {
                   <th className="num">Unsub</th><th className="num">Fail</th><th className="num">Skipped</th>
                 </tr></thead>
                 <tbody>
-                  {rows.map((r) => {
+                  {shown.map((r) => {
                     const o = overview[r.id] || null;
                     return (
                     <tr key={r.id} className="row-click" onClick={() => open(r)}>
                       <td>
-                        <div>{r.name}</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <ChannelIcon channel={r.channel} />{r.name}
+                        </div>
                         <span className="mono dim" style={{ fontSize: 11 }}>{r.channel} · {r.purpose}</span>
                       </td>
                       <td>{(() => { const st = campaignStatus(r); return (
@@ -427,8 +506,11 @@ export default function CampaignsPage() {
                   })}
                 </tbody>
               </table>
-            </Panel>
-          )}
+              {shown.length === 0 && (
+                <div className="tw-note" style={{ marginBottom: 0 }}>No broadcasts in this view.</div>
+              )}
+            </Panel>);
+          })()}
     </div>
   );
 }
