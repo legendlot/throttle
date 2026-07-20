@@ -907,7 +907,25 @@ async function getTicket(params, auth, env) {
     // Shopify panel) so an RTO or an already-delivered parcel is visible without the agent
     // going to look — that changes how the conversation opens.
     shipment: await fetchTicketShipment(updatedTicket, env),
+    // When each lifecycle stage was first reached, so the spine can carry dates. Derived from
+    // the history we already fetched — no extra query. FIRST occurrence per stage: a ticket can
+    // be bounced back to an earlier stage, and the spine should show when it was first reached,
+    // not when it was last re-entered.
+    stage_dates: stageDates(historyRes.data || [], updatedTicket),
   });
+}
+
+function stageDates(history, ticket) {
+  const out = {};
+  for (const h of history) {
+    if (h.field_name !== 'stage' || !h.new_value) continue;
+    const at = h.changed_at;
+    if (!out[h.new_value] || at < out[h.new_value]) out[h.new_value] = at;
+  }
+  // `intake` is the opening stage, so it never appears as a TRANSITION in the history.
+  if (!out.intake && ticket?.created_at) out.intake = ticket.created_at;
+  if (!out.closed && ticket?.closed_at) out.closed = ticket.closed_at;
+  return out;
 }
 
 // Pre-flight for the service bindings. A Worker cannot fetch() another Worker on the same

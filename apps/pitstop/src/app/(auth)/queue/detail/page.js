@@ -118,7 +118,7 @@ export default function TicketDetailPage() {
       <DetailHeader ticket={t} onRefresh={refresh} session={session} stages={stages} perms={perms} />
 
       {/* Stepper */}
-      <LifecycleStepper ticket={t} />
+      <LifecycleStepper ticket={t} stageDates={data.stage_dates} shipment={data.shipment} />
 
       {/* Outbound parcel banner — sits directly under the stepper so an RTO or an already-
           delivered parcel is the first thing read, not something the agent has to go find.
@@ -512,8 +512,10 @@ const inputStyle = {
 // (so "I haven't received it" is a different problem than the customer thinks).
 function ShipmentBanner({ shipment: s }) {
   if (!s) return null;
-  if (s.lifecycle !== 'rto' && s.lifecycle !== 'delivered') return null;
-  const rto = s.lifecycle === 'rto';
+  // RTO only. "Delivered" now reads off the spine's forward leg, so a banner for it would just
+  // repeat what is already two inches above.
+  if (s.lifecycle !== 'rto') return null;
+  const rto = true;
   const when = rto ? s.as_of : (s.delivered_at || s.as_of);
   const date = when ? new Date(when).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : null;
   return (
@@ -540,10 +542,19 @@ function ShipmentBanner({ shipment: s }) {
   );
 }
 
-function LifecycleStepper({ ticket: t }) {
+function LifecycleStepper({ ticket: t, stageDates, shipment }) {
   // Spine (dotted nodes, default) / Rail (segmented bars) — handoff §6.3.
   const [variant, setVariant] = useState('spine');
   const stage = t.closed_at ? 'closed' : t.stage;
+  // The forward leg — the parcel's trip TO the customer, which is the prologue to every ticket.
+  // Three nodes, not the full courier trail: this is context for the case, and expanding it
+  // would drown the work the spine actually tracks.
+  const lead = shipment ? [
+    { key: 'ordered',   label: 'Ordered',   date: t.purchase_date || null },
+    { key: 'shipped',   label: 'Shipped',   date: shipment.dispatched_at },
+    { key: 'delivered', label: shipment.lifecycle === 'rto' ? 'Returned (RTO)' : 'Delivered',
+      date: shipment.lifecycle === 'rto' ? shipment.as_of : shipment.delivered_at },
+  ] : [];
   return (
     <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)',
       padding: '16px 20px', marginBottom: 'var(--gap)' }}>
@@ -552,7 +563,8 @@ function LifecycleStepper({ ticket: t }) {
           textTransform: 'uppercase', fontWeight: 600 }}>Lifecycle · {DISPOSITION_LABELS[t.disposition] || t.disposition || 'Pending'}</span>
         <StepperToggle value={variant} onChange={setVariant} />
       </div>
-      <VoltStepper disposition={t.disposition} stage={stage} variant={variant} />
+      <VoltStepper disposition={t.disposition} stage={stage} variant={variant}
+        dates={stageDates || {}} lead={lead} />
     </div>
   );
 }

@@ -263,13 +263,53 @@ export function Drawer({ open, onClose, width = 440, children }) {
    future = surface-3 ghost. variant 'spine' (default dotted
    nodes) | 'rail' (segmented battery bars). (handoff §6.3)
    ════════════════════════════════════════════════════════════ */
-export function Stepper({ disposition, stage, variant = 'spine' }) {
+// `dates`  — { stageKey: ISO } so each node can show WHEN it was reached.
+// `lead`   — courier nodes prepended before the ticket stages (the forward leg: the parcel's
+//            journey to the customer, which happened before the ticket existed). Kept as its own
+//            captioned group rather than merged, because those nodes are COURIER-SCANNED while
+//            the ticket stages are set by an agent — showing them identically would imply a
+//            verification the ticket stages do not have.
+/* Compact IST date for a stepper node: "18 Jul". Undated nodes render a spacer so every dot
+   stays on one horizontal axis. */
+function fmtStepDate(v) {
+  if (!v) return '';
+  try {
+    return new Date(v).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', timeZone: 'Asia/Kolkata' });
+  } catch { return ''; }
+}
+
+/* Stacked node: label ABOVE the dot, date BELOW it, so the axis separates what from when. */
+function StepNode({ n, w }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '0 4px', width: w }}>
+      <div style={{ minHeight: 26, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+        <div style={{ fontFamily: 'var(--f-ui)', fontSize: 10, textAlign: 'center', lineHeight: 1.2,
+          color: n.textColor, fontWeight: n.textWeight }}>{n.label}</div>
+      </div>
+      <div style={{ width: 12, height: 12, borderRadius: '50%', background: n.dotBg, boxShadow: n.dotRing,
+        margin: '6px 0' }} />
+      <div style={{ minHeight: 12, fontFamily: 'var(--f-mono, monospace)', fontSize: 9.5, lineHeight: 1.2,
+        color: 'var(--t4)', textAlign: 'center' }}>{n.date || ''}</div>
+    </div>
+  );
+}
+
+/* Caption over a node group — this is what carries provenance (courier vs our workflow), so
+   individual dots stay uncluttered. */
+function GroupCaption({ children }) {
+  return (
+    <div style={{ fontFamily: 'var(--f-display)', fontSize: 8.5, letterSpacing: '0.09em',
+      textTransform: 'uppercase', color: 'var(--t4)', fontWeight: 600, marginBottom: 2 }}>{children}</div>
+  );
+}
+
+export function Stepper({ disposition, stage, variant = 'spine', dates = {}, lead = [] }) {
   const stages = lifecycle(disposition);
   const curIdx = stages.indexOf(stage);
   const nodes = stages.map((s, i) => {
     const done = i < curIdx, current = i === curIdx;
     return {
-      key: s, label: STAGE_LABEL[s] || s, done, current,
+      key: s, label: STAGE_LABEL[s] || s, done, current, date: fmtStepDate(dates[s]),
       dotBg: done ? 'var(--ok-fg)' : current ? 'var(--accent)' : 'var(--surface-3)',
       dotRing: current ? '0 0 0 4px var(--accent-ring)' : 'none',
       segBg: done ? 'var(--ok-fg)' : current ? 'var(--accent)' : 'var(--surface-3)',
@@ -278,14 +318,38 @@ export function Stepper({ disposition, stage, variant = 'spine' }) {
     };
   });
 
+  // Forward-leg nodes are all historical fact by the time a ticket exists, so they render as
+  // done — except an undated one (e.g. never delivered), which stays ghosted.
+  const leadNodes = (lead || []).map(l => ({
+    key: `lead:${l.key}`, label: l.label, date: fmtStepDate(l.date),
+    done: !!l.date, current: false,
+    dotBg: l.date ? 'var(--ok-fg)' : 'var(--surface-3)',
+    dotRing: 'none',
+    segBg: l.date ? 'var(--ok-fg)' : 'var(--surface-3)',
+    textColor: l.date ? 'var(--t2)' : 'var(--t4)',
+    textWeight: 500,
+  }));
+
   if (variant === 'rail') {
     return (
       <div style={{ display: 'flex', gap: 4, alignItems: 'stretch' }}>
+        {leadNodes.map(n => (
+          <div key={n.key} style={{ flex: 1, minWidth: 0, opacity: 0.85 }}>
+            <div style={{ height: 7, borderRadius: 99, background: n.segBg }} />
+            <div style={{ fontFamily: 'var(--f-ui)', fontSize: 9.5, color: n.textColor, fontWeight: n.textWeight,
+              marginTop: 7, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n.label}</div>
+            <div style={{ fontFamily: 'var(--f-mono, monospace)', fontSize: 9, color: 'var(--t4)', minHeight: 11,
+              whiteSpace: 'nowrap' }}>{n.date || ''}</div>
+          </div>
+        ))}
+        {leadNodes.length > 0 && <div style={{ width: 1, background: 'var(--border)', margin: '0 4px' }} />}
         {nodes.map(n => (
           <div key={n.key} style={{ flex: 1, minWidth: 0 }}>
             <div style={{ height: 7, borderRadius: 99, background: n.segBg }} />
             <div style={{ fontFamily: 'var(--f-ui)', fontSize: 9.5, color: n.textColor, fontWeight: n.textWeight,
               marginTop: 7, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n.label}</div>
+            <div style={{ fontFamily: 'var(--f-mono, monospace)', fontSize: 9, color: 'var(--t4)', minHeight: 11,
+              whiteSpace: 'nowrap' }}>{n.date || ''}</div>
           </div>
         ))}
       </div>
@@ -293,15 +357,23 @@ export function Stepper({ disposition, stage, variant = 'spine' }) {
   }
   return (
     <div style={{ display: 'flex', alignItems: 'flex-start', overflowX: 'auto', paddingBottom: 4 }}>
-      {nodes.map(n => (
-        <div key={n.key} style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7, padding: '0 4px', width: 78 }}>
-            <div style={{ width: 12, height: 12, borderRadius: '50%', background: n.dotBg, boxShadow: n.dotRing }} />
-            <div style={{ fontFamily: 'var(--f-ui)', fontSize: 10, textAlign: 'center', lineHeight: 1.2,
-              color: n.textColor, fontWeight: n.textWeight }}>{n.label}</div>
+      {leadNodes.length > 0 && (
+        <div style={{ flexShrink: 0 }}>
+          <GroupCaption>Order · courier</GroupCaption>
+          <div style={{ display: 'flex' }}>
+            {leadNodes.map(n => <StepNode key={n.key} n={n} w={72} />)}
           </div>
         </div>
-      ))}
+      )}
+      {leadNodes.length > 0 && (
+        <div style={{ width: 1, alignSelf: 'stretch', background: 'var(--border)', margin: '14px 10px 0' }} />
+      )}
+      <div style={{ flexShrink: 0 }}>
+        <GroupCaption>{leadNodes.length > 0 ? 'Case · team' : '\u00A0'}</GroupCaption>
+        <div style={{ display: 'flex' }}>
+          {nodes.map(n => <StepNode key={n.key} n={n} w={78} />)}
+        </div>
+      </div>
     </div>
   );
 }
