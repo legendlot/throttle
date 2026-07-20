@@ -103,9 +103,13 @@ function over `inventory_reading`, not per-row in the Worker.
 The live pull returns ~204 variants of which only ~71 are real catalogue; the rest are
 retired SKUs and Creator-Shipment artefacts. A raw table is two-thirds junk.
 
-**Default view = mapped ∧ purchasable-eligible** — SKUs carrying a `sku_map` entry for
-the channel (so they have a `product_code`) on an ACTIVE product. A `Show all SKUs`
-toggle reveals the rest, with unmapped rows badged and linking to `/mapping`.
+**Default view = mapped SKUs only** — those carrying a `sku_map` entry for the channel,
+so they have a `product_code`. A `Show all SKUs` toggle reveals the rest, with unmapped
+rows badged and linking to `/mapping`.
+
+The filter is mapping, **not** product status. Filtering on ACTIVE would hide exactly the
+`unbuyable` rows the watch list exists to surface — an archived product still holding 300
+units is the case you most need to see.
 
 Unmapped SKUs are shown rather than hidden because they are still real stock, and a
 newly-launched SKU is unmapped precisely when someone most wants to watch it. But they
