@@ -2720,8 +2720,11 @@ async function syncInventorySnapshot(env) {
   // Website channel + its sku_map (channel_sku → product_code), so stock events key on product_code.
   const cc = await sbSales('/rest/v1/connector_config?adapter_kind=eq.shopify&select=channel_id&limit=1');
   const webId = (cc.ok && cc.data[0]) ? cc.data[0].channel_id : null;
+  // inventory_reading.channel_id is NOT NULL and part of the PK — fail loudly rather than
+  // writing junk rows if the Website connector row is missing.
+  if (!webId) throw new Error('inventory: no shopify connector_config row (channel_id required)');
   const skuMap = new Map();
-  if (webId) {
+  {
     const mm = await sbSales(`/rest/v1/sku_map?channel_id=eq.${webId}&select=channel_sku,product_code`);
     for (const r of (mm.ok ? mm.data : [])) skuMap.set(String(r.channel_sku), r.product_code);
   }
@@ -2729,6 +2732,10 @@ async function syncInventorySnapshot(env) {
   let token = await getShopifyToken(env);
   if (!token) throw new Error('Shopify auth failed (client credentials)');
   const today = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+  // captured_at is TRUE UTC, hour-truncated. Do NOT reuse the +5.5h IST shift above — that is
+  // only valid for deriving the IST *date*; using it for a timestamptz would land every reading
+  // 5.5h in the future and corrupt every duration. IST conversion happens at display.
+  const capturedAt = new Date(Math.floor(Date.now() / 3600000) * 3600000).toISOString();
   const bySku = new Map(); let after = null, hasNext = true, pages = 0;
   while (hasNext && pages < 8) {
     pages++;
@@ -2756,10 +2763,41 @@ async function syncInventorySnapshot(env) {
     }
     hasNext = conn?.pageInfo?.hasNextPage; after = conn?.pageInfo?.endCursor;
   }
+  // A truncated walk (page cap hit while Shopify still has more) must never be mistaken for
+  // "everything else went out of stock". Stored for forensics; f_inventory_status /
+  // recompute_stock_events / detect_stock_alerts all filter on pull_complete.
+  const pullComplete = !hasNext;
   const rows = [...bySku.values()];
+
+  // Reading grain (hourly) — the history + watch spine. Written FIRST so a failure here is
+  // visible, but never allowed to regress the daily row that /funnel already depends on.
+  let readingErr = null;
+  if (rows.length) {
+    try {
+      await sbInsertChunked('/rest/v1/inventory_reading?on_conflict=captured_at,channel_id,sku',
+        rows.map(r => ({
+          captured_at: capturedAt, channel_id: webId, sku: r.sku, product_code: r.product_code,
+          product_title: r.product_title, available_qty: r.available_qty,
+          purchasable: r.purchasable, pull_complete: pullComplete,
+        })), 'return=minimal,resolution=merge-duplicates');
+    } catch (e) { readingErr = e?.message || String(e); }
+  }
+
+  // Daily grain — unchanged semantics (last write of the IST day wins), so the /funnel stock
+  // markers keep their existing meaning.
   if (rows.length) await sbInsertChunked('/rest/v1/inventory_snapshot?on_conflict=the_date,sku', rows, 'return=minimal,resolution=merge-duplicates');
-  const rc = await rpcSales('recompute_stock_events', { p_date: today });
-  return { date: today, variants: rows.length, mapped: rows.filter(r => r.product_code).length, flips: (rc.ok ? rc.data : null) };
+
+  // Events + alert detection only from a complete pull.
+  let flips = null, alerts = null;
+  if (pullComplete) {
+    const rc = await rpcSales('recompute_stock_events', { p_date: today });
+    flips = rc.ok ? rc.data : null;
+    const ac = await rpcSales('detect_stock_alerts', { p_lookback_days: 3 });
+    alerts = ac.ok ? ac.data : null;
+  }
+  return { date: today, captured_at: capturedAt, variants: rows.length,
+    mapped: rows.filter(r => r.product_code).length,
+    pull_complete: pullComplete, flips, alerts, reading_error: readingErr };
 }
 
 // The ShopifyQL for daily online-store sessions. Kept as a one-liner so it's trivial to adjust if
@@ -2858,6 +2896,14 @@ export default {
     // Stock in/out stream (layer c): snapshot native Shopify inventory + diff → stock change_events.
     // Best-effort; never disturbs the rest of the cron.
     try { await syncInventorySnapshot(env); } catch (e) { console.error('odoops cron (inventory snapshot) failed:', e?.message || e); }
+    // Hourly readings are pruned to the retention window ONCE a day (not every tick) — 19:00 UTC
+    // = 00:30 IST, just after the IST date rolls. Best-effort.
+    try {
+      if (new Date().getUTCHours() === 19) {
+        const p = await rpcSales('prune_inventory_readings', {});
+        if (p.ok && p.data) console.log('odoops cron: pruned', p.data, 'inventory readings');
+      }
+    } catch (e) { console.error('odoops cron (inventory prune) failed:', e?.message || e); }
     // Shopify online-store sessions (same-source CR denominator) via ShopifyQL → web_sessions.
     // Trailing 60-day refresh; no-op/throws-caught until the read_reports scope is added. Best-effort.
     try { await syncWebSessions(env); } catch (e) { console.error('odoops cron (web sessions) failed:', e?.message || e); }
@@ -3052,12 +3098,15 @@ export default {
             // ad/analytics feeds (Meta/Google/Amazon Ads/DSP/GA4/Razorpay/Uniware-agg — all synthetic
             // is_sale=false channels) are invisible there. /marketing + /funnel depend on exactly those.
             if (!canView(P)) return err('No permission', 403);
-            const [ccR, chR, pmR, pcR, ubR] = await Promise.all([
+            const [ccR, chR, pmR, pcR, ubR, ivR] = await Promise.all([
               sbSales('/rest/v1/connector_config?select=channel_id,adapter_kind,enabled,last_ok_at,last_error'),
               sbPublic('/rest/v1/dispatch_channels?select=id,name,is_sale'),
               sbSales('/rest/v1/pnl_manual?select=updated_at&order=updated_at.desc&limit=1'),
               sbSales('/rest/v1/product_cost?select=updated_at&order=updated_at.desc&limit=1'),
               sbSales('/rest/v1/upload_batch?select=uploaded_at&order=uploaded_at.desc&limit=1'),
+              // Inventory is a cron STEP, not a connector, so it has no connector_config row to
+              // read a last_ok_at off — its freshness is the newest complete reading.
+              sbSales('/rest/v1/inventory_reading?pull_complete=is.true&select=captured_at&order=captured_at.desc&limit=1'),
             ]);
             if (!ccR.ok) return err('Freshness read failed: ' + JSON.stringify(ccR.data), 502);
             const chById = {}; (chR.ok ? chR.data : []).forEach(c => { chById[c.id] = c; });
@@ -3077,6 +3126,7 @@ export default {
                 pnl_manual:   first(pmR, 'updated_at'),
                 product_cost: first(pcR, 'updated_at'),
                 upload_batch: first(ubR, 'uploaded_at'),
+                inventory:    first(ivR, 'captured_at'),
               },
               server_now: new Date().toISOString(),
             });
@@ -3372,6 +3422,36 @@ export default {
             const r = await sbSales(q);
             if (!r.ok) return err('Read failed: ' + JSON.stringify(r.data), 502);
             return ok({ rows: r.data || [] });
+          }
+          case 'getInventoryStatus': {   // S223 — Inventory tab: current availability per channel/SKU
+            if (!canView(P)) return err('No permission', 403);
+            const chans = qp('channels') ? qp('channels').split(',').filter(Boolean) : null;
+            const inclUnmapped = qp('include_unmapped') === '1' || qp('include_unmapped') === 'true';
+            const r = await rpcSales('f_inventory_status', {
+              p_channels: chans, p_include_unmapped: inclUnmapped,
+            });
+            if (!r.ok) return err('Inventory status failed: ' + JSON.stringify(r.data), 502);
+            const rows = r.data || [];
+            // The seeded history starts here; a `since` at that floor means "at least this
+            // long", not exactly — the UI renders it with a ≥ so it can't overstate precision.
+            const hz = await sbSales('/rest/v1/inventory_reading?select=captured_at&order=captured_at.asc&limit=1');
+            return ok({
+              rows,
+              history_start: (hz.ok && hz.data[0]) ? hz.data[0].captured_at : null,
+              low_threshold: rows.length ? Number(rows[0].low_threshold) : 10,
+            });
+          }
+          case 'getInventoryHistory': {   // S223 — Inventory tab: one SKU / family over time + flips
+            if (!canView(P)) return err('No permission', 403);
+            const sku = qp('sku') || null, pc = qp('product_code') || null;
+            if (!sku && !pc) return err('sku or product_code required', 422);
+            const r = await rpcSales('f_inventory_history', {
+              p_sku: sku, p_product_code: pc,
+              p_from: qp('from') || null, p_to: qp('to') || null,
+            });
+            if (!r.ok) return err('Inventory history failed: ' + JSON.stringify(r.data), 502);
+            const rows = r.data || [];
+            return ok({ rows, flips: rows.filter(x => x.is_flip) });
           }
           case 'getConversionDrivers': {   // S189 — attribution: notable CR days + nearby driver events (layer d)
             if (!canView(P)) return err('No permission', 403);
