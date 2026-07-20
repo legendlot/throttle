@@ -2800,6 +2800,103 @@ async function syncInventorySnapshot(env) {
     pull_complete: pullComplete, flips, alerts, reading_error: readingErr };
 }
 
+// ── Stock alerts → Slack (S223) ────────────────────────────────────────────────
+// Drains sales.stock_alert_outbox. Detection lives in the DB (detect_stock_alerts, which only
+// enqueues flips CONFIRMED across N consecutive readings) — this is purely the sender.
+//
+// Same convention as throttleops slackOps/slackTeam + commsops alerts.js: an Incoming Webhook
+// URL in a secret, POST { text }, FAIL-OPEN. With no webhook set the sender logs and leaves rows
+// pending, so the feature is inert until the secret exists and nothing can be posted by accident.
+const SLACK_ALERT_CAP = 12;   // per direction, per message — a bulk catalogue edit must not wall the channel
+
+function stockAlertText(oos, restock, nameOf, extraOos, extraRestock) {
+  const line = (r) => {
+    const name = nameOf(r) || r.product_title || r.sku;
+    return r.direction === 'oos'
+      ? `   • ${name} — was ${Number(r.qty_before) || 0}`
+      : `   • ${name} — ${Number(r.qty_after) || 0} units`;
+  };
+  const parts = ['*Website stock update*'];
+  if (oos.length) {
+    parts.push(`:red_circle: *Out of stock* (${oos.length + extraOos})`);
+    parts.push(oos.map(line).join('\n'));
+    if (extraOos) parts.push(`   _…and ${extraOos} more_`);
+  }
+  if (restock.length) {
+    parts.push(`:large_green_circle: *Back in stock* (${restock.length + extraRestock})`);
+    parts.push(restock.map(line).join('\n'));
+    if (extraRestock) parts.push(`   _…and ${extraRestock} more_`);
+  }
+  return parts.join('\n');
+}
+
+async function sendStockAlerts(env) {
+  const pend = await sbSales('/rest/v1/stock_alert_outbox?status=eq.pending&order=confirmed_at.asc&limit=400');
+  if (!pend.ok) return { skipped: 'outbox read failed' };
+  const rows = pend.data || [];
+  if (!rows.length) return { sent: 0, stale: 0 };
+
+  // Staleness guard. Rows accumulate whenever the sender is unset or failing, so without this
+  // the first successful run would announce a backlog of by-then-meaningless flips. Anything
+  // older than the window is retired unsent — the Watch page remains the record.
+  const maxAgeH = Number((await sbSales('/rest/v1/settings?key=eq.inv_alert_max_age_hours&select=value')
+    .then(r => (r.ok && r.data[0]) ? r.data[0].value : null))) || 6;
+  const cutoff = Date.now() - maxAgeH * 3600 * 1000;
+  const stale = rows.filter(r => new Date(r.confirmed_at).getTime() < cutoff);
+  const fresh = rows.filter(r => new Date(r.confirmed_at).getTime() >= cutoff);
+
+  if (stale.length) {
+    await sbSales(`/rest/v1/stock_alert_outbox?id=in.(${stale.map(r => r.id).join(',')})`, {
+      method: 'PATCH', prefer: 'return=minimal',
+      body: JSON.stringify({ status: 'skipped', sent_at: new Date().toISOString(),
+        error: `stale: older than ${maxAgeH}h when the sender ran` }),
+    });
+  }
+  if (!fresh.length) return { sent: 0, stale: stale.length };
+
+  // No webhook: leave everything pending (NEVER mark sent) so nothing is silently lost.
+  if (!env.SLACK_WEBHOOK_STOCK) {
+    console.log('[Slack:stock] no SLACK_WEBHOOK_STOCK —', fresh.length, 'alert(s) held pending');
+    return { sent: 0, stale: stale.length, held: fresh.length };
+  }
+
+  // Human names: the outbox carries Shopify's product_title, but "Night Wolf Base Red" reads
+  // better than "Night Wolf" + a raw sku. Best-effort — falls back to title, then sku.
+  const codes = [...new Set(fresh.map(r => r.product_code).filter(Boolean))];
+  const nameByCode = {};
+  if (codes.length) {
+    const pm = await sbPublic(`/rest/v1/product_master?product_code=in.(${codes.join(',')})&select=product_code,product,model,color`);
+    for (const p of (pm.ok ? pm.data : [])) {
+      nameByCode[p.product_code] = [p.product, p.model, p.color].filter(Boolean).join(' ');
+    }
+  }
+  const nameOf = (r) => nameByCode[r.product_code];
+
+  const allOos = fresh.filter(r => r.direction === 'oos');
+  const allRes = fresh.filter(r => r.direction === 'restock');
+  const oos = allOos.slice(0, SLACK_ALERT_CAP), res = allRes.slice(0, SLACK_ALERT_CAP);
+  const text = stockAlertText(oos, res, nameOf,
+    allOos.length - oos.length, allRes.length - res.length);
+
+  let posted = false;
+  try {
+    const r = await fetch(env.SLACK_WEBHOOK_STOCK, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    posted = r.ok;
+    if (!r.ok) console.error('[Slack:stock] webhook', r.status);
+  } catch (e) { console.error('[Slack:stock] post failed:', e?.message || e); }
+
+  // Only mark sent on a confirmed 200 — a failed post must retry next tick, not vanish.
+  if (!posted) return { sent: 0, stale: stale.length, held: fresh.length, error: 'post failed' };
+  await sbSales(`/rest/v1/stock_alert_outbox?id=in.(${fresh.map(r => r.id).join(',')})`, {
+    method: 'PATCH', prefer: 'return=minimal',
+    body: JSON.stringify({ status: 'sent', sent_at: new Date().toISOString() }),
+  });
+  return { sent: fresh.length, stale: stale.length };
+}
+
 // The ShopifyQL for daily online-store sessions. Kept as a one-liner so it's trivial to adjust if
 // the live probe shows a different keyword works (day vs date, SINCE window form, metric name).
 const SHOPIFYQL_SESSIONS = (lookbackDays) =>
@@ -2896,6 +2993,12 @@ export default {
     // Stock in/out stream (layer c): snapshot native Shopify inventory + diff → stock change_events.
     // Best-effort; never disturbs the rest of the cron.
     try { await syncInventorySnapshot(env); } catch (e) { console.error('odoops cron (inventory snapshot) failed:', e?.message || e); }
+    // Drain the confirmed-flip outbox to Slack. Runs AFTER syncInventorySnapshot so a flip
+    // detected this tick goes out this tick. Inert (logs + holds) until SLACK_WEBHOOK_STOCK is set.
+    try {
+      const s = await sendStockAlerts(env);
+      if (s?.sent || s?.stale) console.log('odoops cron: stock alerts', JSON.stringify(s));
+    } catch (e) { console.error('odoops cron (stock alerts) failed:', e?.message || e); }
     // Hourly readings are pruned to the retention window ONCE a day (not every tick) — 19:00 UTC
     // = 00:30 IST, just after the IST date rolls. Best-effort.
     try {
@@ -3467,6 +3570,31 @@ export default {
             ]);
             if (!d.ok) return err('Conversion drivers failed: ' + JSON.stringify(d.data), 502);
             return ok({ days: d.data || [], library: (lib.ok ? lib.data : []), settings: { notable_pct: notable, window_days: win, impact_days: imp } });
+          }
+          case 'sendStockAlertsNow': {   // manual outbox drain (super-admin) — Slack sender test trigger
+            if (!canSuperAdmin(P)) return err('No permission', 403);
+            try { return ok(await sendStockAlerts(env)); }
+            catch (e) { return err(String(e?.message || e), 502); }
+          }
+          case 'previewStockAlert': {   // DRY RUN (super-admin): render the message, post NOTHING.
+            if (!canSuperAdmin(P)) return err('No permission', 403);
+            const p = await sbSales('/rest/v1/stock_alert_outbox?status=eq.pending&order=confirmed_at.asc&limit=400');
+            const rows = p.ok ? (p.data || []) : [];
+            const codes = [...new Set(rows.map(r => r.product_code).filter(Boolean))];
+            const nameByCode = {};
+            if (codes.length) {
+              const pm = await sbPublic(`/rest/v1/product_master?product_code=in.(${codes.join(',')})&select=product_code,product,model,color`);
+              for (const x of (pm.ok ? pm.data : [])) nameByCode[x.product_code] = [x.product, x.model, x.color].filter(Boolean).join(' ');
+            }
+            const oos = rows.filter(r => r.direction === 'oos');
+            const res = rows.filter(r => r.direction === 'restock');
+            return ok({
+              pending: rows.length,
+              webhook_set: !!env.SLACK_WEBHOOK_STOCK,
+              text: rows.length ? stockAlertText(oos.slice(0, SLACK_ALERT_CAP), res.slice(0, SLACK_ALERT_CAP),
+                r => nameByCode[r.product_code],
+                Math.max(0, oos.length - SLACK_ALERT_CAP), Math.max(0, res.length - SLACK_ALERT_CAP)) : null,
+            });
           }
           case 'syncInventorySnapshotNow': {   // manual snapshot + diff (super-admin) — layer c test trigger
             if (!canSuperAdmin(P)) return err('No permission', 403);
