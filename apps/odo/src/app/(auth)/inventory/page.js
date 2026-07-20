@@ -410,17 +410,17 @@ function History({ session }) {
 
   return (
     <>
-      <div className="so-card">
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
-          <div style={{ minWidth: 300 }}>
-            <Combobox
-              options={options} value={sku} onChange={setSku}
-              placeholder="Pick a SKU…" portal
-            />
+      {/* RangePicker is a STICKY PAGE HEADER — it paints an opaque var(--bg) with a bottom
+          border so content scrolls under it. Nesting it in a .so-card (var(--surface)) painted
+          the page background as a black strip inside a lighter card. It belongs at page level,
+          as on every other Odo page, with extra controls in its `right` slot. */}
+      <RangePicker from={from} to={to} onChange={({ from: f, to: t }) => { setFrom(f); setTo(t); }}
+        right={
+          <div style={{ minWidth: 260 }}>
+            <Combobox options={options} value={sku} onChange={setSku}
+              placeholder="Pick a variant…" portal />
           </div>
-          <RangePicker from={from} to={to} onChange={({ from: f, to: t }) => { setFrom(f); setTo(t); }} />
-        </div>
-      </div>
+        } />
 
       {loading ? <Spinner /> : (
         <>
