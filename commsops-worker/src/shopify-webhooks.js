@@ -90,8 +90,18 @@ async function handlePixel(env, request) {
   if (body.email) idents.push({ type: 'email', value: String(body.email).toLowerCase().trim(), is_verified: false });
   const ph = SHOP.normalizePhone(body.phone);
   if (ph) idents.push({ type: 'phone', value: ph, is_verified: false });
-  // anonymous fallback — a weak browser-session key so anonymous→known can merge later
-  if (!idents.length && body.client_id) idents.push({ type: 'web_session', value: String(body.client_id), is_verified: false });
+  // Weak browser-session key. ALWAYS sent when we have it — never as a fallback.
+  //
+  // This used to be `if (!idents.length && body.client_id)`, i.e. the session key was sent
+  // ONLY when email/phone were absent. So the anonymous key and the known key never appeared
+  // in the same resolve_identity call, and the merge the comment promised could never fire:
+  // 17,403 web_session profiles accumulated 1:1 with their identifiers, none ever joined to a
+  // real customer, and add_to_cart/checkout_started history sat on profiles with no way to
+  // reach anybody (0 of 15,487 had a phone or email).
+  //
+  // Sending both is what lets resolve_identity fold the anonymous session profile into the
+  // identified one. The resolver's weak-key rules (shared-browser guard) make that safe.
+  if (body.client_id) idents.push({ type: 'web_session', value: String(body.client_id), is_verified: false });
   if (!idents.length) return { ok: true, skipped: 'no_identifier' };
 
   const props = { ...(body.properties || {}), source_surface: 'web_pixel' };
