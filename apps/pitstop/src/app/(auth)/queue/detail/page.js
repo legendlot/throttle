@@ -60,6 +60,7 @@ export default function TicketDetailPage() {
   const { showToast } = useToast();
 
   const [data, setData] = useState(null);  // { ticket, history, attachments, notes, links, dispatch_info, past_cases, repair_run }
+  const [customerOrders, setCustomerOrders] = useState([]);   // lifted from ShopifyPanel — see inferredShipment
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showRevealPhone, setShowRevealPhone] = useState(false);
@@ -101,6 +102,13 @@ export default function TicketDetailPage() {
   if (!data) return null;
 
   const t = data.ticket;
+  // Read-side inference for the ~86% of tickets that were never linked to an order. Applies the
+  // SAME rule as the server-side auto-link (exactly one recent order, else nothing), but writes
+  // nothing and is labelled as inferred — a guess presented as fact would be worse than a blank.
+  const inferredShipment = (!data.shipment && customerOrders.length === 1 && customerOrders[0].shipment)
+    ? { ...customerOrders[0].shipment, inferred: true, order_no: customerOrders[0].order_no }
+    : null;
+  const spineShipment = data.shipment || inferredShipment;
   const stages = lifecycleStages(t.disposition);
   const stageIndex = stages.indexOf(t.stage);
   const isClosed = !!t.closed_at;
@@ -118,12 +126,12 @@ export default function TicketDetailPage() {
       <DetailHeader ticket={t} onRefresh={refresh} session={session} stages={stages} perms={perms} />
 
       {/* Stepper */}
-      <LifecycleStepper ticket={t} stageDates={data.stage_dates} shipment={data.shipment} />
+      <LifecycleStepper ticket={t} stageDates={data.stage_dates} shipment={spineShipment} />
 
       {/* Outbound parcel banner — sits directly under the stepper so an RTO or an already-
           delivered parcel is the first thing read, not something the agent has to go find.
           Only renders when it changes how the conversation should open. */}
-      <ShipmentBanner shipment={data.shipment} />
+      <ShipmentBanner shipment={spineShipment} />
 
       {/* Tags */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 'var(--space-3, 12px)' }}>
@@ -141,7 +149,7 @@ export default function TicketDetailPage() {
         marginTop: 'var(--space-4)',
         alignItems: 'start',
       }}>
-        <IdentityRail ticket={t} dispatch={data.dispatch_info} pastCases={data.past_cases} session={session} onRefresh={refresh} />
+        <IdentityRail ticket={t} dispatch={data.dispatch_info} pastCases={data.past_cases} session={session} onRefresh={refresh} onOrders={setCustomerOrders} />
         <WorkArea ticket={t} dispatch={data.dispatch_info} repairRun={data.repair_run} session={session} perms={perms} onRefresh={refresh} stages={stages} />
         {activityOpen ? (
           <ActivityFeed
@@ -550,7 +558,7 @@ function LifecycleStepper({ ticket: t, stageDates, shipment }) {
   // Three nodes, not the full courier trail: this is context for the case, and expanding it
   // would drown the work the spine actually tracks.
   const lead = shipment ? [
-    { key: 'ordered',   label: 'Ordered',   date: t.purchase_date || null },
+    { key: 'ordered',   label: 'Ordered',   date: t.purchase_date || shipment.order_created_at || null },
     { key: 'shipped',   label: 'Shipped',   date: shipment.dispatched_at },
     { key: 'delivered', label: shipment.lifecycle === 'rto' ? 'Returned (RTO)' : 'Delivered',
       date: shipment.lifecycle === 'rto' ? shipment.as_of : shipment.delivered_at },
@@ -564,7 +572,10 @@ function LifecycleStepper({ ticket: t, stageDates, shipment }) {
         <StepperToggle value={variant} onChange={setVariant} />
       </div>
       <VoltStepper disposition={t.disposition} stage={stage} variant={variant}
-        dates={stageDates || {}} lead={lead} />
+        dates={stageDates || {}} lead={lead}
+        leadCaption={shipment?.inferred
+          ? `Order ${shipment.order_no || ''} · inferred`
+          : 'Order · courier'} />
     </div>
   );
 }
@@ -578,7 +589,7 @@ function ageingLabel(purchaseDate, createdAt) {
   return ` · ${days}d after purchase`;
 }
 
-function IdentityRail({ ticket: t, dispatch, pastCases, session, onRefresh }) {
+function IdentityRail({ ticket: t, dispatch, pastCases, session, onRefresh, onOrders }) {
   const { perms } = useAuth();
   const [revealPhone, setRevealPhone] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState(false);
@@ -612,7 +623,7 @@ function IdentityRail({ ticket: t, dispatch, pastCases, session, onRefresh }) {
       <Field label="Address" value={t.customer_address || '—'} small />
 
       <div style={{ marginBottom: 'var(--space-2)' }}>
-        <ShopifyPanel session={session} phone={t.customer_phone} email={t.customer_email} autoLoad />
+        <ShopifyPanel session={session} phone={t.customer_phone} email={t.customer_email} autoLoad onOrders={onOrders} />
       </div>
 
       {t.call_session_id && <CallBlock ticket={t} />}

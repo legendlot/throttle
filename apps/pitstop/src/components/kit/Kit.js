@@ -303,7 +303,7 @@ function GroupCaption({ children }) {
   );
 }
 
-export function Stepper({ disposition, stage, variant = 'spine', dates = {}, lead = [] }) {
+export function Stepper({ disposition, stage, variant = 'spine', dates = {}, lead = [], leadCaption = 'Order · courier' }) {
   const stages = lifecycle(disposition);
   const curIdx = stages.indexOf(stage);
   const nodes = stages.map((s, i) => {
@@ -359,7 +359,7 @@ export function Stepper({ disposition, stage, variant = 'spine', dates = {}, lea
     <div style={{ display: 'flex', alignItems: 'flex-start', overflowX: 'auto', paddingBottom: 4 }}>
       {leadNodes.length > 0 && (
         <div style={{ flexShrink: 0 }}>
-          <GroupCaption>Order · courier</GroupCaption>
+          <GroupCaption>{leadCaption}</GroupCaption>
           <div style={{ display: 'flex' }}>
             {leadNodes.map(n => <StepNode key={n.key} n={n} w={72} />)}
           </div>

@@ -2134,6 +2134,34 @@ async function insertHistory(ticket_id, field_name, old_value, new_value, note, 
   });
 }
 
+
+// ── Auto-link a ticket to its order ────────────────────────────────────────────────────────
+// Only 13.8% of tickets carried an external_order_id (1,170 of 8,509; 4,000 unlinked in the
+// last 30 days alone) — so the courier spine, the RTO banner and the delivery journeys all had
+// nothing to key off, even when the agent could plainly see the order in the Shopify panel.
+//
+// Rule (Afshaan): link ONLY when the customer has exactly ONE order in the window. Zero is
+// nothing to link; two or more is a guess, and guessing wrong attaches a ticket to the wrong
+// parcel — worse than leaving it blank, because the spine would then confidently show the wrong
+// delivery. Stored WITHOUT the '#', matching the dominant existing convention.
+const AUTO_LINK_WINDOW_DAYS = 90;
+function inferOrderLink(shop) {
+  if (!shop?.found) return null;
+  const cutoff = Date.now() - AUTO_LINK_WINDOW_DAYS * 86400000;
+  const recent = (shop.recent_orders || []).filter((o) => {
+    const t = Date.parse(o?.created_at || '');
+    return Number.isFinite(t) && t >= cutoff;
+  });
+  if (recent.length !== 1) return null;
+  const o = recent[0];
+  if (!o.order_no) return null;
+  return {
+    external_order_id: String(o.order_no).replace(/^#/, ''),
+    purchase_date: istDate(o.created_at),
+    platform: 'website',
+  };
+}
+
 async function createTicket(body, auth, env) {
   const g = require('cs_ticket_manage', auth); if (g) return g;
 
@@ -2189,6 +2217,14 @@ async function createTicket(body, auth, env) {
   // Default dept: explicit > creator's own dept > NULL
   const finalDeptId = bodyDeptId || auth.cs_department_id || null;
 
+  // Auto-link the order when the agent did not name one and the customer has exactly one recent
+  // order. Best-effort — a Shopify hiccup must never block ticket creation.
+  let inferred = null;
+  if (!external_order_id && (normPhone || customer_email)) {
+    try { inferred = inferOrderLink(await shopifyLookup({ phone: normPhone, email: customer_email }, env)); }
+    catch (e) { console.log('autolink_lookup_failed', e?.message || String(e)); }
+  }
+
   const insertRes = await sb(`/rest/v1/cs_tickets`, env, {
     method: 'POST',
     body: JSON.stringify({
@@ -2202,7 +2238,9 @@ async function createTicket(body, auth, env) {
       customer_email: customer_email || null,
       customer_address: customer_address || null,
       platform: platform || null,
-      external_order_id: external_order_id || null,
+      // Agent-supplied wins; otherwise infer from the customer's orders (see inferOrderLink).
+      external_order_id: external_order_id || inferred?.external_order_id || null,
+      ...(!external_order_id && inferred?.purchase_date ? { purchase_date: inferred.purchase_date } : {}),
       lot_unit_upc: lot_unit_upc ? normalizeUpc(lot_unit_upc) : null,
       product: product || null,
       product_sku: product_sku || null,
@@ -2804,6 +2842,9 @@ async function webhookCallAnswered(body, env, account) {
     customer_name: shop.found ? shop.customer.name : (phone ? `Caller ${phone}` : 'Unknown caller'),
     customer_phone: phone, customer_email: shop.found ? shop.customer.email : null,
     disposition: 'pending', issue_description: '[Pending — auto-created from call]',
+    // Link the order when it is unambiguous — the Shopify lookup above is already in hand,
+    // so this costs no extra API call.
+    ...(inferOrderLink(shop) || {}),
     due_at: new Date(Date.now() + (SLA_DAYS['pending'] ?? 7) * 24 * 60 * 60 * 1000).toISOString(),
     assigned_agent_id: agent.id, assigned_agent_name: agent.name,
     stage: 'intake',

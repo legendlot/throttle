@@ -71,15 +71,21 @@ function ShipmentLine({ s: initial, orderNo, session }) {
   );
 }
 
-export function ShopifyPanel({ session, phone, email, onPick, autoLoad }) {
+export function ShopifyPanel({ session, phone, email, onPick, autoLoad, onOrders }) {
   const [state, setState] = useState(null);
   const [loading, setLoading] = useState(false);
   const run = useCallback(async () => {
     setLoading(true);
-    try { setState(await csopsGet('searchShopifyCustomer', { phone: phone || '', email: email || '' }, session)); }
+    try {
+      const r = await csopsGet('searchShopifyCustomer', { phone: phone || '', email: email || '' }, session);
+      setState(r);
+      // Hand the loaded orders up so the lifecycle spine can infer the forward leg on tickets
+      // that were never linked to an order. Reuses THIS fetch rather than issuing a second one.
+      if (onOrders) onOrders(r?.found ? (r.recent_orders || []) : []);
+    }
     catch (e) { setState({ error: e.message }); }
     finally { setLoading(false); }
-  }, [session, phone, email]);
+  }, [session, phone, email, onOrders]);
 
   // On the ticket Detail page (autoLoad), fetch the customer + orders on open
   // so the agent sees order history without a manual click. New Ticket stays manual.
