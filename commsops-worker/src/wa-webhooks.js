@@ -161,6 +161,32 @@ async function handleInbound(env, payload) {
         },
       });
     }
+
+    // 2c. WS-B — a BUTTON tap is also a journey reply signal. Emitted as its own
+    // `whatsapp_reply` event (in ADDITION to whatsapp_inbound, never instead of it:
+    // Pitstop's inbox, the 24h window and any inbound analytics all key off the
+    // generic event, and a tap is still a real inbound message).
+    //
+    // ingest() runs the J1 wait matcher, so this is the entire wake path — an
+    // interactive send node parked via #interactiveBranch resolves the moment this
+    // lands, and #latestButtonId re-reads properties.button_id to pick the branch.
+    //
+    // Best-effort, mirroring the whatsapp_inbound call above: a failure here must not
+    // 500 the route (Meta would redeliver and re-run the opt-out write). A missed
+    // signal is not a lost branch — the interpreter's own DB pre-check re-reads the
+    // event on its next transition, and the node times out to `no_reply` regardless.
+    if (m.button_id) {
+      await ingest(env, {
+        identifiers: [{ type: 'phone', value: `+${wa.toWaId(m.from)}` }],
+        name: 'whatsapp_reply',
+        occurred_at: m.ts,
+        source: 'whatsapp_webhook',
+        idempotency_key: m.provider_message_id ? `wa:reply:${m.provider_message_id}` : undefined,
+        properties: { channel: 'whatsapp', button_id: m.button_id, button_text: m.text,
+                      type: m.type, phone_number_id: m.phone_number_id,
+                      provider_message_id: m.provider_message_id },
+      }).catch((e) => { console.log('wa_reply_ingest_error', e?.message || String(e)); return null; });
+    }
   }
   // 3. hand the conversation to Pitstop
   await forwardToCsops(env, inbound);

@@ -146,11 +146,21 @@ function parseInbound(payload) {
         phone_number_id: phoneId,
         text: null,
         media: null,
+        button_id: null,
       };
       if (m.type === 'text') base.text = m.text?.body || '';
-      else if (m.type === 'button') base.text = m.button?.text || '';
-      else if (m.type === 'interactive') {
-        base.text = m.interactive?.button_reply?.title || m.interactive?.list_reply?.title || '';
+      else if (m.type === 'button') {
+        // Template quick-reply tap. `payload` is the postback we set at send time via a
+        // {component:'button', sub_type:'quick_reply', param_type:'payload'} mapping slot;
+        // when the template is sent WITHOUT a payload parameter Meta echoes the button
+        // LABEL as the payload. Fall back to `text` so both shapes yield a branchable id.
+        base.text = m.button?.text || '';
+        base.button_id = m.button?.payload || m.button?.text || null;
+      } else if (m.type === 'interactive') {
+        // Free-form interactive message tap (24h window only) — id is author-defined.
+        const r = m.interactive?.button_reply || m.interactive?.list_reply || null;
+        base.text = r?.title || '';
+        base.button_id = r?.id || null;
       } else if (['image', 'video', 'audio', 'document', 'sticker'].includes(m.type)) {
         const media = m[m.type] || {};
         base.media = { id: media.id || null, mime_type: media.mime_type || null, caption: media.caption || null, filename: media.filename || null };

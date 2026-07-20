@@ -120,6 +120,57 @@ function restoreFetch() { global.fetch = realFetch; }
     assert.equal(inb[3].text, 'broken wheel');
   });
 
+  // ── WS-B: button taps carry a branchable id ──
+  await t('parseInbound surfaces button_id from both tap shapes', () => {
+    const payload = { object: 'whatsapp_business_account', entry: [{ changes: [{ value: {
+      metadata: { phone_number_id: 'PID' },
+      messages: [
+        // template quick-reply WITH an explicit payload (what we send for J3)
+        { id: 'b1', from: '9199', type: 'button', timestamp: '1700000000', button: { text: 'Make Payment', payload: 'pay_now' } },
+        // template quick-reply with NO payload param — Meta echoes the LABEL
+        { id: 'b2', from: '9199', type: 'button', timestamp: '1700000001', button: { text: 'Cancel Order' } },
+        // free-form interactive reply — author-defined id
+        { id: 'b3', from: '9199', type: 'interactive', timestamp: '1700000002', interactive: { button_reply: { id: 'confirm_cod', title: 'Confirm COD Order' } } },
+        // a plain text message is not a reply signal
+        { id: 'b4', from: '9199', type: 'text', timestamp: '1700000003', text: { body: 'hello' } },
+      ] } }] }] };
+    const inb = wa.parseInbound(payload);
+    assert.equal(inb[0].button_id, 'pay_now');
+    assert.equal(inb[1].button_id, 'Cancel Order');   // label fallback
+    assert.equal(inb[2].button_id, 'confirm_cod');
+    assert.equal(inb[2].text, 'Confirm COD Order');
+    assert.equal(inb[3].button_id, null);
+  });
+
+  await t('handleInbound emits whatsapp_reply ALONGSIDE whatsapp_inbound on a button tap', async () => {
+    const orig = A.sbComms;
+    const events = [];
+    A.sbComms = async (path, env, init) => {
+      if (path.startsWith('/rest/v1/rpc/resolve_identity')) return { ok: true, data: 'prof-1' };
+      if (path.startsWith('/rest/v1/events')) {
+        events.push(JSON.parse(init.body));
+        return { ok: true, data: [{ id: `ev-${events.length}` }] };
+      }
+      return { ok: true, data: [] };   // wa_windows upsert, waits matcher, journeys
+    };
+    const payload = { object: 'whatsapp_business_account', entry: [{ changes: [{ value: {
+      metadata: { phone_number_id: 'PID' },
+      messages: [
+        { id: 'b1', from: '919880212323', type: 'button', timestamp: '1700000000', button: { text: 'Make Payment', payload: 'pay_now' } },
+        { id: 't1', from: '919880212323', type: 'text', timestamp: '1700000001', text: { body: 'hi' } },
+      ] } }] }] };
+    await waHook.handleInbound({}, payload);
+    const names = events.map((e) => e.name);
+    // the tap yields BOTH events; the plain text yields only the generic one
+    assert.deepEqual(names, ['whatsapp_inbound', 'whatsapp_reply', 'whatsapp_inbound']);
+    const reply = events[1];
+    assert.equal(reply.properties.button_id, 'pay_now');
+    assert.equal(reply.properties.button_text, 'Make Payment');
+    assert.equal(reply.idempotency_key, 'wa:reply:b1');   // distinct from wa:inbound:b1
+    assert.equal(events[0].idempotency_key, 'wa:inbound:b1');
+    A.sbComms = orig;
+  });
+
   // ── renderWhatsapp ──
   await t('renderWhatsapp text mode applies tokens', () => {
     const tpl = { content: { text_body: 'Hi {name}, your order {order} shipped.' },
