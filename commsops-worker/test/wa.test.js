@@ -171,6 +171,36 @@ function restoreFetch() { global.fetch = realFetch; }
     A.sbComms = orig;
   });
 
+  await t('handleStatuses persists Meta pricing (category + tri-state billable)', async () => {
+    const orig = A.sbComms;
+    const patches = [];
+    A.sbComms = async (path, env, init) => {
+      if (path.startsWith('/rest/v1/messages?provider=eq.whatsapp'))
+        return { ok: true, data: [{ id: 'msg-1', profile_id: 'prof-1', channel: 'whatsapp' }] };
+      if (path.startsWith('/rest/v1/messages?id=eq.')) { patches.push(JSON.parse(init.body)); return { ok: true, data: [] }; }
+      return { ok: true, data: [] };
+    };
+    const mk = (id, pricing) => ({ object: 'whatsapp_business_account', entry: [{ changes: [{ value: {
+      statuses: [{ id, status: 'delivered', timestamp: '1700000000', recipient_id: '9199', ...(pricing ? { pricing } : {}) }] } }] }] });
+
+    await waHook.handleStatuses({}, mk('m1', { billable: true, category: 'marketing', pricing_model: 'PMP' }));
+    assert.equal(patches[0].pricing_category, 'marketing');
+    assert.equal(patches[0].billable, true);
+
+    patches.length = 0;
+    await waHook.handleStatuses({}, mk('m2', { billable: false, category: 'service' }));
+    assert.equal(patches[0].billable, false);          // genuinely free
+
+    patches.length = 0;
+    await waHook.handleStatuses({}, mk('m3', { category: 'utility' }));   // no billable flag
+    assert.equal(patches[0].billable, null);           // absent must NOT collapse to false
+
+    patches.length = 0;
+    await waHook.handleStatuses({}, mk('m4', null));   // no pricing object at all
+    assert.ok(!('pricing_category' in patches[0]));
+    A.sbComms = orig;
+  });
+
   // ── renderWhatsapp ──
   await t('renderWhatsapp text mode applies tokens', () => {
     const tpl = { content: { text_body: 'Hi {name}, your order {order} shipped.' },

@@ -81,6 +81,18 @@ async function handleStatuses(env, payload) {
       if (u.canonical_status === 'opened') patch.read_at = u.at;    // WA 'read' → our canonical 'opened'
       if (u.reason) patch.reason = u.reason;
       if (u.cost != null) patch.cost = u.cost;
+      // Persist Meta's pricing verdict. This is the ONLY authoritative per-message signal for
+      // whether we were charged and at what category — it was parsed and then dropped, so ₹
+      // spend could never be computed. `cost` above stays a billable-MESSAGE COUNT; rupees are
+      // derived at read time from comms.channel_rate_card (effective-dated, so a historical
+      // send is costed at the rate in force on its send date).
+      // `billable` is tri-state on purpose: absent ≠ free. Coercing a missing flag to false
+      // would silently price the message at zero.
+      if (u.pricing) {
+        patch.pricing = u.pricing;
+        patch.pricing_category = u.pricing.category || null;
+        patch.billable = typeof u.pricing.billable === 'boolean' ? u.pricing.billable : null;
+      }
       await A.sbComms(`/rest/v1/messages?id=eq.${A.enc(msg.id)}`, env,
         { method: 'PATCH', body: JSON.stringify(patch) });
     }
@@ -261,4 +273,4 @@ async function handleWhatsappWebhook(env, request) {
   return { ok: true, statuses, inbound, meta };
 }
 
-module.exports = { handleWhatsappWebhook, verifyWhatsappWebhook, verifySignature, handleInbound };
+module.exports = { handleWhatsappWebhook, verifyWhatsappWebhook, verifySignature, handleInbound, handleStatuses };

@@ -380,7 +380,7 @@ export default function CampaignsPage() {
               <table className="dt">
                 <thead><tr>
                   <th>Broadcast</th><th>Status</th><th>Sent / scheduled</th>
-                  <th className="num">Revenue</th>
+                  <th className="num">Revenue</th><th className="num">Cost</th><th className="num">ROI</th>
                   <th className="num">Sent</th><th className="num">Delivered</th>
                   <th className="num">Read</th><th className="num">Click</th><th className="num">Order</th>
                   <th className="num">Unsub</th><th className="num">Fail</th><th className="num">Skipped</th>
@@ -404,6 +404,17 @@ export default function CampaignsPage() {
                         {o?.is_scheduled && <span className="dim"> (sched)</span>}
                       </td>
                       <td className="num mono">{o?.attributed_revenue ? inr(o.attributed_revenue) : '—'}</td>
+                      <td className="num mono">
+                        {o && Number(o.cost_inr) > 0 ? inr(o.cost_inr) : '—'}
+                        {/* An unpriced send is NOT a free one — say so rather than let a small
+                            ₹ figure read as the whole spend. */}
+                        {o?.unpriced > 0 && (
+                          <div className="dim" style={{ fontSize: 10 }} title={`${o.unpriced} sent message(s) have no rate card entry — spend is understated`}>
+                            +{o.unpriced} unpriced
+                          </div>
+                        )}
+                      </td>
+                      <td className="num mono">{o?.roi != null ? `${Number(o.roi).toFixed(2)}x` : '—'}</td>
                       <td className="num mono dim">{o ? o.sent : '—'}</td>
                       <td className="num mono dim">{o ? o.delivered : '—'}</td>
                       <td className="num mono">{rate(o?.read_rate)}</td>
