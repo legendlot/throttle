@@ -2666,6 +2666,44 @@ export default {
       return new Response('ok', { status: 200 });
     }
 
+    // Read-only Uniware discovery probe (token-gated, no Google login needed). Uniware is the OMS
+    // that receives Shopify orders, books the courier (Delhivery primary / Shiprocket fallback) and
+    // writes the fulfillment + AWB back to Shopify — so it is the single place that knows BOTH
+    // couriers' tracking. This dumps the shipping/status shape for ONE order so a mapper can be
+    // written against real data rather than docs (the Shopflo/Cashfree lesson: docs drift).
+    // PII-REDACTED by construction: only shipping-package + status fields are returned, never the
+    // customer/address block Uniware also sends.
+    if (request.method === 'POST' && url.pathname === '/internal/uniware-probe') {
+      const want = env.ODOOPS_INTERNAL_TOKEN;
+      const a = request.headers.get('Authorization') || '';
+      const bearer = a.slice(0, 7).toLowerCase() === 'bearer ' ? a.slice(7).trim() : '';
+      if (!want || bearer !== want) return new Response('unauthorised', { status: 401 });
+      let b = {}; try { b = await request.json(); } catch { /* ignore */ }
+      let token; try { token = await getUniwareToken(env); } catch (e) { return err(String(e?.message || e), 400); }
+      const base = `https://${env.UNIWARE_TENANT}.unicommerce.com`;
+      const H = { Authorization: `bearer ${token}`, 'Content-Type': 'application/json' };
+      const res = await fetch(`${base}/services/rest/v1/oms/saleOrder/get`, {
+        method: 'POST', headers: H, body: JSON.stringify({ code: b.code }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!j.successful) return err('uniware: ' + JSON.stringify(j.errors || j).slice(0, 300), 502);
+      const so = j.saleOrderDTO || {};
+      const pkgs = (so.shippingPackages || []).map((p) => ({
+        code: p.code, status: p.statusCode, shippingProvider: p.shippingProvider,
+        shippingCourier: p.shippingCourier, trackingNumber: p.trackingNumber,
+        shippingPackageStatusCode: p.shippingPackageStatusCode,
+        dispatchedOn: p.dispatchedOn, deliveredOn: p.deliveredOn,
+        shipmentTrackingStatus: p.shipmentTrackingStatus,
+        keys: Object.keys(p),          // so we can see fields this shape does not anticipate
+      }));
+      return ok({
+        code: so.code, displayOrderCode: so.displayOrderCode, channel: so.channel,
+        status: so.status, saleOrderKeys: Object.keys(so),
+        shippingPackages: pkgs,
+        itemStatuses: (so.saleOrderItems || []).map((i) => ({ code: i.code, statusCode: i.statusCode })),
+      });
+    }
+
     const auth = await verifyJWT(request.headers.get('Authorization'));
     const userId = auth?.userId || null;
     const P = auth?.permissions || {};
