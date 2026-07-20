@@ -196,6 +196,26 @@ async function shopifyLookup({ phone, email }, env) {
 
 // ── Auth ────────────────────────────────────────────────────────────────────
 
+// Ignition permissions come from the Ignition-only layer, NOT the user's global
+// `users_profile.role` (2026-07-20). Ignition was the last system deriving perms from
+// the shared single-role column, which made Ignition access mutually exclusive with a
+// person's other job — an active Pitstop CS agent could not also be an Ignition manager.
+// Mirrors snorkelops `getSnorkelPerms` / RULE-SNORKEL-002. `active=false` is a
+// Ignition-scoped kill switch (Manifest's RULE-MANIFEST-006 pattern); no row = no access.
+async function getIgnitionPerms(userId, env) {
+  const ur = await sbStore(
+    `/rest/v1/ignition_user_roles?user_id=eq.${userId}&active=is.true&select=role_key&limit=1`,
+    env,
+  );
+  if (!ur.ok || !ur.data?.[0]) return { __role: null, perms: {} };
+  const roleKey = ur.data[0].role_key;
+  const r = await sbStore(
+    `/rest/v1/ignition_roles?role_key=eq.${encodeURIComponent(roleKey)}&select=permissions&limit=1`,
+    env,
+  );
+  return { __role: roleKey, perms: (r.ok && r.data?.[0]?.permissions) || {} };
+}
+
 async function verifyJWT(authHeader, env) {
   if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
   const token = authHeader.slice(7);
@@ -214,18 +234,15 @@ async function verifyJWT(authHeader, env) {
   const profile = profileRes.data[0];
   if (!profile.active) return null;
 
-  const rolesRes = await sbStore(
-    `/rest/v1/roles?role_id=eq.${encodeURIComponent(profile.role)}&select=permissions&limit=1`,
-    env,
-  );
-  const permissions = (rolesRes.ok && rolesRes.data?.[0]?.permissions) || {};
+  const ip = await getIgnitionPerms(user.id, env);
 
   return {
     userId: user.id,
     email: user.email,
-    role: profile.role,
+    role: profile.role,               // global role — display/context only, NOT the gate
+    ignitionRole: ip.__role,
     fullName: profile.full_name,
-    permissions,
+    permissions: ip.perms,
     // Echo the raw JWT so sibling-worker calls (csops createTicket) can re-use it.
     bearer: token,
   };
@@ -751,15 +768,21 @@ async function generateUgcBrief(body, auth, env) {
   return ok({ brief: ins.data?.[0] || null });
 }
 
-// POC dropdown source (Reann #5): people on roles that carry ignition_view.
+// POC dropdown source (Reann #5): people who hold an Ignition role carrying ignition_view.
+// Repointed off store.roles onto the Ignition-only layer (2026-07-20) — otherwise it would
+// still list the whole company `admin` cohort and miss anyone granted Ignition directly.
 async function getIgnitionUsers(_url, auth, env) {
-  const rr = await sbStore(`/rest/v1/roles?select=role_id,permissions`, env);
-  const roleIds = (rr.ok ? rr.data || [] : [])
+  const rr = await sbStore(`/rest/v1/ignition_roles?select=role_key,permissions`, env);
+  const roleKeys = (rr.ok ? rr.data || [] : [])
     .filter(r => r.permissions && (r.permissions.ignition_view === true || r.permissions.ignition_view === 'true'))
-    .map(r => r.role_id);
-  if (!roleIds.length) return ok({ users: [] });
-  const inList = roleIds.map(encodeURIComponent).join(',');
-  const ur = await sbStore(`/rest/v1/users_profile?active=eq.true&role=in.(${inList})&select=id,full_name&order=full_name.asc`, env);
+    .map(r => r.role_key);
+  if (!roleKeys.length) return ok({ users: [] });
+  const inList = roleKeys.map(encodeURIComponent).join(',');
+  const ar = await sbStore(`/rest/v1/ignition_user_roles?active=is.true&role_key=in.(${inList})&select=user_id`, env);
+  const userIds = (ar.ok ? ar.data || [] : []).map(r => r.user_id);
+  if (!userIds.length) return ok({ users: [] });
+  const ur = await sbStore(
+    `/rest/v1/users_profile?active=eq.true&id=in.(${userIds.join(',')})&select=id,full_name&order=full_name.asc`, env);
   return ok({ users: (ur.ok ? ur.data || [] : []).filter(u => u.full_name) });
 }
 
@@ -1238,7 +1261,8 @@ async function getMe(url, auth, env) {
   return ok({
     userId: auth.userId,
     email: auth.email,
-    role: auth.role,
+    role: auth.role,                  // global role — context only
+    ignitionRole: auth.ignitionRole,  // the role that actually gates Ignition
     fullName: auth.fullName,
     permissions: auth.permissions,
   });
@@ -2592,10 +2616,92 @@ async function promoteConnect(body, auth, env) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// ACCESS CONTROL (Ignition-only permission layer, 2026-07-20)
+// Governance is gated on `ignition_admin` — a key that only exists in this layer,
+// so holding the company-wide `admin` role no longer confers it.
+// ────────────────────────────────────────────────────────────────────────────
+
+// Roster + the assignable role presets. Read-gated on ignition_admin (not ignition_view):
+// who has access to what is itself sensitive.
+async function getIgnitionAccess(_url, auth, env) {
+  const gate = requirePerm('ignition_admin', auth);
+  if (gate) return gate;
+  const rr = await sbStore(`/rest/v1/ignition_roles?select=role_key,label,description,permissions,is_system&order=role_key.asc`, env);
+  const ar = await sbStore(`/rest/v1/ignition_user_roles?select=user_id,role_key,active,assigned_at&order=assigned_at.desc`, env);
+  const assignments = ar.ok ? ar.data || [] : [];
+  let users = [];
+  if (assignments.length) {
+    const ids = assignments.map(a => a.user_id);
+    const ur = await sbStore(`/rest/v1/users_profile?id=in.(${ids.join(',')})&select=id,full_name,role,active`, env);
+    const byId = Object.fromEntries((ur.ok ? ur.data || [] : []).map(u => [u.id, u]));
+    users = assignments.map(a => ({
+      ...a,
+      full_name: byId[a.user_id]?.full_name || null,
+      global_role: byId[a.user_id]?.role || null,   // shown for context; never the gate
+      profile_active: byId[a.user_id]?.active ?? null,
+    }));
+  }
+  return ok({ roles: rr.ok ? rr.data || [] : [], users });
+}
+
+// People who could be granted access — every active profile, so a person's other job
+// (CS agent, social, production) no longer disqualifies them from Ignition.
+async function getGrantableUsers(_url, auth, env) {
+  const gate = requirePerm('ignition_admin', auth);
+  if (gate) return gate;
+  const ur = await sbStore(`/rest/v1/users_profile?active=eq.true&select=id,full_name,role&order=full_name.asc`, env);
+  return ok({ users: (ur.ok ? ur.data || [] : []).filter(u => u.full_name) });
+}
+
+async function grantIgnitionAccess(body, auth, env) {
+  const gate = requirePerm('ignition_admin', auth);
+  if (gate) return gate;
+  const { user_id, role_key } = body?.data || {};
+  if (!user_id || !role_key) return err('user_id and role_key required', 400);
+  const rr = await sbStore(`/rest/v1/ignition_roles?role_key=eq.${encodeURIComponent(role_key)}&select=role_key&limit=1`, env);
+  if (!rr.ok || !rr.data?.[0]) return err('unknown_role_key', 400);
+  const up = await sbStore(`/rest/v1/users_profile?id=eq.${user_id}&select=id,active&limit=1`, env);
+  if (!up.ok || !up.data?.[0]) return err('user_not_found', 404);
+  if (!up.data[0].active) return err('user_is_deactivated', 400);
+  const res = await sbStore(`/rest/v1/ignition_user_roles`, env, {
+    method: 'POST',
+    prefer: 'resolution=merge-duplicates,return=representation',
+    body: JSON.stringify([{
+      user_id, role_key, active: true,
+      assigned_by: auth.userId, assigned_at: nowIso(),
+      disabled_at: null, disabled_by: null,
+    }]),
+  });
+  if (!res.ok) return err(`db_error: ${JSON.stringify(res.data)}`, 400);
+  return ok({ user_id, role_key });
+}
+
+// Ignition-scoped kill switch. Revoking Ignition NEVER touches users_profile — the
+// person keeps their other systems (this is the whole point of the separate layer).
+async function setIgnitionUserActive(body, auth, env) {
+  const gate = requirePerm('ignition_admin', auth);
+  if (gate) return gate;
+  const { user_id, active } = body?.data || {};
+  if (!user_id || typeof active !== 'boolean') return err('user_id and active(boolean) required', 400);
+  if (user_id === auth.userId && !active) return err('You cannot revoke your own Ignition access', 400);
+  const patch = active
+    ? { active: true,  disabled_at: null,      disabled_by: null }
+    : { active: false, disabled_at: nowIso(),  disabled_by: auth.userId };
+  const res = await sbStore(`/rest/v1/ignition_user_roles?user_id=eq.${user_id}`, env, {
+    method: 'PATCH', prefer: 'return=representation', body: JSON.stringify(patch),
+  });
+  if (!res.ok) return err(`db_error: ${JSON.stringify(res.data)}`, 400);
+  if (!res.data?.length) return err('user_has_no_ignition_access', 404);
+  return ok({ user_id, active });
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // DISPATCH
 // ────────────────────────────────────────────────────────────────────────────
 
 const GET_ACTIONS = {
+  getIgnitionAccess,
+  getGrantableUsers,
   getInfluencers,
   getInfluencerCounts,
   getInfluencer,
@@ -2667,6 +2773,8 @@ const POST_ACTIONS = {
   promoteConnect,
   setConnectStatus,
   returnConnect,
+  grantIgnitionAccess,
+  setIgnitionUserActive,
 };
 
 async function handleGet(url, request, env) {
