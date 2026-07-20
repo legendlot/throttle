@@ -2682,11 +2682,37 @@ export default {
       let token; try { token = await getUniwareToken(env); } catch (e) { return err(String(e?.message || e), 400); }
       const base = `https://${env.UNIWARE_TENANT}.unicommerce.com`;
       const H = { Authorization: `bearer ${token}`, 'Content-Type': 'application/json' };
-      const res = await fetch(`${base}/services/rest/v1/oms/saleOrder/get`, {
-        method: 'POST', headers: H, body: JSON.stringify({ code: b.code }),
+      // Search mode: Uniware's own order `code` is not the Shopify order name, so find it first.
+      if (!b.code) {
+        const days = Math.min(Number(b.days) || 3, 30);
+        const sr = await fetch(`${base}/services/rest/v1/oms/saleOrder/search`, {
+          method: 'POST', headers: H,
+          body: JSON.stringify({
+            fromDate: uniISO(Date.now() - days * 86400000), toDate: uniISO(Date.now()),
+            dateType: 'CREATED', channel: b.channel || 'LEGEND_OF_TOYS',
+            searchOptions: { displayStart: Number(b.offset) || 0, displayLength: Math.min(Number(b.limit) || 10, 50) },
+          }),
+        });
+        const sj = await sr.json().catch(() => ({}));
+        if (!sj.successful) return err('uniware search: ' + JSON.stringify(sj.errors || sj).slice(0, 300), 502);
+        return ok({
+          total: sj.totalRecords,
+          elementKeys: Object.keys((sj.elements || [])[0] || {}),
+          elements: (sj.elements || []).map((e) => ({
+            code: e.code, displayOrderCode: e.displayOrderCode, channel: e.channel, status: e.status,
+          })),
+        });
+      }
+      // `path` lets us probe alternate endpoints without a redeploy per guess — Unicommerce's
+      // docs drift and a wrong path returns HTML, which used to surface as an unhelpful "{}".
+      const path = b.path || '/services/rest/v1/oms/saleOrder/get';
+      const res = await fetch(`${base}${path}`, {
+        method: 'POST', headers: H, body: JSON.stringify(b.body || { code: b.code }),
       });
-      const j = await res.json().catch(() => ({}));
-      if (!j.successful) return err('uniware: ' + JSON.stringify(j.errors || j).slice(0, 300), 502);
+      const text = await res.text();
+      let j; try { j = JSON.parse(text); } catch { return err(`uniware http_${res.status} non-json: ${text.slice(0, 200)}`, 502); }
+      if (b.raw) return ok({ http: res.status, json: j });
+      if (!j.successful) return err(`uniware http_${res.status}: ` + JSON.stringify(j.errors || j).slice(0, 300), 502);
       const so = j.saleOrderDTO || {};
       const pkgs = (so.shippingPackages || []).map((p) => ({
         code: p.code, status: p.statusCode, shippingProvider: p.shippingProvider,
