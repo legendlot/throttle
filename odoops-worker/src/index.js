@@ -2163,6 +2163,200 @@ async function adsAutoPause(env) {
   } catch (e) { console.error('adsAutoPause failed:', e?.message || e); }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════════════
+// Uniware courier tracking (D2C parcels) → public.ecom_shipments
+//
+// Uniware is the OMS between Shopify and the couriers: it books Delhivery (primary),
+// Shiprocket (fallback) or SELF, and writes the AWB back to Shopify. It is therefore the ONLY
+// place that knows delivery + RTO — Shopify's fulfillment stops at "dispatched" and never moves
+// again (its "Mark as delivered" button is manual). See reference/integrations.md.
+//
+// This is deliberately NOT a `sales` connector: it writes operational CX data to `public` for
+// Pitstop + Relay, not sell-out facts. It rides the same hourly cron as a bounded best-effort
+// step and is fully resumable, so a capped run simply continues next tick.
+// ═══════════════════════════════════════════════════════════════════════════════════════
+
+const UNI_TRACK_WINDOW_MS = 6 * 3600 * 1000;
+// Page size == the per-run get cap, so one page is always fully processed and page_offset can
+// advance deterministically. Never let these diverge.
+const UNI_TRACK_PAGE = 25;
+// saleorder/get calls per run — the real cost, and the binding constraint. Uniware has no bulk
+// package endpoint (shippingPackage/search accepts only saleOrderCode, one order at a time), so
+// this is unavoidable. Run budget: 1 state + 1 search + 1 existing-lookup + <=25 gets + 1 upsert
+// + 1 state-patch = ~30, comfortably under the 50-subrequest worker ceiling.
+const UNI_TRACK_MAX_GETS  = UNI_TRACK_PAGE;
+// Orders in these states have no shipping package yet, so fetching their detail is pure waste.
+// Roughly half of any recent window sits in PENDING_VERIFICATION.
+const UNI_TRACK_SKIP_STATUS = new Set(['PENDING_VERIFICATION', 'CREATED']);
+
+// Uniware reports the provider inconsistently across channels — 'DELHIVERY_SURFACE' on the
+// website, 'delhivery'/'Delhivery' on CRED, 'Xpressbees'/'xpressbees' on FirstCry — so match
+// case-insensitively on a prefix, never on equality.
+function uniCourier(provider) {
+  const p = String(provider || '').toUpperCase();
+  if (!p) return null;
+  if (p.startsWith('DELHIVERY')) return 'delhivery';
+  if (p.startsWith('SHIPROCKET')) return 'shiprocket';
+  if (p.startsWith('XPRESSBEES')) return 'xpressbees';
+  if (p.startsWith('SHADOWFAX')) return 'shadowfax';
+  if (p.startsWith('BLUEDART') || p.startsWith('BLUE DART')) return 'bluedart';
+  if (p.startsWith('ECOM')) return 'ecom_express';
+  if (p.startsWith('DTDC')) return 'dtdc';
+  if (p === 'SELF') return 'self';
+  return 'other';
+}
+
+// Uniware package status + RAW courier status → our normalised lifecycle.
+// Package status is authoritative for the terminal states; courier status refines the long
+// DISPATCHED middle (manifested → in transit → out for delivery). Both raw values are stored
+// verbatim alongside, so an unrecognised courier code degrades to a coarser lifecycle rather
+// than being lost.
+function uniLifecycle(packageStatus, courierStatus) {
+  const s = String(packageStatus || '').toUpperCase();
+  const c = String(courierStatus || '').toUpperCase().replace(/[\s_]+/g, '-');
+  if (s === 'CANCELLED') return 'cancelled';
+  if (s === 'DELIVERED') return 'delivered';
+  if (s.startsWith('RETURN') || s === 'RETURNED') return 'rto';
+  // courier-code refinements (Delhivery uses UD-*/RT-*/DL-*; Shiprocket uses plain words)
+  if (c) {
+    if (c.startsWith('RT-') || c.includes('RTO') || c.includes('RETURN')) return 'rto';
+    if (c.includes('DELIVERED')) return 'delivered';
+    if (c.includes('OUT-FOR-DELIVERY') || c.includes('OFD')) return 'out_for_delivery';
+    if (c.includes('MANIFEST')) return 'manifested';
+    if (c.includes('TRANSIT') || c.includes('DISPATCH') || c.includes('PICKED')) return 'in_transit';
+  }
+  if (s === 'DISPATCHED') return 'in_transit';
+  if (s) return 'pending';
+  return 'unknown';
+}
+
+// Uniware is inconsistent: `updated` is epoch MILLISECONDS, `dispatched` is epoch SECONDS.
+// Normalise defensively rather than trusting either.
+function uniTs(v) {
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  if (Number.isNaN(n) || n <= 0) return null;
+  const ms = n < 1e12 ? n * 1000 : n;
+  const d = new Date(ms);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+function uniPackageRow(so, p) {
+  const lifecycle = uniLifecycle(p.status, p.courierStatus);
+  return {
+    uniware_package_code: p.code,
+    uniware_order_code: so.code,
+    // Uniware's order code IS the Shopify order id — but ONLY for the website channel. Uniware
+    // also fulfils CRED / FirstCry / Flipkart, whose codes are marketplace ids; stamping those
+    // as shopify_order_id would send Pitstop and Relay looking up orders that don't exist.
+    shopify_order_id: so.channel === 'LEGEND_OF_TOYS' ? so.code : null,
+    shopify_order_name: so.displayOrderCode || null,
+    channel: so.channel || null,
+    shipping_provider: p.shippingProvider || p.shippingCourier || null,
+    courier: uniCourier(p.shippingProvider || p.shippingCourier),
+    tracking_number: p.trackingNumber || null,
+    tracking_link: p.trackingLink || null,
+    package_status: p.status || null,
+    courier_status: p.courierStatus || null,
+    lifecycle,
+    is_cod: typeof so.cod === 'boolean' ? so.cod : null,
+    collectable_amount: p.collectableAmount != null ? Number(p.collectableAmount) : null,
+    collected_amount: p.collectedAmount != null ? Number(p.collectedAmount) : null,
+    dispatched_at: uniTs(p.dispatched),
+    delivered_at: uniTs(p.delivered),
+    uniware_updated_at: uniTs(p.updated || so.updated),
+    pod_code: p.podCode || null,
+    invoice_code: p.invoiceCode || null,
+    raw: { status: p.status, courierStatus: p.courierStatus, trackingStatus: p.trackingStatus,
+           shippingMethod: p.shippingMethod, orderStatus: so.status },
+    updated_at: new Date().toISOString(),
+  };
+}
+
+async function syncUniwareTracking(env) {
+  const st = await sbPublic('/rest/v1/ecom_tracking_state?id=eq.true&select=*&limit=1');
+  const state = (st.ok && st.data?.[0]) || {};
+  const now = Date.now();
+  // Cold start: 3 days back. Long enough to pick up in-flight parcels, short enough not to
+  // stampede the first run (the window walk catches up over subsequent ticks).
+  const cursor = Number(state.cursor_ms) || (now - 3 * 86400000);
+  const winStart = cursor;
+  const winEnd = Math.min(cursor + UNI_TRACK_WINDOW_MS, now);
+  if (winStart >= winEnd) return { skipped: 'caught_up' };
+
+  const token = await getUniwareToken(env);
+  const base = `https://${env.UNIWARE_TENANT}.unicommerce.com`;
+  const H = { Authorization: `bearer ${token}`, 'Content-Type': 'application/json' };
+
+  // 1. ONE page of orders changed in the window, at the stored offset. Page size == the get cap,
+  // so a page is always fully processed in a single run and the offset advances deterministically.
+  const offset = Number(state.page_offset) || 0;
+  const r = await fetch(`${base}/services/rest/v1/oms/saleOrder/search`, {
+    method: 'POST', headers: H,
+    body: JSON.stringify({
+      fromDate: uniISO(winStart), toDate: uniISO(winEnd), dateType: 'UPDATED',
+      searchOptions: { displayStart: offset, displayLength: UNI_TRACK_PAGE },
+    }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!j.successful) throw new Error('uniware search: ' + JSON.stringify(j.errors || j).slice(0, 200));
+  const elements = j.elements || [];
+  const windowDone = elements.length < UNI_TRACK_PAGE;   // short page ⇒ end of this window
+
+  const candidates = elements
+    .filter((e) => !UNI_TRACK_SKIP_STATUS.has(String(e.status || '').toUpperCase()));
+
+  // 2. Skip orders already held at this same `updated` stamp — ONE query, not one per order.
+  // Purely an optimisation; correctness comes from the cursor below.
+  const known = {};
+  if (candidates.length) {
+    const codes = [...new Set(candidates.map((e) => e.code).filter(Boolean))];
+    const ex = await sbPublic(`/rest/v1/ecom_shipments?uniware_order_code=in.(${codes.map((c) => `"${c}"`).join(',')})&select=uniware_order_code,uniware_updated_at`);
+    for (const row of (ex.ok && Array.isArray(ex.data) ? ex.data : [])) {
+      const t = Date.parse(row.uniware_updated_at || '') || 0;
+      known[row.uniware_order_code] = Math.max(known[row.uniware_order_code] || 0, t);
+    }
+  }
+  const todo = candidates.filter((e) => (Number(e.updated) || 0) > (known[e.code] || 0));
+
+  // 3. Fetch detail for the changed ones (the expensive leg — hard-capped).
+  const gets = todo.slice(0, UNI_TRACK_MAX_GETS);
+  const rows = [];
+  for (const e of gets) {
+    const r = await fetch(`${base}/services/rest/v1/oms/saleorder/get`, {   // lowercase 'saleorder' — camelCase 404s
+      method: 'POST', headers: H, body: JSON.stringify({ code: e.code }),
+    });
+    const j = await r.json().catch(() => ({}));
+    const so = j?.saleOrderDTO;
+    if (!so) continue;
+    for (const p of (so.shippingPackages || [])) if (p?.code) rows.push(uniPackageRow(so, p));
+  }
+
+  if (rows.length) {
+    const up = await sbPublic('/rest/v1/ecom_shipments?on_conflict=uniware_package_code', {
+      method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify(rows),
+    });
+    if (!up.ok) throw new Error(`ecom_shipments upsert failed (${up.status}): ${JSON.stringify(up.data).slice(0, 200)}`);
+  }
+
+  // 4. Progress is driven by the PAGE OFFSET, not by rows written. Many orders legitimately carry
+  // no shipping package (cancelled, still processing); keying progress off stored rows re-fetched
+  // those forever. A short page ends the window → jump the cursor and reset the offset.
+  await sbPublic('/rest/v1/ecom_tracking_state?id=eq.true', {
+    method: 'PATCH',
+    body: JSON.stringify({
+      cursor_ms: windowDone ? winEnd : winStart,
+      page_offset: windowDone ? 0 : offset + elements.length,
+      last_run_at: new Date().toISOString(), last_error: null,
+      orders_seen: Number(state.orders_seen || 0) + elements.length,
+      packages_upserted: Number(state.packages_upserted || 0) + rows.length,
+    }),
+  });
+  return { window: [uniISO(winStart), uniISO(winEnd)], offset, seen: elements.length,
+           candidates: candidates.length, fetched: gets.length,
+           packages: rows.length, windowDone, cursor: uniISO(windowDone ? winEnd : winStart) };
+}
+
 const ADAPTERS = { shopify: shopifyAdapter, snorkel_internal: snorkelAdapter, qc_upload: qcAdapter, qc_gsheet: gsheetAdapter, amazon_spapi: amazonAdapter, amazon_ads: amazonAdsAdapter, amazon_ads_product: amazonAdsProductAdapter, amazon_dsp: amazonDspAdapter, meta_ads: metaAdsAdapter, meta_status: metaStatusAdapter, google_ads: googleAdsAdapter, ga4: ga4Adapter, uniware: uniwareAdapter, uniware_agg: uniwareAggAdapter, razorpay_payments: razorpayPaymentsAdapter };
 
 // minimal RFC-4180-ish CSV parser (handles quoted fields, commas, newlines)
@@ -2597,6 +2791,17 @@ export default {
     // Phase 2: auto-pause engine ads past the kill gate (free — only lowers spend; no-op while
     // ads_write_enabled is false). Self-contained + best-effort; never disturbs the producer above.
     try { await adsAutoPause(env); } catch (e) { console.error('odoops cron (auto-pause) failed:', e?.message || e); }
+    // Courier tracking: Uniware → public.ecom_shipments (CX data for Pitstop + Relay, not sell-out).
+    // Bounded + resumable, so a capped run just continues next tick. Best-effort: a Uniware outage
+    // must never take down the sell-out producer above.
+    try {
+      const r = await syncUniwareTracking(env);
+      console.log('odoops cron (uniware tracking):', JSON.stringify(r));
+    } catch (e) {
+      console.error('odoops cron (uniware tracking) failed:', e?.message || e);
+      try { await sbPublic('/rest/v1/ecom_tracking_state?id=eq.true', { method: 'PATCH',
+        body: JSON.stringify({ last_run_at: new Date().toISOString(), last_error: String(e?.message || e).slice(0, 400) }) }); } catch { /* ignore */ }
+    }
     // Daily conversion-funnel snapshot: refresh the trailing window from traffic_fact (GA4 keeps
     // revising recent days; older days stay frozen at their last value). The audit spine for the
     // /funnel Conversion-history page. Cheap (one RPC); best-effort.
@@ -2679,6 +2884,13 @@ export default {
       const bearer = a.slice(0, 7).toLowerCase() === 'bearer ' ? a.slice(7).trim() : '';
       if (!want || bearer !== want) return new Response('unauthorised', { status: 401 });
       let b = {}; try { b = await request.json(); } catch { /* ignore */ }
+      // Run the real tracking sync on demand (same code the cron calls) — for bring-up and
+      // for draining a backlog faster than hourly ticks would.
+      if (b.op === 'sync') {
+        SUPABASE_SERVICE_KEY = env.SUPABASE_SERVICE_KEY || '';
+        try { return ok(await syncUniwareTracking(env)); }
+        catch (e) { return err(String(e?.message || e), 500); }
+      }
       let token; try { token = await getUniwareToken(env); } catch (e) { return err(String(e?.message || e), 400); }
       const base = `https://${env.UNIWARE_TENANT}.unicommerce.com`;
       const H = { Authorization: `bearer ${token}`, 'Content-Type': 'application/json' };
