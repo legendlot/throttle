@@ -2793,7 +2793,8 @@ async function syncInventorySnapshot(env) {
     const rc = await rpcSales('recompute_stock_events', { p_date: today });
     flips = rc.ok ? rc.data : null;
     const ac = await rpcSales('detect_stock_alerts', { p_lookback_days: 3 });
-    alerts = ac.ok ? ac.data : null;
+    const pc = await rpcSales('detect_product_stock_alerts', { p_lookback_days: 3 });
+    alerts = { variant: ac.ok ? ac.data : null, product: pc.ok ? pc.data : null };
   }
   return { date: today, captured_at: capturedAt, variants: rows.length,
     mapped: rows.filter(r => r.product_code).length,
@@ -2809,7 +2810,7 @@ async function syncInventorySnapshot(env) {
 // pending, so the feature is inert until the secret exists and nothing can be posted by accident.
 const SLACK_ALERT_CAP = 12;   // per direction, per message — a bulk catalogue edit must not wall the channel
 
-function stockAlertText(oos, restock, nameOf, extraOos, extraRestock) {
+function stockAlertText(oos, restock, nameOf, extraOos, extraRestock, prodOos = [], prodRestock = []) {
   const line = (r) => {
     const name = nameOf(r) || r.product_title || r.sku;
     return r.direction === 'oos'
@@ -2817,6 +2818,17 @@ function stockAlertText(oos, restock, nameOf, extraOos, extraRestock) {
       : `   • ${name} — ${Number(r.qty_after) || 0} units`;
   };
   const parts = ['*Website stock update*'];
+  // Whole-product lines lead. A product going entirely dark is a different severity from one
+  // colour running out, and burying it among variant lines is exactly how it gets missed.
+  if (prodOos.length) {
+    parts.push(':rotating_light: *Completely out of stock*');
+    parts.push(prodOos.map(r =>
+      `   • *${r.product_family}* — all ${Number(r.qty_after) || 0} variants out`).join('\n'));
+  }
+  if (prodRestock.length) {
+    parts.push(':white_check_mark: *Available again*');
+    parts.push(prodRestock.map(r => `   • *${r.product_family}* — back on sale`).join('\n'));
+  }
   if (oos.length) {
     parts.push(`:red_circle: *Out of stock* (${oos.length + extraOos})`);
     parts.push(oos.map(line).join('\n'));
@@ -2863,20 +2875,37 @@ async function sendStockAlerts(env) {
   // Human names: the outbox carries Shopify's product_title, but "Night Wolf Base Red" reads
   // better than "Night Wolf" + a raw sku. Best-effort — falls back to title, then sku.
   const codes = [...new Set(fresh.map(r => r.product_code).filter(Boolean))];
-  const nameByCode = {};
+  const nameByCode = {}, pmFamily = {};
   if (codes.length) {
     const pm = await sbPublic(`/rest/v1/product_master?product_code=in.(${codes.join(',')})&select=product_code,product,model,color`);
     for (const p of (pm.ok ? pm.data : [])) {
       nameByCode[p.product_code] = [p.product, p.model, p.color].filter(Boolean).join(' ');
+      pmFamily[p.product_code] = p.product;   // family, for product-level suppression
     }
   }
   const nameOf = (r) => nameByCode[r.product_code];
 
-  const allOos = fresh.filter(r => r.direction === 'oos');
-  const allRes = fresh.filter(r => r.direction === 'restock');
+  const prodOos = fresh.filter(r => r.scope === 'product' && r.direction === 'oos');
+  const prodRes = fresh.filter(r => r.scope === 'product' && r.direction === 'restock');
+
+  // A product-level line already says everything the variant lines under it would, so don't
+  // print both — "Bumble — all 3 variants out" plus three Bumble rows is the same news twice.
+  // Suppressed rows are still marked sent (they were announced, at product grain).
+  const covered = { oos: new Set(prodOos.map(r => r.product_family)),
+                    restock: new Set(prodRes.map(r => r.product_family)) };
+  const isCovered = (r) => {
+    const fam = pmFamily[r.product_code];
+    return fam ? covered[r.direction]?.has(fam) : false;
+  };
+
+  const allOos = fresh.filter(r => r.scope !== 'product' && r.direction === 'oos' && !isCovered(r));
+  const allRes = fresh.filter(r => r.scope !== 'product' && r.direction === 'restock' && !isCovered(r));
   const oos = allOos.slice(0, SLACK_ALERT_CAP), res = allRes.slice(0, SLACK_ALERT_CAP);
+
+  // Nothing left to say once product lines absorbed everything? Still send — the product lines
+  // ARE the message. Only bail when the whole batch is empty, which `fresh.length` already covers.
   const text = stockAlertText(oos, res, nameOf,
-    allOos.length - oos.length, allRes.length - res.length);
+    allOos.length - oos.length, allRes.length - res.length, prodOos, prodRes);
 
   let posted = false;
   try {
@@ -3586,14 +3615,17 @@ export default {
               const pm = await sbPublic(`/rest/v1/product_master?product_code=in.(${codes.join(',')})&select=product_code,product,model,color`);
               for (const x of (pm.ok ? pm.data : [])) nameByCode[x.product_code] = [x.product, x.model, x.color].filter(Boolean).join(' ');
             }
-            const oos = rows.filter(r => r.direction === 'oos');
-            const res = rows.filter(r => r.direction === 'restock');
+            const pOos = rows.filter(r => r.scope === 'product' && r.direction === 'oos');
+            const pRes = rows.filter(r => r.scope === 'product' && r.direction === 'restock');
+            const oos = rows.filter(r => r.scope !== 'product' && r.direction === 'oos');
+            const res = rows.filter(r => r.scope !== 'product' && r.direction === 'restock');
             return ok({
               pending: rows.length,
               webhook_set: !!env.SLACK_WEBHOOK_STOCK,
               text: rows.length ? stockAlertText(oos.slice(0, SLACK_ALERT_CAP), res.slice(0, SLACK_ALERT_CAP),
                 r => nameByCode[r.product_code],
-                Math.max(0, oos.length - SLACK_ALERT_CAP), Math.max(0, res.length - SLACK_ALERT_CAP)) : null,
+                Math.max(0, oos.length - SLACK_ALERT_CAP), Math.max(0, res.length - SLACK_ALERT_CAP),
+                pOos, pRes) : null,
             });
           }
           case 'syncInventorySnapshotNow': {   // manual snapshot + diff (super-admin) — layer c test trigger
