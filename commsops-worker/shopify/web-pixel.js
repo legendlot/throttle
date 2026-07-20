@@ -48,13 +48,27 @@ analytics.subscribe("checkout_started", function (event) {
   }, event);
 });
 
+// Best-effort cart key. `init` is a page-render snapshot, so cart may be absent on the very
+// first add — hence the defensive reads. NOTE this is the Web Pixel cart id, which Shopify
+// says does NOT match the Ajax cart token and does NOT appear on the order, so it is a WEAK
+// key for re-linking a session to itself, never a join key to an order. Order correlation is
+// done on checkout_token (see checkout_started above + the order webhook).
+function cartKey() {
+  try {
+    var c = (typeof init !== "undefined" && init && init.data && init.data.cart) || null;
+    return (c && (c.id || c.token)) || null;
+  } catch (e) { return null; }
+}
+
 analytics.subscribe("product_added_to_cart", function (event) {
   var line = (event.data && event.data.cartLine) || {};
   var m = line.merchandise || {};
   var prod = m.product || {};
   var cost = (line.cost && line.cost.totalAmount) || {};
   post("add_to_cart", {
+    cart_id: cartKey(),
     properties: {
+      cart_id: cartKey(),
       product_title: prod.title || m.title || null,
       variant_id: m.id || null,
       sku: m.sku || null,

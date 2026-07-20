@@ -102,6 +102,17 @@ async function handlePixel(env, request) {
   // Sending both is what lets resolve_identity fold the anonymous session profile into the
   // identified one. The resolver's weak-key rules (shared-browser guard) make that safe.
   if (body.client_id) idents.push({ type: 'web_session', value: String(body.client_id), is_verified: false });
+  // Checkout token — the one key that survives the Shopflo hand-off. Shopflo runs checkout on
+  // its own domain (checkout.shopflo.co) where this pixel cannot run, so the browser session
+  // dies at the boundary; but the Shopify ORDER carries the same checkout_token, so attaching
+  // it here lets the order later fold this anonymous session into the real customer.
+  // Shopify's own guidance: correlate on checkout_token, NOT the pixel cart id (different
+  // namespace from the Ajax cart token, so it is not a reliable join key).
+  const ckTok = body.checkout_token || body.properties?.checkout_token || null;
+  if (ckTok) idents.push({ type: 'checkout_token', value: String(ckTok), is_verified: false });
+  // Weak cart key on add_to_cart. Independent of client_id, so it still links the cart if the
+  // browser key is lost (cookie cleared / new session). NOT a join key to orders — see above.
+  if (body.cart_id) idents.push({ type: 'cart_id', value: String(body.cart_id), is_verified: false });
   if (!idents.length) return { ok: true, skipped: 'no_identifier' };
 
   const props = { ...(body.properties || {}), source_surface: 'web_pixel' };

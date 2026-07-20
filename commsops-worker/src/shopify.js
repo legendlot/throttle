@@ -195,11 +195,27 @@ function trackingFrom(order) {
 function mapOrderEvent(o, name) {
   const identifiers = identsFromContact(o);
   if (!identifiers.length) return null;
+  // Weak key — same role web_session plays for the browser. The pixel emits checkout_token on
+  // checkout_started, so attaching it to the order lets resolve_identity fold that anonymous
+  // session profile into this customer automatically (weak-key rules keep it safe). This is
+  // the ONLY bridge that survives the Shopflo hand-off.
+  const ckTok = o.checkout_token || null;
+  if (ckTok) identifiers.push({ type: 'checkout_token', value: String(ckTok), is_verified: false });
   const oid = o.id != null ? String(o.id) : null;
   const total = o.total_price != null ? Number(o.total_price) : null;
   const track = trackingFrom(o);
+  // Checkout/cart tokens. Shopify's own guidance is to correlate a storefront session to an
+  // order via the CHECKOUT token (the pixel's cart id is a different namespace and does not
+  // match the Ajax cart token, so it is not a reliable join key). Capturing it here is what
+  // makes an anonymous pixel session recoverable AFTER the fact — the Shopflo checkout sits on
+  // its own domain where our pixel cannot run, so the order is the first server-side record
+  // that can carry the link back.
+  const checkoutToken = o.checkout_token || o.checkout_id != null && String(o.checkout_id) || null;
+  const cartToken = o.cart_token || null;
   const props = {
     shopify_order_id: oid,
+    checkout_token: checkoutToken,
+    cart_token: cartToken,
     order_number: o.order_number || o.name || null,
     total, total_price: total,
     currency: o.currency || o.currency_code || null,

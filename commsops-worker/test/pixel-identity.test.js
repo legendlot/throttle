@@ -44,7 +44,7 @@ const types = (ids) => (ids || []).map((i) => i.type).sort();
     await handlePixel(ENV, req({ token: 'tok', event: 'checkout_started',
       email: 'Buyer@Example.com', client_id: 'cid-123', checkout_token: 'ck1' }));
     restore();
-    assert.deepEqual(types(cap.identifiers), ['email', 'web_session']);
+    assert.deepEqual(types(cap.identifiers), ['checkout_token', 'email', 'web_session']);
     const email = cap.identifiers.find((i) => i.type === 'email');
     assert.equal(email.value, 'buyer@example.com', 'email should be lowercased');
     assert.equal(cap.identifiers.find((i) => i.type === 'web_session').value, 'cid-123');
@@ -80,6 +80,41 @@ const types = (ids) => (ids || []).map((i) => i.type).sort();
     assert.equal(r.ok, false);
     assert.equal(r.status, 401);
     assert.equal(cap.identifiers, undefined);
+  });
+
+  await t('checkout_started attaches checkout_token as a weak identifier (the Shopflo bridge)', async () => {
+    const cap = {}; const restore = stubDb(cap);
+    await handlePixel(ENV, req({ token: 'tok', event: 'checkout_started',
+      client_id: 'cid-1', checkout_token: 'ck-abc' }));
+    restore();
+    assert.deepEqual(types(cap.identifiers), ['checkout_token', 'web_session']);
+    assert.equal(cap.identifiers.find((i) => i.type === 'checkout_token').value, 'ck-abc');
+  });
+
+  await t('add_to_cart attaches cart_id when the pixel supplies one', async () => {
+    const cap = {}; const restore = stubDb(cap);
+    await handlePixel(ENV, req({ token: 'tok', event: 'add_to_cart',
+      client_id: 'cid-2', cart_id: 'gid://shopify/Cart/c1-xyz' }));
+    restore();
+    assert.deepEqual(types(cap.identifiers), ['cart_id', 'web_session']);
+  });
+
+  await t('order webhook carries checkout_token as identifier + property', () => {
+    const { mapOrderEvent } = require('../src/shopify.js');
+    const env = mapOrderEvent({ id: 1, email: 'b@x.com', checkout_token: 'ck-abc',
+      cart_token: 'cart-1', total_price: '100.00', created_at: '2026-07-20T00:00:00Z' }, 'order_placed');
+    assert.ok(env.identifiers.some((i) => i.type === 'checkout_token' && i.value === 'ck-abc'),
+      'checkout_token must be a weak identifier so the anonymous session folds in');
+    assert.equal(env.properties.checkout_token, 'ck-abc');
+    assert.equal(env.properties.cart_token, 'cart-1');
+  });
+
+  await t('order without a checkout_token still maps (no phantom identifier)', () => {
+    const { mapOrderEvent } = require('../src/shopify.js');
+    const env = mapOrderEvent({ id: 2, email: 'c@x.com', total_price: '50.00',
+      created_at: '2026-07-20T00:00:00Z' }, 'order_placed');
+    assert.ok(!env.identifiers.some((i) => i.type === 'checkout_token'));
+    assert.equal(env.properties.checkout_token, null);
   });
 
   console.log(`\n${pass} passed, ${fail} failed`);
