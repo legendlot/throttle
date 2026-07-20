@@ -2276,78 +2276,10 @@ function uniPackageRow(so, p) {
   };
 }
 
-// Lifecycle → the Relay event that triggers a journey. Only transitions worth a customer
-// message are emitted; manifested/pending/cancelled deliberately produce nothing (a parcel
-// merely existing is not news, and cancellation is already an order-level Shopify event).
-const UNI_EMIT_EVENT = {
-  in_transit: 'order_shipped',
-  out_for_delivery: 'order_out_for_delivery',
-  delivered: 'order_delivered',
-  rto: 'order_rto',
-};
-const UNI_EMIT_MAX = 12;   // per run — keeps the ingest posts inside the subrequest budget
-
-// Push pending lifecycle transitions into Relay's substrate. Driven by a DB query rather than
-// the fetch loop, so a transition discovered while at the per-run cap is retried next tick
-// instead of being lost — a missed `delivered` means a customer never hears from us.
-async function emitUniwareTrackingEvents(env) {
-  const url = String(env.RELAY_INGEST_URL || 'https://commsops.afshaan.workers.dev').replace(/\/+$/, '');
-  const token = env.ODOOPS_INGEST_TOKEN;
-  if (!token) return { skipped: 'no_ingest_token' };
-
-  const want = Object.keys(UNI_EMIT_EVENT);
-  // Website parcels only: identity is resolved from the Shopify order, which marketplace
-  // channels (CRED/FirstCry) do not have in the Relay substrate.
-  const q = `/rest/v1/ecom_shipments?lifecycle=in.(${want.join(',')})`
-    + `&shopify_order_id=not.is.null`
-    + `&select=id,uniware_package_code,shopify_order_name,shopify_order_id,lifecycle,courier,`
-    + `tracking_number,tracking_link,emitted_lifecycles`
-    + `&order=uniware_updated_at.desc&limit=200`;
-  const r = await sbPublic(q);
-  if (!r.ok) return { error: `select failed ${r.status}` };
-
-  const pending = (r.data || []).filter((x) => !(x.emitted_lifecycles || []).includes(x.lifecycle))
-    .slice(0, UNI_EMIT_MAX);
-  let sent = 0, failed = 0;
-  let unresolved = 0, lastError = null;
-  for (const s of pending) {
-    // Uniware MASKS customer contact ('********' — 0 digits, no @), so it cannot supply
-    // identifiers. Resolve the profile from the order_placed event Relay already holds for
-    // this Shopify order instead; no PII moves between the two systems.
-    const ev = await sbComms(`/rest/v1/events?name=eq.order_placed`
-      + `&properties->>shopify_order_id=eq.${encodeURIComponent(s.shopify_order_id)}`
-      + `&select=profile_id&limit=1`);
-    const profileId = (ev.ok && ev.data?.[0]?.profile_id) || null;
-    if (!profileId) { unresolved++; continue; }
-    try {
-      const res = await fetch(`${url}/ingest`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          profile_id: profileId,
-          name: UNI_EMIT_EVENT[s.lifecycle],
-          source: 'uniware',
-          // One event per (package, lifecycle) — Relay dedups, so a retry after a partial
-          // failure can never double-fire a customer message.
-          idempotency_key: `uniware:${s.uniware_package_code}:${s.lifecycle}`,
-          properties: {
-            order_number: s.shopify_order_name ? String(s.shopify_order_name).replace(/^#/, '') : null,
-            shopify_order_id: s.shopify_order_id, courier: s.courier,
-            tracking_number: s.tracking_number, tracking_url: s.tracking_link,
-            shipping_package: s.uniware_package_code,
-          },
-        }),
-      });
-      if (!res.ok) { failed++; if (!lastError) lastError = `http_${res.status}: ${(await res.text()).slice(0, 200)}`; continue; }
-      await sbPublic(`/rest/v1/ecom_shipments?id=eq.${s.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ emitted_lifecycles: [...(s.emitted_lifecycles || []), s.lifecycle] }),
-      });
-      sent++;
-    } catch (e) { failed++; if (!lastError) lastError = String(e?.message || e).slice(0, 200); }
-  }
-  return { candidates: pending.length, sent, failed, unresolved, lastError };
-}
+// NOTE: lifecycle → Relay event emission lives in COMMSOPS (src/shipment-events.js), not here.
+// A Worker cannot fetch() another Worker on the same workers.dev zone (Cloudflare error 1042),
+// so odoops cannot POST to commsops /ingest. commsops pulls from public.ecom_shipments on its
+// own cron and calls ingest() in-process — which is also what fires the journey triggers.
 
 async function syncUniwareTracking(env) {
   const st = await sbPublic('/rest/v1/ecom_tracking_state?id=eq.true&select=*&limit=1');
@@ -2872,8 +2804,7 @@ export default {
     // must never take down the sell-out producer above.
     try {
       const r = await syncUniwareTracking(env);
-      const em = await emitUniwareTrackingEvents(env);
-      console.log('odoops cron (uniware tracking):', JSON.stringify(r), 'emit:', JSON.stringify(em));
+      console.log('odoops cron (uniware tracking):', JSON.stringify(r));
     } catch (e) {
       console.error('odoops cron (uniware tracking) failed:', e?.message || e);
       try { await sbPublic('/rest/v1/ecom_tracking_state?id=eq.true', { method: 'PATCH',
@@ -2963,12 +2894,10 @@ export default {
       let b = {}; try { b = await request.json(); } catch { /* ignore */ }
       // Run the real tracking sync on demand (same code the cron calls) — for bring-up and
       // for draining a backlog faster than hourly ticks would.
-      if (b.op === 'sync' || b.op === 'emit') {
+      if (b.op === 'sync') {
         SUPABASE_SERVICE_KEY = env.SUPABASE_SERVICE_KEY || '';
-        try {
-          if (b.op === 'emit') return ok(await emitUniwareTrackingEvents(env));
-          return ok(await syncUniwareTracking(env));
-        } catch (e) { return err(String(e?.message || e), 500); }
+        try { return ok(await syncUniwareTracking(env)); }
+        catch (e) { return err(String(e?.message || e), 500); }
       }
       let token; try { token = await getUniwareToken(env); } catch (e) { return err(String(e?.message || e), 400); }
       const base = `https://${env.UNIWARE_TENANT}.unicommerce.com`;

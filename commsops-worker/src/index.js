@@ -18,6 +18,7 @@ const CFWH = require('./cashfree-webhooks.js');
 const AL = require('./alerts.js');
 const EA = require('./email-assets.js');
 const OPTOUT = require('./optout.js');
+const SHIPEV = require('./shipment-events.js');
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -512,6 +513,14 @@ async function handlePost(body, auth, env) {
 //    claim in startCampaign guards against a concurrent manual send), and
 // 2) watch recent real-send outcomes for a bounce/failure spike, alerting ≤1/hour.
 async function runScheduled(env) {
+  // 0. courier lifecycle → substrate events (delivered / RTO journey triggers). PULLED from
+  // public.ecom_shipments, which odoops fills from Uniware. Best-effort: never break the
+  // campaign scheduler below.
+  try {
+    const r = await SHIPEV.emitShipmentEvents(env, ingest);
+    if (r?.sent) console.log('shipment_events', JSON.stringify(r));
+  } catch (e) { console.log('shipment_events_error', e?.message || String(e)); }
+
   // 1. due scheduled campaigns
   try {
     const due = await A.sbComms(
@@ -734,7 +743,11 @@ export default {
       const bearer = a.slice(0, 7).toLowerCase() === 'bearer ' ? a.slice(7).trim() : '';
       if (!want || bearer !== want) return err('unauthorised', 401);
       let b = {}; try { b = await request.json(); } catch {}
-      const ops = { submit: WATPL.waSubmitTemplate, sync: WATPL.waSyncTemplateStatus, upload: WATPL.waUploadHeaderMedia };
+      // shipmentEvents: drain the courier-lifecycle → substrate emission on demand (the same
+      // pass the */5 cron runs) so bring-up doesn't wait on a tick.
+      const ops = { submit: WATPL.waSubmitTemplate, sync: WATPL.waSyncTemplateStatus,
+                    upload: WATPL.waUploadHeaderMedia,
+                    shipmentEvents: (e) => SHIPEV.emitShipmentEvents(e, ingest) };
       const fn = ops[b.op];
       if (!fn) return err('unknown_op', 400);
       const r = await fn(env, b);
