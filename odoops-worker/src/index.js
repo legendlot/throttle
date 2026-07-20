@@ -2279,6 +2279,38 @@ function uniPackageRow(so, p) {
 // so odoops cannot POST to commsops /ingest. commsops pulls from public.ecom_shipments on its
 // own cron and calls ingest() in-process — which is also what fires the journey triggers.
 
+// Refresh ONE order's parcels on demand (the Pitstop agent hitting ⟳ mid-call). Cheap: token +
+// one saleorder/get + one upsert. Only works for orders we already track — the Uniware order
+// code is the Shopify order ID, which we hold on the existing row; without it there is nothing
+// to look up, and an agent refreshing an untracked order wants "no record", not a search.
+async function refreshUniwareOrder(env, orderName) {
+  const raw = String(orderName || '').trim();
+  if (!raw) return { ok: false, error: 'order_required' };
+  const withHash = raw.startsWith('#') ? raw : `#${raw}`;
+  const cur = await sbPublic(`/rest/v1/ecom_shipments?shopify_order_name=eq.${encodeURIComponent(withHash)}`
+    + `&select=uniware_order_code&limit=1`);
+  const code = (cur.ok && cur.data?.[0]?.uniware_order_code) || null;
+  if (!code) return { ok: false, error: 'not_tracked' };
+
+  const token = await getUniwareToken(env);
+  const base = `https://${env.UNIWARE_TENANT}.unicommerce.com`;
+  const res = await fetch(`${base}/services/rest/v1/oms/saleorder/get`, {
+    method: 'POST',
+    headers: { Authorization: `bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
+  });
+  const j = await res.json().catch(() => ({}));
+  const so = j?.saleOrderDTO;
+  if (!so) return { ok: false, error: 'uniware_no_order' };
+  const rows = (so.shippingPackages || []).filter((p) => p?.code).map((p) => uniPackageRow(so, p));
+  if (!rows.length) return { ok: true, packages: 0 };
+  const up = await sbPublic('/rest/v1/ecom_shipments?on_conflict=uniware_package_code', {
+    method: 'POST', prefer: 'return=minimal,resolution=merge-duplicates', body: JSON.stringify(rows),
+  });
+  if (!up.ok) return { ok: false, error: `upsert_${up.status}` };
+  return { ok: true, packages: rows.length, lifecycle: rows[0].lifecycle };
+}
+
 async function syncUniwareTracking(env, opts = {}) {
   const st = await sbPublic('/rest/v1/ecom_tracking_state?id=eq.true&select=*&limit=1');
   const state = (st.ok && st.data?.[0]) || {};
@@ -2895,10 +2927,15 @@ export default {
       let b = {}; try { b = await request.json(); } catch { /* ignore */ }
       // Run the real tracking sync on demand (same code the cron calls) — for bring-up and
       // for draining a backlog faster than hourly ticks would.
-      if (b.op === 'sync') {
+      if (b.op === 'sync' || b.op === 'refreshOrder') {
         SUPABASE_SERVICE_KEY = env.SUPABASE_SERVICE_KEY || '';
-        try { return ok(await syncUniwareTracking(env, { pageSize: b.pageSize })); }
-        catch (e) { return err(String(e?.message || e), 500); }
+        try {
+          if (b.op === 'refreshOrder') {
+            const r = await refreshUniwareOrder(env, b.order);
+            return r.ok ? ok(r) : err(r.error, 404);
+          }
+          return ok(await syncUniwareTracking(env, { pageSize: b.pageSize }));
+        } catch (e) { return err(String(e?.message || e), 500); }
       }
       let token; try { token = await getUniwareToken(env); } catch (e) { return err(String(e?.message || e), 400); }
       const base = `https://${env.UNIWARE_TENANT}.unicommerce.com`;

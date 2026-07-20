@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
-import { csopsGet } from '../lib/csopsFetch.js';
-import { Search, ExternalLink } from 'lucide-react';
+import { csopsGet, csopsPost } from '../lib/csopsFetch.js';
+import { Search, ExternalLink, RefreshCw } from 'lucide-react';
 
 const money = (amt, cur) => amt == null ? '' : `${cur || '₹'}${Number(amt).toLocaleString('en-IN')}`;
 const fmtDate = d => { try { return new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }); } catch { return d; } };
@@ -20,7 +20,20 @@ const SHIP_TONE = {
 };
 
 // The one-line answer to "where is my order" — no OTP, no leaving the app.
-function ShipmentLine({ s }) {
+// ⟳ re-pulls THIS order from Uniware (csops → odoops over a service binding). The hourly poll
+// can be up to an hour stale, which is exactly the moment an agent is on a call.
+function ShipmentLine({ s: initial, orderNo, session }) {
+  const [s, setS] = useState(initial);
+  const [busy, setBusy] = useState(false);
+  const [errMsg, setErrMsg] = useState(null);
+  useEffect(() => { setS(initial); }, [initial]);
+  const refresh = async () => {
+    if (busy || !orderNo || !session) return;
+    setBusy(true); setErrMsg(null);
+    try { setS(await csopsPost('refreshShipment', { order_no: orderNo }, session)); }
+    catch (e) { setErrMsg(e?.message || 'refresh failed'); }
+    finally { setBusy(false); }
+  };
   const tone = SHIP_TONE[s.lifecycle] || 'var(--t2)';
   const when = s.lifecycle === 'delivered' ? s.delivered_at || s.as_of
              : s.lifecycle === 'rto' ? s.as_of
@@ -32,7 +45,17 @@ function ShipmentLine({ s }) {
         <span>{s.label}</span>
         {when && <span style={{ color:'var(--t3)', fontWeight:400 }}>· {fmtShort(when)}</span>}
         {s.parcels > 1 && <span style={{ color:'var(--t3)', fontWeight:400 }}>· {s.parcels} parcels</span>}
+        {orderNo && session && (
+          <button onClick={refresh} disabled={busy} title="Re-check with the courier now"
+            style={{ background:'none', border:'none', padding:0, marginLeft:2, cursor:busy?'default':'pointer',
+                     color:'var(--t3)', display:'inline-flex', alignItems:'center', opacity:busy?0.5:1 }}>
+            {/* No spin animation — the app defines no `spin` keyframe, so it would be dead CSS.
+                The disabled + dimmed state is the busy signal. */}
+            <RefreshCw size={11} />
+          </button>
+        )}
       </div>
+      {errMsg && <div style={{ color:'var(--t3)', marginLeft:13, fontSize:11 }}>{errMsg}</div>}
       {/* COD reconciliation — "was the money actually collected?" is a real CS question and
           the answer is otherwise nowhere in Pitstop. */}
       {s.is_cod && (
@@ -119,7 +142,7 @@ export function ShopifyPanel({ session, phone, email, onPick, autoLoad }) {
                     OTP round-trip, so it is the deep dive rather than the first answer. */}
                 {((o.tracking || []).length > 0 || o.shipment) && (
                   <div style={{ marginTop:6 }}>
-                    {o.shipment && <ShipmentLine s={o.shipment} />}
+                    {o.shipment && <ShipmentLine s={o.shipment} orderNo={o.order_no} session={session} />}
                     {o.tracking.map((t, i) => (
                       <div key={i} style={{ color:'var(--t2)' }}>
                         {t.company ? `${t.company}: ` : 'AWB: '}{t.number || '—'}

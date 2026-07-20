@@ -572,7 +572,14 @@ export default {
     if (!action && request.method === 'GET') return err('Missing action parameter', 400);
 
     // Authenticate every request (besides /health)
-    const auth = await verifyJWT(request.headers.get('Authorization'), env);
+    if (url.pathname === '/internal/ping-bindings' && request.method === 'POST') {
+    const a = request.headers.get('Authorization') || '';
+    const bearer = a.slice(0, 7).toLowerCase() === 'bearer ' ? a.slice(7).trim() : '';
+    if (!env.ODOOPS_INTERNAL_TOKEN || bearer !== env.ODOOPS_INTERNAL_TOKEN) return err('unauthorised', 401);
+    return ok(await pingBindings(env));
+  }
+
+  const auth = await verifyJWT(request.headers.get('Authorization'), env);
     if (!auth) return err('Unauthorized', 401);
 
     if (request.method === 'GET') {
@@ -703,6 +710,7 @@ async function handlePost(action, body, auth, env, request) {
     case 'updateTag':            return updateTag(body, auth, env);
     case 'deleteTag':            return deleteTag(body, auth, env);
     case 'setTicketTags':        return setTicketTags(body, auth, env);
+    case 'refreshShipment':      return refreshShipment(body, auth, env);
     case 'setThreadTags':        return setThreadTags(body, auth, env);
     case 'setMyopDefaultDepartment': return setMyopDefaultDepartment(body, auth, env);
     case 'markCalledBack':           return markCalledBack(body, auth, env);
@@ -884,6 +892,62 @@ async function getTicket(params, auth, env) {
     // Shopify panel) so an RTO or an already-delivered parcel is visible without the agent
     // going to look — that changes how the conversation opens.
     shipment: await fetchTicketShipment(updatedTicket, env),
+  });
+}
+
+// Pre-flight for the service bindings. A Worker cannot fetch() another Worker on the same
+// workers.dev zone (Cloudflare error 1042), so csops MUST reach commsops and odoops over
+// bindings — and a missing binding degrades to exactly the broken route. This proves both are
+// wired without needing a Google login, and is the check to run before flipping WA_TRANSPORT.
+async function pingBindings(env) {
+  const out = {};
+  for (const [name, b, path] of [['commsops', env.COMMSOPS, '/health'], ['odoops', env.ODOOPS, '/health']]) {
+    if (!b || typeof b.fetch !== 'function') { out[name] = { bound: false }; continue; }
+    try {
+      const r = await b.fetch(new Request(`https://internal${path}`));
+      out[name] = { bound: true, status: r.status };
+    } catch (e) { out[name] = { bound: true, error: String(e?.message || e).slice(0, 120) }; }
+  }
+  return out;
+}
+
+// Agent-triggered courier refresh (the ⟳ on the shipment line). The hourly Uniware poll can be
+// up to an hour stale, which is exactly when it matters — an agent on a call. Goes to odoops
+// over the ODOOPS service binding; a plain fetch() to odoops.workers.dev would 404 with
+// Cloudflare error 1042 (same-zone worker-to-worker). Returns the refreshed row so the UI can
+// re-render without a second round trip.
+async function refreshShipment(body, auth, env) {
+  const order = String(body?.order_no || '').trim();
+  if (!order) return err('order_no required');
+  const withHash = order.startsWith('#') ? order : `#${order}`;
+  if (!/^#LOT/i.test(withHash)) return err('Not a website order — no courier record to refresh', 422);
+  try {
+    const res = await callWorker(env.ODOOPS, env, '/internal/uniware-probe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.ODOOPS_INTERNAL_TOKEN}` },
+      body: JSON.stringify({ op: 'refreshOrder', order: withHash }),
+    });
+    if (!res.ok) {
+      // 404 = we have never tracked this order (pre-backfill, or a marketplace parcel).
+      return res.status === 404
+        ? err('No courier record for this order yet', 404)
+        : err(`Courier refresh failed (${res.status})`, 502);
+    }
+  } catch (e) { return err(`Courier refresh failed: ${e?.message || e}`, 502); }
+  const r = await sbPublic(`/rest/v1/ecom_shipments?shopify_order_name=eq.${encodeURIComponent(withHash)}`
+    + `&select=courier,shipping_provider,tracking_number,tracking_link,lifecycle,package_status,`
+    + `courier_status,dispatched_at,delivered_at,uniware_updated_at,is_cod,collectable_amount,collected_amount`
+    + `&order=uniware_updated_at.desc.nullslast&limit=1`, env);
+  const row = (r.ok && Array.isArray(r.data) && r.data[0]) || null;
+  if (!row) return err('No courier record for this order yet', 404);
+  return ok({
+    courier: row.courier, provider: row.shipping_provider,
+    awb: row.tracking_number, tracking_link: row.tracking_link,
+    lifecycle: row.lifecycle, label: SHIPMENT_LIFECYCLE_LABEL[row.lifecycle] || row.lifecycle,
+    alert: SHIPMENT_ALERT.has(row.lifecycle),
+    package_status: row.package_status, courier_status: row.courier_status,
+    dispatched_at: row.dispatched_at, delivered_at: row.delivered_at, as_of: row.uniware_updated_at,
+    is_cod: row.is_cod, cod_collectable: row.collectable_amount, cod_collected: row.collected_amount,
   });
 }
 
@@ -4386,10 +4450,9 @@ async function sendWaReplyViaRelay(thread, text, auth, env) {
   if (!(until > Date.now()))
     return err('Outside the 24h customer window — free-text replies are blocked until the customer messages again (templates coming soon)', 422);
 
-  const base = String(env.RELAY_SEND_URL || 'https://commsops.afshaan.workers.dev').replace(/\/+$/, '');
   let resp, data;
   try {
-    resp = await fetch(`${base}/send`, {
+    resp = await callWorker(env.COMMSOPS, env, '/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.INGEST_TOKEN}` },
       body: JSON.stringify({
@@ -4816,9 +4879,23 @@ async function sendMetaAttachment(body, auth, env) {
 // ═════════════════════════════════════════════════════════════════════════════
 
 function commsopsUrl(env) { return env.COMMSOPS_URL || 'https://commsops.afshaan.workers.dev'; }
+
+// Call another LOT worker. MUST go over a service binding: a Worker cannot fetch() another
+// Worker on the same workers.dev zone — Cloudflare returns error 1042 and the request 404s.
+// The binding delivers straight to the target's fetch handler (the URL host is ignored, only
+// the path matters), so the token gates on the far side still apply. Falls back to public HTTP
+// when the binding is absent (local/dev), which is also exactly the path that 1042s in prod —
+// so a missing binding fails loudly rather than silently taking a broken route.
+async function callWorker(binding, env, path, init) {
+  if (binding && typeof binding.fetch === 'function') {
+    return binding.fetch(new Request(`https://internal${path}`, init));
+  }
+  return fetch(`${commsopsUrl(env)}${path}`, init);
+}
+
 function gmailMailbox(env) { return env.GMAIL_MAILBOX || 'carecrew@legendoftoys.com'; }
 const GMAIL_API = 'https://gmail.googleapis.com/gmail/v1';
-const MAX_NEW_EMAILS_PER_RUN = 6;             // subrequest budget (≤50/invocation) — backlog drains across cron ticks
+const MAX_NEW_EMAILS_PER_RUN = 6;             // paced per tick (Gmail API politeness); backlog drains across cron ticks
 
 // base64url <-> bytes/strings ------------------------------------------------
 function b64urlToBytes(data) {
@@ -4947,7 +5024,7 @@ function parseGmailMessage(msg) {
 async function relayIngest(env, payload) {
   if (!env.INGEST_TOKEN) return { ok: false, skipped: 'no_ingest_token' };
   try {
-    const r = await fetch(`${commsopsUrl(env)}/ingest`, {
+    const r = await callWorker(env.COMMSOPS, env, '/ingest', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.INGEST_TOKEN}` },
       body: JSON.stringify(payload),

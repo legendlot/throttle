@@ -11,6 +11,19 @@ SUPABASE_URL = "https://jkxcnjabmrkteanzoofj.supabase.co"
 [triggers]
 crons = ["*/2 * * * *"]
 
+# Service bindings — REQUIRED, not an optimisation. A Worker cannot fetch() another Worker on
+# the same workers.dev zone: Cloudflare returns error 1042 and the call 404s. csops talks to
+# commsops (Relay /ingest + /send at the WhatsApp cutover) and to odoops (on-demand courier
+# refresh), so both must go over a binding rather than a public URL. The HTTP paths are kept as
+# a fallback for local/dev where the binding is absent.
+[[services]]
+binding = "COMMSOPS"
+service = "commsops"
+
+[[services]]
+binding = "ODOOPS"
+service = "odoops"
+
 # Secrets set via `wrangler secret put` — never stored in this file:
 # SUPABASE_ANON_KEY
 # SUPABASE_SERVICE_ROLE_KEY
