@@ -52,18 +52,24 @@ async function deriveAttributes(env, profileId, name, properties) {
 
 // ingest({identifiers, name, occurred_at, properties, source, idempotency_key})
 async function ingest(env, payload) {
-  const { identifiers, name, occurred_at, properties, source, idempotency_key } = payload || {};
+  const { identifiers, name, occurred_at, properties, source, idempotency_key, profile_id } = payload || {};
   if (!name) return { ok: false, error: 'name_required' };
-  if (!Array.isArray(identifiers) || identifiers.length === 0)
-    return { ok: false, error: 'identifiers_required' };
+  // A caller that ALREADY knows the profile may pass profile_id and skip resolution. Needed by
+  // the Uniware courier feed: Uniware masks customer contact ('********'), so there are no
+  // identifiers to resolve — the profile is looked up from the order instead.
+  const hasIds = Array.isArray(identifiers) && identifiers.length > 0;
+  if (!hasIds && !profile_id) return { ok: false, error: 'identifiers_required' };
 
-  // 1. resolve identity (atomic) → profile_id
-  const rpc = await A.sbComms('/rest/v1/rpc/resolve_identity', env, {
-    method: 'POST',
-    body: JSON.stringify({ p_identifiers: identifiers, p_source: source || null }),
-  });
-  if (!rpc.ok) return { ok: false, error: 'resolve_failed:' + JSON.stringify(rpc.data) };
-  const profileId = rpc.data; // RPC returns the uuid scalar
+  let profileId = profile_id || null;
+  if (!profileId) {
+    // 1. resolve identity (atomic) → profile_id
+    const rpc = await A.sbComms('/rest/v1/rpc/resolve_identity', env, {
+      method: 'POST',
+      body: JSON.stringify({ p_identifiers: identifiers, p_source: source || null }),
+    });
+    if (!rpc.ok) return { ok: false, error: 'resolve_failed:' + JSON.stringify(rpc.data) };
+    profileId = rpc.data; // RPC returns the uuid scalar
+  }
 
   // 2. append event — idempotent on idempotency_key (UNIQUE). ignore-duplicates so a
   //    retried webhook never double-counts; null key always inserts.

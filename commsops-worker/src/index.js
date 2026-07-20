@@ -593,7 +593,12 @@ export default {
     if (url.pathname === '/ingest' && request.method === 'POST') {
       const hdr = request.headers.get('Authorization') || '';
       const tok = hdr.startsWith('Bearer ') ? hdr.slice(7) : (request.headers.get('X-Ingest-Token') || '');
-      if (!env.INGEST_TOKEN || tok !== env.INGEST_TOKEN) return err('unauthorised', 401);
+      // Accept the odoops service token alongside INGEST_TOKEN. A SECOND accepted token rather
+      // than a rotation: INGEST_TOKEN is also held by csops, so rotating it to admit odoops would
+      // mean coordinating three workers for no security gain. Scoped to /ingest only — odoops
+      // feeds the substrate; it must never be able to reach /send or /campaign/send.
+      if (!tok || !((env.INGEST_TOKEN && tok === env.INGEST_TOKEN)
+                 || (env.ODOOPS_INGEST_TOKEN && tok === env.ODOOPS_INGEST_TOKEN))) return err('unauthorised', 401);
       const body = await request.json().catch(() => ({}));
       const r = await ingest(env, body);
       return r.ok ? ok(r) : err(r.error, 400);
