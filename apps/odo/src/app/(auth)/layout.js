@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { RequireAuth, useAuth } from '@throttle/auth';
 import { Spinner, AppLauncher } from '@throttle/ui';
-import { LayoutDashboard, Receipt, Store, Boxes, Megaphone, Filter, GitMerge, PlugZap, Upload, ShieldCheck, LogOut, ChevronDown, ChevronRight, Landmark, Gauge } from 'lucide-react';
+import { LayoutDashboard, Receipt, Store, Boxes, Megaphone, Filter, GitMerge, PlugZap, Upload, ShieldCheck, LogOut, ChevronDown, ChevronRight, Landmark, Gauge, PackageSearch } from 'lucide-react';
 import { FAMILY_ORDER, FAMILIES } from '../../lib/families.js';
 import { FreshnessProvider, FreshnessChip } from '../../components/Freshness.js';
 
@@ -20,6 +20,7 @@ const NAV = [
   { route: '/marketing',   label: 'Marketing',   icon: Megaphone,       perm: 'sales_view' },
   { route: '/dyno',        label: 'Dyno',        icon: Gauge,           perm: 'sales_view' },
   { route: '/funnel',      label: 'Funnel',      icon: Filter,          perm: 'sales_view' },
+  { route: '/inventory',   label: 'Inventory',   icon: PackageSearch,   perm: 'sales_view' },
   { route: '/mapping',     label: 'Mapping',     icon: GitMerge,        perm: 'sales_view' },
   { route: '/connectors',  label: 'Connectors',  icon: PlugZap,         perm: 'sales_view' },
   { route: '/uploads',     label: 'Uploads',     icon: Upload,          perm: 'sales_upload', adminAlt: 'salesops_admin' },
