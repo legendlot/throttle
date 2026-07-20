@@ -1,7 +1,7 @@
 'use client';
 // Odo — Inventory (S223). Two jobs only: availability watch + history audit.
 // Spec: docs/superpowers/specs/2026-07-20-odo-inventory-design.md
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@throttle/auth';
 import { Spinner, Combobox } from '@throttle/ui';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceArea } from 'recharts';
@@ -28,6 +28,40 @@ function durationLabel(since, now, atFloor) {
     : mins < 60 * 36 ? `${Math.round(mins / 60)}h`
     : `${Math.round(mins / 1440)}d`;
   return (atFloor ? '≥ ' : '') + s;
+}
+
+// Product-row availability: "3 out · 1 low · 7 in" plus a proportional bar. The bar is the
+// at-a-glance read (how much of this product's range is unavailable); the counts are the
+// precise one. Segments follow the status colours so the bar and the child chips agree.
+function AvailabilityBar({ counts, total }) {
+  const seg = [
+    ['oos', counts.oos], ['low', counts.low], ['ok', counts.ok], ['gone', counts.gone],
+  ].filter(([, n]) => n > 0);
+  const parts = [];
+  if (counts.oos) parts.push(`${counts.oos} out`);
+  if (counts.low) parts.push(`${counts.low} low`);
+  if (counts.ok) parts.push(`${counts.ok} in stock`);
+  if (counts.gone) parts.push(`${counts.gone} delisted`);
+  return (
+    <div style={{ minWidth: 190 }}>
+      <div style={{ display: 'flex', height: 5, borderRadius: 99, overflow: 'hidden', gap: 1, marginBottom: 5 }}>
+        {seg.map(([k, n]) => (
+          <div key={k} title={`${n} ${STATUS_META[k].label.toLowerCase()}`}
+            style={{ width: `${(n / total) * 100}%`, background: STATUS_META[k].color }} />
+        ))}
+      </div>
+      <span style={{ fontSize: 11, color: 'var(--t3)' }}>{parts.join(' · ')}</span>
+    </div>
+  );
+}
+
+// Child-row label: the part of the variant that ISN'T the product name — "Tarmac Purple", not
+// "Shadow Tarmac Purple" — since the product is already the row above. Falls back to the full
+// name when it isn't a clean prefix (unmapped SKUs, odd titles).
+function variantLabel(r) {
+  const full = r.variant_name || r.family;
+  if (r.family && full !== r.family && full.startsWith(r.family + ' ')) return full.slice(r.family.length + 1);
+  return full === r.family ? (r.sku || full) : full;
 }
 
 function StatusChip({ status }) {
@@ -62,6 +96,7 @@ function Watch({ session }) {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('attention');
   const [showUnmapped, setShowUnmapped] = useState(false);
+  const [touched, setTouched] = useState({});   // family → explicit open/closed, overrides auto
   const [variants, setVariants] = useState([]);
   const now = Date.now();
 
@@ -78,16 +113,19 @@ function Watch({ session }) {
     }).finally(() => setLoading(false));
   }, [session, showUnmapped]);
 
-  const famOf = useMemo(() => Object.fromEntries(
-    variants.map(v => [v.product_code, v.product || '—'])), [variants]);
+  const nameOf = useMemo(() => Object.fromEntries(variants.map(v => [v.product_code, {
+    family: v.product || '—',
+    full: [v.product, v.model, v.color].filter(Boolean).join(' '),
+  }])), [variants]);
 
   const enriched = useMemo(() => rows.map(r => ({
     ...r,
     available_qty: Number(r.available_qty) || 0,
-    family: r.product_code ? (famOf[r.product_code] || r.product_code) : 'Unmapped',
+    family: r.product_code ? (nameOf[r.product_code]?.family || r.product_code) : 'Unmapped',
+    variant_name: r.product_code ? (nameOf[r.product_code]?.full || r.product_code) : (r.product_title || r.sku),
     // A `since` sitting on the earliest reading we hold is a floor, not an exact age.
     at_floor: !!(meta.history_start && r.since && new Date(r.since).getTime() <= new Date(meta.history_start).getTime()),
-  })), [rows, famOf, meta.history_start]);
+  })), [rows, nameOf, meta.history_start]);
 
   const counts = useMemo(() => {
     const c = { oos: 0, low: 0, ok: 0, gone: 0, unbuyable: 0, units: 0 };
@@ -106,15 +144,47 @@ function Watch({ session }) {
     return enriched.filter(r => r.status === filter);
   }, [enriched, filter]);
 
-  // Default sort = longest in its current state first, which is the order that matters on a
-  // watch list. `since` must sort by epoch, not by ISO string.
-  const sort = useTableSort(filtered, {
-    initialKey: 'since', initialDir: 'asc',
-    valueOf: (row, key) => key === 'since'
-      ? (row.since ? new Date(row.since).getTime() : Number.MAX_SAFE_INTEGER)
-      : row[key],
+  // Group the filtered variants under their product. A flat list of ~67 rows buries the thing
+  // you actually want — WHICH products are partly out — so the product is the row and its
+  // models/colours are children. Same shape as /products/drr.
+  const groups = useMemo(() => {
+    const by = new Map();
+    for (const r of filtered) {
+      if (!by.has(r.family)) by.set(r.family, []);
+      by.get(r.family).push(r);
+    }
+    return [...by.entries()].map(([family, rows]) => {
+      const c = { oos: 0, low: 0, ok: 0, gone: 0, unbuyable: 0 };
+      let units = 0, oldest = null;
+      for (const r of rows) {
+        c[r.status] = (c[r.status] || 0) + 1;
+        if (!r.purchasable && r.status !== 'gone') c.unbuyable++;
+        if (r.status !== 'gone') units += r.available_qty;
+        const t = r.since ? new Date(r.since).getTime() : null;
+        if (t && (c.oos || c.low) && (oldest === null || t < oldest)) oldest = t;
+      }
+      // A product's headline status is its WORST child — one colour out of stock is a fact
+      // about the product, and averaging it away is what makes a rollup useless.
+      const worst = c.oos ? 'oos' : c.low ? 'low' : c.gone === rows.length ? 'gone' : 'ok';
+      return { family, rows, counts: c, units, worst, oldest, total: rows.length };
+    });
+  }, [filtered]);
+
+  // Products needing attention first, then most variants out, then name.
+  const sort = useTableSort(groups, {
+    initialKey: 'attention', initialDir: 'desc',
+    valueOf: (g, key) => key === 'attention' ? (g.counts.oos * 1000 + g.counts.low)
+      : key === 'family' ? g.family
+      : key === 'units' ? g.units
+      : key === 'total' ? g.total
+      : g[key],
   });
-  const sorted = sort.sorted;
+  const sortedGroups = sort.sorted;
+
+  // With a filter on, every visible child already matches — collapsed rows would hide exactly
+  // what was asked for, so open them. Manual toggles still win via `touched`.
+  const autoExpand = filter !== 'all';
+  const isOpen = (fam) => touched[fam] !== undefined ? touched[fam] : autoExpand;
 
   if (loading) return <Spinner />;
 
@@ -147,10 +217,16 @@ function Watch({ session }) {
             <input type="checkbox" checked={showUnmapped} onChange={e => setShowUnmapped(e.target.checked)} />
             Show unmapped SKUs
           </label>
-          <button className="so-chip" onClick={() => downloadCsv(sorted.map(r => ({
-            sku: r.sku, product_code: r.product_code || '', product: r.family, qty: r.available_qty,
-            status: r.status, purchasable: r.purchasable, since: r.since || '',
-          })), 'inventory-watch.csv')}>Export CSV</button>
+          <button className="so-chip" onClick={() => downloadCsv(
+            sortedGroups.flatMap(g => g.rows).map(r => ({
+              product: r.family, variant: r.variant_name, sku: r.sku,
+              product_code: r.product_code || '', qty: r.available_qty,
+              status: r.status, purchasable: r.purchasable, since: r.since || '',
+            })), 'inventory-watch.csv')}>Export CSV</button>
+          <button className="so-chip" onClick={() => setTouched(
+            Object.fromEntries(sortedGroups.map(g => [g.family, !sortedGroups.every(x => isOpen(x.family))])))}>
+            {sortedGroups.every(g => isOpen(g.family)) ? 'Collapse all' : 'Expand all'}
+          </button>
         </div>
 
         {!showUnmapped && (
@@ -166,30 +242,59 @@ function Watch({ session }) {
             <thead>
               <tr>
                 <SortHeader k="family" label="Product" sort={sort} />
-                <SortHeader k="sku" label="SKU" sort={sort} />
-                <SortHeader k="available_qty" label="Qty" sort={sort} numeric />
-                <SortHeader k="status" label="Status" sort={sort} />
-                <SortHeader k="since" label="In this state" sort={sort} />
-                <th>Last seen</th>
+                <SortHeader k="attention" label="Availability" sort={sort} />
+                <SortHeader k="total" label="Variants" sort={sort} numeric />
+                <SortHeader k="units" label="Units" sort={sort} numeric />
+                <th>Longest out</th>
+                <th style={{ width: 28 }} />
               </tr>
             </thead>
             <tbody>
-              {sorted.map(r => (
-                <tr key={`${r.channel_id}:${r.sku}`}>
-                  <td style={{ color: 'var(--t1)' }}>
-                    {r.family}
-                    {!r.purchasable && r.status !== 'gone' && (
-                      <span style={{ marginLeft: 8, fontSize: 10, letterSpacing: '.08em', color: '#F59E0B' }}>UNBUYABLE</span>
-                    )}
-                  </td>
-                  <td style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>{r.sku}</td>
-                  <td className="so-num">{fmtInt(r.available_qty)}</td>
-                  <td><StatusChip status={r.status} /></td>
-                  <td className="so-num">{durationLabel(r.since, now, r.at_floor)}</td>
-                  <td style={{ fontSize: 12, color: 'var(--t3)' }}>{istTime(r.last_seen_at)}</td>
-                </tr>
-              ))}
-              {!sorted.length && (
+              {sortedGroups.map(g => {
+                const open = isOpen(g.family);
+                return (
+                  <Fragment key={g.family}>
+                    <tr onClick={() => setTouched(t => ({ ...t, [g.family]: !open }))}
+                      style={{ cursor: 'pointer' }}>
+                      <td style={{ color: 'var(--t1)', fontWeight: 600 }}>
+                        <span style={{ display: 'inline-block', width: 14, color: 'var(--t3)' }}>
+                          {open ? '▾' : '▸'}
+                        </span>
+                        {g.family}
+                      </td>
+                      <td><AvailabilityBar counts={g.counts} total={g.total} /></td>
+                      <td className="so-num">{g.total}</td>
+                      <td className="so-num">{fmtInt(g.units)}</td>
+                      <td className="so-num" style={{ color: g.oldest ? 'var(--t2)' : 'var(--t3)' }}>
+                        {g.oldest ? durationLabel(new Date(g.oldest).toISOString(), now,
+                          meta.history_start && g.oldest <= new Date(meta.history_start).getTime()) : '—'}
+                      </td>
+                      <td />
+                    </tr>
+                    {open && g.rows.map(r => (
+                      <tr key={`${r.channel_id}:${r.sku}`} style={{ background: 'var(--surface2)' }}>
+                        <td style={{ paddingLeft: 34, color: 'var(--t2)' }}>
+                          {variantLabel(r)}
+                          {!r.purchasable && r.status !== 'gone' && (
+                            <span style={{ marginLeft: 8, fontSize: 10, letterSpacing: '.08em', color: '#F59E0B' }}>UNBUYABLE</span>
+                          )}
+                          <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--t3)', marginTop: 2 }}>{r.sku}</div>
+                        </td>
+                        <td><StatusChip status={r.status} /></td>
+                        <td />
+                        <td className="so-num">{r.status === 'gone' ? '—' : fmtInt(r.available_qty)}</td>
+                        <td className="so-num" style={{ color: 'var(--t2)' }}>
+                          {r.status === 'gone'
+                            ? <span style={{ fontSize: 11, color: 'var(--t3)' }}>last seen {istTime(r.last_seen_at)}</span>
+                            : durationLabel(r.since, now, r.at_floor)}
+                        </td>
+                        <td />
+                      </tr>
+                    ))}
+                  </Fragment>
+                );
+              })}
+              {!sortedGroups.length && (
                 <tr><td colSpan={6} style={{ color: 'var(--t3)', padding: 22, textAlign: 'center' }}>
                   Nothing in this filter.
                 </td></tr>
