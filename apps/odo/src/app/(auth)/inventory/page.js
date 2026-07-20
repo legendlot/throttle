@@ -30,27 +30,46 @@ function durationLabel(since, now, atFloor) {
   return (atFloor ? '≥ ' : '') + s;
 }
 
-// Product-row availability: "3 out · 1 low · 7 in" plus a proportional bar. The bar is the
-// at-a-glance read (how much of this product's range is unavailable); the counts are the
-// precise one. Segments follow the status colours so the bar and the child chips agree.
-function AvailabilityBar({ counts, total }) {
-  const seg = [
-    ['oos', counts.oos], ['low', counts.low], ['ok', counts.ok], ['gone', counts.gone],
-  ].filter(([, n]) => n > 0);
+// Product-row availability: one small tick per variant, plus a plain-language summary.
+//
+// The first cut was a full-width proportional bar in saturated red/amber. Two problems: it
+// stretched across half the table so the page read as an alarm even when most stock was fine,
+// and a proportional bar can't tell you 4-of-5 from 8-of-10. One tick per variant fixes both —
+// variant counts here are 1–11, so the marks stay legible AND the range size becomes visible.
+//
+// Only the exceptional states carry colour. "In stock" is drawn in a muted neutral rather than
+// green, because it isn't news — letting it compete for attention is what made the original
+// jarring. Muted red/amber still read clearly against it without shouting.
+const TICK = {
+  oos:  '#C4565B',
+  low:  '#B8862F',
+  ok:   'color-mix(in srgb, var(--t3) 38%, transparent)',
+  gone: 'color-mix(in srgb, var(--t3) 18%, transparent)',
+};
+
+function Availability({ counts, total }) {
+  const seq = [
+    ...Array(counts.oos).fill('oos'), ...Array(counts.low).fill('low'),
+    ...Array(counts.ok).fill('ok'), ...Array(counts.gone).fill('gone'),
+  ];
   const parts = [];
-  if (counts.oos) parts.push(`${counts.oos} out`);
+  if (counts.oos) parts.push(`${counts.oos} of ${total} out`);
   if (counts.low) parts.push(`${counts.low} low`);
-  if (counts.ok) parts.push(`${counts.ok} in stock`);
   if (counts.gone) parts.push(`${counts.gone} delisted`);
+  if (!parts.length) parts.push(`All ${total} in stock`);
+
   return (
-    <div style={{ minWidth: 190 }}>
-      <div style={{ display: 'flex', height: 5, borderRadius: 99, overflow: 'hidden', gap: 1, marginBottom: 5 }}>
-        {seg.map(([k, n]) => (
-          <div key={k} title={`${n} ${STATUS_META[k].label.toLowerCase()}`}
-            style={{ width: `${(n / total) * 100}%`, background: STATUS_META[k].color }} />
+    <div style={{ minWidth: 150 }}>
+      <div style={{ display: 'flex', gap: 3, marginBottom: 6, flexWrap: 'wrap', maxWidth: 220 }}>
+        {seq.slice(0, 24).map((k, i) => (
+          <span key={i} title={STATUS_META[k].label}
+            style={{ width: 9, height: 5, borderRadius: 2, background: TICK[k], flex: '0 0 auto' }} />
         ))}
+        {seq.length > 24 && (
+          <span style={{ fontSize: 10, color: 'var(--t3)', lineHeight: '5px' }}>+{seq.length - 24}</span>
+        )}
       </div>
-      <span style={{ fontSize: 11, color: 'var(--t3)' }}>{parts.join(' · ')}</span>
+      <span style={{ fontSize: 11, color: counts.oos ? 'var(--t2)' : 'var(--t3)' }}>{parts.join(' · ')}</span>
     </div>
   );
 }
@@ -148,27 +167,37 @@ function Watch({ session }) {
   // you actually want — WHICH products are partly out — so the product is the row and its
   // models/colours are children. Same shape as /products/drr.
   const groups = useMemo(() => {
-    const by = new Map();
-    for (const r of filtered) {
-      if (!by.has(r.family)) by.set(r.family, []);
-      by.get(r.family).push(r);
+    // Children come from the FILTERED set, but the rollup is computed over ALL of the product's
+    // variants. Aggregating the filtered subset made the summary lie under any active filter —
+    // with "Needs attention" on, Flare read "5 variants / 2 units" when it really has 11 and 107.
+    // A rollup that only describes the rows that survived a filter is worse than no rollup.
+    const all = new Map();
+    for (const r of enriched) {
+      if (!all.has(r.family)) all.set(r.family, []);
+      all.get(r.family).push(r);
     }
-    return [...by.entries()].map(([family, rows]) => {
+    const shown = new Map();
+    for (const r of filtered) {
+      if (!shown.has(r.family)) shown.set(r.family, []);
+      shown.get(r.family).push(r);
+    }
+    return [...shown.entries()].map(([family, rows]) => {
+      const every = all.get(family) || rows;
       const c = { oos: 0, low: 0, ok: 0, gone: 0, unbuyable: 0 };
       let units = 0, oldest = null;
-      for (const r of rows) {
+      for (const r of every) {
         c[r.status] = (c[r.status] || 0) + 1;
         if (!r.purchasable && r.status !== 'gone') c.unbuyable++;
         if (r.status !== 'gone') units += r.available_qty;
-        const t = r.since ? new Date(r.since).getTime() : null;
-        if (t && (c.oos || c.low) && (oldest === null || t < oldest)) oldest = t;
+        const t = (r.status === 'oos' || r.status === 'low') && r.since ? new Date(r.since).getTime() : null;
+        if (t && (oldest === null || t < oldest)) oldest = t;
       }
-      // A product's headline status is its WORST child — one colour out of stock is a fact
+      // A product's headline status is its WORST variant — one colour out of stock is a fact
       // about the product, and averaging it away is what makes a rollup useless.
-      const worst = c.oos ? 'oos' : c.low ? 'low' : c.gone === rows.length ? 'gone' : 'ok';
-      return { family, rows, counts: c, units, worst, oldest, total: rows.length };
+      const worst = c.oos ? 'oos' : c.low ? 'low' : c.gone === every.length ? 'gone' : 'ok';
+      return { family, rows, counts: c, units, worst, oldest, total: every.length, shownCount: rows.length };
     });
-  }, [filtered]);
+  }, [filtered, enriched]);
 
   // Products needing attention first, then most variants out, then name.
   const sort = useTableSort(groups, {
@@ -190,11 +219,11 @@ function Watch({ session }) {
 
   const FILTERS = [
     ['attention', `Needs attention (${counts.oos + counts.low})`],
+    ['all', `All (${enriched.length})`],
     ['oos', `Out of stock (${counts.oos})`],
     ['low', `Low (${counts.low})`],
     ['unbuyable', `Unbuyable (${counts.unbuyable})`],
     ['gone', `Delisted (${counts.gone})`],
-    ['all', `All (${enriched.length})`],
   ];
 
   return (
@@ -262,8 +291,13 @@ function Watch({ session }) {
                         </span>
                         {g.family}
                       </td>
-                      <td><AvailabilityBar counts={g.counts} total={g.total} /></td>
-                      <td className="so-num">{g.total}</td>
+                      <td><Availability counts={g.counts} total={g.total} /></td>
+                      <td className="so-num">
+                        {g.total}
+                        {g.shownCount < g.total && (
+                          <span style={{ color: 'var(--t3)', fontSize: 11 }}> · {g.shownCount} shown</span>
+                        )}
+                      </td>
                       <td className="so-num">{fmtInt(g.units)}</td>
                       <td className="so-num" style={{ color: g.oldest ? 'var(--t2)' : 'var(--t3)' }}>
                         {g.oldest ? durationLabel(new Date(g.oldest).toISOString(), now,
