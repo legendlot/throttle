@@ -8,6 +8,18 @@
 export const WA_CATEGORIES = ['MARKETING', 'UTILITY', 'AUTHENTICATION'];
 export const WA_COMPONENTS = ['header', 'body', 'button'];
 
+// WA templates are WABA-scoped and NON-transferable: one approved on the marketing account
+// simply does not exist on the transactional or support one. LOT's three live numbers each
+// sit on their own WABA, so the target has to be chosen at authoring time — picking wrong
+// means re-authoring and re-queuing for Meta review at cutover.
+// Canonical ids: reference/bitespeed.md §1.
+export const WA_WABAS = [
+  { id: '4607501919493306', label: 'Marketing — 9035697508', hint: 'Promotions, abandonment, winback' },
+  { id: '717043791430518', label: 'Transactional — 7022142666', hint: 'Order lifecycle, COD confirmation' },
+  { id: '2257035788468620', label: 'Support — 9880212323', hint: 'Pitstop CS / inbound conversations' },
+  { id: '1752135339132947', label: 'Sandbox — +1 555 174 8518', hint: 'Test number only; not reusable on live numbers' },
+];
+
 // Meta's own constraints (v21.0). Enforced client-side so authors see them before submitting
 // into a review queue that takes ~minutes-to-hours to reject.
 export const WA_LIMITS = { header: 60, body: 1024, footer: 60, buttons: 10 };
@@ -54,6 +66,14 @@ export function validateWaTemplate(content, declaredTokens = []) {
   }
   // Footer takes no parameters in Meta's model.
   if (placeholdersIn(c.footer).length) errs.push('Footer cannot contain {{n}} placeholders.');
+
+  // Meta rejects a body that ENDS with a placeholder — it reads as a truncated message.
+  // Verified empirically 2026-07-20: lot_checkout_abandoned_02 was refused with a bare
+  // "Invalid parameter" until a closing line was added after the final {{4}}.
+  if (/\{\{\d+\}\}\s*$/.test(c.body || '')) {
+    errs.push('Body cannot end with a {{n}} placeholder — add a closing line after it (Meta rejects this).');
+  }
+  if (!c.waba_id) errs.push('Pick the WhatsApp Business Account to author on — templates cannot be moved between accounts later.');
 
   for (const comp of ['header', 'body']) {
     const nums = placeholdersIn(c[comp]);

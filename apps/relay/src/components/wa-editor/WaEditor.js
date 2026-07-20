@@ -2,7 +2,7 @@
 import { Plus, Trash2 } from 'lucide-react';
 import { Panel, Badge, Btn } from '@/components/ui.js';
 import {
-  WA_CATEGORIES, WA_COMPONENTS, WA_LIMITS,
+  WA_CATEGORIES, WA_COMPONENTS, WA_LIMITS, WA_WABAS,
   normalizeMetaName, placeholdersIn, previewText, validateWaTemplate,
 } from './waTemplate.js';
 
@@ -53,6 +53,19 @@ export default function WaEditor({ wa, setWa, variables, disabled }) {
               onChange={(e) => set('category', e.target.value)}>
               {WA_CATEGORIES.map((x) => <option key={x} value={x}>{x}</option>)}
             </select>
+          </div>
+        </div>
+
+        <div className="ff" style={{ marginTop: 14 }}>
+          <div className="kv-k">WhatsApp Business Account</div>
+          <select className="f-inp" value={c.waba_id || ''} disabled={disabled || !!c.provider_template_id}
+            onChange={(e) => set('waba_id', e.target.value)}>
+            <option value="">Select an account…</option>
+            {WA_WABAS.map((w) => <option key={w.id} value={w.id}>{w.label} — {w.hint}</option>)}
+          </select>
+          <div className="tw-note" style={{ marginTop: 6 }}>
+            Templates live on ONE account and cannot be moved. Author on the account of the number
+            that will actually send this message.
           </div>
         </div>
 
