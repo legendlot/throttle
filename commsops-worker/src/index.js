@@ -158,6 +158,15 @@ async function handleGet(url, auth, env) {
         { method: 'POST', body: JSON.stringify({ p_days: days }) });
       return r.ok ? ok(r.data) : err('db_error', 500);
     }
+    case 'getCampaignsOverview': {   // broadcast analytics list (BiteSpeed parity, Phase 1)
+      const lim = Math.min(Number(url.searchParams.get('limit') || 200), 500);
+      const off = Number(url.searchParams.get('offset') || 0);
+      // ONE set-based RPC for every campaign — never per-campaign getCampaignStats in a loop.
+      const r = await A.sbComms('/rest/v1/rpc/campaign_stats_list', env,
+        { method: 'POST', body: JSON.stringify({ p_limit: lim, p_offset: off }) });
+      return r.ok ? ok(r.data) : err('db_error', 500);
+    }
+
     case 'getCampaignStats': {
       const id = url.searchParams.get('id'); if (!id) return err('id_required', 400);
       const r = await A.sbComms('/rest/v1/rpc/campaign_stats', env,

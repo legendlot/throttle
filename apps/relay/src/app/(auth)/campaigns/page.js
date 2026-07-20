@@ -8,6 +8,9 @@ import { PageHead, Panel, Badge, Btn, EmptyState, Kpi } from '@/components/ui.js
 import { fmtDate, inr } from '@/components/format.js';
 
 const pct = (num, den) => (den ? Math.round((Number(num) / Number(den)) * 1000) / 10 : 0);
+// campaign_stats_list returns rates as fractions; null = no denominator (nothing sent/delivered)
+// which is NOT the same as 0% — render an em dash so an unsent draft never reads as a 0% result.
+const rate = (v) => (v == null ? '—' : `${(Number(v) * 100).toFixed(1)}%`);
 
 const CHANNELS = ['email'];
 const PURPOSES = ['marketing', 'transactional', 'utility'];
@@ -45,6 +48,7 @@ export default function CampaignsPage() {
   const { session, perms } = useAuth();
   const { showToast } = useToast();
   const [rows, setRows] = useState([]);
+  const [overview, setOverview] = useState({});
   const [segments, setSegments] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -63,14 +67,18 @@ export default function CampaignsPage() {
     if (!session) return;
     setLoading(true);
     try {
-      const [cs, sg, tp] = await Promise.all([
+      const [cs, sg, tp, ov] = await Promise.all([
         garageFetch('getCampaigns', {}, session),
         garageFetch('getSegments', {}, session),
         garageFetch('getTemplates', {}, session),
+        // ONE set-based call for every campaign's metrics — never per-row getCampaignStats.
+        // Non-fatal: the list still renders (with — in the metric columns) if analytics fail.
+        garageFetch('getCampaignsOverview', {}, session).catch(() => null),
       ]);
       setRows(Array.isArray(cs) ? cs : []);
       setSegments(Array.isArray(sg) ? sg : []);
       setTemplates(Array.isArray(tp) ? tp : []);
+      setOverview(Array.isArray(ov) ? Object.fromEntries(ov.map((o) => [o.id, o])) : {});
     } catch (e) { showToast(e.message || 'Failed to load campaigns', 'error'); }
     finally { setLoading(false); }
   }, [session, showToast]);
@@ -370,22 +378,42 @@ export default function CampaignsPage() {
           : (
             <Panel title="Campaigns" count={rows.length}>
               <table className="dt">
-                <thead><tr><th>Name</th><th>Channel</th><th>Purpose</th><th>Status</th><th className="num">Audience</th><th>Updated</th></tr></thead>
+                <thead><tr>
+                  <th>Broadcast</th><th>Status</th><th>Sent / scheduled</th>
+                  <th className="num">Revenue</th>
+                  <th className="num">Sent</th><th className="num">Delivered</th>
+                  <th className="num">Read</th><th className="num">Click</th><th className="num">Order</th>
+                  <th className="num">Unsub</th><th className="num">Fail</th><th className="num">Skipped</th>
+                </tr></thead>
                 <tbody>
-                  {rows.map((r) => (
+                  {rows.map((r) => {
+                    const o = overview[r.id] || null;
+                    return (
                     <tr key={r.id} className="row-click" onClick={() => open(r)}>
-                      <td>{r.name}</td>
-                      <td><Badge label={r.channel} tone="blue" /></td>
-                      <td className="dim">{r.purpose}</td>
+                      <td>
+                        <div>{r.name}</div>
+                        <span className="mono dim" style={{ fontSize: 11 }}>{r.channel} · {r.purpose}</span>
+                      </td>
                       <td>{(() => { const st = campaignStatus(r); return (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'flex-start' }}>
                           <Badge label={st.label} tone={st.tone} dot={st.dot} />
                           {st.sub && <span className="mono dim" style={{ fontSize: 11 }}>{st.sub}</span>}
                         </div>); })()}</td>
-                      <td className="num mono dim">{r.audience_snapshot ?? '—'}</td>
-                      <td className="mono dim">{fmtDate(r.updated_at)}</td>
-                    </tr>
-                  ))}
+                      <td className="mono dim">
+                        {o?.at ? fmtDate(o.at) : '—'}
+                        {o?.is_scheduled && <span className="dim"> (sched)</span>}
+                      </td>
+                      <td className="num mono">{o?.attributed_revenue ? inr(o.attributed_revenue) : '—'}</td>
+                      <td className="num mono dim">{o ? o.sent : '—'}</td>
+                      <td className="num mono dim">{o ? o.delivered : '—'}</td>
+                      <td className="num mono">{rate(o?.read_rate)}</td>
+                      <td className="num mono">{rate(o?.click_rate)}</td>
+                      <td className="num mono">{rate(o?.order_rate)}</td>
+                      <td className="num mono">{rate(o?.unsub_rate)}</td>
+                      <td className="num mono">{rate(o?.fail_rate)}</td>
+                      <td className="num mono">{rate(o?.skip_rate)}</td>
+                    </tr>);
+                  })}
                 </tbody>
               </table>
             </Panel>
