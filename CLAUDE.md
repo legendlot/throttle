@@ -88,5 +88,10 @@ Throttle uses a separate secret pointing to throttleops.
 - Never modify `wrangler.toml` without explicit permission.
 - PostgREST returns numeric DB columns as strings. Always wrap with `Number()` before
   arithmetic. Always wrap integer insert values with `Math.round()`.
-- 50-subrequest limit on Cloudflare Workers. Never loop await per row.
+- Never loop await per row — batch via IN filters, array inserts, or RPCs.
+  **Subrequest ceiling is 10,000 per invocation** (Paid plan; 50 is the Free-plan figure, and a
+  separate 1,000 cap applies to internal services — KV/D1/R2/service bindings). Verified 2026-07-20.
+- **A Worker cannot `fetch()` another Worker on the same `workers.dev` zone** — Cloudflare
+  error 1042, surfacing as a 404. Cross-worker calls need a `[[services]]` binding
+  (see `csops-worker/wrangler.toml`).
 - Every new `store` schema table needs: `GRANT ALL ON store.{table} TO service_role`
