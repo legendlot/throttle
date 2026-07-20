@@ -227,13 +227,19 @@ async function attachShipments(orders, env) {
   try {
     const names = [...new Set((orders || []).map(o => o.order_no).filter(Boolean))];
     if (!names.length) return;
-    const inList = names.map(n => `"${String(n).replace(/"/g, '')}"`).join(',');
+    // encodeURIComponent is REQUIRED, not tidiness: order names start with '#', and fetch()
+    // treats that as a URL fragment and drops everything after it — the query silently arrives
+    // truncated and PostgREST 400s.
+    const inList = names.map(n => `"${encodeURIComponent(String(n).replace(/"/g, ''))}"`).join(',');
     const r = await sbPublic(`/rest/v1/ecom_shipments?shopify_order_name=in.(${inList})`
       + `&select=shopify_order_name,courier,shipping_provider,tracking_number,tracking_link,`
       + `lifecycle,package_status,courier_status,dispatched_at,delivered_at,uniware_updated_at,`
       + `is_cod,collectable_amount,collected_amount`
       + `&order=uniware_updated_at.desc.nullslast`, env);
-    if (!r.ok || !Array.isArray(r.data)) return;
+    // Log rather than fail silently. The catch below is deliberate (tracking must never break
+    // the customer lookup) but a swallowed error is invisible — which is exactly how the '#'
+    // fragment bug above shipped unnoticed.
+    if (!r.ok || !Array.isArray(r.data)) { console.log('attachShipments_failed', r.status, JSON.stringify(r.data).slice(0, 200)); return; }
     const byName = {};
     // An order can have several packages (split shipment). Keep the first per name — the query
     // is newest-first — and count the rest so the UI can say "+1 more parcel".
@@ -258,7 +264,7 @@ async function attachShipments(orders, env) {
         parcels: s.parcels,
       };
     }
-  } catch (_) { /* tracking is an enrichment — never fail the customer lookup over it */ }
+  } catch (e) { console.log('attachShipments_error', e?.message || String(e)); /* never fail the customer lookup over tracking */ }
 }
 
 // Resolve Shopify order names → createdAt (for the purchase-date backfill). The Shopify order
@@ -576,6 +582,15 @@ export default {
     const a = request.headers.get('Authorization') || '';
     const bearer = a.slice(0, 7).toLowerCase() === 'bearer ' ? a.slice(7).trim() : '';
     if (!env.ODOOPS_INTERNAL_TOKEN || bearer !== env.ODOOPS_INTERNAL_TOKEN) return err('unauthorised', 401);
+    let pb = {}; try { pb = await request.json(); } catch { /* ignore */ }
+    // Optional: exercise the shipment enrichment against real order names. Post-deploy smoke for
+    // a path that is otherwise only reachable behind a Google login — which is how the '#'
+    // URL-fragment bug reached production unnoticed.
+    if (Array.isArray(pb.checkOrders) && pb.checkOrders.length) {
+      const probe = pb.checkOrders.map((n) => ({ order_no: n }));
+      await attachShipments(probe, env);
+      return ok({ bindings: await pingBindings(env), orders: probe });
+    }
     return ok(await pingBindings(env));
   }
 
