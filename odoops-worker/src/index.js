@@ -2268,8 +2268,6 @@ function uniPackageRow(so, p) {
     uniware_updated_at: uniTs(p.updated || so.updated),
     pod_code: p.podCode || null,
     invoice_code: p.invoiceCode || null,
-    notification_email: so.notificationEmail || null,
-    notification_phone: so.notificationMobile || null,
     raw: { status: p.status, courierStatus: p.courierStatus, trackingStatus: p.trackingStatus,
            shippingMethod: p.shippingMethod, orderStatus: so.status },
     updated_at: new Date().toISOString(),
@@ -2281,7 +2279,7 @@ function uniPackageRow(so, p) {
 // so odoops cannot POST to commsops /ingest. commsops pulls from public.ecom_shipments on its
 // own cron and calls ingest() in-process — which is also what fires the journey triggers.
 
-async function syncUniwareTracking(env) {
+async function syncUniwareTracking(env, opts = {}) {
   const st = await sbPublic('/rest/v1/ecom_tracking_state?id=eq.true&select=*&limit=1');
   const state = (st.ok && st.data?.[0]) || {};
   const now = Date.now();
@@ -2299,17 +2297,20 @@ async function syncUniwareTracking(env) {
   // 1. ONE page of orders changed in the window, at the stored offset. Page size == the get cap,
   // so a page is always fully processed in a single run and the offset advances deterministically.
   const offset = Number(state.page_offset) || 0;
+  // Backfill runs may pass a bigger page. Page size and get-cap move together — they MUST stay
+  // equal or page_offset stops matching what was processed.
+  const page = Math.min(Math.max(Number(opts.pageSize) || UNI_TRACK_PAGE, 1), 200);
   const r = await fetch(`${base}/services/rest/v1/oms/saleOrder/search`, {
     method: 'POST', headers: H,
     body: JSON.stringify({
       fromDate: uniISO(winStart), toDate: uniISO(winEnd), dateType: 'UPDATED',
-      searchOptions: { displayStart: offset, displayLength: UNI_TRACK_PAGE },
+      searchOptions: { displayStart: offset, displayLength: page },
     }),
   });
   const j = await r.json().catch(() => ({}));
   if (!j.successful) throw new Error('uniware search: ' + JSON.stringify(j.errors || j).slice(0, 200));
   const elements = j.elements || [];
-  const windowDone = elements.length < UNI_TRACK_PAGE;   // short page ⇒ end of this window
+  const windowDone = elements.length < page;   // short page ⇒ end of this window
 
   const candidates = elements
     .filter((e) => !UNI_TRACK_SKIP_STATUS.has(String(e.status || '').toUpperCase()));
@@ -2328,7 +2329,7 @@ async function syncUniwareTracking(env) {
   const todo = candidates.filter((e) => (Number(e.updated) || 0) > (known[e.code] || 0));
 
   // 3. Fetch detail for the changed ones (the expensive leg — hard-capped).
-  const gets = todo.slice(0, UNI_TRACK_MAX_GETS);
+  const gets = todo.slice(0, page);
   const rows = [];
   for (const e of gets) {
     const r = await fetch(`${base}/services/rest/v1/oms/saleorder/get`, {   // lowercase 'saleorder' — camelCase 404s
@@ -2896,7 +2897,7 @@ export default {
       // for draining a backlog faster than hourly ticks would.
       if (b.op === 'sync') {
         SUPABASE_SERVICE_KEY = env.SUPABASE_SERVICE_KEY || '';
-        try { return ok(await syncUniwareTracking(env)); }
+        try { return ok(await syncUniwareTracking(env, { pageSize: b.pageSize })); }
         catch (e) { return err(String(e?.message || e), 500); }
       }
       let token; try { token = await getUniwareToken(env); } catch (e) { return err(String(e?.message || e), 400); }

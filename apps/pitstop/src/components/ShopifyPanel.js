@@ -5,6 +5,48 @@ import { Search, ExternalLink } from 'lucide-react';
 
 const money = (amt, cur) => amt == null ? '' : `${cur || '₹'}${Number(amt).toLocaleString('en-IN')}`;
 const fmtDate = d => { try { return new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }); } catch { return d; } };
+const fmtShort = d => { try { return new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }); } catch { return d; } };
+
+// Courier lifecycle → dot colour. `rto` is the one an agent must not miss: a parcel heading
+// back to us changes the whole conversation, so it reads as an alert, not a status.
+const SHIP_TONE = {
+  delivered: 'var(--ok, #3FB950)',
+  out_for_delivery: 'var(--brand-yellow, #F2CD1A)',
+  in_transit: 'var(--t2)',
+  manifested: 'var(--t3)',
+  pending: 'var(--t3)',
+  rto: 'var(--brand-red, #DE2A2A)',
+  cancelled: 'var(--t3)',
+};
+
+// The one-line answer to "where is my order" — no OTP, no leaving the app.
+function ShipmentLine({ s }) {
+  const tone = SHIP_TONE[s.lifecycle] || 'var(--t2)';
+  const when = s.lifecycle === 'delivered' ? s.delivered_at || s.as_of
+             : s.lifecycle === 'rto' ? s.as_of
+             : s.dispatched_at;
+  return (
+    <div style={{ marginBottom:4 }}>
+      <div style={{ display:'flex', alignItems:'center', gap:6, color:tone, fontWeight:s.alert ? 600 : 400 }}>
+        <span style={{ width:7, height:7, borderRadius:'50%', background:tone, flexShrink:0 }} />
+        <span>{s.label}</span>
+        {when && <span style={{ color:'var(--t3)', fontWeight:400 }}>· {fmtShort(when)}</span>}
+        {s.parcels > 1 && <span style={{ color:'var(--t3)', fontWeight:400 }}>· {s.parcels} parcels</span>}
+      </div>
+      {/* COD reconciliation — "was the money actually collected?" is a real CS question and
+          the answer is otherwise nowhere in Pitstop. */}
+      {s.is_cod && (
+        <div style={{ color:'var(--t3)', marginLeft:13 }}>
+          COD {money(s.cod_collectable)}{Number(s.cod_collected) > 0 ? ` · collected` : ` · not yet collected`}
+        </div>
+      )}
+      {/* Raw courier code, so an agent can quote it verbatim to the courier on a call. */}
+      {s.courier_status && (
+        <div style={{ color:'var(--t3)', marginLeft:13, fontSize:11 }}>{s.courier_status}</div>
+      )}
+    </div>
+  );
+}
 
 export function ShopifyPanel({ session, phone, email, onPick, autoLoad }) {
   const [state, setState] = useState(null);
@@ -70,9 +112,14 @@ export function ShopifyPanel({ session, phone, email, onPick, autoLoad }) {
                     ))}
                   </div>
                 )}
-                {/* Tracking / AWB */}
-                {(o.tracking || []).length > 0 && (
+                {/* Tracking / AWB — Shopify only knows an AWB EXISTS (its fulfillment stops at
+                    "dispatched" and never moves). The live courier state comes from Uniware via
+                    public.ecom_shipments, attached by csops as o.shipment. The external `track`
+                    link is kept: it is the only place with the full scan trail, it just costs an
+                    OTP round-trip, so it is the deep dive rather than the first answer. */}
+                {((o.tracking || []).length > 0 || o.shipment) && (
                   <div style={{ marginTop:6 }}>
+                    {o.shipment && <ShipmentLine s={o.shipment} />}
                     {o.tracking.map((t, i) => (
                       <div key={i} style={{ color:'var(--t2)' }}>
                         {t.company ? `${t.company}: ` : 'AWB: '}{t.number || '—'}

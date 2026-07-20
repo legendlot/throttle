@@ -202,7 +202,63 @@ async function shopifyLookup({ phone, email }, env) {
       })),
     };
   });
+  await attachShipments(recent_orders, env);
   return { configured: true, found: true, customer, recent_orders };
+}
+
+// ── Outbound shipment state (public.ecom_shipments) ───────────────────────────────────────
+// Shopify knows only that an AWB EXISTS — its fulfillment stops at "dispatched" and never moves
+// (the "Mark as delivered" button is manual). The courier lifecycle lives in Uniware, which
+// odoops polls into public.ecom_shipments. Attaching it here means the agent sees "Delivered
+// 18 Jul" on the order card instead of having to leave Pitstop, enter a phone number and wait
+// for a Delhivery OTP just to answer "where is my order".
+//
+// Join is on the Shopify order NAME (#LOT43700) — Uniware's own order code is the Shopify order
+// ID, which Shopify's GraphQL order list does not return here.
+const SHIPMENT_LIFECYCLE_LABEL = {
+  pending: 'Preparing', manifested: 'Label created', in_transit: 'In transit',
+  out_for_delivery: 'Out for delivery', delivered: 'Delivered', rto: 'Returning to sender',
+  cancelled: 'Cancelled', unknown: 'Unknown',
+};
+// Anything an agent should react to without being asked.
+const SHIPMENT_ALERT = new Set(['rto']);
+
+async function attachShipments(orders, env) {
+  try {
+    const names = [...new Set((orders || []).map(o => o.order_no).filter(Boolean))];
+    if (!names.length) return;
+    const inList = names.map(n => `"${String(n).replace(/"/g, '')}"`).join(',');
+    const r = await sbPublic(`/rest/v1/ecom_shipments?shopify_order_name=in.(${inList})`
+      + `&select=shopify_order_name,courier,shipping_provider,tracking_number,tracking_link,`
+      + `lifecycle,package_status,courier_status,dispatched_at,delivered_at,uniware_updated_at,`
+      + `is_cod,collectable_amount,collected_amount`
+      + `&order=uniware_updated_at.desc.nullslast`, env);
+    if (!r.ok || !Array.isArray(r.data)) return;
+    const byName = {};
+    // An order can have several packages (split shipment). Keep the first per name — the query
+    // is newest-first — and count the rest so the UI can say "+1 more parcel".
+    for (const row of r.data) {
+      const k = row.shopify_order_name;
+      if (!byName[k]) byName[k] = { ...row, parcels: 1 };
+      else byName[k].parcels += 1;
+    }
+    for (const o of orders) {
+      const s = byName[o.order_no];
+      if (!s) { o.shipment = null; continue; }
+      o.shipment = {
+        courier: s.courier, provider: s.shipping_provider,
+        awb: s.tracking_number, tracking_link: s.tracking_link,
+        lifecycle: s.lifecycle, label: SHIPMENT_LIFECYCLE_LABEL[s.lifecycle] || s.lifecycle,
+        alert: SHIPMENT_ALERT.has(s.lifecycle),
+        // Raw upstream values kept so an agent can quote the exact courier code on a call.
+        package_status: s.package_status, courier_status: s.courier_status,
+        dispatched_at: s.dispatched_at, delivered_at: s.delivered_at,
+        as_of: s.uniware_updated_at,
+        is_cod: s.is_cod, cod_collectable: s.collectable_amount, cod_collected: s.collected_amount,
+        parcels: s.parcels,
+      };
+    }
+  } catch (_) { /* tracking is an enrichment — never fail the customer lookup over it */ }
 }
 
 // Resolve Shopify order names → createdAt (for the purchase-date backfill). The Shopify order
@@ -824,7 +880,38 @@ async function getTicket(params, auth, env) {
     past_cases: pastCases,
     repair_run: repairRun?.data?.[0] || null,
     tags: tagsByTicket[ticket.id] || [],
+    // Outbound parcel state for THIS ticket's order. Surfaced on the ticket (not just the
+    // Shopify panel) so an RTO or an already-delivered parcel is visible without the agent
+    // going to look — that changes how the conversation opens.
+    shipment: await fetchTicketShipment(updatedTicket, env),
   });
+}
+
+// Resolve a ticket's outbound shipment. Tickets store external_order_id in mixed shapes —
+// '#LOT25126', bare 'LOT25126', an Amazon id ('043-…'), a Shopflo ULID — so match the two
+// Shopify-name forms and return null for everything else rather than guessing.
+async function fetchTicketShipment(ticket, env) {
+  try {
+    const raw = String(ticket?.external_order_id || '').trim();
+    if (!raw) return null;
+    const withHash = raw.startsWith('#') ? raw : `#${raw}`;
+    if (!/^#LOT/i.test(withHash)) return null;      // marketplace order — never a Uniware website parcel
+    const r = await sbPublic(`/rest/v1/ecom_shipments?shopify_order_name=eq.${encodeURIComponent(withHash)}`
+      + `&select=courier,shipping_provider,tracking_number,tracking_link,lifecycle,package_status,`
+      + `courier_status,dispatched_at,delivered_at,uniware_updated_at,is_cod,collectable_amount,collected_amount`
+      + `&order=uniware_updated_at.desc.nullslast&limit=1`, env);
+    const row = (r.ok && Array.isArray(r.data) && r.data[0]) || null;
+    if (!row) return null;
+    return {
+      courier: row.courier, provider: row.shipping_provider,
+      awb: row.tracking_number, tracking_link: row.tracking_link,
+      lifecycle: row.lifecycle, label: SHIPMENT_LIFECYCLE_LABEL[row.lifecycle] || row.lifecycle,
+      alert: SHIPMENT_ALERT.has(row.lifecycle),
+      package_status: row.package_status, courier_status: row.courier_status,
+      dispatched_at: row.dispatched_at, delivered_at: row.delivered_at, as_of: row.uniware_updated_at,
+      is_cod: row.is_cod, cod_collectable: row.collectable_amount, cod_collected: row.collected_amount,
+    };
+  } catch (_) { return null; }   // enrichment only — never fail the ticket load
 }
 
 async function fetchDispatchInfo(upc, env) {

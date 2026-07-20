@@ -120,6 +120,11 @@ export default function TicketDetailPage() {
       {/* Stepper */}
       <LifecycleStepper ticket={t} />
 
+      {/* Outbound parcel banner — sits directly under the stepper so an RTO or an already-
+          delivered parcel is the first thing read, not something the agent has to go find.
+          Only renders when it changes how the conversation should open. */}
+      <ShipmentBanner shipment={data.shipment} />
+
       {/* Tags */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 'var(--space-3, 12px)' }}>
         <Tag size={13} style={{ color: 'var(--t4)', flexShrink: 0 }} />
@@ -500,6 +505,37 @@ const inputStyle = {
   fontSize: 13,
   outline: 'none',
 };
+
+// Outbound parcel banner. Deliberately NOT a full status panel — the detail lives on the order
+// card in the identity rail. This exists only for the two states that should change how an agent
+// opens the conversation: the parcel is coming back to us (RTO), or it is already delivered
+// (so "I haven't received it" is a different problem than the customer thinks).
+function ShipmentBanner({ shipment: s }) {
+  if (!s) return null;
+  if (s.lifecycle !== 'rto' && s.lifecycle !== 'delivered') return null;
+  const rto = s.lifecycle === 'rto';
+  const when = rto ? s.as_of : (s.delivered_at || s.as_of);
+  const date = when ? new Date(when).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : null;
+  return (
+    <div style={{
+      marginTop: 'var(--space-3, 12px)',
+      display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+      padding: '8px 12px', borderRadius: 'var(--radius-md)',
+      background: rto ? 'var(--state-error-bg, rgba(222,42,42,.10))' : 'var(--surface-2, rgba(255,255,255,.03))',
+      border: `1px solid ${rto ? 'var(--brand-red, #DE2A2A)' : 'var(--line, rgba(255,255,255,.08))'}`,
+      color: rto ? 'var(--state-error-fg, #DE2A2A)' : 'var(--t2)',
+      fontSize: 12,
+    }}>
+      <span style={{ fontWeight: 600, letterSpacing: '.04em' }}>
+        {rto ? 'PARCEL RETURNING TO SENDER' : 'PARCEL DELIVERED'}
+      </span>
+      {date && <span style={{ color: 'var(--t3)' }}>· {date}</span>}
+      {s.courier && <span style={{ color: 'var(--t3)' }}>· {s.courier}</span>}
+      {s.awb && <span style={{ color: 'var(--t3)', fontFamily: 'var(--mono, monospace)' }}>· {s.awb}</span>}
+      {s.courier_status && <span style={{ color: 'var(--t4)' }}>· {s.courier_status}</span>}
+    </div>
+  );
+}
 
 function LifecycleStepper({ ticket: t }) {
   // Spine (dotted nodes, default) / Rail (segmented bars) — handoff §6.3.
