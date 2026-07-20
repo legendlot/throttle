@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
-import { Spinner, useToast } from '@throttle/ui';
+import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { Plus, Minus, ArrowLeft, Check, Play, Pause, AlertTriangle, GitBranch } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState, Pipeline } from '@/components/ui.js';
 import { fmtDate } from '@/components/format.js';
@@ -309,11 +309,21 @@ export default function JourneysPage() {
             </div>
             {j.triggerType === 'event' ? (
               <div className="ff"><div className="kv-k">Trigger event</div>
-                <input className="f-inp mono" list="journey-event-suggest" value={j.triggerEvent}
-                  onChange={(e) => set('triggerEvent', e.target.value)} placeholder="checkout_started"
-                  disabled={busy || !editable} />
+                {/* Combobox, not a <datalist>: a datalist filters its options against whatever
+                    is ALREADY in the input, and this field is always pre-filled — so the list
+                    collapsed to the single matching row and looked empty/broken. Combobox is
+                    also the house standard for pickers (PATTERN-160). */}
+                <Combobox
+                  value={j.triggerEvent}
+                  options={eventDefs.map((d) => ({ value: d.name, label: d.name, hint: d.description || '' }))}
+                  onChange={(v) => set('triggerEvent', v || '')}
+                  placeholder="Search 29 registered events…"
+                  disabled={busy || !editable}
+                  allowClear={false}
+                  emptyLabel="No matching event — check the name is registered in comms.event_definitions"
+                />
                 <div className="kpi-sub" style={{ marginTop: 4, whiteSpace: 'normal' }}>
-                  {eventDefs.length} registered event{eventDefs.length === 1 ? '' : 's'} — clear the field to browse them all
+                  {eventDefs.length} registered event{eventDefs.length === 1 ? '' : 's'} — click to browse, type to filter
                 </div>
               </div>
             ) : (
@@ -358,8 +368,17 @@ export default function JourneysPage() {
             <div className="kv-k" style={{ marginBottom: 6 }}>Exit rules — event fires → journey exits early with this outcome</div>
             {(j.exit_rules || []).map((rule, i) => (
               <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
-                <input className="f-inp mono" list="journey-event-suggest" style={{ flex: 1 }} value={rule.event || ''}
-                  onChange={(e) => setExitRule(i, 'event', e.target.value)} placeholder="order_cancelled" disabled={busy || !editable} />
+                <div style={{ flex: 1 }}>
+                  <Combobox
+                    value={rule.event || ''}
+                    options={eventDefs.map((d) => ({ value: d.name, label: d.name, hint: d.description || '' }))}
+                    onChange={(v) => setExitRule(i, 'event', v || '')}
+                    placeholder="order_cancelled"
+                    disabled={busy || !editable}
+                    allowClear={false}
+                    portal
+                  />
+                </div>
                 <input className="f-inp mono" style={{ flex: 1 }} value={rule.outcome || ''}
                   onChange={(e) => setExitRule(i, 'outcome', e.target.value)} placeholder="exited" disabled={busy || !editable} />
                 {editable && <Btn onClick={() => removeExitRule(i)} disabled={busy}><Minus size={14} /></Btn>}
@@ -429,9 +448,6 @@ export default function JourneysPage() {
           </Panel>
         )}
 
-        <datalist id="journey-event-suggest">
-          {eventDefs.map((d) => <option key={d.name} value={d.name}>{d.description || ''}</option>)}
-        </datalist>
       </div>
     );
   }
