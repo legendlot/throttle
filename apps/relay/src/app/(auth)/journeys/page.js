@@ -32,6 +32,10 @@ const REENROL = [
   { id: 'once_ever', label: 'Once ever' },
   { id: 'cooldown', label: 'Cooldown (hours)' },
 ];
+// Fallback only — the picker loads the live comms.event_definitions registry via
+// getEventDefinitions. This list is what shows if that call fails; it was previously the
+// ONLY source, which silently hid every event registered after it was written (the whole
+// courier lifecycle, payment_link_*, segment_entered, whatsapp_*, shopflo_order_completed).
 const EVENT_SUGGEST = ['checkout_started', 'order_placed', 'order_fulfilled', 'order_delivered',
   'add_to_cart', 'checkout_abandoned', 'return_created'];
 
@@ -66,6 +70,7 @@ export default function JourneysPage() {
   const [rows, setRows] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [segments, setSegments] = useState([]);
+  const [eventDefs, setEventDefs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState('list');
   const [j, setJ] = useState(emptyJourney());
@@ -97,14 +102,18 @@ export default function JourneysPage() {
     if (!session) return;
     setLoading(true);
     try {
-      const [js, tp, sg] = await Promise.all([
+      const [js, tp, sg, ev] = await Promise.all([
         garageFetch('getJourneys', {}, session),
         garageFetch('getTemplates', {}, session),
         garageFetch('getSegments', {}, session),
+        // Registry-backed trigger picker. Non-fatal: fall back to EVENT_SUGGEST rather
+        // than failing the whole page load over a suggestion list.
+        garageFetch('getEventDefinitions', {}, session).catch(() => null),
       ]);
       setRows(Array.isArray(js) ? js : []);
       setTemplates(Array.isArray(tp) ? tp : []);
       setSegments(Array.isArray(sg) ? sg : []);
+      setEventDefs(Array.isArray(ev) && ev.length ? ev : EVENT_SUGGEST.map((name) => ({ name, description: null })));
     } catch (e) { showToast(e.message || 'Failed to load journeys', 'error'); }
     finally { setLoading(false); }
   }, [session, showToast]);
@@ -300,7 +309,12 @@ export default function JourneysPage() {
             </div>
             {j.triggerType === 'event' ? (
               <div className="ff"><div className="kv-k">Trigger event</div>
-                <input className="f-inp mono" list="journey-event-suggest" value={j.triggerEvent} onChange={(e) => set('triggerEvent', e.target.value)} placeholder="checkout_started" disabled={busy || !editable} />
+                <input className="f-inp mono" list="journey-event-suggest" value={j.triggerEvent}
+                  onChange={(e) => set('triggerEvent', e.target.value)} placeholder="checkout_started"
+                  disabled={busy || !editable} />
+                <div className="kpi-sub" style={{ marginTop: 4, whiteSpace: 'normal' }}>
+                  {eventDefs.length} registered event{eventDefs.length === 1 ? '' : 's'} — clear the field to browse them all
+                </div>
               </div>
             ) : (
               <div className="ff"><div className="kv-k">Segment to watch</div>
@@ -415,7 +429,9 @@ export default function JourneysPage() {
           </Panel>
         )}
 
-        <datalist id="journey-event-suggest">{EVENT_SUGGEST.map((a) => <option key={a} value={a} />)}</datalist>
+        <datalist id="journey-event-suggest">
+          {eventDefs.map((d) => <option key={d.name} value={d.name}>{d.description || ''}</option>)}
+        </datalist>
       </div>
     );
   }

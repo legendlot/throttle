@@ -110,6 +110,12 @@ async function handleGet(url, auth, env) {
       return r.ok ? ok(r.data) : err('db_error', 500);
     }
 
+    case 'getEventDefinitions': {      // the registry that backs the journey trigger picker
+      const r = await A.sbComms(
+        '/rest/v1/event_definitions?is_active=is.true&select=name,description&order=name.asc', env);
+      return r.ok ? ok(r.data) : err('db_error', 500);
+    }
+
     case 'getSegments': {              // M6
       const r = await A.sbComms('/rest/v1/segments?select=*&order=updated_at.desc', env);
       return r.ok ? ok(r.data) : err('db_error', 500);
