@@ -526,8 +526,11 @@ function ShipmentBanner({ shipment: s }) {
       color: rto ? 'var(--state-error-fg, #DE2A2A)' : 'var(--t2)',
       fontSize: 12,
     }}>
+      {/* Say ORIGINAL ORDER, never just "parcel". A refund/replacement ticket has a SECOND,
+          reverse shipment (Return Logistics below), and a bare "PARCEL DELIVERED" on such a
+          ticket reads as "the return reached us" — the opposite of what this means. */}
       <span style={{ fontWeight: 600, letterSpacing: '.04em' }}>
-        {rto ? 'PARCEL RETURNING TO SENDER' : 'PARCEL DELIVERED'}
+        {rto ? 'ORIGINAL ORDER RETURNING TO SENDER' : 'ORIGINAL ORDER DELIVERED'}
       </span>
       {date && <span style={{ color: 'var(--t3)' }}>· {date}</span>}
       {s.courier && <span style={{ color: 'var(--t3)' }}>· {s.courier}</span>}
