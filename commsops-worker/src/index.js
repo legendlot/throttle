@@ -427,7 +427,7 @@ async function handlePost(body, auth, env) {
     // suppression, consent, quiet hours, freq cap) so the rehearsal is honest.
     case 'sendCampaignTest': {
       if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
-      const r = await CAMP.sendCampaignTest(env, { id: body.id, to: body.to });
+      const r = await CAMP.sendCampaignTest(env, { id: body.id, to: body.to, draft: body.draft });
       return r.ok ? ok(r) : err(r.error, 400);
     }
     case 'submitCampaign': {           // draft → approved (auto) or pending_approval (threshold)

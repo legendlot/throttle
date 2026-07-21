@@ -248,7 +248,14 @@ export default function CampaignsPage() {
   async function sendTest() {
     setTestBusy(true); setTestResults(null);
     try {
-      const r = await workerFetch('sendCampaignTest', { id: c.id, to: testTo }, session);
+      // Send the ON-SCREEN form, not the last-saved row — otherwise the preview shows your
+      // values while the test quietly uses the saved ones, and they disagree.
+      let draftVars = {};
+      try { draftVars = c.vars && c.vars.trim() ? JSON.parse(c.vars) : {}; } catch { draftVars = {}; }
+      const r = await workerFetch('sendCampaignTest', {
+        id: c.id, to: testTo,
+        draft: { channel: c.channel, purpose: c.purpose, template_id: c.template_id, vars: draftVars },
+      }, session);
       const rows = r?.data?.results || r?.results || [];
       setTestResults(rows);
       // A test that was gated is NOT a success — say so, or the operator reads green and ships.

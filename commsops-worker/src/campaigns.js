@@ -122,9 +122,21 @@ async function profileIdForAddress(env, channel, address) {
   return (r.ok && r.data?.[0]?.profile_id) || null;
 }
 
-async function sendCampaignTest(env, { id, to }) {
-  const camp = await getCampaign(env, id);
-  if (!camp) return { ok: false, error: 'not_found' };
+// `draft` carries the UNSAVED form state (vars / template_id / channel / purpose). The test must
+// exercise what is ON SCREEN, not what was last saved — otherwise the preview and the test
+// disagree, which is exactly how someone concludes their values "don't work" when they were
+// simply never persisted. Anything the caller omits falls back to the stored campaign.
+async function sendCampaignTest(env, { id, to, draft }) {
+  const stored = await getCampaign(env, id);
+  if (!stored) return { ok: false, error: 'not_found' };
+  const d = draft || {};
+  const camp = {
+    ...stored,
+    channel: d.channel || stored.channel,
+    purpose: d.purpose || stored.purpose,
+    template_id: d.template_id || stored.template_id,
+    vars: d.vars && typeof d.vars === 'object' ? d.vars : stored.vars,
+  };
   if (!camp.template_id) return { ok: false, error: 'template_required' };
 
   const list = (Array.isArray(to) ? to : String(to || '').split(','))
