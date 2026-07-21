@@ -6,6 +6,7 @@ import { Spinner, useToast } from '@throttle/ui';
 import { Plus, ArrowLeft, Check, Send, ShieldCheck, X, AlertTriangle, Clock, Mail, MessageCircle, Download } from 'lucide-react';
 import { PageHead, Panel, Badge, Btn, EmptyState, Kpi } from '@/components/ui.js';
 import { fmtDate, inr } from '@/components/format.js';
+import { TemplatePreview, TemplateValues } from '@/components/TemplatePreview.js';
 
 const pct = (num, den) => (den ? Math.round((Number(num) / Number(den)) * 1000) / 10 : 0);
 // campaign_stats_list returns rates as fractions; null = no denominator (nothing sent/delivered)
@@ -315,6 +316,13 @@ export default function CampaignsPage() {
 
   if (view === 'form') {
     const chTemplates = templates.filter((t) => t.channel === c.channel);
+    const selTpl = templates.find((t) => t.id === c.template_id) || null;
+    // c.vars is held as a JSON STRING (that is what save() posts). The editor works in objects,
+    // so parse for display and re-stringify on change — a malformed string degrades to {} rather
+    // than throwing mid-render and blanking the page.
+    let varsObj = {};
+    try { varsObj = c.vars && c.vars.trim() ? JSON.parse(c.vars) : {}; } catch { varsObj = {}; }
+    const setVarsObj = (o) => set('vars', JSON.stringify(o));
     const segName = segments.find((s) => s.id === c.segment_id)?.name;
     const tplName = templates.find((t) => t.id === c.template_id)?.name;
     const cStatus = campaignStatus(c);
@@ -385,11 +393,33 @@ export default function CampaignsPage() {
                   </select>
                 : <div className="kv-v">{tplName || <span className="dim">—</span>}</div>}
             </div>
-            <div className="ff ff-full"><div className="kv-k">Constants (JSON, optional)</div>
-              <input className="f-inp mono" value={c.vars} onChange={(e) => set('vars', e.target.value)} placeholder='{"promo_code":"COMEBACK10"}' disabled={busy || !isDraft || !canBuild} />
-            </div>
           </div>
         </Panel>
+
+        {/* Fill the template's variables as labelled fields and watch the message render, instead
+            of hand-writing JSON against token names you have to already know. The raw JSON stays
+            available underneath for anything the declared variables don't cover. */}
+        {selTpl && (
+          {/* auto-fit collapses to one column below ~700px without needing a media query */}
+          <div className="tpl-split" style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', alignItems: 'start' }}>
+            <Panel title="Values" pad>
+              <TemplateValues template={selTpl} values={varsObj}
+                onChange={setVarsObj} disabled={busy || !isDraft || !canBuild} />
+              <details style={{ marginTop: 14 }}>
+                <summary className="dim" style={{ fontSize: 12, cursor: 'pointer' }}>Advanced — raw JSON</summary>
+                <input className="f-inp mono" style={{ marginTop: 8 }} value={c.vars}
+                  onChange={(e) => set('vars', e.target.value)} placeholder='{"promo_code":"COMEBACK10"}'
+                  disabled={busy || !isDraft || !canBuild} />
+              </details>
+            </Panel>
+            <Panel title="Preview" pad>
+              <TemplatePreview template={selTpl} values={varsObj} />
+              <div className="tw-note" style={{ marginTop: 12, marginBottom: 0 }}>
+                Greyed words are examples or fallbacks, not what will send — fill a value to replace them.
+              </div>
+            </Panel>
+          </div>
+        )}
 
         {/* Deliberately ABOVE Lifecycle: test before you submit, not after. */}
         {c.id && canBuild && (
