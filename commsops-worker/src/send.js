@@ -180,7 +180,13 @@ async function send(env, opts) {
       rendered = { ...body, to, from: `${fromName} <${sender.address}>`, unsubscribe_url: sys.unsubscribe_url };
     }
   } catch (e) {
-    return await finalize(env, opts, { status: 'skipped', reason: e.message }, sender, channel, purpose, template);
+    // FAILED, not skipped. 'skipped' means the gate deliberately withheld the message
+    // (suppression / consent / quiet hours / freq cap / test mode) — the system working as
+    // intended. Reaching here means rendering broke: an unresolved variable, a bad template, a
+    // transient lookup. That is a defect, and filing it under 'skipped' both understates the
+    // failure rate in campaign analytics (where skipped and failed are deliberately separate
+    // columns) and sends the reader hunting consent settings for a missing constant.
+    return await finalize(env, opts, { status: 'failed', reason: e.message }, sender, channel, purpose, template);
   }
 
   // gate
