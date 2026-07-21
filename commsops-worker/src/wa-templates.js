@@ -292,6 +292,12 @@ async function waAccountInfo(env, wabaIds) {
     'account_review_status', 'business_verification_status', 'health_status',
     'owner_business_info', 'on_behalf_of_business_info',
   ].join(',');
+  // Phone numbers are fetched alongside because `platform_type` answers the question that
+  // actually decides the cutover shape: is the number ALREADY on Cloud API? If it is, and our
+  // token can see its id, Relay can send using the existing phone_number_id — no re-registration
+  // (the "one genuinely disruptive act"), no partner removal, no billing change. `id` here IS the
+  // phone_number_id that `sender_identities` needs.
+  const numFields = 'id,display_phone_number,verified_name,quality_rating,platform_type,code_verification_status,status';
   const out = {};
   for (const id of (Array.isArray(wabaIds) ? wabaIds : [])) {
     try {
@@ -299,8 +305,20 @@ async function waAccountInfo(env, wabaIds) {
         { headers: { Authorization: `Bearer ${env.WA_TOKEN}` } });
       const data = await res.json().catch(() => ({}));
       // A 403/200-with-error here is itself the answer: the token cannot see the WABA.
-      out[id] = res.ok ? { ok: true, ...data }
-                       : { ok: false, status: res.status, error: data?.error?.message || `http_${res.status}` };
+      if (!res.ok) {
+        out[id] = { ok: false, status: res.status, error: data?.error?.message || `http_${res.status}` };
+        continue;
+      }
+      let numbers = null;
+      try {
+        const nr = await fetch(`${graphBase(env)}/${encodeURIComponent(id)}/phone_numbers?fields=${numFields}`,
+          { headers: { Authorization: `Bearer ${env.WA_TOKEN}` } });
+        const nd = await nr.json().catch(() => ({}));
+        // Non-fatal: the WABA facts are still worth returning if the number read is denied.
+        numbers = nr.ok ? (nd?.data || [])
+                        : { error: nd?.error?.message || `http_${nr.status}`, status: nr.status };
+      } catch (e) { numbers = { error: String(e?.message || e) }; }
+      out[id] = { ok: true, ...data, phone_numbers: numbers };
     } catch (e) { out[id] = { ok: false, error: String(e?.message || e) }; }
   }
   return { ok: true, wabas: out };
