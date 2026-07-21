@@ -286,29 +286,49 @@ async function waListTemplates(env, wabaIds, opts = {}) {
 // proof, and it needs no name.
 async function waAccountInfo(env, wabaIds) {
   if (!env.WA_TOKEN) return { ok: false, error: 'wa_not_configured' };
-  const fields = [
-    'id', 'name', 'currency', 'timezone_id', 'country', 'ownership_type',
-    'primary_funding_id',            // ← who Meta bills
-    'account_review_status', 'business_verification_status', 'health_status',
-    'owner_business_info', 'on_behalf_of_business_info',
-  ].join(',');
+  // MEASURED 2026-07-21: `primary_funding_id` / `owner_business_info` /
+  // `on_behalf_of_business_info` are **BSP-ONLY** — Graph answers
+  //   "(#10) ... requires that the Business that owns this App is a Business Solution Provider"
+  // LOT is a direct business, not a BSP, so these are permanently unreadable for us; no grant
+  // fixes it. Verifying who funds a WABA therefore has to be done in Business Settings ("How
+  // you'll pay"), NOT here. Kept as a best-effort first attempt only, because Graph rejects the
+  // WHOLE request if any single requested field is forbidden — which is what dragged the
+  // harmless fields down with it on the first run.
+  const BSP_FIELDS = 'id,name,currency,timezone_id,country,ownership_type,primary_funding_id,'
+    + 'account_review_status,business_verification_status,health_status,'
+    + 'owner_business_info,on_behalf_of_business_info';
+  // Everything here is readable by an ordinary business token.
+  const SAFE_FIELDS = 'id,name,currency,timezone_id,account_review_status,business_verification_status';
   // Phone numbers are fetched alongside because `platform_type` answers the question that
   // actually decides the cutover shape: is the number ALREADY on Cloud API? If it is, and our
   // token can see its id, Relay can send using the existing phone_number_id — no re-registration
   // (the "one genuinely disruptive act"), no partner removal, no billing change. `id` here IS the
   // phone_number_id that `sender_identities` needs.
   const numFields = 'id,display_phone_number,verified_name,quality_rating,platform_type,code_verification_status,status';
+  const getFields = async (id, f) => {
+    const res = await fetch(`${graphBase(env)}/${encodeURIComponent(id)}?fields=${f}`,
+      { headers: { Authorization: `Bearer ${env.WA_TOKEN}` } });
+    return { res, data: await res.json().catch(() => ({})) };
+  };
+
   const out = {};
   for (const id of (Array.isArray(wabaIds) ? wabaIds : [])) {
     try {
-      const res = await fetch(`${graphBase(env)}/${encodeURIComponent(id)}?fields=${fields}`,
-        { headers: { Authorization: `Bearer ${env.WA_TOKEN}` } });
-      const data = await res.json().catch(() => ({}));
-      // A 403/200-with-error here is itself the answer: the token cannot see the WABA.
+      let { res, data } = await getFields(id, BSP_FIELDS);
+      let bspRestricted = false;
+      // Fall back to the safe set rather than losing everything to one forbidden field.
       if (!res.ok) {
-        out[id] = { ok: false, status: res.status, error: data?.error?.message || `http_${res.status}` };
+        const retry = await getFields(id, SAFE_FIELDS);
+        if (retry.res.ok) { bspRestricted = true; res = retry.res; data = retry.data; }
+      }
+      // Still failing on the SAFE set means the token genuinely cannot see this WABA —
+      // a different problem from the BSP gate, and one a system-user grant DOES fix.
+      if (!res.ok) {
+        out[id] = { ok: false, status: res.status, error: data?.error?.message || `http_${res.status}`,
+                    hint: 'token cannot see this WABA — assign the relay wa bot system user to it' };
         continue;
       }
+      if (bspRestricted) data.funding_note = 'primary_funding_id is BSP-only — check "How you\'ll pay" in Business Settings';
       let numbers = null;
       try {
         const nr = await fetch(`${graphBase(env)}/${encodeURIComponent(id)}/phone_numbers?fields=${numFields}`,
