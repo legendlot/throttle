@@ -340,25 +340,36 @@ export default function TemplatesPage() {
             )}
         </Panel>
 
-        {canTest && t.channel === 'whatsapp' && (
+        {/* The blocker for WhatsApp is APPROVAL, not the channel. An un-approved template
+            genuinely cannot be sent (Meta only ships templates it has reviewed) — but an
+            APPROVED one can, and forcing that through a throwaway campaign just to see it on a
+            handset is exactly the friction that stops anyone checking 18 templates. */}
+        {canTest && t.channel === 'whatsapp' && t.approval_status !== 'APPROVED' && (
           <Panel title="Send a test" pad>
             <div className="tw-note" style={{ marginTop: 0 }}>
               WhatsApp templates can only be sent once Meta has <b>approved</b> them, so there is no
-              draft test-send here. Save → Submit to Meta → Sync status until <code>APPROVED</code>, then
-              test it from a campaign or journey against an allow-listed number.
+              draft test-send here. Save → Submit to Meta → Sync status until <code>APPROVED</code> —
+              the test send appears here automatically once it is.
             </div>
           </Panel>
         )}
 
-        {canTest && t.channel !== 'whatsapp' && (
+        {canTest && (t.channel !== 'whatsapp' || t.approval_status === 'APPROVED') && (
           <Panel title="Send a test" pad>
             <div className="tw-note" style={{ marginTop: 0, marginBottom: 12 }}>
-              Sends the current (unsaved) draft as a transactional message. Test values fill any
-              <code>{' {token} '}</code> (applied as constants + recipient). Profile/event tokens won’t resolve in a test.
+              {t.channel === 'whatsapp'
+                ? <>Sends the <b>approved</b> template as Meta holds it. The recipient must be on the
+                  test-mode allow list, and the sending number must sit on the <b>same WABA</b> this
+                  template was approved on — templates are WABA-scoped, so a sender on another WABA
+                  will be rejected by Meta as unknown.</>
+                : <>Sends the current (unsaved) draft as a transactional message.</>}
+              {' '}Test values fill any <code>{' {token} '}</code> (applied as constants + recipient).
+              Profile/event tokens won’t resolve in a test.
             </div>
             <div className="form-grid">
               <div className="ff"><div className="kv-k">Test recipient</div>
-                <input className="f-inp mono" value={testTo} onChange={(e) => setTestTo(e.target.value)} placeholder="you@legendoftoys.com" disabled={testing} />
+                <input className="f-inp mono" value={testTo} onChange={(e) => setTestTo(e.target.value)}
+                  placeholder={t.channel === 'whatsapp' ? '+917019103926' : 'you@legendoftoys.com'} disabled={testing} />
               </div>
               <div className="ff"><div className="kv-k">Test values (JSON)</div>
                 <input className="f-inp mono" value={testVals} onChange={(e) => setTestVals(e.target.value)} placeholder='{"first":"Afshaan"}' disabled={testing} />
