@@ -30,23 +30,60 @@ const EMIT_EVENT = {
 };
 const MAX_PER_RUN = 15;   // keeps the cron tick well inside its subrequest budget
 
+// When did this lifecycle transition actually HAPPEN upstream? Deliberately not "when did we
+// poll it" — see the watermark note below. `delivered` carries a real delivery stamp (populated
+// on 9,884 of 9,885 live rows); the other states have none of their own, so Uniware's own
+// last-touch stamp is the closest proxy for the transition.
+function occurredAt(s) {
+  const raw = s.lifecycle === 'delivered' ? (s.delivered_at || s.uniware_updated_at)
+                                          : s.uniware_updated_at;
+  const t = Date.parse(raw || '');
+  return Number.isNaN(t) ? null : t;
+}
+
 // emitShipmentEvents(env, ingest) — `ingest` is injected to keep this module pure-ish and
 // avoid a require cycle with index.js.
 async function emitShipmentEvents(env, ingest) {
   const want = Object.keys(EMIT_EVENT);
+
+  // WATERMARK. `emitted_lifecycles` answers "already sent?"; it cannot answer "did this happen
+  // before Relay existed?". The 2026-07-20 backfill needed the second answer and only had the
+  // first, so it bulk-marked every row — permanently silencing order_delivered/order_rto, whose
+  // states are terminal and never transition again.
+  //
+  // Fail CLOSED: no watermark ⇒ emit nothing. A missing setting must never mean "send everything"
+  // — the blast radius here is live customer messages.
+  const st = await A.sbComms('/rest/v1/settings?id=eq.1&select=courier_emit_from&limit=1', env);
+  const fromRaw = st.ok ? st.data?.[0]?.courier_emit_from : null;
+  const fromMs = Date.parse(fromRaw || '');
+  if (!fromRaw || Number.isNaN(fromMs)) return { ok: true, skipped: 'no_watermark', sent: 0 };
   // Website parcels only: identity resolves via the Shopify order, which the marketplace
   // channels Uniware also fulfils (CRED / FirstCry) do not have in this substrate.
+  // Coarse gate in the query (index-friendly, and stops the 300-row window filling with ancient
+  // rows and starving live ones); the precise per-lifecycle check happens below on occurredAt.
   const q = `/rest/v1/ecom_shipments?lifecycle=in.(${want.join(',')})&shopify_order_id=not.is.null`
+    + `&uniware_updated_at=gte.${encodeURIComponent(new Date(fromMs).toISOString())}`
     + `&select=id,uniware_package_code,shopify_order_name,shopify_order_id,lifecycle,courier,`
-    + `tracking_number,tracking_link,emitted_lifecycles`
+    + `tracking_number,tracking_link,emitted_lifecycles,delivered_at,uniware_updated_at`
     + `&order=uniware_updated_at.desc.nullslast&limit=300`;
   const r = await sbPublic(q, env);
   if (!r.ok) return { ok: false, error: `select_failed_${r.status}` };
 
+  // A row can pass the coarse gate but still be a LATE DISCOVERY of an old event — Uniware
+  // reconciling a months-stale parcel bumps uniware_updated_at to today while delivered_at
+  // stays in May. Those are dropped WITHOUT marking: they are not "done", they are out of
+  // scope, and marking them would corrupt the guard if the watermark is ever moved back.
+  let stale = 0;
   const pending = (r.data || [])
     .filter((s) => !(s.emitted_lifecycles || []).includes(s.lifecycle))
+    .filter((s) => {
+      const at = occurredAt(s);
+      if (at !== null && at >= fromMs) return true;
+      stale++;
+      return false;
+    })
     .slice(0, MAX_PER_RUN);
-  if (!pending.length) return { ok: true, candidates: 0, sent: 0 };
+  if (!pending.length) return { ok: true, candidates: 0, sent: 0, stale };
 
   let sent = 0, unresolved = 0, failed = 0;
   for (const s of pending) {
@@ -83,7 +120,7 @@ async function emitShipmentEvents(env, ingest) {
     await markEmitted(env, s);
     sent++;
   }
-  return { ok: true, candidates: pending.length, sent, unresolved, failed };
+  return { ok: true, candidates: pending.length, sent, unresolved, failed, stale };
 }
 
 async function markEmitted(env, s) {
