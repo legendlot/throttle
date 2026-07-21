@@ -2132,6 +2132,18 @@ async function adsGuardedWrite({ userId, action, planId = null, request, fn }) {
 async function adsAutoPause(env) {
   try {
     if (!(await adsWriteEnabled())) return;
+    // Temporary hold. After ANY account-wide delivery interruption (billing restriction, payment
+    // failure, account review), every live ad re-enters Meta's learning phase at once and is
+    // expected to be volatile for days — the exact artifact that wrongly killed SCALE V2 in July.
+    // Judging those days on purchase-ROAS destroys reads we have already paid for. Set
+    // `ads_autopause_hold_until` (ISO date, inclusive) to freeze the kill-gate through the
+    // re-learn window. Deliberately date-boxed so it EXPIRES ON ITS OWN — a forgotten hold
+    // cannot silently disable the backstop forever. The daily spend ceiling still applies.
+    const holdUntil = await adsSetting('ads_autopause_hold_until', null);
+    if (holdUntil && todayISO() <= String(holdUntil)) {
+      console.log(`adsAutoPause: on hold through ${holdUntil} (post-interruption re-learn window)`);
+      return;
+    }
     const killRoas  = num(await adsSetting('ads_kill_roas', '2'));
     const killAfter = num(await adsSetting('ads_kill_after_inr', '6500'));
     // The kill-gate is a PROSPECT-test policy: cheaply retire experiment losers. It must NOT
