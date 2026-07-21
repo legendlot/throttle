@@ -749,6 +749,20 @@ export default {
       return r.ok ? ok(r) : err(r.error, 400);
     }
     // Internal template submit/sync — the SAME waSubmitTemplate/waSyncTemplateStatus the
+    // WABA account facts — chiefly `primary_funding_id`, i.e. WHO META BILLS. Same token gate
+    // and same read-only posture as the template pull above. This is the pre-flight for leaving
+    // a BSP: on a BSP credit line the funding id is theirs, and it must become ours before the
+    // number is registered. Run it before and after attaching a payment method — the id CHANGING
+    // is the proof, and it does not depend on reading a settings screen correctly.
+    if (url.pathname === '/internal/wa-account-info' && request.method === 'POST') {
+      const want = env.WA_SYNC_TOKEN;
+      const a = request.headers.get('Authorization') || '';
+      const bearer = a.slice(0, 7).toLowerCase() === 'bearer ' ? a.slice(7).trim() : '';
+      if (!want || bearer !== want) return err('unauthorised', 401);
+      let b = {}; try { b = await request.json(); } catch {}
+      const r = await WATPL.waAccountInfo(env, b.wabaIds || []);
+      return r.ok ? ok(r) : err(r.error, 400);
+    }
     // `/templates` UI calls, reachable with the WA_SYNC_TOKEN instead of a Google-login JWT so
     // a bulk authoring run isn't gated on an interactive browser session. Writes only to
     // comms.templates + Meta's template catalog; it can send nothing.

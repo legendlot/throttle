@@ -268,7 +268,45 @@ async function waListTemplates(env, wabaIds, opts = {}) {
   return { ok: true, wabas: out };
 }
 
+// Read-only WABA account facts — WHO PAYS, and is the account in a state that can send.
+//
+// Lives here because this module already owns graphBase() + the WA_TOKEN system-user token;
+// it is not template-specific. Strictly a Graph GET: no sends, no writes, no customer data.
+//
+// The field that matters is `primary_funding_id` — the funding source Meta bills. On a WABA
+// that rides a BSP's credit line this is the BSP's funding entity, NOT ours (support WABA
+// 2257035788468620 read SMARTPING AI LIMITED in Business Settings on 2026-07-17). Meta bills
+// whoever owns that id, so it is the single fact that decides whether we can send on our own
+// account after leaving a BSP — and the cleanest way to CONFIRM a newly-added payment method
+// actually took, rather than trusting the settings screen.
+//
+// Deliberately reports the raw id: mapping an id to a company name needs a permission on the
+// funding entity we do not have, and inventing a label we cannot verify is how the "TS =
+// TrustSignal" error happened. Compare the id before/after attaching a card — a CHANGE is the
+// proof, and it needs no name.
+async function waAccountInfo(env, wabaIds) {
+  if (!env.WA_TOKEN) return { ok: false, error: 'wa_not_configured' };
+  const fields = [
+    'id', 'name', 'currency', 'timezone_id', 'country', 'ownership_type',
+    'primary_funding_id',            // ← who Meta bills
+    'account_review_status', 'business_verification_status', 'health_status',
+    'owner_business_info', 'on_behalf_of_business_info',
+  ].join(',');
+  const out = {};
+  for (const id of (Array.isArray(wabaIds) ? wabaIds : [])) {
+    try {
+      const res = await fetch(`${graphBase(env)}/${encodeURIComponent(id)}?fields=${fields}`,
+        { headers: { Authorization: `Bearer ${env.WA_TOKEN}` } });
+      const data = await res.json().catch(() => ({}));
+      // A 403/200-with-error here is itself the answer: the token cannot see the WABA.
+      out[id] = res.ok ? { ok: true, ...data }
+                       : { ok: false, status: res.status, error: data?.error?.message || `http_${res.status}` };
+    } catch (e) { out[id] = { ok: false, error: String(e?.message || e) }; }
+  }
+  return { ok: true, wabas: out };
+}
+
 module.exports = {
-  waSubmitTemplate, waSyncTemplateStatus, waListTemplates, waUploadHeaderMedia,
+  waSubmitTemplate, waSyncTemplateStatus, waListTemplates, waUploadHeaderMedia, waAccountInfo,
   buildComponents, categoryFor, wabaFor,
 };
