@@ -772,6 +772,29 @@ export default {
       const r = await WATPL.waAccountInfo(env, b.wabaIds || []);
       return r.ok ? ok(r) : err(r.error, 400);
     }
+    // What WA_TOKEN can do (scopes only — never the token). Distinguishes a missing
+    // whatsapp_business_messaging scope from an app that is simply not subscribed to the WABA:
+    // both surface as the same (#200) on send, and only one is fixed by subscribing.
+    if (url.pathname === '/internal/wa-token-scopes' && request.method === 'POST') {
+      const want = env.WA_SYNC_TOKEN;
+      const a = request.headers.get('Authorization') || '';
+      const bearer = a.slice(0, 7).toLowerCase() === 'bearer ' ? a.slice(7).trim() : '';
+      if (!want || bearer !== want) return err('unauthorised', 401);
+      const r = await WATPL.waTokenScopes(env);
+      return r.ok ? ok(r) : err(r.error, 400);
+    }
+    // Subscribe this app to ONE named WABA. State-changing: it also turns on webhook delivery
+    // for that WABA, so on an inbound-carrying number it can put two systems in the same
+    // conversation. Deliberately one id per call.
+    if (url.pathname === '/internal/wa-subscribe-app' && request.method === 'POST') {
+      const want = env.WA_SYNC_TOKEN;
+      const a = request.headers.get('Authorization') || '';
+      const bearer = a.slice(0, 7).toLowerCase() === 'bearer ' ? a.slice(7).trim() : '';
+      if (!want || bearer !== want) return err('unauthorised', 401);
+      let b = {}; try { b = await request.json(); } catch {}
+      const r = await WATPL.waSubscribeApp(env, b.wabaId);
+      return r.ok ? ok(r) : err(r.error, 400);
+    }
     // `/templates` UI calls, reachable with the WA_SYNC_TOKEN instead of a Google-login JWT so
     // a bulk authoring run isn't gated on an interactive browser session. Writes only to
     // comms.templates + Meta's template catalog; it can send nothing.

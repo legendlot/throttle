@@ -329,6 +329,20 @@ async function waAccountInfo(env, wabaIds) {
         continue;
       }
       if (bspRestricted) data.funding_note = 'primary_funding_id is BSP-only — check "How you\'ll pay" in Business Settings';
+      // WHICH APPS MAY ACT ON THIS WABA. Reading a WABA needs only asset access +
+      // whatsapp_business_management; SENDING additionally requires the token's app to be
+      // SUBSCRIBED to that WABA. A WABA onboarded by a BSP has the BSP's app subscribed and not
+      // ours — which produces exactly "(#200) You do not have the necessary permissions to send
+      // messages on behalf of this WhatsApp Business Account" while every read keeps working.
+      let subscribedApps = null;
+      try {
+        const sr = await fetch(`${graphBase(env)}/${encodeURIComponent(id)}/subscribed_apps`,
+          { headers: { Authorization: `Bearer ${env.WA_TOKEN}` } });
+        const sd = await sr.json().catch(() => ({}));
+        subscribedApps = sr.ok ? (sd?.data || [])
+                               : { error: sd?.error?.message || `http_${sr.status}`, status: sr.status };
+      } catch (e) { subscribedApps = { error: String(e?.message || e) }; }
+
       let numbers = null;
       try {
         const nr = await fetch(`${graphBase(env)}/${encodeURIComponent(id)}/phone_numbers?fields=${numFields}`,
@@ -338,13 +352,55 @@ async function waAccountInfo(env, wabaIds) {
         numbers = nr.ok ? (nd?.data || [])
                         : { error: nd?.error?.message || `http_${nr.status}`, status: nr.status };
       } catch (e) { numbers = { error: String(e?.message || e) }; }
-      out[id] = { ok: true, ...data, phone_numbers: numbers };
+      out[id] = { ok: true, ...data, phone_numbers: numbers, subscribed_apps: subscribedApps };
     } catch (e) { out[id] = { ok: false, error: String(e?.message || e) }; }
   }
   return { ok: true, wabas: out };
 }
 
+// What can WA_TOKEN actually do? Rules out the other reading of a (#200): that the token simply
+// lacks `whatsapp_business_messaging` (reads only need `whatsapp_business_management`, so a
+// management-only token reads happily and fails every send). Returns SCOPES ONLY — never the
+// token, and never anything that could reconstruct it.
+async function waTokenScopes(env) {
+  if (!env.WA_TOKEN) return { ok: false, error: 'wa_not_configured' };
+  const r = await fetch(
+    `${graphBase(env)}/debug_token?input_token=${encodeURIComponent(env.WA_TOKEN)}`,
+    { headers: { Authorization: `Bearer ${env.WA_TOKEN}` } });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) return { ok: false, error: j?.error?.message || `http_${r.status}` };
+  const d = j?.data || {};
+  return {
+    ok: true,
+    app_id: d.app_id || null,
+    application: d.application || null,
+    type: d.type || null,
+    is_valid: d.is_valid ?? null,
+    expires_at: d.expires_at ?? null,          // 0 = never, which is what a system-user token should read
+    scopes: d.scopes || [],
+    can_send: Array.isArray(d.scopes) && d.scopes.includes('whatsapp_business_messaging'),
+  };
+}
+
+// Subscribe THIS app to a WABA — the missing step that lets it send, not just read.
+//
+// NOT read-only, and not free of consequence: subscribing also starts webhook delivery for that
+// WABA to commsops. On a number that receives customer messages (the support line) that means
+// inbound arrives here ALONGSIDE the incumbent BSP, so two systems could answer the same
+// customer. Takes an explicit wabaId — never a loop over every WABA — so the blast radius is
+// always a deliberate choice.
+async function waSubscribeApp(env, wabaId) {
+  if (!env.WA_TOKEN) return { ok: false, error: 'wa_not_configured' };
+  if (!wabaId) return { ok: false, error: 'waba_id_required' };
+  const r = await fetch(`${graphBase(env)}/${encodeURIComponent(wabaId)}/subscribed_apps`,
+    { method: 'POST', headers: { Authorization: `Bearer ${env.WA_TOKEN}` } });
+  const j = await r.json().catch(() => ({}));
+  return r.ok ? { ok: true, waba_id: wabaId, result: j }
+              : { ok: false, waba_id: wabaId, status: r.status, error: j?.error?.message || `http_${r.status}` };
+}
+
 module.exports = {
   waSubmitTemplate, waSyncTemplateStatus, waListTemplates, waUploadHeaderMedia, waAccountInfo,
+  waTokenScopes, waSubscribeApp,
   buildComponents, categoryFor, wabaFor,
 };
