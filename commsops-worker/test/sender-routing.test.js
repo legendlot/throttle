@@ -82,5 +82,38 @@ t('no active senders → null', () => {
   assert.equal(pickSender(null, { purpose: 'marketing' }), null);
 });
 
+// ── WABA-scoping (added when the three live numbers got sender rows) ──
+// A WhatsApp template approved on WABA A does not exist on WABA B. Sending it from a number on
+// B is rejected by Meta as an unknown template, so the template's WABA must outrank purpose.
+const W = (id, purpose, waba) => ({ id, purpose, status: 'active', metadata: { waba_id: waba } });
+
+t('WA: template WABA wins over purpose', () => {
+  const rows = [W('mkt', 'marketing', 'A'), W('txn', 'transactional', 'B')];
+  // a marketing-purpose send whose template lives on B must NOT go out of the marketing number
+  assert.equal(pickSender(rows, { purpose: 'marketing', wabaId: 'B' })?.id, 'txn');
+  assert.equal(pickSender(rows, { purpose: 'transactional', wabaId: 'A' })?.id, 'mkt');
+});
+
+t('WA: no sender on the template\'s WABA refuses rather than mis-routing', () => {
+  const rows = [W('mkt', 'marketing', 'A'), W('txn', 'transactional', 'B')];
+  assert.equal(pickSender(rows, { purpose: 'marketing', wabaId: 'C' }), null);
+});
+
+t('WA: purpose still decides WITHIN the right WABA', () => {
+  const rows = [W('a1', 'marketing', 'A'), W('a2', 'transactional', 'A')];
+  assert.equal(pickSender(rows, { purpose: 'transactional', wabaId: 'A' })?.id, 'a2');
+});
+
+t('WA: no wabaId (email, or a template with none) keeps the old purpose routing', () => {
+  const rows = [W('mkt', 'marketing', 'A'), W('txn', 'transactional', 'B')];
+  assert.equal(pickSender(rows, { purpose: 'transactional' })?.id, 'txn');
+});
+
+t('WA: explicit senderId still overrides the WABA filter', () => {
+  const rows = [W('mkt', 'marketing', 'A'), W('txn', 'transactional', 'B')];
+  assert.equal(pickSender(rows, { senderId: 'mkt', wabaId: 'B' })?.id, 'mkt');
+});
+
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

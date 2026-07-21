@@ -29,9 +29,22 @@ const rand = () => (crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '') : 
 // there are MULTIPLE active senders and none matches: refuse rather than silently pick
 // the oldest (the pre-fix bug that would route txn/support sends out the wrong number).
 // 'all' is the wildcard purpose the live email sender uses; null/'' treated the same.
-function pickSender(rows, { purpose, senderId } = {}) {
+function pickSender(rows, { purpose, senderId, wabaId } = {}) {
   if (!Array.isArray(rows) || rows.length === 0) return null;
   if (senderId) return rows.find((s) => s.id === senderId) || null;   // explicit pin (null if not active on channel)
+
+  // WhatsApp templates are WABA-SCOPED: a template approved on WABA A simply does not exist
+  // on WABA B, so sending it from a number on B is rejected by Meta as an unknown template.
+  // When the template names its WABA, that constraint outranks purpose — and if no sender sits
+  // on that WABA we return null rather than silently sending from the wrong number, because a
+  // clear 'no sender for this template's WABA' beats a confusing rejection from Meta.
+  // (Harmless while one WA sender exists; load-bearing the moment there are three.)
+  if (wabaId) {
+    const onWaba = rows.filter((s) => s.metadata && s.metadata.waba_id === wabaId);
+    if (!onWaba.length) return null;
+    rows = onWaba;
+  }
+
   const isWild = (p) => p == null || p === '' || p === 'all';
   if (purpose) {
     const exact = rows.find((s) => s.purpose === purpose);
@@ -44,11 +57,11 @@ function pickSender(rows, { purpose, senderId } = {}) {
 
 // Route to the right sender for (channel, purpose), honoring an explicit opts.senderId.
 // Fetches ALL active senders for the channel (tiny set) ordered oldest-first, then picks.
-async function getActiveSender(env, channel, purpose, senderId) {
+async function getActiveSender(env, channel, purpose, senderId, wabaId) {
   const r = await A.sbComms(
     `/rest/v1/sender_identities?channel=eq.${A.enc(channel)}&status=eq.active&select=*&order=created_at.asc`, env);
   const rows = (r.ok && r.data) || [];
-  return pickSender(rows, { purpose, senderId });
+  return pickSender(rows, { purpose, senderId, wabaId });
 }
 
 async function getTemplate(env, templateId) {
@@ -109,11 +122,17 @@ async function send(env, opts) {
     opts._reservedId = reserve.data?.[0]?.id || null;
   }
 
-  const sender = await getActiveSender(env, channel, purpose, opts.senderId);
-  if (!sender) return await finalize(env, opts, { status: 'failed', reason: 'no_active_sender' }, null, channel, purpose);
-
+  // Template BEFORE sender: on WhatsApp the template's WABA constrains which senders are even
+  // valid (pickSender), so we cannot choose a number until we know which WABA the template is on.
   const template = opts.template || await getTemplate(env, opts.templateId);
-  if (!template) return await finalize(env, opts, { status: 'failed', reason: 'template_not_found' }, sender, channel, purpose);
+  if (!template) return await finalize(env, opts, { status: 'failed', reason: 'template_not_found' }, null, channel, purpose);
+
+  const wabaId = channel === 'whatsapp' ? ((template.content && template.content.waba_id) || null) : null;
+  const sender = await getActiveSender(env, channel, purpose, opts.senderId, wabaId);
+  if (!sender) return await finalize(env, opts,
+    // Name the WABA in the reason — "no active sender" would send someone hunting the wrong problem.
+    { status: 'failed', reason: wabaId ? `no_sender_on_waba:${wabaId}` : 'no_active_sender' },
+    null, channel, purpose);
 
   const profile = await getProfile(env, opts.profileId);
   const to = opts.to || null;
