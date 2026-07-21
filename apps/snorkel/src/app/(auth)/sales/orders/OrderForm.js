@@ -51,7 +51,21 @@ export default function OrderForm({ partners, channels, initial, saving, onSubmi
     () => partners.map(p => ({ value: p.id, label: p.name, hint: p.partner_code })),
     [partners]
   );
-  const productOptions = useMemo(() => PRODUCTS.map(p => ({ value: p, label: p })), [PRODUCTS]);
+  // Partners order by the name printed on THEIR PO, which is often the variant rather
+  // than our product name — Blinkit's "L.O.T Build Harry Potter Wooden Collectible
+  // Puzzle" is our product `HP Desk warmer standee`, model `Harry Potter with Hedwig`.
+  // Matching on the product name alone made those SKUs look absent (#bugs 2026-07-21),
+  // so feed every model + colour in as hidden `search` text: the dropdown still lists
+  // just the product, but typing a character/variant/colour name finds it.
+  const productOptions = useMemo(() => PRODUCTS.map((p) => {
+    const models = PRODUCT_VARIANTS[p] || [];
+    const colors = Object.values(PRODUCT_COLORS[p] || {}).flat();
+    return {
+      value: p,
+      label: p,
+      search: [...models, ...new Set(colors)].join(' '),
+    };
+  }), [PRODUCTS, PRODUCT_VARIANTS, PRODUCT_COLORS]);
 
   function applyPartner(p) {
     if (p) setMeta(s => ({ ...s, channel_key: p.channel_key || s.channel_key, credit_days: p.default_credit_days ?? s.credit_days }));

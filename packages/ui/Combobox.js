@@ -8,11 +8,13 @@ import { createPortal } from 'react-dom';
  *
  * Controlled component:
  *   value     — the currently-selected option's `value` (string). Pass '' for none.
- *   options   — [{ value: string, label: string, hint?: string }, ...]
+ *   options   — [{ value: string, label: string, hint?: string, search?: string }, ...]
+ *               `hint` is shown to the right of the label AND matched against.
+ *               `search` is matched against but NEVER rendered — hidden alias text.
  *   onChange  — (value: string, option | null) => void. Fires on selection and on clear.
  *
  * Behaviour:
- *   - Typing filters by case-insensitive substring across label + hint.
+ *   - Typing filters by case-insensitive substring across label + hint + search.
  *   - ArrowUp/ArrowDown move the highlight; Enter selects; Escape closes.
  *   - mousedown (not click) selects, so the option fires before the input's blur.
  *   - Blur close is delayed 150 ms so mousedown lands first.
@@ -111,7 +113,13 @@ export function Combobox({
     }
     const tokens = q.split(/\s+/).filter(Boolean);
     return options.filter((o) => {
-      const hay = `${(o.label || '').toLowerCase()} ${(o.hint || '').toLowerCase()}`;
+      // `search` is HIDDEN match-only text — never rendered. Use it for terms a
+      // user will plausibly type but that don't belong on screen: sub-variants,
+      // colours, trade/partner aliases. (Snorkel's sales-order product picker
+      // needs "Harry Potter" to find `HP Desk warmer standee`, whose character
+      // names live in the Model field, not the product name.) Putting those in
+      // `hint` would work for matching but dumps them into the dropdown.
+      const hay = `${(o.label || '').toLowerCase()} ${(o.hint || '').toLowerCase()} ${(o.search || '').toLowerCase()}`;
       return tokens.every((t) => hay.includes(t));
     });
   }, [options, query, selectedOption, onQueryChange]);
