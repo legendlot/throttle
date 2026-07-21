@@ -148,6 +148,14 @@ function categoryFor(template) {
 }
 
 // waSubmitTemplate({templateId}) — submit to Meta, mark local approval_status PENDING.
+// waSubmitTemplate({templateId, stageWabaId}) — PRE-STAGE mode (BiteSpeed-exit migration prep):
+//   create the SAME template on a DIFFERENT WABA (a migration destination) with ZERO local
+//   mutation — no re-pin, no provider_template_id overwrite, no approval_status change. The
+//   local row keeps tracking the LIVE copy until migration day flips `content.waba_id`
+//   (a data-only change). Without this mode, submitting would re-pin the row to a WABA that
+//   does not hold the number yet, breaking WABA-scoped sender routing. Check a staged copy's
+//   approval via the /internal/wa-templates catalog pull on the destination WABA (sync only
+//   follows the pin).
 async function waSubmitTemplate(env, body) {
   if (!env.WA_TOKEN) return { ok: false, error: 'wa_not_configured' };
   const tpl = await getTemplate(env, body.templateId);
@@ -155,7 +163,11 @@ async function waSubmitTemplate(env, body) {
   if (tpl.channel !== 'whatsapp') return { ok: false, error: 'not_a_whatsapp_template' };
   const content = tpl.content || {};
   if (!content.meta_name || !content.body) return { ok: false, error: 'meta_name_and_body_required' };
-  const wabaId = wabaFor(env, tpl);
+  const stageWabaId = body.stageWabaId ? String(body.stageWabaId) : null;
+  if (stageWabaId && stageWabaId === (content.waba_id || null)) {
+    return { ok: false, error: 'stage_waba_is_pinned_waba' };   // staging onto the live pin is a mistake, not a no-op
+  }
+  const wabaId = stageWabaId || wabaFor(env, tpl);
   if (!wabaId) return { ok: false, error: 'wa_waba_not_configured' };
 
   const graphBody = {
@@ -175,6 +187,12 @@ async function waSubmitTemplate(env, body) {
   } catch (e) { return { ok: false, error: `wa_fetch_error:${e?.message || e}` }; }
 
   if (!res.ok) return { ok: false, error: data?.error?.message || `wa_http_${res.status}`, raw: data };
+
+  if (stageWabaId) {
+    // Pre-stage: Meta-side create only. The local row is deliberately untouched (see header).
+    return { ok: true, staged: true, provider_template_id: data?.id || null,
+             status: data?.status || 'PENDING', waba_id: wabaId };
+  }
 
   await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(tpl.id)}`, env, {
     method: 'PATCH',

@@ -347,6 +347,50 @@ function restoreFetch() { global.fetch = realFetch; }
     A.sbComms = orig;
   });
 
+  // ── waSubmitTemplate stage mode (migration pre-staging) ──
+  await t('waSubmitTemplate stageWabaId submits to the override WABA with ZERO local mutation', async () => {
+    const calls = [];
+    stubFetch(async (u, opts = {}) => {
+      calls.push({ u, method: opts.method || 'GET' });
+      if (u.includes('/rest/v1/templates')) {
+        return { ok: true, status: 200, text: async () => JSON.stringify([{ id: 'T1', channel: 'whatsapp',
+          purpose: 'utility', language: 'en',
+          content: { meta_name: 'lot_x', body: 'Hello {{1}}, bye.', waba_id: 'LIVE_WABA' } }]) };
+      }
+      if (u.includes('/message_templates')) {
+        return { ok: true, status: 200, json: async () => ({ id: 'STAGED_ID', status: 'PENDING' }) };
+      }
+      throw new Error('unexpected fetch ' + u);
+    });
+    const r = await WATPL.waSubmitTemplate(
+      { WA_TOKEN: 'tok', SUPABASE_URL: 'https://sb', SUPABASE_SERVICE_ROLE_KEY: 'k' },
+      { templateId: 'T1', stageWabaId: 'DEST_WABA' });
+    restoreFetch();
+    assert.equal(r.ok, true);
+    assert.equal(r.staged, true);
+    assert.equal(r.waba_id, 'DEST_WABA');
+    assert.equal(r.provider_template_id, 'STAGED_ID');
+    const graph = calls.find((c) => c.u.includes('/message_templates'));
+    assert.ok(graph.u.includes('/DEST_WABA/'), 'must submit to the override WABA, not the pin');
+    assert.ok(!calls.some((c) => c.method === 'PATCH'), 'staged submit must never PATCH the local row');
+  });
+
+  await t('waSubmitTemplate refuses staging onto the pinned WABA', async () => {
+    stubFetch(async (u) => {
+      if (u.includes('/rest/v1/templates')) {
+        return { ok: true, status: 200, text: async () => JSON.stringify([{ id: 'T1', channel: 'whatsapp',
+          content: { meta_name: 'lot_x', body: 'b', waba_id: 'LIVE_WABA' } }]) };
+      }
+      throw new Error('unexpected fetch ' + u);
+    });
+    const r = await WATPL.waSubmitTemplate(
+      { WA_TOKEN: 'tok', SUPABASE_URL: 'https://sb', SUPABASE_SERVICE_ROLE_KEY: 'k' },
+      { templateId: 'T1', stageWabaId: 'LIVE_WABA' });
+    restoreFetch();
+    assert.equal(r.ok, false);
+    assert.equal(r.error, 'stage_waba_is_pinned_waba');
+  });
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();
