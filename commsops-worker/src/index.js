@@ -421,6 +421,15 @@ async function handlePost(body, auth, env) {
         : await A.sbComms('/rest/v1/campaigns', env, { method: 'POST', headers: { Prefer: 'return=representation' }, body: JSON.stringify({ ...row, status: 'draft', created_by: auth.userId }) });
       return r.ok ? ok(r.data?.[0]) : err('db_error:' + JSON.stringify(r.data), 500);
     }
+    // Send the campaign's template to a few named addresses — no segment, no approval, no
+    // fan-out. Recorded under source 'campaign_test:<id>' so it never lands in the campaign's
+    // own stats, and it runs through the SAME send gate as a real broadcast (test_mode,
+    // suppression, consent, quiet hours, freq cap) so the rehearsal is honest.
+    case 'sendCampaignTest': {
+      if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
+      const r = await CAMP.sendCampaignTest(env, { id: body.id, to: body.to });
+      return r.ok ? ok(r) : err(r.error, 400);
+    }
     case 'submitCampaign': {           // draft → approved (auto) or pending_approval (threshold)
       if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
       const camp = await CAMP.getCampaign(env, body.id);

@@ -94,4 +94,63 @@ async function processQueueMessage(env, body) {
   }
 }
 
-module.exports = { getCampaign, setStatus, needsApproval, reachableCount, startCampaign, processQueueMessage };
+// ── Send test ────────────────────────────────────────────────────────────────
+// Send the campaign's own template to a handful of named addresses, without a segment,
+// an approval or a fan-out. What a marketer actually wants before pressing go: does this
+// render, and does it look right on a real handset.
+//
+// Deliberate choices:
+//  · source = 'campaign_test:<id>', NOT 'campaign:<id>'. campaign_stats_list joins on
+//    exact `source = 'campaign:'||id`, so test sends stay OUT of the campaign's own
+//    sent/delivered/read/cost figures. A test that quietly skewed the numbers it exists to
+//    help you read would be worse than no test at all.
+//  · NO dedup_key — you must be able to test the same campaign repeatedly. The broadcast
+//    path keeps its dedup; this path is explicitly operator-driven and repeatable.
+//  · The send gate is NOT bypassed. test_mode, suppression, consent, quiet hours and the
+//    frequency cap all still apply, and a skip is reported with its reason. Bypassing would
+//    make the test a poor rehearsal AND a way to message a suppressed customer.
+//  · The recipient's PROFILE is resolved from the address where one exists, so variables
+//    render against real data. Without it, any template with variables throws
+//    `unresolved_variables` — so the profile lookup is what makes the test meaningful.
+const MAX_TEST_RECIPIENTS = 5;   // a test, not a side-door broadcast
+
+async function profileIdForAddress(env, channel, address) {
+  const type = channel === 'whatsapp' ? 'phone' : 'email';
+  const value = channel === 'whatsapp' ? String(address).replace(/[^\d+]/g, '') : String(address).trim().toLowerCase();
+  const r = await A.sbComms(
+    `/rest/v1/identifiers?type=eq.${type}&value=eq.${A.enc(value)}&select=profile_id&limit=1`, env);
+  return (r.ok && r.data?.[0]?.profile_id) || null;
+}
+
+async function sendCampaignTest(env, { id, to }) {
+  const camp = await getCampaign(env, id);
+  if (!camp) return { ok: false, error: 'not_found' };
+  if (!camp.template_id) return { ok: false, error: 'template_required' };
+
+  const list = (Array.isArray(to) ? to : String(to || '').split(','))
+    .map((s) => String(s).trim()).filter(Boolean).slice(0, MAX_TEST_RECIPIENTS);
+  if (!list.length) return { ok: false, error: 'no_recipients' };
+
+  const results = [];
+  for (const addr of list) {
+    const profileId = await profileIdForAddress(env, camp.channel, addr);
+    try {
+      const r = await send(env, {
+        channel: camp.channel, purpose: camp.purpose,
+        profileId, to: addr,
+        templateId: camp.template_id,
+        constants: camp.vars || {},
+        tracking: { campaign: `${camp.name} (test)` },
+        source: `campaign_test:${id}`,
+      });
+      results.push({ to: addr, profile_matched: !!profileId, status: r?.status || 'unknown', reason: r?.reason || null });
+    } catch (e) {
+      // Surface unresolved_variables verbatim — naming the missing tokens IS the useful
+      // result here, not an incidental error.
+      results.push({ to: addr, profile_matched: !!profileId, status: 'failed', reason: String(e?.message || e) });
+    }
+  }
+  return { ok: true, results, capped: (Array.isArray(to) ? to.length : list.length) > MAX_TEST_RECIPIENTS };
+}
+
+module.exports = { getCampaign, setStatus, needsApproval, reachableCount, startCampaign, processQueueMessage, sendCampaignTest };

@@ -123,6 +123,9 @@ export default function CampaignsPage() {
   const [stats, setStats] = useState(null);
   const [attr, setAttr] = useState(null);
   const [reach, setReach] = useState(null);   // {loading}|{total,reachable} for the picked segment × (channel,purpose)
+  const [testTo, setTestTo] = useState('');
+  const [testBusy, setTestBusy] = useState(false);
+  const [testResults, setTestResults] = useState(null);
 
   const canBuild = !perms || perms.campaign_build;
   const canApprove = !perms || perms.approve;
@@ -239,6 +242,21 @@ export default function CampaignsPage() {
       load();
     } catch (e) { showToast(e.message || 'Save failed', 'error'); }
     finally { setBusy(false); }
+  }
+
+  async function sendTest() {
+    setTestBusy(true); setTestResults(null);
+    try {
+      const r = await workerFetch('sendCampaignTest', { id: c.id, to: testTo }, session);
+      const rows = r?.data?.results || r?.results || [];
+      setTestResults(rows);
+      // A test that was gated is NOT a success — say so, or the operator reads green and ships.
+      const ok = rows.filter((x) => x.status === 'sent' || x.status === 'queued').length;
+      showToast(ok === rows.length ? `Test sent to ${ok}` : `${ok}/${rows.length} sent — see the reasons below`,
+        ok === rows.length ? 'success' : 'error');
+    } catch (e) {
+      showToast(e.message || 'Test send failed', 'error');
+    } finally { setTestBusy(false); }
   }
 
   async function submit() {
@@ -372,6 +390,45 @@ export default function CampaignsPage() {
             </div>
           </div>
         </Panel>
+
+        {/* Deliberately ABOVE Lifecycle: test before you submit, not after. */}
+        {c.id && canBuild && (
+          <Panel title="Send a test" pad>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+              <input className="f-inp" style={{ flex: '1 1 320px' }} value={testTo}
+                onChange={(e) => setTestTo(e.target.value)}
+                placeholder={c.channel === 'whatsapp' ? '+919876543210, +919876543211' : 'you@legendoftoys.com'}
+                disabled={testBusy || !c.template_id} />
+              <Btn onClick={sendTest} disabled={testBusy || !c.template_id || !testTo.trim()}>
+                <Send size={14} /> {testBusy ? 'Sending…' : 'Send test'}
+              </Btn>
+            </div>
+            <div className="tw-note" style={{ marginTop: 10, marginBottom: 0 }}>
+              {!c.template_id
+                ? 'Pick a template first — the test sends that template.'
+                : <>Up to 5 addresses, comma-separated. Goes through the <strong>same gate as a real send</strong>
+                  {' '}(test mode, suppression, consent, quiet hours, frequency cap), so what you see here is what
+                  a customer would get. Test sends are recorded but <strong>excluded from this campaign&apos;s stats</strong>.</>}
+            </div>
+            {testResults && (
+              <table className="dt" style={{ marginTop: 12 }}>
+                <thead><tr><th>To</th><th>Result</th><th>Detail</th></tr></thead>
+                <tbody>
+                  {testResults.map((r, i) => (
+                    <tr key={i}>
+                      <td className="mono">{r.to}</td>
+                      <td><Badge label={r.status}
+                        tone={r.status === 'sent' || r.status === 'queued' ? 'green' : r.status === 'skipped' ? 'yellow' : 'red'} /></td>
+                      <td className="dim" style={{ fontSize: 12 }}>
+                        {r.reason || (r.profile_matched ? 'rendered with this contact’s data' : 'no matching contact — variables used defaults')}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </Panel>
+        )}
 
         <Panel title="Lifecycle" pad>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
