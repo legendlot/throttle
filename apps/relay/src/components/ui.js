@@ -24,6 +24,39 @@ export function Badge({ label, tone = 'gray', dot = false, soft = true }) {
   );
 }
 
+/* ---- Switch ---------------------------------------------------------- */
+// A real on/off control for state that is genuinely binary to the reader, even when the
+// underlying model has more values (a journey is draft|active|paused|archived, but the only
+// question anyone actually asks is "is this sending?").
+//
+// Deliberately renders as a <button role="switch"> rather than a styled checkbox: it is an
+// action with a side effect, not a form field, and screen readers should announce it as such.
+// `label` is required — an unlabelled switch in a table row is unreadable out of context.
+export function Switch({ checked, onChange, disabled = false, busy = false, label, title }) {
+  const on = !!checked;
+  return (
+    <button
+      type="button" role="switch" aria-checked={on} aria-label={label} title={title || label}
+      disabled={disabled || busy}
+      onClick={(e) => { e.stopPropagation(); if (!disabled && !busy) onChange(!on); }}
+      style={{
+        position: 'relative', width: 34, height: 19, flexShrink: 0, padding: 0,
+        borderRadius: 999, cursor: disabled || busy ? 'not-allowed' : 'pointer',
+        border: `1px solid ${on ? 'var(--ok-bd, #2e7d32)' : 'var(--line, #d0d0d0)'}`,
+        background: on ? 'var(--ok-solid, #2e7d32)' : 'var(--surface-3, #e4e4e4)',
+        opacity: disabled ? 0.45 : 1,
+        transition: prefersReducedMotion() ? 'none' : 'background 140ms ease, border-color 140ms ease',
+      }}
+    >
+      <span style={{
+        position: 'absolute', top: 2, left: on ? 17 : 2, width: 13, height: 13, borderRadius: '50%',
+        background: '#fff', boxShadow: '0 1px 2px rgba(0,0,0,.3)',
+        transition: prefersReducedMotion() ? 'none' : 'left 140ms ease',
+      }} />
+    </button>
+  );
+}
+
 /* ---- Btn ------------------------------------------------------------- */
 export function Btn({ kind = 'ghost', children, onClick, disabled, style, type = 'button' }) {
   return (

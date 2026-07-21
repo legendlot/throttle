@@ -5,7 +5,7 @@ import { useAuth } from '@throttle/auth';
 import { garageFetch, workerFetch } from '@throttle/db';
 import { Spinner, useToast, Combobox } from '@throttle/ui';
 import { Plus, Minus, ArrowLeft, Check, Play, Pause, AlertTriangle, GitBranch } from 'lucide-react';
-import { PageHead, Panel, Badge, Btn, EmptyState, Pipeline } from '@/components/ui.js';
+import { PageHead, Panel, Badge, Btn, EmptyState, Pipeline, Switch } from '@/components/ui.js';
 import { fmtDate } from '@/components/format.js';
 import { fromDefinition, toDefinition, TRIGGER_ID } from '@/components/journey-canvas/graph.js';
 import NodeDrawer from '@/components/journey-canvas/NodeDrawer.js';
@@ -27,6 +27,19 @@ function branchLabel(key) {
   return key.replace(/^branch_/, '');
 }
 const STATUS_TONE = { draft: 'gray', active: 'green', paused: 'yellow', archived: 'gray' };
+
+// Four statuses, but only one question anyone actually asks: is this sending right now?
+// ON is exactly `active` — the same value the worker's trigger matcher gates on — so the switch
+// can never disagree with what the engine does. Everything else is OFF.
+const isOn = (s) => s === 'active';
+// Turning OFF goes to `paused`, never `draft`: draft means "never been live", pausing a live
+// journey must stay distinguishable from one that was never launched. `archived` is a deliberate
+// retirement and is not re-armable from a list switch — reopen the journey to bring it back.
+function toggleGuard(r) {
+  if (r.status === 'archived') return { can: false, why: 'Archived — open the journey to restore it' };
+  if (!isOn(r.status) && r.active_version == null) return { can: false, why: 'No published version yet — open and save one first' };
+  return { can: true, why: isOn(r.status) ? 'Sending — click to pause' : 'Paused — click to start sending' };
+}
 const REENROL = [
   { id: 'once_while_active', label: 'Once while active' },
   { id: 'once_ever', label: 'Once ever' },
@@ -75,6 +88,7 @@ export default function JourneysPage() {
   const [view, setView] = useState('list');
   const [j, setJ] = useState(emptyJourney());
   const [busy, setBusy] = useState(false);
+  const [togglingId, setTogglingId] = useState(null);
   const [compileErrors, setCompileErrors] = useState(null);
   const [funnel, setFunnel] = useState(null);
   // canvas state — page-owned so save/drawer/canvas share one source of truth
@@ -126,6 +140,30 @@ export default function JourneysPage() {
     setNodesRaw(g.nodes);
     setEdges(g.edges);
     setSelected(null);
+  }
+
+  // List-level on/off. Optimistic so the switch feels instant, reverted on failure — a control
+  // that lies about whether a journey is sending is worse than a slow one.
+  async function toggleRow(r, next) {
+    const g = toggleGuard(r);
+    if (!g.can) { showToast(g.why, 'error'); return; }
+    // Turning ON starts real customer messages; turning OFF is the safe direction and needs no
+    // ceremony. Asymmetric on purpose.
+    if (next && !window.confirm(
+      `Turn ON "${r.name}"?\n\nIt will start enrolling customers on every ${triggerSummary(r.trigger, segments)} and sending messages.`
+    )) return;
+    setTogglingId(r.id);
+    setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, status: next ? 'active' : 'paused' } : x)));
+    try {
+      await workerFetch('setJourneyStatus', { id: r.id, status: next ? 'active' : 'paused' }, session);
+      showToast(next ? `"${r.name}" is ON — now sending` : `"${r.name}" is OFF`, 'success');
+      refresh();
+    } catch (e) {
+      setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, status: r.status } : x)));
+      showToast(String(e.message) === 'no_published_version'
+        ? "Can't turn on — no published version yet"
+        : (e.message || 'Could not change the journey'), 'error');
+    } finally { setTogglingId(null); }
   }
 
   function startNew() {
@@ -279,6 +317,24 @@ export default function JourneysPage() {
           <div className="po-head-l">
             <Btn onClick={() => setView('list')}><ArrowLeft size={14} /> Back to journeys</Btn>
             <span className="po-head-no" style={{ fontSize: 18 }}>{j.id ? (j.name || 'Journey') : 'New Journey'}</span>
+            {/* Same control, same meaning as the list — one source of truth for "is it sending?". */}
+            {j.id && (
+              <span style={{ display: 'inline-flex', gap: 7, alignItems: 'center', marginRight: 2 }}>
+                <Switch
+                  checked={isOn(j.status)} busy={busy}
+                  disabled={!canBuild || j.status === 'archived' || (!isOn(j.status) && j.active_version == null)}
+                  label={`${isOn(j.status) ? 'Turn off' : 'Turn on'} this journey`}
+                  title={j.status === 'archived' ? 'Archived'
+                    : (!isOn(j.status) && j.active_version == null) ? 'Save a version before turning it on'
+                    : isOn(j.status) ? 'Sending — click to pause' : 'Paused — click to start sending'}
+                  onChange={(next) => setStatus(next ? 'active' : 'paused')}
+                />
+                <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: .3,
+                  color: isOn(j.status) ? 'var(--ok-fg, #2e7d32)' : 'var(--text-4)' }}>
+                  {isOn(j.status) ? 'ON' : 'OFF'}
+                </span>
+              </span>
+            )}
             <Badge label={(j.status || 'draft')} tone={STATUS_TONE[j.status] || 'gray'} />
             {j.active_version != null && <Badge label={`v${j.active_version}`} tone="blue" dot />}
           </div>
@@ -397,15 +453,22 @@ export default function JourneysPage() {
 
         <Panel title="Lifecycle" pad>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-            {!j.id && <span className="dim" style={{ fontSize: 13 }}>Save the journey to enable activate.</span>}
-            {j.id && j.status !== 'active' && canBuild && (
-              <Btn kind="primary" onClick={() => setStatus('active')} disabled={busy}><Play size={14} /> Activate</Btn>
-            )}
-            {j.id && j.status === 'active' && canBuild && (
-              <Btn onClick={() => setStatus('paused')} disabled={busy}><Pause size={14} /> Pause</Btn>
+            {/* On/off now lives on the ON/OFF switch in the header — one control, not two that can
+                disagree. Archive stays a button: it is a retirement, not the everyday toggle. */}
+            {!j.id && <span className="dim" style={{ fontSize: 13 }}>Save the journey to enable the ON/OFF switch.</span>}
+            {j.id && (
+              <span className="dim" style={{ fontSize: 13 }}>
+                This journey is <strong style={{ color: isOn(j.status) ? 'var(--ok-fg, #2e7d32)' : 'var(--text-3)' }}>
+                  {isOn(j.status) ? 'ON — enrolling and sending' : 'OFF — not enrolling anyone'}
+                </strong>. Use the switch beside the title to change it.
+              </span>
             )}
             {j.id && (j.status === 'draft' || j.status === 'paused') && j.active_version == null && (
-              <span className="dim" style={{ fontSize: 13 }}>No published version yet — save first to enable activation.</span>
+              <span className="dim" style={{ fontSize: 13 }}>No published version yet — save first to enable the switch.</span>
+            )}
+            {j.id && j.status !== 'archived' && canBuild && (
+              <Btn onClick={() => { if (window.confirm('Archive this journey? It stops sending and leaves the active list.')) setStatus('archived'); }}
+                disabled={busy} style={{ marginLeft: 'auto' }}>Archive</Btn>
             )}
           </div>
           <div className="tw-note" style={{ marginBottom: 0, marginTop: 12 }}>
@@ -461,20 +524,53 @@ export default function JourneysPage() {
         : rows.length === 0
           ? <Panel><EmptyState icon="arrow-right" title="No journeys yet" hint="Create a journey — pick a trigger event, then build the flow on the canvas." /></Panel>
           : (
-            <Panel title="Journeys" count={rows.length}>
+            <Panel title="Journeys" count={rows.length}
+              action={(() => {
+                const on = rows.filter((r) => isOn(r.status)).length;
+                // The headline answer to "is anything running?", without reading every row.
+                return (
+                  <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                    <Badge label={`${on} on`} tone={on ? 'green' : 'gray'} dot={on > 0} />
+                    <Badge label={`${rows.length - on} off`} tone="gray" />
+                  </span>
+                );
+              })()}>
               <table className="dt">
-                <thead><tr><th>Name</th><th>Status</th><th className="num">Version</th><th>Trigger</th><th>Re-enrolment</th><th>Updated</th></tr></thead>
+                <thead><tr><th style={{ width: 92 }}>On / Off</th><th>Name</th><th>Status</th><th className="num">Version</th><th>Trigger</th><th>Re-enrolment</th><th>Updated</th></tr></thead>
                 <tbody>
-                  {rows.map((r) => (
+                  {rows.map((r) => {
+                    const g = toggleGuard(r);
+                    const on = isOn(r.status);
+                    return (
                     <tr key={r.id} className="row-click" onClick={() => open(r)}>
+                      {/* stopPropagation lives in Switch — the row opens the editor, the switch must not. */}
+                      <td onClick={(e) => e.stopPropagation()}>
+                        <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+                          <Switch
+                            checked={on}
+                            busy={togglingId === r.id}
+                            // Read-only for non-builders: everyone can SEE on/off, only builders flip it.
+                            disabled={!canBuild || !g.can}
+                            label={`${on ? 'Turn off' : 'Turn on'} journey ${r.name}`}
+                            title={canBuild ? g.why : (on ? 'Sending' : 'Not sending')}
+                            onChange={(next) => toggleRow(r, next)}
+                          />
+                          <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: .3,
+                            color: on ? 'var(--ok-fg, #2e7d32)' : 'var(--text-4)' }}>
+                            {on ? 'ON' : 'OFF'}
+                          </span>
+                        </span>
+                      </td>
                       <td><GitBranch size={13} style={{ verticalAlign: -2, marginRight: 6, color: 'var(--text-4)' }} />{r.name}</td>
+                      {/* Kept alongside the switch: ON/OFF is the answer, but draft-vs-paused-vs-archived still matters. */}
                       <td><Badge label={r.status || 'draft'} tone={STATUS_TONE[r.status] || 'gray'} /></td>
                       <td className="num mono dim">{r.active_version ?? '—'}</td>
                       <td className="dim">{triggerSummary(r.trigger, segments)}</td>
                       <td className="dim">{r.reenrolment || '—'}</td>
                       <td className="mono dim">{fmtDate(r.updated_at)}</td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </Panel>
