@@ -30,14 +30,23 @@ function inQuietHours(start, end) {
 }
 
 // Test-mode allowlist match: '@domain' = suffix match, else exact email. Case-insensitive.
+// Phone numbers get typed the way people read them — "+91 70191 03926", "+91-7019103926" —
+// while the allow-list entry is compact. Exact equality made FORMATTING decide whether the gate
+// opened, which reads as "the system is broken" rather than "you typed a space". Compare
+// separator-insensitively: only whitespace, hyphens, dots and brackets are removed, never digits
+// and never the leading +, so this cannot widen a match to a different number. Domain patterns
+// (@example.com) still match on the raw address.
+const compactAddr = (s) => s.replace(/[\s()\-.]/g, '');
+
 function testModeAllows(to, allow) {
   const addr = (to || '').toLowerCase().trim();
   if (!addr) return false;
+  const compact = compactAddr(addr);
   const list = Array.isArray(allow) ? allow : [];
   return list.some((pat) => {
     const p = String(pat || '').toLowerCase().trim();
     if (!p) return false;
-    return p[0] === '@' ? addr.endsWith(p) : addr === p;
+    return p[0] === '@' ? addr.endsWith(p) : compactAddr(p) === compact;
   });
 }
 
@@ -105,4 +114,4 @@ async function runGate(env, { profileId, channel, purpose, to, wa }) {
   return { pass: true, reason: null };
 }
 
-module.exports = { runGate, inQuietHours, _clearSettingsCache: () => { _settingsCache = null; } };
+module.exports = { runGate, inQuietHours, testModeAllows, _clearSettingsCache: () => { _settingsCache = null; } };
