@@ -398,9 +398,9 @@ export default function CampaignsPage() {
 
         {/* Fill the template's variables as labelled fields and watch the message render, instead
             of hand-writing JSON against token names you have to already know. The raw JSON stays
-            available underneath for anything the declared variables don't cover. */}
+            available underneath for anything the declared variables don't cover.
+            auto-fit collapses the two columns to one below ~700px without a media query. */}
         {selTpl && (
-          {/* auto-fit collapses to one column below ~700px without needing a media query */}
           <div className="tpl-split" style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', alignItems: 'start' }}>
             <Panel title="Values" pad>
               <TemplateValues template={selTpl} values={varsObj}
