@@ -71,7 +71,12 @@ function downloadCampaignsCsv(rows, overview, tab) {
   URL.revokeObjectURL(url);
 }
 
-const CHANNELS = ['email'];
+// Must track the adapters the worker actually has (send.js ADAPTERS). This read 'email' only
+// from the original UI build, when email was the sole adapter — the WhatsApp adapter landed
+// later and nothing widened it, so a channel the whole backend supports was unreachable from
+// the UI. Same failure as the journey trigger picker's hardcoded 7-event list. If a new adapter
+// is added to send.js, add it here in the same change.
+const CHANNELS = ['email', 'whatsapp'];
 const PURPOSES = ['marketing', 'transactional', 'utility'];
 const STATUS_TONE = {
   draft: 'gray', pending_approval: 'yellow', approved: 'blue', scheduled: 'yellow',
