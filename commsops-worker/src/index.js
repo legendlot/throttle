@@ -1,4 +1,5 @@
 const A = require('./auth.js');
+const G = require('./gate.js');
 // Workflow class must be a named export of the entry module (wrangler class_name).
 export { JourneyWorkflow } from './journey-workflow.js';
 const { ingest } = require('./ingest.js');
@@ -395,6 +396,13 @@ async function handlePost(body, auth, env) {
     case 'sendTest': {                 // M5 — test-send: always allowed, no approval; transactional bypasses marketing gate
       if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
       if (!body.to) return err('to_required', 400);
+      // sendTest is arbitrary-content + arbitrary-recipient by design — so its recipients are
+      // permanently restricted to the internal allowlist, even after test_mode goes OFF
+      // (review M3). Real-customer rehearsal is sendCampaignTest with a saved template.
+      const st = await A.sbComms('/rest/v1/settings?id=eq.1&select=test_mode_allow&limit=1', env);
+      const allow = (st.ok && st.data?.[0]?.test_mode_allow) || ['@legendoftoys.com'];
+      if (!G.testModeAllows(body.to, allow))
+        return err('test_sends_are_internal_only', 403);
       const r = await send(env, {
         channel: body.channel || 'email', purpose: 'transactional',
         to: body.to, templateId: body.templateId || null, template: body.template || null,
@@ -416,6 +424,9 @@ async function handlePost(body, auth, env) {
       return r.ok ? ok(r.data?.[0]) : err('db_error:' + JSON.stringify(r.data), 500);
     }
     case 'previewSegment': {           // size + reachable-on-(channel,purpose), no materialize
+      // Without this, any relay_view holder is a PII count-oracle over arbitrary segment
+      // definitions (review M9) — gate it like saveSegment/materializeSegment.
+      if (!A.canSegment(auth.permissions)) return err('forbidden', 403);
       const { definition, channel, purpose } = body;
       const r = await A.sbComms('/rest/v1/rpc/preview_segment', env, {
         method: 'POST', body: JSON.stringify({ p_def: definition || {}, p_channel: channel || 'email', p_purpose: purpose || 'marketing' }),
