@@ -871,6 +871,25 @@ export default {
     // Subscribe this app to ONE named WABA. State-changing: it also turns on webhook delivery
     // for that WABA, so on an inbound-carrying number it can put two systems in the same
     // conversation. Deliberately one id per call.
+    // Bulk staging loader for the BiteSpeed contact/consent export (2026-07-22 cutover).
+    // Pass-through to PostgREST bulk insert on the staging table — rows arrive as JSON from
+    // curl'd files so no interactive session carries the payload. Table name is FIXED (no
+    // caller-controlled table). Same WA_SYNC_TOKEN gate as its /internal siblings.
+    if (url.pathname === '/internal/bsp-import-load' && request.method === 'POST') {
+      const want = env.WA_SYNC_TOKEN;
+      const a = request.headers.get('Authorization') || '';
+      const bearer = a.slice(0, 7).toLowerCase() === 'bearer ' ? a.slice(7).trim() : '';
+      if (!want || bearer !== want) return err('unauthorised', 401);
+      let b = {}; try { b = await request.json(); } catch {}
+      if (!Array.isArray(b.rows) || !b.rows.length) return err('rows_required', 400);
+      const rows = b.rows.map((r) => ({
+        list_name: String(r.list_name || ''), full_name: r.full_name || null,
+        phone: r.phone || null, email: r.email || null,
+      }));
+      const w = await A.sbComms('/rest/v1/bitespeed_import_2026_07_22', env,
+        { method: 'POST', body: JSON.stringify(rows) });
+      return w.ok ? ok({ inserted: rows.length }) : err(`load_failed:${w.status}`, 500);
+    }
     if (url.pathname === '/internal/wa-subscribe-app' && request.method === 'POST') {
       const want = env.WA_SYNC_TOKEN;
       const a = request.headers.get('Authorization') || '';
