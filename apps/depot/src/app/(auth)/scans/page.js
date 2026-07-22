@@ -10,7 +10,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useAuth } from '@throttle/auth';
 import { garageFetch } from '@throttle/db';
-import { Spinner } from '@throttle/ui';
+import { Spinner, Modal } from '@throttle/ui';
 import {
   Icon, Panel, FilterChip, ToneBadge, fmt, btnGhost, inputStyle, lineColor, lineRgb, istToday,
 } from '../../../components/kit/index.js';
@@ -100,6 +100,7 @@ export default function ScanFeedPage() {
   const [upcLoading,      setUpcLoading]      = useState(false);
   const [summary,         setSummary]         = useState(null);
   const [summaryLoading,  setSummaryLoading]  = useState(false);
+  const [historyUpc,      setHistoryUpc]      = useState(null); // unit whose full history modal is open
 
   const { scans, loading, error: scanError, hasMore, loadMore } =
     useScans({ dateFrom, dateTo, showVoided, activityFilter, activities: DISPATCH_ACTS }, session);
@@ -270,7 +271,9 @@ export default function ScanFeedPage() {
                 {displayRows.map(s => {
                   const voided = !!s.voided;
                   return (
-                    <tr key={s.id} style={{ opacity: voided ? 0.5 : 1 }}>
+                    <tr key={s.id} className="scan-row" style={{ opacity: voided ? 0.5 : 1, cursor: s.upc ? 'pointer' : 'default' }}
+                      title={s.upc ? 'Click for full unit history' : undefined}
+                      onClick={() => { if (s.upc) setHistoryUpc(s.upc); }}>
                       <td style={tdBase}>
                         <span className="num" style={{ fontSize: 11, color: 'var(--t3)' }}>
                           {upcMode ? formatDateTime(s.timestamp) : formatTime(s.timestamp)}
@@ -310,6 +313,101 @@ export default function ScanFeedPage() {
           </div>
         )}
       </Panel>
+
+      <UnitHistoryModal upc={historyUpc} session={session} onClose={() => setHistoryUpc(null)} />
+      <style>{`.scan-row:hover td { background: var(--surface-2); }`}</style>
+    </div>
+  );
+}
+
+/* ── Unit history modal ─────────────────────────────────────────
+   Click any feed row → the unit's WHOLE scan history (production +
+   dispatch), with the dispatch channel attached to ALLOC/PACK/DOUT
+   rows (served by getScansByUpc's allocation enrichment). */
+function UnitHistoryModal({ upc, session, onClose }) {
+  const [rows,    setRows]    = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!upc || !session) { setRows([]); return; }
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const data = await garageFetch('getScansByUpc', { upc }, session);
+        if (!cancelled) setRows(Array.isArray(data) ? data : []);
+      } catch (_) { if (!cancelled) setRows([]); }
+      finally { if (!cancelled) setLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [upc, session]);
+
+  const product   = rows.find(r => r.unit_product)?.unit_product || null;
+  const status    = rows.find(r => r.unit_status)?.unit_status || null;
+  // Headline channel = the most recent dispatch row that resolved one (rows are desc).
+  const channel   = rows.find(r => r.channel_name && (r.activity === 'DOUT' || r.activity === 'ALLOC'))?.channel_name || null;
+
+  return (
+    <Modal open={!!upc} onClose={onClose} size="lg" title={`Unit history — ${upc || ''}`}>
+      {loading ? (
+        <div style={{ padding: '32px 0', display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+      ) : rows.length === 0 ? (
+        <div style={{ padding: '24px 0', textAlign: 'center', fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--t3)' }}>
+          No scans found for this unit
+        </div>
+      ) : (
+        <>
+          {/* Header strip: product · status · channel */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18, marginBottom: 14 }}>
+            <HeaderStat label="Product" value={product || '—'} />
+            <HeaderStat label="Status" value={status ? status.replace(/_/g, ' ').toUpperCase() : '—'} />
+            <HeaderStat label="Channel" value={channel || '—'} accent={!!channel} />
+            <HeaderStat label="Scans" value={String(rows.length)} />
+          </div>
+
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  {['Time','Activity','Station','Line','Channel','Operator','Status'].map(h => (
+                    <th key={h} style={thStyle}><span className="eyebrow">{h}</span></th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(r => (
+                  <tr key={r.id} style={{ opacity: r.voided ? 0.5 : 1 }}>
+                    <td style={tdBase}>
+                      <span className="num" style={{ fontSize: 11, color: 'var(--t3)' }}>{formatDateTime(r.timestamp)}</span>
+                    </td>
+                    <td style={tdBase}><ActivityBadge activity={r.activity} /></td>
+                    <td style={{ ...tdBase, fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--t2)' }}>{r.station || '—'}</td>
+                    <td style={tdBase}>
+                      {r.line ? <LineChip id={r.line} /> : <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--t4)' }}>—</span>}
+                    </td>
+                    <td style={{ ...tdBase, fontFamily: 'var(--font-ui)', fontSize: 12.5, color: r.channel_name ? 'var(--t1)' : 'var(--t4)', fontWeight: r.channel_name ? 600 : 400 }}>
+                      {r.channel_name || '—'}
+                    </td>
+                    <td style={{ ...tdBase, fontFamily: 'var(--font-ui)', fontSize: 12.5, color: 'var(--t2)' }}>
+                      {r.operator_name || (r.operator_id ? String(r.operator_id).slice(0, 8) : '—')}
+                    </td>
+                    <td style={tdBase}>{r.voided ? <ToneBadge tone="bad">Voided</ToneBadge> : <ToneBadge tone="ok">OK</ToneBadge>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+function HeaderStat({ label, value, accent }) {
+  return (
+    <div>
+      <div className="eyebrow" style={{ marginBottom: 4 }}>{label}</div>
+      <div style={{ fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: accent ? 'var(--yellow)' : 'var(--t1)' }}>{value}</div>
     </div>
   );
 }
