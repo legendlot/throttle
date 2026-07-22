@@ -100,7 +100,8 @@ async function handleShopfloWebhook(env, request) {
     // event row (what the journey's send step binds from) carries it. Payload-supplied
     // image wins; catalog-cache lookup fills the gap. Best-effort by design.
     if (spec.event === 'checkout_abandoned' && envlp.properties && !envlp.properties.product_image_url) {
-      envlp.properties.product_image_url = await resolveProductImage(env, envlp.properties.product_names);
+      envlp.properties.product_image_url = await resolveProductImage(
+        env, envlp.properties.primary_product_name || envlp.properties.product_names);
     }
 
     const r = await ingest(env, envlp);

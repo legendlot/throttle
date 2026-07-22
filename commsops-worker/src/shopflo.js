@@ -91,6 +91,30 @@ function inrGroup(v) {
   return neg + s.slice(0, -3).replace(/\B(?=(\d{2})+(?!\d))/g, ',') + ',' + s.slice(-3);
 }
 
+// Add-on line items that must never headline the cart message or pick its header image
+// (live case 2026-07-23 00:40 IST: "Gift Wrapping" was the cart's FIRST line item, so the
+// hero became a gift-box icon and the body led with the ₹49 add-on, not the car).
+const ADDON_NAMES = new Set(['gift wrapping']);
+
+// Cart names ordered for DISPLAY: add-ons last, then by line value (price×qty) when the
+// payload carries prices, so the customer's real purchase headlines. Returns a CSV in
+// the same shape product_names uses.
+function orderedNames(namesCsv, lineItems) {
+  const parts = String(namesCsv || '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (parts.length < 2) return parts.join(', ') || null;
+  const value = {};
+  if (Array.isArray(lineItems)) for (const li of lineItems) {
+    const t = li && (li.title || li.name);
+    if (t) value[String(t).trim()] = (Number(li.price) || 0) * (Number(li.quantity) || 1);
+  }
+  const sorted = parts.slice().sort((a, b) => {
+    const aAddon = ADDON_NAMES.has(a.toLowerCase()), bAddon = ADDON_NAMES.has(b.toLowerCase());
+    if (aAddon !== bAddon) return aAddon ? 1 : -1;
+    return (value[b] || 0) - (value[a] || 0);
+  });
+  return sorted.join(', ');
+}
+
 // Cart product names truncated at a comma boundary (WA template bodies cap at 1024
 // chars AFTER substitution — a long multi-item cart string can fail the send). Always
 // keeps the first item (hard-sliced if itself over budget), then whole names while
@@ -131,17 +155,32 @@ function checkoutUrlSuffix(url) {
   return s.slice(SHOPFLO_CHECKOUT_BASE.length) || null;
 }
 
-// Best-effort product image from the payload itself (the doc doesn't promise one; scan
-// the plausible spots). The handler falls back to the comms.product_images catalog cache.
-function payloadImageUrl(body) {
-  const li = Array.isArray(body?.line_items) ? body.line_items[0] : null;
-  const cands = [li?.image_url, li?.image, li?.featured_image, li?.product_image,
-    Array.isArray(body?.cart_product_images) ? body.cart_product_images[0] : null];
-  for (const c of cands) {
-    const s = typeof c === 'string' ? c : (c && typeof c === 'object' ? c.src : null);
-    if (s && /^https?:\/\//.test(s)) return s;
+// Best-effort product image from the payload itself (live wire confirmed 2026-07-23:
+// line_items DO carry image URLs). Picks the PRIMARY item's image — title match on
+// `primaryName`, else the highest-value non-add-on line — never blindly item[0] (the
+// gift-box-icon incident). If the primary item carries no image, returns null so the
+// handler's catalog-cache lookup (keyed on the primary NAME) resolves it instead — a
+// wrong-product image is worse than a fallback.
+function payloadImageUrl(body, primaryName) {
+  const items = Array.isArray(body?.line_items) ? body.line_items : [];
+  if (!items.length) return null;
+  const imgOf = (li) => {
+    for (const c of [li?.image_url, li?.image, li?.featured_image, li?.product_image]) {
+      const s = typeof c === 'string' ? c : (c && typeof c === 'object' ? c.src : null);
+      if (s && /^https?:\/\//.test(s)) return s;
+    }
+    return null;
+  };
+  const titleOf = (li) => String(li?.title || li?.name || '').trim();
+  let pick = primaryName ? items.find((li) => titleOf(li) === primaryName) : null;
+  if (!pick) {
+    pick = items.slice().sort((a, b) => {
+      const aAddon = ADDON_NAMES.has(titleOf(a).toLowerCase()), bAddon = ADDON_NAMES.has(titleOf(b).toLowerCase());
+      if (aAddon !== bAddon) return aAddon ? 1 : -1;
+      return ((Number(b?.price) || 0) * (Number(b?.quantity) || 1)) - ((Number(a?.price) || 0) * (Number(a?.quantity) || 1));
+    })[0];
   }
-  return null;
+  return pick ? imgOf(pick) : null;
 }
 
 // checkout_abandoned → the abandoned-cart signal (event name `checkout_abandoned`,
@@ -156,6 +195,8 @@ function mapCheckoutAbandoned(body) {
     body.abandoned_checkout_url,
   );
   const key = firstNonEmpty(body.checkout_id, body.cart_token, body.session_id) || '';
+  const namesOrdered = orderedNames(body.cart_product_names, body.line_items);
+  const primaryName = (namesOrdered || '').split(',')[0].trim() || null;
   const props = {
     checkout_id: body.checkout_id || null,
     cart_token: body.cart_token || null,
@@ -169,14 +210,17 @@ function mapCheckoutAbandoned(body) {
     line_item_count: Array.isArray(body.line_items) ? body.line_items.length : null,
     product_names: body.cart_product_names || null,
     // Display-ready derivations for template slots (the cart-contents WA templates
-    // bind these; raw product_names/total_price stay for analytics):
-    product_names_short: shortNames(body.cart_product_names),
+    // bind these; raw product_names/total_price stay for analytics). Names are
+    // display-ordered first so an add-on can never headline.
+    product_names_short: shortNames(namesOrdered),
     total_display: inrGroup(body.total_price) != null ? `₹${inrGroup(body.total_price)}` : null,
     // v3 image-header template slots: the CTA button suffix + (if the payload carries
     // one) the cart product's image. The handler backfills product_image_url from the
-    // comms.product_images catalog cache when the payload has none.
+    // comms.product_images catalog cache when the payload has none, keyed on
+    // primary_product_name (display-ordered: add-ons last, highest line value first).
     checkout_url_suffix: checkoutUrlSuffix(checkoutUrl),
-    product_image_url: payloadImageUrl(body),
+    primary_product_name: primaryName || null,
+    product_image_url: payloadImageUrl(body, primaryName),
     marketing_consent: (body.customer && body.customer.marketing_consent) ?? null,
     source_surface: 'shopflo',
   };
@@ -270,7 +314,7 @@ function consentRowsFrom(body, capturedAt) {
 }
 
 module.exports = {
-  eventName, pickIdentity, identsFromShopflo, displayName, noteAttr, toIso, num, inrGroup, shortNames,
+  eventName, pickIdentity, identsFromShopflo, displayName, noteAttr, toIso, num, inrGroup, shortNames, orderedNames,
   checkoutUrlSuffix, payloadImageUrl, SHOPFLO_CHECKOUT_BASE,
   mapCheckoutAbandoned, mapOrderCompleted, mapAddToCart, EVENT_MAP, consentRowsFrom,
 };

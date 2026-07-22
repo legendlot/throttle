@@ -172,9 +172,10 @@ t('shortNames keeps oversized first item hard-sliced', () => {
   assert.ok(out.includes('…'));
 });
 t('shortNames null on empty', () => { assert.equal(FLO.shortNames(''), null); });
-t('mapCheckoutAbandoned carries product_names_short + total_display', () => {
+t('mapCheckoutAbandoned carries product_names_short (value-ordered) + total_display', () => {
   const e = FLO.mapCheckoutAbandoned(CHECKOUT_ABANDONED);
-  assert.equal(e.properties.product_names_short, 'A, B');
+  // fixture line_items: A ₹799, B ₹1599 → B headlines (display order = line value desc)
+  assert.equal(e.properties.product_names_short, 'B, A');
   assert.equal(e.properties.total_display, '₹2,398');
 });
 
@@ -189,13 +190,57 @@ t('checkoutUrlSuffix null on foreign/absent URL (fail-loud path)', () => {
   assert.equal(FLO.checkoutUrlSuffix(null), null);
   assert.equal(FLO.checkoutUrlSuffix('https://checkout.shopflo.co/stable/'), null);
 });
-t('payloadImageUrl scans line_items + cart_product_images shapes', () => {
+t('payloadImageUrl scans line_items image shapes (single item)', () => {
   assert.equal(FLO.payloadImageUrl({ line_items: [{ image_url: 'https://cdn.x/a.webp' }] }), 'https://cdn.x/a.webp');
   assert.equal(FLO.payloadImageUrl({ line_items: [{ image: { src: 'https://cdn.x/b.webp' } }] }), 'https://cdn.x/b.webp');
-  assert.equal(FLO.payloadImageUrl({ cart_product_images: ['https://cdn.x/c.webp'] }), 'https://cdn.x/c.webp');
+  // cart_product_images fallback REMOVED by design (index-0 add-on risk) — cache resolves instead
+  assert.equal(FLO.payloadImageUrl({ cart_product_images: ['https://cdn.x/c.webp'] }), null);
   assert.equal(FLO.payloadImageUrl({ line_items: [{ image: 'not-a-url' }] }), null);
   assert.equal(FLO.payloadImageUrl({}), null);
 });
+t('orderedNames: add-on last, highest line value first', () => {
+  const items = [
+    { title: 'Gift Wrapping', price: '49.00', quantity: 1 },
+    { title: 'L.O.T Cars Shadow - RC Drift Car', price: '2199.00', quantity: 1 },
+    { title: 'L.O.T Spare Parts - Battery pack for L.O.T Cars Flare/Bumble/Ghost', price: '499.00', quantity: 1 },
+  ];
+  assert.equal(
+    FLO.orderedNames('Gift Wrapping,L.O.T Cars Shadow - RC Drift Car,L.O.T Spare Parts - Battery pack for L.O.T Cars Flare/Bumble/Ghost', items),
+    'L.O.T Cars Shadow - RC Drift Car, L.O.T Spare Parts - Battery pack for L.O.T Cars Flare/Bumble/Ghost, Gift Wrapping');
+});
+t('orderedNames: no prices still demotes the add-on', () => {
+  assert.equal(FLO.orderedNames('Gift Wrapping,L.O.T Cars Shadow - RC Drift Car', null),
+    'L.O.T Cars Shadow - RC Drift Car, Gift Wrapping');
+});
+t('payloadImageUrl picks the PRIMARY item image, not item[0]', () => {
+  const body = { line_items: [
+    { title: 'Gift Wrapping', price: '49.00', quantity: 1, image_url: 'https://cdn.x/gift.avif' },
+    { title: 'L.O.T Cars Shadow - RC Drift Car', price: '2199.00', quantity: 1, image_url: 'https://cdn.x/shadow.webp' },
+  ] };
+  assert.equal(FLO.payloadImageUrl(body, 'L.O.T Cars Shadow - RC Drift Car'), 'https://cdn.x/shadow.webp');
+  // no primaryName → value sort still lands on the car
+  assert.equal(FLO.payloadImageUrl(body, null), 'https://cdn.x/shadow.webp');
+});
+t('payloadImageUrl: primary item without an image → null (cache resolves), never the add-on image', () => {
+  const body = { line_items: [
+    { title: 'Gift Wrapping', price: '49.00', quantity: 1, image_url: 'https://cdn.x/gift.avif' },
+    { title: 'L.O.T Cars Shadow - RC Drift Car', price: '2199.00', quantity: 1 },
+  ] };
+  assert.equal(FLO.payloadImageUrl(body, 'L.O.T Cars Shadow - RC Drift Car'), null);
+});
+t('mapCheckoutAbandoned: gift-wrap cart → car headlines, primary_product_name set', () => {
+  const b = { ...CHECKOUT_ABANDONED,
+    cart_product_names: 'Gift Wrapping,L.O.T Cars Shadow - RC Drift Car',
+    line_items: [
+      { title: 'Gift Wrapping', price: '49.00', quantity: 1, image_url: 'https://cdn.x/gift.avif' },
+      { title: 'L.O.T Cars Shadow - RC Drift Car', price: '2199.00', quantity: 1, image_url: 'https://cdn.x/shadow.webp' },
+    ] };
+  const e = FLO.mapCheckoutAbandoned(b);
+  assert.equal(e.properties.product_names_short, 'L.O.T Cars Shadow - RC Drift Car, Gift Wrapping');
+  assert.equal(e.properties.primary_product_name, 'L.O.T Cars Shadow - RC Drift Car');
+  assert.equal(e.properties.product_image_url, 'https://cdn.x/shadow.webp');
+});
+
 t('mapCheckoutAbandoned carries checkout_url_suffix (null when base differs)', () => {
   const e = FLO.mapCheckoutAbandoned(CHECKOUT_ABANDONED);
   // fixture's checkout_url is the doc shape (not /stable/) → suffix null by design
