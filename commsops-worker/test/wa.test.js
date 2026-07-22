@@ -99,6 +99,13 @@ function restoreFetch() { global.fetch = realFetch; }
     assert.equal(u[2].cost, null);
   });
 
+  await t('cost: billable:false service message is NOT costed; absent billable is unpriced', () => {
+    const mk = (pricing) => ({ entry: [{ changes: [{ value: { statuses: [{ id: 'w', status: 'delivered', timestamp: '1700000000', pricing }] } }] }] });
+    assert.strictEqual(wa.parseStatusWebhook(mk({ billable: false, category: 'service' }))[0].cost, null);
+    assert.strictEqual(wa.parseStatusWebhook(mk({ category: 'utility' }))[0].cost, null);          // tri-state: absent ≠ billable
+    assert.strictEqual(wa.parseStatusWebhook(mk({ billable: true, category: 'marketing' }))[0].cost, 1);
+  });
+
   // ── parseInbound ──
   await t('parseInbound normalizes text/button/interactive/media', () => {
     const payload = { object: 'whatsapp_business_account', entry: [{ changes: [{ value: {

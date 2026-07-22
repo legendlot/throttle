@@ -107,8 +107,11 @@ function parseStatusWebhook(payload) {
     for (const s of value.statuses || []) {
       const canonical = STATUS_MAP[s.status] || null;
       if (!canonical) continue;
-      // per-conversation billing lands on the status webhook's pricing object
-      const priced = s.pricing && (s.pricing.billable === true || s.pricing.category);
+      // per-conversation billing lands on the status webhook's pricing object.
+      // Billable means Meta SAID billable. category-presence is not a price signal —
+      // {billable:false, category:'service'} is every free service-window message, i.e. most
+      // of the support number's traffic (review H4). Absent billable = unpriced (tri-state).
+      const priced = s.pricing?.billable === true;
       updates.push({
         provider_message_id: s.id || null,
         canonical_status: canonical,
