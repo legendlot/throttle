@@ -9,6 +9,7 @@ const WATPL = require('../src/wa-templates.js');
 const waHook = require('../src/wa-webhooks.js');
 const A = require('../src/auth.js');
 const { runGate, _clearSettingsCache } = require('../src/gate.js');
+const { waWindowOpen } = require('../src/send.js');
 
 let pass = 0, fail = 0;
 function t(name, fn) {
@@ -389,6 +390,41 @@ function restoreFetch() { global.fetch = realFetch; }
     restoreFetch();
     assert.equal(r.ok, false);
     assert.equal(r.error, 'stage_waba_is_pinned_waba');
+  });
+
+  // ── waWindowOpen — per (customer, business number) window (review H5 part 3) ──
+  await t('waWindowOpen fails closed with no phoneNumberId — no DB call made', async () => {
+    const orig = A.sbComms;
+    let called = false;
+    A.sbComms = async () => { called = true; return { ok: true, data: [] }; };
+    const openNoId = await waWindowOpen({}, '919880212323', null);
+    assert.equal(openNoId, false);
+    assert.equal(called, false, 'must not query sbComms without a phone_number_id');
+    A.sbComms = orig;
+  });
+
+  await t('waWindowOpen is isolated per business number — SUPPORT window does not open MARKETING', async () => {
+    const orig = A.sbComms;
+    A.sbComms = async (path) => {
+      // only the SUPPORT phone_number_id has an open window row
+      if (path.includes('phone_number_id=eq.SUPPORT_PID')) {
+        return { ok: true, data: [{ last_inbound_at: new Date().toISOString() }] };
+      }
+      return { ok: true, data: [] };   // MARKETING_PID (or anything else) → no row
+    };
+    const support = await waWindowOpen({}, '919880212323', 'SUPPORT_PID');
+    const marketing = await waWindowOpen({}, '919880212323', 'MARKETING_PID');
+    assert.equal(support, true);
+    assert.equal(marketing, false, 'a window opened on SUPPORT must not leak to MARKETING for the same customer');
+    A.sbComms = orig;
+  });
+
+  await t('waWindowOpen treats a stale last_inbound_at (>24h) as closed', async () => {
+    const orig = A.sbComms;
+    A.sbComms = async () => ({ ok: true, data: [{ last_inbound_at: new Date(Date.now() - 25 * 3600 * 1000).toISOString() }] });
+    const stale = await waWindowOpen({}, '919880212323', 'SUPPORT_PID');
+    assert.equal(stale, false);
+    A.sbComms = orig;
   });
 
   console.log(`\n${pass} passed, ${fail} failed`);

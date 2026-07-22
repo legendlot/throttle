@@ -116,11 +116,14 @@ async function handleInbound(env, payload) {
   const inbound = wa.parseInbound(payload);
   for (const m of inbound) {
     if (!m.from) continue;
-    // 1. open the 24h window
-    await A.sbComms('/rest/v1/wa_windows?on_conflict=identifier_value', env, {
+    // 1. open the 24h window — per (customer, RECEIVING business number): Meta's service
+    // window is per WABA number, not per customer (review H5 part 3). m.phone_number_id is
+    // the business number this inbound landed on.
+    await A.sbComms('/rest/v1/wa_windows?on_conflict=identifier_value,phone_number_id', env, {
       method: 'POST',
       headers: { Prefer: 'resolution=merge-duplicates' },
-      body: JSON.stringify({ identifier_value: m.from, last_inbound_at: m.ts, updated_at: new Date().toISOString() }),
+      body: JSON.stringify({ identifier_value: m.from, phone_number_id: m.phone_number_id || '',
+                             last_inbound_at: m.ts, updated_at: new Date().toISOString() }),
     });
     // 2. substrate — resolve/create profile + append the inbound event
     const res = await ingest(env, {

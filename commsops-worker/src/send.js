@@ -10,12 +10,16 @@ const whatsappAdapter = require('./adapters/whatsapp.js');
 
 const ADAPTERS = { email: emailAdapter, whatsapp: whatsappAdapter };
 
-// Is the WA customer-service window open for this recipient? (last inbound < 24h ago)
-async function waWindowOpen(env, to) {
+// Is the WA customer-service window open for this recipient ON THIS SENDING NUMBER?
+// (review H5 part 3) — Meta's 24h window is per (business number ↔ customer): a window opened
+// by messaging SUPPORT must NOT open free-text sends from MARKETING/TXN. No phone_number_id
+// context (e.g. template branch, or a sender with no metadata) → fail closed, no DB call.
+async function waWindowOpen(env, to, phoneNumberId) {
   const id = whatsappAdapter.toWaId(to);
-  if (!id) return false;
+  if (!id || !phoneNumberId) return false;
   const r = await A.sbComms(
-    `/rest/v1/wa_windows?identifier_value=eq.${A.enc(id)}&select=last_inbound_at&limit=1`, env);
+    `/rest/v1/wa_windows?identifier_value=eq.${A.enc(id)}` +
+    `&phone_number_id=eq.${A.enc(phoneNumberId)}&select=last_inbound_at&limit=1`, env);
   const row = r.ok ? r.data?.[0] : null;
   if (!row?.last_inbound_at) return false;
   return (Date.now() - new Date(row.last_inbound_at).getTime()) < 24 * 3600 * 1000;
@@ -164,14 +168,18 @@ async function send(env, opts) {
   try {
     if (channel === 'whatsapp') {
       const isTemplate = !!(template.content && template.content.meta_name);
-      const windowOpen = isTemplate ? false : await waWindowOpen(env, to);
+      // Window is scoped to the SENDING sender's phone_number_id (review H5 part 3) —
+      // a window opened on SUPPORT's number must not leak into a MARKETING/TXN free-text
+      // send just because it's the same customer. Template sends never need the lookup.
+      const senderPhoneId = sender.metadata?.phone_number_id || null;
+      const windowOpen = isTemplate ? false : await waWindowOpen(env, to, senderPhoneId);
       const body = renderWhatsapp(template, {
         profile, event: opts.eventContext, constants: opts.constants,
         recipient: opts.recipient, system: {},
       });
       rendered = {
         ...body, to,
-        phone_number_id: sender.metadata?.phone_number_id || null,
+        phone_number_id: senderPhoneId,
         window_open: windowOpen,
       };
       waMeta = { mode: body.mode, window_open: windowOpen, hasTemplate: isTemplate };
@@ -248,4 +256,4 @@ async function finalize(env, opts, res, sender, channel, purpose, template, sent
            provider_message_id: res.provider_message_id || null };
 }
 
-module.exports = { send, getActiveSender, pickSender };
+module.exports = { send, getActiveSender, pickSender, waWindowOpen };
