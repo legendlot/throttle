@@ -117,6 +117,43 @@ const types = (ids) => (ids || []).map((i) => i.type).sort();
     assert.equal(env.properties.checkout_token, null);
   });
 
+  // ── product_viewed: ATTACH-ONLY (S230 browse abandonment) ──
+  await t('product_viewed from an UNKNOWN browser is dropped — no profile mint', async () => {
+    const cap = {}; const restore = stubDb(cap);   // stub's identifiers lookup returns [] → unknown
+    const r = await handlePixel(ENV, req({ token: 'tok', event: 'product_viewed', client_id: 'cid-new',
+      properties: { product_name: 'Ghost', product_handle: 'ghost' } }));
+    restore();
+    assert.equal(r.skipped, 'anonymous_view');
+    assert.equal(cap.identifiers, undefined, 'resolve_identity must not be called');
+  });
+
+  await t('product_viewed from a KNOWN browser ingests with product props', async () => {
+    const cap = {}; const restore = stubDb(cap);
+    const stubbed = A.sbComms;   // layer a known-identifier answer over the base stub
+    A.sbComms = async (path, env, init) => {
+      if (path.startsWith('/rest/v1/identifiers?or=')) return { ok: true, data: [{ profile_id: 'p1' }] };
+      return stubbed(path, env, init);
+    };
+    const r = await handlePixel(ENV, req({ token: 'tok', event: 'product_viewed', client_id: 'cid-known',
+      properties: { product_name: 'Ghost', product_handle: 'ghost-rc-drift-car', product_image_url: 'https://cdn.x/g.webp' } }));
+    restore();   // stubDb holds the REAL sbComms — this resets past the wrapper too
+    assert.ok(r.ok && !r.skipped, JSON.stringify(r));
+    assert.deepEqual(types(cap.identifiers), ['web_session']);
+  });
+
+  await t('product_viewed lookup ERROR fails closed (dropped, not minted)', async () => {
+    const cap = {}; const restore = stubDb(cap);
+    const stubbed = A.sbComms;
+    A.sbComms = async (path, env, init) => {
+      if (path.startsWith('/rest/v1/identifiers?or=')) return { ok: false, status: 500, data: null };
+      return stubbed(path, env, init);
+    };
+    const r = await handlePixel(ENV, req({ token: 'tok', event: 'product_viewed', client_id: 'cid-x' }));
+    restore();
+    assert.equal(r.skipped, 'anonymous_view');
+    assert.equal(cap.identifiers, undefined);
+  });
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

@@ -5,7 +5,10 @@
 // Privacy: Permission = "Not required"; Data sale = "does not qualify as data sale"
 // (first-party endpoint, no third-party sharing).
 //
-// Emits the two storefront signals the backend can't see on its own:
+// Emits the three storefront signals the backend can't see on its own:
+//   product_viewed         → product_viewed     (the browse-abandonment trigger; the
+//                                                backend keeps it ATTACH-ONLY — views
+//                                                from unknown browsers are dropped)
 //   product_added_to_cart → add_to_cart        (top-of-funnel, usually anonymous)
 //   checkout_started       → checkout_started   (the abandoned-cart journey trigger)
 // clientId is always sent as a weak browser-session key so an anonymous add_to_cart
@@ -59,6 +62,33 @@ function cartKey() {
     return (c && (c.id || c.token)) || null;
   } catch (e) { return null; }
 }
+
+// Browse signal. The variant payload carries the product image + url natively, so the
+// browse-abandonment template's image header + product link bind with no server lookup.
+analytics.subscribe("product_viewed", function (event) {
+  var v = (event.data && event.data.productVariant) || {};
+  var prod = v.product || {};
+  var price = v.price || {};
+  var url = prod.url || null; // Shopify gives a path like /products/ghost-rc-drift-car
+  var path = url ? String(url).split("?")[0] : null;
+  var handle = null;
+  if (path) {
+    var mm = path.match(/\/products\/([^\/]+)/);
+    if (mm) handle = mm[1];
+  }
+  post("product_viewed", {
+    properties: {
+      product_name: prod.title || v.title || null,
+      variant_id: v.id || null,
+      sku: v.sku || null,
+      price: num(price.amount),
+      currency: price.currencyCode || null,
+      product_handle: handle,
+      product_url: path ? ("https://www.legendoftoys.com" + path) : null,
+      product_image_url: (v.image && v.image.src) || null
+    }
+  }, event);
+});
 
 analytics.subscribe("product_added_to_cart", function (event) {
   var line = (event.data && event.data.cartLine) || {};

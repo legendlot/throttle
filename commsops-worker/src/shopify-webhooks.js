@@ -83,7 +83,7 @@ async function handlePixel(env, request) {
   if (!body || body.token !== env.PIXEL_TOKEN) return { ok: false, error: 'unauthorised', status: 401 };
 
   const name = body.event;
-  if (name !== 'add_to_cart' && name !== 'checkout_started')
+  if (name !== 'add_to_cart' && name !== 'checkout_started' && name !== 'product_viewed')
     return { ok: false, error: 'unsupported_event', status: 400 };
 
   const idents = [];
@@ -114,6 +114,18 @@ async function handlePixel(env, request) {
   // browser key is lost (cookie cleared / new session). NOT a join key to orders — see above.
   if (body.cart_id) idents.push({ type: 'cart_id', value: String(body.cart_id), is_verified: false });
   if (!idents.length) return { ok: true, skipped: 'no_identifier' };
+
+  // product_viewed is ATTACH-ONLY: it fires on EVERY product page view — an order of
+  // magnitude above add_to_cart — and a view from a browser we have never seen can
+  // never be messaged anyway. Minting a profile per anonymous view would bloat the
+  // substrate (and enrol phantom browsers into browse-abandonment) for zero reach.
+  // So: only ingest when SOME identifier already exists. Fail-closed on a lookup
+  // error — a lost view is cheap, a junk profile is forever.
+  if (name === 'product_viewed') {
+    const ors = idents.map((i) => `and(type.eq.${i.type},value.eq.${A.enc(i.value)})`).join(',');
+    const known = await A.sbComms(`/rest/v1/identifiers?or=(${ors})&select=profile_id&limit=1`, env);
+    if (!(known.ok && known.data?.length)) return { ok: true, skipped: 'anonymous_view' };
+  }
 
   const props = { ...(body.properties || {}), source_surface: 'web_pixel' };
   // dedup a pixel checkout_started against the webhook's (same checkout token)
