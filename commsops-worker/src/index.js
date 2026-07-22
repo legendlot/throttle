@@ -324,11 +324,19 @@ async function handlePost(body, auth, env) {
       const { id, channel, name, purpose, language, content, variables, status } = body;
       if (!name) return err('name_required', 400);
       if (id) {
-        const cur = await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(id)}&select=version&limit=1`, env);
+        const cur = await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(id)}&select=version,content&limit=1`, env);
         const v = (cur.ok && Number(cur.data?.[0]?.version)) || 1;
+        // The UI rebuilds `content` from form state and historically DROPPED worker-owned keys
+        // (waba_id pin, header_handle) — which silently re-routes sync/sends to the wrong WABA
+        // (review C4/M8). Carry them over unless explicitly sent.
+        const prev = (cur.ok && cur.data?.[0]?.content) || {};
+        const mergedContent = { ...(content || {}) };
+        for (const k of ['waba_id', 'header_handle']) {
+          if (mergedContent[k] == null && prev[k] != null) mergedContent[k] = prev[k];
+        }
         const r = await A.sbComms(`/rest/v1/templates?id=eq.${A.enc(id)}`, env, {
           method: 'PATCH', body: JSON.stringify({
-            channel, name, purpose, language: language || 'en', content: content || {},
+            channel, name, purpose, language: language || 'en', content: mergedContent,
             variables: variables || [], status: status || 'active', version: v + 1, updated_at: nowIso(),
           }),
         });
