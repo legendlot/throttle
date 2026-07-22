@@ -406,6 +406,10 @@ async function handlePost(body, auth, env) {
         channel: body.channel || 'email', purpose: 'transactional', isTest: true,
         to: body.to, templateId: body.templateId || null, template: body.template || null,
         profileId: body.profileId || null, constants: body.constants || {},
+        // Test values double as the trigger-event context so EVENT-sourced variables
+        // (the abandoned-cart templates' product/total/image/url slots) resolve in a
+        // test send instead of always collapsing to their fallbacks.
+        eventContext: body.event || body.constants || {},
         recipient: body.recipient || {}, source: 'test',
       });
       return ok(r);
