@@ -556,6 +556,17 @@ async function runScheduled(env) {
     }
   } catch (e) { console.log('scheduler_sweep_error', e?.message || String(e)); }
 
+  // 1b. stalled broadcasts — a campaign stuck 'sending' for >30 min means its continuation
+  // chain died (DLQ'd page / worker eviction). Alert-only: resuming needs a human decision.
+  try {
+    const cutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const stuck = await A.sbComms(
+      `/rest/v1/campaigns?status=eq.sending&updated_at=lt.${A.enc(cutoff)}&select=id,name,updated_at`, env);
+    for (const c of (stuck.ok && Array.isArray(stuck.data) ? stuck.data : [])) {
+      await AL.alert(env, `⚠️ *Relay — broadcast stalled*\n"${c.name}" has been 'sending' since ${c.updated_at}. Fan-out chain likely died — check comms.queue_failures.`);
+    }
+  } catch (e) { console.log('stall_sweep_error', e?.message || String(e)); }
+
   // 2. deliverability spike watch (≤1 alert/hour via settings.last_alert_at)
   try { await checkDeliverabilitySpike(env); }
   catch (e) { console.log('spike_check_error', e?.message || String(e)); }
