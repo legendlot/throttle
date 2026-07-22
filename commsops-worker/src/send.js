@@ -107,7 +107,12 @@ async function send(env, opts) {
   const adapter = ADAPTERS[channel];
   if (!adapter) return { status: 'failed', reason: 'no_adapter' };
 
-  // dedup reserve — if a row with this dedup_key exists, never re-send
+  // dedup reserve — dedup on SUCCESS, not on attempt. A prior sent-like row (or a fresh
+  // in-flight queued row) dedups; a prior skipped/failed/suppressed/stale-queued row is
+  // ADOPTED so the retry can run. Review 2026-07-21 finding C1: burning the key on any
+  // outcome turned every transient failure into a silent permanent loss.
+  const SENT_LIKE = new Set(['sent', 'delivered', 'opened', 'clicked', 'bounced']);
+  const IN_FLIGHT_MS = 10 * 60 * 1000;
   if (opts.dedupKey) {
     const reserve = await A.sbComms('/rest/v1/messages?on_conflict=dedup_key', env, {
       method: 'POST',
@@ -117,9 +122,18 @@ async function send(env, opts) {
         source: opts.source || null, dedup_key: opts.dedupKey, to_address: opts.to || null,
       }),
     });
-    if (reserve.ok && Array.isArray(reserve.data) && reserve.data.length === 0)
-      return { status: 'deduped', deduped: true };
-    opts._reservedId = reserve.data?.[0]?.id || null;
+    if (reserve.ok && Array.isArray(reserve.data) && reserve.data.length === 0) {
+      const ex = await A.sbComms(
+        `/rest/v1/messages?dedup_key=eq.${A.enc(opts.dedupKey)}&select=id,status,queued_at&limit=1`, env);
+      const row = ex.ok ? ex.data?.[0] : null;
+      const inFlight = row && row.status === 'queued'
+        && (Date.now() - new Date(row.queued_at).getTime()) < IN_FLIGHT_MS;
+      // Unknown state (lookup failed / row vanished) → dedup: fail-safe against double-send.
+      if (!row || SENT_LIKE.has(row.status) || inFlight) return { status: 'deduped', deduped: true };
+      opts._reservedId = row.id;   // adopt the failed/skipped/stale row — this attempt owns it now
+    } else {
+      opts._reservedId = reserve.data?.[0]?.id || null;
+    }
   }
 
   // Template BEFORE sender: on WhatsApp the template's WABA constrains which senders are even
@@ -210,7 +224,9 @@ async function finalize(env, opts, res, sender, channel, purpose, template, sent
     source: opts.source || null, provider: sender?.provider || 'resend',
     provider_message_id: res.provider_message_id || null,
     status: res.status, provider_status: res.status, reason: res.reason || null,
-    dedup_key: opts.dedupKey || null, to_address: opts.to || null,
+    // Non-sent outcomes FREE the key (dedup-on-success). 'sent' keeps it so redeliveries dedup.
+    dedup_key: res.status === 'sent' ? (opts.dedupKey || null) : null,
+    to_address: opts.to || null,
     sent_at: sent && res.status === 'sent' ? nowIso() : null,
   };
   let msg;
