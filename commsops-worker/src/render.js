@@ -120,7 +120,13 @@ function renderWhatsapp(template, ctx) {
     if (headerFormat === 'IMAGE' || headerFormat === 'VIDEO' || headerFormat === 'DOCUMENT') {
       const kind = headerFormat.toLowerCase();
       const link = byComp.header?.[0]?.value || content.header_media_url || null;
-      if (link) components.push({ type: 'header', parameters: [{ type: kind, [kind]: { link } }] });
+      // Fail CLOSED, not silent-omit. A media-header template with no asset link would
+      // otherwise ship with the header component simply missing — Meta then rejects the
+      // send with an opaque 132000, and the customer sees nothing, with no readable reason
+      // anywhere in our logs. Throwing here routes it through the same 'failed' + reason
+      // path as an unresolved variable (see send.js's render try/catch).
+      if (!link) throw Object.assign(new Error('media_header_missing_url'), { reason: 'media_header_missing_url' });
+      components.push({ type: 'header', parameters: [{ type: kind, [kind]: { link } }] });
     } else if (byComp.header?.length) {
       components.push({ type: 'header', parameters: byComp.header.map((s) => ({ type: 'text', text: s.value })) });
     }

@@ -161,8 +161,22 @@ async function waSubmitTemplate(env, body) {
   const tpl = await getTemplate(env, body.templateId);
   if (!tpl) return { ok: false, error: 'template_not_found' };
   if (tpl.channel !== 'whatsapp') return { ok: false, error: 'not_a_whatsapp_template' };
-  const content = tpl.content || {};
+  let content = tpl.content || {};
   if (!content.meta_name || !content.body) return { ok: false, error: 'meta_name_and_body_required' };
+
+  // Self-serve image headers: the author uploads an asset + saves, but the Meta-side upload
+  // handle (`h:…`) is only minted here, at submit time — so a marketer never has to touch a
+  // separate "upload" step. Do NOT submit a media template with no handle: Meta rejects it with
+  // an opaque error that gives the author nothing to act on (same discipline as the render-time
+  // guard in render.js). The handle is APP-scoped (see waUploadHeaderMedia), not WABA-scoped, so
+  // this runs identically for a live submit and a pre-stage submit.
+  const headerFormat = String(content.header_format || 'TEXT').toUpperCase();
+  if (MEDIA_HEADERS.has(headerFormat) && content.header_media_url && !content.header_handle) {
+    const up = await waUploadHeaderMedia(env, { templateId: tpl.id, url: content.header_media_url });
+    if (!up.ok) return { ok: false, error: `header_upload_failed:${up.error}` };
+    content = { ...content, header_handle: up.handle };
+  }
+
   const stageWabaId = body.stageWabaId ? String(body.stageWabaId) : null;
   if (stageWabaId && stageWabaId === (content.waba_id || null)) {
     return { ok: false, error: 'stage_waba_is_pinned_waba' };   // staging onto the live pin is a mistake, not a no-op

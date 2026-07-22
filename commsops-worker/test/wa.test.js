@@ -306,6 +306,14 @@ function restoreFetch() { global.fetch = realFetch; }
     assert.deepEqual(header.parameters, [{ type: 'image', image: { link: 'https://cdn.example.com/hero.jpg' } }]);
   });
 
+  await t('renderWhatsapp fails CLOSED on an IMAGE header with no media url (not a silent omit)', () => {
+    const tpl = {
+      language: 'en', variables: [],
+      content: { meta_name: 'lot_x', header_format: 'IMAGE', body: 'Hi', mapping: [] },
+    };
+    assert.throws(() => renderWhatsapp(tpl, {}), /media_header_missing_url/);
+  });
+
   await t('categoryFor derives from purpose + honours override', () => {
     assert.equal(WATPL.categoryFor({ purpose: 'marketing', content: {} }), 'MARKETING');
     assert.equal(WATPL.categoryFor({ purpose: 'utility', content: {} }), 'UTILITY');
@@ -353,6 +361,68 @@ function restoreFetch() { global.fetch = realFetch; }
     const openW = await runGate({}, { channel: 'whatsapp', purpose: 'utility', to: '919880212323', wa: { mode: 'text', window_open: true } });
     assert.equal(openW.pass, true);
     A.sbComms = orig;
+  });
+
+  // ── self-serve image headers: auto-upload on submit ──
+  await t('waSubmitTemplate auto-uploads a media header (IMAGE+url+no-handle) before submitting', async () => {
+    const calls = [];
+    stubFetch(async (u, opts = {}) => {
+      calls.push({ u, method: opts.method || 'GET', body: opts.body });
+      if (u.includes('/rest/v1/templates') && (!opts.method || opts.method === 'GET')) {
+        return { ok: true, status: 200, text: async () => JSON.stringify([{
+          id: 'T1', channel: 'whatsapp', purpose: 'utility', language: 'en',
+          content: { meta_name: 'lot_promo', body: 'Hi there.', header_format: 'IMAGE',
+            header_media_url: 'https://cdn.example.com/hero.png', waba_id: 'WABA1' },
+        }]) };
+      }
+      if (u.includes('/rest/v1/templates') && opts.method === 'PATCH') {
+        return { ok: true, status: 200, text: async () => '[]' };
+      }
+      if (u === 'https://cdn.example.com/hero.png') {
+        return { ok: true, headers: { get: () => 'image/png' }, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer };
+      }
+      if (u.includes('/uploads?')) return { ok: true, json: async () => ({ id: 'upload:SESS1' }) };
+      if (u.includes('/upload:SESS1')) return { ok: true, json: async () => ({ h: 'h:NEWHANDLE' }) };
+      if (u.includes('/message_templates')) return { ok: true, status: 200, json: async () => ({ id: 'PTID', status: 'PENDING' }) };
+      throw new Error('unexpected fetch ' + u);
+    });
+    const r = await WATPL.waSubmitTemplate(
+      { WA_TOKEN: 'tok', WA_APP_ID: 'APPID', SUPABASE_URL: 'https://sb', SUPABASE_SERVICE_ROLE_KEY: 'k' },
+      { templateId: 'T1' });
+    restoreFetch();
+    assert.equal(r.ok, true);
+    assert.equal(r.provider_template_id, 'PTID');
+    // upload happens BEFORE submit: asset fetch -> upload session -> upload -> message_templates
+    const idx = (needle) => calls.findIndex((c) => c.u.includes(needle));
+    assert.ok(idx('hero.png') < idx('/uploads?'), 'must fetch the asset before opening an upload session');
+    assert.ok(idx('/uploads?') < idx('/upload:SESS1'), 'must open the session before uploading bytes');
+    assert.ok(idx('/upload:SESS1') < idx('/message_templates'), 'must have a handle before submitting to Meta');
+    const submitCall = calls.find((c) => c.u.includes('/message_templates'));
+    const submitted = JSON.parse(submitCall.body);
+    const header = submitted.components.find((c) => c.type === 'HEADER');
+    assert.equal(header.format, 'IMAGE');
+    assert.deepEqual(header.example, { header_handle: ['h:NEWHANDLE'] });
+  });
+
+  await t('waSubmitTemplate REFUSES to submit a media template when the upload fails', async () => {
+    stubFetch(async (u, opts = {}) => {
+      if (u.includes('/rest/v1/templates') && (!opts.method || opts.method === 'GET')) {
+        return { ok: true, status: 200, text: async () => JSON.stringify([{
+          id: 'T2', channel: 'whatsapp', language: 'en',
+          content: { meta_name: 'lot_promo2', body: 'Hi.', header_format: 'IMAGE',
+            header_media_url: 'https://cdn.example.com/bad.png', waba_id: 'WABA1' },
+        }]) };
+      }
+      if (u === 'https://cdn.example.com/bad.png') return { ok: false, status: 404 };
+      throw new Error('unexpected fetch ' + u);
+    });
+    const r = await WATPL.waSubmitTemplate(
+      { WA_TOKEN: 'tok', WA_APP_ID: 'APPID', SUPABASE_URL: 'https://sb', SUPABASE_SERVICE_ROLE_KEY: 'k' },
+      { templateId: 'T2' });
+    restoreFetch();
+    assert.equal(r.ok, false);
+    assert.ok(r.error.startsWith('header_upload_failed:'), r.error);
+    assert.ok(r.error.includes('asset_fetch_http_404'), r.error);
   });
 
   // ── waSubmitTemplate stage mode (migration pre-staging) ──
