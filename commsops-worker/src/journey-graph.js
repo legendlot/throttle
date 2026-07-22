@@ -73,6 +73,20 @@ function durationToMs(str) {
   return Math.round(Number(m[1]) * _UNIT_MS[m[2]]);
 }
 
+// ms from `nowMs` (UTC epoch) until the NEXT occurrence of `hour`:00:30 IST. The +30s
+// cushion keeps a quiet-hours retry from landing a hair inside the window it just left.
+// Pure so the boundary cases are unit-testable (the workflow wraps it with settings I/O).
+const _IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
+function msUntilIstHour(nowMs, hour) {
+  let h = Number(hour);
+  if (!isFinite(h) || h < 0 || h > 23) h = 9;
+  const nowIst = nowMs + _IST_OFFSET_MS;
+  const target = new Date(nowIst);
+  target.setUTCHours(h, 0, 30, 0);
+  if (target.getTime() <= nowIst) target.setUTCDate(target.getUTCDate() + 1);
+  return target.getTime() - nowIst;
+}
+
 // Did a send() result actually leave the building? (vs a gate skip/suppression/failure)
 function sendWentOut(res) {
   return !!res && (res.status === 'sent' || res.status === 'delivered' || res.status === 'deduped');
@@ -98,4 +112,4 @@ function resolveSendNext(step, res, def) {
   return { next: plainNext };
 }
 
-module.exports = { resolveTarget, stepTargets, handlesFor, ID_TYPE_FOR_CHANNEL, HANDLES, RESERVED_STEP_IDS, durationToMs, sendWentOut, resolveSendNext };
+module.exports = { resolveTarget, stepTargets, handlesFor, ID_TYPE_FOR_CHANNEL, HANDLES, RESERVED_STEP_IDS, durationToMs, msUntilIstHour, sendWentOut, resolveSendNext };

@@ -147,5 +147,52 @@ t('consentRowsFrom absent → [] (leave gate default block)', () => {
   assert.deepEqual(FLO.consentRowsFrom(b, null), []);
 });
 
+// ── display derivations for the cart-contents template (v2) ──
+t('inrGroup Indian grouping', () => {
+  assert.equal(FLO.inrGroup(2099), '2,099');
+  assert.equal(FLO.inrGroup(999), '999');
+  assert.equal(FLO.inrGroup(129999), '1,29,999');
+  assert.equal(FLO.inrGroup(1994.05), '1,994');
+  assert.equal(FLO.inrGroup(null), null);
+  assert.equal(FLO.inrGroup('garbage'), null);
+});
+t('shortNames single item passes through', () => {
+  assert.equal(FLO.shortNames('L.O.T Cars Ghost - RC Drift Car'), 'L.O.T Cars Ghost - RC Drift Car');
+});
+t('shortNames truncates at comma boundary with +N more', () => {
+  const names = 'L.O.T Cars Ghost - RC Drift Car, L.O.T Cars Flare 2.0 - RC Drift Car, L.O.T Cars Knox - Off-Road RC Truck, L.O.T Cars Shadow - RC Drift Car';
+  const out = FLO.shortNames(names);
+  assert.ok(out.length <= 110 + ' +9 more'.length);
+  assert.ok(/\+\d+ more$/.test(out), out);
+  assert.ok(out.startsWith('L.O.T Cars Ghost'));
+});
+t('shortNames keeps oversized first item hard-sliced', () => {
+  const out = FLO.shortNames('X'.repeat(200) + ', Y');
+  assert.ok(out.length <= 110 + ' +1 more'.length);
+  assert.ok(out.includes('…'));
+});
+t('shortNames null on empty', () => { assert.equal(FLO.shortNames(''), null); });
+t('mapCheckoutAbandoned carries product_names_short + total_display', () => {
+  const e = FLO.mapCheckoutAbandoned(CHECKOUT_ABANDONED);
+  assert.equal(e.properties.product_names_short, 'A, B');
+  assert.equal(e.properties.total_display, '₹2,398');
+});
+
+// ── display name (Shop Pass identity → profile greeting backfill) ──
+t('displayName prefers FIRST name (Shopify-mapper parity: first || full)', () => {
+  assert.equal(FLO.displayName(CHECKOUT_ABANDONED), 'Riya');
+});
+t('displayName falls back to last name when first missing', () => {
+  const b = { ...CHECKOUT_ABANDONED, customer: { ...CHECKOUT_ABANDONED.customer, first_name: null } };
+  assert.equal(FLO.displayName(b), 'K');
+});
+t('displayName null when no name anywhere', () => {
+  const b = { ...CHECKOUT_ABANDONED, customer: { ...CHECKOUT_ABANDONED.customer, first_name: null, last_name: '' } };
+  assert.equal(FLO.displayName(b), null);
+});
+t('displayName reads camelCase userData (store_page_view shape)', () => {
+  assert.equal(FLO.displayName({ eventName: 'store_page_view', eventPayload: { userData: { firstName: 'Aman', lastName: 'S' } } }), 'Aman');
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

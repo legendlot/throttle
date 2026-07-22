@@ -649,6 +649,13 @@ async function runScheduled(env) {
     if (se.segments) console.log('segment_entry', JSON.stringify(se));
   } catch (e) { console.log('segment_entry_error', e?.message || String(e)); }
 
+  // 2c. journey send-health watch — every non-send IS logged as a messages row, but
+  // nobody sits on /journeys, so a journey that quietly starts failing (an unresolved
+  // variable after a template edit, a sender mis-pin, an adapter outage) would burn its
+  // audience invisibly. This closes the "we won't even know failures are happening" gap.
+  try { await checkJourneySendHealth(env); }
+  catch (e) { console.log('journey_health_error', e?.message || String(e)); }
+
   // (J1) Lifetime cap: auto-exit enrolments older than their journey's max_duration.
   // We signal the parked instance so it ends cleanly via #park → 'expired'.
   try {
@@ -694,6 +701,44 @@ async function checkDeliverabilitySpike(env) {
     await A.sbComms('/rest/v1/settings?id=eq.1', env,
       { method: 'PATCH', body: JSON.stringify({ last_alert_at: nowIso() }) });
   }
+}
+
+// Journey send-health watch (≤1 alert/hour via settings.journey_alert_at — its own
+// rate-limit column, so an email-deliverability alert can't mask a journey one).
+// Two triggers, both over journey-sourced messages from the last hour:
+//   1. any DEFECT-class failure — alert even at volume 1: these reasons never self-heal
+//      (a template edit or config fix is required, and every enrolment hits the same wall);
+//   2. failed-rate > 20% on ≥10 real attempts — catches adapter/provider trouble.
+// Gate-by-design outcomes (consent, freq cap, quiet hours, test mode, suppression) are the
+// system WORKING and never alert here.
+const JOURNEY_DEFECT_RE = /^(unresolved_variables|template_not_found|no_sender_on_waba|no_active_sender|media_header_missing_url|no_adapter)/;
+async function checkJourneySendHealth(env) {
+  const s = await A.sbComms('/rest/v1/settings?id=eq.1&select=journey_alert_at&limit=1', env);
+  const last = s.ok && s.data?.[0]?.journey_alert_at ? new Date(s.data[0].journey_alert_at).getTime() : 0;
+  if (Date.now() - last < 3600 * 1000) return;   // rate-limit: once per hour
+
+  const cutoff = new Date(Date.now() - 3600 * 1000).toISOString();
+  const r = await A.sbComms(
+    `/rest/v1/messages?source=like.${A.enc('journey:')}*&queued_at=gte.${A.enc(cutoff)}` +
+    '&select=status,reason&limit=1000', env);
+  const rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
+  if (!rows.length) return;
+
+  const attempts = rows.filter((m) => m.status === 'sent' || m.status === 'failed');
+  const failed = attempts.filter((m) => m.status === 'failed');
+  const defects = failed.filter((m) => JOURNEY_DEFECT_RE.test(m.reason || ''));
+  const rateTrip = attempts.length >= 10 && (failed.length / attempts.length) > 0.20;
+  if (!defects.length && !rateTrip) return;
+
+  const reasons = {};
+  for (const m of failed) { const k = m.reason || 'unknown'; reasons[k] = (reasons[k] || 0) + 1; }
+  const top = Object.entries(reasons).sort((a, b) => b[1] - a[1]).slice(0, 3)
+    .map(([k, n]) => `${k} ×${n}`).join(' · ');
+  await AL.alert(env,
+    `🚨 *Relay — journey sends failing*\n${failed.length}/${attempts.length} journey sends failed in the last hour` +
+    `${defects.length ? ` (incl. ${defects.length} defect-class — these never self-heal)` : ''}.\nTop reasons: ${top}.\nCheck /journeys funnel + comms.messages.`);
+  await A.sbComms('/rest/v1/settings?id=eq.1', env,
+    { method: 'PATCH', body: JSON.stringify({ journey_alert_at: nowIso() }) });
 }
 
 export default {

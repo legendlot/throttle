@@ -61,9 +61,14 @@ function identsFromShopflo(body) {
 }
 
 function displayName(body) {
+  // Mirrors the Shopify customer mapper's `first || full` preference — display_name is
+  // what template greetings bind ("Hi {first_name}"), so a bare first name beats
+  // "Firstname Lastname" and the two feeds must agree on semantics.
   const id = pickIdentity(body);
-  const full = [String(id.first_name || '').trim(), String(id.last_name || '').trim()].filter(Boolean).join(' ');
-  return full || null;
+  const first = String(id.first_name || '').trim();
+  if (first) return first;
+  const last = String(id.last_name || '').trim();
+  return last || null;
 }
 
 function noteAttr(body, name) {
@@ -73,6 +78,36 @@ function noteAttr(body, name) {
 }
 
 function num(v) { const n = Number(v); return isFinite(n) ? n : null; }
+
+// Indian-grouped integer string ("2,099", "1,29,999"). The render engine has no
+// transforms, so display-ready values must be derived at MAP time.
+function inrGroup(v) {
+  if (v == null || v === '') return null;   // NB num(null) is 0 — a null total must NOT read "₹0"
+  const n = num(v);
+  if (n == null) return null;
+  const s = String(Math.round(Math.abs(n)));
+  const neg = n < 0 ? '-' : '';
+  if (s.length <= 3) return neg + s;
+  return neg + s.slice(0, -3).replace(/\B(?=(\d{2})+(?!\d))/g, ',') + ',' + s.slice(-3);
+}
+
+// Cart product names truncated at a comma boundary (WA template bodies cap at 1024
+// chars AFTER substitution — a long multi-item cart string can fail the send). Always
+// keeps the first item (hard-sliced if itself over budget), then whole names while
+// they fit, then "+N more".
+function shortNames(names, max = 110) {
+  const parts = String(names || '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (!parts.length) return null;
+  let out = parts[0].length > max ? parts[0].slice(0, max - 1) + '…' : parts[0];
+  let used = 1;
+  for (let i = 1; i < parts.length; i++) {
+    const cand = `${out}, ${parts[i]}`;
+    if (cand.length > max) break;
+    out = cand; used++;
+  }
+  const rest = parts.length - used;
+  return rest > 0 ? `${out} +${rest} more` : out;
+}
 
 // ms-epoch or ISO string → ISO string; null if neither.
 function toIso(v) {
@@ -107,6 +142,10 @@ function mapCheckoutAbandoned(body) {
     total_tax: num(body.total_tax),
     line_item_count: Array.isArray(body.line_items) ? body.line_items.length : null,
     product_names: body.cart_product_names || null,
+    // Display-ready derivations for template slots (the cart-contents WA template v2
+    // binds these; raw product_names/total_price stay for analytics):
+    product_names_short: shortNames(body.cart_product_names),
+    total_display: inrGroup(body.total_price) != null ? `₹${inrGroup(body.total_price)}` : null,
     marketing_consent: (body.customer && body.customer.marketing_consent) ?? null,
     source_surface: 'shopflo',
   };
@@ -200,6 +239,6 @@ function consentRowsFrom(body, capturedAt) {
 }
 
 module.exports = {
-  eventName, pickIdentity, identsFromShopflo, displayName, noteAttr, toIso, num,
+  eventName, pickIdentity, identsFromShopflo, displayName, noteAttr, toIso, num, inrGroup, shortNames,
   mapCheckoutAbandoned, mapOrderCompleted, mapAddToCart, EVENT_MAP, consentRowsFrom,
 };

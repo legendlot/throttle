@@ -71,6 +71,20 @@ async function handleShopfloWebhook(env, request) {
       return { ok: false, error: r.error, status: 400 };
     }
 
+    // Backfill the profile's display_name from the Shop Pass identity. Shopflo is the
+    // ONLY feed that knows the name for net-new checkout contacts (the Shopify customer
+    // webhook never sees them), and without it every journey greeting renders the
+    // "there" fallback (measured: ~55% of abandoners had no name). Fill-when-EMPTY only —
+    // never overwrite a Shopify-sourced name (the PostgREST filter makes the PATCH a
+    // no-op when a name exists). Best-effort: a greeting name is never worth a redelivery.
+    const dn = FLO.displayName(body);
+    if (dn && r.profile_id) {
+      await A.sbComms(
+        `/rest/v1/profiles?id=eq.${A.enc(r.profile_id)}&or=(display_name.is.null,display_name.eq.)`,
+        env, { method: 'PATCH', body: JSON.stringify({ display_name: String(dn).slice(0, 120), updated_at: new Date().toISOString() }) }
+      ).catch((e) => { console.log('shopflo_name_backfill_error', e?.message || String(e)); });
+    }
+
     // Record marketing consent from the payload — on EVERY delivery, including deduped
     // retries. The ledger is append-only latest-wins, so a duplicate row is cosmetic; a
     // LOST opt-out is a compliance failure (review C3). A failed write returns 500 so

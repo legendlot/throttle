@@ -178,8 +178,33 @@ class JourneyWorkflow extends WorkflowEntrypoint {
           if (dec.terminate) { await this.#end(env, step, enrolmentId, dec.terminate, cur); return; }
           cur = G.resolveTarget(s, dec.handle);
         } else {
-          const decision = G.resolveSendNext(s, res, def);
-          await this.#logStep(env, step, enrolmentId, cur, s.type, { ...res, on_skip: s.on_skip || 'continue', skipped_wait: decision.skippedWait || null });
+          // Quiet-hours DEFER, not drop. The gate's v1 quiet-hours check hard-skips
+          // ("defer, don't drop" was always the stated intent — gate.js §4). For a
+          // journey send that is a silent one-third loss on evening-peak triggers
+          // (measured 33% of abandoned-cart sends land in 21:00–09:00 IST). So: park
+          // interruptibly until quiet hours end, then retry ONCE. The park reuses the
+          // wait-step machinery, so an ambient exit signal arriving overnight (e.g.
+          // the customer purchased) still terminates WITHOUT sending — and the same
+          // pre-check closes the skip→park gap. A second quiet_hours skip on the
+          // retry (misconfig / boundary) falls through to normal on_skip routing —
+          // deliberately no loop.
+          let finalRes = res, deferred = false;
+          if (res && res.status === 'skipped' && res.reason === 'quiet_hours') {
+            const deferMs = await step.do(`qhcalc:${cur}`, async () => this.#msUntilQuietEnd(env));
+            if (deferMs > 0) {
+              const pre = exitEventSet.size
+                ? await step.do(`qhprecheck:${cur}`, async () => this.#eventSince(env, profileId, [...exitEventSet], enrolledAt))
+                : null;
+              if (pre) { await this.#end(env, step, enrolmentId, exitOutcomeFor(pre), cur); return; }
+              const woke = await this.#park(step, `qhwait:${cur}`, deferMs);
+              if (woke.kind === 'exit') { await this.#end(env, step, enrolmentId, woke.outcome, cur); return; }
+              finalRes = await step.do(`${cur}:qhretry`, async () =>
+                this.#doSend(env, s, profileId, enrolmentId, `${cur}:qhretry`, triggerProps, journeyName));
+              deferred = true;
+            }
+          }
+          const decision = G.resolveSendNext(s, finalRes, def);
+          await this.#logStep(env, step, enrolmentId, cur, s.type, { ...finalRes, ...(deferred ? { deferred_from: 'quiet_hours' } : {}), on_skip: s.on_skip || 'continue', skipped_wait: decision.skippedWait || null });
           if (decision.terminate) { await this.#end(env, step, enrolmentId, decision.terminate, cur); return; }
           cur = decision.next;
         }
@@ -362,6 +387,18 @@ class JourneyWorkflow extends WorkflowEntrypoint {
     if (!r.ok) return null;
     const p = r.data?.[0]?.properties || {};
     return p.button_id || p.button || p.payload || null;
+  }
+
+  // ms from now until the next quiet-hours END boundary in IST (default 09:00).
+  // Settings unreadable → default end hour 9 (mirrors gate.js's fail-safe defaults).
+  // The boundary math is G.msUntilIstHour (pure, unit-tested).
+  async #msUntilQuietEnd(env) {
+    let end = 9;
+    try {
+      const r = await A.sbComms('/rest/v1/settings?id=eq.1&select=quiet_hours_end&limit=1', env);
+      if (r.ok && r.data?.[0]?.quiet_hours_end != null) end = Number(r.data[0].quiet_hours_end);
+    } catch (_) { /* default */ }
+    return G.msUntilIstHour(Date.now(), end);
   }
 
   // Park on the single 'signal' event type with a timeout. Returns:

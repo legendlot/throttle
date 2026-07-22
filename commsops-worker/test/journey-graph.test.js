@@ -96,6 +96,29 @@ assert.deepEqual(
   ['a', 'b']);
 console.log('handlesFor ok');
 
+// msUntilIstHour — quiet-hours defer boundary math (pure; workflow wraps with settings I/O)
+{
+  const IST = (5 * 60 + 30) * 60 * 1000;
+  // helper: UTC epoch for a given IST wall-clock time on 2026-07-22
+  const istEpoch = (h, m = 0, s = 0) => Date.UTC(2026, 6, 22, h, m, s) - IST;
+  // 23:00 IST → next 09:00:30 IST is 10h 30s away
+  assert.equal(G.msUntilIstHour(istEpoch(23), 9), 10 * 3600000 + 30000);
+  // 03:00 IST → 6h 30s away (same morning)
+  assert.equal(G.msUntilIstHour(istEpoch(3), 9), 6 * 3600000 + 30000);
+  // 08:59:59 IST → 31s away (just before the boundary)
+  assert.equal(G.msUntilIstHour(istEpoch(8, 59, 59), 9), 31000);
+  // exactly 09:00:30 IST → rolls to TOMORROW (target <= now)
+  assert.equal(G.msUntilIstHour(istEpoch(9, 0, 30), 9), 24 * 3600000);
+  // 09:00:00 IST → 30s (the cushion)
+  assert.equal(G.msUntilIstHour(istEpoch(9, 0, 0), 9), 30000);
+  // invalid hour falls back to 9
+  assert.equal(G.msUntilIstHour(istEpoch(3), 'garbage'), 6 * 3600000 + 30000);
+  assert.equal(G.msUntilIstHour(istEpoch(3), 99), 6 * 3600000 + 30000);
+  // result is always positive
+  assert.ok(G.msUntilIstHour(Date.now(), 9) > 0);
+}
+console.log('msUntilIstHour ok');
+
 // order_modify + interactive send dynamic handles
 assert.deepEqual(G.handlesFor({ type: 'action', kind: 'order_modify' }), ['done', 'not_done']);
 assert.deepEqual(
