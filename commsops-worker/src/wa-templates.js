@@ -494,7 +494,7 @@ async function waMigrateNumber(env, body) {
       const { phoneNumberId, dataLocalizationRegion } = body;
       if (!phoneNumberId || !dataLocalizationRegion) return { ok: false, error: 'missing_params' };
       return post(`/${encodeURIComponent(phoneNumberId)}/settings`,
-        { storage_configuration: { status: 'ENABLED',
+        { storage_configuration: { status: 'IN_COUNTRY_STORAGE_ENABLED',
             data_localization_region: String(dataLocalizationRegion) } });
     }
     default:
