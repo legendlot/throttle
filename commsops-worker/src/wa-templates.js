@@ -488,6 +488,14 @@ async function waMigrateNumber(env, body) {
       return post(`/${encodeURIComponent(phoneNumberId)}/register`,
         { messaging_product: 'whatsapp', pin: String(pin ?? '000000') });
     }
+    // Meta v21+ refuses to register a MIGRATED number until its data-localization region is
+    // configured (error 100: "Expected data localization region: 'IN'"). One-time, pre-register.
+    case 'settings': {
+      const { phoneNumberId, dataLocalizationRegion } = body;
+      if (!phoneNumberId || !dataLocalizationRegion) return { ok: false, error: 'missing_params' };
+      return post(`/${encodeURIComponent(phoneNumberId)}/settings`,
+        { data_localization_region: String(dataLocalizationRegion) });
+    }
     default:
       return { ok: false, error: 'unknown_op' };
   }
