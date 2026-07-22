@@ -25,8 +25,9 @@ const CAMPROW = { id: 'C', status: 'sending', segment_id: 'S', template_id: 'T',
     assert.ok(!sentPatch, 'must NOT mark the campaign sent');
   });
 
-  await t('one recipient throwing does not kill the page; continuation still enqueues', async () => {
+  await t('one recipient throwing does not kill the page; continuation still enqueues; heartbeat PATCH fires', async () => {
     const enq = [];
+    let heartbeatPatch = null;
     A.sbComms = async (path, env, opts = {}) => {
       if (path.includes('/campaigns?id=eq.C') && (!opts.method || opts.method === 'GET')) return { ok: true, data: [CAMPROW] };
       if (path.includes('campaign_recipients')) return { ok: true, data: [
@@ -38,12 +39,19 @@ const CAMPROW = { id: 'C', status: 'sending', segment_id: 'S', template_id: 'T',
         if (!global.__threw_once) { global.__threw_once = true; throw new Error('boom'); }
         return { ok: true, data: [] };   // others: template_not_found → failed result, no throw
       }
+      if (path.includes('/campaigns?id=eq.C') && path.includes('status=eq.sending') && opts.method === 'PATCH') {
+        heartbeatPatch = { path, body: JSON.parse(opts.body) };
+        return { ok: true, data: [CAMPROW] };
+      }
       return { ok: true, data: [] };
     };
     global.__threw_once = false;
     await CAMP.processQueueMessage({ BROADCAST_QUEUE: { send: async (m) => enq.push(m) } }, { campaignId: 'C', after: null });
     assert.equal(enq.length, 1, 'continuation enqueued despite recipient-1 throw');
     assert.equal(enq[0].after, 'P4');
+    assert.ok(heartbeatPatch, 'a processed full page must PATCH the campaign heartbeat (status=eq.sending filter)');
+    assert.ok(heartbeatPatch.path.includes('id=eq.C'), 'heartbeat PATCH must target this campaign id');
+    assert.ok(!!heartbeatPatch.body.updated_at, 'heartbeat PATCH body must carry updated_at');
   });
 
   A.sbComms = orig;

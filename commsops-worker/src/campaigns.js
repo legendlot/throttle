@@ -98,6 +98,20 @@ async function processQueueMessage(env, body) {
   }
   if (pageErrors) console.log('campaign_page_errors', campaignId, pageErrors);
 
+  // Page-progress heartbeat for the stall sweep (index.js runScheduled '1b' alerts on
+  // campaigns.updated_at stale >30 min while status='sending'). startCampaign only stamps
+  // updated_at at claim time, so a long-but-healthy broadcast (many pages, serial queue
+  // continuation) would look identical to a dead chain and re-alert every 5-min tick. Bumping
+  // it here means a campaign whose pages are still flowing never trips the sweep — only a
+  // genuinely stuck chain does (which then keeps re-alerting each tick until resolved —
+  // intended nagging for a real incident). Scoped to status=eq.sending so a campaign that
+  // finished/was cancelled between the read above and here is never touched; best-effort —
+  // must not throw (a missed bump only risks one alert, a throw would retry the whole page).
+  await A.sbComms(`/rest/v1/campaigns?id=eq.${A.enc(campaignId)}&status=eq.sending`, env,
+    { method: 'PATCH', body: JSON.stringify({ updated_at: nowIso() }) }).catch((e) => {
+      console.log('campaign_heartbeat_error', campaignId, e?.message || String(e));
+    });
+
   if (recs.length === SENDS_PER_MSG) {
     // more remain → continue from the last profile_id
     await env.BROADCAST_QUEUE.send({ campaignId, after: recs[recs.length - 1].profile_id });

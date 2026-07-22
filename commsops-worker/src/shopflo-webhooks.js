@@ -75,18 +75,30 @@ async function handleShopfloWebhook(env, request) {
     // retries. The ledger is append-only latest-wins, so a duplicate row is cosmetic; a
     // LOST opt-out is a compliance failure (review C3). A failed write returns 500 so
     // Shopflo redelivers and the consent is re-attempted (never swallow a withdrawal error).
+    //
+    // This inner try/catch is the consent-stage boundary (Gate-1 review): once we're here,
+    // ANY failure — a returned {ok:false} OR a THROW from recordConsent's fetch (connection
+    // reset/DNS on the transport call) — must surface as the same 500. A throw must NOT be
+    // allowed to fall through to the outer mapper-crash catch below, which acks 200 — that
+    // would silently lose the opt-out, exactly the compliance failure this codebase forbids.
     let consent = 0;
-    for (const c of FLO.consentRowsFrom(body, envlp.occurred_at)) {
-      const w = await recordConsent(env, { profile_id: r.profile_id, ...c });
-      if (!w.ok) {
-        await capture(env, request, body).catch(() => {});
-        return { ok: false, error: 'consent_write_failed', status: 500 };
+    try {
+      for (const c of FLO.consentRowsFrom(body, envlp.occurred_at)) {
+        const w = await recordConsent(env, { profile_id: r.profile_id, ...c });
+        if (!w.ok) throw new Error('consent_write_failed');
+        consent++;
       }
-      consent++;
+    } catch (e) {
+      await capture(env, request, body).catch(() => {});
+      console.log('shopflo_consent_error', evName, e?.message || String(e));
+      return { ok: false, error: 'consent_write_failed', status: 500 };
     }
     return { ok: true, event: evName, emitted: spec.event, profile_id: r.profile_id, deduped: r.deduped, consent };
   } catch (e) {
     // Never 500 back to Shopflo on a mapper bug (avoids a retry storm) — capture + ack.
+    // Only reachable for failures BEFORE the consent stage (mapping/ingest) — the inner
+    // try/catch above intercepts anything from the consent-writing stage onward and always
+    // returns 500, so this 200 path never covers a lost opt-out.
     await capture(env, request, body).catch(() => {});
     console.log('shopflo_map_error', evName, e?.message || String(e));
     return { ok: true, event: evName, error_captured: true };

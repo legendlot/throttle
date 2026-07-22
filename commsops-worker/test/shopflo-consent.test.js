@@ -48,6 +48,20 @@ const orig = A.sbComms;
     A.sbComms = orig;
   });
 
+  await t('consent write THROWS (transport failure) -> non-2xx, not swallowed as {ok:true} (Gate-1 review)', async () => {
+    A.sbComms = async (path) => {
+      if (path.includes('resolve_identity')) return { ok: true, data: 'P1' };
+      if (path.startsWith('/rest/v1/events')) return { ok: true, data: [{ id: 'E1b' }] }; // first occurrence
+      if (path.startsWith('/rest/v1/consent')) throw new Error('fetch failed');
+      if (path.startsWith('/rest/v1/webhook_captures')) return { ok: true, data: [] };
+      return { ok: true, data: [] };
+    };
+    const r = await handleShopfloWebhook(ENV, req(BODY));
+    A.sbComms = orig;
+    assert.equal(r.ok, false, 'a THROWN consent write must not ack success');
+    assert.equal(r.status, 500, 'must surface a 500 so Shopflo redelivers, not the mapper-crash 200');
+  });
+
   await t('deduped event retry STILL attempts consent (append-only, duplicate rows are cosmetic)', async () => {
     let consentAttempts = 0;
     A.sbComms = async (path, env, opts = {}) => {
