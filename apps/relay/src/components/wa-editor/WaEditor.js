@@ -1,5 +1,8 @@
 'use client';
-import { Plus, Trash2 } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { Plus, Trash2, Upload, X } from 'lucide-react';
+import { supabase, workerFetch } from '@throttle/db';
+import { useToast } from '@throttle/ui';
 import { Panel, Badge, Btn } from '@/components/ui.js';
 import {
   WA_CATEGORIES, WA_COMPONENTS, WA_LIMITS, WA_WABAS,
@@ -7,6 +10,29 @@ import {
 } from './waTemplate.js';
 
 const BTN_TYPES = ['QUICK_REPLY', 'URL', 'PHONE_NUMBER'];
+const HEADER_TYPES = [
+  { value: 'NONE', label: 'None' },
+  { value: 'TEXT', label: 'Text' },
+  { value: 'IMAGE', label: 'Image' },
+];
+// Self-serve image headers reuse the email-editor's exact upload mechanic (EmailEditor.js
+// uploadAsset): sign a URL into the public relay-email-assets bucket, PUT via the
+// storage-js signed-upload helper, get back a public URL. Same bucket + same 5MB/mime
+// limits enforced worker- and bucket-side (email-assets.js validateAsset).
+const ASSET_BUCKET = 'relay-email-assets';
+const MAX_ASSET_BYTES = 5 * 1024 * 1024;
+const ACCEPT_MIME = 'image/png,image/jpeg,image/gif,image/webp';
+
+async function uploadHeaderImage(file, session) {
+  if (!file.type || !file.type.startsWith('image/')) throw new Error('not an image');
+  if (file.size > MAX_ASSET_BYTES) throw new Error('image too large (max 5MB)');
+  const r = await workerFetch('createEmailAssetUploadUrl', { file_name: file.name, mime_type: file.type }, session);
+  const d = r?.data;
+  if (!d?.token || !d?.storage_path) throw new Error(r?.error || 'sign failed');
+  const up = await supabase.storage.from(ASSET_BUCKET).uploadToSignedUrl(d.storage_path, d.token, file);
+  if (up.error) throw up.error;
+  return d.public_url;
+}
 
 function Count({ n, cap }) {
   return <span className="dim" style={{ fontSize: 11, color: n > cap ? 'var(--danger,#DE2A2A)' : undefined }}>{n}/{cap}</span>;
@@ -14,13 +40,53 @@ function Count({ n, cap }) {
 
 // The WhatsApp-side authoring surface: Meta template fields + positional-slot mapping
 // + a live preview bubble. Pure presentation — the page owns state, save and submit.
-export default function WaEditor({ wa, setWa, variables, disabled, locked }) {
+export default function WaEditor({ wa, setWa, variables, disabled, locked, session }) {
   const c = wa || {};
   const mapping = Array.isArray(c.mapping) ? c.mapping : [];
   const tokens = (variables || []).map((v) => v.token).filter(Boolean);
   const errs = validateWaTemplate(c, tokens);
+  const { showToast } = useToast();
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef(null);
 
   const set = (k, v) => setWa({ ...c, [k]: v });
+
+  // A media header carries NO text (Meta's rule) — the three states are mutually exclusive
+  // in the UI, though `header_format` is what's actually load-bearing on the wire. Absent
+  // `header_format` defaults to TEXT (see wa-templates.js), so a legacy row that only ever
+  // set `header` still shows as Text here.
+  const headerType = c.header_format === 'IMAGE' ? 'IMAGE'
+    : (c.header_format === 'TEXT' || (!c.header_format && c.header)) ? 'TEXT'
+    : 'NONE';
+
+  // `header_format`/`header_media_url` are worker-preserved-on-omission (saveTemplate merges
+  // them back in when the UI sends null/undefined — review C4/M8), so an intentional CLEAR
+  // must send a non-null value the merge won't second-guess: 'TEXT' (functionally "no header"
+  // once `header` is also emptied) rather than undefined. `header_handle` is worker-owned and
+  // never authored here — but a NEW or REMOVED asset invalidates whatever handle Meta minted
+  // for the old one, so we explicitly blank it (never fabricate a real value) to force submit
+  // to re-upload rather than silently reusing a stale sample image.
+  function setHeaderType(type) {
+    if (type === 'NONE') setWa({ ...c, header_format: 'TEXT', header: '', header_media_url: '', header_handle: '' });
+    else if (type === 'TEXT') setWa({ ...c, header_format: 'TEXT', header_media_url: '', header_handle: '' });
+    else if (type === 'IMAGE') setWa({ ...c, header_format: 'IMAGE', header: '' });
+  }
+
+  async function onPickImage(e) {
+    const file = e.target.files?.[0];
+    e.target.value = '';   // allow re-picking the same filename
+    if (!file) return;
+    setUploading(true);
+    try {
+      const url = await uploadHeaderImage(file, session);
+      setWa({ ...c, header_format: 'IMAGE', header: '', header_media_url: url, header_handle: '' });
+      showToast('Header image uploaded', 'success');
+    } catch (err) {
+      showToast('Upload failed: ' + (err?.message || err), 'error');
+    } finally { setUploading(false); }
+  }
+
+  function removeImage() { setWa({ ...c, header_media_url: '', header_handle: '' }); }
   const setMap = (i, k, v) => setWa({ ...c, mapping: mapping.map((m, j) => (j === i ? { ...m, [k]: v } : m)) });
   const addMap = () => {
     const body = mapping.filter((m) => (m.component || 'body') === 'body');
@@ -70,9 +136,49 @@ export default function WaEditor({ wa, setWa, variables, disabled, locked }) {
         </div>
 
         <div className="ff" style={{ marginTop: 14 }}>
-          <div className="kv-k">Header <span className="dim">(optional, text)</span> <Count n={(c.header || '').length} cap={WA_LIMITS.header} /></div>
-          <input className="f-inp" value={c.header || ''} onChange={(e) => set('header', e.target.value)}
-            disabled={disabled} placeholder="Still thinking it over?" />
+          <div className="kv-k">
+            Header <span className="dim">(optional)</span>
+            {headerType === 'TEXT' && <Count n={(c.header || '').length} cap={WA_LIMITS.header} />}
+          </div>
+          <div style={{ display: 'flex', gap: 6, marginBottom: headerType === 'NONE' ? 0 : 8 }}>
+            {HEADER_TYPES.map((h) => (
+              <Btn key={h.value} kind={headerType === h.value ? 'primary' : 'ghost'}
+                onClick={() => setHeaderType(h.value)} disabled={disabled}>{h.label}</Btn>
+            ))}
+          </div>
+          {headerType === 'TEXT' && (
+            <input className="f-inp" value={c.header || ''} onChange={(e) => set('header', e.target.value)}
+              disabled={disabled} placeholder="Still thinking it over?" />
+          )}
+          {headerType === 'IMAGE' && (
+            <div>
+              {c.header_media_url ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <img src={c.header_media_url} alt="Header preview"
+                    style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--border,#e5e5e5)', flexShrink: 0 }} />
+                  <div className="mono dim" style={{ flex: 1, minWidth: 0, fontSize: 11, wordBreak: 'break-all' }}>{c.header_media_url}</div>
+                  {!disabled && (
+                    <>
+                      <Btn onClick={() => fileRef.current && fileRef.current.click()} disabled={uploading}>
+                        <Upload size={14} /> {uploading ? 'Uploading…' : 'Replace'}
+                      </Btn>
+                      <Btn onClick={removeImage} disabled={uploading}><X size={14} /> Remove</Btn>
+                    </>
+                  )}
+                </div>
+              ) : (
+                !disabled && (
+                  <Btn onClick={() => fileRef.current && fileRef.current.click()} disabled={uploading}>
+                    <Upload size={14} /> {uploading ? 'Uploading…' : 'Upload image'}
+                  </Btn>
+                )
+              )}
+              <input ref={fileRef} type="file" accept={ACCEPT_MIME} style={{ display: 'none' }} onChange={onPickImage} />
+              <div className="tw-note" style={{ marginTop: 6 }}>
+                PNG/JPEG/GIF/WebP, max 5MB. Meta reviews this exact image as the template&apos;s sample header.
+              </div>
+            </div>
+          )}
         </div>
         <div className="ff" style={{ marginTop: 14 }}>
           <div className="kv-k">Body <Count n={(c.body || '').length} cap={WA_LIMITS.body} /></div>
@@ -153,6 +259,9 @@ export default function WaEditor({ wa, setWa, variables, disabled, locked }) {
         <div style={{ background: '#ECE5DD', padding: 20, borderRadius: 8, display: 'flex', justifyContent: 'center' }}>
           <div style={{ background: '#fff', borderRadius: 8, padding: '8px 10px', maxWidth: 380, width: '100%',
             boxShadow: '0 1px 1px rgba(0,0,0,.13)', fontSize: 14, lineHeight: 1.4, color: '#111' }}>
+            {headerType === 'IMAGE' && c.header_media_url && (
+              <img src={c.header_media_url} alt="" style={{ width: '100%', display: 'block', borderRadius: 6, marginBottom: 6 }} />
+            )}
             {c.header && <div style={{ fontWeight: 700, marginBottom: 4 }}>{previewText(c.header, mapping, 'header')}</div>}
             <div style={{ whiteSpace: 'pre-wrap' }}>{previewText(c.body, mapping, 'body') || <span style={{ color: '#999' }}>Body preview…</span>}</div>
             {c.footer && <div style={{ color: '#8696A0', fontSize: 12, marginTop: 6 }}>{c.footer}</div>}

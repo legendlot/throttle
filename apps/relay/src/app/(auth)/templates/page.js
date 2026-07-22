@@ -26,7 +26,7 @@ function emptyTemplate() {
   return {
     id: null, channel: 'email', name: '', purpose: 'marketing', language: 'en',
     status: 'draft', subject: '', html_body: '', text_body: '', design_json: null, variables: [],
-    wa: { meta_name: '', category: 'MARKETING', waba_id: '', header: '', body: '', footer: '', buttons: [], mapping: [] },
+    wa: { meta_name: '', category: 'MARKETING', waba_id: '', header: '', header_format: '', header_media_url: '', body: '', footer: '', buttons: [], mapping: [] },
     approval_status: null, provider_template_id: null,
   };
 }
@@ -81,7 +81,8 @@ export default function TemplatesPage() {
       wa: {
         meta_name: c.meta_name || '', category: c.category || 'MARKETING',
         waba_id: c.waba_id || '',
-        header: c.header || '', body: c.body || '', footer: c.footer || '',
+        header: c.header || '', header_format: c.header_format || '', header_media_url: c.header_media_url || '',
+        body: c.body || '', footer: c.footer || '',
         buttons: Array.isArray(c.buttons) ? c.buttons : [],
         mapping: Array.isArray(c.mapping) ? c.mapping : [],
       },
@@ -119,12 +120,26 @@ export default function TemplatesPage() {
       content = {
         meta_name: w.meta_name || '', language: t.language || 'en', category: w.category || 'MARKETING',
         body: w.body || '',
+        // ALWAYS sent (never conditionally omitted): the worker's saveTemplate merge only
+        // preserves these on a null/undefined omission (review C4/M8's protection against the
+        // UI silently dropping a value it doesn't know about). Now that the editor owns them,
+        // an explicit clear — switching Image back to None/Text — must reach the server as a
+        // real non-null value ('TEXT' / '') or the merge would quietly restore the old image.
+        header_format: w.header_format || 'TEXT',
+        header_media_url: w.header_media_url || '',
         mapping: (w.mapping || []).filter((m) => m.token),
       };
       if (w.header) content.header = w.header;
       if (w.footer) content.footer = w.footer;
       if ((w.buttons || []).length) content.buttons = w.buttons;
       if (w.waba_id) content.waba_id = w.waba_id;
+      // `header_handle` is otherwise worker-owned (minted only by waUploadHeaderMedia /
+      // waSubmitTemplate) and never authored here — but WaEditor blanks it locally whenever the
+      // header image is replaced or removed, because the OLD handle points at Meta's copy of the
+      // asset that no longer matches `header_media_url`. That blank has to reach the server (an
+      // omitted key would be merge-preserved back to the stale handle), so forward it ONLY when
+      // WaEditor actually touched it this session — never a fabricated non-empty value.
+      if ('header_handle' in w) content.header_handle = w.header_handle || '';
     } else if (edRef.current) {
       const ex = edRef.current.export();
       content = { subject: t.subject, html_body: ex.html, text_body: ex.text, design_json: ex.design };
@@ -288,7 +303,8 @@ export default function TemplatesPage() {
         </Panel>
 
         {t.channel === 'whatsapp' ? (
-          <WaEditor wa={t.wa} setWa={(w) => set('wa', w)} variables={t.variables} disabled={saving || !canEdit} locked={!!t.provider_template_id} />
+          <WaEditor wa={t.wa} setWa={(w) => set('wa', w)} variables={t.variables} disabled={saving || !canEdit}
+          locked={!!t.provider_template_id} session={session} />
         ) : (
         <Panel title="Content" pad
           action={t.channel === 'email' && canEdit ? (

@@ -58,6 +58,15 @@ export function validateWaTemplate(content, declaredTokens = []) {
   else if (normalizeMetaName(c.meta_name) !== c.meta_name) errs.push('Meta template name must be lowercase letters, numbers and underscores only.');
   if (!c.body || !c.body.trim()) errs.push('Body is required.');
 
+  // Image header: Meta headers carry EITHER text OR one media asset, never both. The UI
+  // enforces this in state (selecting Image clears any header text), but a saved/loaded
+  // template could still disagree, so check it here too.
+  const headerFormat = String(c.header_format || 'TEXT').toUpperCase();
+  if (headerFormat === 'IMAGE') {
+    if (!c.header_media_url) errs.push('Upload the header image before submitting.');
+    if (c.header) errs.push('An image header cannot also have header text — remove one.');
+  }
+
   for (const [field, cap] of [['header', WA_LIMITS.header], ['body', WA_LIMITS.body], ['footer', WA_LIMITS.footer]]) {
     if (c[field] && c[field].length > cap) errs.push(`${field[0].toUpperCase() + field.slice(1)} exceeds ${cap} characters (${c[field].length}).`);
   }
