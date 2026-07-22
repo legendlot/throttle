@@ -220,6 +220,13 @@ async function handlePost(body, auth, env) {
       if (!A.canAdmin(auth.permissions)) return err('forbidden', 403);
       const { user_id, role_key, active, full_name } = body;
       if (!user_id || !role_key) return err('user_id_and_role_key_required', 400);
+      // Only a super admin may hand out a role that carries relay_super_admin — otherwise a
+      // relay_admin self-escalates into saveRelaySettings/test_mode/PII backfill (review H9).
+      const roleR = await A.sbStore(
+        `/rest/v1/relayops_roles?role_key=eq.${A.enc(role_key)}&select=permissions&limit=1`, env);
+      if (!roleR.ok || !roleR.data?.[0]) return err('unknown_role', 400);
+      if (roleR.data[0].permissions?.relay_super_admin && !A.canSuperAdmin(auth.permissions))
+        return err('super_admin_required_to_grant_super_admin', 403);
       // Ensure a users_profile row exists + is active — verifyJWT requires one,
       // so a granted user can actually sign in (mirrors odoops grantAccess).
       const profR = await A.sbStore(`/rest/v1/users_profile?id=eq.${A.enc(user_id)}&select=id&limit=1`, env);
