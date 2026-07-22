@@ -162,21 +162,35 @@ async function setJourneyStatus(env, id, status) {
 // enrol(env, {journeyId, profileId, eventId?}) — respects re-enrolment policy,
 // creates the enrolment row pinned to active_version, starts the Workflow instance.
 async function enrol(env, { journeyId, profileId, eventId }) {
+  // A failed READ is a transient infra blip, not "this journey doesn't exist" — throw so
+  // the queue consumer's catch retries the message instead of acking a lost enrolment
+  // (review H10). Only a genuinely missing/inactive journey returns the soft {ok:false}.
   const jr = await A.sbComms(`/rest/v1/journeys?id=eq.${A.enc(journeyId)}&select=*&limit=1`, env);
-  const j = jr.ok && jr.data?.[0];
+  if (!jr.ok) throw new Error('journey_read_failed:' + jr.status);
+  const j = jr.data?.[0];
   if (!j || j.status !== 'active' || !j.active_version) return { ok: false, error: 'journey_not_active' };
 
-  // re-enrolment policy
-  if (j.reenrolment === 'once_while_active' || j.reenrolment === 'once_ever') {
-    const statusFilter = j.reenrolment === 'once_ever' ? '' : '&status=eq.active';
+  // Policy normalization (review H12): an unrecognised/legacy reenrolment value falls back
+  // to the SAFEST policy (once_while_active) rather than skipping dedup entirely, and a
+  // cooldown journey with null/0 hours still dedups — using a 24h default window — instead
+  // of silently taking the 'no policy matched' fall-through (the old double-enrol hole).
+  const policy = ['once_while_active', 'once_ever', 'cooldown', 'always'].includes(j.reenrolment)
+    ? j.reenrolment : 'once_while_active';
+  const cooldownH = policy === 'cooldown' ? (Number(j.reenrol_cooldown_hours) || 24) : null;
+
+  // re-enrolment policy — only 'always' skips the dedup check entirely.
+  if (policy === 'once_while_active' || policy === 'once_ever') {
+    const statusFilter = policy === 'once_ever' ? '' : '&status=eq.active';
     const ex = await A.sbComms(
       `/rest/v1/enrolments?journey_id=eq.${A.enc(journeyId)}&profile_id=eq.${A.enc(profileId)}${statusFilter}&select=id&limit=1`, env);
-    if (ex.ok && ex.data?.length) return { ok: true, skipped: 'reenrolment_policy' };
-  } else if (j.reenrolment === 'cooldown' && j.reenrol_cooldown_hours) {
-    const since = new Date(Date.now() - j.reenrol_cooldown_hours * 3600e3).toISOString();
+    if (!ex.ok) throw new Error('dedup_check_failed:' + ex.status);   // don't enrol blind on a failed dedup read
+    if (ex.data?.length) return { ok: false, skipped: 'reenrolment_policy' };
+  } else if (policy === 'cooldown') {
+    const since = new Date(Date.now() - cooldownH * 3600e3).toISOString();
     const ex = await A.sbComms(
       `/rest/v1/enrolments?journey_id=eq.${A.enc(journeyId)}&profile_id=eq.${A.enc(profileId)}&enrolled_at=gte.${A.enc(since)}&select=id&limit=1`, env);
-    if (ex.ok && ex.data?.length) return { ok: true, skipped: 'cooldown' };
+    if (!ex.ok) throw new Error('dedup_check_failed:' + ex.status);
+    if (ex.data?.length) return { ok: false, skipped: 'cooldown' };
   }
 
   const ins = await A.sbComms('/rest/v1/enrolments', env, {
@@ -185,18 +199,33 @@ async function enrol(env, { journeyId, profileId, eventId }) {
       status: 'active', context: { trigger_event_id: eventId || null, enrolled_at: new Date().toISOString() } }),
   });
   const enrolment = ins.data?.[0];
-  if (!enrolment?.id) return { ok: false, error: 'enrolment_insert_failed' };
+  // A failed/empty insert is transient (or a schema surprise) — throw so the queue retries
+  // (review H10). The unique index added alongside this fix (see migration 0026) means a
+  // retry that races a still-active duplicate now fails at the DB with a constraint
+  // violation (ins.ok === false) rather than silently double-enrolling.
+  if (!ins.ok || !enrolment?.id) throw new Error('enrolment_insert_failed:' + ins.status);
 
-  // start the durable Workflow — instance id = enrolment id (unique → idempotent against double-fan-out)
+  // start the durable Workflow — instance id = enrolment id (unique → idempotent against
+  // double-fan-out AND against a queue redelivery of this same enrol() message: a retry
+  // reaches this point with the SAME enrolment row already inserted — no, actually a
+  // retried enrol() call re-runs the dedup check above first, which will now find that
+  // very enrolment row (status='active') and skip before ever reaching the insert. So the
+  // insert path only runs once per successful enrolment; a THROW here still leaves the
+  // enrolment row 'active' with no workflow instance — mark it 'failed' and rethrow so the
+  // queue retries. On retry, dedup sees the 'failed' row (once_while_active only matches
+  // status=active) and proceeds to insert a fresh enrolment + create() attempt — no
+  // double-workflow, because create()'s target id is always this NEW enrolment's id.
   try {
     await env.JOURNEY_WORKFLOW.create({ id: enrolment.id,
       params: { enrolmentId: enrolment.id, journeyId, journeyVersion: j.active_version, profileId } });
   } catch (e) {
-    // create throws on duplicate id (already started) → benign; otherwise mark failed
+    // create throws on duplicate id (already started) → benign, instance is already
+    // running under this id; otherwise mark the enrolment failed and THROW so the queue
+    // retries the whole enrol() (review H10) instead of leaving a dangling active row.
     if (!String(e?.message || '').toLowerCase().includes('already')) {
       await A.sbComms(`/rest/v1/enrolments?id=eq.${A.enc(enrolment.id)}`, env,
         { method: 'PATCH', body: JSON.stringify({ status: 'failed', ended_at: new Date().toISOString() }) });
-      return { ok: false, error: 'workflow_start_failed:' + (e?.message || '') };
+      throw new Error('workflow_start_failed:' + (e?.message || ''));
     }
   }
   return { ok: true, enrolment_id: enrolment.id };
