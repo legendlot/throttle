@@ -3339,7 +3339,7 @@ function withinCustomerWindow(thread) {
 // Find-or-create the thread for a given customer_phone. Phase C uses
 // waba_phone_number_id=NULL (placeholder); Phase C2 will pass the real one and
 // the unique constraint will split threads per WABA number.
-async function findOrCreateWaThread(customer_phone, env) {
+async function findOrCreateWaThread(customer_phone, env, { create = true } = {}) {
   if (!customer_phone) return { thread: null, created: false };
   const norm = toE164(customer_phone);
   const r = await sb(
@@ -3347,6 +3347,11 @@ async function findOrCreateWaThread(customer_phone, env) {
     env,
   );
   if (r.data?.[0]) return { thread: r.data[0], created: false };
+  // Find-only mode: read paths must NOT mint threads — getWaThread (the ticket WA tab)
+  // was inserting a phone-only, message-less thread for every ticket opened whose customer
+  // had no real WA conversation (~3.6k empty threads by 2026-07-22, Pruthvi). Threads are
+  // created only on WRITE (send paths, inbound stub) — pass create:true there.
+  if (!create) return { thread: null, created: false };
   const ins = await sb(`/rest/v1/cs_wa_threads`, env, {
     method: 'POST',
     body: JSON.stringify({ customer_phone: norm }),
@@ -3370,8 +3375,9 @@ async function getWaThread(params, auth, env) {
   if (!t) return err('Ticket not found', 404);
   if (!t.customer_phone) return ok({ thread: null, messages: [], reason: 'no_phone_on_ticket' });
 
-  const { thread } = await findOrCreateWaThread(t.customer_phone, env);
-  if (!thread) return ok({ thread: null, messages: [] });
+  // Find-only: opening a ticket's WA tab must not create a thread (see findOrCreateWaThread).
+  const { thread } = await findOrCreateWaThread(t.customer_phone, env, { create: false });
+  if (!thread) return ok({ thread: null, messages: [], reason: 'no_thread_yet' });
 
   const msgsRes = await sb(
     `/rest/v1/cs_wa_messages?thread_id=eq.${thread.id}&select=*&order=created_at.asc&limit=500`,
@@ -5472,6 +5478,12 @@ async function getMessagingThreads(params, auth, env) {
   };
   const orderClause = ORDERS[sort] || ORDERS.recent;
   let q = `/rest/v1/cs_wa_threads?select=*&order=${orderClause}&limit=${limit}`;
+  // Hide guaranteed-empty threads (S229, Pruthvi): a thread that never had a message
+  // (last_message_at null) AND has no provider ref (nothing to live-pull from BiteSpeed)
+  // renders permanently empty — pure clutter. Mostly legacy stubs minted by the old
+  // create-on-read getWaThread path. Threads with a ref but no local mirror still show
+  // (WA renders via live pull). Same filter applied to the tile counts (getMessagingStats).
+  q += `&and=(or(last_message_at.not.is.null,provider_thread_ref.not.is.null))`;
   // Ignition handoff scope (S177): threads transferred to the Influencer team leave
   // the CS inbox entirely. Default = exclude them; scope=ignition = ONLY them (a
   // read-only oversight view for CS leads, since Pitstop still owns the channel).
@@ -5570,7 +5582,10 @@ async function getMessagingStats(params, auth, env) {
   };
   // Two-way channels: small volume → fetch threads + last-message direction.
   // Exclude Ignition-transferred threads (S177) — they're off the CS inbox.
-  const twRes = await sb(`/rest/v1/cs_wa_threads?channel=in.(instagram,messenger)&ignition_connect=is.false&thread_state=in.(open,snoozed)&select=id,channel,assigned_agent_id&limit=1000`, env);
+  // NONEMPTY (S229): tile counts must match the list, which hides guaranteed-empty
+  // threads (never messaged + no provider ref) — see getMessagingThreads.
+  const NONEMPTY = `&and=(or(last_message_at.not.is.null,provider_thread_ref.not.is.null))`;
+  const twRes = await sb(`/rest/v1/cs_wa_threads?channel=in.(instagram,messenger)&ignition_connect=is.false&thread_state=in.(open,snoozed)${NONEMPTY}&select=id,channel,assigned_agent_id&limit=1000`, env);
   const tw = twRes.data || [];
   const chById = {};
   for (const t of tw) {
@@ -5601,22 +5616,22 @@ async function getMessagingStats(params, auth, env) {
   const ACTIVE = `&thread_state=in.(open,snoozed)`;
   // WhatsApp: exact counts only (read-only mirror — awaiting tracked in BiteSpeed).
   // All counts exclude Ignition-transferred threads (S177).
-  stats.whatsapp.total = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.whatsapp&ignition_connect=is.false${ACTIVE}&select=id`, env);
-  stats.whatsapp.mine = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.whatsapp&ignition_connect=is.false&assigned_agent_id=eq.${auth.userId}${ACTIVE}&select=id`, env);
-  stats.whatsapp.unassigned = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.whatsapp&ignition_connect=is.false&assigned_agent_id=is.null${ACTIVE}&select=id`, env);
+  stats.whatsapp.total = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.whatsapp&ignition_connect=is.false${ACTIVE}${NONEMPTY}&select=id`, env);
+  stats.whatsapp.mine = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.whatsapp&ignition_connect=is.false&assigned_agent_id=eq.${auth.userId}${ACTIVE}${NONEMPTY}&select=id`, env);
+  stats.whatsapp.unassigned = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.whatsapp&ignition_connect=is.false&assigned_agent_id=is.null${ACTIVE}${NONEMPTY}&select=id`, env);
   // Email: exact counts (volume may grow → cheap counts, no per-thread awaiting v1).
-  stats.email.total = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.email&ignition_connect=is.false${ACTIVE}&select=id`, env);
-  stats.email.mine = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.email&ignition_connect=is.false&assigned_agent_id=eq.${auth.userId}${ACTIVE}&select=id`, env);
-  stats.email.unassigned = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.email&ignition_connect=is.false&assigned_agent_id=is.null${ACTIVE}&select=id`, env);
+  stats.email.total = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.email&ignition_connect=is.false${ACTIVE}${NONEMPTY}&select=id`, env);
+  stats.email.mine = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.email&ignition_connect=is.false&assigned_agent_id=eq.${auth.userId}${ACTIVE}${NONEMPTY}&select=id`, env);
+  stats.email.unassigned = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.email&ignition_connect=is.false&assigned_agent_id=is.null${ACTIVE}${NONEMPTY}&select=id`, env);
   // Web (L.O.T Web widget via BiteSpeed, S182): exact counts only (read-mostly mirror).
-  stats.web.total = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.web&ignition_connect=is.false${ACTIVE}&select=id`, env);
-  stats.web.mine = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.web&ignition_connect=is.false&assigned_agent_id=eq.${auth.userId}${ACTIVE}&select=id`, env);
-  stats.web.unassigned = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.web&ignition_connect=is.false&assigned_agent_id=is.null${ACTIVE}&select=id`, env);
+  stats.web.total = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.web&ignition_connect=is.false${ACTIVE}${NONEMPTY}&select=id`, env);
+  stats.web.mine = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.web&ignition_connect=is.false&assigned_agent_id=eq.${auth.userId}${ACTIVE}${NONEMPTY}&select=id`, env);
+  stats.web.unassigned = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.web&ignition_connect=is.false&assigned_agent_id=is.null${ACTIVE}${NONEMPTY}&select=id`, env);
   // Closed (resolved) count per channel — shown on each channel tile so the team has
   // quick visibility into resolved volume per channel (Pruthvi, S185). Excludes
   // Ignition-transferred threads, consistent with the active counts above.
   for (const ch of ['instagram', 'messenger', 'whatsapp', 'email', 'web']) {
-    stats[ch].closed = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.${ch}&ignition_connect=is.false&thread_state=eq.closed&select=id`, env);
+    stats[ch].closed = await sbCount(`/rest/v1/cs_wa_threads?channel=eq.${ch}&ignition_connect=is.false&thread_state=eq.closed${NONEMPTY}&select=id`, env);
   }
   // Per-channel UNREAD count (S222, Pruthvi) — active threads with a customer message
   // that arrived after the thread was last opened. One set-based RPC over the generated
