@@ -88,8 +88,14 @@ async function runGate(env, { profileId, channel, purpose, to, wa }) {
       if (cnt.data.length >= Number(s.frequency_cap_per_day || 3))
         return { pass: false, reason: 'freq_cap' };
     }
-    // 4. quiet hours (defer, don't drop — surfaced as a skip reason in v1)
-    if (inQuietHours(Number(s.quiet_hours_start ?? 21), Number(s.quiet_hours_end ?? 9)))
+    // 4. quiet hours. Journey sends defer-and-retry at the boundary (journey-workflow);
+    //    everything else surfaces the skip. ALLOWLISTED recipients (test_mode_allow —
+    //    internal staff + test numbers, super-admin-managed) BYPASS quiet hours entirely,
+    //    regardless of test_mode: an end-to-end send test at 23:00 IST must be able to
+    //    reach the tester's own phone tonight, not tomorrow morning. This can never widen
+    //    to a customer — the allowlist is the internal-test list by definition.
+    if (inQuietHours(Number(s.quiet_hours_start ?? 21), Number(s.quiet_hours_end ?? 9))
+        && !testModeAllows(to, s.test_mode_allow))
       return { pass: false, reason: 'quiet_hours' };
   }
 
