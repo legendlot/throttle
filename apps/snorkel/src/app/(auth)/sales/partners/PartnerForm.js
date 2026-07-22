@@ -20,7 +20,18 @@ const EMPTY = {
 
 // Shared create/edit form. `initial` may be a loaded partner row; `channels` from getSalesChannels.
 export default function PartnerForm({ initial, channels, saving, onSubmit, onCancel }) {
-  const [f, setF] = useState({ ...EMPTY, ...(initial || {}), is_active: initial?.is_active !== false });
+  // Null-safe init: a loaded partner row stores blanks as NULL — spreading it raw
+  // overrides EMPTY's '' with null, and submit()'s .trim() then throws on the first
+  // blank field, silently killing Save (Vinayram, #bugs 2026-07-22). Only take
+  // non-null values; nulls fall back to ''.
+  const [f, setF] = useState(() => {
+    const base = { ...EMPTY };
+    if (initial) for (const k of Object.keys(EMPTY)) {
+      if (initial[k] !== undefined && initial[k] !== null) base[k] = initial[k];
+    }
+    base.is_active = initial?.is_active !== false;
+    return base;
+  });
   const set = (k, v) => setF(s => ({ ...s, [k]: v }));
   const grid = { display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 14 };
 
