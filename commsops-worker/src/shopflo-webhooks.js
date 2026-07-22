@@ -71,14 +71,18 @@ async function handleShopfloWebhook(env, request) {
       return { ok: false, error: r.error, status: 400 };
     }
 
-    // Record marketing consent from the payload (only on first occurrence, not on a
-    // deduped retry — the ledger is append-only and latest-wins).
+    // Record marketing consent from the payload — on EVERY delivery, including deduped
+    // retries. The ledger is append-only latest-wins, so a duplicate row is cosmetic; a
+    // LOST opt-out is a compliance failure (review C3). A failed write returns 500 so
+    // Shopflo redelivers and the consent is re-attempted (never swallow a withdrawal error).
     let consent = 0;
-    if (!r.deduped) {
-      for (const c of FLO.consentRowsFrom(body, envlp.occurred_at)) {
-        await recordConsent(env, { profile_id: r.profile_id, ...c }).catch(() => {});
-        consent++;
+    for (const c of FLO.consentRowsFrom(body, envlp.occurred_at)) {
+      const w = await recordConsent(env, { profile_id: r.profile_id, ...c });
+      if (!w.ok) {
+        await capture(env, request, body).catch(() => {});
+        return { ok: false, error: 'consent_write_failed', status: 500 };
       }
+      consent++;
     }
     return { ok: true, event: evName, emitted: spec.event, profile_id: r.profile_id, deduped: r.deduped, consent };
   } catch (e) {
