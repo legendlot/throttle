@@ -50,16 +50,40 @@ function testModeAllows(to, allow) {
   });
 }
 
-// runGate(env, {profileId, channel, purpose, to, wa?}) → {pass, reason}
-// wa (WhatsApp only): {mode:'template'|'text', window_open:boolean, hasTemplate:boolean}
-async function runGate(env, { profileId, channel, purpose, to, wa }) {
+// The recipients a TEST send may reach: test_mode_allow (super-admin, may carry @domain
+// patterns) ∪ test_allowlist (builder-managed via addTestAllowlist, exact addresses only).
+// Two lists on purpose — widening TEST reach must never widen the crown-jewel send lock.
+function testUnion(settings) {
+  const a = Array.isArray(settings.test_mode_allow) ? settings.test_mode_allow : [];
+  const b = Array.isArray(settings.test_allowlist) ? settings.test_allowlist : [];
+  return a.concat(b);
+}
+
+// Is `to` an allowed TEST-send recipient? (used by sendTest / sendCampaignTest call sites)
+async function testRecipientAllowed(env, to) {
   const settings = await getSettings(env);
+  return testModeAllows(to, testUnion(settings));
+}
+
+// runGate(env, {profileId, channel, purpose, to, wa?, isTest?}) → {pass, reason}
+// wa (WhatsApp only): {mode:'template'|'text', window_open:boolean, hasTemplate:boolean}
+// isTest: a deliberate test send (sendTest / sendCampaignTest). Test sends are HARD-LOCKED
+// to the test union (enforced here as defense-in-depth, not only at the call sites) and in
+// exchange bypass consent / frequency cap / quiet hours — safe precisely because they can
+// only ever reach internal/test addresses. Suppression + channel rules still apply.
+async function runGate(env, { profileId, channel, purpose, to, wa, isTest }) {
+  const settings = await getSettings(env);
+
+  // 0a. TEST-send recipient lock — before everything, regardless of test_mode.
+  if (isTest && !testModeAllows(to, testUnion(settings)))
+    return { pass: false, reason: 'test_recipient_not_allowlisted' };
 
   // 0. TEST MODE — global send lock, ahead of everything. Default ON (fail-safe).
   // Until a super-admin disables it, NO send (any channel, any purpose, incl. test
   // sends + transactional) reaches an address off the allowlist. The crown-jewel guard
-  // against ever emailing a real customer before sign-off.
-  if (settings.test_mode !== false && !testModeAllows(to, settings.test_mode_allow))
+  // against ever emailing a real customer before sign-off. (A test send may additionally
+  // use the builder-managed test_allowlist — it already passed the 0a lock above.)
+  if (settings.test_mode !== false && !testModeAllows(to, isTest ? testUnion(settings) : settings.test_mode_allow))
     return { pass: false, reason: 'test_mode_blocked' };
 
   // 1. suppression — overrides everything. FAIL CLOSED: an unreadable suppression list is a
@@ -71,7 +95,10 @@ async function runGate(env, { profileId, channel, purpose, to, wa }) {
     if (sup.data?.[0]) return { pass: false, reason: 'suppressed' };
   }
 
-  const isMarketing = purpose === 'marketing';
+  // Test sends skip the marketing gates (consent / freq cap / quiet hours) AND the send
+  // budget: a test must verify rendering + delivery on demand, and it is already locked
+  // to internal/test recipients by 0a — there is no customer to protect from it.
+  const isMarketing = purpose === 'marketing' && !isTest;
   if (isMarketing) {
     // 2. consent — marketing requires opted_in
     const state = profileId ? await latestConsent(env, profileId, channel, 'marketing') : 'unknown';
@@ -124,4 +151,4 @@ async function runGate(env, { profileId, channel, purpose, to, wa }) {
   return { pass: true, reason: null };
 }
 
-module.exports = { runGate, inQuietHours, testModeAllows, _clearSettingsCache: () => { _settingsCache = null; } };
+module.exports = { runGate, inQuietHours, testModeAllows, testRecipientAllowed, testUnion, _clearSettingsCache: () => { _settingsCache = null; } };

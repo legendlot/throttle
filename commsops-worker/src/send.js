@@ -238,7 +238,7 @@ async function send(env, opts) {
   }
 
   // gate
-  const g = await runGate(env, { profileId: opts.profileId, channel, purpose, to, wa: waMeta });
+  const g = await runGate(env, { profileId: opts.profileId, channel, purpose, to, wa: waMeta, isTest: opts.isTest === true });
   if (!g.pass) {
     const st = g.reason === 'suppressed' ? 'suppressed' : 'skipped';
     return await finalize(env, opts, { status: st, reason: g.reason }, sender, channel, purpose, template);

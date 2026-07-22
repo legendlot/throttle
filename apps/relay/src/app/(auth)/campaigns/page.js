@@ -274,6 +274,17 @@ export default function CampaignsPage() {
     } finally { setTestBusy(false); }
   }
 
+  // Add one blocked test recipient to the builder-managed TEST allowlist, then re-run the test.
+  async function allowAndRetest(addr) {
+    setTestBusy(true);
+    try {
+      await workerFetch('addTestAllowlist', { entry: addr }, session);
+      showToast('Added to test allowlist', 'success');
+    } catch (e) { showToast(e.message || 'Could not add to allowlist', 'error'); setTestBusy(false); return; }
+    setTestBusy(false);
+    await sendTest();
+  }
+
   async function submit() {
     if (!c.id) { showToast('Save the campaign first', 'error'); return; }
     if (!c.segment_id || !c.template_id) { showToast('Pick a segment and a template first', 'error'); return; }
@@ -458,9 +469,9 @@ export default function CampaignsPage() {
             <div className="tw-note" style={{ marginTop: 10, marginBottom: 0 }}>
               {!c.template_id
                 ? 'Pick a template first — the test sends that template.'
-                : <>Up to 5 addresses, comma-separated. Goes through the <strong>same gate as a real send</strong>
-                  {' '}(test mode, suppression, consent, quiet hours, frequency cap), so what you see here is what
-                  a customer would get. Test sends are recorded but <strong>excluded from this campaign&apos;s stats</strong>.</>}
+                : <>Up to 5 addresses, comma-separated. Test sends reach <strong>approved test addresses only</strong>
+                  {' '}and skip consent / quiet hours / frequency caps so they always deliver on demand
+                  (suppression still applies). Recorded but <strong>excluded from this campaign&apos;s stats</strong>.</>}
             </div>
             {testResults && (
               <table className="dt" style={{ marginTop: 12 }}>
@@ -472,7 +483,10 @@ export default function CampaignsPage() {
                       <td><Badge label={r.status}
                         tone={r.status === 'sent' || r.status === 'queued' ? 'green' : r.status === 'skipped' ? 'yellow' : 'red'} /></td>
                       <td className="dim" style={{ fontSize: 12 }}>
-                        {r.reason || (r.profile_matched ? 'rendered with this contact’s data' : 'no matching contact — variables used defaults')}
+                        {r.reason === 'not_on_test_allowlist'
+                          ? <>not on the test allowlist{' '}
+                            <Btn kind="ghost" onClick={() => allowAndRetest(r.to)} disabled={testBusy}>Add &amp; resend</Btn></>
+                          : (r.reason || (r.profile_matched ? 'rendered with this contact’s data' : 'no matching contact — variables used defaults'))}
                       </td>
                     </tr>
                   ))}

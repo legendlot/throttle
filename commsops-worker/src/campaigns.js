@@ -4,6 +4,7 @@
 // consumer invocation stays well under the 50-subrequest limit at any audience size.
 const A = require('./auth.js');
 const { send } = require('./send.js');
+const G = require('./gate.js');
 
 const SENDS_PER_MSG = 4;   // recipients handled per consumer invocation (~8 subreq each → safe)
 const nowIso = () => new Date().toISOString();
@@ -180,10 +181,18 @@ async function sendCampaignTest(env, { id, to, draft }) {
 
   const results = [];
   for (const addr of list) {
+    // Test sends are hard-locked to the TEST union (test_mode_allow ∪ test_allowlist) —
+    // Afshaan's S230 rule: a test reaches only the number entered AND only if it is a
+    // test address; anything else surfaces as a per-recipient block the UI can offer to
+    // allowlist. (Previously, with test_mode OFF, this path could reach ANY address.)
+    if (!(await G.testRecipientAllowed(env, addr))) {
+      results.push({ to: addr, profile_matched: false, status: 'blocked', reason: 'not_on_test_allowlist' });
+      continue;
+    }
     const profileId = await profileIdForAddress(env, camp.channel, addr);
     try {
       const r = await send(env, {
-        channel: camp.channel, purpose: camp.purpose,
+        channel: camp.channel, purpose: camp.purpose, isTest: true,
         profileId, to: addr,
         templateId: camp.template_id,
         constants: camp.vars || {},

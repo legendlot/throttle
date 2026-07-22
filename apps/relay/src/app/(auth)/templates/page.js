@@ -53,6 +53,7 @@ export default function TemplatesPage() {
   const [testVals, setTestVals] = useState('{}');
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
+  const [needsAllow, setNeedsAllow] = useState(false);   // recipient not on the test allowlist → offer add-and-resend
   const [submitting, setSubmitting] = useState(false);
   // WS review follow-up: submitToMeta must never submit content the saved row doesn't have
   // yet (an uploaded-but-unsaved image lints clean in memory but ships headerless from the
@@ -101,7 +102,7 @@ export default function TemplatesPage() {
     setEditorKey('t-' + r.id);
     setView('form');
   }
-  function resetTest() { setTestTo(''); setTestVals('{}'); setTestResult(null); }
+  function resetTest() { setTestTo(''); setTestVals('{}'); setTestResult(null); setNeedsAllow(false); }
   function set(k, v) { setT((p) => ({ ...p, [k]: v })); }
 
   function addVar() { setT((p) => ({ ...p, variables: [...p.variables, { token: '', source: 'profile', field: '', fallback: '' }] })); }
@@ -220,7 +221,7 @@ export default function TemplatesPage() {
     let vals = {};
     try { vals = testVals.trim() ? JSON.parse(testVals) : {}; }
     catch { showToast('Test values must be valid JSON', 'error'); return; }
-    setTesting(true); setTestResult(null);
+    setTesting(true); setTestResult(null); setNeedsAllow(false);
     try {
       // Send the in-memory template so it works before/without saving. Test values are
       // passed as BOTH constants and recipient overrides so any matching var resolves.
@@ -234,8 +235,25 @@ export default function TemplatesPage() {
       setTestResult(res);
       if (res.status === 'sent') showToast('Test sent', 'success');
       else showToast(`Test ${res.status}: ${res.reason || ''}`, res.status === 'sent' ? 'success' : 'error');
-    } catch (e) { showToast(e.message || 'Test send failed', 'error'); }
+    } catch (e) {
+      // Not on the test allowlist → offer the one-click fix instead of a dead end.
+      if (e.message === 'test_sends_are_internal_only') setNeedsAllow(true);
+      else showToast(e.message || 'Test send failed', 'error');
+    }
     finally { setTesting(false); }
+  }
+
+  // Add the entered recipient to the builder-managed TEST allowlist, then resend.
+  // Exact address only — the worker rejects @domain patterns (super-admin territory).
+  async function allowAndResend() {
+    setTesting(true);
+    try {
+      await workerFetch('addTestAllowlist', { entry: testTo.trim() }, session);
+      setNeedsAllow(false);
+      showToast('Added to test allowlist', 'success');
+    } catch (e) { showToast(e.message || 'Could not add to allowlist', 'error'); setTesting(false); return; }
+    setTesting(false);
+    await sendTest();
   }
 
   // Submitting sends the template into Meta's review queue under LOT's WhatsApp Business
@@ -441,6 +459,15 @@ export default function TemplatesPage() {
                 <input className="f-inp mono" value={testVals} onChange={(e) => setTestVals(e.target.value)} placeholder='{"first":"Afshaan"}' disabled={testing} />
               </div>
             </div>
+            {needsAllow && (
+              <div style={{ margin: '8px 0', fontSize: 13, padding: '10px 12px', border: '1px solid var(--line, #ddd)', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <b>{testTo.trim()}</b> isn’t on the test allowlist — test sends only reach approved test
+                addresses. Add it (exact address, test sends only) and resend?
+                <Btn kind="primary" onClick={allowAndResend} disabled={testing} style={{ marginLeft: 12 }}>
+                  {testing ? 'Working…' : 'Add & resend'}
+                </Btn>
+              </div>
+            )}
             <div className="form-foot">
               {testResult && (
                 <span style={{ marginRight: 'auto', alignSelf: 'center' }}>

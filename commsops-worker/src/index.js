@@ -393,23 +393,45 @@ async function handlePost(body, auth, env) {
       return ok(EA.signToUrls(env, bucket, path, sd));
     }
 
-    case 'sendTest': {                 // M5 — test-send: always allowed, no approval; transactional bypasses marketing gate
+    case 'sendTest': {                 // M5 — test-send: always allowed, no approval; isTest bypasses the marketing gates
       if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
       if (!body.to) return err('to_required', 400);
-      // sendTest is arbitrary-content + arbitrary-recipient by design — so its recipients are
-      // permanently restricted to the internal allowlist, even after test_mode goes OFF
-      // (review M3). Real-customer rehearsal is sendCampaignTest with a saved template.
-      const st = await A.sbComms('/rest/v1/settings?id=eq.1&select=test_mode_allow&limit=1', env);
-      const allow = (st.ok && st.data?.[0]?.test_mode_allow) || ['@legendoftoys.com'];
-      if (!G.testModeAllows(body.to, allow))
+      // sendTest is arbitrary-content by design — so its recipients are permanently
+      // restricted to the TEST union (test_mode_allow ∪ test_allowlist), even after
+      // test_mode goes OFF (review M3). A blocked recipient is self-serve fixable:
+      // addTestAllowlist (builder perm) adds the exact address, then resend.
+      if (!(await G.testRecipientAllowed(env, body.to)))
         return err('test_sends_are_internal_only', 403);
       const r = await send(env, {
-        channel: body.channel || 'email', purpose: 'transactional',
+        channel: body.channel || 'email', purpose: 'transactional', isTest: true,
         to: body.to, templateId: body.templateId || null, template: body.template || null,
         profileId: body.profileId || null, constants: body.constants || {},
         recipient: body.recipient || {}, source: 'test',
       });
       return ok(r);
+    }
+    case 'addTestAllowlist': {         // S230 — builder-managed TEST-send allowlist (exact addresses only)
+      if (!A.canBuild(auth.permissions)) return err('forbidden', 403);
+      const entry = String(body.entry || '').trim();
+      if (!entry) return err('entry_required', 400);
+      // @domain patterns grant every address on the domain — that stays a super-admin
+      // decision on test_mode_allow. Here: one exact email or one exact phone.
+      if (entry.startsWith('@')) return err('domain_patterns_are_super_admin_only', 400);
+      const isEmail = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(entry);
+      const digits = entry.replace(/[^\d]/g, '');
+      const isPhone = !isEmail && digits.length >= 8 && digits.length <= 15;
+      if (!isEmail && !isPhone) return err('entry_must_be_email_or_phone', 400);
+      const norm = isEmail ? entry.toLowerCase() : entry;
+      const st = await A.sbComms('/rest/v1/settings?id=eq.1&select=test_allowlist&limit=1', env);
+      if (!st.ok) return err('db_error', 500);
+      const cur = Array.isArray(st.data?.[0]?.test_allowlist) ? st.data[0].test_allowlist : [];
+      if (!cur.includes(norm)) {
+        const w = await A.sbComms('/rest/v1/settings?id=eq.1', env,
+          { method: 'PATCH', body: JSON.stringify({ test_allowlist: [...cur, norm] }) });
+        if (!w.ok) return err('db_error', 500);
+      }
+      G._clearSettingsCache();   // the 60s settings cache would otherwise still block the immediate resend
+      return ok({ added: norm, test_allowlist: cur.includes(norm) ? cur : [...cur, norm] });
     }
 
     // ── M6: segments ──
