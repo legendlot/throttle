@@ -376,6 +376,10 @@ class JourneyWorkflow extends WorkflowEntrypoint {
       if (p.kind === 'exit') return { kind: 'exit', outcome: p.outcome || 'exited', event: p.event };
       return { kind: 'response', event: p.event };
     } catch (e) {
+      // waitForEvent signals BOTH timeout and infra errors by throwing. Compile-time duration
+      // validation (Task 22) removes the config-error case; anything else is logged so a
+      // masked infra failure is at least visible in the step row (review H14).
+      console.log('park_exit', stepName, String(e?.message || e).slice(0, 140));
       return { kind: 'timeout' };
     }
   }

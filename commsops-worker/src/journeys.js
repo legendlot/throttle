@@ -50,7 +50,14 @@ async function compile(env, definition, journey) {
     if (s.type === 'condition' &&
         (!steps[G.resolveTarget(s, 'if_true')] || !steps[G.resolveTarget(s, 'if_false')]))
       errors.push(`condition_branch_missing:${id}`);
-    if (s.type === 'wait' && !s.duration) errors.push(`wait_no_duration:${id}`);
+    // A missing duration AND an unparseable one (e.g. a typo'd "3 dayz") are both compile
+    // errors — the interpreter's #park catch-all can't tell "bad config" from "real
+    // timeout", so a typo silently fires the drip instantly instead of failing loud here
+    // (review H14).
+    if (s.type === 'wait') {
+      if (!s.duration) errors.push(`wait_no_duration:${id}`);
+      else if (G.durationToMs(s.duration) === null) errors.push(`wait_bad_duration:${id}`);
+    }
     if (s.type === 'wait_response') {
       if (!Array.isArray(s.awaited) || s.awaited.length === 0) errors.push(`wait_response_no_awaited:${id}`);
       if (!s.within || G.durationToMs(s.within) === null) errors.push(`wait_response_bad_within:${id}`);

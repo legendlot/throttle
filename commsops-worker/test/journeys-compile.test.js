@@ -184,5 +184,23 @@ const { compile } = require('../src/journeys.js');
   }
   console.log('compile order_modify + interactive ok');
 
+  // H14 — wait step with an unparseable duration ("3 dayz" typo) → compile rejects
+  {
+    const def = { entry: 'w', steps: {
+      w: { type: 'wait', duration: '3 dayz', outcomes: { next: 'ex' } },
+      ex: { type: 'exit', outcome: 'completed' } } };
+    const r = await compile({}, def);
+    assert.ok(r.errors.includes('wait_bad_duration:w'), JSON.stringify(r.errors));
+  }
+  // H14 — a valid duration still compiles clean
+  {
+    const def = { entry: 'w', steps: {
+      w: { type: 'wait', duration: '30 minutes', outcomes: { next: 'ex' } },
+      ex: { type: 'exit', outcome: 'completed' } } };
+    const r = await compile({}, def);
+    assert.ok(r.ok, 'valid wait duration should compile: ' + JSON.stringify(r.errors));
+  }
+  console.log('compile H14 wait-duration-validation ok');
+
   console.log('journeys-compile.test.js: all assertions passed');
 })().catch((e) => { console.error(e); process.exit(1); });
